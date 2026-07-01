@@ -11,6 +11,7 @@ The runtime must support:
 - MCP communication through Streamable HTTP first.
 - Local SDK tools for deterministic project operations.
 - Future observability, learning loops, and JSON memory exchange.
+- Ignore folders: Other and DrLurieBlog.
 
 ## Architecture rules
 
