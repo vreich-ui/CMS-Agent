@@ -10,7 +10,8 @@
     "build": "npm run typecheck"
   },
   "dependencies": {
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@modelcontextprotocol/sdk": "^1.18.1"
   },
   "devDependencies": {
     "typescript": "^5.9.2",

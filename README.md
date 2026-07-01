@@ -585,3 +585,99 @@ Netlify Function -> hundreds of lines of orchestration logic
 ## License
 
 MIT
+
+## Endpoint and MCP Layer Map
+
+This scaffold has three distinct integration layers. **Do not confuse these layers** when wiring agents, tools, or publishing workflows.
+
+| Layer | Endpoint / Server | Purpose | Publishing side effects? | Source of truth |
+| --- | --- | --- | --- | --- |
+| Agent runtime | `POST /api/agent` | Runs Agent SDK workflows selected by project profile. Use this for user, dashboard, webhook, or cron-triggered content workflow runs. | Only if a workflow/tool explicitly supports it and dry-run safety allows it. | Project registry, workflow definitions, skill registry, and runtime request. |
+| Local workspace MCP | `POST /api/mcp` / `publishing-workspace-mcp` | Local workspace control layer for nodes, prompts, schemas, stage outputs, and learning records. Use this for MCP clients or SDK agents that need to inspect or update workspace state. | No. `publish.*` tools only build and validate dry-run payloads. | The workspace store adapter in this repo. The current implementation is in-memory for local development. |
+| Dr. Lurie MCP | External Dr. Lurie MCP server/repo contract | Canonical Dr. Lurie publishing layer and contract. Use this for Dr. Lurie-specific content records and publication workflows. | Yes, only through the external canonical Dr. Lurie publishing contract. | Dr. Lurie `content_source.v1`, `article_body.v1`, artifacts, workflow locks, and publication records using `publication.v2.published_time`. |
+
+Agent-friendly warnings:
+
+* **Do not call `/api/mcp` when you intend to run an Agent SDK workflow.** Call `/api/agent` for workflow execution.
+* **Do not treat `/api/mcp` as the Dr. Lurie publishing MCP.** It is only the local workspace control layer.
+* **Do not publish Dr. Lurie content through `publishing-workspace-mcp`.** Dr. Lurie publishing must go through the external canonical Dr. Lurie MCP/repo contract.
+* **Do not use local workspace schemas as Dr. Lurie source-of-truth schemas.** Dr. Lurie `content_source.v1`, `article_body.v1`, artifacts, workflow locks, and `publication.v2.published_time` remain canonical in the Dr. Lurie MCP/repo contract.
+
+## MCP Workspace Endpoint
+
+`POST /api/mcp` exposes the publishing workspace as an MCP-compatible JSON-RPC endpoint. Use it for MCP clients and SDK agents that need workspace tools, prompts, schemas, stage outputs, learning records, and dry-run publishing payload helpers.
+
+The MCP server is named `publishing-workspace-mcp`. It uses the official `@modelcontextprotocol/sdk` package when available, while the Netlify Function serves a stateless JSON-RPC-compatible endpoint. Netlify Functions do not provide durable per-client sessions in this scaffold, so full Streamable HTTP session behavior is intentionally limited; clients should send authenticated JSON-RPC requests to `/api/mcp` and treat each request as stateless.
+
+### Required MCP environment variable
+
+```bash
+MCP_API_TOKEN=replace-with-a-long-random-token
+```
+
+Do not log or commit this token. The MCP endpoint rejects requests unless the `Authorization` header exactly matches `Bearer $MCP_API_TOKEN`.
+
+### Test the MCP endpoint with curl
+
+Initialize the MCP session:
+
+```bash
+curl -sS http://localhost:8888/api/mcp \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $MCP_API_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+```
+
+List tools:
+
+```bash
+curl -sS http://localhost:8888/api/mcp \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $MCP_API_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+```
+
+Call a workspace tool:
+
+```bash
+curl -sS http://localhost:8888/api/mcp \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $MCP_API_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"workspace.get_nodes","arguments":{}}}'
+```
+
+Validate an article body:
+
+```bash
+curl -sS http://localhost:8888/api/mcp \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $MCP_API_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"article_body.validate","arguments":{"article":{"title":"Example","bodyMarkdown":"Body","slug":"example"}}}}'
+```
+
+### Available MCP tools
+
+The endpoint exposes these tools: `workspace.get_nodes`, `workspace.get_node`, `workspace.update_node_prompt`, `workspace.update_node_schema`, `workspace.export_workspace`, `workspace.import_workspace`, `article_body.get_schema`, `article_body.validate`, `stage.save_output`, `stage.get_output`, `stage.list_outputs`, `learning.record_observation`, `learning.list_observations`, `publish.build_payload`, and `publish.validate_payload`.
+
+Publishing tools only build and validate dry-run payloads. They do not publish content or mutate external publishing systems.
+
+The Dr. Lurie MCP/repo contract remains canonical for Dr. Lurie publishing workflows. This `publishing-workspace-mcp` endpoint is a separate local workspace control layer for prompts, nodes, schemas, stage outputs, and learning records; it does not replace the Dr. Lurie publishing contract.
+
+The current local `articleBodySchema` is a temporary workspace schema for local validation only. It must be replaced with, or mapped to, the Dr. Lurie MCP-compatible `article_body.v1` node schema before Dr. Lurie publishing workflows rely on this workspace layer.
+
+### Connecting SDK agents
+
+Configure SDK agents with a remote Streamable HTTP MCP server that points at the Netlify route and sends the bearer token header:
+
+```ts
+const workspaceMcpServer = {
+  name: "publishing-workspace-mcp",
+  type: "streamable_http",
+  url: `${process.env.NETLIFY_SITE_URL}/api/mcp`,
+  headers: {
+    authorization: `Bearer ${process.env.MCP_API_TOKEN}`
+  }
+};
+```
+
+For local development, use `http://localhost:8888/api/mcp`. The current workspace store is an in-memory adapter intended for development and tests; replace the `WorkspaceStore` implementation with Supabase, Postgres, SQLite, or another persistent backend before relying on stored workspace state in production.

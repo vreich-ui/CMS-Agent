@@ -9,3 +9,8 @@
   from = "/api/agent"
   to = "/.netlify/functions/agent"
   status = 200
+
+[[redirects]]
+  from = "/api/mcp"
+  to = "/.netlify/functions/mcp"
+  status = 200
