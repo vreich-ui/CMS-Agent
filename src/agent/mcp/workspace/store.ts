@@ -10,7 +10,7 @@ export const articleBodySchema = z.object({
 }).strict();
 
 export type ArticleBody = z.infer<typeof articleBodySchema>;
-export type WorkspaceNode = { id: string; name: string; prompt: string; schema: unknown; updatedAt: string };
+export type WorkspaceNode = { id: string; name: string; prompt: string; schema?: unknown; updatedAt: string };
 export type StageOutput = { id: string; stage: string; value: unknown; createdAt: string };
 export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; createdAt: string };
 export type PublishPayload = ArticleBody & { dryRun: true; target: "preview" | "cms"; builtAt: string };
