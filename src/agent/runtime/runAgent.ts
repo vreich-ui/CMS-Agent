@@ -1,4 +1,4 @@
-import type { AgentRequest, AgentRunResponse, ProjectProfile } from "./types.js";
+import type { AgentRequest, AgentRunResponse, DraftResult, ProjectProfile } from "./types.js";
 import { createAgent } from "./createAgent.js";
 import { JsonMemoryAdapter } from "../memory/JsonMemoryAdapter.js";
 import { draftContent } from "../skills/contentDraft.js";
@@ -21,7 +21,7 @@ export async function runAgent(request: AgentRequest, project: ProjectProfile): 
 
   consoleObservability.runStarted(metadata);
   try {
-    let draft = { title: request.input, content: request.input, status: "input_ready" as const };
+    let draft: DraftResult = { title: request.input, content: request.input, status: "input_ready" };
     let review: unknown;
     let seo: unknown;
     let publish: unknown;
