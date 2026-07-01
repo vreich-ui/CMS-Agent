@@ -1,6 +1,6 @@
 import { ZodError } from "zod";
 import { validateRequest } from "../../src/agent/runtime/validateRequest.js";
-import { getProject } from "../../src/agent/projects/registry.js";
+import { getProject, ProjectNotFoundError } from "../../src/agent/projects/registry.js";
 import { runAgent } from "../../src/agent/runtime/runAgent.js";
 
 const json = (statusCode: number, body: unknown) => ({
@@ -21,8 +21,8 @@ export const handler = async (event: { httpMethod: string; body: string | null }
   } catch (error) {
     if (error instanceof SyntaxError) return json(400, { error: { code: "invalid_json", message: "Request body must be valid JSON." } });
     if (error instanceof ZodError) return json(400, { error: { code: "validation_error", issues: error.issues } });
+    if (error instanceof ProjectNotFoundError) return json(404, { error: { code: error.code, message: error.message } });
     const message = error instanceof Error ? error.message : "Unknown error";
-    const statusCode = message.startsWith("Unknown projectId") ? 404 : 500;
-    return json(statusCode, { error: { code: statusCode === 404 ? "project_not_found" : "internal_error", message } });
+    return json(500, { error: { code: "internal_error", message } });
   }
 };
