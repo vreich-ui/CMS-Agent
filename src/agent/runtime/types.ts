@@ -31,6 +31,12 @@ export type ProjectProfile = {
   publishingTarget: PublishingTarget;
 };
 
+export type DraftResult = {
+  title: string;
+  content: string;
+  status: "input_ready" | "draft_ready";
+};
+
 export type AgentRequest = {
   projectId: string;
   workflow?: WorkflowId;
