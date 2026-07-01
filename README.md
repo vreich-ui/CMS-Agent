@@ -83,36 +83,47 @@ Agent Runtime
 ├── netlify/
 │   └── functions/
 │       └── agent.mts
-└── src/
+├── src/
+│   └── agent/
+│       ├── runtime/
+│       │   ├── createAgent.ts
+│       │   ├── runAgent.ts
+│       │   ├── types.ts
+│       │   └── validateRequest.ts
+│       ├── projects/
+│       │   ├── registry.ts
+│       │   └── project-a.ts
+│       ├── skills/
+│       │   ├── registry.ts
+│       │   ├── contentDraft.ts
+│       │   ├── editorialReview.ts
+│       │   ├── seo.ts
+│       │   └── publish.ts
+│       ├── workflows/
+│       │   ├── contentCreation.ts
+│       │   ├── publishOnly.ts
+│       │   └── refreshExistingContent.ts
+│       ├── mcp/
+│       │   ├── buildMcpServers.ts
+│       │   └── toolFilters.ts
+│       ├── memory/
+│       │   ├── memoryEnvelope.ts
+│       │   ├── MemoryAdapter.ts
+│       │   └── JsonMemoryAdapter.ts
+│       └── observability/
+│           ├── ObservabilityAdapter.ts
+│           └── consoleObservability.ts
+└── tests/
     └── agent/
-        ├── runtime/
-        │   ├── createAgent.ts
-        │   ├── runAgent.ts
-        │   ├── types.ts
-        │   └── validateRequest.ts
-        ├── projects/
-        │   ├── registry.ts
-        │   └── project-a.ts
-        ├── skills/
-        │   ├── registry.ts
-        │   ├── contentDraft.ts
-        │   ├── editorialReview.ts
-        │   ├── seo.ts
-        │   └── publish.ts
-        ├── workflows/
-        │   ├── contentCreation.ts
-        │   ├── publishOnly.ts
-        │   └── refreshExistingContent.ts
-        ├── mcp/
-        │   ├── buildMcpServers.ts
-        │   └── toolFilters.ts
         ├── memory/
-        │   ├── memoryEnvelope.ts
-        │   ├── MemoryAdapter.ts
-        │   └── JsonMemoryAdapter.ts
-        └── observability/
-            ├── ObservabilityAdapter.ts
-            └── consoleObservability.ts
+        │   └── memoryEnvelope.test.ts
+        ├── projects/
+        │   └── registry.test.ts
+        ├── runtime/
+        │   └── validateRequest.test.ts
+        └── skills/
+            ├── publish.test.ts
+            └── registry.test.ts
 ```
 
 ## Core Concepts
@@ -150,13 +161,26 @@ export const projectA = {
     "Return publish-ready Markdown unless another format is requested."
   ],
   allowedSkills: [
-    "research",
     "draft_content",
     "editorial_review",
     "seo_optimize",
     "publish"
   ],
-  memoryNamespace: "project-a"
+  mcpServers: [
+    {
+      name: "content_repo",
+      type: "streamable_http",
+      urlEnv: "MCP_CONTENT_REPO_URL",
+      authorizationEnv: "MCP_CONTENT_REPO_TOKEN",
+      allowedTools: ["search_documents", "get_document"]
+    }
+  ],
+  memoryNamespace: "project-a",
+  publishingTarget: {
+    type: "http",
+    endpointEnv: "PROJECT_A_PUBLISH_ENDPOINT",
+    tokenEnv: "PROJECT_A_PUBLISH_TOKEN"
+  }
 };
 ```
 
@@ -369,7 +393,10 @@ Each project should define:
   editorialRules: [],
   allowedSkills: [],
   mcpServers: [],
-  memoryNamespace: "project-b"
+  memoryNamespace: "project-b",
+  publishingTarget: {
+    type: "none"
+  }
 }
 ```
 
@@ -407,7 +434,7 @@ mcpServers: [
   {
     name: "content_repo",
     type: "streamable_http",
-    url: process.env.MCP_CONTENT_REPO_URL ?? "",
+    urlEnv: "MCP_CONTENT_REPO_URL",
     authorizationEnv: "MCP_CONTENT_REPO_TOKEN",
     allowedTools: ["search_documents", "get_document"]
   }

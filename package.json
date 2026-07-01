@@ -1,0 +1,24 @@
+{
+  "name": "cms-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "npm run typecheck"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.9",
+    "netlify-cli": "^17.38.1",
+    "@types/node": "^22.13.14"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
