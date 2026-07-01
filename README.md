@@ -663,6 +663,8 @@ Publishing tools only build and validate dry-run payloads. They do not publish c
 
 The Dr. Lurie MCP/repo contract remains canonical for Dr. Lurie publishing workflows. This `publishing-workspace-mcp` endpoint is a separate local workspace control layer for prompts, nodes, schemas, stage outputs, and learning records; it does not replace the Dr. Lurie publishing contract.
 
+The current local `articleBodySchema` is a temporary workspace schema for local validation only. It must be replaced with, or mapped to, the Dr. Lurie MCP-compatible `article_body.v1` node schema before Dr. Lurie publishing workflows rely on this workspace layer.
+
 ### Connecting SDK agents
 
 Configure SDK agents with a remote Streamable HTTP MCP server that points at the Netlify route and sends the bearer token header:

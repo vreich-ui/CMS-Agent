@@ -11,30 +11,60 @@ export type WorkspaceTool = {
 };
 
 const emptyInput = z.object({}).strict();
+
+const workspaceNodeImport = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  prompt: z.string(),
+  schema: z.unknown(),
+  updatedAt: z.string().datetime()
+}).strict();
+const stageOutputImport = z.object({
+  id: z.string().min(1),
+  stage: z.string().min(1),
+  value: z.unknown(),
+  createdAt: z.string().datetime()
+}).strict();
+const learningObservationImport = z.object({
+  id: z.string().min(1),
+  observation: z.string().min(1),
+  metadata: z.record(z.unknown()).optional(),
+  createdAt: z.string().datetime()
+}).strict();
+const publishPayloadSchema = articleBodySchema.extend({
+  target: z.enum(["preview", "cms"]),
+  dryRun: z.literal(true),
+  builtAt: z.string().datetime()
+}).strict();
 const nodeId = z.object({ id: z.string().min(1) }).strict();
 const updatePrompt = z.object({ id: z.string().min(1), prompt: z.string().min(1) }).strict();
 const updateSchema = z.object({ id: z.string().min(1), schema: z.unknown() }).strict();
-const importWorkspace = z.object({ nodes: z.array(z.any()).optional(), stageOutputs: z.array(z.any()).optional(), learningObservations: z.array(z.any()).optional() }).strict();
+const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(), stageOutputs: z.array(stageOutputImport).optional(), learningObservations: z.array(learningObservationImport).optional() }).strict();
 const saveOutput = z.object({ id: z.string().min(1).optional(), stage: z.string().min(1), value: z.unknown() }).strict();
 const listOutputs = z.object({ stage: z.string().min(1).optional() }).strict();
 const recordObservation = z.object({ observation: z.string().min(1), metadata: z.record(z.unknown()).optional() }).strict();
 const validateArticle = z.object({ article: z.unknown() }).strict();
 const publishBuild = z.object({ article: articleBodySchema, target: z.enum(["preview", "cms"]).default("preview") }).strict();
-const publishValidate = z.object({ payload: z.object({ dryRun: z.literal(true), title: z.string().min(1), bodyMarkdown: z.string().min(1), slug: z.string().min(1), target: z.enum(["preview", "cms"]) }).passthrough() }).strict();
+const publishValidate = z.object({ payload: publishPayloadSchema }).strict();
 
 const objectSchema = (properties: JsonSchema = {}, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 const emptyJsonSchema = objectSchema();
 const nodeIdJsonSchema = objectSchema({ id: { type: "string", minLength: 1 } }, ["id"]);
 const updatePromptJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, prompt: { type: "string", minLength: 1 } }, ["id", "prompt"]);
 const updateSchemaJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, schema: {} }, ["id", "schema"]);
-const importWorkspaceJsonSchema = objectSchema({ nodes: { type: "array", items: {} }, stageOutputs: { type: "array", items: {} }, learningObservations: { type: "array", items: {} } });
+const workspaceNodeJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, name: { type: "string", minLength: 1 }, prompt: { type: "string" }, schema: {}, updatedAt: { type: "string", format: "date-time" } }, ["id", "name", "prompt", "schema", "updatedAt"]);
+const stageOutputJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, stage: { type: "string", minLength: 1 }, value: {}, createdAt: { type: "string", format: "date-time" } }, ["id", "stage", "value", "createdAt"]);
+const learningObservationJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, observation: { type: "string", minLength: 1 }, metadata: { type: "object" }, createdAt: { type: "string", format: "date-time" } }, ["id", "observation", "createdAt"]);
+const importWorkspaceJsonSchema = objectSchema({ nodes: { type: "array", items: workspaceNodeJsonSchema }, stageOutputs: { type: "array", items: stageOutputJsonSchema }, learningObservations: { type: "array", items: learningObservationJsonSchema } });
 const saveOutputJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, stage: { type: "string", minLength: 1 }, value: {} }, ["stage", "value"]);
 const listOutputsJsonSchema = objectSchema({ stage: { type: "string", minLength: 1 } });
 const recordObservationJsonSchema = objectSchema({ observation: { type: "string", minLength: 1 }, metadata: { type: "object" } }, ["observation"]);
-const articleJsonSchema = objectSchema({ title: { type: "string", minLength: 1 }, dek: { type: "string" }, bodyMarkdown: { type: "string", minLength: 1 }, slug: { type: "string", minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }, tags: { type: "array", items: { type: "string" } }, author: { type: "string" } }, ["title", "bodyMarkdown", "slug"]);
+const articleProperties = { title: { type: "string", minLength: 1 }, dek: { type: "string" }, bodyMarkdown: { type: "string", minLength: 1 }, slug: { type: "string", minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }, tags: { type: "array", items: { type: "string" } }, author: { type: "string" } };
+const articleJsonSchema = objectSchema(articleProperties, ["title", "bodyMarkdown", "slug"]);
 const validateArticleJsonSchema = objectSchema({ article: articleJsonSchema }, ["article"]);
 const publishBuildJsonSchema = objectSchema({ article: articleJsonSchema, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, ["article"]);
-const publishValidateJsonSchema = objectSchema({ payload: objectSchema({ dryRun: { const: true }, title: { type: "string", minLength: 1 }, bodyMarkdown: { type: "string", minLength: 1 }, slug: { type: "string", minLength: 1 }, target: { type: "string", enum: ["preview", "cms"] } }, ["dryRun", "title", "bodyMarkdown", "slug", "target"]) }, ["payload"]);
+const publishPayloadJsonSchema = objectSchema({ ...articleProperties, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["title", "bodyMarkdown", "slug", "target", "dryRun", "builtAt"]);
+const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
 
 const ok = (data: unknown) => ({ ok: true, data });
 

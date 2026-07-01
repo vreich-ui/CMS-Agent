@@ -10,7 +10,7 @@ const event = (body: unknown, token = "test-token") => ({
 const call = async (body: unknown, token = "test-token") => {
   process.env.MCP_API_TOKEN = "test-token";
   const response = await handler(event(body, token));
-  return { ...response, json: JSON.parse(response.body) };
+  return { ...response, json: response.body ? JSON.parse(response.body) : undefined };
 };
 
 describe("mcp endpoint", () => {
@@ -22,6 +22,12 @@ describe("mcp endpoint", () => {
     const response = await handler(event({ jsonrpc: "2.0", id: 1, method: "initialize" }, "wrong-token"));
     expect(response.statusCode).toBe(401);
     expect(JSON.parse(response.body).error.code).toBe("unauthorized");
+  });
+
+  it("returns 202 without a body for MCP notifications", async () => {
+    const response = await handler(event({ jsonrpc: "2.0", method: "notifications/initialized" }));
+    expect(response.statusCode).toBe(202);
+    expect(response.body).toBe("");
   });
 
   it("handles initialize requests", async () => {
@@ -49,5 +55,23 @@ describe("mcp endpoint", () => {
   it("validates article bodies", async () => {
     const response = await call({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "article_body.validate", arguments: { article: { title: "T", bodyMarkdown: "Body", slug: "valid-slug" } } } });
     expect(response.json.result.structuredContent.data.valid).toBe(true);
+  });
+
+  it("validates publish payloads against the full dry-run payload schema", async () => {
+    const built = await call({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "publish.build_payload", arguments: { article: { title: "T", bodyMarkdown: "Body", slug: "valid-slug" }, target: "preview" } } });
+    const valid = await call({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: built.json.result.structuredContent.data.payload } } });
+    const invalid = await call({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: { title: "T", bodyMarkdown: "Body", slug: "Invalid Slug", target: "preview", dryRun: true } } } });
+
+    expect(valid.json.result.structuredContent.data.valid).toBe(true);
+    expect(invalid.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it("rejects invalid workspace imports before mutating the store", async () => {
+    const importResponse = await call({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "workspace.import_workspace", arguments: { nodes: [{ id: "bad-node", name: "Bad", prompt: "Bad", schema: {}, updatedAt: "not-a-date" }] } } });
+    const getResponse = await call({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "workspace.get_node", arguments: { id: "bad-node" } } });
+
+    expect(importResponse.json.error.code).toBe(-32603);
+    expect(importResponse.json.error.data.error.code).toBe("validation_error");
+    expect(getResponse.json.result.structuredContent.data.node).toBeNull();
   });
 });

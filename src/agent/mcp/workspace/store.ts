@@ -7,7 +7,7 @@ export const articleBodySchema = z.object({
   slug: z.string().min(1).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   tags: z.array(z.string().min(1)).default([]),
   author: z.string().optional()
-});
+}).strict();
 
 export type ArticleBody = z.infer<typeof articleBodySchema>;
 export type WorkspaceNode = { id: string; name: string; prompt: string; schema: unknown; updatedAt: string };
