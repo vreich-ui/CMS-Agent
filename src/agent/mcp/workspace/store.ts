@@ -1,3 +1,5 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { z } from "zod";
 
 const visibleString = z.string().min(1);
@@ -54,14 +56,17 @@ export type WorkspaceNode = { id: string; name: string; prompt: string; schema?:
 export type StageOutput = { id: string; stage: string; value?: unknown; createdAt: string };
 export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; createdAt: string };
 export type PublishPayload = { articleBody: ArticleBody; dryRun: true; target: "preview" | "cms"; builtAt: string };
+export type WorkspaceDocument = { schemaVersion: 1; workspaceVersion: number; updatedAt: string; nodes: WorkspaceNode[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[] };
+export type WorkspaceStoreKind = "memory" | "json";
 
 export interface WorkspaceStore {
+  getWorkspaceVersion(): Promise<number>;
   getNodes(): Promise<WorkspaceNode[]>;
   getNode(id: string): Promise<WorkspaceNode | undefined>;
   updateNodePrompt(id: string, prompt: string): Promise<WorkspaceNode>;
   updateNodeSchema(id: string, schema: unknown): Promise<WorkspaceNode>;
-  exportWorkspace(): Promise<{ nodes: WorkspaceNode[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[] }>;
-  importWorkspace(workspace: { nodes?: WorkspaceNode[]; stageOutputs?: StageOutput[]; learningObservations?: LearningObservation[] }): Promise<{ imported: true; counts: { nodes: number; stageOutputs: number; learningObservations: number } }>;
+  exportWorkspace(): Promise<WorkspaceDocument>;
+  importWorkspace(workspace: { nodes?: WorkspaceNode[]; stageOutputs?: StageOutput[]; learningObservations?: LearningObservation[] }): Promise<{ imported: true; workspaceVersion: number; counts: { nodes: number; stageOutputs: number; learningObservations: number } }>;
   saveStageOutput(stage: string, value: unknown, id?: string): Promise<StageOutput>;
   getStageOutput(id: string): Promise<StageOutput | undefined>;
   listStageOutputs(stage?: string): Promise<StageOutput[]>;
@@ -123,49 +128,118 @@ export const articleBodyJsonSchema = {
 
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const defaultWorkspaceNodes = (): WorkspaceNode[] => [
+  { id: "article_body", name: "Article Body", prompt: "Build canonical `article_body.v1` structured article nodes. Markdown is only an export/rendering adapter.", schema: articleBodyJsonSchema, updatedAt: now() },
+  { id: "publish_payload", name: "Publish Payload", prompt: "Build a dry-run publishing payload from rendered output. Flow: article_body.v1 → render markdown → publish payload.", schema: { type: "object" }, updatedAt: now() }
+];
+const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [] });
 
-export class InMemoryWorkspaceStore implements WorkspaceStore {
-  private nodes = new Map<string, WorkspaceNode>([
-    ["article_body", { id: "article_body", name: "Article Body", prompt: "Build canonical `article_body.v1` structured article nodes. Markdown is only an export/rendering adapter.", schema: articleBodyJsonSchema, updatedAt: now() }],
-    ["publish_payload", { id: "publish_payload", name: "Publish Payload", prompt: "Build a dry-run publishing payload from rendered output. Flow: article_body.v1 → render markdown → publish payload.", schema: { type: "object" }, updatedAt: now() }]
-  ]);
-  private stageOutputs = new Map<string, StageOutput>();
-  private learningObservations = new Map<string, LearningObservation>();
+const workspaceNodeSchema: z.ZodType<WorkspaceNode> = z.object({ id: z.string().min(1), name: z.string().min(1), prompt: z.string(), schema: z.unknown().optional(), updatedAt: z.string().datetime() }).strict();
+const stageOutputSchema: z.ZodType<StageOutput> = z.object({ id: z.string().min(1), stage: z.string().min(1), value: z.unknown().optional(), createdAt: z.string().datetime() }).strict();
+const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.unknown()).optional(), createdAt: z.string().datetime() }).strict();
+const workspaceDocumentSchema: z.ZodType<WorkspaceDocument> = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema) }).strict();
 
-  async getNodes() { return [...this.nodes.values()]; }
-  async getNode(id: string) { return this.nodes.get(id); }
+class WorkspaceStateStore implements WorkspaceStore {
+  protected document: WorkspaceDocument;
+  constructor(document: WorkspaceDocument = createDefaultWorkspaceDocument()) { this.document = document; }
+  protected async load() { return this.document; }
+  protected async save(document: WorkspaceDocument) { this.document = document; }
+  protected async mutate(update: (document: WorkspaceDocument) => void) {
+    const document = await this.load();
+    update(document);
+    document.workspaceVersion += 1;
+    document.updatedAt = now();
+    await this.save(document);
+    return document.workspaceVersion;
+  }
+  async getWorkspaceVersion() { return (await this.load()).workspaceVersion; }
+  async getNodes() { return [...(await this.load()).nodes]; }
+  async getNode(id: string) { return (await this.load()).nodes.find((node) => node.id === id); }
   async updateNodePrompt(id: string, prompt: string) {
-    const node = this.nodes.get(id) ?? { id, name: id, prompt: "", schema: {}, updatedAt: now() };
-    const updated = { ...node, prompt, updatedAt: now() };
-    this.nodes.set(id, updated);
-    return updated;
+    let updated: WorkspaceNode | undefined;
+    await this.mutate((document) => {
+      const existing = document.nodes.find((node) => node.id === id) ?? { id, name: id, prompt: "", schema: {}, updatedAt: now() };
+      updated = { ...existing, prompt, updatedAt: now() };
+      document.nodes = [...document.nodes.filter((node) => node.id !== id), updated];
+    });
+    return updated!;
   }
   async updateNodeSchema(id: string, schema: unknown) {
-    const node = this.nodes.get(id) ?? { id, name: id, prompt: "", schema: {}, updatedAt: now() };
-    const updated = { ...node, schema, updatedAt: now() };
-    this.nodes.set(id, updated);
-    return updated;
+    let updated: WorkspaceNode | undefined;
+    await this.mutate((document) => {
+      const existing = document.nodes.find((node) => node.id === id) ?? { id, name: id, prompt: "", schema: {}, updatedAt: now() };
+      updated = { ...existing, schema, updatedAt: now() };
+      document.nodes = [...document.nodes.filter((node) => node.id !== id), updated];
+    });
+    return updated!;
   }
-  async exportWorkspace() { return { nodes: await this.getNodes(), stageOutputs: await this.listStageOutputs(), learningObservations: await this.listObservations() }; }
+  async exportWorkspace() { return structuredClone(await this.load()); }
   async importWorkspace(workspace: { nodes?: WorkspaceNode[]; stageOutputs?: StageOutput[]; learningObservations?: LearningObservation[] }) {
-    workspace.nodes?.forEach((node) => this.nodes.set(node.id, node));
-    workspace.stageOutputs?.forEach((output) => this.stageOutputs.set(output.id, output));
-    workspace.learningObservations?.forEach((observation) => this.learningObservations.set(observation.id, observation));
-    return { imported: true as const, counts: { nodes: workspace.nodes?.length ?? 0, stageOutputs: workspace.stageOutputs?.length ?? 0, learningObservations: workspace.learningObservations?.length ?? 0 } };
+    let workspaceVersion = 0;
+    workspaceVersion = await this.mutate((document) => {
+      workspace.nodes?.forEach((node) => { document.nodes = [...document.nodes.filter((existing) => existing.id !== node.id), node]; });
+      workspace.stageOutputs?.forEach((output) => { document.stageOutputs = [...document.stageOutputs.filter((existing) => existing.id !== output.id), output]; });
+      workspace.learningObservations?.forEach((observation) => { document.learningObservations = [...document.learningObservations.filter((existing) => existing.id !== observation.id), observation]; });
+    });
+    return { imported: true as const, workspaceVersion, counts: { nodes: workspace.nodes?.length ?? 0, stageOutputs: workspace.stageOutputs?.length ?? 0, learningObservations: workspace.learningObservations?.length ?? 0 } };
   }
   async saveStageOutput(stage: string, value: unknown, id = makeId("stage")) {
     const output = { id, stage, value, createdAt: now() };
-    this.stageOutputs.set(id, output);
+    await this.mutate((document) => { document.stageOutputs = [...document.stageOutputs.filter((existing) => existing.id !== id), output]; });
     return output;
   }
-  async getStageOutput(id: string) { return this.stageOutputs.get(id); }
-  async listStageOutputs(stage?: string) { return [...this.stageOutputs.values()].filter((output) => !stage || output.stage === stage); }
+  async getStageOutput(id: string) { return (await this.load()).stageOutputs.find((output) => output.id === id); }
+  async listStageOutputs(stage?: string) { return (await this.load()).stageOutputs.filter((output) => !stage || output.stage === stage); }
   async recordObservation(observation: string, metadata?: Record<string, unknown>) {
     const record = { id: makeId("learning"), observation, metadata, createdAt: now() };
-    this.learningObservations.set(record.id, record);
+    await this.mutate((document) => { document.learningObservations = [...document.learningObservations, record]; });
     return record;
   }
-  async listObservations() { return [...this.learningObservations.values()]; }
+  async listObservations() { return [...(await this.load()).learningObservations]; }
 }
 
-export const workspaceStore = new InMemoryWorkspaceStore();
+export class InMemoryWorkspaceStore extends WorkspaceStateStore {}
+
+export class JsonWorkspaceStore extends WorkspaceStateStore {
+  private loaded = false;
+  constructor(private readonly filePath: string) { super(createDefaultWorkspaceDocument()); }
+  protected override async load() {
+    if (this.loaded) return this.document;
+    try {
+      const parsed = JSON.parse(await readFile(this.filePath, "utf8"));
+      this.document = workspaceDocumentSchema.parse(parsed);
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        this.document = createDefaultWorkspaceDocument();
+        await this.save(this.document);
+      } else {
+        throw error;
+      }
+    }
+    this.loaded = true;
+    return this.document;
+  }
+  protected override async save(document: WorkspaceDocument) {
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(tempPath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+    await rename(tempPath, this.filePath);
+    this.document = document;
+    this.loaded = true;
+  }
+}
+
+export function createWorkspaceStore(kind: WorkspaceStoreKind = "memory", filePath = process.env.WORKSPACE_STORE_PATH ?? ".data/workspace.json"): WorkspaceStore {
+  if (kind === "json") return new JsonWorkspaceStore(filePath);
+  return new InMemoryWorkspaceStore();
+}
+
+const productionJsonStoreError = "Invalid workspace storage configuration: JSON workspace storage is local/dev only. Netlify serverless filesystem is not durable storage. Use WORKSPACE_STORE=memory for now or implement a database/object-store adapter before enabling persistence in production.";
+
+export function createWorkspaceStoreFromEnv(env: NodeJS.ProcessEnv = process.env): WorkspaceStore {
+  const kind = env.WORKSPACE_STORE === "json" ? "json" : "memory";
+  if (env.NODE_ENV === "production" && kind === "json") throw new Error(productionJsonStoreError);
+  return createWorkspaceStore(kind, env.WORKSPACE_STORE_PATH ?? ".data/workspace.json");
+}
+
+export const workspaceStore = createWorkspaceStoreFromEnv();

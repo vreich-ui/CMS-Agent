@@ -77,6 +77,22 @@ User authentication
 
 Project-specific secrets are intentionally not stored as Netlify environment variables. Publishing will be performed through project MCP servers by updating canonical JSON workflow records. There is no separate publishing endpoint in this workspace.
 
+
+## Workspace MCP storage
+
+By default, the workspace MCP server uses an in-memory store. This is intentionally simple for tests and serverless safety, but it is ephemeral: prompt, schema, stage output, and learning observation updates can disappear after process restarts, Netlify cold starts, or deployments.
+
+For local development persistence, opt into the JSON workspace store:
+
+```text
+WORKSPACE_STORE=json
+WORKSPACE_STORE_PATH=.data/workspace.json
+```
+
+`WORKSPACE_STORE` supports `memory` and `json`; if it is unset, the server defaults to `memory`. When `json` is selected and the file does not exist, the store initializes it with the default workspace nodes. The JSON document includes `schemaVersion`, `workspaceVersion`, `updatedAt`, `nodes`, `stageOutputs`, and `learningObservations`; writes are performed atomically through a temporary file followed by rename.
+
+Do not use `WORKSPACE_STORE=json` in Netlify production. The JSON store is intended for local/dev persistence only because the Netlify serverless filesystem is not durable storage. If `NODE_ENV=production` and `WORKSPACE_STORE=json`, startup fails fast with a configuration error. Production persistence will require a database or object store adapter; until then, production workspace state is ephemeral unless backed externally.
+
 ## Local development
 
 Install dependencies:
