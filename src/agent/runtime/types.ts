@@ -4,16 +4,13 @@ export type WorkflowId = "content_creation" | "publish_only" | "refresh_existing
 export type SkillId = "draft_content" | "editorial_review" | "seo_optimize" | "publish";
 
 export type PublishingTarget = {
-  type: "http" | "none";
-  endpointEnv?: string;
-  tokenEnv?: string;
+  type: "project_mcp" | "none";
 };
 
 export type McpServerConfig = {
   name: string;
   type: "streamable_http";
-  urlEnv: string;
-  authorizationEnv?: string;
+  url?: string;
   allowedTools?: string[];
   blockedTools?: string[];
 };

@@ -18,7 +18,13 @@ describe("mcp endpoint", () => {
     process.env.MCP_API_TOKEN = "test-token";
   });
 
-  it("rejects unauthorized requests", async () => {
+  it("rejects requests without bearer authorization", async () => {
+    const response = await handler(event({ jsonrpc: "2.0", id: 1, method: "initialize" }, ""));
+    expect(response.statusCode).toBe(401);
+    expect(JSON.parse(response.body).error.code).toBe("unauthorized");
+  });
+
+  it("rejects requests with an invalid bearer token", async () => {
     const response = await handler(event({ jsonrpc: "2.0", id: 1, method: "initialize" }, "wrong-token"));
     expect(response.statusCode).toBe(401);
     expect(JSON.parse(response.body).error.code).toBe("unauthorized");

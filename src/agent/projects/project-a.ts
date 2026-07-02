@@ -13,19 +13,10 @@ export const projectA: ProjectProfile = {
     "Return publish-ready Markdown unless another format is requested."
   ],
   allowedSkills: ["draft_content", "editorial_review", "seo_optimize", "publish"],
-  mcpServers: [
-    {
-      name: "content_repo",
-      type: "streamable_http",
-      urlEnv: "MCP_CONTENT_REPO_URL",
-      authorizationEnv: "MCP_CONTENT_REPO_TOKEN",
-      allowedTools: ["search_documents", "get_document"]
-    }
-  ],
+  // TODO: Resolve project MCP servers from authenticated project selection and passthrough credentials.
+  mcpServers: [],
   memoryNamespace: "project-a",
   publishingTarget: {
-    type: "http",
-    endpointEnv: "PROJECT_A_PUBLISH_ENDPOINT",
-    tokenEnv: "PROJECT_A_PUBLISH_TOKEN"
+    type: "project_mcp"
   }
 };
