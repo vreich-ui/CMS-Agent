@@ -13,6 +13,27 @@ const call = async (body: unknown, token = "test-token") => {
   return { ...response, json: response.body ? JSON.parse(response.body) : undefined };
 };
 
+const validArticleBody = {
+  schema_version: "article_body.v1",
+  nodes: [
+    {
+      id: "n_Example",
+      kind: "content",
+      public: {
+        title: "Example title",
+        body: "Visible reader-facing body copy."
+      }
+    }
+  ]
+};
+
+const validateArticleBody = (articleBody: unknown, id = 50) => call({
+  jsonrpc: "2.0",
+  id,
+  method: "tools/call",
+  params: { name: "article_body.validate", arguments: { articleBody } }
+});
+
 describe("mcp endpoint", () => {
   beforeEach(() => {
     process.env.MCP_API_TOKEN = "test-token";
@@ -47,10 +68,14 @@ describe("mcp endpoint", () => {
     expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("workspace.get_nodes");
   });
 
-  it("calls workspace.get_nodes", async () => {
+  it("calls workspace.get_nodes without treating Markdown as canonical", async () => {
     const response = await call({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "workspace.get_nodes", arguments: {} } });
+    const articleBodyNode = response.json.result.structuredContent.data.nodes.find((node: { id: string }) => node.id === "article_body");
+
     expect(response.json.result.structuredContent.ok).toBe(true);
     expect(response.json.result.structuredContent.data.nodes.length).toBeGreaterThan(0);
+    expect(articleBodyNode.prompt).toBe("Build canonical `article_body.v1` structured article nodes. Markdown is only an export/rendering adapter.");
+    expect(articleBodyNode.schema.required).toEqual(["schema_version", "nodes"]);
   });
 
   it("updates workspace node prompt", async () => {
@@ -58,16 +83,191 @@ describe("mcp endpoint", () => {
     expect(response.json.result.structuredContent.data.node.prompt).toBe("New prompt");
   });
 
-  it("validates article bodies", async () => {
-    const response = await call({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "article_body.validate", arguments: { article: { title: "T", bodyMarkdown: "Body", slug: "valid-slug" } } } });
+  it("validates canonical article_body.v1 bodies", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "article_body.validate", arguments: { articleBody: validArticleBody } } });
     expect(response.json.result.structuredContent.data.valid).toBe(true);
   });
 
-  it("validates publish payloads against the full dry-run payload schema", async () => {
-    const built = await call({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "publish.build_payload", arguments: { article: { title: "T", bodyMarkdown: "Body", slug: "valid-slug" }, target: "preview" } } });
-    const valid = await call({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: built.json.result.structuredContent.data.payload } } });
-    const invalid = await call({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: { title: "T", bodyMarkdown: "Body", slug: "Invalid Slug", target: "preview", dryRun: true } } } });
+  it.each(["n_A1b2C3", "n_test123"])("accepts valid node id %s", async (nodeId) => {
+    const response = await validateArticleBody({
+      schema_version: "article_body.v1",
+      nodes: [{ id: nodeId, kind: "content", public: { title: "Valid node" } }]
+    });
 
+    expect(response.json.result.structuredContent.data.valid).toBe(true);
+  });
+
+  it.each(["abc123", ""])("rejects invalid node id %s", async (nodeId) => {
+    const response = await validateArticleBody({
+      schema_version: "article_body.v1",
+      nodes: [{ id: nodeId, kind: "content", public: { title: "Invalid node" } }]
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it("rejects article_body.v1 bodies with empty nodes", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 51, method: "tools/call", params: { name: "article_body.validate", arguments: { articleBody: { schema_version: "article_body.v1", nodes: [] } } } });
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it("rejects invalid node kind", async () => {
+    const response = await validateArticleBody({
+      schema_version: "article_body.v1",
+      nodes: [{ id: "n_InvalidKind", kind: "section", public: { title: "Invalid kind" } }]
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it("rejects empty public node content", async () => {
+    const response = await validateArticleBody({
+      schema_version: "article_body.v1",
+      nodes: [{ id: "n_EmptyPublic", kind: "content", public: {} }]
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it.each([
+    { ctaText: "Read more" },
+    { ctaLink: "https://example.com/read-more" }
+  ])("rejects incomplete CTA fields %#", async (publicFields) => {
+    const response = await validateArticleBody({
+      schema_version: "article_body.v1",
+      nodes: [{ id: "n_Cta", kind: "action", public: publicFields }]
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it("rejects empty media objects", async () => {
+    const response = await validateArticleBody({
+      schema_version: "article_body.v1",
+      nodes: [{ id: "n_EmptyMedia", kind: "content", public: { media: {} } }]
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it.each(["internal", "hidden"])("rejects article bodies with only %s visibility nodes", async (visibility) => {
+    const response = await validateArticleBody({
+      schema_version: "article_body.v1",
+      nodes: [{ id: "n_NotVisible", kind: "content", visibility, public: { title: "Not reader visible" } }]
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it("rejects private node visibility", async () => {
+    const response = await call({
+      jsonrpc: "2.0",
+      id: 53,
+      method: "tools/call",
+      params: {
+        name: "article_body.validate",
+        arguments: {
+          articleBody: {
+            schema_version: "article_body.v1",
+            nodes: [{ id: "n_Private", kind: "content", visibility: "private", public: { title: "Private title" } }]
+          }
+        }
+      }
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it("accepts internal visibility when another node is reader-visible", async () => {
+    const response = await call({
+      jsonrpc: "2.0",
+      id: 54,
+      method: "tools/call",
+      params: {
+        name: "article_body.validate",
+        arguments: {
+          articleBody: {
+            schema_version: "article_body.v1",
+            nodes: [
+              { id: "n_Internal", kind: "content", visibility: "internal", public: { title: "Internal planning title" } },
+              { id: "n_Public", kind: "content", visibility: "public", public: { body: "Reader-facing body." } }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(true);
+  });
+
+  it("accepts supported public media", async () => {
+    const response = await call({
+      jsonrpc: "2.0",
+      id: 55,
+      method: "tools/call",
+      params: {
+        name: "article_body.validate",
+        arguments: {
+          articleBody: {
+            schema_version: "article_body.v1",
+            nodes: [{ id: "n_Media", kind: "content", public: { media: { type: "image", src: "https://example.com/image.jpg", alt: "Example image" } } }]
+          }
+        }
+      }
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(true);
+  });
+
+  it("rejects unsupported public media types", async () => {
+    const response = await call({
+      jsonrpc: "2.0",
+      id: 56,
+      method: "tools/call",
+      params: {
+        name: "article_body.validate",
+        arguments: {
+          articleBody: {
+            schema_version: "article_body.v1",
+            nodes: [{ id: "n_Media", kind: "content", public: { media: { type: "document", src: "https://example.com/file.pdf", alt: "Example document" } } }]
+          }
+        }
+      }
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
+  });
+
+  it("exposes JSON Schema constraints matching runtime article_body.v1 validation", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 57, method: "tools/call", params: { name: "article_body.get_schema", arguments: {} } });
+    const schema = response.json.result.structuredContent.data.schema;
+    const nodeSchema = schema.properties.nodes.items;
+    const publicSchema = nodeSchema.properties.public;
+    const mediaSchema = publicSchema.properties.media;
+
+    expect(schema.properties.schema_version.const).toBe("article_body.v1");
+    expect(nodeSchema.properties.id.pattern).toBe("^n_[A-Za-z0-9]+$");
+    expect(nodeSchema.properties.visibility.enum).toEqual(["public", "internal", "hidden"]);
+    expect(nodeSchema.properties.kind.enum).toEqual(["content", "action", "placement", "interactive"]);
+    expect(publicSchema.anyOf).toEqual(expect.arrayContaining([{ required: ["title"] }, { required: ["body"] }, { required: ["media"] }]));
+    expect(publicSchema.dependentRequired).toEqual({ ctaText: ["ctaLink"], ctaLink: ["ctaText"] });
+    expect(mediaSchema.required).toEqual(["type"]);
+    expect(mediaSchema.anyOf).toEqual([{ required: ["src"] }, { required: ["artifactReference"] }, { required: ["embed"] }]);
+    expect(mediaSchema.properties.type.enum).toEqual(["image", "video", "audio", "embed"]);
+  });
+
+  it("rejects markdown-first article objects", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 52, method: "tools/call", params: { name: "article_body.validate", arguments: { article: { title: "T", bodyMarkdown: "Body", slug: "valid-slug" } } } });
+    expect(response.json.error.code).toBe(-32603);
+    expect(response.json.error.data.error.code).toBe("validation_error");
+  });
+
+  it("validates publish payloads against the full dry-run canonical article body payload schema", async () => {
+    const built = await call({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "publish.build_payload", arguments: { articleBody: validArticleBody, target: "preview" } } });
+    const valid = await call({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: built.json.result.structuredContent.data.payload } } });
+    const invalid = await call({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: { article: { title: "T", bodyMarkdown: "Body", slug: "valid-slug" }, target: "preview", dryRun: true, builtAt: new Date().toISOString() } } } });
+
+    expect(built.json.result.structuredContent.data.payload.articleBody).toEqual(validArticleBody);
     expect(valid.json.result.structuredContent.data.valid).toBe(true);
     expect(invalid.json.result.structuredContent.data.valid).toBe(false);
   });

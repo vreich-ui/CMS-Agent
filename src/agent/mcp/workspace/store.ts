@@ -1,19 +1,59 @@
 import { z } from "zod";
 
-export const articleBodySchema = z.object({
-  title: z.string().min(1),
-  dek: z.string().optional(),
-  bodyMarkdown: z.string().min(1),
-  slug: z.string().min(1).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  tags: z.array(z.string().min(1)).default([]),
-  author: z.string().optional()
+const visibleString = z.string().min(1);
+const publicMediaSchema = z.object({
+  type: z.enum(["image", "video", "audio", "embed"]),
+  src: z.string().min(1).optional(),
+  artifactReference: z.string().min(1).optional(),
+  embed: z.string().min(1).optional(),
+  alt: z.string().min(1).optional(),
+  caption: z.string().min(1).optional()
+}).strict().refine(
+  (media) => media.src !== undefined || media.artifactReference !== undefined || media.embed !== undefined,
+  { message: "Media requires at least one of src, artifactReference, or embed." }
+);
+
+const publicNodeFieldsSchema = z.object({
+  eyebrow: visibleString.optional(),
+  title: visibleString.optional(),
+  body: visibleString.optional(),
+  items: z.array(visibleString).min(1).optional(),
+  ctaText: visibleString.optional(),
+  ctaLink: visibleString.optional(),
+  label: visibleString.optional(),
+  media: publicMediaSchema.optional()
+}).strict().refine(
+  (publicFields) => Object.keys(publicFields).length > 0,
+  { message: "Public node content requires at least one meaningful field." }
+).refine(
+  (publicFields) => (publicFields.ctaText === undefined) === (publicFields.ctaLink === undefined),
+  { message: "CTA fields must include both ctaText and ctaLink." }
+);
+
+const nodeVisibilitySchema = z.enum(["public", "internal", "hidden"]).optional();
+const articleBodyNodeSchema = z.object({
+  id: z.string().regex(/^n_[A-Za-z0-9]+$/),
+  kind: z.enum(["content", "action", "placement", "interactive"]),
+  visibility: nodeVisibilitySchema,
+  public: publicNodeFieldsSchema
 }).strict();
+
+const visiblePublicFields = ["eyebrow", "title", "body", "items", "ctaText", "ctaLink", "label", "media"] as const;
+const hasVisiblePublicField = (publicFields: z.infer<typeof publicNodeFieldsSchema>) => visiblePublicFields.some((field) => publicFields[field] !== undefined);
+
+export const articleBodySchema = z.object({
+  schema_version: z.literal("article_body.v1"),
+  nodes: z.array(articleBodyNodeSchema).min(1)
+}).strict().refine(
+  (articleBody) => articleBody.nodes.some((node) => (node.visibility === undefined || node.visibility === "public") && hasVisiblePublicField(node.public)),
+  { message: "At least one node must be reader-visible with at least one public field.", path: ["nodes"] }
+);
 
 export type ArticleBody = z.infer<typeof articleBodySchema>;
 export type WorkspaceNode = { id: string; name: string; prompt: string; schema?: unknown; updatedAt: string };
 export type StageOutput = { id: string; stage: string; value?: unknown; createdAt: string };
 export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; createdAt: string };
-export type PublishPayload = ArticleBody & { dryRun: true; target: "preview" | "cms"; builtAt: string };
+export type PublishPayload = { articleBody: ArticleBody; dryRun: true; target: "preview" | "cms"; builtAt: string };
 
 export interface WorkspaceStore {
   getNodes(): Promise<WorkspaceNode[]>;
@@ -29,13 +69,65 @@ export interface WorkspaceStore {
   listObservations(): Promise<LearningObservation[]>;
 }
 
+export const articleBodyJsonSchema = {
+  type: "object",
+  required: ["schema_version", "nodes"],
+  additionalProperties: false,
+  properties: {
+    schema_version: { const: "article_body.v1" },
+    nodes: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        required: ["id", "kind", "public"],
+        additionalProperties: false,
+        properties: {
+          id: { type: "string", pattern: "^n_[A-Za-z0-9]+$" },
+          kind: { type: "string", enum: ["content", "action", "placement", "interactive"] },
+          visibility: { type: "string", enum: ["public", "internal", "hidden"] },
+          public: {
+            type: "object",
+            additionalProperties: false,
+            anyOf: [{ required: ["eyebrow"] }, { required: ["title"] }, { required: ["body"] }, { required: ["items"] }, { required: ["label"] }, { required: ["media"] }, { required: ["ctaText"] }, { required: ["ctaLink"] }],
+            dependentRequired: { ctaText: ["ctaLink"], ctaLink: ["ctaText"] },
+            properties: {
+              eyebrow: { type: "string", minLength: 1 },
+              title: { type: "string", minLength: 1 },
+              body: { type: "string", minLength: 1 },
+              items: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+              ctaText: { type: "string", minLength: 1 },
+              ctaLink: { type: "string", minLength: 1 },
+              label: { type: "string", minLength: 1 },
+              media: {
+                type: "object",
+                required: ["type"],
+                additionalProperties: false,
+                anyOf: [{ required: ["src"] }, { required: ["artifactReference"] }, { required: ["embed"] }],
+                properties: {
+                  type: { type: "string", enum: ["image", "video", "audio", "embed"] },
+                  src: { type: "string", minLength: 1 },
+                  artifactReference: { type: "string", minLength: 1 },
+                  embed: { type: "string", minLength: 1 },
+                  alt: { type: "string", minLength: 1 },
+                  caption: { type: "string", minLength: 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 export class InMemoryWorkspaceStore implements WorkspaceStore {
   private nodes = new Map<string, WorkspaceNode>([
-    ["article_body", { id: "article_body", name: "Article Body", prompt: "Draft a complete article body in Markdown.", schema: { type: "object", required: ["title", "bodyMarkdown", "slug"], properties: { title: { type: "string" }, dek: { type: "string" }, bodyMarkdown: { type: "string" }, slug: { type: "string" }, tags: { type: "array", items: { type: "string" } }, author: { type: "string" } } }, updatedAt: now() }],
-    ["publish_payload", { id: "publish_payload", name: "Publish Payload", prompt: "Build a dry-run publishing payload.", schema: { type: "object" }, updatedAt: now() }]
+    ["article_body", { id: "article_body", name: "Article Body", prompt: "Build canonical `article_body.v1` structured article nodes. Markdown is only an export/rendering adapter.", schema: articleBodyJsonSchema, updatedAt: now() }],
+    ["publish_payload", { id: "publish_payload", name: "Publish Payload", prompt: "Build a dry-run publishing payload from rendered output. Flow: article_body.v1 → render markdown → publish payload.", schema: { type: "object" }, updatedAt: now() }]
   ]);
   private stageOutputs = new Map<string, StageOutput>();
   private learningObservations = new Map<string, LearningObservation>();
