@@ -1,4 +1,5 @@
 import { handleMcpJsonRpc } from "../../src/agent/mcp/workspace/server.js";
+import { hasBearerToken, unauthorizedResponse, type HeaderMap } from "../../src/agent/runtime/auth.js";
 
 const json = (statusCode: number, body: unknown) => ({
   statusCode,
@@ -17,16 +18,10 @@ const isMcpNotification = (message: unknown) => {
   return request.id === undefined && typeof request.method === "string" && request.method.startsWith("notifications/");
 };
 
-const isAuthorized = (headers: Record<string, string | undefined>) => {
-  const expected = process.env.MCP_API_TOKEN;
-  if (!expected) return false;
-  const authorization = headers.authorization ?? headers.Authorization;
-  return authorization === `Bearer ${expected}`;
-};
-
-export const handler = async (event: { httpMethod: string; body: string | null; headers: Record<string, string | undefined> }) => {
+export const handler = async (event: { httpMethod: string; body: string | null; headers: HeaderMap }) => {
   if (event.httpMethod !== "POST") return json(405, { error: { code: "method_not_allowed", message: "Use POST." } });
-  if (!isAuthorized(event.headers)) return json(401, { error: { code: "unauthorized", message: "Missing or invalid bearer token." } });
+  // TODO: Replace workspace bearer tokens with authenticated user sessions and passthrough project credentials.
+  if (!hasBearerToken(event.headers, process.env.MCP_API_TOKEN)) return json(401, unauthorizedResponse);
 
   try {
     const rawBody = event.body ? JSON.parse(event.body) : {};

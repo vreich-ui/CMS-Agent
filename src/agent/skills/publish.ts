@@ -13,22 +13,6 @@ export async function publishContent(params: z.infer<typeof publishParamsSchema>
     return { dryRun: true, published: false, status: "dry_run", target: project.publishingTarget.type };
   }
 
-  if (project.publishingTarget.type !== "http") {
-    return { dryRun: false, published: false, status: "no_publish_target" };
-  }
-
-  const endpoint = project.publishingTarget.endpointEnv ? process.env[project.publishingTarget.endpointEnv] : undefined;
-  if (!endpoint) throw new Error("Publishing endpoint is not configured");
-
-  const token = project.publishingTarget.tokenEnv ? process.env[project.publishingTarget.tokenEnv] : undefined;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify({ title: parsed.title, content: parsed.content })
-  });
-
-  return { dryRun: false, published: response.ok, status: response.ok ? "published" : "publish_failed", statusCode: response.status };
+  // TODO: Publish by updating canonical JSON workflow records through the selected project MCP using passthrough credentials.
+  return { dryRun: false, published: false, status: "project_mcp_publish_not_implemented", target: project.publishingTarget.type };
 }
