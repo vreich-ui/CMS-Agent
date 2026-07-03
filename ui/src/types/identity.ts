@@ -1,6 +1,7 @@
 export type IdentityUser = {
   email?: string;
   token?: { access_token?: string };
+  jwt?: () => Promise<string>;
 };
 
 export type NetlifyIdentity = {
