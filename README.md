@@ -148,3 +148,47 @@ curl -sS http://localhost:8888/api/mcp \
 * Publishing defaults to dry-run.
 * Mutating external actions must be explicit and auditable.
 * The current publishing skill does not call external publishing endpoints; project MCP publishing will be added later with passthrough credentials.
+
+## Visual workspace UI
+
+A lightweight React/Vite UI lives in `ui/`. It is a local browser workspace for inspecting and editing MCP workspace state; it does not replace the Netlify functions and it is not the source of truth. The workspace MCP server at `POST /api/mcp` remains the source of truth.
+
+### Run locally
+
+Install root dependencies and UI dependencies:
+
+```bash
+npm install
+npm --prefix ui install
+```
+
+Start Netlify dev so `/api/mcp` is available, then start the Vite app in a second terminal:
+
+```bash
+npm run dev
+npm run ui:dev
+```
+
+By default, the UI points at `/api/mcp`. In local development, use the Vite URL shown by `npm run ui:dev`; if the Vite dev server is not proxying Netlify requests in your setup, enter the full Netlify dev endpoint in the UI, such as `http://localhost:8888/api/mcp`.
+
+### Bearer token
+
+Enter the MCP bearer token in the UI token field. The token must match `MCP_API_TOKEN` for the Netlify MCP endpoint. For now, the UI stores that token only in browser `localStorage`; do not hardcode it and do not commit secrets.
+
+### Current capabilities
+
+The UI can:
+
+* Render workspace nodes from `workspace.get_nodes` as a React Flow graph.
+* Inspect a selected node, including id, name, prompt, schema preview, and workspace version when returned by MCP.
+* Save prompt edits through `workspace.update_node_prompt`.
+* Render selected node schemas with react-jsonschema-form.
+* Fetch and display the canonical `article_body.v1` schema from `article_body.get_schema`.
+* Validate pasted JSON or RJSF-created article bodies with `article_body.validate`.
+* Export the current workspace document with `workspace.export_workspace`.
+
+The UI cannot:
+
+* Publish content or call real project publishing MCP tools.
+* Persist data outside whatever store backs the workspace MCP server.
+* Act as the canonical workspace state. All reads and mutations must go through MCP tools, and the MCP workspace server remains authoritative.
