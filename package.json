@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "setup": "npm ci",
     "dev": "netlify dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "npm run typecheck"
+    "build": "npm run typecheck",
+    "codex:test": "npm run typecheck && npm test"
   },
   "dependencies": {
     "zod": "^3.25.76",
