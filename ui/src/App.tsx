@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Form from "@rjsf/core";
+import Form, { type IChangeEvent } from "@rjsf/core";
 import validator from "@rjsf/validator-ajv8";
-import type { IChangeEvent, JSONSchema7 } from "@rjsf/utils";
+import type { RJSFSchema } from "@rjsf/utils";
 import { Background, Controls, MiniMap, ReactFlow, type Node, type Edge } from "@xyflow/react";
-import { callMcpTool, McpClientError } from "./mcpClient";
+import { callMcpMethod, callMcpTool, McpClientError } from "./mcpClient";
 import type { ArticleValidationResult, WorkspaceDocument, WorkspaceNode } from "./types";
 
 const TOKEN_KEY = "cms-agent.mcpToken";
@@ -13,11 +13,12 @@ const sampleArticleBody = {
   nodes: [{ id: "n_intro", kind: "content", visibility: "public", public: { title: "Sample title", body: "Sample body" } }]
 };
 
-const asSchema = (schema: unknown): JSONSchema7 | undefined => schema && typeof schema === "object" ? schema as JSONSchema7 : undefined;
+const asSchema = (schema: unknown): RJSFSchema | undefined => schema && typeof schema === "object" ? schema as RJSFSchema : undefined;
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const promptPreview = (prompt: string) => prompt.length > 96 ? `${prompt.slice(0, 96)}…` : prompt;
 
 type Status = { tone: "info" | "success" | "error"; message: string } | null;
+type InitializeResult = { protocolVersion?: string; serverInfo?: { name?: string; version?: string } };
 
 function App() {
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT);
@@ -26,12 +27,13 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [promptDraft, setPromptDraft] = useState("");
   const [workspaceVersion, setWorkspaceVersion] = useState<number | undefined>();
-  const [articleSchema, setArticleSchema] = useState<JSONSchema7 | undefined>();
+  const [articleSchema, setArticleSchema] = useState<RJSFSchema | undefined>();
   const [articleJson, setArticleJson] = useState(pretty(sampleArticleBody));
   const [articleFormData, setArticleFormData] = useState<unknown>(sampleArticleBody);
   const [validation, setValidation] = useState<ArticleValidationResult | null>(null);
   const [exportedWorkspace, setExportedWorkspace] = useState<WorkspaceDocument | null>(null);
   const [status, setStatus] = useState<Status>(null);
+  const [connection, setConnection] = useState<InitializeResult | null>(null);
 
   const config = useMemo(() => ({ endpoint, token }), [endpoint, token]);
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedId) ?? null, [nodes, selectedId]);
@@ -50,11 +52,22 @@ function App() {
     setStatus({ tone: "error", message });
   };
 
+  const testConnection = async () => {
+    try {
+      const result = await callMcpMethod<InitializeResult>(config, "initialize", {});
+      setConnection(result);
+      setStatus({ tone: "success", message: `Connected to ${result.serverInfo?.name ?? "MCP server"} using protocol ${result.protocolVersion ?? "unknown"}.` });
+    } catch (error) {
+      setConnection(null);
+      handleError(error);
+    }
+  };
+
   const loadWorkspace = useCallback(async () => {
     try {
       const [{ nodes: nextNodes }, { schema }] = await Promise.all([
         callMcpTool<{ nodes: WorkspaceNode[] }>(config, "workspace.get_nodes"),
-        callMcpTool<{ schema: JSONSchema7 }>(config, "article_body.get_schema")
+        callMcpTool<{ schema: RJSFSchema }>(config, "article_body.get_schema")
       ]);
       setNodes(nextNodes);
       setArticleSchema(schema);
@@ -112,7 +125,8 @@ function App() {
       <div className="auth-card">
         <label>Endpoint<input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>
         <label>MCP bearer token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Stored in localStorage" /></label>
-        <button onClick={loadWorkspace}>Load workspace</button>
+        <div className="auth-actions"><button onClick={testConnection}>Test connection</button><button onClick={loadWorkspace}>Load workspace</button></div>
+        {connection && <p className="connection-summary">Server: <strong>{connection.serverInfo?.name ?? "unknown"}</strong><br />Protocol: <strong>{connection.protocolVersion ?? "unknown"}</strong></p>}
       </div>
     </header>
 

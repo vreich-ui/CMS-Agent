@@ -1,4 +1,4 @@
-import type { JSONSchema7 } from "@rjsf/utils";
+import type { RJSFSchema } from "@rjsf/utils";
 
 export type JsonValue = unknown;
 
@@ -6,7 +6,7 @@ export type WorkspaceNode = {
   id: string;
   name: string;
   prompt: string;
-  schema?: JSONSchema7 | JsonValue;
+  schema?: RJSFSchema | JsonValue;
   updatedAt?: string;
 };
 

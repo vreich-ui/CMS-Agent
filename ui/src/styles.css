@@ -56,6 +56,8 @@ pre {
   gap: 0.8rem;
   padding: 1rem;
 }
+.auth-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.connection-summary { color: #eef3ff !important; font-size: 0.9rem; line-height: 1.4; margin: 0 !important; }
 .status { border-radius: 1rem; font-weight: 700; padding: 0.9rem 1rem; }
 .status.info { background: #e8edff; color: #2945a5; }
 .status.success { background: #e8f8ef; color: #16633a; }
