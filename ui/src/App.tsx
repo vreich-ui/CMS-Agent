@@ -7,25 +7,31 @@ import { SchemaViewer } from "./components/SchemaViewer";
 import { Validator } from "./components/Validator";
 import { WorkspaceGraph } from "./components/WorkspaceGraph";
 import { getErrorMessage } from "./hooks/useConnection";
+import { useIdentitySession } from "./hooks/useIdentitySession";
 import { useWorkspace } from "./hooks/useWorkspace";
 import type { InitializeResult, McpConfig } from "./types/workspace";
 
 const TOKEN_KEY = "cms-agent.mcpToken";
-const DEFAULT_ENDPOINT = "/api/mcp";
+const DEPLOYED_ENDPOINT = "/api/workspace-mcp";
+const LOCAL_ENDPOINT = "/api/mcp";
+const isDeployedMode = !import.meta.env.DEV;
+const DEFAULT_ENDPOINT = isDeployedMode ? DEPLOYED_ENDPOINT : LOCAL_ENDPOINT;
 
 type Status = { tone: "info" | "success" | "error"; message: string } | null;
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
 function App() {
+  const { session, login, logout } = useIdentitySession(isDeployedMode);
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT);
-  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) ?? "");
+  const [token, setToken] = useState(() => isDeployedMode ? "" : localStorage.getItem(TOKEN_KEY) ?? "");
   const [status, setStatus] = useState<Status>(null);
-  const config = useMemo<McpConfig>(() => ({ endpoint, token }), [endpoint, token]);
+  const usingSecureProxy = endpoint === DEPLOYED_ENDPOINT;
+  const config = useMemo<McpConfig>(() => ({ endpoint, token: usingSecureProxy ? undefined : token, authToken: usingSecureProxy ? session.accessToken : undefined, requiresToken: !usingSecureProxy }), [endpoint, session.accessToken, token, usingSecureProxy]);
   const workspace = useWorkspace(config);
 
   useEffect(() => {
-    localStorage.setItem(TOKEN_KEY, token);
+    if (!isDeployedMode) localStorage.setItem(TOKEN_KEY, token);
   }, [token]);
 
   const handleError = (error: unknown) => {
@@ -72,10 +78,17 @@ function App() {
     }
   };
 
+
+  if (isDeployedMode && session.loading) return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>Checking workspace access…</h1><p>Netlify Identity is verifying your session.</p></section></main>;
+
+  if (isDeployedMode && !session.authenticated) return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>Workspace login required</h1><p>Sign in with Google through Netlify Identity to access the CMS-Agent workspace.</p>{session.error && <div className="status error" role="status">{session.error}</div>}<button onClick={login}>Log in with Google</button></section></main>;
+
+  if (isDeployedMode && !session.authorized) return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>Not authorized</h1><p>The signed-in account is not allowlisted for this workspace.</p>{session.email && <p>Signed in as <strong>{session.email}</strong>.</p>}{session.error && <div className="status error" role="status">{session.error}</div>}<button onClick={logout}>Log out</button></section></main>;
+
   return <main className="app-shell">
     <header className="hero">
       <div><p className="eyebrow">CMS-Agent</p><h1>Workspace UI</h1><p>Visualize and edit workspace state through the MCP server. The MCP server remains the source of truth.</p></div>
-      <ConnectionPanel endpoint={endpoint} token={token} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} />
+      <div className="header-stack">{isDeployedMode && <div className="session-card"><span>Signed in as <strong>{session.email}</strong></span><button onClick={logout}>Log out</button></div>}<ConnectionPanel endpoint={endpoint} token={token} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} showTokenField={!usingSecureProxy} /></div>
     </header>
 
     {status && <div className={`status ${status.tone}`} role="status">{status.message}</div>}
