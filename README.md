@@ -192,3 +192,58 @@ The UI cannot:
 * Publish content or call real project publishing MCP tools.
 * Persist data outside whatever store backs the workspace MCP server.
 * Act as the canonical workspace state. All reads and mutations must go through MCP tools, and the MCP workspace server remains authoritative.
+
+## Publishing Conductor workspace graph
+
+The default workspace MCP graph is the first real Publishing Conductor workflow. `workspace.get_nodes` returns typed nodes with UI-compatible `id`, `name`, `prompt`, `schema`, and `updatedAt` fields plus operational metadata for prompts, schemas, dependencies, risk level, status, produced artifacts, allowed tools, required inputs, and graph position.
+
+Current graph flow:
+
+```text
+input_triage
+  -> topic_opportunity
+  -> reader_insight
+  -> research
+  -> objection_mapping
+  -> narrative_movement
+  -> angle_strategy
+  -> brief_architect
+  -> draft_writer
+
+draft_writer
+  -> human_texture
+  -> trust_factual
+  -> emotional_resonance
+  -> reader_simulation
+
+human_texture
+trust_factual
+emotional_resonance
+reader_simulation
+  -> review_aggregator
+  -> article_body
+  -> publish_payload
+  -> publication_controller
+  -> learning_recorder
+```
+
+The richer internal conductor graph maps later to Dr. Lurie MCP's five external workflow stages:
+
+| Internal node | Future external stage |
+| --- | --- |
+| `reader_insight` | `reader_insight` |
+| `research` | `research` |
+| `angle_strategy` | `angle` |
+| `draft_writer` | `draft` |
+| `article_body` | `final_article` |
+
+Canonical content rules:
+
+* `article_body.v1` is the canonical article content artifact.
+* Markdown is not canonical. Markdown is only a render/export adapter.
+* `content_source.v1` remains the canonical external project workflow envelope.
+* The workspace MCP manages nodes, prompts, schemas, stage outputs, and learning observations only.
+* Dr. Lurie MCP remains the future external project publishing backend; this workspace does not integrate it yet.
+* `publish_payload` consumes `article_body.v1` and produces a dry-run adapter payload only.
+* `publication_controller` is marked `publish` risk, but it is dry/approval-only for now and must not publish without future explicit approval support.
+* `learning_recorder` records structured observations and improvement candidates, but it does not auto-edit prompts or schemas.

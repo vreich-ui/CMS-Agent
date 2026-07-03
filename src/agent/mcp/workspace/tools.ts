@@ -1,5 +1,6 @@
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { articleBodyJsonSchema, articleBodySchema, type WorkspaceStore } from "./store.js";
+import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 
 export type JsonSchema = Record<string, unknown>;
 export type WorkspaceTool = {
@@ -16,9 +17,9 @@ const workspaceNodeImport = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   prompt: z.string(),
-  schema: z.unknown(),
+  schema: z.unknown().optional(),
   updatedAt: z.string().datetime()
-}).strict();
+}).passthrough();
 const stageOutputImport = z.object({
   id: z.string().min(1),
   stage: z.string().min(1),
@@ -76,7 +77,7 @@ export function createWorkspaceTools(store: WorkspaceStore): WorkspaceTool[] {
     tool({ name: "workspace.update_node_prompt", description: "Update a node prompt.", zodSchema: updatePrompt, inputSchema: updatePromptJsonSchema, execute: async (input) => { const data = updatePrompt.parse(input); const node = await store.updateNodePrompt(data.id, data.prompt); return ok({ node, workspaceVersion: await store.getWorkspaceVersion() }); } }),
     tool({ name: "workspace.update_node_schema", description: "Update a node schema.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const node = await store.updateNodeSchema(data.id, data.schema); return ok({ node, workspaceVersion: await store.getWorkspaceVersion() }); } }),
     tool({ name: "workspace.export_workspace", description: "Export workspace data.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok(await store.exportWorkspace()); } }),
-    tool({ name: "workspace.import_workspace", description: "Import workspace data.", zodSchema: importWorkspace, inputSchema: importWorkspaceJsonSchema, execute: async (input) => ok(await store.importWorkspace(importWorkspace.parse(input))) }),
+    tool({ name: "workspace.import_workspace", description: "Import workspace data.", zodSchema: importWorkspace, inputSchema: importWorkspaceJsonSchema, execute: async (input) => { const data = importWorkspace.parse(input); return ok(await store.importWorkspace({ ...data, nodes: data.nodes as WorkspaceNode[] | undefined })); } }),
     tool({ name: "article_body.get_schema", description: "Get article body schema.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ schema: articleBodyJsonSchema }); } }),
     tool({ name: "article_body.validate", description: "Validate article body data.", zodSchema: validateArticle, inputSchema: validateArticleJsonSchema, execute: async (input) => { const articleBody = validateArticle.parse(input).articleBody; const parsed = articleBodySchema.safeParse(articleBody); return ok({ valid: parsed.success, articleBody: parsed.success ? parsed.data : undefined, issues: parsed.success ? [] : parsed.error.issues }); } }),
     tool({ name: "stage.save_output", description: "Save stage output.", zodSchema: saveOutput, inputSchema: saveOutputJsonSchema, execute: async (input) => { const data = saveOutput.parse(input); const output = await store.saveStageOutput(data.stage, data.value, data.id); return ok({ output, workspaceVersion: await store.getWorkspaceVersion() }); } }),
