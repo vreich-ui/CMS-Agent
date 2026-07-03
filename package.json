@@ -7,7 +7,9 @@
     "dev": "netlify dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "npm run typecheck"
+    "build": "npm run typecheck",
+    "ui:dev": "npm --prefix ui run dev",
+    "ui:build": "npm --prefix ui run build"
   },
   "dependencies": {
     "zod": "^3.25.76",
