@@ -6,7 +6,7 @@ export function getErrorMessage(error: unknown) {
   return error instanceof McpClientError ? error.message : error instanceof Error ? error.message : "Unknown error";
 }
 
-export function useConnection(endpoint: string, token: string) {
+export function useConnection(endpoint: string, token: string | undefined) {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({ tone: "idle" });
   const config = useMemo<McpConfig>(() => ({ endpoint, token }), [endpoint, token]);
 

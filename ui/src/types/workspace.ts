@@ -4,7 +4,9 @@ export type JsonValue = unknown;
 
 export type McpConfig = {
   endpoint: string;
-  token: string;
+  token?: string;
+  authToken?: string;
+  requiresToken?: boolean;
 };
 
 export type WorkspaceNode = {

@@ -20,14 +20,15 @@ type McpToolResult<T> = {
 export type McpClientConfig = McpConfig;
 
 export async function callMcpMethod<T>(config: McpClientConfig, method: string, params?: Record<string, unknown>): Promise<T> {
-  if (!config.token.trim()) throw new McpClientError("Enter an MCP bearer token before calling workspace tools.");
+  const bearerToken = config.authToken ?? config.token;
+  if (config.requiresToken !== false && !bearerToken?.trim()) throw new McpClientError("Enter an MCP bearer token before calling workspace tools.");
+
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (bearerToken?.trim()) headers.authorization = `Bearer ${bearerToken}`;
 
   const response = await fetch(config.endpoint, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${config.token}`
-    },
+    headers,
     body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params: params ?? {} })
   });
 

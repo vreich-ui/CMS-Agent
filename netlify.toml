@@ -1,5 +1,6 @@
 [build]
-  command = "npm run build"
+  command = "npm install --no-fund --no-audit && npm --prefix ui install --no-fund --no-audit && npm run ui:build"
+  publish = "ui/dist"
   functions = "netlify/functions"
 
 [functions]
@@ -13,4 +14,20 @@
 [[redirects]]
   from = "/api/mcp"
   to = "/.netlify/functions/mcp"
+  status = 200
+
+
+[[redirects]]
+  from = "/api/session"
+  to = "/.netlify/functions/session"
+  status = 200
+
+[[redirects]]
+  from = "/api/workspace-mcp"
+  to = "/.netlify/functions/workspace-mcp"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
   status = 200

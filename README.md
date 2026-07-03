@@ -247,3 +247,37 @@ Canonical content rules:
 * `publish_payload` consumes `article_body.v1` and produces a dry-run adapter payload only.
 * `publication_controller` is marked `publish` risk, but it is dry/approval-only for now and must not publish without future explicit approval support.
 * `learning_recorder` records structured observations and improvement candidates, but it does not auto-edit prompts or schemas.
+
+## Deployed workspace UI and Identity access
+
+The Netlify site root (`/`) serves the Vite React workspace UI from `ui/dist`. The Netlify build installs root and UI dependencies, runs `npm run ui:build`, publishes `ui/dist`, and keeps Netlify functions available from `netlify/functions`.
+
+Configured routes:
+
+```text
+/                         Vite workspace UI
+/api/agent                /.netlify/functions/agent
+/api/mcp                  /.netlify/functions/mcp
+/api/session              /.netlify/functions/session
+/api/workspace-mcp        /.netlify/functions/workspace-mcp
+```
+
+Production UI access is protected with Netlify Identity. Google login must be enabled in Netlify Identity provider settings. After login, the server-side `session` function reads the Netlify-verified identity context, compares the user email to `ADMIN_EMAIL_IDS`, and returns only authentication/authorization state and the email address. `ADMIN_EMAIL_IDS` is a comma-separated allowlist, for example:
+
+```text
+ADMIN_EMAIL_IDS=admin@example.com,owner@example.com
+```
+
+In deployed mode, the UI uses `/api/workspace-mcp`. That secure proxy verifies the Netlify Identity session, checks `ADMIN_EMAIL_IDS`, and forwards authorized JSON-RPC requests to the workspace MCP handler with the server-side `MCP_API_TOKEN`. The browser must never receive `MCP_API_TOKEN` or `AGENT_API_TOKEN`, and those values must not be stored in frontend source or browser storage.
+
+Local development can still use direct MCP token mode with `/api/mcp`; in that mode the UI shows the manual MCP token field and stores the local token in browser `localStorage`. In deployed secure-proxy mode, the manual MCP token field is hidden and the UI sends the Netlify Identity access token only to the same-origin secure proxy.
+
+Required production environment variables remain:
+
+```text
+ADMIN_EMAIL_IDS=
+MCP_API_TOKEN=
+AGENT_API_TOKEN=
+OPENAI_API_KEY=
+OPENAI_AGENT_MODEL=gpt-5.5
+```
