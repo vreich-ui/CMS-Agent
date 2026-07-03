@@ -78,6 +78,17 @@ User authentication
 Project-specific secrets are intentionally not stored as Netlify environment variables. Publishing will be performed through project MCP servers by updating canonical JSON workflow records. There is no separate publishing endpoint in this workspace.
 
 
+## Dr. Lurie integration constraints
+
+Dr. Lurie integration policy is documented in [docs/projects/dr-lurie-integration-notes.md](docs/projects/dr-lurie-integration-notes.md). In short:
+
+* The workspace MCP is not the Dr. Lurie publishing backend and must not replace the Dr. Lurie MCP/repo as the canonical source for publishing behavior.
+* `article_body.v1` remains canonical article content; Markdown is adapter/export output only.
+* CMS-Agent adapter payloads must preserve Dr. Lurie `artifactReferences`.
+* Raw image artifact references must not be treated as public reader-facing URLs. PDF refs may route through Dr. Lurie `/pdf/*`; images may not assume an equivalent `/image/*` fallback.
+* Reader-visible inline images must include rendering placement metadata so future Dr. Lurie publishing can distinguish body images from hero/featured image paths.
+* No Dr. Lurie publishing side effects or MCP calls are part of the current workspace flow.
+
 ## Workspace MCP storage
 
 By default, the workspace MCP server uses an in-memory store. This is intentionally simple for tests and serverless safety, but it is ephemeral: prompt, schema, stage output, and learning observation updates can disappear after process restarts, Netlify cold starts, or deployments.
