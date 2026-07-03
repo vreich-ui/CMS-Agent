@@ -26,4 +26,19 @@ describe("Publishing Conductor workspace nodes", () => {
   it("marks publication_controller as publish risk", () => {
     expect(listWorkspaceNodes().find((node) => node.id === "publication_controller")?.riskLevel).toBe("publish");
   });
+
+  it("mentions rendering placement in the article_body node policy", () => {
+    const node = listWorkspaceNodes().find((workspaceNode) => workspaceNode.id === "article_body");
+
+    expect(node?.prompt).toContain("rendering.placement");
+    expect(node?.metadata?.canonicalRules).toEqual(expect.arrayContaining(["Reader-visible image nodes require rendering.placement"]));
+  });
+
+  it("mentions artifactReferences and markdown adapter-only policy in publish_payload", () => {
+    const node = listWorkspaceNodes().find((workspaceNode) => workspaceNode.id === "publish_payload");
+
+    expect(node?.prompt).toContain("artifactReferences");
+    expect(node?.prompt).toContain("Markdown is adapter/export only");
+    expect(node?.metadata?.canonicalRules).toEqual(expect.arrayContaining(["Must preserve artifactReferences", "Markdown is adapter/export only"]));
+  });
 });
