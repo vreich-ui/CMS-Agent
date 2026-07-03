@@ -6,10 +6,15 @@ import { Inspector } from "./components/Inspector";
 import { SchemaViewer } from "./components/SchemaViewer";
 import { Validator } from "./components/Validator";
 import { WorkspaceGraph } from "./components/WorkspaceGraph";
+import { WorkflowControls } from "./components/WorkflowControls";
+import { RunStatusPanel } from "./components/RunStatusPanel";
+import { NodeExecutionList } from "./components/NodeExecutionList";
+import { ArtifactPanel } from "./components/ArtifactPanel";
 import { getErrorMessage } from "./hooks/useConnection";
 import { getAccessScreen } from "./accessState";
 import { useIdentitySession } from "./hooks/useIdentitySession";
 import { useWorkspace } from "./hooks/useWorkspace";
+import { useWorkflowRun } from "./hooks/useWorkflowRun";
 import type { InitializeResult, McpConfig } from "./types/workspace";
 
 const TOKEN_KEY = "cms-agent.mcpToken";
@@ -30,6 +35,7 @@ function App() {
   const usingSecureProxy = endpoint === DEPLOYED_ENDPOINT;
   const config = useMemo<McpConfig>(() => ({ endpoint, token: usingSecureProxy ? undefined : token, authToken: usingSecureProxy ? session.accessToken : undefined, requiresToken: !usingSecureProxy }), [endpoint, session.accessToken, token, usingSecureProxy]);
   const workspace = useWorkspace(config);
+  const workflowRun = useWorkflowRun(config);
   const accessScreen = getAccessScreen(isDeployedMode, session);
 
   useEffect(() => {
@@ -80,6 +86,17 @@ function App() {
     }
   };
 
+  const workflowAction = async <T,>(operation: () => Promise<T>, successMessage: (result: T) => string) => {
+    try {
+      const result = await operation();
+      setStatus({ tone: "success", message: successMessage(result) });
+      return result;
+    } catch (error) {
+      handleError(error);
+      throw error;
+    }
+  };
+
 
   if (accessScreen.kind === "checking") return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>{accessScreen.title}</h1><p>{accessScreen.detail}</p></section></main>;
 
@@ -100,10 +117,17 @@ function App() {
     <section className="workspace-grid">
       <section className="panel graph-panel" aria-label="Workspace graph">
         <div className="panel-heading"><h2>Workspace graph</h2><div className="auth-actions"><button onClick={loadWorkspace}>Load workspace</button><button onClick={exportWorkspace}>Export Workspace</button></div></div>
-        <WorkspaceGraph nodes={workspace.nodes} selectedNodeId={workspace.selectedId} onSelectNode={workspace.setSelectedId} />
+        <WorkspaceGraph nodes={workspace.nodes} selectedNodeId={workspace.selectedId} onSelectNode={workspace.setSelectedId} executionStatusByNodeId={workflowRun.nodeStatusById} />
       </section>
 
       <Inspector selectedNode={workspace.selectedNode} promptDraft={workspace.promptDraft} workspaceVersion={workspace.workspaceVersion} selectedSchema={workspace.selectedSchema} onPromptDraftChange={workspace.setPromptDraft} onSavePrompt={savePrompt} />
+    </section>
+
+    <section className="execution-grid">
+      <WorkflowControls currentRun={workflowRun.currentRun} runs={workflowRun.runs} selectedRunId={workflowRun.selectedRunId} loading={workflowRun.loading} onStartDryRun={(projectId, input) => workflowAction(() => workflowRun.startDryRun(projectId, input), (run) => `Started dry-run ${run.runId}.`)} onRunNextNode={() => workflowAction(workflowRun.runNextNode, (run) => run?.status === "blocked" ? "Dry-run blocked at publication_controller. No publication was performed." : `Advanced dry-run to ${run?.currentNodeId ?? run?.status ?? "next state"}.`)} onResetRun={() => workflowAction(workflowRun.resetRun, (run) => `Reset dry-run ${run?.runId ?? "run"}.`)} onRefreshRun={() => workflowAction(workflowRun.refreshRun, (run) => `Refreshed dry-run ${run?.runId ?? "run"}.`)} onListRuns={(projectId) => workflowAction(() => workflowRun.listRuns(projectId), (runs) => `Loaded ${runs.length} dry-run${runs.length === 1 ? "" : "s"}.`)} onLoadRun={(runId) => workflowAction(() => workflowRun.loadRun(runId), (run) => `Loaded dry-run ${run?.runId ?? runId}.`)} />
+      <RunStatusPanel run={workflowRun.currentRun} />
+      <NodeExecutionList run={workflowRun.currentRun} />
+      <ArtifactPanel run={workflowRun.currentRun} />
     </section>
 
     <section className="lower-grid">
