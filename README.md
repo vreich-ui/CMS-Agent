@@ -259,6 +259,19 @@ Canonical content rules:
 * `publication_controller` is marked `publish` risk, but it is dry/approval-only for now and must not publish without future explicit approval support.
 * `learning_recorder` records structured observations and improvement candidates, but it does not auto-edit prompts or schemas.
 
+### Dry-run workflow execution
+
+The workspace MCP exposes dry-run-only workflow controls for the Publishing Conductor:
+
+* `workflow.start_dry_run` creates an in-memory execution record for a `projectId` and initial user input.
+* `workflow.get_run` and `workflow.list_runs` read current execution state for UI display.
+* `workflow.run_next_node` advances the next dependency-ready node and records node status, timings, deterministic mock output, stage outputs, artifacts, warnings, and errors.
+* `workflow.reset_run` returns an existing run to its initial queued state.
+
+Dry-run execution is intentionally mock and deterministic. It does not invoke OpenAI, does not call Dr. Lurie or other external project MCP servers, and does not perform publishing side effects. The executor preserves `article_body.v1` as the canonical article body, builds only dry-run `publish_payload` data, and stops at `publication_controller` with `approval_required`. When that block occurs, no publication has been performed and there is no approval execution path yet.
+
+The workspace UI can start, advance, reset, refresh, and inspect these runs. It visualizes graph nodes with execution-state CSS classes (`queued`, `running`, `completed`, `blocked`, and `failed`) and displays run metadata, approval requirements, node outputs, artifacts, and stage outputs.
+
 ## Deployed workspace UI and Identity access
 
 The Netlify site root (`/`) serves the Vite React workspace UI from `ui/dist`. The Netlify build installs root and UI dependencies, runs `npm run ui:build`, publishes `ui/dist`, and keeps Netlify functions available from `netlify/functions`.

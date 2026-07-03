@@ -1,6 +1,8 @@
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { articleBodyJsonSchema, articleBodySchema, type WorkspaceStore } from "./store.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
+import { executionStore } from "../../workspace/executionStore.js";
+import { getRun, listRuns, resetRun, runNextNode, startDryRun } from "../../workspace/executor.js";
 
 export type JsonSchema = Record<string, unknown>;
 export type WorkspaceTool = {
@@ -48,6 +50,9 @@ const recordObservation = z.object({ observation: z.string().min(1), metadata: z
 const validateArticle = z.object({ articleBody: z.unknown() }).strict();
 const publishBuild = z.object({ articleBody: articleBodySchema, target: z.enum(["preview", "cms"]).default("preview") }).strict();
 const publishValidate = z.object({ payload: publishPayloadSchema }).strict();
+const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional() }).strict();
+const runIdInput = z.object({ runId: z.string().min(1) }).strict();
+const listRunsInput = z.object({ projectId: z.string().min(1).optional(), workflowId: z.string().min(1).optional() }).strict();
 
 const objectSchema = (properties: JsonSchema = {}, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 const emptyJsonSchema = objectSchema();
@@ -65,6 +70,9 @@ const validateArticleJsonSchema = objectSchema({ articleBody: articleBodyJsonSch
 const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, ["articleBody"]);
 const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
+const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 } }, ["projectId", "input"]);
+const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
+const listRunsJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 } });
 
 const ok = (data: unknown) => ({ ok: true, data });
 
@@ -86,7 +94,12 @@ export function createWorkspaceTools(store: WorkspaceStore): WorkspaceTool[] {
     tool({ name: "learning.record_observation", description: "Record a learning observation.", zodSchema: recordObservation, inputSchema: recordObservationJsonSchema, execute: async (input) => { const data = recordObservation.parse(input); const observation = await store.recordObservation(data.observation, data.metadata); return ok({ observation, workspaceVersion: await store.getWorkspaceVersion() }); } }),
     tool({ name: "learning.list_observations", description: "List learning observations.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ observations: await store.listObservations() }); } }),
     tool({ name: "publish.build_payload", description: "Build a dry-run publish payload without side effects.", zodSchema: publishBuild, inputSchema: publishBuildJsonSchema, execute: async (input) => { const data = publishBuild.parse(input); return ok({ payload: { articleBody: data.articleBody, target: data.target, dryRun: true, builtAt: new Date().toISOString() } }); } }),
-    tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); return ok({ valid: parsed.success, issues: parsed.success ? [] : parsed.error.issues }); } })
+    tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); return ok({ valid: parsed.success, issues: parsed.success ? [] : parsed.error.issues }); } }),
+    tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => { const data = startDryRunInput.parse(input); return ok({ run: await startDryRun(data, executionStore) }); } }),
+    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await getRun(runIdInput.parse(input).runId, executionStore) ?? null }) }),
+    tool({ name: "workflow.list_runs", description: "List dry-run workflow executions.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => ok({ runs: await listRuns(listRunsInput.parse(input), executionStore) }) }),
+    tool({ name: "workflow.run_next_node", description: "Run the next dependency-ready Publishing Conductor node in dry-run mode only.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await runNextNode(runIdInput.parse(input).runId, { executionStore, workspaceStore: store }) }) }),
+    tool({ name: "workflow.reset_run", description: "Reset a dry-run workflow execution to its initial queued state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await resetRun(runIdInput.parse(input).runId, executionStore) }) })
   ];
 }
 
