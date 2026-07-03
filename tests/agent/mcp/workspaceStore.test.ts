@@ -22,7 +22,9 @@ describe("workspace store", () => {
     const store = createWorkspaceStore();
 
     expect(store).toBeInstanceOf(InMemoryWorkspaceStore);
-    expect((await store.getNodes()).map((node) => node.id)).toContain("article_body");
+    const ids = (await store.getNodes()).map((node) => node.id);
+    expect(ids).toContain("article_body");
+    expect(ids).toHaveLength(18);
   });
 
   it("uses memory when WORKSPACE_STORE is missing", () => {
@@ -36,7 +38,9 @@ describe("workspace store", () => {
     const store = createWorkspaceStoreFromEnv({ NODE_ENV: "development", WORKSPACE_STORE: "json", WORKSPACE_STORE_PATH: filePath });
 
     expect(store).toBeInstanceOf(JsonWorkspaceStore);
-    expect((await store.getNodes()).map((node) => node.id)).toContain("article_body");
+    const ids = (await store.getNodes()).map((node) => node.id);
+    expect(ids).toContain("article_body");
+    expect(ids).toHaveLength(18);
   });
 
   it("throws for WORKSPACE_STORE=json in production", () => {
@@ -53,7 +57,8 @@ describe("workspace store", () => {
 
     expect(exported.schemaVersion).toBe(1);
     expect(exported.workspaceVersion).toBe(0);
-    expect(exported.nodes.map((node) => node.id)).toEqual(expect.arrayContaining(["article_body", "publish_payload"]));
+    expect(exported.nodes).toHaveLength(18);
+    expect(exported.nodes.map((node) => node.id)).toEqual(expect.arrayContaining(["input_triage", "article_body", "publish_payload", "publication_controller"]));
   });
 
   it("persists node prompt updates after reloading the JSON workspace store", async () => {

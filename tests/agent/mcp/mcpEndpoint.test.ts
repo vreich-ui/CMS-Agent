@@ -73,8 +73,10 @@ describe("mcp endpoint", () => {
     const articleBodyNode = response.json.result.structuredContent.data.nodes.find((node: { id: string }) => node.id === "article_body");
 
     expect(response.json.result.structuredContent.ok).toBe(true);
-    expect(response.json.result.structuredContent.data.nodes.length).toBeGreaterThan(0);
-    expect(articleBodyNode.prompt).toBe("Build canonical `article_body.v1` structured article nodes. Markdown is only an export/rendering adapter.");
+    expect(response.json.result.structuredContent.data.nodes).toHaveLength(18);
+    expect(response.json.result.structuredContent.data.nodes.map((node: { id: string }) => node.id)).toEqual(expect.arrayContaining(["input_triage", "article_body", "publish_payload", "publication_controller"]));
+    expect(articleBodyNode.prompt).toContain("article_body.v1");
+    expect(articleBodyNode.prompt).toContain("Markdown is not canonical");
     expect(articleBodyNode.schema.required).toEqual(["schema_version", "nodes"]);
   });
 

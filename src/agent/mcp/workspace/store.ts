@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
+import { listWorkspaceNodes } from "../../workspace/nodes.js";
+import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceNode } from "../../workspace/nodeTypes.js";
 
 const visibleString = z.string().min(1);
 const publicMediaSchema = z.object({
@@ -52,7 +54,6 @@ export const articleBodySchema = z.object({
 );
 
 export type ArticleBody = z.infer<typeof articleBodySchema>;
-export type WorkspaceNode = { id: string; name: string; prompt: string; schema?: unknown; updatedAt: string };
 export type StageOutput = { id: string; stage: string; value?: unknown; createdAt: string };
 export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; createdAt: string };
 export type PublishPayload = { articleBody: ArticleBody; dryRun: true; target: "preview" | "cms"; builtAt: string };
@@ -128,16 +129,31 @@ export const articleBodyJsonSchema = {
 
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-const defaultWorkspaceNodes = (): WorkspaceNode[] => [
-  { id: "article_body", name: "Article Body", prompt: "Build canonical `article_body.v1` structured article nodes. Markdown is only an export/rendering adapter.", schema: articleBodyJsonSchema, updatedAt: now() },
-  { id: "publish_payload", name: "Publish Payload", prompt: "Build a dry-run publishing payload from rendered output. Flow: article_body.v1 → render markdown → publish payload.", schema: { type: "object" }, updatedAt: now() }
-];
+const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes().map((node) => node.id === "article_body" ? { ...node, schema: articleBodyJsonSchema, outputSchema: articleBodyJsonSchema } : node);
 const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [] });
 
-const workspaceNodeSchema: z.ZodType<WorkspaceNode> = z.object({ id: z.string().min(1), name: z.string().min(1), prompt: z.string(), schema: z.unknown().optional(), updatedAt: z.string().datetime() }).strict();
+const workspaceNodeSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.string().min(1).default("workspace"),
+  description: z.string().default(""),
+  prompt: z.string(),
+  schema: z.unknown().optional(),
+  inputSchema: z.unknown().default({ type: "object" }),
+  outputSchema: z.unknown().default({ type: "object" }),
+  allowedTools: z.array(z.string()).default([]),
+  requiredInputs: z.array(z.string()).default([]),
+  produces: z.array(z.string()).default([]),
+  riskLevel: z.enum(workspaceRiskLevels).default("read"),
+  dependsOn: z.array(z.string()).default([]),
+  status: z.enum(workspaceNodeStatuses).default("draft"),
+  position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }),
+  updatedAt: z.string().datetime(),
+  metadata: z.record(z.unknown()).optional()
+}).passthrough();
 const stageOutputSchema: z.ZodType<StageOutput> = z.object({ id: z.string().min(1), stage: z.string().min(1), value: z.unknown().optional(), createdAt: z.string().datetime() }).strict();
 const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.unknown()).optional(), createdAt: z.string().datetime() }).strict();
-const workspaceDocumentSchema: z.ZodType<WorkspaceDocument> = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema) }).strict();
+const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema) }).strict();
 
 class WorkspaceStateStore implements WorkspaceStore {
   protected document: WorkspaceDocument;
@@ -158,7 +174,7 @@ class WorkspaceStateStore implements WorkspaceStore {
   async updateNodePrompt(id: string, prompt: string) {
     let updated: WorkspaceNode | undefined;
     await this.mutate((document) => {
-      const existing = document.nodes.find((node) => node.id === id) ?? { id, name: id, prompt: "", schema: {}, updatedAt: now() };
+      const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, prompt, updatedAt: now() };
       document.nodes = [...document.nodes.filter((node) => node.id !== id), updated];
     });
@@ -167,7 +183,7 @@ class WorkspaceStateStore implements WorkspaceStore {
   async updateNodeSchema(id: string, schema: unknown) {
     let updated: WorkspaceNode | undefined;
     await this.mutate((document) => {
-      const existing = document.nodes.find((node) => node.id === id) ?? { id, name: id, prompt: "", schema: {}, updatedAt: now() };
+      const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, schema, updatedAt: now() };
       document.nodes = [...document.nodes.filter((node) => node.id !== id), updated];
     });
@@ -207,7 +223,7 @@ export class JsonWorkspaceStore extends WorkspaceStateStore {
     if (this.loaded) return this.document;
     try {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8"));
-      this.document = workspaceDocumentSchema.parse(parsed);
+      this.document = workspaceDocumentSchema.parse(parsed) as WorkspaceDocument;
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         this.document = createDefaultWorkspaceDocument();
