@@ -12,10 +12,14 @@ export type SessionState = {
 
 const unauthenticated: SessionState = { loading: false, authenticated: false, authorized: false };
 
-const getAccessToken = (user: IdentityUser | null) => user?.token?.access_token;
+const getAccessToken = async (user: IdentityUser | null) => {
+  if (!user) return undefined;
+  if (typeof user.jwt === "function") return user.jwt();
+  return user.token?.access_token;
+};
 
 async function fetchSession(accessToken: string): Promise<SessionState> {
-  const response = await fetch("/api/session", { headers: { authorization: `Bearer ${accessToken}` } });
+  const response = await fetch("/api/session", { headers: { Authorization: `Bearer ${accessToken}` } });
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401) return unauthenticated;
   return {
@@ -33,12 +37,18 @@ export function useIdentitySession(enabled: boolean) {
 
   const refresh = useCallback(async (user: IdentityUser | null = window.netlifyIdentity?.currentUser() ?? null) => {
     if (!enabled) return;
-    const accessToken = getAccessToken(user);
+    let accessToken: string | undefined;
+    try {
+      accessToken = await getAccessToken(user);
+    } catch {
+      setState({ ...unauthenticated, error: "Unable to verify the Netlify Identity session." });
+      return;
+    }
     if (!accessToken) {
       setState(unauthenticated);
       return;
     }
-    setState((current) => ({ ...current, loading: true }));
+    setState({ loading: true, authenticated: true, authorized: false, email: user?.email });
     setState(await fetchSession(accessToken));
   }, [enabled]);
 
@@ -50,7 +60,10 @@ export function useIdentitySession(enabled: boolean) {
       return;
     }
     identity.on("init", (user) => void refresh(user ?? null));
-    identity.on("login", (user) => void refresh(user ?? null));
+    identity.on("login", (user) => {
+      identity.close?.();
+      void refresh(user ?? identity.currentUser());
+    });
     identity.on("logout", () => setState(unauthenticated));
     identity.init();
     void refresh(identity.currentUser());

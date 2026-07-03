@@ -7,6 +7,7 @@ import { SchemaViewer } from "./components/SchemaViewer";
 import { Validator } from "./components/Validator";
 import { WorkspaceGraph } from "./components/WorkspaceGraph";
 import { getErrorMessage } from "./hooks/useConnection";
+import { getAccessScreen } from "./accessState";
 import { useIdentitySession } from "./hooks/useIdentitySession";
 import { useWorkspace } from "./hooks/useWorkspace";
 import type { InitializeResult, McpConfig } from "./types/workspace";
@@ -29,6 +30,7 @@ function App() {
   const usingSecureProxy = endpoint === DEPLOYED_ENDPOINT;
   const config = useMemo<McpConfig>(() => ({ endpoint, token: usingSecureProxy ? undefined : token, authToken: usingSecureProxy ? session.accessToken : undefined, requiresToken: !usingSecureProxy }), [endpoint, session.accessToken, token, usingSecureProxy]);
   const workspace = useWorkspace(config);
+  const accessScreen = getAccessScreen(isDeployedMode, session);
 
   useEffect(() => {
     if (!isDeployedMode) localStorage.setItem(TOKEN_KEY, token);
@@ -79,11 +81,13 @@ function App() {
   };
 
 
-  if (isDeployedMode && session.loading) return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>Checking workspace access…</h1><p>Netlify Identity is verifying your session.</p></section></main>;
+  if (accessScreen.kind === "checking") return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>{accessScreen.title}</h1><p>{accessScreen.detail}</p></section></main>;
 
-  if (isDeployedMode && !session.authenticated) return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>Workspace login required</h1><p>Sign in with Google through Netlify Identity to access the CMS-Agent workspace.</p>{session.error && <div className="status error" role="status">{session.error}</div>}<button onClick={login}>Log in with Google</button></section></main>;
+  if (accessScreen.kind === "verifying") return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>{accessScreen.title}</h1><p>{accessScreen.detail}</p></section></main>;
 
-  if (isDeployedMode && !session.authorized) return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>Not authorized</h1><p>The signed-in account is not allowlisted for this workspace.</p>{session.email && <p>Signed in as <strong>{session.email}</strong>.</p>}{session.error && <div className="status error" role="status">{session.error}</div>}<button onClick={logout}>Log out</button></section></main>;
+  if (accessScreen.kind === "login") return <main className="app-shell"><section className="access-card"><p className="eyebrow">{accessScreen.eyebrow}</p><h1>{accessScreen.title}</h1>{accessScreen.error && <div className="status error" role="status">{accessScreen.error}</div>}<button onClick={login}>{accessScreen.button}</button></section></main>;
+
+  if (accessScreen.kind === "unauthorized") return <main className="app-shell"><section className="access-card"><p className="eyebrow">CMS-Agent</p><h1>{accessScreen.title}</h1><p>The signed-in account is not allowlisted for this workspace.</p>{accessScreen.email && <p>Signed in as <strong>{accessScreen.email}</strong>.</p>}{accessScreen.error && <div className="status error" role="status">{accessScreen.error}</div>}<button onClick={logout}>Log out</button></section></main>;
 
   return <main className="app-shell">
     <header className="hero">
