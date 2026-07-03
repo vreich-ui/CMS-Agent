@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "setup": "npm ci",
     "dev": "netlify dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
