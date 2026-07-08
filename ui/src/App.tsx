@@ -36,6 +36,14 @@ const workspaceTabs: Array<{ id: WorkspaceTab; label: string; helper: string }> 
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
+const RepositoryDiagnostics = ({ health, onRefresh }: { health: ReturnType<typeof useWorkspace>["repositoryHealth"]; onRefresh: () => void }) => {
+  const entries = health ? Object.entries(health) : [];
+  return <section className="panel">
+    <div className="panel-heading"><div><h2>Repository diagnostics</h2><p className="muted">Safe repository health metadata only. Storage paths and secrets are not displayed.</p></div><button onClick={onRefresh}>Refresh</button></div>
+    {entries.length ? <div className="table-wrap"><table><thead><tr><th>Repository</th><th>Backend</th><th>Readable</th><th>Writable</th><th>Version</th></tr></thead><tbody>{entries.map(([name, status]) => <tr key={name}><td>{name}</td><td>{status.backend}</td><td>{status.readable ? "yes" : "no"}</td><td>{status.writable ? "yes" : "no"}</td><td>{status.version}</td></tr>)}</tbody></table></div> : <p className="empty-state">Refresh diagnostics to view repository health.</p>}
+  </section>;
+};
+
 function App() {
   const { session, login, logout } = useIdentitySession(isDeployedMode);
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT);
@@ -83,6 +91,15 @@ function App() {
     try {
       await workspace.exportWorkspace();
       setStatus({ tone: "success", message: "Workspace exported from MCP." });
+    } catch (error) {
+      handleError(error);
+    }
+  };
+
+  const refreshRepositoryHealth = async () => {
+    try {
+      await workspace.loadRepositoryHealth();
+      setStatus({ tone: "success", message: "Repository diagnostics refreshed." });
     } catch (error) {
       handleError(error);
     }
@@ -155,6 +172,7 @@ function App() {
     {activeTab === "support" && <section className="tab-panel" aria-label="Support workspace">
       <section className="support-grid">
         <section className="panel"><div className="panel-heading"><div><h2>Workspace exchange</h2><p className="muted">Export the current MCP workspace document for review or handoff.</p></div><button onClick={exportWorkspace}>Export</button></div><pre>{workspace.exportedWorkspace ? pretty(workspace.exportedWorkspace) : "Export the workspace to view the current MCP document."}</pre></section>
+        <RepositoryDiagnostics health={workspace.repositoryHealth} onRefresh={refreshRepositoryHealth} />
         <section className="panel"><h2>article_body schema</h2><p className="muted">Reference schema used by validation and article body checks.</p><SchemaViewer schema={workspace.articleSchema} emptyMessage="Load the workspace to fetch article_body.get_schema." /></section>
       </section>
       <Validator articleSchema={workspace.articleSchema} articleJson={workspace.articleJson} articleFormData={workspace.articleFormData} validation={workspace.validation} onArticleJsonChange={workspace.setArticleJson} onArticleFormDataChange={workspace.setArticleFormData} onValidateArticleBody={validateArticleBody} onJsonParseError={() => setStatus({ tone: "error", message: "JSON input is not valid JSON." })} />

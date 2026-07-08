@@ -157,3 +157,18 @@ export type BudgetStatus = {
   percentUsed: number;
   status: "ok" | "warning" | "exceeded";
 };
+
+export type RepositoryHealth = {
+  backend: "memory" | "json" | "blobs";
+  writable: boolean;
+  readable: boolean;
+  version: string;
+};
+
+export type RepositoryHealthSummary = {
+  workspace: RepositoryHealth;
+  execution: RepositoryHealth;
+  artifact: RepositoryHealth;
+  learning: RepositoryHealth;
+  usage: RepositoryHealth;
+};

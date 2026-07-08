@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { modelUsageStore, type InMemoryModelUsageStore } from "./modelUsageStore.js";
+import { repositoryManager } from "../repository/RepositoryManager.js";
+import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
 import type { BudgetStatus, EstimateModelCostInput, ModelUsageFilters, ModelUsageRecord, ModelUsageSummary, ModelUsageSummaryBucket, RecordModelUsageInput } from "./modelUsageTypes.js";
 
 const now = () => new Date().toISOString();
@@ -52,7 +53,7 @@ export function estimateModelCost(input: EstimateModelCostInput): number {
   return roundUsd(((uncached * pricing.inputUsdPerMillion) + (cached * (pricing.cachedInputUsdPerMillion ?? pricing.inputUsdPerMillion)) + (input.outputTokens * pricing.outputUsdPerMillion)) / 1_000_000);
 }
 
-export async function recordModelUsage(input: RecordModelUsageInput, store: InMemoryModelUsageStore = modelUsageStore): Promise<ModelUsageRecord> {
+export async function recordModelUsage(input: RecordModelUsageInput, store: UsageRepository = repositoryManager.getUsageRepository()): Promise<ModelUsageRecord> {
   const parsed = recordModelUsageSchema.parse(input);
   const record: ModelUsageRecord = {
     ...parsed,
@@ -77,7 +78,7 @@ const add = (bucket: ModelUsageSummaryBucket, record: ModelUsageRecord) => {
 };
 const bucketFor = (buckets: Record<string, ModelUsageSummaryBucket>, key: string) => buckets[key] ?? (buckets[key] = emptyBucket());
 
-export async function summarizeModelUsage(filters: ModelUsageFilters = {}, store: InMemoryModelUsageStore = modelUsageStore): Promise<ModelUsageSummary> {
+export async function summarizeModelUsage(filters: ModelUsageFilters = {}, store: UsageRepository = repositoryManager.getUsageRepository()): Promise<ModelUsageSummary> {
   const records = await store.list(usageFiltersSchema.parse(filters));
   const summary: ModelUsageSummary = { ...emptyBucket(), totalInputTokens: 0, totalOutputTokens: 0, totalReasoningTokens: 0, totalCostUsdEstimate: 0, byModel: {}, byNode: {}, byProject: {} };
   for (const record of records) {
@@ -93,7 +94,7 @@ export async function summarizeModelUsage(filters: ModelUsageFilters = {}, store
   return summary;
 }
 
-export async function getBudgetStatus(input: { projectId?: string; runId?: string; budgetUsd?: number }, store: InMemoryModelUsageStore = modelUsageStore): Promise<BudgetStatus> {
+export async function getBudgetStatus(input: { projectId?: string; runId?: string; budgetUsd?: number }, store: UsageRepository = repositoryManager.getUsageRepository()): Promise<BudgetStatus> {
   const budgetUsd = Math.max(0, input.budgetUsd ?? 0);
   const summary = await summarizeModelUsage({ projectId: input.projectId, runId: input.runId }, store);
   const spentUsdEstimate = summary.totalCostUsdEstimate;

@@ -1,7 +1,8 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 import type { ExecutionArtifact, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
-import { InMemoryExecutionStore, executionStore } from "./executionStore.js";
+import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
+import { repositoryManager } from "../repository/RepositoryManager.js";
 import type { WorkspaceStore } from "../mcp/workspace/store.js";
 import { recordModelUsage } from "../observability/modelUsage.js";
 
@@ -71,26 +72,26 @@ const mockOutputForNode = (node: WorkspaceNode, run: WorkflowExecutionRecord) =>
 
 const buildArtifact = (node: WorkspaceNode, output: unknown): ExecutionArtifact => ({ id: `artifact_${node.id}_${Date.now()}`, nodeId: node.id, type: node.produces[0] ?? "mock_output", value: output, createdAt: now() });
 
-export async function startDryRun(data: StartDryRunInput, store: InMemoryExecutionStore = executionStore): Promise<WorkflowExecutionRecord> {
+export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord> {
   return store.createRun(buildInitialRun(data));
 }
 
-export async function getRun(runId: string, store: InMemoryExecutionStore = executionStore) {
+export async function getRun(runId: string, store: ExecutionRepository = repositoryManager.getExecutionRepository()) {
   return store.getRun(runId);
 }
 
-export async function listRuns(filters: ListRunsInput = {}, store: InMemoryExecutionStore = executionStore) {
+export async function listRuns(filters: ListRunsInput = {}, store: ExecutionRepository = repositoryManager.getExecutionRepository()) {
   return store.listRuns(filters);
 }
 
-export async function resetRun(runId: string, store: InMemoryExecutionStore = executionStore): Promise<WorkflowExecutionRecord> {
+export async function resetRun(runId: string, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord> {
   const existing = await store.getRun(runId);
   if (!existing) throw new Error(`Unknown run: ${runId}`);
   return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId }, runId));
 }
 
-export async function runNextNode(runId: string, options: { executionStore?: InMemoryExecutionStore; workspaceStore?: WorkspaceStore } = {}): Promise<WorkflowExecutionRecord> {
-  const store = options.executionStore ?? executionStore;
+export async function runNextNode(runId: string, options: { executionStore?: ExecutionRepository; workspaceStore?: WorkspaceStore } = {}): Promise<WorkflowExecutionRecord> {
+  const store = options.executionStore ?? repositoryManager.getExecutionRepository();
   const run = await store.getRun(runId);
   if (!run) throw new Error(`Unknown run: ${runId}`);
   if (["blocked", "cancelled", "completed", "failed"].includes(run.status)) return run;

@@ -258,4 +258,3 @@ export function createWorkspaceStoreFromEnv(env: NodeJS.ProcessEnv = process.env
   return createWorkspaceStore(kind, env.WORKSPACE_STORE_PATH ?? ".data/workspace.json");
 }
 
-export const workspaceStore = createWorkspaceStoreFromEnv();

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { modelUsageStore } from "../../../src/agent/observability/modelUsageStore.js";
+import { repositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 
 const event = (body: unknown, token = "test-token") => ({
@@ -38,7 +38,7 @@ const validateArticleBody = (articleBody: unknown, id = 50) => call({
 describe("mcp endpoint", () => {
   beforeEach(() => {
     process.env.MCP_API_TOKEN = "test-token";
-    modelUsageStore.clear();
+    repositoryManager.getUsageRepository().clear();
   });
 
   it("rejects requests without bearer authorization", async () => {
@@ -69,6 +69,20 @@ describe("mcp endpoint", () => {
     const response = await call({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("workspace.get_nodes");
     expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("usage.get_summary");
+    expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("repository.get_health");
+  });
+
+  it("MCP repository health tool returns safe diagnostics", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "repository.get_health", arguments: {} } });
+
+    expect(response.json.result.structuredContent.data.health).toMatchObject({
+      workspace: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      execution: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      artifact: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      learning: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      usage: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
+    });
+    expect(JSON.stringify(response.json.result.structuredContent.data.health)).not.toMatch(/token|secret|authorization|path/i);
   });
 
   it("MCP usage tools return structured JSON", async () => {
