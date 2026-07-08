@@ -305,3 +305,31 @@ AGENT_API_TOKEN=
 OPENAI_API_KEY=
 OPENAI_AGENT_MODEL=gpt-5.5
 ```
+
+## Model usage and budget observability
+
+CMS-Agent includes an in-memory model usage accounting layer for future OpenAI and agent execution. It does **not** call OpenAI and it does **not** perform real billing. Current values are estimates only.
+
+Usage records are represented by `ModelUsageRecord` and can include run, workflow, project, node, agent, model, provider, token counts, estimated USD cost, status (`estimated` or `actual`), timestamp, and sanitized metadata. Metadata should not include raw prompts, API keys, authorization headers, cookies, JWTs, or other secrets.
+
+The local pricing catalog currently includes placeholder estimates for:
+
+* `gpt-5.5`
+* `gpt-5.5-mini`
+* `gpt-4.1`
+* `gpt-4.1-mini`
+
+These prices are deliberately documented as placeholders and must be updated before any production billing, quota enforcement, customer reporting, or financial decision-making. Estimates are not billing-grade and should not be treated as invoice truth.
+
+The workspace MCP server exposes these usage tools:
+
+* `usage.record` stores an estimated or actual usage record.
+* `usage.list_records` lists records by optional `runId`, `projectId`, `workflowId`, `nodeId`, `from`, or `to` filters.
+* `usage.get_summary` returns total input, output, reasoning, and combined tokens; estimated cost; record count; and breakdowns by model, node, and project.
+* `usage.get_budget_status` returns estimated spend, remaining budget, percent used, and `ok`, `warning`, or `exceeded` status for an optional run/project budget.
+
+Dry-run workflow node execution records deterministic mock usage for each executed node using `OPENAI_AGENT_MODEL` or `gpt-5.5`. The dry-run usage is always recorded with `status: "estimated"`; no model request is sent.
+
+The workspace UI includes a Usage & Budget Estimates panel. When a dry-run is active, the panel filters usage by the current `runId`, shows estimated token/cost totals and model/node/project breakdowns, lets users enter a budget, and refreshes automatically after Run Next Node. The Refresh Usage button re-queries the MCP usage tools.
+
+Future OpenAI integration should replace or supplement deterministic estimates with actual usage data returned by OpenAI responses while preserving the same storage and summary interfaces. External telemetry and durable billing storage are intentionally not integrated yet.

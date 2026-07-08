@@ -10,11 +10,13 @@ import { WorkflowControls } from "./components/WorkflowControls";
 import { RunStatusPanel } from "./components/RunStatusPanel";
 import { NodeExecutionList } from "./components/NodeExecutionList";
 import { ArtifactPanel } from "./components/ArtifactPanel";
+import { UsagePanel } from "./components/UsagePanel";
 import { getErrorMessage } from "./hooks/useConnection";
 import { getAccessScreen } from "./accessState";
 import { useIdentitySession } from "./hooks/useIdentitySession";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useWorkflowRun } from "./hooks/useWorkflowRun";
+import { useModelUsage } from "./hooks/useModelUsage";
 import type { InitializeResult, McpConfig } from "./types/workspace";
 
 const TOKEN_KEY = "cms-agent.mcpToken";
@@ -36,6 +38,7 @@ function App() {
   const config = useMemo<McpConfig>(() => ({ endpoint, token: usingSecureProxy ? undefined : token, authToken: usingSecureProxy ? session.accessToken : undefined, requiresToken: !usingSecureProxy }), [endpoint, session.accessToken, token, usingSecureProxy]);
   const workspace = useWorkspace(config);
   const workflowRun = useWorkflowRun(config);
+  const modelUsage = useModelUsage(config, workflowRun.currentRun?.runId, workflowRun.currentRun?.projectId);
   const accessScreen = getAccessScreen(isDeployedMode, session);
 
   useEffect(() => {
@@ -86,9 +89,10 @@ function App() {
     }
   };
 
-  const workflowAction = async <T,>(operation: () => Promise<T>, successMessage: (result: T) => string) => {
+  const workflowAction = async <T,>(operation: () => Promise<T>, successMessage: (result: T) => string, afterSuccess?: (result: T) => Promise<void>) => {
     try {
       const result = await operation();
+      if (afterSuccess) await afterSuccess(result);
       setStatus({ tone: "success", message: successMessage(result) });
       return result;
     } catch (error) {
@@ -124,10 +128,11 @@ function App() {
     </section>
 
     <section className="execution-grid">
-      <WorkflowControls currentRun={workflowRun.currentRun} runs={workflowRun.runs} selectedRunId={workflowRun.selectedRunId} loading={workflowRun.loading} onStartDryRun={(projectId, input) => workflowAction(() => workflowRun.startDryRun(projectId, input), (run) => `Started dry-run ${run.runId}.`)} onRunNextNode={() => workflowAction(workflowRun.runNextNode, (run) => run?.status === "blocked" ? "Dry-run blocked at publication_controller. No publication was performed." : `Advanced dry-run to ${run?.currentNodeId ?? run?.status ?? "next state"}.`)} onResetRun={() => workflowAction(workflowRun.resetRun, (run) => `Reset dry-run ${run?.runId ?? "run"}.`)} onRefreshRun={() => workflowAction(workflowRun.refreshRun, (run) => `Refreshed dry-run ${run?.runId ?? "run"}.`)} onListRuns={(projectId) => workflowAction(() => workflowRun.listRuns(projectId), (runs) => `Loaded ${runs.length} dry-run${runs.length === 1 ? "" : "s"}.`)} onLoadRun={(runId) => workflowAction(() => workflowRun.loadRun(runId), (run) => `Loaded dry-run ${run?.runId ?? runId}.`)} />
+      <WorkflowControls currentRun={workflowRun.currentRun} runs={workflowRun.runs} selectedRunId={workflowRun.selectedRunId} loading={workflowRun.loading} onStartDryRun={(projectId, input) => workflowAction(() => workflowRun.startDryRun(projectId, input), (run) => `Started dry-run ${run.runId}.`)} onRunNextNode={() => workflowAction(workflowRun.runNextNode, (run) => run?.status === "blocked" ? "Dry-run blocked at publication_controller. No publication was performed." : `Advanced dry-run to ${run?.currentNodeId ?? run?.status ?? "next state"}.`, async () => modelUsage.refreshUsage())} onResetRun={() => workflowAction(workflowRun.resetRun, (run) => `Reset dry-run ${run?.runId ?? "run"}.`)} onRefreshRun={() => workflowAction(workflowRun.refreshRun, (run) => `Refreshed dry-run ${run?.runId ?? "run"}.`)} onListRuns={(projectId) => workflowAction(() => workflowRun.listRuns(projectId), (runs) => `Loaded ${runs.length} dry-run${runs.length === 1 ? "" : "s"}.`)} onLoadRun={(runId) => workflowAction(() => workflowRun.loadRun(runId), (run) => `Loaded dry-run ${run?.runId ?? runId}.`)} />
       <RunStatusPanel run={workflowRun.currentRun} />
       <NodeExecutionList run={workflowRun.currentRun} />
       <ArtifactPanel run={workflowRun.currentRun} />
+      <UsagePanel summary={modelUsage.summary} budgetStatus={modelUsage.budgetStatus} budgetUsd={modelUsage.budgetUsd} recordCount={modelUsage.records.length} loading={modelUsage.loading} activeRunId={workflowRun.currentRun?.runId} onBudgetUsdChange={modelUsage.setBudgetUsd} onRefresh={() => void modelUsage.refreshUsage().catch(handleError)} />
     </section>
 
     <section className="lower-grid">

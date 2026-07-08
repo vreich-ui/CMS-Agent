@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { InMemoryExecutionStore } from "../../src/agent/workspace/executionStore.js";
 import { getRun, runNextNode, startDryRun } from "../../src/agent/workspace/executor.js";
+import { modelUsageStore } from "../../src/agent/observability/modelUsageStore.js";
 
 const completeUntil = async (runId: string, targetNodeId: string, store: InMemoryExecutionStore) => {
   let run = await getRun(runId, store);
@@ -11,6 +12,7 @@ const completeUntil = async (runId: string, targetNodeId: string, store: InMemor
 };
 
 describe("Publishing Conductor dry-run execution", () => {
+  beforeEach(() => modelUsageStore.clear());
   it("start dry run creates a queued run", async () => {
     const store = new InMemoryExecutionStore();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
@@ -79,6 +81,17 @@ describe("Publishing Conductor dry-run execution", () => {
     const advanced = await completeUntil(run.runId, "publish_payload", store);
 
     expect(advanced.stageOutputs.publish_payload).toMatchObject({ artifact: "dry_run_publish_payload.v1", dryRun: true, publicationSideEffects: false });
+  });
+
+  it("dry-run node execution records estimated usage", async () => {
+    const store = new InMemoryExecutionStore();
+    const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
+    await runNextNode(run.runId, { executionStore: store });
+
+    const records = await modelUsageStore.list({ runId: run.runId, nodeId: "input_triage" });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ runId: run.runId, projectId: "project-a", nodeId: "input_triage", status: "estimated", provider: "openai" });
+    expect(records[0].totalTokens).toBe(records[0].inputTokens + records[0].outputTokens);
   });
 
   it("no external MCP calls occur", async () => {
