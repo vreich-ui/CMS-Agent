@@ -3,11 +3,27 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 import type { ExecutionArtifact, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
 import { InMemoryExecutionStore, executionStore } from "./executionStore.js";
 import type { WorkspaceStore } from "../mcp/workspace/store.js";
+import { recordModelUsage } from "../observability/modelUsage.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 const now = () => new Date().toISOString();
 const makeRunId = () => `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const duration = (startedAt?: string, endedAt = now()) => startedAt ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt)) : undefined;
+const modelForDryRun = () => process.env.OPENAI_AGENT_MODEL?.trim() || "gpt-5.5";
+const deterministicTokenCount = (value: unknown, minimum: number) => Math.max(minimum, Math.ceil(JSON.stringify(value ?? "").length / 4));
+
+const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: WorkspaceNode, input: unknown, output: unknown) => recordModelUsage({
+  runId: run.runId,
+  workflowId: run.workflowId,
+  projectId: run.projectId,
+  nodeId: node.id,
+  model: modelForDryRun(),
+  provider: "openai",
+  inputTokens: deterministicTokenCount({ prompt: node.prompt, input }, 64),
+  outputTokens: deterministicTokenCount(output, 32),
+  status: "estimated",
+  metadata: { dryRun: true, source: "workflow.run_next_node", estimateMethod: "deterministic_mock_length" }
+});
 
 export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
@@ -105,6 +121,7 @@ export async function runNextNode(runId: string, options: { executionStore?: InM
     run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", reason: "Publication requires explicit future approval; dry-run blocked before publishing.", requestedAt: completedAt }];
     run.stageOutputs[nextNode.id] = state.output;
     run.artifacts.push(buildArtifact(nextNode, state.output));
+    await recordDryRunNodeUsage(run, nextNode, state.input, state.output);
     return store.saveRun(run);
   }
 
@@ -116,6 +133,7 @@ export async function runNextNode(runId: string, options: { executionStore?: InM
   state.output = output;
   run.stageOutputs[nextNode.id] = output;
   run.artifacts.push(buildArtifact(nextNode, output));
+  await recordDryRunNodeUsage(run, nextNode, state.input, output);
   run.updatedAt = completedAt;
   run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
   if (options.workspaceStore) await options.workspaceStore.saveStageOutput(nextNode.id, output, `${run.runId}:${nextNode.id}`);

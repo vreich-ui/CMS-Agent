@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
+import { modelUsageStore } from "../../../src/agent/observability/modelUsageStore.js";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 
 const event = (body: unknown, token = "test-token") => ({
@@ -37,6 +38,7 @@ const validateArticleBody = (articleBody: unknown, id = 50) => call({
 describe("mcp endpoint", () => {
   beforeEach(() => {
     process.env.MCP_API_TOKEN = "test-token";
+    modelUsageStore.clear();
   });
 
   it("rejects requests without bearer authorization", async () => {
@@ -66,6 +68,19 @@ describe("mcp endpoint", () => {
   it("lists tools", async () => {
     const response = await call({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("workspace.get_nodes");
+    expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("usage.get_summary");
+  });
+
+  it("MCP usage tools return structured JSON", async () => {
+    const recorded = await call({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "usage.record", arguments: { runId: "run-mcp", projectId: "project-a", nodeId: "node-a", model: "gpt-5.5", provider: "openai", inputTokens: 10, outputTokens: 5, status: "estimated" } } });
+    const summary = await call({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "usage.get_summary", arguments: { runId: "run-mcp" } } });
+    const records = await call({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "usage.list_records", arguments: { runId: "run-mcp" } } });
+    const budget = await call({ jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "usage.get_budget_status", arguments: { runId: "run-mcp", budgetUsd: 1 } } });
+
+    expect(recorded.json.result.structuredContent).toMatchObject({ ok: true, data: { record: { totalTokens: 15, currency: "USD" } } });
+    expect(summary.json.result.structuredContent.data.summary.recordCount).toBe(1);
+    expect(records.json.result.structuredContent.data.records).toHaveLength(1);
+    expect(budget.json.result.structuredContent.data.budgetStatus.status).toBe("ok");
   });
 
   it("calls workspace.get_nodes without treating Markdown as canonical", async () => {

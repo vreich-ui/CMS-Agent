@@ -161,3 +161,19 @@ button:disabled { background: #aab4cc; cursor: not-allowed; }
 @media (max-width: 980px) {
   .execution-grid { grid-template-columns: 1fr; }
 }
+
+.usage-panel { grid-column: 1 / -1; }
+.usage-panel .muted { color: #64748b; margin: 0.25rem 0 0; }
+.usage-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+.usage-stats div { border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.75rem; background: #f8fafc; }
+.usage-stats span, .budget-field { display: block; color: #475569; font-size: 0.85rem; }
+.usage-stats strong { display: block; margin-top: 0.25rem; font-size: 1.1rem; }
+.budget-field input { display: block; margin-top: 0.35rem; max-width: 12rem; }
+.budget-status { margin: 1rem 0; padding: 0.75rem; border-radius: 0.75rem; display: flex; gap: 0.75rem; flex-wrap: wrap; border: 1px solid #cbd5e1; }
+.budget-status.ok { background: #ecfdf5; border-color: #86efac; }
+.budget-status.warning { background: #fffbeb; border-color: #facc15; }
+.budget-status.exceeded { background: #fef2f2; border-color: #fca5a5; }
+.usage-breakdowns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+.usage-breakdown ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.usage-breakdown li { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.5rem; }
+.usage-breakdown strong { text-align: right; }

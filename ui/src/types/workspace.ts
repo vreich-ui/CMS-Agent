@@ -109,3 +109,51 @@ export type InitializeResult = {
   protocolVersion?: string;
   serverInfo?: { name?: string; version?: string };
 };
+
+export type ModelUsageBucket = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  reasoningTokens: number;
+  costUsdEstimate: number;
+  recordCount: number;
+};
+
+export type ModelUsageRecord = {
+  usageId: string;
+  runId?: string;
+  workflowId?: string;
+  projectId?: string;
+  nodeId?: string;
+  agentId?: string;
+  model: string;
+  provider: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+  costUsdEstimate: number;
+  currency: "USD";
+  status: "estimated" | "actual";
+  recordedAt: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type ModelUsageSummary = ModelUsageBucket & {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalReasoningTokens: number;
+  totalCostUsdEstimate: number;
+  byModel: Record<string, ModelUsageBucket>;
+  byNode: Record<string, ModelUsageBucket>;
+  byProject: Record<string, ModelUsageBucket>;
+};
+
+export type BudgetStatus = {
+  spentUsdEstimate: number;
+  remainingUsdEstimate: number;
+  budgetUsd: number;
+  percentUsed: number;
+  status: "ok" | "warning" | "exceeded";
+};
