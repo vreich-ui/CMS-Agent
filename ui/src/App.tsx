@@ -26,6 +26,13 @@ const isDeployedMode = !import.meta.env.DEV;
 const DEFAULT_ENDPOINT = isDeployedMode ? DEPLOYED_ENDPOINT : LOCAL_ENDPOINT;
 
 type Status = { tone: "info" | "success" | "error"; message: string } | null;
+type WorkspaceTab = "builder" | "nodes" | "support";
+
+const workspaceTabs: Array<{ id: WorkspaceTab; label: string; helper: string }> = [
+  { id: "builder", label: "Builder", helper: "Compose and dry-run the primary content workflow." },
+  { id: "nodes", label: "Nodes", helper: "Review prompts, schemas, content blocks, and stage outputs." },
+  { id: "support", label: "Support", helper: "Use diagnostics, validation, usage, and workspace exchange tools." }
+];
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
@@ -34,6 +41,7 @@ function App() {
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT);
   const [token, setToken] = useState(() => isDeployedMode ? "" : localStorage.getItem(TOKEN_KEY) ?? "");
   const [status, setStatus] = useState<Status>(null);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("builder");
   const usingSecureProxy = endpoint === DEPLOYED_ENDPOINT;
   const config = useMemo<McpConfig>(() => ({ endpoint, token: usingSecureProxy ? undefined : token, authToken: usingSecureProxy ? session.accessToken : undefined, requiresToken: !usingSecureProxy }), [endpoint, session.accessToken, token, usingSecureProxy]);
   const workspace = useWorkspace(config);
@@ -112,35 +120,46 @@ function App() {
 
   return <main className="app-shell">
     <header className="hero">
-      <div><p className="eyebrow">CMS-Agent</p><h1>Workspace UI</h1><p>Visualize and edit workspace state through the MCP server. The MCP server remains the source of truth.</p></div>
+      <div><p className="eyebrow">CMS-Agent</p><h1>Workspace</h1><p>Build, inspect, and validate content workflows from one MCP-backed workspace.</p></div>
       <div className="header-stack">{isDeployedMode && <div className="session-card"><span>Signed in as <strong>{session.email}</strong></span><button onClick={logout}>Log out</button></div>}<ConnectionPanel endpoint={endpoint} token={token} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} showTokenField={!usingSecureProxy} /></div>
     </header>
 
     {status && <div className={`status ${status.tone}`} role="status">{status.message}</div>}
 
-    <section className="workspace-grid">
-      <section className="panel graph-panel" aria-label="Workspace graph">
-        <div className="panel-heading"><h2>Workspace graph</h2><div className="auth-actions"><button onClick={loadWorkspace}>Load workspace</button><button onClick={exportWorkspace}>Export Workspace</button></div></div>
-        <WorkspaceGraph nodes={workspace.nodes} selectedNodeId={workspace.selectedId} onSelectNode={workspace.setSelectedId} executionStatusByNodeId={workflowRun.nodeStatusById} />
+    <nav className="workspace-tabs" aria-label="Workspace sections">
+      {workspaceTabs.map((tab) => <button key={tab.id} type="button" className={`workspace-tab ${activeTab === tab.id ? "active" : ""}`} aria-pressed={activeTab === tab.id} onClick={() => setActiveTab(tab.id)}><span>{tab.label}</span><small>{tab.helper}</small></button>)}
+    </nav>
+
+    {activeTab === "builder" && <section className="tab-panel" aria-label="Builder workspace">
+      <section className="workspace-grid">
+        <section className="panel graph-panel" aria-label="Workspace graph">
+          <div className="panel-heading"><div><h2>Builder map</h2><p className="muted">Select a node, then run or inspect the dry-run flow.</p></div><div className="auth-actions"><button onClick={loadWorkspace}>Load workspace</button></div></div>
+          <WorkspaceGraph nodes={workspace.nodes} selectedNodeId={workspace.selectedId} onSelectNode={workspace.setSelectedId} executionStatusByNodeId={workflowRun.nodeStatusById} />
+        </section>
+        <WorkflowControls currentRun={workflowRun.currentRun} runs={workflowRun.runs} selectedRunId={workflowRun.selectedRunId} loading={workflowRun.loading} onStartDryRun={(projectId, input) => workflowAction(() => workflowRun.startDryRun(projectId, input), (run) => `Started dry-run ${run.runId}.`)} onRunNextNode={() => workflowAction(workflowRun.runNextNode, (run) => run?.status === "blocked" ? "Dry-run blocked at publication_controller. No publication was performed." : `Advanced dry-run to ${run?.currentNodeId ?? run?.status ?? "next state"}.`, async () => modelUsage.refreshUsage())} onResetRun={() => workflowAction(workflowRun.resetRun, (run) => `Reset dry-run ${run?.runId ?? "run"}.`)} onRefreshRun={() => workflowAction(workflowRun.refreshRun, (run) => `Refreshed dry-run ${run?.runId ?? "run"}.`)} onListRuns={(projectId) => workflowAction(() => workflowRun.listRuns(projectId), (runs) => `Loaded ${runs.length} dry-run${runs.length === 1 ? "" : "s"}.`)} onLoadRun={(runId) => workflowAction(() => workflowRun.loadRun(runId), (run) => `Loaded dry-run ${run?.runId ?? runId}.`)} />
       </section>
+      <section className="execution-grid builder-status-grid">
+        <RunStatusPanel run={workflowRun.currentRun} />
+        <NodeExecutionList run={workflowRun.currentRun} />
+      </section>
+    </section>}
 
-      <Inspector selectedNode={workspace.selectedNode} promptDraft={workspace.promptDraft} workspaceVersion={workspace.workspaceVersion} selectedSchema={workspace.selectedSchema} onPromptDraftChange={workspace.setPromptDraft} onSavePrompt={savePrompt} />
-    </section>
-
-    <section className="execution-grid">
-      <WorkflowControls currentRun={workflowRun.currentRun} runs={workflowRun.runs} selectedRunId={workflowRun.selectedRunId} loading={workflowRun.loading} onStartDryRun={(projectId, input) => workflowAction(() => workflowRun.startDryRun(projectId, input), (run) => `Started dry-run ${run.runId}.`)} onRunNextNode={() => workflowAction(workflowRun.runNextNode, (run) => run?.status === "blocked" ? "Dry-run blocked at publication_controller. No publication was performed." : `Advanced dry-run to ${run?.currentNodeId ?? run?.status ?? "next state"}.`, async () => modelUsage.refreshUsage())} onResetRun={() => workflowAction(workflowRun.resetRun, (run) => `Reset dry-run ${run?.runId ?? "run"}.`)} onRefreshRun={() => workflowAction(workflowRun.refreshRun, (run) => `Refreshed dry-run ${run?.runId ?? "run"}.`)} onListRuns={(projectId) => workflowAction(() => workflowRun.listRuns(projectId), (runs) => `Loaded ${runs.length} dry-run${runs.length === 1 ? "" : "s"}.`)} onLoadRun={(runId) => workflowAction(() => workflowRun.loadRun(runId), (run) => `Loaded dry-run ${run?.runId ?? runId}.`)} />
-      <RunStatusPanel run={workflowRun.currentRun} />
-      <NodeExecutionList run={workflowRun.currentRun} />
+    {activeTab === "nodes" && <section className="tab-panel" aria-label="Nodes workspace">
+      <section className="workspace-grid">
+        <Inspector selectedNode={workspace.selectedNode} promptDraft={workspace.promptDraft} workspaceVersion={workspace.workspaceVersion} selectedSchema={workspace.selectedSchema} onPromptDraftChange={workspace.setPromptDraft} onSavePrompt={savePrompt} />
+        <section className="panel"><h2>Selected node form</h2><p className="muted">Preview the selected node schema. Submitting here is visual only.</p>{workspace.selectedSchema ? <Form schema={workspace.selectedSchema} validator={validator} onSubmit={() => setStatus({ tone: "info", message: "Schema form data is visual only and is not saved." })} /> : <p className="empty-state">Select a node with a schema to preview its form.</p>}</section>
+      </section>
       <ArtifactPanel run={workflowRun.currentRun} />
-      <UsagePanel summary={modelUsage.summary} budgetStatus={modelUsage.budgetStatus} budgetUsd={modelUsage.budgetUsd} recordCount={modelUsage.records.length} loading={modelUsage.loading} activeRunId={workflowRun.currentRun?.runId} onBudgetUsdChange={modelUsage.setBudgetUsd} onRefresh={() => void modelUsage.refreshUsage().catch(handleError)} />
-    </section>
+    </section>}
 
-    <section className="lower-grid">
-      <section className="panel"><h2>Selected node schema form</h2>{workspace.selectedSchema ? <Form schema={workspace.selectedSchema} validator={validator} onSubmit={() => setStatus({ tone: "info", message: "Schema form data is visual only and is not saved." })} /> : <p>No selected node schema to render.</p>}</section>
-      <section className="panel"><h2>article_body schema</h2><SchemaViewer schema={workspace.articleSchema} emptyMessage="Load the workspace to fetch article_body.get_schema." /></section>
+    {activeTab === "support" && <section className="tab-panel" aria-label="Support workspace">
+      <section className="support-grid">
+        <section className="panel"><div className="panel-heading"><div><h2>Workspace exchange</h2><p className="muted">Export the current MCP workspace document for review or handoff.</p></div><button onClick={exportWorkspace}>Export</button></div><pre>{workspace.exportedWorkspace ? pretty(workspace.exportedWorkspace) : "Export the workspace to view the current MCP document."}</pre></section>
+        <section className="panel"><h2>article_body schema</h2><p className="muted">Reference schema used by validation and article body checks.</p><SchemaViewer schema={workspace.articleSchema} emptyMessage="Load the workspace to fetch article_body.get_schema." /></section>
+      </section>
       <Validator articleSchema={workspace.articleSchema} articleJson={workspace.articleJson} articleFormData={workspace.articleFormData} validation={workspace.validation} onArticleJsonChange={workspace.setArticleJson} onArticleFormDataChange={workspace.setArticleFormData} onValidateArticleBody={validateArticleBody} onJsonParseError={() => setStatus({ tone: "error", message: "JSON input is not valid JSON." })} />
-      <section className="panel"><h2>Workspace export</h2><pre>{workspace.exportedWorkspace ? pretty(workspace.exportedWorkspace) : "Click Export Workspace to view the current MCP workspace document."}</pre></section>
-    </section>
+      <UsagePanel summary={modelUsage.summary} budgetStatus={modelUsage.budgetStatus} budgetUsd={modelUsage.budgetUsd} recordCount={modelUsage.records.length} loading={modelUsage.loading} activeRunId={workflowRun.currentRun?.runId} onBudgetUsdChange={modelUsage.setBudgetUsd} onRefresh={() => void modelUsage.refreshUsage().catch(handleError)} />
+    </section>}
   </main>;
 }
 

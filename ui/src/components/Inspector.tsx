@@ -13,12 +13,12 @@ type InspectorProps = {
 
 export function Inspector({ selectedNode, promptDraft, workspaceVersion, selectedSchema, onPromptDraftChange, onSavePrompt }: InspectorProps) {
   return <aside className="panel inspector">
-    <h2>Node inspector</h2>
+    <h2>Node details</h2>
     {selectedNode ? <>
-      <dl><dt>Node ID</dt><dd>{selectedNode.id}</dd><dt>Name</dt><dd>{selectedNode.name}</dd><dt>Workspace version</dt><dd>{workspaceVersion ?? "Not returned yet"}</dd></dl>
-      <label>Prompt<textarea rows={8} value={promptDraft} onChange={(event) => onPromptDraftChange(event.target.value)} /></label>
+      <dl><dt>ID</dt><dd>{selectedNode.id}</dd><dt>Name</dt><dd>{selectedNode.name}</dd><dt>Workspace version</dt><dd>{workspaceVersion ?? "Not returned yet"}</dd></dl>
+      <label>Node prompt<textarea rows={8} value={promptDraft} onChange={(event) => onPromptDraftChange(event.target.value)} /></label>
       <button onClick={onSavePrompt}>Save Prompt</button>
-      <h3>Schema preview</h3><SchemaViewer schema={selectedSchema} emptyMessage="No schema for this node." />
-    </> : <p>Select a node to inspect it.</p>}
+      <h3>Schema preview</h3><SchemaViewer schema={selectedSchema} emptyMessage="No schema is attached to this node." />
+    </> : <p className="empty-state">Select a node from the Builder map to review its prompt and schema.</p>}
   </aside>;
 }
