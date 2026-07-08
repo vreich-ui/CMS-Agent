@@ -30,4 +30,3 @@ export class InMemoryModelUsageStore {
   }
 }
 
-export const modelUsageStore = new InMemoryModelUsageStore();

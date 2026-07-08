@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { getBudgetStatus, estimateModelCost, recordModelUsage, summarizeModelUsage } from "../../../src/agent/observability/modelUsage.js";
-import { InMemoryModelUsageStore } from "../../../src/agent/observability/modelUsageStore.js";
+import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
+import type { UsageRepository } from "../../../src/agent/repository/interfaces/UsageRepository.js";
 
 const base = { model: "gpt-5.5", provider: "openai", inputTokens: 1000, outputTokens: 500, status: "estimated" as const };
 
 describe("model usage observability", () => {
-  let store: InMemoryModelUsageStore;
+  let store: UsageRepository;
 
-  beforeEach(() => { store = new InMemoryModelUsageStore(); });
+  beforeEach(() => { store = new RepositoryManager().getUsageRepository(); });
 
   it("estimates cost from the placeholder catalog", () => {
     expect(estimateModelCost({ model: "gpt-5.5", inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBe(20);

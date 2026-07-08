@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { InMemoryExecutionStore } from "../../src/agent/workspace/executionStore.js";
+import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
+import type { ExecutionRepository } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import { getRun, runNextNode, startDryRun } from "../../src/agent/workspace/executor.js";
-import { modelUsageStore } from "../../src/agent/observability/modelUsageStore.js";
+import { repositoryManager } from "../../src/agent/repository/RepositoryManager.js";
 
-const completeUntil = async (runId: string, targetNodeId: string, store: InMemoryExecutionStore) => {
+const completeUntil = async (runId: string, targetNodeId: string, store: ExecutionRepository) => {
   let run = await getRun(runId, store);
   while (run && !run.nodes.find((node) => node.nodeId === targetNodeId && ["completed", "blocked"].includes(node.status))) {
     run = await runNextNode(runId, { executionStore: store });
@@ -12,9 +13,9 @@ const completeUntil = async (runId: string, targetNodeId: string, store: InMemor
 };
 
 describe("Publishing Conductor dry-run execution", () => {
-  beforeEach(() => modelUsageStore.clear());
+  beforeEach(() => repositoryManager.getUsageRepository().clear());
   it("start dry run creates a queued run", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
 
     expect(run.runId).toMatch(/^run_/);
@@ -26,14 +27,14 @@ describe("Publishing Conductor dry-run execution", () => {
   });
 
   it("run has 18 conductor nodes", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
 
     expect(run.nodes).toHaveLength(18);
   });
 
   it("run_next_node advances state", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
     const advanced = await runNextNode(run.runId, { executionStore: store });
 
@@ -43,7 +44,7 @@ describe("Publishing Conductor dry-run execution", () => {
   });
 
   it("dependency ordering is respected", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
 
     const afterInput = await runNextNode(run.runId, { executionStore: store });
@@ -56,7 +57,7 @@ describe("Publishing Conductor dry-run execution", () => {
   });
 
   it("publication_controller blocks without approval", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
     const blocked = await completeUntil(run.runId, "publication_controller", store);
 
@@ -67,7 +68,7 @@ describe("Publishing Conductor dry-run execution", () => {
   });
 
   it("article_body node produces article_body.v1", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
     const advanced = await completeUntil(run.runId, "article_body", store);
 
@@ -76,7 +77,7 @@ describe("Publishing Conductor dry-run execution", () => {
   });
 
   it("publish_payload remains dry-run", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
     const advanced = await completeUntil(run.runId, "publish_payload", store);
 
@@ -84,18 +85,18 @@ describe("Publishing Conductor dry-run execution", () => {
   });
 
   it("dry-run node execution records estimated usage", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
     await runNextNode(run.runId, { executionStore: store });
 
-    const records = await modelUsageStore.list({ runId: run.runId, nodeId: "input_triage" });
+    const records = await repositoryManager.getUsageRepository().list({ runId: run.runId, nodeId: "input_triage" });
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ runId: run.runId, projectId: "project-a", nodeId: "input_triage", status: "estimated", provider: "openai" });
     expect(records[0].totalTokens).toBe(records[0].inputTokens + records[0].outputTokens);
   });
 
   it("no external MCP calls occur", async () => {
-    const store = new InMemoryExecutionStore();
+    const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
     const advanced = await runNextNode(run.runId, { executionStore: store });
 

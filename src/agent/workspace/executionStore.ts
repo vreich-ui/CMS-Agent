@@ -34,4 +34,3 @@ export class InMemoryExecutionStore {
   }
 }
 
-export const executionStore = new InMemoryExecutionStore();

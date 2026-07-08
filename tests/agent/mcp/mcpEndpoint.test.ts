@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { modelUsageStore } from "../../../src/agent/observability/modelUsageStore.js";
+import { repositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 
 const event = (body: unknown, token = "test-token") => ({
@@ -38,7 +38,7 @@ const validateArticleBody = (articleBody: unknown, id = 50) => call({
 describe("mcp endpoint", () => {
   beforeEach(() => {
     process.env.MCP_API_TOKEN = "test-token";
-    modelUsageStore.clear();
+    repositoryManager.getUsageRepository().clear();
   });
 
   it("rejects requests without bearer authorization", async () => {
