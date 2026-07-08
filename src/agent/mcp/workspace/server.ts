@@ -1,13 +1,14 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createWorkspaceTools, toolError } from "./tools.js";
-import { workspaceStore, type WorkspaceStore } from "./store.js";
+import type { WorkspaceStore } from "./store.js";
+import { repositoryManager } from "../../repository/RepositoryManager.js";
 
 export const MCP_SERVER_NAME = "publishing-workspace-mcp";
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 const SERVER_VERSION = "0.1.0";
 
-export function createWorkspaceMcpServer(store: WorkspaceStore = workspaceStore) {
+export function createWorkspaceMcpServer(store: WorkspaceStore = repositoryManager.getWorkspaceRepository()) {
   const server = new Server(
     { name: MCP_SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {}, prompts: {}, resources: {} } }
@@ -29,7 +30,7 @@ export function createWorkspaceMcpServer(store: WorkspaceStore = workspaceStore)
   return server;
 }
 
-export async function handleMcpJsonRpc(message: unknown, store: WorkspaceStore = workspaceStore) {
+export async function handleMcpJsonRpc(message: unknown, store: WorkspaceStore = repositoryManager.getWorkspaceRepository()) {
   const request = message as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
   const id = request.id ?? null;
   const tools = createWorkspaceTools(store);

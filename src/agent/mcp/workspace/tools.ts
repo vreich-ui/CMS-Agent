@@ -1,10 +1,9 @@
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { articleBodyJsonSchema, articleBodySchema, type WorkspaceStore } from "./store.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
-import { executionStore } from "../../workspace/executionStore.js";
+import { repositoryManager } from "../../repository/RepositoryManager.js";
 import { getRun, listRuns, resetRun, runNextNode, startDryRun } from "../../workspace/executor.js";
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
-import { modelUsageStore } from "../../observability/modelUsageStore.js";
 
 export type JsonSchema = Record<string, unknown>;
 export type WorkspaceTool = {
@@ -85,6 +84,8 @@ const ok = (data: unknown) => ({ ok: true, data });
 const tool = (definition: WorkspaceTool) => definition;
 
 export function createWorkspaceTools(store: WorkspaceStore): WorkspaceTool[] {
+  const executionRepository = repositoryManager.getExecutionRepository();
+  const usageRepository = repositoryManager.getUsageRepository();
   return [
     tool({ name: "workspace.get_nodes", description: "List workspace nodes.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ nodes: await store.getNodes() }); } }),
     tool({ name: "workspace.get_node", description: "Get one workspace node.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => ok({ node: await store.getNode(nodeId.parse(input).id) ?? null }) }),
@@ -101,15 +102,16 @@ export function createWorkspaceTools(store: WorkspaceStore): WorkspaceTool[] {
     tool({ name: "learning.list_observations", description: "List learning observations.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ observations: await store.listObservations() }); } }),
     tool({ name: "publish.build_payload", description: "Build a dry-run publish payload without side effects.", zodSchema: publishBuild, inputSchema: publishBuildJsonSchema, execute: async (input) => { const data = publishBuild.parse(input); return ok({ payload: { articleBody: data.articleBody, target: data.target, dryRun: true, builtAt: new Date().toISOString() } }); } }),
     tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); return ok({ valid: parsed.success, issues: parsed.success ? [] : parsed.error.issues }); } }),
-    tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => { const data = startDryRunInput.parse(input); return ok({ run: await startDryRun(data, executionStore) }); } }),
-    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await getRun(runIdInput.parse(input).runId, executionStore) ?? null }) }),
-    tool({ name: "workflow.list_runs", description: "List dry-run workflow executions.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => ok({ runs: await listRuns(listRunsInput.parse(input), executionStore) }) }),
-    tool({ name: "workflow.run_next_node", description: "Run the next dependency-ready Publishing Conductor node in dry-run mode only.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await runNextNode(runIdInput.parse(input).runId, { executionStore, workspaceStore: store }) }) }),
-    tool({ name: "workflow.reset_run", description: "Reset a dry-run workflow execution to its initial queued state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await resetRun(runIdInput.parse(input).runId, executionStore) }) }),
-    tool({ name: "usage.record", description: "Record estimated or actual model usage without storing raw prompts or secrets.", zodSchema: recordModelUsageSchema, inputSchema: usageRecordJsonSchema, execute: async (input) => ok({ record: await recordModelUsage(recordModelUsageSchema.parse(input), modelUsageStore) }) }),
-    tool({ name: "usage.list_records", description: "List model usage records with optional filters.", zodSchema: usageFiltersSchema, inputSchema: usageFiltersJsonSchema, execute: async (input) => ok({ records: await modelUsageStore.list(usageFiltersSchema.parse(input)) }) }),
-    tool({ name: "usage.get_summary", description: "Summarize estimated model token and cost usage with optional filters.", zodSchema: usageFiltersSchema, inputSchema: usageFiltersJsonSchema, execute: async (input) => ok({ summary: await summarizeModelUsage(usageFiltersSchema.parse(input), modelUsageStore) }) }),
-    tool({ name: "usage.get_budget_status", description: "Return estimated budget status for a run or project.", zodSchema: budgetStatusInput, inputSchema: budgetStatusJsonSchema, execute: async (input) => ok({ budgetStatus: await getBudgetStatus(budgetStatusInput.parse(input), modelUsageStore) }) })
+    tool({ name: "repository.get_health", description: "Return safe repository health metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ health: await repositoryManager.getRepositoryHealth() }); } }),
+    tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => { const data = startDryRunInput.parse(input); return ok({ run: await startDryRun(data, executionRepository) }); } }),
+    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await getRun(runIdInput.parse(input).runId, executionRepository) ?? null }) }),
+    tool({ name: "workflow.list_runs", description: "List dry-run workflow executions.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => ok({ runs: await listRuns(listRunsInput.parse(input), executionRepository) }) }),
+    tool({ name: "workflow.run_next_node", description: "Run the next dependency-ready Publishing Conductor node in dry-run mode only.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await runNextNode(runIdInput.parse(input).runId, { executionStore: executionRepository, workspaceStore: store }) }) }),
+    tool({ name: "workflow.reset_run", description: "Reset a dry-run workflow execution to its initial queued state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await resetRun(runIdInput.parse(input).runId, executionRepository) }) }),
+    tool({ name: "usage.record", description: "Record estimated or actual model usage without storing raw prompts or secrets.", zodSchema: recordModelUsageSchema, inputSchema: usageRecordJsonSchema, execute: async (input) => ok({ record: await recordModelUsage(recordModelUsageSchema.parse(input), usageRepository) }) }),
+    tool({ name: "usage.list_records", description: "List model usage records with optional filters.", zodSchema: usageFiltersSchema, inputSchema: usageFiltersJsonSchema, execute: async (input) => ok({ records: await usageRepository.list(usageFiltersSchema.parse(input)) }) }),
+    tool({ name: "usage.get_summary", description: "Summarize estimated model token and cost usage with optional filters.", zodSchema: usageFiltersSchema, inputSchema: usageFiltersJsonSchema, execute: async (input) => ok({ summary: await summarizeModelUsage(usageFiltersSchema.parse(input), usageRepository) }) }),
+    tool({ name: "usage.get_budget_status", description: "Return estimated budget status for a run or project.", zodSchema: budgetStatusInput, inputSchema: budgetStatusJsonSchema, execute: async (input) => ok({ budgetStatus: await getBudgetStatus(budgetStatusInput.parse(input), usageRepository) }) })
   ];
 }
 

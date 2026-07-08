@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RJSFSchema } from "@rjsf/utils";
 import { callMcpTool } from "../mcp/client";
-import type { ArticleBodySchema, ArticleValidationResult, McpConfig, WorkspaceDocument, WorkspaceNode } from "../types/workspace";
+import type { ArticleBodySchema, ArticleValidationResult, McpConfig, RepositoryHealthSummary, WorkspaceDocument, WorkspaceNode } from "../types/workspace";
 
 const sampleArticleBody = {
   schema_version: "article_body.v1",
@@ -21,6 +21,7 @@ export function useWorkspace(config: McpConfig) {
   const [articleFormData, setArticleFormData] = useState<unknown>(sampleArticleBody);
   const [validation, setValidation] = useState<ArticleValidationResult | null>(null);
   const [exportedWorkspace, setExportedWorkspace] = useState<WorkspaceDocument | null>(null);
+  const [repositoryHealth, setRepositoryHealth] = useState<RepositoryHealthSummary | null>(null);
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedId) ?? null, [nodes, selectedId]);
   const selectedSchema = asSchema(selectedNode?.schema);
@@ -60,6 +61,12 @@ export function useWorkspace(config: McpConfig) {
     return result;
   };
 
+  const loadRepositoryHealth = async () => {
+    const result = await callMcpTool<{ health: RepositoryHealthSummary }>(config, "repository.get_health");
+    setRepositoryHealth(result.health);
+    return result.health;
+  };
+
   return {
     nodes,
     selectedId,
@@ -72,6 +79,7 @@ export function useWorkspace(config: McpConfig) {
     articleFormData,
     validation,
     exportedWorkspace,
+    repositoryHealth,
     setSelectedId,
     setPromptDraft,
     setArticleJson,
@@ -79,6 +87,7 @@ export function useWorkspace(config: McpConfig) {
     loadWorkspace,
     savePrompt,
     exportWorkspace,
-    validateArticleBody
+    validateArticleBody,
+    loadRepositoryHealth
   };
 }
