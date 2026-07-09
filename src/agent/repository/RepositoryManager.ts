@@ -6,6 +6,11 @@ import type { ExecutionRepository } from "./interfaces/ExecutionRepository.js";
 import type { LearningRepository } from "./interfaces/LearningRepository.js";
 import type { UsageRepository } from "./interfaces/UsageRepository.js";
 import type { WorkspaceRepository } from "./interfaces/WorkspaceRepository.js";
+import { BlobArtifactRepository } from "./blobs/BlobArtifactRepository.js";
+import { BlobExecutionRepository } from "./blobs/BlobExecutionRepository.js";
+import { BlobLearningRepository } from "./blobs/BlobLearningRepository.js";
+import { BlobUsageRepository } from "./blobs/BlobUsageRepository.js";
+import { BlobWorkspaceRepository } from "./blobs/BlobWorkspaceRepository.js";
 import { MemoryArtifactRepository } from "./memory/MemoryArtifactRepository.js";
 import { MemoryExecutionRepository } from "./memory/MemoryExecutionRepository.js";
 import { MemoryLearningRepository } from "./memory/MemoryLearningRepository.js";
@@ -30,7 +35,8 @@ export type RepositoryHealthSummary = {
   usage: RepositoryHealth;
 };
 
-const resolveContext = (context: Partial<RepositoryContext> = {}): RepositoryContext => repositoryConfigSchema.parse({ backend: context.backend ?? "memory", workspaceId: context.workspaceId, projectId: context.projectId, runId: context.runId });
+const resolveBackend = (context: Partial<RepositoryContext>) => context.backend ?? (process.env.WORKSPACE_STORE as RepositoryBackend | undefined) ?? "memory";
+const resolveContext = (context: Partial<RepositoryContext> = {}): RepositoryContext => repositoryConfigSchema.parse({ backend: resolveBackend(context), workspaceId: context.workspaceId, projectId: context.projectId, runId: context.runId });
 
 export class RepositoryManager {
   private readonly context: RepositoryContext;
@@ -42,6 +48,15 @@ export class RepositoryManager {
 
   constructor(context: Partial<RepositoryContext> = {}) {
     this.context = resolveContext(context);
+    if (this.context.backend === "blobs") {
+      this.workspaceRepository = new BlobWorkspaceRepository();
+      this.executionRepository = new BlobExecutionRepository();
+      this.artifactRepository = new BlobArtifactRepository();
+      this.learningRepository = new BlobLearningRepository(this.workspaceRepository);
+      this.usageRepository = new BlobUsageRepository();
+      return;
+    }
+
     this.workspaceRepository = new MemoryWorkspaceRepository(this.context.backend);
     this.executionRepository = new MemoryExecutionRepository(this.context.backend);
     this.artifactRepository = new MemoryArtifactRepository(this.executionRepository, this.context.backend);
@@ -68,4 +83,4 @@ export class RepositoryManager {
   }
 }
 
-export const repositoryManager = new RepositoryManager({ backend: "memory" });
+export const repositoryManager = new RepositoryManager();

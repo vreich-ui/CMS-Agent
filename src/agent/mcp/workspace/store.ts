@@ -130,7 +130,7 @@ export const articleBodyJsonSchema = {
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes().map((node) => node.id === "article_body" ? { ...node, schema: articleBodyJsonSchema, outputSchema: articleBodyJsonSchema } : node);
-const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [] });
+export const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [] });
 
 const workspaceNodeSchema = z.object({
   id: z.string().min(1),
@@ -153,7 +153,7 @@ const workspaceNodeSchema = z.object({
 }).passthrough();
 const stageOutputSchema: z.ZodType<StageOutput> = z.object({ id: z.string().min(1), stage: z.string().min(1), value: z.unknown().optional(), createdAt: z.string().datetime() }).strict();
 const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.unknown()).optional(), createdAt: z.string().datetime() }).strict();
-const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema) }).strict();
+export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema) }).strict();
 
 class WorkspaceStateStore implements WorkspaceStore {
   protected document: WorkspaceDocument;

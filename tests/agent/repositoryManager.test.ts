@@ -32,15 +32,13 @@ describe("RepositoryManager", () => {
     expect(manager.getUsageRepository()).toBeInstanceOf(MemoryUsageRepository);
   });
 
-  it("keeps json and blobs configured backends mapped to memory repositories in this PR", () => {
-    for (const backend of ["json", "blobs"] as const) {
-      const manager = new RepositoryManager({ backend });
+  it("keeps json configured backend mapped to memory repositories as a placeholder", () => {
+    const manager = new RepositoryManager({ backend: "json" });
 
-      expect(manager.getWorkspaceRepository()).toBeInstanceOf(MemoryWorkspaceRepository);
-      expect(manager.getExecutionRepository()).toBeInstanceOf(MemoryExecutionRepository);
-      expect(manager.getArtifactRepository()).toBeInstanceOf(MemoryArtifactRepository);
-      expect(manager.getUsageRepository()).toBeInstanceOf(MemoryUsageRepository);
-    }
+    expect(manager.getWorkspaceRepository()).toBeInstanceOf(MemoryWorkspaceRepository);
+    expect(manager.getExecutionRepository()).toBeInstanceOf(MemoryExecutionRepository);
+    expect(manager.getArtifactRepository()).toBeInstanceOf(MemoryArtifactRepository);
+    expect(manager.getUsageRepository()).toBeInstanceOf(MemoryUsageRepository);
   });
 
   it("returns healthy memory repository health for every repository", async () => {
