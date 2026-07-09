@@ -9,7 +9,7 @@ export const drLurieProjectConfig: ProjectConnectionConfig = {
   mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT",
   authMode: "bearer_env",
   tokenEnvVar: "DR_LURIE_MCP_TOKEN",
-  allowedTools: ["initialize", "tools/list"],
+  allowedTools: ["ping", "registry_get", "object_inventory", "object_contract"],
   contentContract: {
     contentContract: "content_source.v1",
     canonicalArticleBody: "article_body.v1"
