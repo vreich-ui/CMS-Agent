@@ -63,6 +63,7 @@ export type WorkspaceNode = {
   prompt: string;
   schema?: RJSFSchema | JsonValue;
   updatedAt?: string;
+  position?: { x: number; y: number };
 };
 
 export type WorkspaceExport = {

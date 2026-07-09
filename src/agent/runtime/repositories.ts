@@ -36,4 +36,5 @@ export const getExecutionRepository = () => getRepositoryManager().getExecutionR
 export const getArtifactRepository = () => getRepositoryManager().getArtifactRepository();
 export const getLearningRepository = () => getRepositoryManager().getLearningRepository();
 export const getUsageRepository = () => getRepositoryManager().getUsageRepository();
+export const getProjectRepository = () => getRepositoryManager().getProjectRepository();
 export const getRepositoryHealth = (): Promise<RepositoryHealthSummary> => getRepositoryManager().getRepositoryHealth();

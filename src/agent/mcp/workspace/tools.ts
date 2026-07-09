@@ -4,6 +4,8 @@ import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { getRun, listRuns, resetRun, runNextNode, startDryRun } from "../../workspace/executor.js";
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
+import { toProjectSummary, validateHandoff } from "../../projects/projectRegistry.js";
+import { ProjectMcpAdapter } from "../../projects/drLurie/adapter.js";
 
 export type JsonSchema = Record<string, unknown>;
 export type WorkspaceTool = {
@@ -55,6 +57,8 @@ const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any()
 const runIdInput = z.object({ runId: z.string().min(1) }).strict();
 const listRunsInput = z.object({ projectId: z.string().min(1).optional(), workflowId: z.string().min(1).optional() }).strict();
 const budgetStatusInput = z.object({ projectId: z.string().min(1).optional(), runId: z.string().min(1).optional(), budgetUsd: z.number().nonnegative().optional() }).strict();
+const projectIdInput = z.object({ projectId: z.string().min(1) }).strict();
+const validateHandoffInput = z.object({ projectId: z.string().min(1), contentSource: z.unknown().optional(), articleBody: z.unknown().optional() }).strict();
 
 const objectSchema = (properties: JsonSchema = {}, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 const emptyJsonSchema = objectSchema();
@@ -78,6 +82,8 @@ const listRunsJsonSchema = objectSchema({ projectId: { type: "string", minLength
 const usageFiltersJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" } });
 const usageRecordJsonSchema = objectSchema({ usageId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, agentId: { type: "string", minLength: 1 }, model: { type: "string", minLength: 1 }, provider: { type: "string", minLength: 1 }, inputTokens: { type: "integer", minimum: 0 }, outputTokens: { type: "integer", minimum: 0 }, totalTokens: { type: "integer", minimum: 0 }, reasoningTokens: { type: "integer", minimum: 0 }, cachedInputTokens: { type: "integer", minimum: 0 }, costUsdEstimate: { type: "number", minimum: 0 }, currency: { const: "USD" }, status: { type: "string", enum: ["estimated", "actual"] }, recordedAt: { type: "string", format: "date-time" }, metadata: { type: "object" } }, ["model", "provider", "inputTokens", "outputTokens", "status"]);
 const budgetStatusJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0 } });
+const projectIdJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 } }, ["projectId"]);
+const validateHandoffJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, contentSource: {}, articleBody: {} }, ["projectId"]);
 
 const ok = (data: unknown) => ({ ok: true, data });
 
@@ -88,6 +94,12 @@ export function createWorkspaceTools(): WorkspaceTool[] {
   const executionRepository = repositoryManager.getExecutionRepository();
   const usageRepository = repositoryManager.getUsageRepository();
   const learningRepository = repositoryManager.getLearningRepository();
+  const projectRepository = repositoryManager.getProjectRepository();
+  const requireProject = async (id: string) => {
+    const config = await projectRepository.get(id);
+    if (!config) throw new Error(`Unknown projectId: ${id}`);
+    return config;
+  };
   return [
     tool({ name: "workspace.get_nodes", description: "List workspace nodes.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ nodes: await workspaceRepository.getNodes() }); } }),
     tool({ name: "workspace.get_node", description: "Get one workspace node.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => ok({ node: await workspaceRepository.getNode(nodeId.parse(input).id) ?? null }) }),
@@ -113,7 +125,12 @@ export function createWorkspaceTools(): WorkspaceTool[] {
     tool({ name: "usage.record", description: "Record estimated or actual model usage without storing raw prompts or secrets.", zodSchema: recordModelUsageSchema, inputSchema: usageRecordJsonSchema, execute: async (input) => ok({ record: await recordModelUsage(recordModelUsageSchema.parse(input), usageRepository) }) }),
     tool({ name: "usage.list_records", description: "List model usage records with optional filters.", zodSchema: usageFiltersSchema, inputSchema: usageFiltersJsonSchema, execute: async (input) => ok({ records: await usageRepository.list(usageFiltersSchema.parse(input)) }) }),
     tool({ name: "usage.get_summary", description: "Summarize estimated model token and cost usage with optional filters.", zodSchema: usageFiltersSchema, inputSchema: usageFiltersJsonSchema, execute: async (input) => ok({ summary: await summarizeModelUsage(usageFiltersSchema.parse(input), usageRepository) }) }),
-    tool({ name: "usage.get_budget_status", description: "Return estimated budget status for a run or project.", zodSchema: budgetStatusInput, inputSchema: budgetStatusJsonSchema, execute: async (input) => ok({ budgetStatus: await getBudgetStatus(budgetStatusInput.parse(input), usageRepository) }) })
+    tool({ name: "usage.get_budget_status", description: "Return estimated budget status for a run or project.", zodSchema: budgetStatusInput, inputSchema: budgetStatusJsonSchema, execute: async (input) => ok({ budgetStatus: await getBudgetStatus(budgetStatusInput.parse(input), usageRepository) }) }),
+    tool({ name: "project.list", description: "List registered project MCP connections with safe, non-secret metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); const projects = await projectRepository.list(); return ok({ projects: projects.map((config) => toProjectSummary(config)) }); } }),
+    tool({ name: "project.get", description: "Get one registered project MCP connection with safe, non-secret metadata.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await projectRepository.get(projectIdInput.parse(input).projectId); return ok({ project: config ? toProjectSummary(config) : null }); } }),
+    tool({ name: "project.test_connection", description: "Run a primitive MCP initialize against a project's external server. Read-only; no publishing side effects.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok({ connection: await new ProjectMcpAdapter(config).testConnection() }); } }),
+    tool({ name: "project.list_tools", description: "List a project's remote MCP tools via tools/list. Returns safe tool names and descriptions only.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok(await new ProjectMcpAdapter(config).listTools()); } }),
+    tool({ name: "project.validate_handoff", description: "Dry structural validation of a handoff against the project content_source.v1 / article_body.v1 contract. Read-only; no publishing.", zodSchema: validateHandoffInput, inputSchema: validateHandoffJsonSchema, execute: async (input) => { const data = validateHandoffInput.parse(input); const config = await requireProject(data.projectId); return ok({ validation: validateHandoff(config, { contentSource: data.contentSource, articleBody: data.articleBody }) }); } })
   ];
 }
 
