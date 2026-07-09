@@ -230,6 +230,8 @@ The UI cannot:
 
 The default workspace MCP graph is the first real Publishing Conductor workflow. `workspace.get_nodes` returns typed nodes with UI-compatible `id`, `name`, `prompt`, `schema`, and `updatedAt` fields plus operational metadata for prompts, schemas, dependencies, risk level, status, produced artifacts, allowed tools, required inputs, and graph position.
 
+Node ordering is canonical and stable. Editing a node's prompt or schema updates it in place and never changes workflow order — `workspace.get_nodes` always returns nodes in canonical conductor order (by graph `position.y` then `position.x`, falling back to the canonical Publishing Conductor order), regardless of storage insertion order, mutation order, or `updatedAt`. The `sortWorkspaceNodes` helper (`src/agent/workspace/nodes.ts`) applies this ordering on read, and the workspace UI graph applies the same position-based ordering defensively.
+
 Current graph flow:
 
 ```text
@@ -355,3 +357,37 @@ Dry-run workflow node execution records deterministic mock usage for each execut
 The workspace UI includes a Usage & Budget Estimates panel. When a dry-run is active, the panel filters usage by the current `runId`, shows estimated token/cost totals and model/node/project breakdowns, lets users enter a budget, and refreshes automatically after Run Next Node. The Refresh Usage button re-queries the MCP usage tools.
 
 Future OpenAI integration should replace or supplement deterministic estimates with actual usage data returned by OpenAI responses while preserving the same storage and summary interfaces. External telemetry and durable billing storage are intentionally not integrated yet.
+
+## Project MCP connections
+
+CMS-Agent can register external **project** MCP servers and perform primitive, guarded tests against them. This is connection scaffolding only: it can initialize a project's MCP server, list its tools, discover schema/contract surfaces, and dry-validate a handoff payload. **Publishing execution is not part of this registry and remains disabled** until a future explicit `PUBLISH` approval gate is implemented — no `project.*` tool performs a publish side effect.
+
+### Registry and Dr. Lurie adapter
+
+* The project registry is defined in `src/agent/projects/projectTypes.ts` and `src/agent/projects/projectRegistry.ts`. Each project connection carries `projectId`, `name`, `mcpEndpointEnvVar`, `authMode`, `tokenEnvVar`, `allowedTools`, `contentContract`, `publishingPolicy`, and `status`.
+* Connection configs are stored **through repositories** (`ProjectRepository`, backed by memory or Netlify Blobs like the other repositories), seeded from the code-defined defaults — not from hardcoded runtime state.
+* The **Dr. Lurie** project (`dr-lurie`) is defined in `src/agent/projects/drLurie/definition.ts` with `contentContract: content_source.v1` and `canonicalArticleBody: article_body.v1`. Its publishing policy is disabled (`publishEnabled: false`, `requiresExplicitPublish: true`).
+* The MCP connection adapter lives in `src/agent/projects/mcpClient.ts` (a minimal JSON-RPC client) and `src/agent/projects/drLurie/adapter.ts` (the project adapter). It supports the primitive calls `initialize`, `tools/list`, best-effort schema/contract discovery, and a best-effort dry validation call.
+
+### Environment variables
+
+The project endpoint and bearer token are resolved from environment variables at request time and are **never persisted** to workspace JSON or Blobs, and **never returned or logged**:
+
+```text
+DR_LURIE_MCP_ENDPOINT=
+DR_LURIE_MCP_TOKEN=
+```
+
+Only non-secret metadata is stored and returned. Project views expose the env var *names* plus `endpointConfigured` / `tokenConfigured` booleans — never the endpoint value, token, authorization header, cookies, or JWTs.
+
+### MCP tools
+
+The workspace MCP server exposes these read-only project tools (no publishing side effects):
+
+* `project.list` — list registered projects with safe, non-secret metadata.
+* `project.get` — get one project's safe metadata and connection state.
+* `project.test_connection` — run a primitive MCP `initialize` against the project's server and return safe server info.
+* `project.list_tools` — list the project's remote tool names/descriptions via `tools/list`.
+* `project.validate_handoff` — dry, local structural validation of a handoff payload against the project's `content_source.v1` / `article_body.v1` contract.
+
+Publishing stays disabled: enabling it will require a future explicit `PUBLISH` approval gate, and until then these tools only read, initialize, list, and validate.

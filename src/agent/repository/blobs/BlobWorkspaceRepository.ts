@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { createDefaultWorkspaceDocument, workspaceDocumentSchema, type LearningObservation, type StageOutput, type WorkspaceDocument } from "../../mcp/workspace/store.js";
-import { listWorkspaceNodes } from "../../workspace/nodes.js";
+import { createDefaultWorkspaceDocument, upsertWorkspaceNode, workspaceDocumentSchema, type LearningObservation, type StageOutput, type WorkspaceDocument } from "../../mcp/workspace/store.js";
+import { listWorkspaceNodes, sortWorkspaceNodes } from "../../workspace/nodes.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { WorkspaceRepository } from "../interfaces/WorkspaceRepository.js";
@@ -39,7 +39,7 @@ export class BlobWorkspaceRepository implements WorkspaceRepository {
   }
 
   async getWorkspaceVersion() { return (await this.load()).workspaceVersion; }
-  async getNodes() { return clone((await this.load()).nodes); }
+  async getNodes() { return sortWorkspaceNodes(clone((await this.load()).nodes)); }
   async getNode(id: string) { return clone((await this.load()).nodes.find((node) => node.id === id)); }
 
   async updateNodePrompt(id: string, prompt: string) {
@@ -47,7 +47,7 @@ export class BlobWorkspaceRepository implements WorkspaceRepository {
     await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, prompt, updatedAt: now() };
-      document.nodes = [...document.nodes.filter((node) => node.id !== id), updated];
+      document.nodes = upsertWorkspaceNode(document.nodes, updated);
     });
     return clone(updated!);
   }
@@ -57,7 +57,7 @@ export class BlobWorkspaceRepository implements WorkspaceRepository {
     await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, schema, updatedAt: now() };
-      document.nodes = [...document.nodes.filter((node) => node.id !== id), updated];
+      document.nodes = upsertWorkspaceNode(document.nodes, updated);
     });
     return clone(updated!);
   }
@@ -67,7 +67,7 @@ export class BlobWorkspaceRepository implements WorkspaceRepository {
   async importWorkspace(workspace: { nodes?: WorkspaceNode[]; stageOutputs?: StageOutput[]; learningObservations?: LearningObservation[] }) {
     partialWorkspaceSchema.parse(workspace);
     const workspaceVersion = await this.mutate((document) => {
-      workspace.nodes?.forEach((node) => { document.nodes = [...document.nodes.filter((existing) => existing.id !== node.id), node]; });
+      workspace.nodes?.forEach((node) => { document.nodes = upsertWorkspaceNode(document.nodes, node); });
       workspace.stageOutputs?.forEach((output) => { document.stageOutputs = [...document.stageOutputs.filter((existing) => existing.id !== output.id), output]; });
       workspace.learningObservations?.forEach((observation) => { document.learningObservations = [...document.learningObservations.filter((existing) => existing.id !== observation.id), observation]; });
     });

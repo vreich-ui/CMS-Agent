@@ -1,8 +1,15 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import { listWorkspaceNodes } from "../../workspace/nodes.js";
+import { listWorkspaceNodes, sortWorkspaceNodes } from "../../workspace/nodes.js";
 import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceNode } from "../../workspace/nodeTypes.js";
+
+// Replace a node in place when it already exists, otherwise append it. This preserves the existing
+// array order so editing a node's prompt/schema never moves it (e.g. to the end of the workflow).
+export const upsertWorkspaceNode = (nodes: WorkspaceNode[], node: WorkspaceNode): WorkspaceNode[] =>
+  nodes.some((existing) => existing.id === node.id)
+    ? nodes.map((existing) => existing.id === node.id ? node : existing)
+    : [...nodes, node];
 
 const visibleString = z.string().min(1);
 const publicMediaSchema = z.object({
@@ -167,14 +174,14 @@ class WorkspaceStateStore implements WorkspaceStore {
     return document.workspaceVersion;
   }
   async getWorkspaceVersion() { return (await this.load()).workspaceVersion; }
-  async getNodes() { return [...(await this.load()).nodes]; }
+  async getNodes() { return sortWorkspaceNodes([...(await this.load()).nodes]); }
   async getNode(id: string) { return (await this.load()).nodes.find((node) => node.id === id); }
   async updateNodePrompt(id: string, prompt: string) {
     let updated: WorkspaceNode | undefined;
     await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, prompt, updatedAt: now() };
-      document.nodes = [...document.nodes.filter((node) => node.id !== id), updated];
+      document.nodes = upsertWorkspaceNode(document.nodes, updated);
     });
     return updated!;
   }
@@ -183,7 +190,7 @@ class WorkspaceStateStore implements WorkspaceStore {
     await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, schema, updatedAt: now() };
-      document.nodes = [...document.nodes.filter((node) => node.id !== id), updated];
+      document.nodes = upsertWorkspaceNode(document.nodes, updated);
     });
     return updated!;
   }
@@ -191,7 +198,7 @@ class WorkspaceStateStore implements WorkspaceStore {
   async importWorkspace(workspace: { nodes?: WorkspaceNode[]; stageOutputs?: StageOutput[]; learningObservations?: LearningObservation[] }) {
     let workspaceVersion = 0;
     workspaceVersion = await this.mutate((document) => {
-      workspace.nodes?.forEach((node) => { document.nodes = [...document.nodes.filter((existing) => existing.id !== node.id), node]; });
+      workspace.nodes?.forEach((node) => { document.nodes = upsertWorkspaceNode(document.nodes, node); });
       workspace.stageOutputs?.forEach((output) => { document.stageOutputs = [...document.stageOutputs.filter((existing) => existing.id !== output.id), output]; });
       workspace.learningObservations?.forEach((observation) => { document.learningObservations = [...document.learningObservations.filter((existing) => existing.id !== observation.id), observation]; });
     });

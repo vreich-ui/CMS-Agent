@@ -1708,6 +1708,43 @@ export function listWorkspaceNodes(): WorkspaceNode[] {
   return publishingConductorNodes.map((node) => ({ ...node, dependsOn: [...node.dependsOn], allowedTools: [...node.allowedTools], requiredInputs: [...node.requiredInputs], produces: [...node.produces], position: { ...node.position }, metadata: node.metadata ? { ...node.metadata } : undefined }));
 }
 
+const canonicalNodeById = new Map(publishingConductorNodes.map((node, index) => [node.id, { index, position: node.position }]));
+
+type SortableWorkspaceNode = { id: string; position?: { x?: number; y?: number } | null };
+
+// Effective grid position for ordering. Prefer the node's own position; if it is missing but the
+// node is a canonical Publishing Conductor node, borrow the canonical position so stored data that
+// predates positions still renders in order.
+const effectivePosition = (node: SortableWorkspaceNode): { x: number; y: number } | null => {
+  const own = node.position;
+  if (own && Number.isFinite(own.x) && Number.isFinite(own.y)) return { x: own.x as number, y: own.y as number };
+  const canonical = canonicalNodeById.get(node.id);
+  return canonical ? { ...canonical.position } : null;
+};
+
+// Returns nodes in canonical conductor order without mutating the input. Ordering keys, in priority:
+// grid position (top-to-bottom by y, then left-to-right by x), then canonical Publishing Conductor
+// index, then original insertion order (stable). Prompt/schema edits, storage insertion order, and
+// updatedAt never affect the result. Nodes with neither a position nor a canonical entry are kept in
+// their original relative order at the end.
+export function sortWorkspaceNodes<T extends SortableWorkspaceNode>(nodes: T[]): T[] {
+  return nodes
+    .map((node, index) => ({ node, index, position: effectivePosition(node) }))
+    .sort((a, b) => {
+      if (a.position && b.position) {
+        if (a.position.y !== b.position.y) return a.position.y - b.position.y;
+        if (a.position.x !== b.position.x) return a.position.x - b.position.x;
+      } else if (a.position || b.position) {
+        return a.position ? -1 : 1;
+      }
+      const aIndex = canonicalNodeById.get(a.node.id)?.index ?? Number.POSITIVE_INFINITY;
+      const bIndex = canonicalNodeById.get(b.node.id)?.index ?? Number.POSITIVE_INFINITY;
+      if (aIndex !== bIndex) return aIndex - bIndex;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.node);
+}
+
 export function getWorkspaceNode(id: string): WorkspaceNode | undefined {
   return listWorkspaceNodes().find((node) => node.id === id);
 }

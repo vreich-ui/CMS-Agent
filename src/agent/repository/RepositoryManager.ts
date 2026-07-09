@@ -4,16 +4,19 @@ import type { RepositoryHealth } from "./RepositoryHealth.js";
 import type { ArtifactRepository } from "./interfaces/ArtifactRepository.js";
 import type { ExecutionRepository } from "./interfaces/ExecutionRepository.js";
 import type { LearningRepository } from "./interfaces/LearningRepository.js";
+import type { ProjectRepository } from "./interfaces/ProjectRepository.js";
 import type { UsageRepository } from "./interfaces/UsageRepository.js";
 import type { WorkspaceRepository } from "./interfaces/WorkspaceRepository.js";
 import { BlobArtifactRepository } from "./blobs/BlobArtifactRepository.js";
 import { BlobExecutionRepository } from "./blobs/BlobExecutionRepository.js";
 import { BlobLearningRepository } from "./blobs/BlobLearningRepository.js";
+import { BlobProjectRepository } from "./blobs/BlobProjectRepository.js";
 import { BlobUsageRepository } from "./blobs/BlobUsageRepository.js";
 import { BlobWorkspaceRepository } from "./blobs/BlobWorkspaceRepository.js";
 import { MemoryArtifactRepository } from "./memory/MemoryArtifactRepository.js";
 import { MemoryExecutionRepository } from "./memory/MemoryExecutionRepository.js";
 import { MemoryLearningRepository } from "./memory/MemoryLearningRepository.js";
+import { MemoryProjectRepository } from "./memory/MemoryProjectRepository.js";
 import { MemoryUsageRepository } from "./memory/MemoryUsageRepository.js";
 import { MemoryWorkspaceRepository } from "./memory/MemoryWorkspaceRepository.js";
 
@@ -48,6 +51,7 @@ export class RepositoryManager {
   private readonly artifactRepository: ArtifactRepository;
   private readonly learningRepository: LearningRepository;
   private readonly usageRepository: UsageRepository;
+  private readonly projectRepository: ProjectRepository;
 
   constructor(context: Partial<RepositoryContext> = {}) {
     this.context = resolveContext(context);
@@ -57,6 +61,7 @@ export class RepositoryManager {
       this.artifactRepository = new BlobArtifactRepository();
       this.learningRepository = new BlobLearningRepository(this.workspaceRepository);
       this.usageRepository = new BlobUsageRepository();
+      this.projectRepository = new BlobProjectRepository();
       return;
     }
 
@@ -65,6 +70,7 @@ export class RepositoryManager {
     this.artifactRepository = new MemoryArtifactRepository(this.executionRepository, this.context.backend);
     this.learningRepository = new MemoryLearningRepository(this.workspaceRepository, this.context.backend);
     this.usageRepository = new MemoryUsageRepository(this.context.backend);
+    this.projectRepository = new MemoryProjectRepository(this.context.backend);
   }
 
   getContext(): RepositoryContext { return { ...this.context }; }
@@ -73,6 +79,7 @@ export class RepositoryManager {
   getArtifactRepository(): ArtifactRepository { return this.artifactRepository; }
   getLearningRepository(): LearningRepository { return this.learningRepository; }
   getUsageRepository(): UsageRepository { return this.usageRepository; }
+  getProjectRepository(): ProjectRepository { return this.projectRepository; }
 
   async getRepositoryHealth(): Promise<RepositoryHealthSummary> {
     const [workspace, execution, artifact, learning, usage] = await Promise.all([
