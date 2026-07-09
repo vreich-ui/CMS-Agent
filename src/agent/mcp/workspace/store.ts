@@ -58,8 +58,6 @@ export type StageOutput = { id: string; stage: string; value?: unknown; createdA
 export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; createdAt: string };
 export type PublishPayload = { articleBody: ArticleBody; dryRun: true; target: "preview" | "cms"; builtAt: string };
 export type WorkspaceDocument = { schemaVersion: 1; workspaceVersion: number; updatedAt: string; nodes: WorkspaceNode[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[] };
-export type WorkspaceStoreKind = "memory" | "json";
-
 export interface WorkspaceStore {
   getWorkspaceVersion(): Promise<number>;
   getNodes(): Promise<WorkspaceNode[]>;
@@ -244,17 +242,3 @@ export class JsonWorkspaceStore extends WorkspaceStateStore {
     this.loaded = true;
   }
 }
-
-export function createWorkspaceStore(kind: WorkspaceStoreKind = "memory", filePath = process.env.WORKSPACE_STORE_PATH ?? ".data/workspace.json"): WorkspaceStore {
-  if (kind === "json") return new JsonWorkspaceStore(filePath);
-  return new InMemoryWorkspaceStore();
-}
-
-const productionJsonStoreError = "Invalid workspace storage configuration: JSON workspace storage is local/dev only. Netlify serverless filesystem is not durable storage. Use WORKSPACE_STORE=memory for now or implement a database/object-store adapter before enabling persistence in production.";
-
-export function createWorkspaceStoreFromEnv(env: NodeJS.ProcessEnv = process.env): WorkspaceStore {
-  const kind = env.WORKSPACE_STORE === "json" ? "json" : "memory";
-  if (env.NODE_ENV === "production" && kind === "json") throw new Error(productionJsonStoreError);
-  return createWorkspaceStore(kind, env.WORKSPACE_STORE_PATH ?? ".data/workspace.json");
-}
-

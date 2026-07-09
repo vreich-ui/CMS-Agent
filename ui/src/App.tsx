@@ -36,11 +36,14 @@ const workspaceTabs: Array<{ id: WorkspaceTab; label: string; helper: string }> 
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
+const repositoryNames = ["workspace", "execution", "artifact", "learning", "usage"] as const;
+
 const RepositoryDiagnostics = ({ health, onRefresh }: { health: ReturnType<typeof useWorkspace>["repositoryHealth"]; onRefresh: () => void }) => {
-  const entries = health ? Object.entries(health) : [];
+  const entries = health ? repositoryNames.map((name) => [name, health[name]] as const) : [];
   return <section className="panel">
     <div className="panel-heading"><div><h2>Repository diagnostics</h2><p className="muted">Safe repository health metadata only. Storage paths and secrets are not displayed.</p></div><button onClick={onRefresh}>Refresh</button></div>
-    {entries.length ? <div className="table-wrap"><table><thead><tr><th>Repository</th><th>Backend</th><th>Readable</th><th>Writable</th><th>Version</th></tr></thead><tbody>{entries.map(([name, status]) => <tr key={name}><td>{name}</td><td>{status.backend}</td><td>{status.readable ? "yes" : "no"}</td><td>{status.writable ? "yes" : "no"}</td><td>{status.version}</td></tr>)}</tbody></table></div> : <p className="empty-state">Refresh diagnostics to view repository health.</p>}
+    {health && <div className="diagnostic-summary" aria-label="Storage summary"><span><strong>Repository backend</strong>{health.backend}</span><span><strong>Storage health</strong>{health.storageHealth}</span><span><strong>Workspace version</strong>{health.workspaceVersion}</span></div>}
+    {entries.length ? <div className="table-wrap"><table><thead><tr><th>Repository</th><th>Backend</th><th>Readable</th><th>Writable</th><th>Version</th></tr></thead><tbody>{entries.map(([name, status]) => <tr key={name}><td>{name}</td><td>{status.backend}</td><td>{status.readable ? "yes" : "no"}</td><td>{status.writable ? "yes" : "no"}</td><td>{status.version}</td></tr>)}</tbody></table></div> : <p className="empty-state">Refresh diagnostics to view repository health for memory/json/blobs backends.</p>}
   </section>;
 };
 

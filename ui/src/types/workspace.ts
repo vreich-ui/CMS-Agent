@@ -166,6 +166,9 @@ export type RepositoryHealth = {
 };
 
 export type RepositoryHealthSummary = {
+  backend: "memory" | "json" | "blobs";
+  storageHealth: "healthy" | "degraded";
+  workspaceVersion: number;
   workspace: RepositoryHealth;
   execution: RepositoryHealth;
   artifact: RepositoryHealth;

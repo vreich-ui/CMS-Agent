@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
 import type { ExecutionRepository } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import { getRun, runNextNode, startDryRun } from "../../src/agent/workspace/executor.js";
-import { repositoryManager } from "../../src/agent/repository/RepositoryManager.js";
+import { repositoryManager } from "../../src/agent/runtime/repositories.js";
 
 const completeUntil = async (runId: string, targetNodeId: string, store: ExecutionRepository) => {
   let run = await getRun(runId, store);
   while (run && !run.nodes.find((node) => node.nodeId === targetNodeId && ["completed", "blocked"].includes(node.status))) {
-    run = await runNextNode(runId, { executionStore: store });
+    run = await runNextNode(runId, { executionRepository: store });
   }
   return run!;
 };
@@ -36,7 +36,7 @@ describe("Publishing Conductor dry-run execution", () => {
   it("run_next_node advances state", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
-    const advanced = await runNextNode(run.runId, { executionStore: store });
+    const advanced = await runNextNode(run.runId, { executionRepository: store });
 
     expect(advanced.nodes.find((node) => node.nodeId === "input_triage")?.status).toBe("completed");
     expect(advanced.stageOutputs.input_triage).toMatchObject({ dryRun: true });
@@ -47,11 +47,11 @@ describe("Publishing Conductor dry-run execution", () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
 
-    const afterInput = await runNextNode(run.runId, { executionStore: store });
+    const afterInput = await runNextNode(run.runId, { executionRepository: store });
     expect(afterInput.currentNodeId).toBe("topic_opportunity");
     expect(afterInput.nodes.find((node) => node.nodeId === "reader_insight")?.status).toBe("queued");
 
-    const afterTopic = await runNextNode(run.runId, { executionStore: store });
+    const afterTopic = await runNextNode(run.runId, { executionRepository: store });
     expect(afterTopic.nodes.find((node) => node.nodeId === "topic_opportunity")?.status).toBe("completed");
     expect(afterTopic.currentNodeId).toBe("reader_insight");
   });
@@ -87,7 +87,7 @@ describe("Publishing Conductor dry-run execution", () => {
   it("dry-run node execution records estimated usage", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
-    await runNextNode(run.runId, { executionStore: store });
+    await runNextNode(run.runId, { executionRepository: store });
 
     const records = await repositoryManager.getUsageRepository().list({ runId: run.runId, nodeId: "input_triage" });
     expect(records).toHaveLength(1);
@@ -98,7 +98,7 @@ describe("Publishing Conductor dry-run execution", () => {
   it("no external MCP calls occur", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
-    const advanced = await runNextNode(run.runId, { executionStore: store });
+    const advanced = await runNextNode(run.runId, { executionRepository: store });
 
     expect(advanced.errors).toEqual([]);
     expect(advanced.artifacts[0]).toMatchObject({ nodeId: "input_triage" });

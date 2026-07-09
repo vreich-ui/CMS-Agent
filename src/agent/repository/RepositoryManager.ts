@@ -28,6 +28,9 @@ export const repositoryConfigSchema = z.object({
 
 export type RepositoryConfig = z.infer<typeof repositoryConfigSchema>;
 export type RepositoryHealthSummary = {
+  backend: RepositoryBackend;
+  storageHealth: "healthy" | "degraded";
+  workspaceVersion: number;
   workspace: RepositoryHealth;
   execution: RepositoryHealth;
   artifact: RepositoryHealth;
@@ -79,8 +82,7 @@ export class RepositoryManager {
       this.learningRepository.health(),
       this.usageRepository.health()
     ]);
-    return { workspace, execution, artifact, learning, usage };
+    const storageHealth = [workspace, execution, artifact, learning, usage].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
+    return { backend: this.context.backend, storageHealth, workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage };
   }
 }
-
-export const repositoryManager = new RepositoryManager();

@@ -45,6 +45,9 @@ describe("RepositoryManager", () => {
     const manager = new RepositoryManager({ backend: "memory" });
 
     await expect(manager.getRepositoryHealth()).resolves.toEqual({
+      backend: "memory",
+      storageHealth: "healthy",
+      workspaceVersion: 0,
       workspace: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       execution: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       artifact: { backend: "memory", readable: true, writable: true, version: "memory.v1" },

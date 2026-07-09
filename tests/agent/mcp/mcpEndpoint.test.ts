@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { repositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
+import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 
 const event = (body: unknown, token = "test-token") => ({
@@ -76,6 +76,9 @@ describe("mcp endpoint", () => {
     const response = await call({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "repository.get_health", arguments: {} } });
 
     expect(response.json.result.structuredContent.data.health).toMatchObject({
+      backend: "memory",
+      storageHealth: "healthy",
+      workspaceVersion: 0,
       workspace: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       execution: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       artifact: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
