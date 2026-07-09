@@ -100,9 +100,21 @@ WORKSPACE_STORE=json
 WORKSPACE_STORE_PATH=.data/workspace.json
 ```
 
-`WORKSPACE_STORE` supports `memory` and `json`; if it is unset, the server defaults to `memory`. When `json` is selected and the file does not exist, the store initializes it with the default workspace nodes. The JSON document includes `schemaVersion`, `workspaceVersion`, `updatedAt`, `nodes`, `stageOutputs`, and `learningObservations`; writes are performed atomically through a temporary file followed by rename.
+`WORKSPACE_STORE` supports `memory`, `json`, and `blobs`; if it is unset, the server defaults to `memory`. When `json` is selected and the file does not exist, the store initializes it with the default workspace nodes. The JSON document includes `schemaVersion`, `workspaceVersion`, `updatedAt`, `nodes`, `stageOutputs`, and `learningObservations`; writes are performed atomically through a temporary file followed by rename.
 
-Do not use `WORKSPACE_STORE=json` in Netlify production. The JSON store is intended for local/dev persistence only because the Netlify serverless filesystem is not durable storage. If `NODE_ENV=production` and `WORKSPACE_STORE=json`, startup fails fast with a configuration error. Production persistence will require a database or object store adapter; until then, production workspace state is ephemeral unless backed externally.
+Use Netlify Blobs for durable deployed runtime storage:
+
+```text
+WORKSPACE_STORE=blobs
+# Optional; defaults to cms-agent
+NETLIFY_BLOBS_STORE_NAME=cms-agent
+```
+
+The Blobs repository backend stores records under stable keys: `workspace/current.json`, `runs/{runId}.json`, `artifacts/{artifactId}.json`, `learning/{observationId}.json`, and `usage/{usageId}.json`. Workspace reads initialize `workspace/current.json` from the Publishing Conductor defaults when it is empty, and blob reads/writes request strong consistency where the Netlify Blobs API supports it so a write can be read by a new repository instance immediately afterward.
+
+Netlify Blobs must be available in the deployment context. In production, configure the site on Netlify and provide the standard Blobs environment/context that `@netlify/blobs` uses for site ID, deploy context, and authentication; do not hardcode tokens or site identifiers in source. For local development against the Netlify Blobs service, run through Netlify tooling or provide the required Netlify Blobs credentials in the local environment.
+
+Do not use `WORKSPACE_STORE=json` in Netlify production. The JSON store is intended for local/dev persistence only because the Netlify serverless filesystem is not durable storage. If `NODE_ENV=production` and `WORKSPACE_STORE=json`, startup fails fast with a configuration error. Use `WORKSPACE_STORE=blobs` for deployed persistence, or keep `memory` for ephemeral test/dev behavior.
 
 ## Local development
 
