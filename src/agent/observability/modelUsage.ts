@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { repositoryManager } from "../repository/RepositoryManager.js";
+import { repositoryManager } from "../runtime/repositories.js";
 import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
 import type { BudgetStatus, EstimateModelCostInput, ModelUsageFilters, ModelUsageRecord, ModelUsageSummary, ModelUsageSummaryBucket, RecordModelUsageInput } from "./modelUsageTypes.js";
 

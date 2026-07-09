@@ -2,8 +2,8 @@ import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 import type { ExecutionArtifact, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
-import { repositoryManager } from "../repository/RepositoryManager.js";
-import type { WorkspaceStore } from "../mcp/workspace/store.js";
+import { repositoryManager } from "../runtime/repositories.js";
+import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import { recordModelUsage } from "../observability/modelUsage.js";
 
 const WORKFLOW_ID = "publishing_conductor";
@@ -90,8 +90,8 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
   return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId }, runId));
 }
 
-export async function runNextNode(runId: string, options: { executionStore?: ExecutionRepository; workspaceStore?: WorkspaceStore } = {}): Promise<WorkflowExecutionRecord> {
-  const store = options.executionStore ?? repositoryManager.getExecutionRepository();
+export async function runNextNode(runId: string, options: { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository } = {}): Promise<WorkflowExecutionRecord> {
+  const store = options.executionRepository ?? repositoryManager.getExecutionRepository();
   const run = await store.getRun(runId);
   if (!run) throw new Error(`Unknown run: ${runId}`);
   if (["blocked", "cancelled", "completed", "failed"].includes(run.status)) return run;
@@ -137,7 +137,7 @@ export async function runNextNode(runId: string, options: { executionStore?: Exe
   await recordDryRunNodeUsage(run, nextNode, state.input, output);
   run.updatedAt = completedAt;
   run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
-  if (options.workspaceStore) await options.workspaceStore.saveStageOutput(nextNode.id, output, `${run.runId}:${nextNode.id}`);
+  if (options.workspaceRepository) await options.workspaceRepository.saveStageOutput(nextNode.id, output, `${run.runId}:${nextNode.id}`);
   return store.saveRun(run);
 }
 
