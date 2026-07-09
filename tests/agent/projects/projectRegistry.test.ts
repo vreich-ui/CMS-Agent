@@ -112,6 +112,14 @@ describe("Dr. Lurie MCP adapter primitives", () => {
     expect(result).toEqual({ ok: true, available: false });
   });
 
+  it("surfaces a generic message when the remote returns a JSON-RPC error (no remote text)", async () => {
+    const transport = fakeTransport({}); // initialize is unhandled -> remote JSON-RPC error
+    const result = await new ProjectMcpAdapter(drLurieProjectConfig, { env, transport }).testConnection();
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("The project MCP server returned an error.");
+  });
+
   it("never leaks the endpoint or token in transport errors", async () => {
     const transport: McpTransport = async () => { throw new Error(`connect ECONNREFUSED https://dr-lurie.example/mcp token=${SECRET}`); };
 
