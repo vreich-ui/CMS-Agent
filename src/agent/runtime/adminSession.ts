@@ -50,4 +50,4 @@ export function adminSessionErrorResponse(error: AdminSessionError) {
   });
 }
 
-export type FunctionEvent = { httpMethod: string; body: string | null; headers: HeaderMap };
+export type FunctionEvent = { httpMethod: string; body: string | null; headers: HeaderMap; blobs?: string };

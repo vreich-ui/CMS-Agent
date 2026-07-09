@@ -116,6 +116,14 @@ Netlify Blobs must be available in the deployment context. In production, config
 
 Do not use `WORKSPACE_STORE=json` in Netlify production. The JSON store is intended for local/dev persistence only because the Netlify serverless filesystem is not durable storage. If `NODE_ENV=production` and `WORKSPACE_STORE=json`, startup fails fast with a configuration error. Use `WORKSPACE_STORE=blobs` for deployed persistence, or keep `memory` for ephemeral test/dev behavior.
 
+### Troubleshooting Netlify Blobs
+
+If `/api/mcp` (or `/api/workspace-mcp`) fails with `MissingBlobsEnvironmentError: The environment has not been configured to use Netlify Blobs`, the Blob store was requested before the Lambda Blobs context was connected. These endpoints are Lambda-style Netlify Functions, so `@netlify/blobs` runs in compatibility mode and requires `connectLambda(event)` before the first `getStore()` call. Verify that:
+
+- `connectLambda(event)` runs at the very beginning of the function handler, before the `RepositoryManager` or any Blob repository is constructed. In this project the connection is centralized in `connectLambdaBlobs(event)` (`src/agent/runtime/lambdaBlobs.ts`) and invoked at the top of each function handler.
+- No `RepositoryManager` or Blob repository is instantiated at module-evaluation time. The shared `repositoryManager` is built lazily on first use, so `getStore()` never runs at import.
+- The deploy actually provides a Blobs context (`event.blobs` plus the `x-nf-site-id` / `x-nf-deploy-id` headers). Without it, `getStore()` still throws `MissingBlobsEnvironmentError` even after `connectLambda(event)`.
+
 ## Local development
 
 Install dependencies:
