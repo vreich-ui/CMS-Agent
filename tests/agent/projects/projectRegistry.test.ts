@@ -85,6 +85,27 @@ describe("Dr. Lurie MCP adapter primitives", () => {
     expect(JSON.stringify(result.tools)).not.toContain("secretField");
   });
 
+  it("callTool allows configured read-only tools and does not expose tokens", async () => {
+    const calls: RecordedCall[] = [];
+    const transport = fakeTransport({ "tools/call": { ok: true, pong: true } }, calls);
+
+    const result = await new ProjectMcpAdapter(drLurieProjectConfig, { env, transport }).callTool("ping", { hello: "world" });
+
+    expect(result).toMatchObject({ ok: true, projectId: "dr-lurie", tool: "ping", result: { ok: true, pong: true } });
+    expect(calls.map((call) => call.method)).toEqual(["tools/call"]);
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it("callTool blocks publishing tools before transport", async () => {
+    const calls: RecordedCall[] = [];
+    const transport = fakeTransport({ "tools/call": { ok: true } }, calls);
+
+    const result = await new ProjectMcpAdapter(drLurieProjectConfig, { env, transport }).callTool("publish_article", {});
+
+    expect(result).toMatchObject({ ok: false, tool: "publish_article", error: "Tool is not allowed for project: publish_article" });
+    expect(calls).toHaveLength(0);
+  });
+
   it("discovers contract/schema surfaces when the remote exposes them", async () => {
     const transport = fakeTransport({ "tools/list": { tools: [{ name: "content.get_schema" }, { name: "other.tool" }] }, "resources/list": { resources: [{ uri: "contract://content_source.v1" }] } });
 

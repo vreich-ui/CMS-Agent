@@ -28,6 +28,7 @@ export type ConnectionTestResult = { ok: boolean; projectId: string; connection:
 export type ListToolsResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tools: SafeToolInfo[]; allowedTools: string[]; error?: string };
 export type ContractDiscoveryResult = { ok: boolean; available: boolean; schemaTools?: string[]; resources?: string[]; error?: string };
 export type DryValidateResult = { ok: boolean; available: boolean; toolName?: string; result?: unknown; error?: string };
+export type CallToolResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tool: string; result?: unknown; error?: string };
 
 // Adapter that performs primitive, guarded MCP calls against a project's external server. It never
 // executes publishing; it only initializes, lists tools, discovers contract/schema surfaces, and
@@ -79,6 +80,21 @@ export class ProjectMcpAdapter {
       return { ok: true, projectId: this.config.projectId, connection, tools: safe, allowedTools };
     } catch (error) {
       return { ok: false, projectId: this.config.projectId, connection, tools: [], allowedTools, error: sanitizeError(error) };
+    }
+  }
+
+  async callTool(name: string, args: Record<string, unknown> = {}): Promise<CallToolResult> {
+    const connection = this.connectionState();
+    if (!this.config.allowedTools.includes(name)) {
+      return { ok: false, projectId: this.config.projectId, connection, tool: name, error: `Tool is not allowed for project: ${name}` };
+    }
+    const resolved = this.requireConnection();
+    if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tool: name, error: resolved.error };
+    try {
+      const result = await mcpCallTool(this.clientOptions(resolved), name, args);
+      return { ok: true, projectId: this.config.projectId, connection, tool: name, result };
+    } catch (error) {
+      return { ok: false, projectId: this.config.projectId, connection, tool: name, error: sanitizeError(error) };
     }
   }
 
