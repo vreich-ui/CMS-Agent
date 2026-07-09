@@ -1,7 +1,7 @@
 import type { ModelUsageFilters, ModelUsageRecord } from "../../observability/modelUsageTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { UsageRepository } from "../interfaces/UsageRepository.js";
-import { getCmsAgentBlobStore, strongConsistency, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 const key = (usageId: string) => `usage/${usageId}.json`;
@@ -20,7 +20,7 @@ export class BlobUsageRepository implements UsageRepository {
   }
   async list(filters: ModelUsageFilters = {}): Promise<ModelUsageRecord[]> {
     const result = await this.store.list({ prefix: "usage/" });
-    const records = await Promise.all(result.blobs.map(async (blob) => this.store.get(blob.key, { type: "json", ...strongConsistency }) as Promise<ModelUsageRecord | null>));
+    const records = await Promise.all(result.blobs.map((blob) => getBlobJson<ModelUsageRecord>(this.store, blob.key)));
     return records.filter((record): record is ModelUsageRecord => record !== null)
       .filter((record) => !filters.runId || record.runId === filters.runId)
       .filter((record) => !filters.projectId || record.projectId === filters.projectId)

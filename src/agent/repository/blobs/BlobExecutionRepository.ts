@@ -1,7 +1,7 @@
 import type { WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { ExecutionRepository } from "../interfaces/ExecutionRepository.js";
-import { getCmsAgentBlobStore, strongConsistency, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 const runKey = (runId: string) => `runs/${runId}.json`;
@@ -21,13 +21,13 @@ export class BlobExecutionRepository implements ExecutionRepository {
   }
 
   async getRun(runId: string): Promise<WorkflowExecutionRecord | undefined> {
-    const run = await this.store.get(runKey(runId), { type: "json", ...strongConsistency });
-    return run === null ? undefined : clone(run as WorkflowExecutionRecord);
+    const run = await getBlobJson<WorkflowExecutionRecord>(this.store, runKey(runId));
+    return run === null ? undefined : clone(run);
   }
 
   async listRuns(filters: { projectId?: string; workflowId?: string } = {}): Promise<WorkflowExecutionRecord[]> {
     const result = await this.store.list({ prefix: "runs/" });
-    const runs = await Promise.all(result.blobs.map(async (blob) => this.store.get(blob.key, { type: "json", ...strongConsistency }) as Promise<WorkflowExecutionRecord | null>));
+    const runs = await Promise.all(result.blobs.map((blob) => getBlobJson<WorkflowExecutionRecord>(this.store, blob.key)));
     return runs.filter((run): run is WorkflowExecutionRecord => run !== null)
       .filter((run) => !filters.projectId || run.projectId === filters.projectId)
       .filter((run) => !filters.workflowId || run.workflowId === filters.workflowId)

@@ -4,7 +4,7 @@ import { listWorkspaceNodes } from "../../workspace/nodes.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { WorkspaceRepository } from "../interfaces/WorkspaceRepository.js";
-import { getCmsAgentBlobStore, strongConsistency, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
 
 const key = "workspace/current.json";
 const now = () => new Date().toISOString();
@@ -16,7 +16,7 @@ export class BlobWorkspaceRepository implements WorkspaceRepository {
   constructor(private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
 
   private async load(): Promise<WorkspaceDocument> {
-    const raw = await this.store.get(key, { type: "json", ...strongConsistency });
+    const raw = await getBlobJson<unknown>(this.store, key);
     if (raw === null) {
       const document = createDefaultWorkspaceDocument();
       await this.save(document);
