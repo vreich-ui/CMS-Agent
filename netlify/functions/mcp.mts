@@ -1,5 +1,7 @@
 import { handleMcpJsonRpc } from "../../src/agent/mcp/workspace/server.js";
 import { hasBearerToken, unauthorizedResponse, type HeaderMap } from "../../src/agent/runtime/auth.js";
+import { connectLambdaBlobs } from "../../src/agent/runtime/lambdaBlobs.js";
+import { refreshRepositoryManagerForRequest } from "../../src/agent/runtime/repositories.js";
 
 const json = (statusCode: number, body: unknown) => ({
   statusCode,
@@ -18,7 +20,10 @@ const isMcpNotification = (message: unknown) => {
   return request.id === undefined && typeof request.method === "string" && request.method.startsWith("notifications/");
 };
 
-export const handler = async (event: { httpMethod: string; body: string | null; headers: HeaderMap }) => {
+export const handler = async (event: { httpMethod: string; body: string | null; headers: HeaderMap; blobs?: string }) => {
+  // Lambda-mode Netlify Blobs must be connected before any repository / getStore() call.
+  connectLambdaBlobs(event);
+  refreshRepositoryManagerForRequest();
   if (event.httpMethod !== "POST") return json(405, { error: { code: "method_not_allowed", message: "Use POST." } });
   // TODO: Replace workspace bearer tokens with authenticated user sessions and passthrough project credentials.
   if (!hasBearerToken(event.headers, process.env.MCP_API_TOKEN)) return json(401, unauthorizedResponse);
