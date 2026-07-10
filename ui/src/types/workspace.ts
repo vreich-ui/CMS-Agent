@@ -189,4 +189,11 @@ export type RepositoryHealthSummary = {
   artifact: RepositoryHealth;
   learning: RepositoryHealth;
   usage: RepositoryHealth;
+  skill: RepositoryHealth;
 };
+
+
+export type SkillDefinition = {
+  skillId: string; name: string; description: string; version: string; status: "draft" | "active" | "deprecated"; instructions: string; inputSchema: JsonValue; outputSchema: JsonValue; allowedTools: string[]; requiredArtifacts: string[]; producedArtifacts: string[]; examples: Array<{ name: string; input: JsonValue; output: JsonValue; notes?: string }>; preconditions: string[]; completionCriteria: string[]; blockerCriteria: string[]; memoryPolicy: JsonValue; toolPolicy: JsonValue; riskLevel: WorkspaceNode["riskLevel"]; metadata: Record<string, unknown>; createdAt: string; updatedAt: string;
+};
+export type SkillResolvedPolicy = { nodeId: string; skillIds: string[]; instructions: string; effectiveTools: string[]; requestedTools: string[]; deniedTools: string[]; conflicts: Array<{ severity: "warning" | "blocker"; source: string; message: string }>; };

@@ -11,6 +11,7 @@ import { RunStatusPanel } from "./components/RunStatusPanel";
 import { NodeExecutionList } from "./components/NodeExecutionList";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { UsagePanel } from "./components/UsagePanel";
+import { SkillsPanel } from "./components/SkillsPanel";
 import { getErrorMessage } from "./hooks/useConnection";
 import { getAccessScreen } from "./accessState";
 import { useIdentitySession } from "./hooks/useIdentitySession";
@@ -36,7 +37,7 @@ const workspaceTabs: Array<{ id: WorkspaceTab; label: string; helper: string }> 
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
-const repositoryNames = ["workspace", "execution", "artifact", "learning", "usage"] as const;
+const repositoryNames = ["workspace", "execution", "artifact", "learning", "usage", "skill"] as const;
 
 const RepositoryDiagnostics = ({ health, onRefresh }: { health: ReturnType<typeof useWorkspace>["repositoryHealth"]; onRefresh: () => void }) => {
   const entries = health ? repositoryNames.map((name) => [name, health[name]] as const) : [];
@@ -88,6 +89,10 @@ function App() {
   const updateOutputSchema = async (schema: unknown) => { try { await workspace.updateOutputSchema(schema); setStatus({ tone: "success", message: "Saved output schema." }); } catch (error) { handleError(error); } };
   const moveSelected = async (direction: -1 | 1) => { if (!workspace.selectedId) return; const ids = workspace.nodes.map((node) => node.id); const index = ids.indexOf(workspace.selectedId); const next = index + direction; if (index < 0 || next < 0 || next >= ids.length) return; [ids[index], ids[next]] = [ids[next], ids[index]]; try { await workspace.reorderNodes(ids); setStatus({ tone: "success", message: "Saved graph order without changing dependencies." }); } catch (error) { handleError(error); } };
   const validateGraph = async () => { try { const result = await workspace.validateGraph(); setStatus({ tone: result.validation.valid ? "success" : "error", message: result.validation.valid ? "Graph is valid." : `Graph issues: ${result.validation.issues.join("; ")}` }); } catch (error) { handleError(error); } };
+  const loadSkills = async () => { try { const skills = await workspace.loadSkills(); setStatus({ tone: "success", message: `Loaded ${skills.length} skills.` }); } catch (error) { handleError(error); } };
+  const assignSkill = async () => { try { await workspace.assignSkill(); setStatus({ tone: "success", message: "Assigned skill to node." }); } catch (error) { handleError(error); } };
+  const unassignSkill = async () => { try { await workspace.unassignSkill(); setStatus({ tone: "success", message: "Unassigned skill from node." }); } catch (error) { handleError(error); } };
+  const resolveSkillPolicy = async () => { try { await workspace.resolveSkillPolicy(); setStatus({ tone: "success", message: "Resolved effective skill policy." }); } catch (error) { handleError(error); } };
 
   const savePrompt = async () => {
     try {
@@ -174,6 +179,7 @@ function App() {
 
     {activeTab === "nodes" && <section className="tab-panel" aria-label="Nodes workspace">
       <section className="workspace-grid">
+        <SkillsPanel skills={workspace.skills} nodes={workspace.nodes} selectedSkillId={workspace.selectedSkillId} selectedNodeId={workspace.selectedId} resolvedPolicy={workspace.resolvedSkillPolicy} onSelectSkill={workspace.setSelectedSkillId} onSelectNode={workspace.setSelectedId} onRefresh={loadSkills} onAssign={assignSkill} onUnassign={unassignSkill} onResolve={resolveSkillPolicy} />
         <Inspector selectedNode={workspace.selectedNode} promptDraft={workspace.promptDraft} workspaceVersion={workspace.workspaceVersion} selectedSchema={workspace.selectedSchema} onPromptDraftChange={workspace.setPromptDraft} onSavePrompt={savePrompt} onCreateNode={createNode} onCloneNode={cloneNode} onDeleteNode={deleteNode} onUpdateNodePatch={updateNodePatch} onUpdateOutputSchema={updateOutputSchema} />
         <section className="panel"><h2>Selected node form</h2><p className="muted">Preview the selected node schema. Submitting here is visual only.</p>{workspace.selectedSchema ? <Form schema={workspace.selectedSchema} validator={validator} onSubmit={() => setStatus({ tone: "info", message: "Schema form data is visual only and is not saved." })} /> : <p className="empty-state">Select a node with a schema to preview its form.</p>}</section>
       </section>
