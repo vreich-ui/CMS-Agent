@@ -9,6 +9,8 @@ import { ProjectMcpAdapter } from "../../projects/drLurie/adapter.js";
 import { skillDefinitionSchema, validateSkillDefinition } from "../../skills/skillValidator.js";
 import { resolveSkillsForNode } from "../../skills/skillResolver.js";
 import type { SkillDefinition } from "../../skills/skillTypes.js";
+import { listTools as listControlledTools, getTool as getControlledTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
+import { executeTool, getToolExecution, listToolExecutions } from "../../tools/toolExecutor.js";
 
 export type JsonSchema = Record<string, unknown>;
 export type WorkspaceTool = {
@@ -78,6 +80,11 @@ const skillAssignInput = z.object({ nodeId: z.string().min(1), skillId: z.string
 const skillVersionInput = z.object({ skillId: z.string().min(1), versionId: z.string().min(1), ...mutationMeta }).strict();
 const skillValidateInput = z.object({ skill: z.unknown() }).strict();
 const skillResolveInput = z.object({ nodeId: z.string().min(1), workspaceSystemPolicy: z.string().optional(), projectPolicy: z.string().optional(), runInstructions: z.string().optional(), platformTools: z.array(z.string()).optional(), runAuthorizedTools: z.array(z.string()).optional(), riskPolicy: z.enum(workspaceRiskLevels).optional() }).strict();
+const controlledToolIdInput = z.object({ toolId: z.string().min(1) }).strict();
+const controlledToolTestInput = z.object({ toolId: z.string().min(1), input: z.unknown().default({}), runId: z.string().min(1).default("mcp-tool-test"), nodeId: z.string().min(1), projectId: z.string().min(1).optional(), skillId: z.string().min(1).optional(), approvedToolIds: z.array(z.string()).optional(), runAuthorizedTools: z.array(z.string()).optional(), platformAllowedTools: z.array(z.string()).optional(), maxRiskLevel: z.enum(workspaceRiskLevels).optional() }).strict();
+const effectiveToolsInput = z.object({ nodeId: z.string().min(1), runId: z.string().min(1).optional(), approvedToolIds: z.array(z.string()).optional(), runAuthorizedTools: z.array(z.string()).optional(), platformAllowedTools: z.array(z.string()).optional(), maxRiskLevel: z.enum(workspaceRiskLevels).optional() }).strict();
+const toolExecutionInput = z.object({ toolExecutionId: z.string().min(1) }).strict();
+const listToolExecutionsInput = z.object({ runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), toolId: z.string().min(1).optional() }).strict();
 
 const objectSchema = (properties: JsonSchema = {}, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 const emptyJsonSchema = objectSchema();
@@ -107,6 +114,10 @@ const projectIdJsonSchema = objectSchema({ projectId: { type: "string", minLengt
 const validateHandoffJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, contentSource: {}, articleBody: {} }, ["projectId"]);
 const projectCallToolJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, tool: { type: "string", minLength: 1 }, arguments: { type: "object", additionalProperties: true } }, ["projectId", "tool", "arguments"]);
 const skillIdJsonSchema = objectSchema({ skillId: { type: "string", minLength: 1 } }, ["skillId"]);
+const controlledToolIdJsonSchema = objectSchema({ toolId: { type: "string", minLength: 1 } }, ["toolId"]);
+const controlledToolTestJsonSchema = objectSchema({ toolId: { type: "string", minLength: 1 }, input: {}, runId: { type: "string" }, nodeId: { type: "string", minLength: 1 }, projectId: { type: "string" }, skillId: { type: "string" }, approvedToolIds: { type: "array", items: { type: "string" } }, runAuthorizedTools: { type: "array", items: { type: "string" } }, platformAllowedTools: { type: "array", items: { type: "string" } }, maxRiskLevel: { type: "string", enum: [...workspaceRiskLevels] } }, ["toolId", "nodeId"]);
+const effectiveToolsJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 1 }, runId: { type: "string" }, approvedToolIds: { type: "array", items: { type: "string" } }, runAuthorizedTools: { type: "array", items: { type: "string" } }, platformAllowedTools: { type: "array", items: { type: "string" } }, maxRiskLevel: { type: "string", enum: [...workspaceRiskLevels] } }, ["nodeId"]);
+const toolExecutionJsonSchema = objectSchema({ toolExecutionId: { type: "string", minLength: 1 }, runId: { type: "string" }, nodeId: { type: "string" }, toolId: { type: "string" } });
 const skillMutationJsonSchema = objectSchema({ skillId: { type: "string", minLength: 1 }, newSkillId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, versionId: { type: "string", minLength: 1 }, skill: {}, patch: { type: "object" }, workspaceSystemPolicy: { type: "string" }, projectPolicy: { type: "string" }, runInstructions: { type: "string" }, platformTools: { type: "array", items: { type: "string" } }, runAuthorizedTools: { type: "array", items: { type: "string" } }, riskPolicy: { type: "string", enum: [...workspaceRiskLevels] }, ...metaJson });
 
 const ok = (data: unknown) => ({ ok: true, data });
@@ -127,6 +138,12 @@ export function createWorkspaceTools(): WorkspaceTool[] {
   };
   return [
 
+    tool({ name: "tool.list", description: "List controlled tool registry entries.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ tools: listControlledTools().map(({ handler, inputSchema, outputSchema, ...tool }) => tool) }); } }),
+    tool({ name: "tool.get", description: "Get one controlled tool definition.", zodSchema: controlledToolIdInput, inputSchema: controlledToolIdJsonSchema, execute: async (input) => { const toolDef = getControlledTool(controlledToolIdInput.parse(input).toolId); if (!toolDef) return ok({ tool: null }); const { handler, inputSchema, outputSchema, ...safe } = toolDef; return ok({ tool: safe }); } }),
+    tool({ name: "tool.test", description: "Execute a controlled tool through policy and audit gateway.", zodSchema: controlledToolTestInput, inputSchema: controlledToolTestJsonSchema, execute: async (input) => { const data = controlledToolTestInput.parse(input); return ok(await executeTool(data.toolId, data.input, { runId: data.runId, nodeId: data.nodeId, projectId: data.projectId, skillId: data.skillId, approvedToolIds: data.approvedToolIds, runAuthorizedTools: data.runAuthorizedTools, platformAllowedTools: data.platformAllowedTools, maxRiskLevel: data.maxRiskLevel })); } }),
+    tool({ name: "tool.get_effective_for_node", description: "Resolve effective controlled tools for a node.", zodSchema: effectiveToolsInput, inputSchema: effectiveToolsJsonSchema, execute: async (input) => { const data = effectiveToolsInput.parse(input); return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId, data) }); } }),
+    tool({ name: "tool.get_execution", description: "Get a controlled tool execution audit record.", zodSchema: toolExecutionInput, inputSchema: toolExecutionJsonSchema, execute: async (input) => ok({ execution: getToolExecution(toolExecutionInput.parse(input).toolExecutionId) ?? null }) }),
+    tool({ name: "tool.list_executions", description: "List controlled tool execution audit records.", zodSchema: listToolExecutionsInput, inputSchema: toolExecutionJsonSchema, execute: async (input) => ok({ executions: listToolExecutions(listToolExecutionsInput.parse(input)) }) }),
     tool({ name: "skill.list", description: "List reusable workspace skills.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ skills: await skillRepository.list() }); } }),
     tool({ name: "skill.get", description: "Get one reusable workspace skill.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok({ skill: await skillRepository.get(skillIdInput.parse(input).skillId) ?? null }) }),
     tool({ name: "skill.create", description: "Create a versioned reusable skill.", zodSchema: skillCreateInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillCreateInput.parse(input); return ok(await skillRepository.create(skillDefinitionSchema.parse(data.skill), data)); } }),
