@@ -8,7 +8,7 @@ import type { ExecutionArtifact } from "../workspace/executionTypes.js";
 import type { ToolDefinition } from "./toolTypes.js";
 
 const ok = (data: unknown) => ({ ok: true, data });
-const anyObj = z.record(z.unknown());
+const anyObj = z.record(z.string(), z.unknown());
 const empty = z.object({}).strict();
 const id = z.object({ id: z.string().min(1) }).strict();
 const runId = z.object({ runId: z.string().min(1).optional() }).strict();

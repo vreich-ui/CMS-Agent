@@ -41,7 +41,7 @@ export const recordModelUsageSchema = z.object({
   currency: z.literal("USD").optional(),
   status: z.enum(["estimated", "actual"]),
   recordedAt: z.string().datetime().optional(),
-  metadata: z.record(z.unknown()).optional()
+  metadata: z.record(z.string(), z.unknown()).optional()
 }).strict();
 
 const roundUsd = (value: number) => Math.round(value * 1_000_000) / 1_000_000;

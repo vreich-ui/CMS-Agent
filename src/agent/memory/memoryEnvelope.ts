@@ -12,7 +12,7 @@ export const memoryEnvelopeSchema = z.object({
     confidence: z.number().min(0).max(1),
     source: z.enum(["user", "agent", "tool", "human_review"])
   })).default([]),
-  preferences: z.record(z.unknown()).default({}),
+  preferences: z.record(z.string(), z.unknown()).default({}),
   openLoops: z.array(z.object({
     id: z.string().min(1),
     status: z.enum(["open", "resolved"]),

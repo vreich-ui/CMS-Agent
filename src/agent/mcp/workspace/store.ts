@@ -165,12 +165,12 @@ const workspaceNodeSchema = z.object({
   status: z.enum(workspaceNodeStatuses).default("draft"),
   position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }),
   updatedAt: z.string().datetime(),
-  metadata: z.record(z.unknown()).optional(),
-  modelConfig: z.record(z.unknown()).optional(),
-  executionConfig: z.record(z.unknown()).optional()
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  modelConfig: z.record(z.string(), z.unknown()).optional(),
+  executionConfig: z.record(z.string(), z.unknown()).optional()
 }).passthrough().transform((node) => ({ ...node, outputSchema: node.outputSchema ?? node.schema ?? { type: "object" } }));
 const stageOutputSchema: z.ZodType<StageOutput> = z.object({ id: z.string().min(1), stage: z.string().min(1), value: z.unknown().optional(), createdAt: z.string().datetime() }).strict();
-const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.unknown()).optional(), createdAt: z.string().datetime() }).strict();
+const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), createdAt: z.string().datetime() }).strict();
 const workspaceEventSchema: z.ZodType<WorkspaceEvent> = z.object({ id: z.string(), type: z.string(), nodeId: z.string().optional(), actor: z.string().optional(), summary: z.string().optional(), workspaceVersion: z.number().int().nonnegative(), beforeHash: z.string().optional(), afterHash: z.string().optional(), createdAt: z.string().datetime() }).strict();
 const workspaceVersionSnapshotSchema: z.ZodType<WorkspaceVersionSnapshot> = z.object({ workspaceVersion: z.number().int().nonnegative(), createdAt: z.string().datetime(), summary: z.string().optional(), nodes: z.array(workspaceNodeSchema as z.ZodType<WorkspaceNode>) }).strict();
 export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema), versions: z.array(workspaceVersionSnapshotSchema).default([]), events: z.array(workspaceEventSchema).default([]) }).strict();

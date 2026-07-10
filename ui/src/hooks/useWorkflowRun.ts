@@ -17,8 +17,8 @@ export function useWorkflowRun(config: McpConfig) {
     }
   }, []);
 
-  const startDryRun = useCallback(async (projectId: string, input: string) => withLoading(async () => {
-    const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.start_dry_run", { projectId, input });
+  const startDryRun = useCallback(async (projectId: string, input: string, executionMode: "mock" | "openai" = "mock") => withLoading(async () => {
+    const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.start_dry_run", { projectId, input, executionMode });
     setCurrentRun(result.run);
     setSelectedRunId(result.run.runId);
     setRuns((current) => [result.run, ...current.filter((run) => run.runId !== result.run.runId)]);
@@ -53,6 +53,46 @@ export function useWorkflowRun(config: McpConfig) {
     });
   }, [config, currentRun, withLoading]);
 
+  const runUntil = useCallback(async (nodeId: string) => {
+    if (!currentRun) return null;
+    return withLoading(async () => {
+      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.run_until", { runId: currentRun.runId, nodeId });
+      setCurrentRun(result.run);
+      setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
+      return result.run;
+    });
+  }, [config, currentRun, withLoading]);
+
+  const runAll = useCallback(async () => {
+    if (!currentRun) return null;
+    return withLoading(async () => {
+      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.run_all", { runId: currentRun.runId });
+      setCurrentRun(result.run);
+      setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
+      return result.run;
+    });
+  }, [config, currentRun, withLoading]);
+
+  const setRunState = useCallback(async (tool: "workflow.pause_run" | "workflow.resume_run" | "workflow.cancel_run") => {
+    if (!currentRun) return null;
+    return withLoading(async () => {
+      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, tool, { runId: currentRun.runId });
+      setCurrentRun(result.run);
+      setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
+      return result.run;
+    });
+  }, [config, currentRun, withLoading]);
+
+  const retryNode = useCallback(async (nodeId?: string) => {
+    if (!currentRun) return null;
+    return withLoading(async () => {
+      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.retry_node", { runId: currentRun.runId, nodeId: nodeId ?? currentRun.currentNodeId });
+      setCurrentRun(result.run);
+      setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
+      return result.run;
+    });
+  }, [config, currentRun, withLoading]);
+
   const resetRun = useCallback(async () => {
     if (!currentRun) return null;
     return withLoading(async () => {
@@ -81,6 +121,12 @@ export function useWorkflowRun(config: McpConfig) {
     loadRun,
     listRuns,
     runNextNode,
+    runUntil,
+    runAll,
+    pauseRun: () => setRunState("workflow.pause_run"),
+    resumeRun: () => setRunState("workflow.resume_run"),
+    cancelRun: () => setRunState("workflow.cancel_run"),
+    retryNode,
     resetRun,
     refreshRun
   };
