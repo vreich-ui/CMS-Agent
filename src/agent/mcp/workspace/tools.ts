@@ -59,6 +59,7 @@ const listRunsInput = z.object({ projectId: z.string().min(1).optional(), workfl
 const budgetStatusInput = z.object({ projectId: z.string().min(1).optional(), runId: z.string().min(1).optional(), budgetUsd: z.number().nonnegative().optional() }).strict();
 const projectIdInput = z.object({ projectId: z.string().min(1) }).strict();
 const validateHandoffInput = z.object({ projectId: z.string().min(1), contentSource: z.unknown().optional(), articleBody: z.unknown().optional() }).strict();
+const projectCallToolInput = z.object({ projectId: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.unknown()).default({}) }).strict();
 
 const objectSchema = (properties: JsonSchema = {}, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 const emptyJsonSchema = objectSchema();
@@ -84,6 +85,7 @@ const usageRecordJsonSchema = objectSchema({ usageId: { type: "string", minLengt
 const budgetStatusJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0 } });
 const projectIdJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 } }, ["projectId"]);
 const validateHandoffJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, contentSource: {}, articleBody: {} }, ["projectId"]);
+const projectCallToolJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, tool: { type: "string", minLength: 1 }, arguments: { type: "object", additionalProperties: true } }, ["projectId", "tool", "arguments"]);
 
 const ok = (data: unknown) => ({ ok: true, data });
 
@@ -130,6 +132,7 @@ export function createWorkspaceTools(): WorkspaceTool[] {
     tool({ name: "project.get", description: "Get one registered project MCP connection with safe, non-secret metadata.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await projectRepository.get(projectIdInput.parse(input).projectId); return ok({ project: config ? toProjectSummary(config) : null }); } }),
     tool({ name: "project.test_connection", description: "Run a primitive MCP initialize against a project's external server. Read-only; no publishing side effects.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok({ connection: await new ProjectMcpAdapter(config).testConnection() }); } }),
     tool({ name: "project.list_tools", description: "List a project's remote MCP tools via tools/list. Returns safe tool names and descriptions only.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok(await new ProjectMcpAdapter(config).listTools()); } }),
+    tool({ name: "project.call_tool", description: "Call an approved read-only tool on a registered project MCP server. Publishing and mutation tools are blocked by project allowedTools.", zodSchema: projectCallToolInput, inputSchema: projectCallToolJsonSchema, execute: async (input) => { const data = projectCallToolInput.parse(input); const config = await requireProject(data.projectId); return ok({ call: await new ProjectMcpAdapter(config).callTool(data.tool, data.arguments) }); } }),
     tool({ name: "project.validate_handoff", description: "Dry structural validation of a handoff against the project content_source.v1 / article_body.v1 contract. Read-only; no publishing.", zodSchema: validateHandoffInput, inputSchema: validateHandoffJsonSchema, execute: async (input) => { const data = validateHandoffInput.parse(input); const config = await requireProject(data.projectId); return ok({ validation: validateHandoff(config, { contentSource: data.contentSource, articleBody: data.articleBody }) }); } })
   ];
 }
