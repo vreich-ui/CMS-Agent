@@ -12,6 +12,7 @@ import { NodeExecutionList } from "./components/NodeExecutionList";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { UsagePanel } from "./components/UsagePanel";
 import { SkillsPanel } from "./components/SkillsPanel";
+import { NodeConsole } from "./components/NodeConsole";
 import { getErrorMessage } from "./hooks/useConnection";
 import { getAccessScreen } from "./accessState";
 import { useIdentitySession } from "./hooks/useIdentitySession";
@@ -183,6 +184,7 @@ function App() {
         <Inspector selectedNode={workspace.selectedNode} promptDraft={workspace.promptDraft} workspaceVersion={workspace.workspaceVersion} selectedSchema={workspace.selectedSchema} onPromptDraftChange={workspace.setPromptDraft} onSavePrompt={savePrompt} onCreateNode={createNode} onCloneNode={cloneNode} onDeleteNode={deleteNode} onUpdateNodePatch={updateNodePatch} onUpdateOutputSchema={updateOutputSchema} />
         <section className="panel"><h2>Selected node form</h2><p className="muted">Preview the selected node schema. Submitting here is visual only.</p>{workspace.selectedSchema ? <Form schema={workspace.selectedSchema} validator={validator} onSubmit={() => setStatus({ tone: "info", message: "Schema form data is visual only and is not saved." })} /> : <p className="empty-state">Select a node with a schema to preview its form.</p>}</section>
       </section>
+      <NodeConsole config={config} nodes={workspace.nodes} selectedNodeId={workspace.selectedId} onSelectNode={workspace.setSelectedId} onError={handleError} onStatus={(message) => setStatus({ tone: "success", message })} />
       <ArtifactPanel run={workflowRun.currentRun} />
     </section>}
 
