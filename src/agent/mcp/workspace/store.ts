@@ -2,7 +2,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { listWorkspaceNodes, sortWorkspaceNodes } from "../../workspace/nodes.js";
-import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceNode } from "../../workspace/nodeTypes.js";
+import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceEvent, type WorkspaceNode, type WorkspaceVersionSnapshot } from "../../workspace/nodeTypes.js";
+import { validateWorkspaceGraph } from "../../workspace/nodes.js";
 
 // Replace a node in place when it already exists, otherwise append it. This preserves the existing
 // array order so editing a node's prompt/schema never moves it (e.g. to the end of the workflow).
@@ -64,13 +65,22 @@ export type ArticleBody = z.infer<typeof articleBodySchema>;
 export type StageOutput = { id: string; stage: string; value?: unknown; createdAt: string };
 export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; createdAt: string };
 export type PublishPayload = { articleBody: ArticleBody; dryRun: true; target: "preview" | "cms"; builtAt: string };
-export type WorkspaceDocument = { schemaVersion: 1; workspaceVersion: number; updatedAt: string; nodes: WorkspaceNode[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[] };
+export type WorkspaceMutationMeta = { expectedWorkspaceVersion?: number; actor?: string; summary?: string };
+export type WorkspaceGraphUpdate = { create?: WorkspaceNode[]; update?: Array<Partial<WorkspaceNode> & { id: string }>; delete?: string[]; dependencies?: Record<string, string[]>; orderedNodeIds?: string[]; positions?: Record<string, { x: number; y: number }>; allowCanonicalNodeRemoval?: boolean; adminApproved?: boolean };
+export type WorkspaceDocument = { schemaVersion: 1; workspaceVersion: number; updatedAt: string; nodes: WorkspaceNode[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[]; versions: WorkspaceVersionSnapshot[]; events: WorkspaceEvent[] };
 export interface WorkspaceStore {
   getWorkspaceVersion(): Promise<number>;
   getNodes(): Promise<WorkspaceNode[]>;
   getNode(id: string): Promise<WorkspaceNode | undefined>;
-  updateNodePrompt(id: string, prompt: string): Promise<WorkspaceNode>;
-  updateNodeSchema(id: string, schema: unknown): Promise<WorkspaceNode>;
+  updateNodePrompt(id: string, prompt: string, meta?: WorkspaceMutationMeta): Promise<WorkspaceNode>;
+  updateNodeSchema(id: string, schema: unknown, meta?: WorkspaceMutationMeta): Promise<WorkspaceNode>;
+  createNode(node: WorkspaceNode, meta: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
+  deleteNode(id: string, meta: WorkspaceMutationMeta): Promise<{ deleted: true; workspaceVersion: number }>;
+  cloneNode(id: string, newId: string, meta: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
+  updateNode(id: string, patch: Partial<WorkspaceNode>, meta: WorkspaceMutationMeta, eventType?: string): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
+  updateGraph(update: WorkspaceGraphUpdate, meta: WorkspaceMutationMeta, eventType?: string): Promise<{ nodes: WorkspaceNode[]; workspaceVersion: number }>;
+  getEvents(): Promise<WorkspaceEvent[]>;
+  getVersions(): Promise<WorkspaceVersionSnapshot[]>;
   exportWorkspace(): Promise<WorkspaceDocument>;
   importWorkspace(workspace: { nodes?: WorkspaceNode[]; stageOutputs?: StageOutput[]; learningObservations?: LearningObservation[] }): Promise<{ imported: true; workspaceVersion: number; counts: { nodes: number; stageOutputs: number; learningObservations: number } }>;
   saveStageOutput(stage: string, value: unknown, id?: string): Promise<StageOutput>;
@@ -135,7 +145,7 @@ export const articleBodyJsonSchema = {
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes().map((node) => node.id === "article_body" ? { ...node, schema: articleBodyJsonSchema, outputSchema: articleBodyJsonSchema } : node);
-export const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [] });
+export const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [], versions: [], events: [] });
 
 const workspaceNodeSchema = z.object({
   id: z.string().min(1),
@@ -147,6 +157,7 @@ const workspaceNodeSchema = z.object({
   inputSchema: z.unknown().default({ type: "object" }),
   outputSchema: z.unknown().default({ type: "object" }),
   allowedTools: z.array(z.string()).default([]),
+  assignedSkills: z.array(z.string()).default([]),
   requiredInputs: z.array(z.string()).default([]),
   produces: z.array(z.string()).default([]),
   riskLevel: z.enum(workspaceRiskLevels).default("read"),
@@ -154,46 +165,90 @@ const workspaceNodeSchema = z.object({
   status: z.enum(workspaceNodeStatuses).default("draft"),
   position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }),
   updatedAt: z.string().datetime(),
-  metadata: z.record(z.unknown()).optional()
-}).passthrough();
+  metadata: z.record(z.unknown()).optional(),
+  modelConfig: z.record(z.unknown()).optional(),
+  executionConfig: z.record(z.unknown()).optional()
+}).passthrough().transform((node) => ({ ...node, outputSchema: node.outputSchema ?? node.schema ?? { type: "object" } }));
 const stageOutputSchema: z.ZodType<StageOutput> = z.object({ id: z.string().min(1), stage: z.string().min(1), value: z.unknown().optional(), createdAt: z.string().datetime() }).strict();
 const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.unknown()).optional(), createdAt: z.string().datetime() }).strict();
-export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema) }).strict();
+const workspaceEventSchema: z.ZodType<WorkspaceEvent> = z.object({ id: z.string(), type: z.string(), nodeId: z.string().optional(), actor: z.string().optional(), summary: z.string().optional(), workspaceVersion: z.number().int().nonnegative(), beforeHash: z.string().optional(), afterHash: z.string().optional(), createdAt: z.string().datetime() }).strict();
+const workspaceVersionSnapshotSchema: z.ZodType<WorkspaceVersionSnapshot> = z.object({ workspaceVersion: z.number().int().nonnegative(), createdAt: z.string().datetime(), summary: z.string().optional(), nodes: z.array(workspaceNodeSchema as z.ZodType<WorkspaceNode>) }).strict();
+export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema), versions: z.array(workspaceVersionSnapshotSchema).default([]), events: z.array(workspaceEventSchema).default([]) }).strict();
 
-class WorkspaceStateStore implements WorkspaceStore {
+
+const hashValue = (value: unknown) => JSON.stringify(value).split("").reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0).toString(16);
+const canonicalIds = () => new Set(listWorkspaceNodes().map((node) => node.id));
+export const validateJsonSchema = (schema: unknown): string[] => {
+  if (typeof schema === "boolean") return [];
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return ["JSON Schema must be an object or boolean."];
+  const type = (schema as { type?: unknown }).type;
+  const validTypes = new Set(["null", "boolean", "object", "array", "number", "string", "integer"]);
+  if (type !== undefined) {
+    const values = Array.isArray(type) ? type : [type];
+    for (const value of values) if (typeof value !== "string" || !validTypes.has(value)) return [`Invalid JSON Schema type: ${String(value)}`];
+  }
+  return [];
+};
+const normalizeNode = (node: WorkspaceNode): WorkspaceNode => ({ ...node, assignedSkills: node.assignedSkills ?? [], inputSchema: node.inputSchema ?? { type: "object" }, outputSchema: node.outputSchema ?? node.schema ?? { type: "object" }, updatedAt: node.updatedAt ?? now() });
+const assertWorkspaceVersion = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => { if (meta?.expectedWorkspaceVersion !== undefined && document.workspaceVersion !== meta.expectedWorkspaceVersion) throw new Error(`workspace_version_conflict: expected ${meta.expectedWorkspaceVersion}, current ${document.workspaceVersion}`); };
+const assertGraphValid = (nodes: WorkspaceNode[], allowCanonicalNodeRemoval = false, adminApproved = false) => {
+  for (const node of nodes) {
+    const inputIssues = validateJsonSchema(node.inputSchema);
+    const outputIssues = validateJsonSchema(node.outputSchema);
+    if (inputIssues.length || outputIssues.length) throw new Error([...inputIssues.map((issue) => `${node.id} inputSchema: ${issue}`), ...outputIssues.map((issue) => `${node.id} outputSchema: ${issue}`)].join("; "));
+  }
+  if (!allowCanonicalNodeRemoval || !adminApproved) for (const id of canonicalIds()) if (!nodes.some((node) => node.id === id)) throw new Error(`Missing required canonical node: ${id}`);
+  const validation = validateWorkspaceGraph(nodes);
+  if (!validation.valid) throw new Error(validation.issues.join("; "));
+};
+
+export class WorkspaceStateStore implements WorkspaceStore {
   protected document: WorkspaceDocument;
   constructor(document: WorkspaceDocument = createDefaultWorkspaceDocument()) { this.document = document; }
   protected async load() { return this.document; }
   protected async save(document: WorkspaceDocument) { this.document = document; }
-  protected async mutate(update: (document: WorkspaceDocument) => void) {
+  protected async mutate(update: (document: WorkspaceDocument) => void, meta?: WorkspaceMutationMeta, eventType = "workspace.updated", nodeId?: string) {
     const document = await this.load();
+    assertWorkspaceVersion(document, meta);
+    const beforeNodes = structuredClone(document.nodes);
     update(document);
+    document.nodes = document.nodes.map(normalizeNode);
+    assertGraphValid(document.nodes);
     document.workspaceVersion += 1;
     document.updatedAt = now();
+    document.versions = [...(document.versions ?? []), { workspaceVersion: document.workspaceVersion, createdAt: document.updatedAt, summary: meta?.summary, nodes: structuredClone(document.nodes) }];
+    document.events = [...(document.events ?? []), { id: makeId("event"), type: eventType, nodeId, actor: meta?.actor, summary: meta?.summary, workspaceVersion: document.workspaceVersion, beforeHash: hashValue(beforeNodes), afterHash: hashValue(document.nodes), createdAt: document.updatedAt }];
     await this.save(document);
     return document.workspaceVersion;
   }
   async getWorkspaceVersion() { return (await this.load()).workspaceVersion; }
   async getNodes() { return sortWorkspaceNodes([...(await this.load()).nodes]); }
   async getNode(id: string) { return (await this.load()).nodes.find((node) => node.id === id); }
-  async updateNodePrompt(id: string, prompt: string) {
+  async getEvents() { return [...((await this.load()).events ?? [])]; }
+  async getVersions() { return [...((await this.load()).versions ?? [])]; }
+  async updateNodePrompt(id: string, prompt: string, meta?: WorkspaceMutationMeta) {
     let updated: WorkspaceNode | undefined;
     await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, prompt, updatedAt: now() };
       document.nodes = upsertWorkspaceNode(document.nodes, updated);
-    });
+    }, meta, "node.prompt_updated", id);
     return updated!;
   }
-  async updateNodeSchema(id: string, schema: unknown) {
+  async updateNodeSchema(id: string, schema: unknown, meta?: WorkspaceMutationMeta) {
     let updated: WorkspaceNode | undefined;
     await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
-      updated = { ...existing, schema, updatedAt: now() };
+      updated = { ...existing, schema, outputSchema: schema, updatedAt: now() };
       document.nodes = upsertWorkspaceNode(document.nodes, updated);
-    });
+    }, meta, "node.output_schema_updated", id);
     return updated!;
   }
+  async createNode(node: WorkspaceNode, meta: WorkspaceMutationMeta) { let workspaceVersion = 0; const normalized = normalizeNode(node); workspaceVersion = await this.mutate((document) => { if (document.nodes.some((existing) => existing.id === node.id)) throw new Error(`Duplicate node id: ${node.id}`); document.nodes = [...document.nodes, normalized]; }, meta, "node.created", node.id); return { node: normalized, workspaceVersion }; }
+  async deleteNode(id: string, meta: WorkspaceMutationMeta) { let workspaceVersion = 0; workspaceVersion = await this.mutate((document) => { if (document.nodes.some((node) => node.dependsOn.includes(id))) throw new Error(`Cannot delete referenced node: ${id}`); document.nodes = document.nodes.filter((node) => node.id !== id); }, meta, "node.deleted", id); return { deleted: true as const, workspaceVersion }; }
+  async cloneNode(id: string, newId: string, meta: WorkspaceMutationMeta) { const existing = await this.getNode(id); if (!existing) throw new Error(`Unknown node: ${id}`); const node = normalizeNode({ ...structuredClone(existing), id: newId, name: `${existing.name} Copy`, dependsOn: [...existing.dependsOn], updatedAt: now() }); let workspaceVersion = 0; workspaceVersion = await this.mutate((document) => { if (document.nodes.some((existingNode) => existingNode.id === newId)) throw new Error(`Duplicate node id: ${newId}`); document.nodes = [...document.nodes, node]; }, meta, "node.cloned", newId); return { node, workspaceVersion }; }
+  async updateNode(id: string, patch: Partial<WorkspaceNode>, meta: WorkspaceMutationMeta, eventType = "node.updated") { let node: WorkspaceNode | undefined; const workspaceVersion = await this.mutate((document) => { const existing = document.nodes.find((candidate) => candidate.id === id); if (!existing) throw new Error(`Unknown node: ${id}`); node = normalizeNode({ ...existing, ...patch, id, updatedAt: now() }); document.nodes = upsertWorkspaceNode(document.nodes, node); }, meta, eventType, id); return { node: node!, workspaceVersion }; }
+  async updateGraph(update: WorkspaceGraphUpdate, meta: WorkspaceMutationMeta, eventType = "graph.updated") { let nodes: WorkspaceNode[] = []; const workspaceVersion = await this.mutate((document) => { nodes = [...document.nodes]; (update.delete ?? []).forEach((id) => { if (nodes.some((node) => node.dependsOn.includes(id)) && !(update.delete ?? []).includes(id)) throw new Error(`Cannot delete referenced node: ${id}`); nodes = nodes.filter((node) => node.id !== id); }); (update.create ?? []).forEach((node) => { if (nodes.some((existing) => existing.id === node.id)) throw new Error(`Duplicate node id: ${node.id}`); nodes.push(normalizeNode(node)); }); (update.update ?? []).forEach((patch) => { const existing = nodes.find((node) => node.id === patch.id); if (!existing) throw new Error(`Unknown node: ${patch.id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, ...patch, updatedAt: now() })); }); Object.entries(update.dependencies ?? {}).forEach(([id, dependsOn]) => { const existing = nodes.find((node) => node.id === id); if (!existing) throw new Error(`Unknown node: ${id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, dependsOn, updatedAt: now() })); }); Object.entries(update.positions ?? {}).forEach(([id, position]) => { const existing = nodes.find((node) => node.id === id); if (!existing) throw new Error(`Unknown node: ${id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, position, updatedAt: now() })); }); if (update.orderedNodeIds) { const ordered = update.orderedNodeIds.map((id) => nodes.find((node) => node.id === id)); if (ordered.some((node) => !node) || ordered.length !== nodes.length) throw new Error("orderedNodeIds must contain every node exactly once."); nodes = (ordered as WorkspaceNode[]).map((node, index) => normalizeNode({ ...node, position: node.position ? { ...node.position, y: index * 100 } : { x: 0, y: index * 100 }, updatedAt: now() })); } assertGraphValid(nodes, update.allowCanonicalNodeRemoval, update.adminApproved); document.nodes = nodes; }, meta, eventType); return { nodes: sortWorkspaceNodes(nodes), workspaceVersion }; }
   async exportWorkspace() { return structuredClone(await this.load()); }
   async importWorkspace(workspace: { nodes?: WorkspaceNode[]; stageOutputs?: StageOutput[]; learningObservations?: LearningObservation[] }) {
     let workspaceVersion = 0;

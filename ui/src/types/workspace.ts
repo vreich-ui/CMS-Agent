@@ -60,10 +60,24 @@ export type WorkflowExecutionRecord = {
 export type WorkspaceNode = {
   id: string;
   name: string;
+  kind?: string;
+  description?: string;
   prompt: string;
   schema?: RJSFSchema | JsonValue;
-  updatedAt?: string;
+  inputSchema?: RJSFSchema | JsonValue;
+  outputSchema?: RJSFSchema | JsonValue;
+  allowedTools?: string[];
+  assignedSkills?: string[];
+  requiredInputs?: string[];
+  produces?: string[];
+  dependsOn?: string[];
+  riskLevel?: "read" | "write" | "publish" | "admin";
+  status?: "draft" | "active" | "deprecated";
   position?: { x: number; y: number };
+  metadata?: Record<string, unknown>;
+  modelConfig?: Record<string, unknown>;
+  executionConfig?: Record<string, unknown>;
+  updatedAt?: string;
 };
 
 export type WorkspaceExport = {
