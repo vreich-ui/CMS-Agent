@@ -1,4 +1,4 @@
-import { defaultProjectConnections } from "../../projects/drLurie/definition.js";
+import { defaultProjectConfigs, migrateDefaultProjectConfig } from "../../projects/defaultMigration.js";
 import type { ProjectConnectionConfig } from "../../projects/projectTypes.js";
 import type { RepositoryBackend } from "../RepositoryManager.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
@@ -10,16 +10,21 @@ export class MemoryProjectRepository implements ProjectRepository {
   private readonly projects = new Map<string, ProjectConnectionConfig>();
 
   constructor(private readonly backend: RepositoryBackend = "memory") {
-    defaultProjectConnections.forEach((project) => this.projects.set(project.projectId, clone(project)));
+    defaultProjectConfigs().forEach((project) => this.projects.set(project.projectId, clone(project)));
   }
 
   async list(): Promise<ProjectConnectionConfig[]> {
-    return [...this.projects.values()].map((project) => clone(project)).sort((a, b) => a.projectId.localeCompare(b.projectId));
+    return (await Promise.all([...this.projects.keys()].map((projectId) => this.get(projectId))))
+      .filter((project): project is ProjectConnectionConfig => project !== undefined)
+      .sort((a, b) => a.projectId.localeCompare(b.projectId));
   }
 
   async get(projectId: string): Promise<ProjectConnectionConfig | undefined> {
     const project = this.projects.get(projectId);
-    return project ? clone(project) : undefined;
+    if (!project) return undefined;
+    const migrated = migrateDefaultProjectConfig(project);
+    if (migrated.changed) this.projects.set(projectId, clone(migrated.config));
+    return clone(migrated.config);
   }
 
   async save(config: ProjectConnectionConfig): Promise<ProjectConnectionConfig> {

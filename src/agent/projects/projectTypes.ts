@@ -25,6 +25,8 @@ export type ProjectPublishingPolicy = {
 
 export type ProjectConnectionConfig = {
   projectId: string;
+  // Monotonic code-definition version used to safely migrate persisted default project records.
+  definitionVersion?: number;
   name: string;
   // The MCP endpoint and bearer token are resolved from environment variables at connection time and
   // are NEVER persisted or returned, so no project secrets are stored in workspace JSON / blobs.

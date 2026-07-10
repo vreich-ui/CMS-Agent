@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 import { BlobProjectRepository } from "../../../src/agent/repository/blobs/BlobProjectRepository.js";
+import { drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
 
 const blobData = vi.hoisted(() => new Map<string, unknown>());
 
@@ -42,5 +43,18 @@ describe("Blob project repository", () => {
       delete process.env.DR_LURIE_MCP_ENDPOINT;
       delete process.env.DR_LURIE_MCP_TOKEN;
     }
+  });
+
+  it("upgrades stale persisted dr-lurie defaults without removing custom project configs", async () => {
+    blobData.set("projects/dr-lurie.json", { ...structuredClone(drLurieProjectConfig), definitionVersion: 1, allowedTools: ["ping"] });
+    blobData.set("projects/custom.json", { ...structuredClone(drLurieProjectConfig), projectId: "custom", name: "Custom", definitionVersion: 1, allowedTools: ["custom_read"] });
+
+    const repository = new RepositoryManager({ backend: "blobs" }).getProjectRepository();
+    const drLurie = await repository.get("dr-lurie");
+    const custom = await repository.get("custom");
+
+    expect(drLurie?.definitionVersion).toBe(drLurieProjectConfig.definitionVersion);
+    expect(drLurie?.allowedTools).toEqual(["ping", "registry_get", "object_inventory", "object_contract"]);
+    expect(custom?.allowedTools).toEqual(["custom_read"]);
   });
 });

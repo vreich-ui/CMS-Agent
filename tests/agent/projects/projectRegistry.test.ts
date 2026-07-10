@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
-import { drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
+import { DR_LURIE_SAFE_READ_ONLY_TOOLS, drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
 import { ProjectMcpAdapter, resolveProjectConnection } from "../../../src/agent/projects/drLurie/adapter.js";
 import { toProjectSummary, validateHandoff } from "../../../src/agent/projects/projectRegistry.js";
 import type { McpTransport } from "../../../src/agent/projects/mcpClient.js";
+import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 
 const env = { DR_LURIE_MCP_ENDPOINT: "https://dr-lurie.example/mcp", DR_LURIE_MCP_TOKEN: "super-secret-token" } as unknown as NodeJS.ProcessEnv;
 const SECRET = "super-secret-token";
@@ -21,6 +22,12 @@ const fakeTransport = (byMethod: Record<string, unknown>, calls: RecordedCall[] 
     return { ok: true, status: 200, json: async () => payload };
   };
 
+const staleDrLurieConfig = (): ProjectConnectionConfig => ({
+  ...structuredClone(drLurieProjectConfig),
+  definitionVersion: 1,
+  allowedTools: ["ping"]
+});
+
 const validArticleBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", public: { title: "Title", body: "Reader-facing body." } }] };
 
 describe("project registry + Dr. Lurie definition", () => {
@@ -32,6 +39,30 @@ describe("project registry + Dr. Lurie definition", () => {
     const drLurie = await repository.get("dr-lurie");
     expect(drLurie?.contentContract).toEqual({ contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" });
     expect(drLurie?.publishingPolicy).toMatchObject({ publishEnabled: false, requiresExplicitPublish: true });
+  });
+
+  it("dr-lurie allowedTools includes exactly the safe read-only tools", () => {
+    expect(drLurieProjectConfig.allowedTools).toEqual([...DR_LURIE_SAFE_READ_ONLY_TOOLS]);
+    expect(drLurieProjectConfig.allowedTools).toEqual(["ping", "registry_get", "object_inventory", "object_contract"]);
+  });
+
+  it("upgrades a persisted stale dr-lurie project config safely", async () => {
+    const repository = new MemoryProjectRepository();
+    await repository.save(staleDrLurieConfig());
+
+    const upgraded = await repository.get("dr-lurie");
+
+    expect(upgraded?.definitionVersion).toBe(drLurieProjectConfig.definitionVersion);
+    expect(upgraded?.allowedTools).toEqual(["ping", "registry_get", "object_inventory", "object_contract"]);
+  });
+
+  it("does not wipe user-added project configs during default migrations", async () => {
+    const repository = new MemoryProjectRepository();
+    await repository.save({ ...staleDrLurieConfig(), projectId: "custom-project", name: "Custom Project", allowedTools: ["custom_read"] });
+
+    const projects = await repository.list();
+
+    expect(projects.find((project) => project.projectId === "custom-project")?.allowedTools).toEqual(["custom_read"]);
   });
 
   it("project summary exposes only safe metadata, never the endpoint value or token", () => {
@@ -103,6 +134,34 @@ describe("Dr. Lurie MCP adapter primitives", () => {
     const result = await new ProjectMcpAdapter(drLurieProjectConfig, { env, transport }).callTool("publish_article", {});
 
     expect(result).toMatchObject({ ok: false, tool: "publish_article", error: "Tool is not allowed for project: publish_article" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("callTool allows registry_get after a stale registry config is upgraded", async () => {
+    const calls: RecordedCall[] = [];
+    const transport = fakeTransport({ "tools/call": { ok: true, value: { slug: "home" } } }, calls);
+    const repository = new MemoryProjectRepository();
+    await repository.save(staleDrLurieConfig());
+    const upgraded = await repository.get("dr-lurie");
+
+    const result = await new ProjectMcpAdapter(upgraded!, { env, transport }).callTool("registry_get", { key: "home" });
+
+    expect(result).toMatchObject({ ok: true, projectId: "dr-lurie", tool: "registry_get", result: { ok: true, value: { slug: "home" } } });
+    expect(calls.map((call) => call.method)).toEqual(["tools/call"]);
+  });
+
+  it("publishing and write tools remain blocked after a stale registry config is upgraded", async () => {
+    const calls: RecordedCall[] = [];
+    const transport = fakeTransport({ "tools/call": { ok: true } }, calls);
+    const repository = new MemoryProjectRepository();
+    await repository.save(staleDrLurieConfig());
+    const upgraded = await repository.get("dr-lurie");
+
+    const publish = await new ProjectMcpAdapter(upgraded!, { env, transport }).callTool("publish_article", {});
+    const write = await new ProjectMcpAdapter(upgraded!, { env, transport }).callTool("save_json_blob_article", {});
+
+    expect(publish.ok).toBe(false);
+    expect(write.ok).toBe(false);
     expect(calls).toHaveLength(0);
   });
 
