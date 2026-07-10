@@ -24,7 +24,7 @@ export function useWorkspace(config: McpConfig) {
   const [repositoryHealth, setRepositoryHealth] = useState<RepositoryHealthSummary | null>(null);
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedId) ?? null, [nodes, selectedId]);
-  const selectedSchema = asSchema(selectedNode?.schema);
+  const selectedSchema = asSchema(selectedNode?.outputSchema ?? selectedNode?.schema);
 
   useEffect(() => {
     if (selectedNode) setPromptDraft(selectedNode.prompt);
@@ -37,16 +37,28 @@ export function useWorkspace(config: McpConfig) {
     ]);
     setNodes(nextNodes);
     setArticleSchema(schema);
+    setWorkspaceVersion((await callMcpTool<WorkspaceDocument>(config, "workspace.export_workspace")).workspaceVersion);
     setSelectedId((current) => current ?? nextNodes[0]?.id ?? null);
   }, [config]);
 
+  const mutationArgs = (summary: string) => ({ expectedWorkspaceVersion: workspaceVersion ?? 0, summary });
+
   const savePrompt = async () => {
     if (!selectedNode) return null;
-    const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion?: number }>(config, "workspace.update_node_prompt", { id: selectedNode.id, prompt: promptDraft });
+    const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion?: number }>(config, "workspace.update_node_prompt", { id: selectedNode.id, prompt: promptDraft, ...mutationArgs("UI prompt update") });
     setNodes((current) => current.map((node) => node.id === result.node.id ? result.node : node));
     setWorkspaceVersion(result.workspaceVersion);
     return result;
   };
+
+  const refreshNodes = async (nextVersion?: number) => { const { nodes: nextNodes } = await callMcpTool<{ nodes: WorkspaceNode[] }>(config, "workspace.get_nodes"); setNodes(nextNodes); if (nextVersion !== undefined) setWorkspaceVersion(nextVersion); };
+  const createNode = async () => { const id = `custom_${Date.now()}`; const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion: number }>(config, "workspace.create_node", { node: { id, name: "New node", kind: "custom", description: "", prompt: "", inputSchema: { type: "object" }, outputSchema: { type: "object" }, allowedTools: [], assignedSkills: [], requiredInputs: [], produces: [], dependsOn: [], riskLevel: "read", status: "draft", position: { x: 0, y: nodes.length * 96 }, updatedAt: new Date().toISOString() }, ...mutationArgs("UI create node") }); await refreshNodes(result.workspaceVersion); setSelectedId(result.node.id); return result; };
+  const cloneNode = async () => { if (!selectedNode) return null; const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion: number }>(config, "workspace.clone_node", { id: selectedNode.id, newId: `${selectedNode.id}_copy_${Date.now()}`, ...mutationArgs("UI clone node") }); await refreshNodes(result.workspaceVersion); setSelectedId(result.node.id); return result; };
+  const deleteNode = async () => { if (!selectedNode) return null; const result = await callMcpTool<{ workspaceVersion: number }>(config, "workspace.delete_node", { id: selectedNode.id, ...mutationArgs("UI delete node") }); await refreshNodes(result.workspaceVersion); setSelectedId(null); return result; };
+  const updateNodePatch = async (patch: Partial<WorkspaceNode>, summary: string) => { if (!selectedNode) return null; const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion: number }>(config, "workspace.update_node", { id: selectedNode.id, patch, ...mutationArgs(summary) }); await refreshNodes(result.workspaceVersion); return result; };
+  const updateOutputSchema = async (schema: unknown) => { if (!selectedNode) return null; const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion: number }>(config, "workspace.update_node_output_schema", { id: selectedNode.id, schema, ...mutationArgs("UI output schema update") }); await refreshNodes(result.workspaceVersion); return result; };
+  const reorderNodes = async (orderedNodeIds: string[]) => { const result = await callMcpTool<{ workspaceVersion: number }>(config, "workspace.reorder_nodes", { orderedNodeIds, ...mutationArgs("UI graph reorder") }); await refreshNodes(result.workspaceVersion); return result; };
+  const validateGraph = async () => callMcpTool<{ validation: { valid: boolean; issues: string[] } }>(config, "workspace.validate_graph", {});
 
   const exportWorkspace = async () => {
     const document = await callMcpTool<WorkspaceDocument>(config, "workspace.export_workspace");
@@ -86,6 +98,13 @@ export function useWorkspace(config: McpConfig) {
     setArticleFormData,
     loadWorkspace,
     savePrompt,
+    createNode,
+    cloneNode,
+    deleteNode,
+    updateNodePatch,
+    updateOutputSchema,
+    reorderNodes,
+    validateGraph,
     exportWorkspace,
     validateArticleBody,
     loadRepositoryHealth

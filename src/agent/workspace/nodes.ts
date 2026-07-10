@@ -1765,6 +1765,19 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
       if (!ids.has(dependency)) issues.push(`Missing dependency for ${node.id}: ${dependency}`);
     }
   }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const visit = (id: string, path: string[]): void => {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) { issues.push(`Cycle detected: ${[...path, id].join(" -> ")}`); return; }
+    visiting.add(id);
+    const node = byId.get(id);
+    node?.dependsOn.forEach((dependency) => { if (byId.has(dependency)) visit(dependency, [...path, id]); });
+    visiting.delete(id);
+    visited.add(id);
+  };
+  nodes.forEach((node) => visit(node.id, []));
   const articleBody = nodes.find((node) => node.id === "article_body");
   if (!articleBody) issues.push("Missing article_body node");
   if (articleBody && !articleBody.produces.includes("article_body.v1")) issues.push("article_body must produce article_body.v1");

@@ -81,6 +81,14 @@ function App() {
     }
   };
 
+  const createNode = async () => { try { const result = await workspace.createNode(); setStatus({ tone: "success", message: `Created node ${result.node.name}.` }); } catch (error) { handleError(error); } };
+  const cloneNode = async () => { try { const result = await workspace.cloneNode(); if (result) setStatus({ tone: "success", message: `Cloned node ${result.node.name}.` }); } catch (error) { handleError(error); } };
+  const deleteNode = async () => { try { await workspace.deleteNode(); setStatus({ tone: "success", message: "Deleted node." }); } catch (error) { handleError(error); } };
+  const updateNodePatch = async (patch: Parameters<typeof workspace.updateNodePatch>[0], summary: string) => { try { await workspace.updateNodePatch(patch, summary); setStatus({ tone: "success", message: "Saved node configuration." }); } catch (error) { handleError(error); } };
+  const updateOutputSchema = async (schema: unknown) => { try { await workspace.updateOutputSchema(schema); setStatus({ tone: "success", message: "Saved output schema." }); } catch (error) { handleError(error); } };
+  const moveSelected = async (direction: -1 | 1) => { if (!workspace.selectedId) return; const ids = workspace.nodes.map((node) => node.id); const index = ids.indexOf(workspace.selectedId); const next = index + direction; if (index < 0 || next < 0 || next >= ids.length) return; [ids[index], ids[next]] = [ids[next], ids[index]]; try { await workspace.reorderNodes(ids); setStatus({ tone: "success", message: "Saved graph order without changing dependencies." }); } catch (error) { handleError(error); } };
+  const validateGraph = async () => { try { const result = await workspace.validateGraph(); setStatus({ tone: result.validation.valid ? "success" : "error", message: result.validation.valid ? "Graph is valid." : `Graph issues: ${result.validation.issues.join("; ")}` }); } catch (error) { handleError(error); } };
+
   const savePrompt = async () => {
     try {
       const result = await workspace.savePrompt();
@@ -153,7 +161,7 @@ function App() {
     {activeTab === "builder" && <section className="tab-panel" aria-label="Builder workspace">
       <section className="workspace-grid">
         <section className="panel graph-panel" aria-label="Workspace graph">
-          <div className="panel-heading"><div><h2>Builder map</h2><p className="muted">Select a node, then run or inspect the dry-run flow.</p></div><div className="auth-actions"><button onClick={loadWorkspace}>Load workspace</button></div></div>
+          <div className="panel-heading"><div><h2>Builder map</h2><p className="muted">Select a node, reorder it, validate edges, and save graph changes through MCP.</p></div><div className="auth-actions"><button onClick={loadWorkspace}>Load workspace</button><button onClick={() => moveSelected(-1)}>Move up</button><button onClick={() => moveSelected(1)}>Move down</button><button onClick={validateGraph}>Validate graph</button></div></div>
           <WorkspaceGraph nodes={workspace.nodes} selectedNodeId={workspace.selectedId} onSelectNode={workspace.setSelectedId} executionStatusByNodeId={workflowRun.nodeStatusById} />
         </section>
         <WorkflowControls currentRun={workflowRun.currentRun} runs={workflowRun.runs} selectedRunId={workflowRun.selectedRunId} loading={workflowRun.loading} onStartDryRun={(projectId, input) => workflowAction(() => workflowRun.startDryRun(projectId, input), (run) => `Started dry-run ${run.runId}.`)} onRunNextNode={() => workflowAction(workflowRun.runNextNode, (run) => run?.status === "blocked" ? "Dry-run blocked at publication_controller. No publication was performed." : `Advanced dry-run to ${run?.currentNodeId ?? run?.status ?? "next state"}.`, async () => modelUsage.refreshUsage())} onResetRun={() => workflowAction(workflowRun.resetRun, (run) => `Reset dry-run ${run?.runId ?? "run"}.`)} onRefreshRun={() => workflowAction(workflowRun.refreshRun, (run) => `Refreshed dry-run ${run?.runId ?? "run"}.`)} onListRuns={(projectId) => workflowAction(() => workflowRun.listRuns(projectId), (runs) => `Loaded ${runs.length} dry-run${runs.length === 1 ? "" : "s"}.`)} onLoadRun={(runId) => workflowAction(() => workflowRun.loadRun(runId), (run) => `Loaded dry-run ${run?.runId ?? runId}.`)} />
@@ -166,7 +174,7 @@ function App() {
 
     {activeTab === "nodes" && <section className="tab-panel" aria-label="Nodes workspace">
       <section className="workspace-grid">
-        <Inspector selectedNode={workspace.selectedNode} promptDraft={workspace.promptDraft} workspaceVersion={workspace.workspaceVersion} selectedSchema={workspace.selectedSchema} onPromptDraftChange={workspace.setPromptDraft} onSavePrompt={savePrompt} />
+        <Inspector selectedNode={workspace.selectedNode} promptDraft={workspace.promptDraft} workspaceVersion={workspace.workspaceVersion} selectedSchema={workspace.selectedSchema} onPromptDraftChange={workspace.setPromptDraft} onSavePrompt={savePrompt} onCreateNode={createNode} onCloneNode={cloneNode} onDeleteNode={deleteNode} onUpdateNodePatch={updateNodePatch} onUpdateOutputSchema={updateOutputSchema} />
         <section className="panel"><h2>Selected node form</h2><p className="muted">Preview the selected node schema. Submitting here is visual only.</p>{workspace.selectedSchema ? <Form schema={workspace.selectedSchema} validator={validator} onSubmit={() => setStatus({ tone: "info", message: "Schema form data is visual only and is not saved." })} /> : <p className="empty-state">Select a node with a schema to preview its form.</p>}</section>
       </section>
       <ArtifactPanel run={workflowRun.currentRun} />
