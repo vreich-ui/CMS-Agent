@@ -5,6 +5,8 @@ import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepo
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import { recordModelUsage } from "../observability/modelUsage.js";
+import { getNodeRunner } from "../execution/runnerRegistry.js";
+import type { ExecutionMode } from "../execution/executionContext.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 const now = () => new Date().toISOString();
@@ -26,7 +28,7 @@ const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: Workspa
   metadata: { dryRun: true, source: "workflow.run_next_node", estimateMethod: "deterministic_mock_length" }
 });
 
-export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string };
+export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
 
 const buildInitialRun = (data: StartDryRunInput, runId = makeRunId()): WorkflowExecutionRecord => {
@@ -47,8 +49,9 @@ const buildInitialRun = (data: StartDryRunInput, runId = makeRunId()): WorkflowE
     approvalsRequired: [],
     initialInput: data.input,
     stageOutputs: {},
-    dryRun: true
-  };
+    dryRun: true,
+    executionMode: data.executionMode ?? "mock"
+  } as WorkflowExecutionRecord;
 };
 
 const nodeById = (nodes: WorkspaceNode[]) => new Map(nodes.map((node) => [node.id, node]));
@@ -126,15 +129,27 @@ export async function runNextNode(runId: string, options: { executionRepository?
     return store.saveRun(run);
   }
 
-  const output = mockOutputForNode(nextNode, run);
+  const mode = ((run as any).executionMode ?? "mock") as ExecutionMode;
+  const runner = getNodeRunner(mode);
+  const result = await runner.run({ node: nextNode, input: state.input }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
   const completedAt = now();
-  state.status = "completed";
   state.completedAt = completedAt;
   state.durationMs = duration(startedAt, completedAt);
+  if (!result.ok) {
+    state.status = result.code === "approval_required" ? "blocked" : result.code === "cancelled" ? "cancelled" : "failed";
+    state.errors = [result.code, result.message];
+    state.output = { error: { code: result.code, message: result.message, details: result.details } };
+    run.status = state.status;
+    run.errors = [...run.errors, `${nextNode.id}:${result.code}`];
+    run.updatedAt = completedAt;
+    return store.saveRun(run);
+  }
+  const output = result.output;
+  state.status = "completed";
   state.output = output;
   run.stageOutputs[nextNode.id] = output;
   run.artifacts.push(buildArtifact(nextNode, output));
-  await recordDryRunNodeUsage(run, nextNode, state.input, output);
+  if (mode === "mock") await recordDryRunNodeUsage(run, nextNode, state.input, output);
   run.updatedAt = completedAt;
   run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
   if (options.workspaceRepository) await options.workspaceRepository.saveStageOutput(nextNode.id, output, `${run.runId}:${nextNode.id}`);

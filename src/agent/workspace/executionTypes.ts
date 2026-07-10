@@ -45,4 +45,5 @@ export type WorkflowExecutionRecord = {
   initialInput?: unknown;
   stageOutputs: Record<string, unknown>;
   dryRun: true;
+  executionMode?: "mock" | "openai";
 };

@@ -10,12 +10,14 @@
     "test": "vitest run",
     "build": "npm run typecheck",
     "ui:dev": "npm --prefix ui run dev",
-    "ui:build": "npm --prefix ui run build"
+    "ui:build": "npm --prefix ui run build",
+    "test:openai:smoke": "node scripts/openai-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.1",
     "@netlify/blobs": "^10.7.9",
-    "zod": "^3.25.76"
+    "@openai/agents": "^0.13.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.13.14",

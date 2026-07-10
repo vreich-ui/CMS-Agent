@@ -11,7 +11,7 @@ export const skillDefinitionSchema = z.object({
   preconditions: stringArray, completionCriteria: stringArray, blockerCriteria: stringArray,
   memoryPolicy: z.object({ namespaces: stringArray, read: z.boolean(), write: z.boolean(), retention: z.string().optional() }).strict(),
   toolPolicy: z.object({ requestedTools: stringArray, mutatingToolsRequireApproval: z.boolean(), notes: z.string().optional() }).strict(),
-  riskLevel: z.enum(workspaceRiskLevels), metadata: z.record(z.unknown()), createdAt: z.string().datetime(), updatedAt: z.string().datetime()
+  riskLevel: z.enum(workspaceRiskLevels), metadata: z.record(z.string(), z.unknown()), createdAt: z.string().datetime(), updatedAt: z.string().datetime()
 }).strict() as z.ZodType<SkillDefinition>;
 
 const validateSimpleExample = (schema: unknown, value: unknown, label: string): string[] => {

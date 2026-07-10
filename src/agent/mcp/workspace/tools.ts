@@ -39,7 +39,7 @@ const stageOutputImport = z.object({
 const learningObservationImport = z.object({
   id: z.string().min(1),
   observation: z.string().min(1),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   createdAt: z.string().datetime()
 }).strict();
 const publishPayloadSchema = z.object({
@@ -55,26 +55,28 @@ const updateSchema = z.object({ id: z.string().min(1), schema: z.unknown(), ...m
 const createNodeInput = z.object({ node: z.any(), ...mutationMeta }).strict();
 const deleteNodeInput = z.object({ id: z.string().min(1), ...mutationMeta }).strict();
 const cloneNodeInput = z.object({ id: z.string().min(1), newId: z.string().min(1), ...mutationMeta }).strict();
-const updateNodeInput = z.object({ id: z.string().min(1), patch: z.record(z.unknown()), ...mutationMeta }).strict();
-const updateGraphInput = z.object({ create: z.array(z.any()).optional(), update: z.array(z.record(z.unknown()).and(z.object({ id: z.string().min(1) }))).optional(), delete: z.array(z.string().min(1)).optional(), dependencies: z.record(z.array(z.string().min(1))).optional(), orderedNodeIds: z.array(z.string().min(1)).optional(), positions: z.record(z.object({ x: z.number(), y: z.number() })).optional(), allowCanonicalNodeRemoval: z.boolean().optional(), adminApproved: z.boolean().optional(), ...mutationMeta }).strict();
+const updateNodeInput = z.object({ id: z.string().min(1), patch: z.record(z.string(), z.unknown()), ...mutationMeta }).strict();
+const updateGraphInput = z.object({ create: z.array(z.any()).optional(), update: z.array(z.record(z.string(), z.unknown()).and(z.object({ id: z.string().min(1) }))).optional(), delete: z.array(z.string().min(1)).optional(), dependencies: z.record(z.string(), z.array(z.string().min(1))).optional(), orderedNodeIds: z.array(z.string().min(1)).optional(), positions: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).optional(), allowCanonicalNodeRemoval: z.boolean().optional(), adminApproved: z.boolean().optional(), ...mutationMeta }).strict();
 const validateNodeInput = z.object({ node: z.any().optional(), id: z.string().min(1).optional() }).strict();
 const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(), stageOutputs: z.array(stageOutputImport).optional(), learningObservations: z.array(learningObservationImport).optional() }).strict();
 const saveOutput = z.object({ id: z.string().min(1).optional(), stage: z.string().min(1), value: z.unknown() }).strict();
 const listOutputs = z.object({ stage: z.string().min(1).optional() }).strict();
-const recordObservation = z.object({ observation: z.string().min(1), metadata: z.record(z.unknown()).optional() }).strict();
+const recordObservation = z.object({ observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional() }).strict();
 const validateArticle = z.object({ articleBody: z.unknown() }).strict();
 const publishBuild = z.object({ articleBody: articleBodySchema, target: z.enum(["preview", "cms"]).default("preview") }).strict();
 const publishValidate = z.object({ payload: publishPayloadSchema }).strict();
-const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional() }).strict();
+const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default("mock") }).strict();
+const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), dependencies: z.record(z.string(), z.unknown()).optional(), approved: z.boolean().optional() }).strict();
+const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional() }).strict();
 const runIdInput = z.object({ runId: z.string().min(1) }).strict();
 const listRunsInput = z.object({ projectId: z.string().min(1).optional(), workflowId: z.string().min(1).optional() }).strict();
 const budgetStatusInput = z.object({ projectId: z.string().min(1).optional(), runId: z.string().min(1).optional(), budgetUsd: z.number().nonnegative().optional() }).strict();
 const projectIdInput = z.object({ projectId: z.string().min(1) }).strict();
 const validateHandoffInput = z.object({ projectId: z.string().min(1), contentSource: z.unknown().optional(), articleBody: z.unknown().optional() }).strict();
-const projectCallToolInput = z.object({ projectId: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.unknown()).default({}) }).strict();
+const projectCallToolInput = z.object({ projectId: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.string(), z.unknown()).default({}) }).strict();
 const skillIdInput = z.object({ skillId: z.string().min(1) }).strict();
 const skillCreateInput = z.object({ skill: z.unknown(), ...mutationMeta }).strict();
-const skillUpdateInput = z.object({ skillId: z.string().min(1), patch: z.record(z.unknown()), ...mutationMeta }).strict();
+const skillUpdateInput = z.object({ skillId: z.string().min(1), patch: z.record(z.string(), z.unknown()), ...mutationMeta }).strict();
 const skillCloneInput = z.object({ skillId: z.string().min(1), newSkillId: z.string().min(1), ...mutationMeta }).strict();
 const skillAssignInput = z.object({ nodeId: z.string().min(1), skillId: z.string().min(1), ...mutationMeta }).strict();
 const skillVersionInput = z.object({ skillId: z.string().min(1), versionId: z.string().min(1), ...mutationMeta }).strict();
@@ -190,7 +192,12 @@ export function createWorkspaceTools(): WorkspaceTool[] {
     tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => { const data = startDryRunInput.parse(input); return ok({ run: await startDryRun(data, executionRepository) }); } }),
     tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await getRun(runIdInput.parse(input).runId, executionRepository) ?? null }) }),
     tool({ name: "workflow.list_runs", description: "List dry-run workflow executions.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => ok({ runs: await listRuns(listRunsInput.parse(input), executionRepository) }) }),
-    tool({ name: "workflow.run_next_node", description: "Run the next dependency-ready Publishing Conductor node in dry-run mode only.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await runNextNode(runIdInput.parse(input).runId, { executionRepository, workspaceRepository }) }) }),
+    tool({ name: "workflow.run_next_node", description: "Run the next dependency-ready Publishing Conductor node.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await runNextNode(runIdInput.parse(input).runId, { executionRepository, workspaceRepository }) }) }),
+    tool({ name: "workflow.run_node", description: "Run one dependency-ready node; dependencies must already be available or supplied.", zodSchema: runNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository }) }); } }),
+    tool({ name: "workflow.run_until", description: "Run dependency-ready nodes until the named node completes, then stop.", zodSchema: runUntilInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = runUntilInput.parse(input); let run = await getRun(data.runId, executionRepository); for (let i=0; run && i<100 && run.status!=="completed" && run.status!=="failed" && run.status!=="blocked" && run.status!=="cancelled"; i++) { run = await runNextNode(data.runId, { executionRepository, workspaceRepository }); if (run.nodes.find((n) => n.nodeId === data.nodeId)?.status === "completed") break; } return ok({ run }); } }),
+    tool({ name: "workflow.run_all", description: "Run all dependency-ready nodes, stopping before publish-risk nodes unless explicit approval exists.", zodSchema: z.object({ runId: z.string().min(1), approved: z.boolean().optional() }).strict(), inputSchema: mutationJsonSchema, execute: async (input) => { const data = z.object({ runId: z.string().min(1), approved: z.boolean().optional() }).strict().parse(input); let run = await getRun(data.runId, executionRepository); for (let i=0; run && i<100 && !["completed","failed","blocked","cancelled"].includes(run.status); i++) run = await runNextNode(data.runId, { executionRepository, workspaceRepository }); return ok({ run }); } }),
+    ...["pause_run","resume_run","cancel_run"].map((action) => tool({ name: `workflow.${action}`, description: `${action} updates run state without executing nodes.`, zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => { const data = runIdInput.parse(input); const run = await getRun(data.runId, executionRepository); if (!run) return ok({ run: null }); const status = action === "cancel_run" ? "cancelled" : action === "pause_run" ? "blocked" : "queued"; return ok({ run: await executionRepository.saveRun({ ...run, status, updatedAt: new Date().toISOString() }) }); } })),
+    tool({ name: "workflow.retry_node", description: "Reset a failed node to queued and run the next dependency-ready node.", zodSchema: runNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); const run = await getRun(data.runId, executionRepository); if (!run) return ok({ run: null }); const node = run.nodes.find((n) => n.nodeId === data.nodeId); if (node) { node.status = "queued"; node.errors = []; await executionRepository.saveRun({ ...run, status: "queued", updatedAt: new Date().toISOString() }); } return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository }) }); } }),
     tool({ name: "workflow.reset_run", description: "Reset a dry-run workflow execution to its initial queued state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await resetRun(runIdInput.parse(input).runId, executionRepository) }) }),
     tool({ name: "usage.record", description: "Record estimated or actual model usage without storing raw prompts or secrets.", zodSchema: recordModelUsageSchema, inputSchema: usageRecordJsonSchema, execute: async (input) => ok({ record: await recordModelUsage(recordModelUsageSchema.parse(input), usageRepository) }) }),
     tool({ name: "usage.list_records", description: "List model usage records with optional filters.", zodSchema: usageFiltersSchema, inputSchema: usageFiltersJsonSchema, execute: async (input) => ok({ records: await usageRepository.list(usageFiltersSchema.parse(input)) }) }),
