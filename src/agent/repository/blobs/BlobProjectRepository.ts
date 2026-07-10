@@ -1,4 +1,4 @@
-import { defaultProjectConnections } from "../../projects/drLurie/definition.js";
+import { defaultProjectConfigs, migrateDefaultProjectConfig } from "../../projects/defaultMigration.js";
 import type { ProjectConnectionConfig } from "../../projects/projectTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { ProjectRepository } from "../interfaces/ProjectRepository.js";
@@ -14,9 +14,16 @@ export class BlobProjectRepository implements ProjectRepository {
   // always contains the known projects. Only non-secret config is stored; endpoints/tokens stay in
   // environment variables.
   private async ensureSeeded(): Promise<void> {
-    const result = await this.store.list({ prefix: "projects/" });
-    if (result.blobs.length > 0) return;
-    await Promise.all(defaultProjectConnections.map((project) => this.store.setJSON(projectKey(project.projectId), project)));
+    await Promise.all(defaultProjectConfigs().map(async (project) => {
+      const key = projectKey(project.projectId);
+      const persisted = await getBlobJson<ProjectConnectionConfig>(this.store, key);
+      if (persisted === null) {
+        await this.store.setJSON(key, project);
+        return;
+      }
+      const migrated = migrateDefaultProjectConfig(persisted);
+      if (migrated.changed) await this.store.setJSON(key, migrated.config);
+    }));
   }
 
   async list(): Promise<ProjectConnectionConfig[]> {
@@ -28,8 +35,12 @@ export class BlobProjectRepository implements ProjectRepository {
 
   async get(projectId: string): Promise<ProjectConnectionConfig | undefined> {
     await this.ensureSeeded();
-    const record = await getBlobJson<ProjectConnectionConfig>(this.store, projectKey(projectId));
-    return record === null ? undefined : clone(record);
+    const key = projectKey(projectId);
+    const record = await getBlobJson<ProjectConnectionConfig>(this.store, key);
+    if (record === null) return undefined;
+    const migrated = migrateDefaultProjectConfig(record);
+    if (migrated.changed) await this.store.setJSON(key, migrated.config);
+    return clone(migrated.config);
   }
 
   async save(config: ProjectConnectionConfig): Promise<ProjectConnectionConfig> {

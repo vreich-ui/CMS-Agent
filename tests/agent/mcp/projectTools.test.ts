@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handler } from "../../../netlify/functions/mcp.mjs";
+import { getProjectRepository, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
 
 const SECRET = "dr-lurie-secret-token";
 const ENDPOINT = "https://dr-lurie.example/mcp";
@@ -17,13 +19,15 @@ const validArticleBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x
 // project tools only ever perform read-only primitives and never a publish call.
 const remoteMethods: string[] = [];
 const remoteFetch = vi.fn(async (_url: string, init: { body: string; headers: Record<string, string> }) => {
-  const request = JSON.parse(init.body) as { method: string };
+  const request = JSON.parse(init.body) as { method: string; params?: { name?: string; arguments?: Record<string, unknown> } };
   remoteMethods.push(request.method);
   const result = request.method === "initialize"
     ? { protocolVersion: "2025-06-18", serverInfo: { name: "dr-lurie-mcp", version: "1.0.0" } }
     : request.method === "tools/list"
-      ? { tools: [{ name: "content.get_schema", description: "Get schema", inputSchema: {} }, { name: "content.validate" }] }
-      : {};
+      ? { tools: [{ name: "ping", description: "Ping", inputSchema: {} }, { name: "publish_article" }, { name: "save_json_blob_article" }] }
+      : request.method === "tools/call"
+        ? { tool: request.params?.name, received: request.params?.arguments ?? {}, tokenEcho: undefined }
+        : {};
   return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
 });
 
@@ -38,6 +42,7 @@ describe("project.* MCP tools", () => {
   });
 
   afterEach(() => {
+    resetRepositoryManager();
     vi.unstubAllGlobals();
     delete process.env.DR_LURIE_MCP_ENDPOINT;
     delete process.env.DR_LURIE_MCP_TOKEN;
@@ -46,7 +51,7 @@ describe("project.* MCP tools", () => {
   it("advertises the project.* tools", async () => {
     const response = await call({ jsonrpc: "2.0", id: 1, method: "tools/list" });
     const names = response.json.result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).toEqual(expect.arrayContaining(["project.list", "project.get", "project.test_connection", "project.list_tools", "project.validate_handoff"]));
+    expect(names).toEqual(expect.arrayContaining(["project.list", "project.get", "project.test_connection", "project.list_tools", "project.call_tool", "project.validate_handoff"]));
   });
 
   it("project.list returns dr-lurie with safe metadata and no secrets", async () => {
@@ -81,8 +86,44 @@ describe("project.* MCP tools", () => {
     const response = await toolCall("project.list_tools", { projectId: "dr-lurie" });
     const { data } = structured(response);
 
-    expect(data.tools.map((tool: { name: string }) => tool.name)).toEqual(["content.get_schema", "content.validate"]);
+    expect(data.tools.map((tool: { name: string }) => tool.name)).toEqual(["ping", "publish_article", "save_json_blob_article"]);
     expect(remoteMethods).toEqual(["tools/list"]);
+  });
+
+  it("project.call_tool allows an approved read-only tool and returns structured JSON without tokens", async () => {
+    const response = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "ping", arguments: { message: "hello" } });
+    const { data } = structured(response);
+
+    expect(data.call).toMatchObject({ ok: true, projectId: "dr-lurie", tool: "ping", result: { tool: "ping", received: { message: "hello" } } });
+    expect(remoteMethods).toEqual(["tools/call"]);
+    expect(JSON.stringify(response.json)).not.toContain(SECRET);
+    expect(JSON.stringify(response.json)).not.toContain(ENDPOINT);
+  });
+
+  it("project.call_tool allows registry_get after a stale persisted default config is upgraded", async () => {
+    await getProjectRepository().save({ ...structuredClone(drLurieProjectConfig), definitionVersion: 1, allowedTools: ["ping"] });
+
+    const response = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "registry_get", arguments: { key: "home" } });
+    const { data } = structured(response);
+
+    expect(data.call).toMatchObject({ ok: true, projectId: "dr-lurie", tool: "registry_get", result: { tool: "registry_get", received: { key: "home" } } });
+    expect(remoteMethods).toEqual(["tools/call"]);
+    expect(JSON.stringify(response.json)).not.toContain(SECRET);
+  });
+
+  it("project.call_tool blocks disallowed publishing and mutation tools before remote calls", async () => {
+    const publish = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "publish_article", arguments: {} });
+    const saveBlob = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "save_json_blob_article", arguments: {} });
+
+    expect(structured(publish).data.call).toMatchObject({ ok: false, tool: "publish_article", error: "Tool is not allowed for project: publish_article" });
+    expect(structured(saveBlob).data.call).toMatchObject({ ok: false, tool: "save_json_blob_article", error: "Tool is not allowed for project: save_json_blob_article" });
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
+  it("project.call_tool rejects an unknown project", async () => {
+    const response = await toolCall("project.call_tool", { projectId: "does-not-exist", tool: "ping", arguments: {} });
+    expect(response.json.error.code).toBe(-32603);
+    expect(response.json.error.data.error.message).toContain("does-not-exist");
   });
 
   it("project.validate_handoff checks content_source.v1 / article_body.v1 structure locally", async () => {
@@ -100,9 +141,8 @@ describe("project.* MCP tools", () => {
     await toolCall("project.list_tools", { projectId: "dr-lurie" });
     await toolCall("project.validate_handoff", { projectId: "dr-lurie", articleBody: validArticleBody });
 
-    // Only read-only primitives were ever sent to the remote — never a publish/tools/call.
+    // Existing project metadata/validation tools still perform only read-only discovery primitives.
     expect(new Set(remoteMethods)).toEqual(new Set(["initialize", "tools/list"]));
-    expect(remoteMethods).not.toContain("tools/call");
   });
 
   it("returns a tool error for an unknown project", async () => {
