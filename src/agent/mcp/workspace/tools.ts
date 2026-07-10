@@ -1,11 +1,14 @@
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { articleBodyJsonSchema, articleBodySchema, validateJsonSchema } from "./store.js";
-import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
+import { workspaceRiskLevels, type WorkspaceNode } from "../../workspace/nodeTypes.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { getRun, listRuns, resetRun, runNextNode, startDryRun } from "../../workspace/executor.js";
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
 import { toProjectSummary, validateHandoff } from "../../projects/projectRegistry.js";
 import { ProjectMcpAdapter } from "../../projects/drLurie/adapter.js";
+import { skillDefinitionSchema, validateSkillDefinition } from "../../skills/skillValidator.js";
+import { resolveSkillsForNode } from "../../skills/skillResolver.js";
+import type { SkillDefinition } from "../../skills/skillTypes.js";
 
 export type JsonSchema = Record<string, unknown>;
 export type WorkspaceTool = {
@@ -67,6 +70,14 @@ const budgetStatusInput = z.object({ projectId: z.string().min(1).optional(), ru
 const projectIdInput = z.object({ projectId: z.string().min(1) }).strict();
 const validateHandoffInput = z.object({ projectId: z.string().min(1), contentSource: z.unknown().optional(), articleBody: z.unknown().optional() }).strict();
 const projectCallToolInput = z.object({ projectId: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.unknown()).default({}) }).strict();
+const skillIdInput = z.object({ skillId: z.string().min(1) }).strict();
+const skillCreateInput = z.object({ skill: z.unknown(), ...mutationMeta }).strict();
+const skillUpdateInput = z.object({ skillId: z.string().min(1), patch: z.record(z.unknown()), ...mutationMeta }).strict();
+const skillCloneInput = z.object({ skillId: z.string().min(1), newSkillId: z.string().min(1), ...mutationMeta }).strict();
+const skillAssignInput = z.object({ nodeId: z.string().min(1), skillId: z.string().min(1), ...mutationMeta }).strict();
+const skillVersionInput = z.object({ skillId: z.string().min(1), versionId: z.string().min(1), ...mutationMeta }).strict();
+const skillValidateInput = z.object({ skill: z.unknown() }).strict();
+const skillResolveInput = z.object({ nodeId: z.string().min(1), workspaceSystemPolicy: z.string().optional(), projectPolicy: z.string().optional(), runInstructions: z.string().optional(), platformTools: z.array(z.string()).optional(), runAuthorizedTools: z.array(z.string()).optional(), riskPolicy: z.enum(workspaceRiskLevels).optional() }).strict();
 
 const objectSchema = (properties: JsonSchema = {}, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 const emptyJsonSchema = objectSchema();
@@ -95,6 +106,8 @@ const budgetStatusJsonSchema = objectSchema({ projectId: { type: "string", minLe
 const projectIdJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 } }, ["projectId"]);
 const validateHandoffJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, contentSource: {}, articleBody: {} }, ["projectId"]);
 const projectCallToolJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, tool: { type: "string", minLength: 1 }, arguments: { type: "object", additionalProperties: true } }, ["projectId", "tool", "arguments"]);
+const skillIdJsonSchema = objectSchema({ skillId: { type: "string", minLength: 1 } }, ["skillId"]);
+const skillMutationJsonSchema = objectSchema({ skillId: { type: "string", minLength: 1 }, newSkillId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, versionId: { type: "string", minLength: 1 }, skill: {}, patch: { type: "object" }, workspaceSystemPolicy: { type: "string" }, projectPolicy: { type: "string" }, runInstructions: { type: "string" }, platformTools: { type: "array", items: { type: "string" } }, runAuthorizedTools: { type: "array", items: { type: "string" } }, riskPolicy: { type: "string", enum: [...workspaceRiskLevels] }, ...metaJson });
 
 const ok = (data: unknown) => ({ ok: true, data });
 
@@ -106,12 +119,27 @@ export function createWorkspaceTools(): WorkspaceTool[] {
   const usageRepository = repositoryManager.getUsageRepository();
   const learningRepository = repositoryManager.getLearningRepository();
   const projectRepository = repositoryManager.getProjectRepository();
+  const skillRepository = repositoryManager.getSkillRepository();
   const requireProject = async (id: string) => {
     const config = await projectRepository.get(id);
     if (!config) throw new Error(`Unknown projectId: ${id}`);
     return config;
   };
   return [
+
+    tool({ name: "skill.list", description: "List reusable workspace skills.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ skills: await skillRepository.list() }); } }),
+    tool({ name: "skill.get", description: "Get one reusable workspace skill.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok({ skill: await skillRepository.get(skillIdInput.parse(input).skillId) ?? null }) }),
+    tool({ name: "skill.create", description: "Create a versioned reusable skill.", zodSchema: skillCreateInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillCreateInput.parse(input); return ok(await skillRepository.create(skillDefinitionSchema.parse(data.skill), data)); } }),
+    tool({ name: "skill.update", description: "Patch a reusable skill and create a version snapshot.", zodSchema: skillUpdateInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillUpdateInput.parse(input); return ok(await skillRepository.update(data.skillId, data.patch as Partial<SkillDefinition>, data)); } }),
+    tool({ name: "skill.delete", description: "Delete a reusable skill definition.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok(await skillRepository.delete(skillIdInput.parse(input).skillId)) }),
+    tool({ name: "skill.clone", description: "Clone a reusable skill under a new id.", zodSchema: skillCloneInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillCloneInput.parse(input); return ok(await skillRepository.clone(data.skillId, data.newSkillId, data)); } }),
+    tool({ name: "skill.assign", description: "Assign a skill id to a node without copying skill text into the node.", zodSchema: skillAssignInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillAssignInput.parse(input); if (!await skillRepository.get(data.skillId)) throw new Error(`Unknown skill: ${data.skillId}`); const node = await workspaceRepository.getNode(data.nodeId); if (!node) throw new Error(`Unknown node: ${data.nodeId}`); const assignedSkills = [...(node.assignedSkills ?? []), data.skillId].filter((id, index, ids) => ids.indexOf(id) === index); return ok(await workspaceRepository.updateNode(data.nodeId, { assignedSkills }, data, "node.skill_assigned")); } }),
+    tool({ name: "skill.unassign", description: "Remove a skill assignment from a node.", zodSchema: skillAssignInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillAssignInput.parse(input); const node = await workspaceRepository.getNode(data.nodeId); if (!node) throw new Error(`Unknown node: ${data.nodeId}`); return ok(await workspaceRepository.updateNode(data.nodeId, { assignedSkills: (node.assignedSkills ?? []).filter((id) => id !== data.skillId) }, data, "node.skill_unassigned")); } }),
+    tool({ name: "skill.list_versions", description: "List snapshots for a skill.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok({ versions: await skillRepository.listVersions(skillIdInput.parse(input).skillId) }) }),
+    tool({ name: "skill.get_version", description: "Get one skill version snapshot.", zodSchema: skillVersionInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillVersionInput.parse(input); return ok({ version: await skillRepository.getVersion(data.skillId, data.versionId) ?? null }); } }),
+    tool({ name: "skill.restore_version", description: "Restore a skill from a previous version snapshot.", zodSchema: skillVersionInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillVersionInput.parse(input); return ok(await skillRepository.restoreVersion(data.skillId, data.versionId, data)); } }),
+    tool({ name: "skill.validate", description: "Validate skill schema, tool policy, and examples.", zodSchema: skillValidateInput, inputSchema: skillMutationJsonSchema, execute: async (input) => ok({ validation: validateSkillDefinition(skillValidateInput.parse(input).skill) }) }),
+    tool({ name: "skill.resolve_for_node", description: "Resolve assigned skills into deterministic instructions, tools, and conflicts for a node.", zodSchema: skillResolveInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillResolveInput.parse(input); const node = await workspaceRepository.getNode(data.nodeId); if (!node) throw new Error(`Unknown node: ${data.nodeId}`); return ok({ policy: await resolveSkillsForNode(node, skillRepository, { workspaceSystemPolicy: data.workspaceSystemPolicy, projectPolicy: data.projectPolicy, runInstructions: data.runInstructions, platformTools: data.platformTools, runAuthorizedTools: data.runAuthorizedTools, riskPolicy: data.riskPolicy }) }); } }),
     tool({ name: "workspace.get_nodes", description: "List workspace nodes.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ nodes: await workspaceRepository.getNodes() }); } }),
     tool({ name: "workspace.get_graph", description: "Get workflow graph nodes and edges.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); const nodes = await workspaceRepository.getNodes(); return ok({ nodes, edges: nodes.flatMap((node) => node.dependsOn.map((dependency) => ({ from: dependency, to: node.id }))) }); } }),
     tool({ name: "workspace.get_node", description: "Get one workspace node.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => ok({ node: await workspaceRepository.getNode(nodeId.parse(input).id) ?? null }) }),

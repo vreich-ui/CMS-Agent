@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RJSFSchema } from "@rjsf/utils";
 import { callMcpTool } from "../mcp/client";
-import type { ArticleBodySchema, ArticleValidationResult, McpConfig, RepositoryHealthSummary, WorkspaceDocument, WorkspaceNode } from "../types/workspace";
+import type { ArticleBodySchema, ArticleValidationResult, McpConfig, RepositoryHealthSummary, SkillDefinition, SkillResolvedPolicy, WorkspaceDocument, WorkspaceNode } from "../types/workspace";
 
 const sampleArticleBody = {
   schema_version: "article_body.v1",
@@ -22,6 +22,9 @@ export function useWorkspace(config: McpConfig) {
   const [validation, setValidation] = useState<ArticleValidationResult | null>(null);
   const [exportedWorkspace, setExportedWorkspace] = useState<WorkspaceDocument | null>(null);
   const [repositoryHealth, setRepositoryHealth] = useState<RepositoryHealthSummary | null>(null);
+  const [skills, setSkills] = useState<SkillDefinition[]>([]);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [resolvedSkillPolicy, setResolvedSkillPolicy] = useState<SkillResolvedPolicy | null>(null);
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedId) ?? null, [nodes, selectedId]);
   const selectedSchema = asSchema(selectedNode?.outputSchema ?? selectedNode?.schema);
@@ -59,6 +62,10 @@ export function useWorkspace(config: McpConfig) {
   const updateOutputSchema = async (schema: unknown) => { if (!selectedNode) return null; const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion: number }>(config, "workspace.update_node_output_schema", { id: selectedNode.id, schema, ...mutationArgs("UI output schema update") }); await refreshNodes(result.workspaceVersion); return result; };
   const reorderNodes = async (orderedNodeIds: string[]) => { const result = await callMcpTool<{ workspaceVersion: number }>(config, "workspace.reorder_nodes", { orderedNodeIds, ...mutationArgs("UI graph reorder") }); await refreshNodes(result.workspaceVersion); return result; };
   const validateGraph = async () => callMcpTool<{ validation: { valid: boolean; issues: string[] } }>(config, "workspace.validate_graph", {});
+  const loadSkills = async () => { const result = await callMcpTool<{ skills: SkillDefinition[] }>(config, "skill.list", {}); setSkills(result.skills); setSelectedSkillId((current) => current ?? result.skills[0]?.skillId ?? null); return result.skills; };
+  const assignSkill = async () => { if (!selectedNode || !selectedSkillId) return null; const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion: number }>(config, "skill.assign", { nodeId: selectedNode.id, skillId: selectedSkillId, ...mutationArgs("UI skill assignment") }); await refreshNodes(result.workspaceVersion); return result; };
+  const unassignSkill = async () => { if (!selectedNode || !selectedSkillId) return null; const result = await callMcpTool<{ node: WorkspaceNode; workspaceVersion: number }>(config, "skill.unassign", { nodeId: selectedNode.id, skillId: selectedSkillId, ...mutationArgs("UI skill unassignment") }); await refreshNodes(result.workspaceVersion); return result; };
+  const resolveSkillPolicy = async () => { if (!selectedNode) return null; const result = await callMcpTool<{ policy: SkillResolvedPolicy }>(config, "skill.resolve_for_node", { nodeId: selectedNode.id, platformTools: selectedNode.allowedTools ?? [], runAuthorizedTools: selectedNode.allowedTools ?? [] }); setResolvedSkillPolicy(result.policy); return result.policy; };
 
   const exportWorkspace = async () => {
     const document = await callMcpTool<WorkspaceDocument>(config, "workspace.export_workspace");
@@ -92,8 +99,12 @@ export function useWorkspace(config: McpConfig) {
     validation,
     exportedWorkspace,
     repositoryHealth,
+    skills,
+    selectedSkillId,
+    resolvedSkillPolicy,
     setSelectedId,
     setPromptDraft,
+    setSelectedSkillId,
     setArticleJson,
     setArticleFormData,
     loadWorkspace,
@@ -105,6 +116,10 @@ export function useWorkspace(config: McpConfig) {
     updateOutputSchema,
     reorderNodes,
     validateGraph,
+    loadSkills,
+    assignSkill,
+    unassignSkill,
+    resolveSkillPolicy,
     exportWorkspace,
     validateArticleBody,
     loadRepositoryHealth

@@ -7,6 +7,7 @@ import { MemoryExecutionRepository } from "../../src/agent/repository/memory/Mem
 import { MemoryLearningRepository } from "../../src/agent/repository/memory/MemoryLearningRepository.js";
 import { MemoryUsageRepository } from "../../src/agent/repository/memory/MemoryUsageRepository.js";
 import { MemoryWorkspaceRepository } from "../../src/agent/repository/memory/MemoryWorkspaceRepository.js";
+import { MemorySkillRepository } from "../../src/agent/skills/skillRegistry.js";
 
 describe("RepositoryManager", () => {
   it("defaults repository context to the memory backend", () => {
@@ -30,6 +31,7 @@ describe("RepositoryManager", () => {
     expect(manager.getArtifactRepository()).toBeInstanceOf(MemoryArtifactRepository);
     expect(manager.getLearningRepository()).toBeInstanceOf(MemoryLearningRepository);
     expect(manager.getUsageRepository()).toBeInstanceOf(MemoryUsageRepository);
+    expect(manager.getSkillRepository()).toBeInstanceOf(MemorySkillRepository);
   });
 
   it("keeps json configured backend mapped to memory repositories as a placeholder", () => {
@@ -52,7 +54,8 @@ describe("RepositoryManager", () => {
       execution: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       artifact: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       learning: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
-      usage: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
+      usage: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      skill: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
     });
   });
 
@@ -64,7 +67,8 @@ describe("RepositoryManager", () => {
       manager.getExecutionRepository(),
       manager.getArtifactRepository(),
       manager.getLearningRepository(),
-      manager.getUsageRepository()
+      manager.getUsageRepository(),
+      manager.getSkillRepository()
     ]) {
       await expect(repository.health()).resolves.toEqual({ backend: "memory", readable: true, writable: true, version: "memory.v1" });
     }
