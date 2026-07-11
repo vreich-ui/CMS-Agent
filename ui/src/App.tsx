@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import Form from "@rjsf/core";
 import validator from "@rjsf/validator-ajv8";
 import { ConnectionPanel } from "./components/ConnectionPanel";
+import { OverviewPanel } from "./components/OverviewPanel";
 import { Inspector } from "./components/Inspector";
 import { SchemaViewer } from "./components/SchemaViewer";
 import { Validator } from "./components/Validator";
@@ -28,9 +29,10 @@ const isDeployedMode = !import.meta.env.DEV;
 const DEFAULT_ENDPOINT = isDeployedMode ? DEPLOYED_ENDPOINT : LOCAL_ENDPOINT;
 
 type Status = { tone: "info" | "success" | "error"; message: string } | null;
-type WorkspaceTab = "builder" | "nodes" | "support";
+type WorkspaceTab = "overview" | "builder" | "nodes" | "support";
 
 const workspaceTabs: Array<{ id: WorkspaceTab; label: string; helper: string }> = [
+  { id: "overview", label: "Overview", helper: "See what needs attention across runs, nodes, projects, and storage." },
   { id: "builder", label: "Builder", helper: "Compose and dry-run the primary content workflow." },
   { id: "nodes", label: "Nodes", helper: "Review prompts, schemas, content blocks, and stage outputs." },
   { id: "support", label: "Support", helper: "Use diagnostics, validation, usage, and workspace exchange tools." }
@@ -54,7 +56,7 @@ function App() {
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT);
   const [token, setToken] = useState(() => isDeployedMode ? "" : localStorage.getItem(TOKEN_KEY) ?? "");
   const [status, setStatus] = useState<Status>(null);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("builder");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
   const usingSecureProxy = endpoint === DEPLOYED_ENDPOINT;
   const config = useMemo<McpConfig>(() => ({ endpoint, token: usingSecureProxy ? undefined : token, authToken: usingSecureProxy ? session.accessToken : undefined, requiresToken: !usingSecureProxy }), [endpoint, session.accessToken, token, usingSecureProxy]);
   const workspace = useWorkspace(config);
@@ -163,6 +165,8 @@ function App() {
     <nav className="workspace-tabs" aria-label="Workspace sections">
       {workspaceTabs.map((tab) => <button key={tab.id} type="button" className={`workspace-tab ${activeTab === tab.id ? "active" : ""}`} aria-pressed={activeTab === tab.id} onClick={() => setActiveTab(tab.id)}><span>{tab.label}</span><small>{tab.helper}</small></button>)}
     </nav>
+
+    {activeTab === "overview" && <OverviewPanel config={config} onNavigate={setActiveTab} />}
 
     {activeTab === "builder" && <section className="tab-panel" aria-label="Builder workspace">
       <section className="workspace-grid">

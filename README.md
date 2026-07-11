@@ -212,6 +212,7 @@ Enter the MCP bearer token in the UI token field. The token must match `MCP_API_
 
 The UI can:
 
+* Show an attention-first Overview tab that surfaces approvals required, failed runs, degraded storage, and unconfigured project connections, plus read-only summaries of runs, nodes, usage estimates, projects, and storage health.
 * Render workspace nodes from `workspace.get_nodes` as a React Flow graph.
 * Inspect a selected node, including id, name, prompt, schema preview, and workspace version when returned by MCP.
 * Save prompt edits through `workspace.update_node_prompt`.

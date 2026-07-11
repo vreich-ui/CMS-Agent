@@ -194,6 +194,26 @@ export type RepositoryHealthSummary = {
 };
 
 
+// Safe, non-secret project connection view returned by project.list / project.get. Only env var
+// *names* and configured booleans are exposed — never endpoint values, tokens, or headers.
+export type ProjectConnectionState = {
+  endpointConfigured: boolean;
+  tokenConfigured: boolean;
+  mcpEndpointEnvVar: string;
+  tokenEnvVar?: string;
+};
+
+export type ProjectSummary = {
+  projectId: string;
+  name: string;
+  authMode: "none" | "bearer_env";
+  allowedTools: string[];
+  contentContract: { contentContract: string; canonicalArticleBody: string };
+  publishingPolicy: { publishEnabled: boolean; requiresExplicitPublish: boolean; description: string };
+  status: "active" | "disabled";
+  connection: ProjectConnectionState;
+};
+
 export type SkillDefinition = {
   skillId: string; name: string; description: string; version: string; status: "draft" | "active" | "deprecated"; instructions: string; inputSchema: JsonValue; outputSchema: JsonValue; allowedTools: string[]; requiredArtifacts: string[]; producedArtifacts: string[]; examples: Array<{ name: string; input: JsonValue; output: JsonValue; notes?: string }>; preconditions: string[]; completionCriteria: string[]; blockerCriteria: string[]; memoryPolicy: JsonValue; toolPolicy: JsonValue; riskLevel: WorkspaceNode["riskLevel"]; metadata: Record<string, unknown>; createdAt: string; updatedAt: string;
 };
