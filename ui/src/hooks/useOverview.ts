@@ -1,0 +1,62 @@
+import { useCallback, useEffect, useState } from "react";
+import { getErrorMessage } from "./useConnection";
+import type { McpClient } from "../mcp/client";
+import type { ModelUsageSummary, ProjectSummary, RepositoryHealthSummary, WorkflowExecutionRecord, WorkspaceNode } from "../types/workspace";
+
+export type OverviewData = {
+  nodes: WorkspaceNode[] | null;
+  runs: WorkflowExecutionRecord[] | null;
+  usageSummary: ModelUsageSummary | null;
+  projects: ProjectSummary[] | null;
+  repositoryHealth: RepositoryHealthSummary | null;
+};
+
+const emptyData: OverviewData = { nodes: null, runs: null, usageSummary: null, projects: null, repositoryHealth: null };
+
+// Read-only overview loader. Each section loads independently so one failing MCP tool (or a
+// missing token) degrades that section instead of blanking the whole page. All data comes from
+// MCP on every refresh; nothing is cached as source of truth in the UI. The shared McpClient
+// resolves the connection at call time, so a token entered after mount is used by the very next
+// refresh without remounting.
+export function useOverview(client: McpClient) {
+  const [data, setData] = useState<OverviewData>(emptyData);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [nodes, runs, usageSummary, projects, repositoryHealth] = await Promise.allSettled([
+        client.call<{ nodes: WorkspaceNode[] }>("workspace.get_nodes"),
+        client.call<{ runs: WorkflowExecutionRecord[] }>("workflow.list_runs"),
+        client.call<{ summary: ModelUsageSummary }>("usage.get_summary"),
+        client.call<{ projects: ProjectSummary[] }>("project.list"),
+        client.call<{ health: RepositoryHealthSummary }>("repository.get_health")
+      ]);
+      const nextErrors: string[] = [];
+      const section = <T, R>(result: PromiseSettledResult<T>, label: string, pick: (value: T) => R): R | null => {
+        if (result.status === "fulfilled") return pick(result.value);
+        nextErrors.push(`${label}: ${getErrorMessage(result.reason)}`);
+        return null;
+      };
+      setData({
+        nodes: section(nodes, "Nodes", (value) => value.nodes),
+        runs: section(runs, "Runs", (value) => value.runs),
+        usageSummary: section(usageSummary, "Usage", (value) => value.summary),
+        projects: section(projects, "Projects", (value) => value.projects),
+        repositoryHealth: section(repositoryHealth, "Storage", (value) => value.health)
+      });
+      setErrors([...new Set(nextErrors)]);
+      setLoadedAt(new Date().toISOString());
+    } finally {
+      setLoading(false);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { data, errors, loading, loadedAt, refresh };
+}

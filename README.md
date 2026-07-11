@@ -182,6 +182,14 @@ curl -sS http://localhost:8888/api/mcp \
 * Mutating external actions must be explicit and auditable.
 * The current publishing skill does not call external publishing endpoints; project MCP publishing will be added later with passthrough credentials.
 
+## Constellation redesign
+
+The UI is migrating toward a project-scoped product model (Overview,
+Constellation with Design/Operate/History modes, Runs, Changes, Settings).
+The audit and specifications live in [docs/constellation/](docs/constellation/):
+`product-model.md`, `information-architecture.md`, `data-model-gaps.md`,
+`migration-plan.md`, and `test-strategy.md`.
+
 ## Visual workspace UI
 
 A lightweight React/Vite UI lives in `ui/`. It is a local browser workspace for inspecting and editing MCP workspace state; it does not replace the Netlify functions and it is not the source of truth. The workspace MCP server at `POST /api/mcp` remains the source of truth.
@@ -204,14 +212,27 @@ npm run ui:dev
 
 By default, the UI points at `/api/mcp`. In local development, use the Vite URL shown by `npm run ui:dev`; if the Vite dev server is not proxying Netlify requests in your setup, enter the full Netlify dev endpoint in the UI, such as `http://localhost:8888/api/mcp`.
 
-### Bearer token
+### Connection mode and bearer token
 
-Enter the MCP bearer token in the UI token field. The token must match `MCP_API_TOKEN` for the Netlify MCP endpoint. For now, the UI stores that token only in browser `localStorage`; do not hardcode it and do not commit secrets.
+The UI has an explicit connection-mode switch: **Direct MCP token** (default
+in local development) sends a manual bearer token to `/api/mcp`, and
+**Identity secure proxy** (default in deployed mode) sends the Netlify
+Identity session token to `/api/workspace-mcp`. The mode — not the endpoint
+string — decides which credential is used; switching modes resets the
+endpoint to that mode's default.
+
+In direct mode, enter the MCP bearer token in the UI token field. The token
+must match `MCP_API_TOKEN` for the Netlify MCP endpoint. A newly entered,
+replaced, or cleared token takes effect on the next request. For now, the UI
+stores that token only in browser `localStorage` in local development; do not
+hardcode it and do not commit secrets. Tokens are redacted from error
+messages and never rendered in the page.
 
 ### Current capabilities
 
 The UI can:
 
+* Show an attention-first Overview tab that surfaces approvals required, failed runs, degraded storage, and unconfigured project connections, plus read-only summaries of runs, nodes, usage estimates, projects, and storage health.
 * Render workspace nodes from `workspace.get_nodes` as a React Flow graph.
 * Inspect a selected node, including id, name, prompt, schema preview, and workspace version when returned by MCP.
 * Save prompt edits through `workspace.update_node_prompt`.
