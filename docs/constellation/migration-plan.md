@@ -72,7 +72,15 @@ session, tests updated, typecheck/tests/ui build green, stop at the boundary.
   (Overview/Constellation/Runs/Changes/Settings), URL-addressable pages,
   legacy tabs reachable under Constellation/Settings as embedded legacy
   panels. UI test toolchain (jsdom + Testing Library, ui-scoped vitest
-  project) lands here. Depends on S0.
+  project) lands here. Depends on S0. **Done.** Shipped: history-based
+  routes (parse-only at load — identity hash tokens survive), quiet
+  header selector (registered / seen-in-runs / stale-selection groups,
+  localStorage preference scoping runs+usage), light/dark/system theme
+  with indigo/teal/amber presets on the 25-token table (AA-validated in
+  `tests/ui/theme.test.ts`), pre-paint theme hint, Runs/Changes honest
+  placeholders, Appearance settings, ui-scoped vitest 3 + jsdom + RTL
+  (`ui/tests/`). Deferred to S7: dark-mode literals in execution pills,
+  flow nodes, budget states, RJSF/React Flow internals.
 - **S3 — Constellation Design mode.** Truthful canvas (minimal node summary,
   dependsOn edges, MCP positions), selection rail, position/dependency
   editing with version guards. Depends on S2.

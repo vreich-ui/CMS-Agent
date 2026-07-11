@@ -1,10 +1,9 @@
 import type { ProjectSummary, RepositoryHealthSummary, WorkflowExecutionRecord, WorkspaceNode } from "./types/workspace.js";
+import type { AppRoute } from "./route.js";
 
 // Pure Overview model. The Overview page leads with what needs attention right now (approvals,
 // failures, degraded storage, configuration gaps) and summarizes everything else. All inputs come
 // from read-only MCP tools; nothing here is source-of-truth state.
-
-export type OverviewTargetTab = "builder" | "nodes" | "support";
 
 export type AttentionSeverity = "action" | "warning" | "info";
 
@@ -13,7 +12,9 @@ export type AttentionItem = {
   severity: AttentionSeverity;
   title: string;
   detail: string;
-  targetTab?: OverviewTargetTab;
+  // Route-based navigation target: run items point at the legacy builder (where run controls
+  // live until S5); storage/config items point at settings.
+  target?: AppRoute;
 };
 
 export type RunOverview = {
@@ -83,7 +84,7 @@ export function buildAttentionItems(input: {
         severity: "action",
         title: `Run ${run.runId} is waiting for approval`,
         detail: approval ? `${approval.nodeId}: ${approval.reason} No publication has been performed.` : "The run is blocked before publish-risk execution. No publication has been performed.",
-        targetTab: "builder"
+        target: { page: "constellation", legacy: "builder" }
       });
     } else if (run.status === "failed") {
       items.push({
@@ -91,7 +92,7 @@ export function buildAttentionItems(input: {
         severity: "action",
         title: `Run ${run.runId} failed`,
         detail: run.errors[0] ?? `The run stopped at ${run.currentNodeId ?? "an unknown node"}.`,
-        targetTab: "builder"
+        target: { page: "constellation", legacy: "builder" }
       });
     } else if (run.status === "running") {
       items.push({
@@ -99,7 +100,7 @@ export function buildAttentionItems(input: {
         severity: "info",
         title: `Run ${run.runId} is in progress`,
         detail: `Currently at ${run.currentNodeId ?? "the next dependency-ready node"} for project ${run.projectId}.`,
-        targetTab: "builder"
+        target: { page: "constellation", legacy: "builder" }
       });
     }
   }
@@ -110,7 +111,7 @@ export function buildAttentionItems(input: {
       severity: "warning",
       title: "Workspace storage is degraded",
       detail: `The ${input.repositoryHealth.backend} repository backend reported degraded health. Recent edits may not persist.`,
-      targetTab: "support"
+      target: { page: "settings" }
     });
   }
 

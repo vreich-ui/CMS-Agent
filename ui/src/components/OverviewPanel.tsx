@@ -1,12 +1,14 @@
 import { buildAttentionItems, summarizeNodes, summarizeRuns } from "../overview";
-import type { AttentionItem, OverviewTargetTab } from "../overview";
+import type { AttentionItem } from "../overview";
+import { routeLabel, type AppRoute } from "../route";
 import { useOverview } from "../hooks/useOverview";
 import type { McpClient } from "../mcp/client";
 import type { ProjectSummary } from "../types/workspace";
 
 type Props = {
   client: McpClient;
-  onNavigate: (tab: OverviewTargetTab) => void;
+  projectId: string | null;
+  onNavigate: (route: AppRoute) => void;
 };
 
 const usd = (value: number) => `$${value.toFixed(6)}`;
@@ -21,7 +23,7 @@ function AttentionList({ items, onNavigate }: { items: AttentionItem[]; onNaviga
         <strong>{item.title}</strong>
         <p className="muted">{item.detail}</p>
       </div>
-      {item.targetTab && <button type="button" className="link-button" onClick={() => onNavigate(item.targetTab!)}>Open {item.targetTab}</button>}
+      {item.target && <button type="button" className="link-button" onClick={() => onNavigate(item.target!)}>{routeLabel(item.target)}</button>}
     </li>)}
   </ul>;
 }
@@ -37,8 +39,8 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
   </li>;
 }
 
-export function OverviewPanel({ client, onNavigate }: Props) {
-  const { data, errors, loading, loadedAt, refresh } = useOverview(client);
+export function OverviewPanel({ client, projectId, onNavigate }: Props) {
+  const { data, errors, loading, loadedAt, refresh } = useOverview(client, projectId);
   const attention = buildAttentionItems({ runs: data.runs ?? [], projects: data.projects ?? [], repositoryHealth: data.repositoryHealth });
   const runOverview = data.runs ? summarizeRuns(data.runs) : null;
   const nodeOverview = data.nodes ? summarizeNodes(data.nodes) : null;
@@ -59,7 +61,7 @@ export function OverviewPanel({ client, onNavigate }: Props) {
 
     <section className="overview-grid">
       <section className="panel" aria-label="Runs summary">
-        <div className="panel-heading"><h2>Runs</h2><button type="button" className="link-button" onClick={() => onNavigate("builder")}>Open builder</button></div>
+        <div className="panel-heading"><h2>Runs</h2><button type="button" className="link-button" onClick={() => onNavigate({ page: "constellation", legacy: "builder" })}>Open builder</button></div>
         {runOverview ? <>
           <div className="overview-stats">
             <div><span>Total dry-runs</span><strong>{integer(runOverview.total)}</strong></div>
@@ -72,7 +74,8 @@ export function OverviewPanel({ client, onNavigate }: Props) {
       </section>
 
       <section className="panel" aria-label="Constellation summary">
-        <div className="panel-heading"><h2>Constellation</h2><button type="button" className="link-button" onClick={() => onNavigate("nodes")}>Open nodes</button></div>
+        <div className="panel-heading"><h2>Constellation</h2><button type="button" className="link-button" onClick={() => onNavigate({ page: "constellation", legacy: "nodes" })}>Open nodes</button></div>
+        {projectId && <p className="muted"><span className="badge">Workspace-wide</span> The constellation is shared across projects; only runs and usage above are scoped to <code>{projectId}</code>.</p>}
         {nodeOverview ? <>
           <div className="overview-stats">
             <div><span>Nodes</span><strong>{integer(nodeOverview.total)}</strong></div>
@@ -85,13 +88,13 @@ export function OverviewPanel({ client, onNavigate }: Props) {
       </section>
 
       <section className="panel" aria-label="Usage summary">
-        <div className="panel-heading"><h2>Usage estimates</h2><button type="button" className="link-button" onClick={() => onNavigate("support")}>Open support</button></div>
+        <div className="panel-heading"><h2>Usage estimates</h2><button type="button" className="link-button" onClick={() => onNavigate({ page: "settings" })}>Open settings</button></div>
         {data.usageSummary ? <div className="overview-stats">
           <div><span>Total tokens</span><strong>{integer(data.usageSummary.totalTokens)}</strong></div>
           <div><span>Estimated cost</span><strong>{usd(data.usageSummary.totalCostUsdEstimate)}</strong></div>
           <div><span>Records</span><strong>{integer(data.usageSummary.recordCount)}</strong></div>
         </div> : <p className="empty-state">Usage estimates have not loaded.</p>}
-        <p className="muted">Estimates only; not billing-grade.</p>
+        <p className="muted">Estimates only; not billing-grade.{projectId ? ` Scoped to ${projectId}.` : ""}</p>
       </section>
 
       <section className="panel" aria-label="Project connections">
@@ -103,7 +106,7 @@ export function OverviewPanel({ client, onNavigate }: Props) {
       </section>
 
       <section className="panel" aria-label="Storage health">
-        <div className="panel-heading"><h2>Storage</h2><button type="button" className="link-button" onClick={() => onNavigate("support")}>Open support</button></div>
+        <div className="panel-heading"><h2>Storage</h2><button type="button" className="link-button" onClick={() => onNavigate({ page: "settings" })}>Open settings</button></div>
         {data.repositoryHealth ? <div className="overview-stats">
           <div><span>Backend</span><strong>{data.repositoryHealth.backend}</strong></div>
           <div><span>Health</span><strong>{data.repositoryHealth.storageHealth}</strong></div>

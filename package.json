@@ -11,7 +11,8 @@
     "build": "npm run typecheck",
     "ui:dev": "npm --prefix ui run dev",
     "ui:build": "npm --prefix ui run build",
-    "test:openai:smoke": "node scripts/openai-smoke.mjs"
+    "test:openai:smoke": "node scripts/openai-smoke.mjs",
+    "test:ui": "npm --prefix ui run test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.1",

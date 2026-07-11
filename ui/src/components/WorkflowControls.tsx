@@ -4,18 +4,23 @@ import type { WorkflowExecutionRecord } from "../types/workspace";
 type Mode = "mock" | "openai";
 type WorkflowControlsProps = {
   currentRun: WorkflowExecutionRecord | null; runs: WorkflowExecutionRecord[]; selectedRunId: string | null; loading: boolean;
+  // Seeded by the header project selector; the free-text input stays authoritative so
+  // unregistered dry-run ids (e.g. "project-a") keep working.
+  defaultProjectId?: string;
   onStartDryRun: (projectId: string, input: string, executionMode: Mode) => Promise<WorkflowExecutionRecord>;
   onRunNextNode: () => Promise<WorkflowExecutionRecord | null>; onRunUntil: (nodeId: string) => Promise<WorkflowExecutionRecord | null>; onRunAll: () => Promise<WorkflowExecutionRecord | null>;
   onPauseRun: () => Promise<WorkflowExecutionRecord | null>; onResumeRun: () => Promise<WorkflowExecutionRecord | null>; onCancelRun: () => Promise<WorkflowExecutionRecord | null>; onRetryNode: (nodeId?: string) => Promise<WorkflowExecutionRecord | null>;
   onResetRun: () => Promise<WorkflowExecutionRecord | null>; onRefreshRun: () => Promise<WorkflowExecutionRecord | null>; onListRuns: (projectId?: string) => Promise<WorkflowExecutionRecord[]>; onLoadRun: (runId: string) => Promise<WorkflowExecutionRecord | null>;
 };
 
-export function WorkflowControls({ currentRun, runs, selectedRunId, loading, onStartDryRun, onRunNextNode, onRunUntil, onRunAll, onPauseRun, onResumeRun, onCancelRun, onRetryNode, onResetRun, onRefreshRun, onListRuns, onLoadRun }: WorkflowControlsProps) {
-  const [projectId, setProjectId] = useState("project-a");
+export function WorkflowControls({ currentRun, runs, selectedRunId, loading, defaultProjectId, onStartDryRun, onRunNextNode, onRunUntil, onRunAll, onPauseRun, onResumeRun, onCancelRun, onRetryNode, onResetRun, onRefreshRun, onListRuns, onLoadRun }: WorkflowControlsProps) {
+  const [projectId, setProjectId] = useState(defaultProjectId ?? "project-a");
   const [initialInput, setInitialInput] = useState("Draft a deterministic dry-run article through the Publishing Conductor.");
   const [executionMode, setExecutionMode] = useState<Mode>("mock");
   const [untilNodeId, setUntilNodeId] = useState("");
   useEffect(() => { void onListRuns(projectId).catch(() => undefined); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Sync only the project field when the header selection changes; other form state is untouched.
+  useEffect(() => { if (defaultProjectId) setProjectId(defaultProjectId); }, [defaultProjectId]);
   const isTerminal = currentRun ? ["cancelled", "completed", "failed"].includes(currentRun.status) : true;
   const nodeOptions = currentRun?.nodes ?? [];
   return <section className="panel workflow-controls" aria-label="Workflow execution controls">
