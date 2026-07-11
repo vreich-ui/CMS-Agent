@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { callMcpTool } from "../mcp/client";
+import { useCallback, useEffect, useState } from "react";
 import { getErrorMessage } from "./useConnection";
-import type { McpConfig, ModelUsageSummary, ProjectSummary, RepositoryHealthSummary, WorkflowExecutionRecord, WorkspaceNode } from "../types/workspace";
+import type { McpClient } from "../mcp/client";
+import type { ModelUsageSummary, ProjectSummary, RepositoryHealthSummary, WorkflowExecutionRecord, WorkspaceNode } from "../types/workspace";
 
 export type OverviewData = {
   nodes: WorkspaceNode[] | null;
@@ -15,28 +15,24 @@ const emptyData: OverviewData = { nodes: null, runs: null, usageSummary: null, p
 
 // Read-only overview loader. Each section loads independently so one failing MCP tool (or a
 // missing token) degrades that section instead of blanking the whole page. All data comes from
-// MCP on every refresh; nothing is cached as source of truth in the UI.
-export function useOverview(config: McpConfig) {
+// MCP on every refresh; nothing is cached as source of truth in the UI. The shared McpClient
+// resolves the connection at call time, so a token entered after mount is used by the very next
+// refresh without remounting.
+export function useOverview(client: McpClient) {
   const [data, setData] = useState<OverviewData>(emptyData);
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
 
-  // refresh reads config through a ref so it stays stable while the user types an endpoint or
-  // token; data reloads on mount and on explicit refresh, not on every keystroke.
-  const configRef = useRef(config);
-  configRef.current = config;
-
   const refresh = useCallback(async () => {
     setLoading(true);
-    const current = configRef.current;
     try {
       const [nodes, runs, usageSummary, projects, repositoryHealth] = await Promise.allSettled([
-        callMcpTool<{ nodes: WorkspaceNode[] }>(current, "workspace.get_nodes"),
-        callMcpTool<{ runs: WorkflowExecutionRecord[] }>(current, "workflow.list_runs"),
-        callMcpTool<{ summary: ModelUsageSummary }>(current, "usage.get_summary"),
-        callMcpTool<{ projects: ProjectSummary[] }>(current, "project.list"),
-        callMcpTool<{ health: RepositoryHealthSummary }>(current, "repository.get_health")
+        client.call<{ nodes: WorkspaceNode[] }>("workspace.get_nodes"),
+        client.call<{ runs: WorkflowExecutionRecord[] }>("workflow.list_runs"),
+        client.call<{ summary: ModelUsageSummary }>("usage.get_summary"),
+        client.call<{ projects: ProjectSummary[] }>("project.list"),
+        client.call<{ health: RepositoryHealthSummary }>("repository.get_health")
       ]);
       const nextErrors: string[] = [];
       const section = <T, R>(result: PromiseSettledResult<T>, label: string, pick: (value: T) => R): R | null => {
@@ -56,7 +52,7 @@ export function useOverview(config: McpConfig) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [client]);
 
   useEffect(() => {
     void refresh();

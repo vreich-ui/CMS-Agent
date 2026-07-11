@@ -61,9 +61,19 @@ End-to-end browser drives (Playwright against `netlify dev` + Vite, as used
 to verify the Overview and reproduce the credential bug) remain a manual
 verification harness per session, not CI — scripts live outside the repo.
 
-## Credential lifecycle regression coverage (S0 gate)
+## Credential lifecycle regression coverage (S0 gate) — shipped
 
-Proposed tests, in order of leverage:
+Implemented in `tests/ui/credentialLifecycle.test.ts` (initial token entry,
+replacement, clearing, endpoint changes including the deployed-path
+regression, mode switches both directions, stale-closure capture, per-request
+secure-proxy token resolution, and redaction of echoed credentials) and
+`tests/ui/connection.test.ts` (union/auth-state modeling, endpoint defaults,
+redaction helpers). The original proposal below is retained for context;
+items 1–2 and 5 are covered as written, item 3 is enforced structurally
+(ConnectionPanel consumes the shared client, so a divergent config can no
+longer exist), and item 4 is subsumed by call-time credential resolution
+(a stale closure can no longer pin a credential, so no epoch mechanism is
+needed).
 
 1. **Extract and unit-test config derivation.** Pull the config construction
    out of `App.tsx:58-61` into a framework-free
@@ -118,7 +128,7 @@ Proposed tests, in order of leverage:
 
 | Session | Must-pass additions |
 |---|---|
-| S0 | Credential suite 1–5 above |
+| S0 | Credential suite 1–5 above — **shipped** |
 | S1 | History/pagination handler tests; meta-required enforcement; sanitizer on `usage.record` metadata |
 | S2 | ui-scoped vitest project bootstrapped; shell nav + project-selector hook tests; a11y smoke (landmarks, nav semantics) |
 | S3 | Graph model tests (summary projection, edge derivation); validation failure matrix; position-update guard tests |

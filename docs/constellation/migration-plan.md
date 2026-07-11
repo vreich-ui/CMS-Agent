@@ -28,10 +28,12 @@ z-index, no overlapping absolute panels, MIT React Flow only.
 These are the blockers identified in `data-model-gaps.md`; the shell migration
 builds on them:
 
-- **D1. Connection/credential unification** (UI): single connection store;
-  explicit direct vs secure-proxy mode; delete the duplicate config in
-  `useConnection`; lazy identity-JWT read; connection-epoch retry for
-  mount-only loads. Fixes the "token unused until endpoint edited" bug.
+- **D1. Connection/credential unification** (UI) — **done (S0)**: explicit
+  `McpConnection` discriminated union, call-time credential resolution via a
+  stable ref-bound client (which also removes the stale-closure class the
+  connection-epoch idea targeted), duplicate config in `useConnection`
+  deleted, lazy per-request identity-JWT read, redaction at the error
+  boundary. See `data-model-gaps.md` §1 Resolution.
 - **D2. History read API + attribution** (backend): paginated
   `workspace.list_events` / `workspace.get_version`; server-stamped actor
   `{kind, id}`; meta required on all version-bumping mutations
@@ -52,10 +54,11 @@ D1 is UI-only and independent. D2/D3/D4 are backend and independent of D1.
 Session granularity follows the working procedure: one cohesive slice per
 session, tests updated, typecheck/tests/ui build green, stop at the boundary.
 
-- **S0 — Connection store & credential lifecycle (D1).**
-  Exit: repro from `data-model-gaps.md` §1 passes (token used immediately;
-  Test connection and app agree; regression tests from `test-strategy.md`
-  green). No visual redesign yet.
+- **S0 — Connection store & credential lifecycle (D1).** **Done.**
+  Exit criteria met: repro from `data-model-gaps.md` §1 passes (token used
+  immediately; Test connection and app agree; regression tests in
+  `tests/ui/credentialLifecycle.test.ts` + `tests/ui/connection.test.ts`
+  green). No visual redesign.
 - **S1 — History & attribution backend (D2) + runs pagination (D3) + honesty
   fixes (D4).** Pure backend; can run parallel to S0. Exit: new tools covered
   by handler-level tests; existing tools unchanged for current UI.

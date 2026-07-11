@@ -212,9 +212,21 @@ npm run ui:dev
 
 By default, the UI points at `/api/mcp`. In local development, use the Vite URL shown by `npm run ui:dev`; if the Vite dev server is not proxying Netlify requests in your setup, enter the full Netlify dev endpoint in the UI, such as `http://localhost:8888/api/mcp`.
 
-### Bearer token
+### Connection mode and bearer token
 
-Enter the MCP bearer token in the UI token field. The token must match `MCP_API_TOKEN` for the Netlify MCP endpoint. For now, the UI stores that token only in browser `localStorage`; do not hardcode it and do not commit secrets.
+The UI has an explicit connection-mode switch: **Direct MCP token** (default
+in local development) sends a manual bearer token to `/api/mcp`, and
+**Identity secure proxy** (default in deployed mode) sends the Netlify
+Identity session token to `/api/workspace-mcp`. The mode — not the endpoint
+string — decides which credential is used; switching modes resets the
+endpoint to that mode's default.
+
+In direct mode, enter the MCP bearer token in the UI token field. The token
+must match `MCP_API_TOKEN` for the Netlify MCP endpoint. A newly entered,
+replaced, or cleared token takes effect on the next request. For now, the UI
+stores that token only in browser `localStorage` in local development; do not
+hardcode it and do not commit secrets. Tokens are redacted from error
+messages and never rendered in the page.
 
 ### Current capabilities
 

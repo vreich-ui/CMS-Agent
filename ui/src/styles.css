@@ -80,6 +80,10 @@ pre {
   padding: 1rem;
 }
 .auth-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.mode-switch { border: 0; display: grid; gap: 0.4rem; margin: 0; padding: 0; }
+.mode-switch legend { font-weight: 700; margin-bottom: 0.25rem; padding: 0; }
+.mode-option { align-items: center; display: flex; font-weight: 600; gap: 0.5rem; }
+.mode-option input { accent-color: var(--color-accent); width: auto; }
 .connection-summary { color: #eef3ff !important; font-size: 0.9rem; line-height: 1.4; margin: 0 !important; }
 .status { border-radius: 1rem; font-weight: 700; padding: 0.9rem 1rem; }
 .status.info { background: #e8edff; color: #2945a5; }

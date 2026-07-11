@@ -71,17 +71,43 @@ credential finally arrives):
   expires every proxied call 401s until logout/login. Stale **credential
   value** with no refresh path.
 
-### Fix direction
+### Resolution (implemented — session S0)
 
-One connection store owning `{ endpoint, mode: "direct" | "secure-proxy",
-credential, status }`; mode chosen explicitly (radio/toggle in Settings ▸
-Connection) with the endpoint string as a default hint only; every caller —
-including ConnectionPanel — consumes the same store (delete the second config
-in `useConnection`); credential changes bump a `connectionEpoch` that
-initial-load effects depend on; identity token read lazily per request (call
-`user.jwt()` at request time, which auto-refreshes) instead of captured at
-login. Proposed regression tests are specified in `test-strategy.md`
-§ Credential lifecycle.
+Status: **fixed**. Final design:
+
+- **Discriminated union** `McpConnection` in `ui/src/connection.ts`:
+  `{ mode: "direct"; endpoint; token }` |
+  `{ mode: "secure-proxy"; endpoint; getAccessToken }`. Authentication state
+  is modeled explicitly; the endpoint string carries no credential meaning.
+  Mode is user-chosen (radio group in the connection panel); switching modes
+  resets the endpoint to that mode's default and swaps the credential source
+  with the union variant.
+- **Call-time credential resolution**: `createMcpClient(getConnection)`
+  (`ui/src/mcp/client.ts`) resolves the connection when a request fires, and
+  `useMcpClient` binds it through a ref with a stable client identity. Any
+  callback or mount-only effect may capture `client.call` — the credential
+  used is always current, eliminating the stale-closure class outright.
+  Direct mode refuses to send a request without a token (no unauthenticated
+  spray); secure-proxy mode calls `getFreshIdentityToken()` per request
+  (`user.jwt()` refreshes expired JWTs), so nothing captures the identity
+  token at login.
+- **One config source**: `useConnection` now consumes the shared client;
+  ConnectionPanel's divergent second `McpConfig` is deleted, so "Test
+  connection" and app requests are the same code path by construction.
+- **Redaction at the error boundary**: `McpClientError` passes its message
+  and details through `redactSecretText`/`redactSecretValue`
+  (`ui/src/connection.ts`) — pattern-based for `Bearer <value>` strings,
+  key-based for credential-named fields — so tokens cannot reach logs, status
+  banners, DOM text, or serialized error details even when a server echoes a
+  header.
+
+Verified live (request-header captures): a pasted token is used by the next
+request with the endpoint untouched; replacement and clearing take effect on
+the next request (clearing sends nothing); mode switches swap credential
+sources cleanly; direct mode pointed at `/api/workspace-mcp` still sends the
+token (the original bug's exact regression); Test connection agrees with app
+requests. Regression suite: `tests/ui/credentialLifecycle.test.ts` and
+`tests/ui/connection.test.ts` (see `test-strategy.md`).
 
 ## 2. Change/revision system gaps **[pre-shell for Changes/History]**
 

@@ -16,17 +16,18 @@ import { SkillsPanel } from "./components/SkillsPanel";
 import { NodeConsole } from "./components/NodeConsole";
 import { getErrorMessage } from "./hooks/useConnection";
 import { getAccessScreen } from "./accessState";
-import { useIdentitySession } from "./hooks/useIdentitySession";
+import { getFreshIdentityToken, useIdentitySession } from "./hooks/useIdentitySession";
+import { useMcpClient } from "./hooks/useMcpClient";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useWorkflowRun } from "./hooks/useWorkflowRun";
 import { useModelUsage } from "./hooks/useModelUsage";
-import type { InitializeResult, McpConfig } from "./types/workspace";
+import { defaultEndpointForMode } from "./connection";
+import type { ConnectionMode, McpConnection } from "./connection";
+import type { InitializeResult } from "./types/workspace";
 
 const TOKEN_KEY = "cms-agent.mcpToken";
-const DEPLOYED_ENDPOINT = "/api/workspace-mcp";
-const LOCAL_ENDPOINT = "/api/mcp";
 const isDeployedMode = !import.meta.env.DEV;
-const DEFAULT_ENDPOINT = isDeployedMode ? DEPLOYED_ENDPOINT : LOCAL_ENDPOINT;
+const DEFAULT_MODE: ConnectionMode = isDeployedMode ? "secure-proxy" : "direct";
 
 type Status = { tone: "info" | "success" | "error"; message: string } | null;
 type WorkspaceTab = "overview" | "builder" | "nodes" | "support";
@@ -53,16 +54,29 @@ const RepositoryDiagnostics = ({ health, onRefresh }: { health: ReturnType<typeo
 
 function App() {
   const { session, login, logout } = useIdentitySession(isDeployedMode);
-  const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT);
+  const [mode, setMode] = useState<ConnectionMode>(DEFAULT_MODE);
+  const [endpoint, setEndpoint] = useState(defaultEndpointForMode(DEFAULT_MODE));
   const [token, setToken] = useState(() => isDeployedMode ? "" : localStorage.getItem(TOKEN_KEY) ?? "");
   const [status, setStatus] = useState<Status>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
-  const usingSecureProxy = endpoint === DEPLOYED_ENDPOINT;
-  const config = useMemo<McpConfig>(() => ({ endpoint, token: usingSecureProxy ? undefined : token, authToken: usingSecureProxy ? session.accessToken : undefined, requiresToken: !usingSecureProxy }), [endpoint, session.accessToken, token, usingSecureProxy]);
-  const workspace = useWorkspace(config);
-  const workflowRun = useWorkflowRun(config);
-  const modelUsage = useModelUsage(config, workflowRun.currentRun?.runId, workflowRun.currentRun?.projectId);
+  // Connection mode is explicit state (a discriminated union), never inferred from the endpoint
+  // string. Switching modes reconfigures request behavior wholesale: the endpoint resets to that
+  // mode's default and the credential source changes with the union variant.
+  const connection = useMemo<McpConnection>(() =>
+    mode === "secure-proxy"
+      ? { mode: "secure-proxy", endpoint, getAccessToken: getFreshIdentityToken }
+      : { mode: "direct", endpoint, token },
+  [endpoint, mode, token]);
+  const client = useMcpClient(connection);
+  const workspace = useWorkspace(client);
+  const workflowRun = useWorkflowRun(client);
+  const modelUsage = useModelUsage(client, workflowRun.currentRun?.runId, workflowRun.currentRun?.projectId);
   const accessScreen = getAccessScreen(isDeployedMode, session);
+
+  const handleModeChange = (nextMode: ConnectionMode) => {
+    setMode(nextMode);
+    setEndpoint(defaultEndpointForMode(nextMode));
+  };
 
   useEffect(() => {
     if (!isDeployedMode) localStorage.setItem(TOKEN_KEY, token);
@@ -157,7 +171,7 @@ function App() {
   return <main className="app-shell">
     <header className="hero">
       <div><p className="eyebrow">CMS-Agent</p><h1>Workspace</h1><p>Build, inspect, and validate content workflows from one MCP-backed workspace.</p></div>
-      <div className="header-stack">{isDeployedMode && <div className="session-card"><span>Signed in as <strong>{session.email}</strong></span><button onClick={logout}>Log out</button></div>}<ConnectionPanel endpoint={endpoint} token={token} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} showTokenField={!usingSecureProxy} /></div>
+      <div className="header-stack">{isDeployedMode && <div className="session-card"><span>Signed in as <strong>{session.email}</strong></span><button onClick={logout}>Log out</button></div>}<ConnectionPanel connection={connection} client={client} token={token} onModeChange={handleModeChange} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} /></div>
     </header>
 
     {status && <div className={`status ${status.tone}`} role="status">{status.message}</div>}
@@ -166,7 +180,7 @@ function App() {
       {workspaceTabs.map((tab) => <button key={tab.id} type="button" className={`workspace-tab ${activeTab === tab.id ? "active" : ""}`} aria-pressed={activeTab === tab.id} onClick={() => setActiveTab(tab.id)}><span>{tab.label}</span><small>{tab.helper}</small></button>)}
     </nav>
 
-    {activeTab === "overview" && <OverviewPanel config={config} onNavigate={setActiveTab} />}
+    {activeTab === "overview" && <OverviewPanel client={client} onNavigate={setActiveTab} />}
 
     {activeTab === "builder" && <section className="tab-panel" aria-label="Builder workspace">
       <section className="workspace-grid">
@@ -188,7 +202,7 @@ function App() {
         <Inspector selectedNode={workspace.selectedNode} promptDraft={workspace.promptDraft} workspaceVersion={workspace.workspaceVersion} selectedSchema={workspace.selectedSchema} onPromptDraftChange={workspace.setPromptDraft} onSavePrompt={savePrompt} onCreateNode={createNode} onCloneNode={cloneNode} onDeleteNode={deleteNode} onUpdateNodePatch={updateNodePatch} onUpdateOutputSchema={updateOutputSchema} />
         <section className="panel"><h2>Selected node form</h2><p className="muted">Preview the selected node schema. Submitting here is visual only.</p>{workspace.selectedSchema ? <Form schema={workspace.selectedSchema} validator={validator} onSubmit={() => setStatus({ tone: "info", message: "Schema form data is visual only and is not saved." })} /> : <p className="empty-state">Select a node with a schema to preview its form.</p>}</section>
       </section>
-      <NodeConsole config={config} nodes={workspace.nodes} selectedNodeId={workspace.selectedId} onSelectNode={workspace.setSelectedId} onError={handleError} onStatus={(message) => setStatus({ tone: "success", message })} />
+      <NodeConsole client={client} nodes={workspace.nodes} selectedNodeId={workspace.selectedId} onSelectNode={workspace.setSelectedId} onError={handleError} onStatus={(message) => setStatus({ tone: "success", message })} />
       <ArtifactPanel run={workflowRun.currentRun} />
     </section>}
 

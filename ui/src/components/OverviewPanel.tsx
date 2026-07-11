@@ -1,10 +1,11 @@
 import { buildAttentionItems, summarizeNodes, summarizeRuns } from "../overview";
 import type { AttentionItem, OverviewTargetTab } from "../overview";
 import { useOverview } from "../hooks/useOverview";
-import type { McpConfig, ProjectSummary } from "../types/workspace";
+import type { McpClient } from "../mcp/client";
+import type { ProjectSummary } from "../types/workspace";
 
 type Props = {
-  config: McpConfig;
+  client: McpClient;
   onNavigate: (tab: OverviewTargetTab) => void;
 };
 
@@ -36,8 +37,8 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
   </li>;
 }
 
-export function OverviewPanel({ config, onNavigate }: Props) {
-  const { data, errors, loading, loadedAt, refresh } = useOverview(config);
+export function OverviewPanel({ client, onNavigate }: Props) {
+  const { data, errors, loading, loadedAt, refresh } = useOverview(client);
   const attention = buildAttentionItems({ runs: data.runs ?? [], projects: data.projects ?? [], repositoryHealth: data.repositoryHealth });
   const runOverview = data.runs ? summarizeRuns(data.runs) : null;
   const nodeOverview = data.nodes ? summarizeNodes(data.nodes) : null;

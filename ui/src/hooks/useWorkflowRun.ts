@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
-import { callMcpTool } from "../mcp/client";
-import type { McpConfig, WorkflowExecutionRecord } from "../types/workspace";
+import type { McpClient } from "../mcp/client";
+import type { WorkflowExecutionRecord } from "../types/workspace";
 
-export function useWorkflowRun(config: McpConfig) {
+export function useWorkflowRun(client: McpClient) {
   const [currentRun, setCurrentRun] = useState<WorkflowExecutionRecord | null>(null);
   const [runs, setRuns] = useState<WorkflowExecutionRecord[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -18,90 +18,90 @@ export function useWorkflowRun(config: McpConfig) {
   }, []);
 
   const startDryRun = useCallback(async (projectId: string, input: string, executionMode: "mock" | "openai" = "mock") => withLoading(async () => {
-    const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.start_dry_run", { projectId, input, executionMode });
+    const result = await client.call<{ run: WorkflowExecutionRecord }>("workflow.start_dry_run", { projectId, input, executionMode });
     setCurrentRun(result.run);
     setSelectedRunId(result.run.runId);
     setRuns((current) => [result.run, ...current.filter((run) => run.runId !== result.run.runId)]);
     return result.run;
-  }), [config, withLoading]);
+  }), [client, withLoading]);
 
   const loadRun = useCallback(async (runId: string) => withLoading(async () => {
-    const result = await callMcpTool<{ run: WorkflowExecutionRecord | null }>(config, "workflow.get_run", { runId });
+    const result = await client.call<{ run: WorkflowExecutionRecord | null }>("workflow.get_run", { runId });
     setCurrentRun(result.run);
     setSelectedRunId(result.run?.runId ?? runId);
     return result.run;
-  }), [config, withLoading]);
+  }), [client, withLoading]);
 
   const listRuns = useCallback(async (projectId?: string) => withLoading(async () => {
     const args = projectId?.trim() ? { projectId } : {};
-    const result = await callMcpTool<{ runs: WorkflowExecutionRecord[] }>(config, "workflow.list_runs", args);
+    const result = await client.call<{ runs: WorkflowExecutionRecord[] }>("workflow.list_runs", args);
     setRuns(result.runs);
     if (!currentRun && result.runs[0]) {
       setCurrentRun(result.runs[0]);
       setSelectedRunId(result.runs[0].runId);
     }
     return result.runs;
-  }), [config, currentRun, withLoading]);
+  }), [client, currentRun, withLoading]);
 
   const runNextNode = useCallback(async () => {
     if (!currentRun) return null;
     return withLoading(async () => {
-      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.run_next_node", { runId: currentRun.runId });
+      const result = await client.call<{ run: WorkflowExecutionRecord }>("workflow.run_next_node", { runId: currentRun.runId });
       setCurrentRun(result.run);
       setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
       return result.run;
     });
-  }, [config, currentRun, withLoading]);
+  }, [client, currentRun, withLoading]);
 
   const runUntil = useCallback(async (nodeId: string) => {
     if (!currentRun) return null;
     return withLoading(async () => {
-      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.run_until", { runId: currentRun.runId, nodeId });
+      const result = await client.call<{ run: WorkflowExecutionRecord }>("workflow.run_until", { runId: currentRun.runId, nodeId });
       setCurrentRun(result.run);
       setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
       return result.run;
     });
-  }, [config, currentRun, withLoading]);
+  }, [client, currentRun, withLoading]);
 
   const runAll = useCallback(async () => {
     if (!currentRun) return null;
     return withLoading(async () => {
-      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.run_all", { runId: currentRun.runId });
+      const result = await client.call<{ run: WorkflowExecutionRecord }>("workflow.run_all", { runId: currentRun.runId });
       setCurrentRun(result.run);
       setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
       return result.run;
     });
-  }, [config, currentRun, withLoading]);
+  }, [client, currentRun, withLoading]);
 
   const setRunState = useCallback(async (tool: "workflow.pause_run" | "workflow.resume_run" | "workflow.cancel_run") => {
     if (!currentRun) return null;
     return withLoading(async () => {
-      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, tool, { runId: currentRun.runId });
+      const result = await client.call<{ run: WorkflowExecutionRecord }>(tool, { runId: currentRun.runId });
       setCurrentRun(result.run);
       setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
       return result.run;
     });
-  }, [config, currentRun, withLoading]);
+  }, [client, currentRun, withLoading]);
 
   const retryNode = useCallback(async (nodeId?: string) => {
     if (!currentRun) return null;
     return withLoading(async () => {
-      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.retry_node", { runId: currentRun.runId, nodeId: nodeId ?? currentRun.currentNodeId });
+      const result = await client.call<{ run: WorkflowExecutionRecord }>("workflow.retry_node", { runId: currentRun.runId, nodeId: nodeId ?? currentRun.currentNodeId });
       setCurrentRun(result.run);
       setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
       return result.run;
     });
-  }, [config, currentRun, withLoading]);
+  }, [client, currentRun, withLoading]);
 
   const resetRun = useCallback(async () => {
     if (!currentRun) return null;
     return withLoading(async () => {
-      const result = await callMcpTool<{ run: WorkflowExecutionRecord }>(config, "workflow.reset_run", { runId: currentRun.runId });
+      const result = await client.call<{ run: WorkflowExecutionRecord }>("workflow.reset_run", { runId: currentRun.runId });
       setCurrentRun(result.run);
       setRuns((current) => current.map((run) => run.runId === result.run.runId ? result.run : run));
       return result.run;
     });
-  }, [config, currentRun, withLoading]);
+  }, [client, currentRun, withLoading]);
 
   const refreshRun = useCallback(async () => {
     if (!currentRun && !selectedRunId) return null;

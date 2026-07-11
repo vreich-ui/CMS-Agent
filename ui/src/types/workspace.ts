@@ -2,13 +2,6 @@ import type { RJSFSchema } from "@rjsf/utils";
 
 export type JsonValue = unknown;
 
-export type McpConfig = {
-  endpoint: string;
-  token?: string;
-  authToken?: string;
-  requiresToken?: boolean;
-};
-
 export type ExecutionStatus = "queued" | "running" | "completed" | "failed" | "blocked" | "cancelled";
 
 export type NodeExecutionState = {

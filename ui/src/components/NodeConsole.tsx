@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { callMcpTool } from "../mcp/client";
-import type { McpConfig, WorkspaceNode } from "../types/workspace";
+import type { McpClient } from "../mcp/client";
+import type { WorkspaceNode } from "../types/workspace";
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const parseJson = (value: string) => value.trim() ? JSON.parse(value) : {};
 
-type Props = { config: McpConfig; nodes: WorkspaceNode[]; selectedNodeId?: string | null; onSelectNode: (nodeId: string) => void; onError: (error: unknown) => void; onStatus: (message: string) => void };
+type Props = { client: McpClient; nodes: WorkspaceNode[]; selectedNodeId?: string | null; onSelectNode: (nodeId: string) => void; onError: (error: unknown) => void; onStatus: (message: string) => void };
 
-export function NodeConsole({ config, nodes, selectedNodeId, onSelectNode, onError, onStatus }: Props) {
+export function NodeConsole({ client, nodes, selectedNodeId, onSelectNode, onError, onStatus }: Props) {
   const [inputJson, setInputJson] = useState("{}");
   const [inspection, setInspection] = useState<unknown>(null);
   const [preparation, setPreparation] = useState<unknown>(null);
@@ -21,10 +21,10 @@ export function NodeConsole({ config, nodes, selectedNodeId, onSelectNode, onErr
     if (!selectedNodeId) return;
     try {
       const [node, prompt, skills, tools] = await Promise.all([
-        callMcpTool(config, "node.get", { nodeId: selectedNodeId }),
-        callMcpTool(config, "node.get_effective_prompt", { nodeId: selectedNodeId }),
-        callMcpTool(config, "node.get_effective_skills", { nodeId: selectedNodeId }),
-        callMcpTool(config, "node.get_effective_tools", { nodeId: selectedNodeId })
+        client.call("node.get", { nodeId: selectedNodeId }),
+        client.call("node.get_effective_prompt", { nodeId: selectedNodeId }),
+        client.call("node.get_effective_skills", { nodeId: selectedNodeId }),
+        client.call("node.get_effective_tools", { nodeId: selectedNodeId })
       ]);
       setInspection({ node, prompt, skills, tools });
       onStatus(`Inspected ${selectedNodeId}.`);
@@ -34,7 +34,7 @@ export function NodeConsole({ config, nodes, selectedNodeId, onSelectNode, onErr
   const prepare = async () => {
     if (!selectedNodeId) return;
     try {
-      const result = await callMcpTool(config, "node.prepare_execution", { nodeId: selectedNodeId, input: parseJson(inputJson) });
+      const result = await client.call("node.prepare_execution", { nodeId: selectedNodeId, input: parseJson(inputJson) });
       setPreparation(result);
       onStatus(`Prepared ${selectedNodeId}.`);
     } catch (error) { onError(error); }
@@ -43,7 +43,7 @@ export function NodeConsole({ config, nodes, selectedNodeId, onSelectNode, onErr
   const execute = async () => {
     if (!selectedNodeId) return;
     try {
-      const result = await callMcpTool(config, "node.execute", { nodeId: selectedNodeId, input: parseJson(inputJson), executionMode: "mock" });
+      const result = await client.call("node.execute", { nodeId: selectedNodeId, input: parseJson(inputJson), executionMode: "mock" });
       setExecution(result);
       await refreshOutputs();
       onStatus(`Executed ${selectedNodeId}.`);
@@ -53,7 +53,7 @@ export function NodeConsole({ config, nodes, selectedNodeId, onSelectNode, onErr
   const validate = async () => {
     if (!selectedNodeId) return;
     try {
-      const result = await callMcpTool(config, "node.validate_input", { nodeId: selectedNodeId, value: parseJson(inputJson) });
+      const result = await client.call("node.validate_input", { nodeId: selectedNodeId, value: parseJson(inputJson) });
       setValidation(result);
       onStatus(`Validated input for ${selectedNodeId}.`);
     } catch (error) { onError(error); }
@@ -63,8 +63,8 @@ export function NodeConsole({ config, nodes, selectedNodeId, onSelectNode, onErr
     if (!selectedNodeId) return;
     try {
       const [outputResult, historyResult] = await Promise.all([
-        callMcpTool<{ output: unknown }>(config, "node.get_latest_output", { nodeId: selectedNodeId }),
-        callMcpTool<{ executions: unknown[] }>(config, "node.list_executions", { nodeId: selectedNodeId })
+        client.call<{ output: unknown }>("node.get_latest_output", { nodeId: selectedNodeId }),
+        client.call<{ executions: unknown[] }>("node.list_executions", { nodeId: selectedNodeId })
       ]);
       setLatestOutput(outputResult.output);
       setHistory(historyResult.executions ?? []);

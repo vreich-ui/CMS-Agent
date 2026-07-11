@@ -18,6 +18,17 @@ const getAccessToken = async (user: IdentityUser | null) => {
   return user.token?.access_token;
 };
 
+// Per-request identity token for the secure-proxy connection. Reads the current user and calls
+// user.jwt() (which refreshes an expired JWT) at call time, so no credential value is captured
+// when the connection object is built and an expired session never pins stale credentials.
+export async function getFreshIdentityToken(): Promise<string | undefined> {
+  try {
+    return await getAccessToken(window.netlifyIdentity?.currentUser() ?? null);
+  } catch {
+    return undefined;
+  }
+}
+
 async function fetchSession(accessToken: string): Promise<SessionState> {
   const response = await fetch("/api/session", { headers: { Authorization: `Bearer ${accessToken}` } });
   const payload = await response.json().catch(() => ({}));
