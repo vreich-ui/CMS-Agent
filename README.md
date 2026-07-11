@@ -182,6 +182,14 @@ curl -sS http://localhost:8888/api/mcp \
 * Mutating external actions must be explicit and auditable.
 * The current publishing skill does not call external publishing endpoints; project MCP publishing will be added later with passthrough credentials.
 
+## Constellation redesign
+
+The UI is migrating toward a project-scoped product model (Overview,
+Constellation with Design/Operate/History modes, Runs, Changes, Settings).
+The audit and specifications live in [docs/constellation/](docs/constellation/):
+`product-model.md`, `information-architecture.md`, `data-model-gaps.md`,
+`migration-plan.md`, and `test-strategy.md`.
+
 ## Visual workspace UI
 
 A lightweight React/Vite UI lives in `ui/`. It is a local browser workspace for inspecting and editing MCP workspace state; it does not replace the Netlify functions and it is not the source of truth. The workspace MCP server at `POST /api/mcp` remains the source of truth.
