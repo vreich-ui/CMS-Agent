@@ -17,8 +17,9 @@ const emptyData: OverviewData = { nodes: null, runs: null, usageSummary: null, p
 // missing token) degrades that section instead of blanking the whole page. All data comes from
 // MCP on every refresh; nothing is cached as source of truth in the UI. The shared McpClient
 // resolves the connection at call time, so a token entered after mount is used by the very next
-// refresh without remounting.
-export function useOverview(client: McpClient) {
+// refresh without remounting. When projectId is set (header selector), runs and usage are scoped
+// to it; nodes/projects/storage stay workspace-wide.
+export function useOverview(client: McpClient, projectId?: string | null) {
   const [data, setData] = useState<OverviewData>(emptyData);
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -27,10 +28,11 @@ export function useOverview(client: McpClient) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
+      const scope = projectId ? { projectId } : {};
       const [nodes, runs, usageSummary, projects, repositoryHealth] = await Promise.allSettled([
         client.call<{ nodes: WorkspaceNode[] }>("workspace.get_nodes"),
-        client.call<{ runs: WorkflowExecutionRecord[] }>("workflow.list_runs"),
-        client.call<{ summary: ModelUsageSummary }>("usage.get_summary"),
+        client.call<{ runs: WorkflowExecutionRecord[] }>("workflow.list_runs", scope),
+        client.call<{ summary: ModelUsageSummary }>("usage.get_summary", scope),
         client.call<{ projects: ProjectSummary[] }>("project.list"),
         client.call<{ health: RepositoryHealthSummary }>("repository.get_health")
       ]);
@@ -52,7 +54,7 @@ export function useOverview(client: McpClient) {
     } finally {
       setLoading(false);
     }
-  }, [client]);
+  }, [client, projectId]);
 
   useEffect(() => {
     void refresh();

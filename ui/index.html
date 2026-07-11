@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CMS Agent Workspace</title>
+    <script>
+      // Pre-paint theme hint: resolve the stored preference before first paint so a dark reload
+      // never flashes light. React re-applies the full token table on mount (ui/src/theme.ts).
+      (function () {
+        try {
+          var stored = JSON.parse(localStorage.getItem("cms-agent.theme") || "null") || {};
+          var mode = stored.mode === "light" || stored.mode === "dark" ? stored.mode : "system";
+          var dark = mode === "dark" || (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.dataset.theme = dark ? "dark" : "light";
+          root.style.colorScheme = dark ? "dark" : "light";
+          if (dark) {
+            root.style.setProperty("--color-bg", "#0e1420");
+            root.style.setProperty("--color-text", "#e7ecf6");
+          }
+        } catch (error) { /* first paint falls back to light */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

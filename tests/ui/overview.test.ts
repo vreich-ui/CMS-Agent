@@ -97,7 +97,7 @@ describe("buildAttentionItems", () => {
     });
     const items = buildAttentionItems({ runs: [blocked], projects: [], repositoryHealth: healthyStorage });
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ id: "approval:run-blocked", severity: "action", targetTab: "builder" });
+    expect(items[0]).toMatchObject({ id: "approval:run-blocked", severity: "action", target: { page: "constellation", legacy: "builder" } });
     expect(items[0].detail).toContain("No publication has been performed.");
   });
 
