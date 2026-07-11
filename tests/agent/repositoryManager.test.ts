@@ -8,6 +8,7 @@ import { MemoryLearningRepository } from "../../src/agent/repository/memory/Memo
 import { MemoryUsageRepository } from "../../src/agent/repository/memory/MemoryUsageRepository.js";
 import { MemoryWorkspaceRepository } from "../../src/agent/repository/memory/MemoryWorkspaceRepository.js";
 import { MemorySkillRepository } from "../../src/agent/skills/skillRegistry.js";
+import { MemoryChangeRepository } from "../../src/agent/repository/memory/MemoryChangeRepository.js";
 
 describe("RepositoryManager", () => {
   it("defaults repository context to the memory backend", () => {
@@ -32,6 +33,7 @@ describe("RepositoryManager", () => {
     expect(manager.getLearningRepository()).toBeInstanceOf(MemoryLearningRepository);
     expect(manager.getUsageRepository()).toBeInstanceOf(MemoryUsageRepository);
     expect(manager.getSkillRepository()).toBeInstanceOf(MemorySkillRepository);
+    expect(manager.getChangeRepository()).toBeInstanceOf(MemoryChangeRepository);
   });
 
   it("keeps json configured backend mapped to memory repositories as a placeholder", () => {
@@ -55,7 +57,8 @@ describe("RepositoryManager", () => {
       artifact: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       learning: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       usage: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
-      skill: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
+      skill: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      change: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
     });
   });
 
@@ -68,7 +71,8 @@ describe("RepositoryManager", () => {
       manager.getArtifactRepository(),
       manager.getLearningRepository(),
       manager.getUsageRepository(),
-      manager.getSkillRepository()
+      manager.getSkillRepository(),
+      manager.getChangeRepository()
     ]) {
       await expect(repository.health()).resolves.toEqual({ backend: "memory", readable: true, writable: true, version: "memory.v1" });
     }

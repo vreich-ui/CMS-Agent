@@ -1,18 +1,18 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createWorkspaceTools, toolError } from "./tools.js";
+import { createWorkspaceTools, toolError, type WorkspaceToolContext } from "./tools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 
 export const MCP_SERVER_NAME = "publishing-workspace-mcp";
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 const SERVER_VERSION = "0.1.0";
 
-export function createWorkspaceMcpServer() {
+export function createWorkspaceMcpServer(context: WorkspaceToolContext = {}) {
   const server = new Server(
     { name: MCP_SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {}, prompts: {}, resources: {} } }
   );
-  const tools = createWorkspaceTools();
+  const tools = createWorkspaceTools(context);
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -29,10 +29,10 @@ export function createWorkspaceMcpServer() {
   return server;
 }
 
-export async function handleMcpJsonRpc(message: unknown) {
+export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolContext = {}) {
   const request = message as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
   const id = request.id ?? null;
-  const tools = createWorkspaceTools();
+  const tools = createWorkspaceTools(context);
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
 
   try {

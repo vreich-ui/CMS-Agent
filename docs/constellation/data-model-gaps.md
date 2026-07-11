@@ -111,7 +111,26 @@ requests. Regression suite: `tests/ui/credentialLifecycle.test.ts` and
 
 ## 2. Change/revision system gaps **[pre-shell for Changes/History]**
 
-The substrate exists but is unreadable and noisy:
+> **Status update (S1, implemented):** first-class change history now exists —
+> immutable `WorkspaceChangeEvent` + `WorkspaceRevision` records in a
+> dedicated `ChangeRepository` (memory/json/blobs, `RecordEnvelope`-wrapped),
+> recorded from the single `mutate()` funnel; paginated/filterable
+> `changes.list` + `changes.get` / `changes.compare` / `changes.restore`
+> tools; structured server-stamped actors (`human|agent|system` +
+> `mcp|ui|system` source, secure proxy stamps verified identity); typed
+> `revision_conflict` on stale `baseRevisionId`; snapshot spam fixed
+> (revisions only on structural change; the in-doc `versions[]` append is
+> retired, legacy data still readable). Typed relationships
+> (`data/memory/policy/evaluation/approval`) are stored in the document and
+> covered by history; `constellation.*` read tools expose structure, derived
+> per-agent/per-relationship metrics (estimated/actual never merged), a
+> system summary with caveats, and evidence-cited attention items. The
+> OpenAI-mode usage double-count is fixed. **Still open from this section:**
+> `workflow.list_runs` pagination/filtering (D3), `usage.record` metadata
+> sanitization at the tool boundary, meta on `skill.delete`, and the in-doc
+> `events[]` thin-append retirement.
+
+The original findings (pre-S1 state), kept for context:
 
 - Every mutation appends a full node snapshot to `document.versions[]` and an
   event (`beforeHash`/`afterHash`, optional `actor`/`summary`) to

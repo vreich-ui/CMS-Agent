@@ -50,4 +50,19 @@ describe("node.* MCP tools", () => {
     expect((await data("node.cancel", { runId: executed.execution.runId })).execution.status).toBe("cancelled");
     expect((await data("node.retry", { runId: executed.execution.runId })).execution.status).toBe("completed");
   });
+
+  it("records usage exactly once per independent execution (double-count regression)", async () => {
+    // mock mode: exactly one estimated record from the runtime.
+    const mock = await data("node.execute", { nodeId: "input_triage", input: {}, executionMode: "mock" });
+    const mockRecords = (await data("usage.list_records", { runId: mock.execution.runId })).records;
+    expect(mockRecords).toHaveLength(1);
+    expect(mockRecords[0].status).toBe("estimated");
+
+    // openai mode: the runner owns usage recording; a failed run (no API key) must record ZERO
+    // usage — previously the runtime fabricated an "actual" record even on failure.
+    delete process.env.OPENAI_API_KEY;
+    const openai = await data("node.execute", { nodeId: "input_triage", input: {}, executionMode: "openai" });
+    expect(openai.execution.status).toBe("failed");
+    expect((await data("usage.list_records", { runId: openai.execution.runId })).records).toHaveLength(0);
+  });
 });

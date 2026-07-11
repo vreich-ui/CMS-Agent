@@ -10,11 +10,18 @@ export const handler = async (event: FunctionEvent, context: NetlifyFunctionCont
   if (event.httpMethod !== "POST") return json(405, { error: { code: "method_not_allowed", message: "Use POST." } });
 
   try {
-    requireAdminSession(context);
+    const session = requireAdminSession(context);
     return await mcpHandler({
       httpMethod: event.httpMethod,
       body: event.body,
-      headers: { ...event.headers, authorization: `Bearer ${process.env.MCP_API_TOKEN ?? ""}` },
+      headers: {
+        ...event.headers,
+        authorization: `Bearer ${process.env.MCP_API_TOKEN ?? ""}`,
+        // Verified-identity attribution for change history: the proxy is the only entry path
+        // that has an authenticated human, so it stamps the actor/source headers server-side.
+        "x-workspace-actor": JSON.stringify({ kind: "human", id: session.email }),
+        "x-workspace-source": "ui"
+      },
       blobs: event.blobs
     });
   } catch (error) {

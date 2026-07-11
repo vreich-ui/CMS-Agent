@@ -82,6 +82,46 @@ For this PR, every repository returned by `RepositoryManager` uses the existing 
 
 Only the memory implementation is wired at runtime right now. Selecting `json` or `blobs` is accepted by the config type for forward compatibility, but repository construction still returns memory repositories in this PR to avoid persistence or behavior changes.
 
+## Workspace change history
+
+The change-history repository family is the first production adopter of
+`RecordEnvelope<T>`. Every workspace mutation that funnels through
+`WorkspaceStateStore.mutate()` produces an immutable
+`WorkspaceChangeEvent`; a full `WorkspaceRevision` snapshot (nodes +
+relationships) is minted only when structural state actually changed, and the
+document tracks `currentRevisionId`. Records persist as
+`changes/{eventId}.json` (`workspace_change_event` / `.v1`) and
+`revisions/{revisionId}.json` (`workspace_revision` / `.v1`) on the Blobs
+backend, and in per-manager memory for the memory/json backends. The store
+records history through the `WorkspaceChangeSink` interface and never imports
+a concrete repository.
+
+Guarantees and trade-offs:
+
+- **Append-only**: nothing updates or deletes an existing event or revision;
+  `changes.restore` re-applies a historical node state as a new forward
+  mutation (`operation: "restore"`).
+- **Write ordering**: the workspace document is saved first, then history
+  records. A crash between the two loses one history record but never
+  fabricates history for a mutation that did not persist.
+- **Conflicts**: callers may send `expectedWorkspaceVersion` (legacy counter)
+  and/or `baseRevisionId`; stale values throw
+  `workspace_version_conflict: …` / `revision_conflict: expected X, current Y`.
+- **Attribution is not authorization**: actors are structured
+  `{kind: human|agent|system, id?, label?}` with a source (`mcp|ui|system`).
+  The secure proxy stamps a verified human actor via `x-workspace-actor` /
+  `x-workspace-source` headers after Netlify Identity checks; direct
+  bearer-token callers default to an agent actor and could self-describe, so
+  change records must never be treated as an access-control log.
+- **Redaction**: before/after values and revision snapshots pass through the
+  shared recursive key-based redactor (`src/agent/observability/redaction.ts`)
+  so credential-shaped values never land in history records.
+- **Legacy compatibility**: documents persisted before change history existed
+  parse via schema defaults; the in-document `events[]` continues to append
+  (thin records), while the unbounded full-node `versions[]` snapshots are no
+  longer written — `getVersions()` merges legacy snapshots with new revision
+  records.
+
 ## Future JSON implementation
 
 A JSON backend can be useful for local development, deterministic fixture generation, and debugging. It should remain a local/dev adapter unless the deployment environment provides durable filesystem semantics. On Netlify serverless functions, local filesystem writes are not durable application storage, so JSON must not be presented as production persistence.

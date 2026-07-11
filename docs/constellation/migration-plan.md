@@ -62,6 +62,12 @@ session, tests updated, typecheck/tests/ui build green, stop at the boundary.
 - **S1 — History & attribution backend (D2) + runs pagination (D3) + honesty
   fixes (D4).** Pure backend; can run parallel to S0. Exit: new tools covered
   by handler-level tests; existing tools unchanged for current UI.
+  **Status: largely done.** Shipped: change history (revisions + events +
+  `changes.*` tools with pagination), structured actor stamping, typed
+  relationships + `constellation.*` read tools with derived metrics and
+  evidence-cited attention, usage double-count fix. Remaining for a later
+  slice: `workflow.list_runs` pagination/filtering, `usage.record` metadata
+  sanitization, real repository health probes.
 - **S2 — App shell.** Header with ProjectSelector + nav
   (Overview/Constellation/Runs/Changes/Settings), URL-addressable pages,
   legacy tabs reachable under Constellation/Settings as embedded legacy

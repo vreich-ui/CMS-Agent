@@ -20,7 +20,8 @@ const duration = (startedAt: string, endedAt = now()) => Math.max(0, Date.parse(
 export type NodeValidationResult = { valid: boolean; value?: unknown; issues: string[] };
 export type NodeExecutionFilters = { nodeId?: string; runId?: string; executionId?: string; artifactType?: string; from?: string; to?: string };
 
-export const redactSecrets = <T>(value: T): T => JSON.parse(JSON.stringify(value, (key, val) => /secret|token|api[_-]?key|authorization|password/i.test(key) ? "[REDACTED]" : val));
+export { redactSensitiveKeys as redactSecrets } from "../observability/redaction.js";
+import { redactSensitiveKeys as redactSecrets } from "../observability/redaction.js";
 
 export function validateAgainstNodeSchema(value: unknown, schema: unknown): NodeValidationResult {
   const result = validateOutput(value, schema);
@@ -103,7 +104,9 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
     else { state.status = "completed"; state.output = outputValidation.value; run.status = "completed"; run.completedAt = endedAt; run.stageOutputs[node.id] = outputValidation.value; const artifact: ExecutionArtifact & { runId: string; executionId: string } = { id: `artifact_${executionId}`, nodeId: node.id, type: node.produces[0] ?? node.id, value: outputValidation.value, createdAt: endedAt, runId, executionId }; run.artifacts.push(artifact); await repos.workspaceRepository.saveStageOutput(node.id, outputValidation.value, `${runId}:${executionId}:${node.id}`); }
   }
   run.updatedAt = endedAt; run.currentNodeId = undefined;
-  await recordModelUsage({ runId, workflowId: run.workflowId, projectId: run.projectId, nodeId: node.id, model: modelName(node, data.modelConfig), provider: "openai", inputTokens: tokenCount(state.input, 64), outputTokens: tokenCount(state.output, 32), status: data.executionMode === "openai" ? "actual" : "estimated", metadata: { executionId, independentNode: true } });
+  // In openai mode the runner records real usage itself (OpenAINodeRunner); recording here too
+  // double-counted every independent execution with fabricated token counts marked "actual".
+  if (data.executionMode !== "openai") await recordModelUsage({ runId, workflowId: run.workflowId, projectId: run.projectId, nodeId: node.id, model: modelName(node, data.modelConfig), provider: "openai", inputTokens: tokenCount(state.input, 64), outputTokens: tokenCount(state.output, 32), status: "estimated", metadata: { executionId, independentNode: true } });
   return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId });
 }
 
