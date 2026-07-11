@@ -193,6 +193,37 @@ of the versioned document); define a retention/compaction policy.
 - Reset leaves orphaned artifact blobs (`BlobExecutionRepository.ts:38-48`
   re-persists without deleting stale `artifacts/*` keys).
 
+## 4b. Product-entity gaps (from the expanded product brief)
+
+The product model names entities and encodings the backend cannot express
+yet. The UI treats each as progressive disclosure of *real* data only — no
+fake entities, no unexplained placeholders:
+
+- **Missions** and **Roles/teams**: no backend representation. Nearest
+  substrate: `node.kind` (free-form string) could seed role/grouping display;
+  missions have nothing. Grouping-by-kind is a UI projection until a real
+  model exists.
+- **Policies** as an entity: policy behavior exists (tool policy resolution,
+  skill policies, canonical-node guards) but there is no queryable policy
+  object; the modal ▸ Permissions section is read-mostly.
+- **Approvals** as an entity: only `approvalsRequired` entries on runs plus
+  the hardcoded `publication_controller` block; no approval records,
+  grant/deny path, or latency data.
+- **Evaluation**: review-stage nodes exist in the canonical graph, but no
+  evaluation results/relationship data is modeled; modal ▸ Evaluation is a
+  placeholder.
+- **Per-edge activity metrics**: Operate-mode connector-thickness encoding
+  needs interaction counts per relationship; nothing records per-edge
+  activity today (usage is per node/run/model/project). Requires backend
+  aggregation before the encoding ships.
+- **Memory**: surfaced memory is limited to global learning observations and
+  unenforced skill memory-policy declarations; no per-node/namespace memory
+  reads.
+- **Change "why" and risk**: events carry a free-form `summary` and nodes a
+  `riskLevel`, but changes have no structured reason or per-change risk
+  classification; the Changes ledger derives risk from the touched node's
+  riskLevel until the backend stamps it.
+
 ## 5. Project scoping gap
 
 The product model implies per-project constellations, but the workspace

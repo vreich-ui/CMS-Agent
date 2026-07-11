@@ -53,7 +53,9 @@ caller, replacing the duplicated config construction.
 
 ```
 <AppShell>
- ├─ Header: product mark · ProjectSelector · nav (Overview/Constellation/Runs/Changes/Settings)
+ ├─ Header: product mark · ProjectSelector (upper-left, GitHub-selector
+ │          spirit: quiet, searchable, context-preserving) · nav
+ │          (Overview/Constellation/Runs/Changes/Settings)
  │          · ConnectionStatus chip (opens Settings ▸ Connection)
  ├─ route: /overview            OverviewPage (exists)
  ├─ route: /constellation       ConstellationPage
@@ -96,18 +98,33 @@ truncation.
 
 ## Relationship taxonomy
 
-| Relationship | Storage today | Rendered as | Editable? |
+Relationships are first-class in the product model: different kinds of
+influence between agents, filterable on the canvas, with restrained visual
+encoding (connector thickness may represent interaction frequency, explained
+on hover/selection — never unexplained, never all kinds shown at once when
+that creates noise).
+
+The influence taxonomy and its current backing:
+
+| Influence kind | Backed today by | Rendered as | Editable? |
 |---|---|---|---|
-| `depends_on` (execution order) | `node.dependsOn: string[]`; edges derived on read by `workspace.get_graph` | solid directed edge | Yes — Design mode, via `workspace.update_graph {dependencies}`; server validates cycles/dangling refs |
-| `produces` / `consumes` (artifact contract) | `node.produces[]`, `node.requiredInputs[]` (names like `article_body.v1`) | dashed edge or port badges, derived; toggleable layer | Not as edges; edited in modal ▸ Relationships. Note: consistency with `depends_on` is **not enforced** by the server (gap) |
-| `skill_assignment` | `node.assignedSkills[]` (ids into the skill registry) | not a canvas edge; count on card + modal ▸ Skills; optional "highlight nodes using skill X" filter | Yes — `skill.assign` / `skill.unassign` |
-| `tool_allowance` | `node.allowedTools[]` + resolver (`skill.resolve_for_node` → effective/denied/conflicts) | modal ▸ Tools; conflicts surface as node attention | Yes — `workspace.update_node_tools` |
-| `project_handoff` (workspace → external project MCP) | project registry (`project.*`), publishing policy disabled | boundary badge on `publish_payload` / `publication_controller`; links to Settings ▸ Projects | No (env-var driven; read-only in UI) |
+| **execution** | `node.dependsOn: string[]`; edges derived on read by `workspace.get_graph` | solid directed edge (default layer) | Yes — Design mode, via `workspace.update_graph {dependencies}`; server validates cycles/dangling refs |
+| **data** | `node.produces[]` / `node.requiredInputs[]` artifact contracts (e.g. `article_body.v1`) | dashed edge or port badges, derived; toggleable layer | Not as edges; edited in modal ▸ Inputs & outputs. Consistency with execution edges is **not enforced** by the server (gap) |
+| **memory** | skill memory policies (`namespaces`, unenforced) + global learning observations | not renderable per-edge yet; modal ▸ Memory only | No (gap: no per-node memory scoping) |
+| **policy** | skill/tool policy resolution (`skill.resolve_for_node` → effective/denied/conflicts), `node.allowedTools[]`, skill assignment | modal ▸ Tools & MCP + ▸ Instructions; conflicts surface as node attention; optional "uses skill X" highlight filter | Yes — `skill.assign`/`unassign`, `workspace.update_node_tools` |
+| **evaluation** | review-stage nodes exist in the canonical graph, but evaluation is not modeled as a relationship | as execution edges only | No (gap: no evaluation relationship/data) |
+| **approval** | `approvalsRequired` on runs + hardcoded `publication_controller` gate | attention item + boundary badge on publish-risk nodes | No (approval granting is out of scope until the backend PUBLISH gate) |
+| **human intervention** | change events (`actor`, once server-stamped) + run controls | History/Changes surfaces, not a persistent canvas edge | n/a |
+
+Additionally, **project_handoff** (workspace → external project MCP, via the
+project registry) renders as a boundary badge on `publish_payload` /
+`publication_controller`, linking to Settings ▸ Projects; read-only.
 
 There is **no edge entity** in the data model — all edges are projections of
-node fields. The taxonomy above is therefore a rendering contract, not a
-schema change; gaps that would justify a real edge model are listed in
-`data-model-gaps.md`.
+node fields or runtime data. The taxonomy above is a rendering and filtering
+contract, not a schema change; kinds marked as gaps (memory, evaluation,
+per-edge activity metrics for thickness encoding) are tracked in
+`data-model-gaps.md` § Product-entity gaps and must not be faked in the UI.
 
 ## Agent configuration modal (accordion sections)
 
@@ -116,27 +133,42 @@ Every save is a section-scoped MCP mutation carrying
 `expectedWorkspaceVersion`, `actor`, and a human-readable `summary`;
 `workspace_version_conflict` produces an inline "reload and reapply" flow.
 
-1. **Identity & status** — id (read-only), name, kind, description, status,
-   riskLevel. → `workspace.update_node`.
-2. **Prompt** — draft editor + effective prompt preview
-   (`node.get_effective_prompt`, includes skill-composed instructions).
-   → `workspace.update_node_prompt`.
-3. **Skills** — assigned skills, registry browser, resolve policy
-   (`skill.resolve_for_node`) with conflict list. → `skill.assign`/`unassign`.
-4. **Tools** — allowed tools, effective vs denied from the resolver, risk
-   notes. → `workspace.update_node_tools`.
-5. **Schemas** — input/output JSON Schema editors with structured validation
-   feedback and RJSF preview (replaces raw textareas).
-   → `workspace.update_node_input_schema` / `_output_schema`.
-6. **Relationships** — dependsOn editor with live `workspace.validate_graph`
-   preview; produces/requiredInputs editors. → `workspace.update_graph` /
-   `update_node`.
-7. **Model & execution** — modelConfig, executionConfig, budget hints.
+The most common information appears first; advanced settings stay available
+but visually quiet. Sections whose backing data does not exist yet render as
+honest, compact placeholders (or stay hidden), never as fake controls.
+
+1. **Identity** — id (read-only), name, kind, description, role/group,
+   status, riskLevel. → `workspace.update_node`.
+2. **Instructions** — prompt draft editor + effective prompt preview
+   (`node.get_effective_prompt`, includes skill-composed instructions);
+   assigned skills with registry browser and resolved policy/conflicts.
+   → `workspace.update_node_prompt`, `skill.assign`/`unassign`.
+3. **Model & execution** — modelConfig, executionConfig.
    → `workspace.update_node_model_config`.
-8. **History** — per-node change list and restore (requires the new history
-   tools; hidden until they exist).
-9. **Danger zone** — clone, deprecate, delete (canonical-node guard surfaced
-   explicitly). → `workspace.clone_node` / `update_node` / `delete_node`.
+4. **Inputs & outputs** — input/output JSON Schema editors with structured
+   validation feedback and RJSF preview (replaces raw textareas);
+   produces/requiredInputs contracts; dependsOn editor with live
+   `workspace.validate_graph` preview. → `workspace.update_node_input_schema`
+   / `_output_schema`, `workspace.update_graph` / `update_node`.
+5. **Tools & MCP** — allowed tools, effective vs denied from the resolver,
+   risk notes, project MCP boundary info. → `workspace.update_node_tools`.
+6. **Memory** — skill memory policies and relevant learning observations;
+   read-only until per-node memory scoping exists (gap).
+7. **Permissions** — riskLevel implications, canonical-node protections,
+   approval requirements; read-mostly today (no independent permission
+   entity — gap).
+8. **Budgets & limits** — per-node/run budget hints against
+   `usage.get_budget_status`; enforcement is backend-side.
+9. **Evaluation** — placeholder until evaluation data exists (gap); links to
+   review-stage outputs meanwhile.
+10. **Activity** — recent executions, durations, usage, warnings for this
+    node (`node.list_executions`, usage by node).
+11. **Change history** — per-node change list, diffs, and restore (requires
+    the S1 history tools; hidden until they exist).
+
+Plus a **danger zone** footer — clone, deprecate, delete (canonical-node
+guard surfaced explicitly). → `workspace.clone_node` / `update_node` /
+`delete_node`.
 
 ## Theme-token architecture
 
@@ -161,7 +193,27 @@ z-index** — layering comes from DOM order, React Flow's internal layers, and
 the native `<dialog>` top layer; **no absolute-positioned overlay panels** —
 rails and canvases are grid areas. Legacy raw-color rules in `styles.css`
 migrate to tokens page-by-page during the shell migration, then the file is
-split per page.
+split per page. Color never carries status alone — every color signal is
+paired with a text label or icon shape.
+
+Theme-system requirements (built on the token layers; primitives are the only
+place values change):
+
+- **Light, dark, and system modes** — dark redefines primitives under
+  `:root[data-theme="dark"]`; "system" follows `prefers-color-scheme` and the
+  explicit choice wins over it.
+- **Editable accent color** — the accent family derives from one configurable
+  value; a small set of **curated presets** ships rather than a free-form
+  theme builder.
+- **Semantic health colors** — the status families are themable as a set so
+  presets can adjust them coherently.
+- **Contrast validation** — every token pair used for text-on-surface is
+  checked against WCAG 2.1 AA at definition time (a unit-testable check over
+  the token table, not per-component review); presets and accent edits must
+  pass it.
+- **Preferences** — theme choice is a UI preference (localStorage now,
+  per-project/user preference surface later); it is not workspace state and
+  never round-trips through MCP.
 
 Known overlap causes to eliminate (audit findings): the current graph
 synthesizes node positions on a fixed 280×180 grid while card height is
