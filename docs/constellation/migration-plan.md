@@ -62,6 +62,12 @@ session, tests updated, typecheck/tests/ui build green, stop at the boundary.
 - **S1 — History & attribution backend (D2) + runs pagination (D3) + honesty
   fixes (D4).** Pure backend; can run parallel to S0. Exit: new tools covered
   by handler-level tests; existing tools unchanged for current UI.
+  **Status: largely done.** Shipped: change history (revisions + events +
+  `changes.*` tools with pagination), structured actor stamping, typed
+  relationships + `constellation.*` read tools with derived metrics and
+  evidence-cited attention, usage double-count fix. Remaining for a later
+  slice: `workflow.list_runs` pagination/filtering, `usage.record` metadata
+  sanitization, real repository health probes.
 - **S2 — App shell.** Header with ProjectSelector + nav
   (Overview/Constellation/Runs/Changes/Settings), URL-addressable pages,
   legacy tabs reachable under Constellation/Settings as embedded legacy
@@ -84,6 +90,31 @@ session, tests updated, typecheck/tests/ui build green, stop at the boundary.
   Projects · Exchange; Support tab retires; delete `ui/src/mcpClient.ts`
   shim; finish token migration of legacy CSS; split styles per page.
   Depends on S2; final cleanup depends on S4–S6 having retired their tabs.
+
+## Where the expanded product brief lands (no resequencing)
+
+The expanded brief (supervisory-environment framing, influence taxonomy,
+Operate encodings, 11 modal sections, theme system, evidence-based attention)
+folds into the existing sessions rather than adding new ones:
+
+- **S2** absorbs the GitHub-selector-spirit project switcher (upper-left,
+  quiet, searchable, context-preserving) and the theme system foundation
+  (light/dark/system modes, editable accent + curated presets, contrast
+  validation over the token table, preference storage).
+- **S3** absorbs stable-positions-for-spatial-memory as a hard constraint
+  (Design owns layout; other modes never reflow) and relationship-kind
+  filtering for the kinds that have data (execution, data, policy).
+- **S4** ships the 11-section modal (Identity, Instructions, Model &
+  execution, Inputs & outputs, Tools & MCP, Memory, Permissions, Budgets &
+  limits, Evaluation, Activity, Change history) with honest placeholders for
+  gap-backed sections (Memory, Permissions detail, Evaluation).
+- **S5** ships Operate encodings only where data exists (node size from
+  per-node usage, color+label health, run overlays); connector-thickness
+  waits for per-edge activity aggregation (backend, tracked in
+  `data-model-gaps.md` §4b) and joins later without resequencing.
+- **S6** ships evidence-linked attention and changes: every attention item
+  cites its evidence and deep-links to runs/changes/usage; the Changes ledger
+  distinguishes human vs agent actors (requires S1 actor stamping).
 
 ## Dependency graph of sessions
 

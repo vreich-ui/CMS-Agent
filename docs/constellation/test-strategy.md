@@ -130,11 +130,11 @@ needed).
 |---|---|
 | S0 | Credential suite 1–5 above — **shipped** |
 | S1 | History/pagination handler tests; meta-required enforcement; sanitizer on `usage.record` metadata |
-| S2 | ui-scoped vitest project bootstrapped; shell nav + project-selector hook tests; a11y smoke (landmarks, nav semantics) |
-| S3 | Graph model tests (summary projection, edge derivation); validation failure matrix; position-update guard tests |
-| S4 | Modal section save/conflict tests; schema editor validation tests |
-| S5 | Runs ledger model tests; pagination contract tests; pause vs approval-block rendering test |
-| S6 | History/Changes suite above |
+| S2 | ui-scoped vitest project bootstrapped; shell nav + project-selector hook tests (search filtering, context preservation); a11y smoke (landmarks, nav semantics); **theme-system tests: contrast validation over every text/surface token pair (light + dark + presets), mode-switch persistence** |
+| S3 | Graph model tests (summary projection, edge derivation, **relationship-kind filtering**); validation failure matrix; position-update guard tests; **position stability across mode switches** |
+| S4 | Modal section save/conflict tests; schema editor validation tests; **gap-backed sections render honest placeholders, never fake controls** |
+| S5 | Runs ledger model tests; pagination contract tests; pause vs approval-block rendering test; **encoding-scale model tests (metric→size mapping bounded and labeled; no color-only signals)** |
+| S6 | History/Changes suite above; **attention items render their evidence and deep-link to it; human vs agent actor filters** |
 | S7 | Token-only CSS lint (no raw color literals in new files); dead-shim removal doesn't break imports |
 
 Every session also keeps the standing gates: `npm run typecheck`, `npm test`,

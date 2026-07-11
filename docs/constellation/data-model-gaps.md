@@ -111,7 +111,26 @@ requests. Regression suite: `tests/ui/credentialLifecycle.test.ts` and
 
 ## 2. Change/revision system gaps **[pre-shell for Changes/History]**
 
-The substrate exists but is unreadable and noisy:
+> **Status update (S1, implemented):** first-class change history now exists —
+> immutable `WorkspaceChangeEvent` + `WorkspaceRevision` records in a
+> dedicated `ChangeRepository` (memory/json/blobs, `RecordEnvelope`-wrapped),
+> recorded from the single `mutate()` funnel; paginated/filterable
+> `changes.list` + `changes.get` / `changes.compare` / `changes.restore`
+> tools; structured server-stamped actors (`human|agent|system` +
+> `mcp|ui|system` source, secure proxy stamps verified identity); typed
+> `revision_conflict` on stale `baseRevisionId`; snapshot spam fixed
+> (revisions only on structural change; the in-doc `versions[]` append is
+> retired, legacy data still readable). Typed relationships
+> (`data/memory/policy/evaluation/approval`) are stored in the document and
+> covered by history; `constellation.*` read tools expose structure, derived
+> per-agent/per-relationship metrics (estimated/actual never merged), a
+> system summary with caveats, and evidence-cited attention items. The
+> OpenAI-mode usage double-count is fixed. **Still open from this section:**
+> `workflow.list_runs` pagination/filtering (D3), `usage.record` metadata
+> sanitization at the tool boundary, meta on `skill.delete`, and the in-doc
+> `events[]` thin-append retirement.
+
+The original findings (pre-S1 state), kept for context:
 
 - Every mutation appends a full node snapshot to `document.versions[]` and an
   event (`beforeHash`/`afterHash`, optional `actor`/`summary`) to
@@ -192,6 +211,37 @@ of the versioned document); define a retention/compaction policy.
   `executeNode` (`nodeRuntime.ts:106`). Fix before analytics trends.
 - Reset leaves orphaned artifact blobs (`BlobExecutionRepository.ts:38-48`
   re-persists without deleting stale `artifacts/*` keys).
+
+## 4b. Product-entity gaps (from the expanded product brief)
+
+The product model names entities and encodings the backend cannot express
+yet. The UI treats each as progressive disclosure of *real* data only — no
+fake entities, no unexplained placeholders:
+
+- **Missions** and **Roles/teams**: no backend representation. Nearest
+  substrate: `node.kind` (free-form string) could seed role/grouping display;
+  missions have nothing. Grouping-by-kind is a UI projection until a real
+  model exists.
+- **Policies** as an entity: policy behavior exists (tool policy resolution,
+  skill policies, canonical-node guards) but there is no queryable policy
+  object; the modal ▸ Permissions section is read-mostly.
+- **Approvals** as an entity: only `approvalsRequired` entries on runs plus
+  the hardcoded `publication_controller` block; no approval records,
+  grant/deny path, or latency data.
+- **Evaluation**: review-stage nodes exist in the canonical graph, but no
+  evaluation results/relationship data is modeled; modal ▸ Evaluation is a
+  placeholder.
+- **Per-edge activity metrics**: Operate-mode connector-thickness encoding
+  needs interaction counts per relationship; nothing records per-edge
+  activity today (usage is per node/run/model/project). Requires backend
+  aggregation before the encoding ships.
+- **Memory**: surfaced memory is limited to global learning observations and
+  unenforced skill memory-policy declarations; no per-node/namespace memory
+  reads.
+- **Change "why" and risk**: events carry a free-form `summary` and nodes a
+  `riskLevel`, but changes have no structured reason or per-change risk
+  classification; the Changes ledger derives risk from the touched node's
+  riskLevel until the backend stamps it.
 
 ## 5. Project scoping gap
 
