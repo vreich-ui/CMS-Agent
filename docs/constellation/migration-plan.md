@@ -1,5 +1,9 @@
 # Constellation redesign — migration plan
 
+> **Anchor:** `PRODUCT_VISION.md` (repo root) supersedes this plan wherever
+> they disagree. This plan sequences the work; the vision decides what the
+> work is for.
+
 Sequenced plan from the current Overview/Builder/Nodes/Support UI to the
 target product model (`product-model.md`). Each session is a shippable slice
 that keeps the app working; legacy tabs coexist until their replacement is
@@ -98,20 +102,69 @@ session, tests updated, typecheck/tests/ui build green, stop at the boundary.
   now stamp `source: "ui"`; position moves mint revisions (honest history,
   no cosmetic carve-out); `getErrorMessage` unwraps the nested tool-error
   message so server refusals/conflicts surface verbatim.
-- **S4 — Node modal.** Accordion sections 1–7 + 9 (`information-architecture.md`),
-  replacing Inspector/SkillsPanel/NodeConsole flows; legacy Nodes tab
-  retires. Depends on S3 (canvas selection), parallel-safe with S5.
-- **S5 — Operate mode + Runs page.** Run ledger (paginated), run detail
+- **S4 — Focused agent configuration.** The large, conceptually-grouped
+  editing surface (`PRODUCT_VISION.md` ▸ Editing philosophy: one focused
+  configuration experience, not many small dialogs) covering sections 1–7 +
+  9 of `information-architecture.md`, replacing Inspector/SkillsPanel/
+  NodeConsole flows; legacy Nodes tab retires. Editing encourages
+  understanding before modification; unsaved work is respected; conflicts
+  stay understandable. Depends on S3 (canvas selection), parallel-safe
+  with S5/S6.
+- **S5 — Operate mode + Runs page.** Health/cost/interaction on the same
+  spatial layout (never reflowed). Run ledger (paginated), run detail
   (nodes, artifacts, usage), live overlay + controls on the canvas; legacy
   Builder tab retires. Depends on S2 + D3; canvas overlay parts depend on S3.
-- **S6 — Changes page + History mode.** Event ledger with filters and diffs;
-  timeline scrubbing on the canvas; per-node restore
-  (`workspace.restore_node_version`); modal ▸ History section appears.
-  Depends on S1 + S3 (canvas) — ledger-only parts depend only on S1 + S2.
-- **S7 — Settings consolidation & legacy retirement.** Connection · Storage ·
-  Projects · Exchange; Support tab retires; delete `ui/src/mcpClient.ts`
-  shim; finish token migration of legacy CSS; split styles per page.
+- **S6 — History as a first-class surface: Changes page + History mode.**
+  Attributed event ledger with filters and field-level diffs answering
+  who/why/when/what/what-happened-afterwards; human vs agent vs system
+  actors always visible; restore-as-new-event; timeline scrubbing on the
+  canvas; configuration surface ▸ History section appears. Depends on S1 +
+  S3 (canvas) — ledger-only parts depend only on S1 + S2.
+- **S7 — Settings consolidation, legacy retirement & calm pass.**
+  Connection · Storage · Projects · Exchange; Support tab retires; delete
+  `ui/src/mcpClient.ts` shim; finish token migration of legacy CSS; split
+  styles per page. Includes the visual-language calm pass (see vision
+  deltas below): reduce card/border weight, let healthy state recede.
   Depends on S2; final cleanup depends on S4–S6 having retired their tabs.
+
+## Vision alignment deltas (from PRODUCT_VISION.md, 2026-07)
+
+Current-state gaps against the vision, folded into sessions rather than
+resequenced. None require backend changes now; entity growth happens via
+adapters, never breaking migrations.
+
+- **Attention hierarchy (4 layers).** Overview should visibly separate
+  Layer 1 (act now) from Layer 2 (be aware) and push Layers 3/4 behind
+  progressive disclosure. Today it approximates this with severity-sorted
+  attention items + stat cards; restructure lands with S6's ledger data
+  (change-awareness is most of Layer 2). Every new page states which layers
+  it serves.
+- **Calm visual language.** The current UI is panel/card-heavy (borders +
+  shadows on everything). Incremental de-chroming lands with S7's visual
+  pass; new surfaces built before then should already prefer whitespace and
+  typographic hierarchy over boxes, and color only for meaning.
+- **Node representation.** Vision: name, ID, short description, role —
+  everything else elsewhere. Current S3 card shows name, kind·status, risk
+  badge, and counts (Layer 3 info). Adjust the card toward
+  description/role when S4 or S5 next touches the canvas; keep risk visible
+  (it is attention-bearing, not decorative).
+- **Selection reveals, never navigates.** The S3 rail follows this; S4's
+  configuration surface must too (focused editing in place, no page churn),
+  and Runs/Changes should prefer in-place detail rails over detail pages
+  where feasible.
+- **Graph is one view, not the product.** Navigation already gives
+  Overview/Runs/Changes equal standing. Guard: organizational entities
+  (Missions, Agent Teams, Knowledge) arrive as data-model adapters first
+  (backend, post-S7 horizon), surfaced in Overview/analytics before any new
+  canvas work; avoid canvas-first features that assume the graph is home.
+- **Relationship strength = interaction frequency.** Requires per-edge
+  activity aggregation (tracked in `data-model-gaps.md` §4b). Joins Operate
+  mode when the aggregation exists; never faked from static structure.
+- **Organizational understanding horizon.** "Who influences whom / where
+  does knowledge accumulate / what changed quality" analytics build on S1
+  history + S5 run data + future memory/evaluation records; each insight
+  must cite observable evidence (existing constellation attention pattern
+  is the template).
 
 ## Where the expanded product brief lands (no resequencing)
 
@@ -126,10 +179,11 @@ folds into the existing sessions rather than adding new ones:
 - **S3** absorbs stable-positions-for-spatial-memory as a hard constraint
   (Design owns layout; other modes never reflow) and relationship-kind
   filtering for the kinds that have data (execution, data, policy).
-- **S4** ships the 11-section modal (Identity, Instructions, Model &
-  execution, Inputs & outputs, Tools & MCP, Memory, Permissions, Budgets &
-  limits, Evaluation, Activity, Change history) with honest placeholders for
-  gap-backed sections (Memory, Permissions detail, Evaluation).
+- **S4** ships the 11-section focused configuration surface (Identity,
+  Instructions, Model & execution, Inputs & outputs, Tools & MCP, Memory,
+  Permissions, Budgets & limits, Evaluation, Activity, Change history) with
+  honest placeholders for gap-backed sections (Memory, Permissions detail,
+  Evaluation).
 - **S5** ships Operate encodings only where data exists (node size from
   per-node usage, color+label health, run overlays); connector-thickness
   waits for per-edge activity aggregation (backend, tracked in

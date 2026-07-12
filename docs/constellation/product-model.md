@@ -1,7 +1,17 @@
 # Constellation redesign — product model
 
-Status: audit/specification only. Nothing in this document is implemented yet
-except the Overview tab. See `migration-plan.md` for sequencing.
+> **Anchor:** `PRODUCT_VISION.md` (repo root) is the product's north star and
+> supersedes this spec wherever they disagree. Notable vision emphases this
+> spec predates: the full mental-model hierarchy (Projects → Missions →
+> Workflows → Agent Teams → Agents → Runs → Knowledge → History — the graph
+> is one view, not the product), the explicit four-layer attention
+> hierarchy, "selection reveals, almost never navigates," the calm visual
+> language (avoid heavy cards/borders/decorative color), and the
+> organizational-understanding horizon (influence, collaboration, knowledge
+> accumulation). See `migration-plan.md` ▸ "Vision alignment deltas."
+
+Status: specification; S0–S3 of `migration-plan.md` are implemented. See
+`migration-plan.md` for sequencing.
 
 ## Purpose
 
