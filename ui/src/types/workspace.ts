@@ -86,6 +86,31 @@ export type WorkspaceExport = {
 export type WorkspaceDocument = WorkspaceExport;
 export type ArticleBodySchema = RJSFSchema;
 
+// UI mirrors of the S1 relationship model (src/agent/workspace/relationshipTypes.ts). Execution
+// edges are never stored — they are derived from node.dependsOn server-side.
+export type RelationshipKind = "execution" | "data" | "memory" | "policy" | "evaluation" | "approval";
+
+export type WorkspaceRelationship = {
+  id: string;
+  kind: RelationshipKind;
+  sourceId: string;
+  targetId: string;
+  direction: "forward" | "bidirectional";
+  label?: string;
+  enabled: boolean;
+  metadata?: Record<string, unknown>;
+  schemaRefs?: string[];
+  artifactRefs?: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConstellationStructure = {
+  agents: Array<Pick<WorkspaceNode, "id" | "name" | "kind" | "status" | "riskLevel" | "dependsOn" | "position">>;
+  relationships: WorkspaceRelationship[];
+  derivedExecutionEdges: Array<{ kind: "execution"; sourceId: string; targetId: string; derivedFrom: "dependsOn" }>;
+};
+
 export type ToolEnvelope<T> = {
   ok: boolean;
   data?: T;

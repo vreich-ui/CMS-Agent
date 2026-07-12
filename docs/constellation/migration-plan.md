@@ -83,7 +83,21 @@ session, tests updated, typecheck/tests/ui build green, stop at the boundary.
   flow nodes, budget states, RJSF/React Flow internals.
 - **S3 — Constellation Design mode.** Truthful canvas (minimal node summary,
   dependsOn edges, MCP positions), selection rail, position/dependency
-  editing with version guards. Depends on S2.
+  editing with version guards. Depends on S2. **Done.** Shipped: Design
+  canvas as the `/constellation` default (legacy panels stay under
+  `?legacy=`), custom minimal node cards (no prompt text), edges derived
+  from `dependsOn` + read-only stored data/policy layers, drag- and
+  keyboard-move persistence via `workspace.update_graph {positions}`,
+  dependency add/remove with local cycle pre-check (server authoritative),
+  typed-confirmation delete via `update_graph {delete}` (atomic; canonical
+  refusals surfaced verbatim), conflict banner with explicit
+  reload-and-reapply, screen-reader list view, token-themed React Flow
+  (`--xy-*-default` overrides). Decisions: canvas never sends
+  `orderedNodeIds` (reorder rewrites `y`); `baseRevisionId` omitted from UI
+  mutations (`expectedWorkspaceVersion` is strictly tighter); UI mutations
+  now stamp `source: "ui"`; position moves mint revisions (honest history,
+  no cosmetic carve-out); `getErrorMessage` unwraps the nested tool-error
+  message so server refusals/conflicts surface verbatim.
 - **S4 — Node modal.** Accordion sections 1–7 + 9 (`information-architecture.md`),
   replacing Inspector/SkillsPanel/NodeConsole flows; legacy Nodes tab
   retires. Depends on S3 (canvas selection), parallel-safe with S5.

@@ -185,7 +185,24 @@ of the versioned document); define a retention/compaction policy.
 - Position doubles as canonical ordering (`sortWorkspaceNodes` by y-then-x,
   `nodes.ts:1730`; reorder rewrites y as `index*100`, `store.ts:251`) —
   free-form dragging in Design mode will interact with ordering; the plan is
-  to treat ordering as derived and let validation own correctness.
+  to treat ordering as derived and let validation own correctness. **S3
+  status:** the Design canvas never sends `orderedNodeIds`, so drags only
+  reposition; ordering remains a derived view. The legacy Builder's Move
+  up/down keeps its rewrite behavior until S5 retires it.
+- **`deleteNode` partial-mutation hazard** (found in S3, worked around, not
+  yet fixed): `store.deleteNode`'s mutator filters `document.nodes` in
+  place, and `mutate()` runs its unconditional `assertGraphValid
+  (document.nodes)` only *after* the mutator — so a refused delete (e.g. a
+  canonical node) throws after the in-memory document was already mutated,
+  without a version bump. `updateGraph` instead edits a copy and validates
+  before assignment, failing atomically. The S3 UI therefore deletes via
+  `workspace.update_graph {delete: [id]}`. Backend fix candidate: make
+  `deleteNode` (and any in-place mutator) work on a copy, or have
+  `mutate()` snapshot/restore on validation failure. Related: canonical
+  removal is effectively impossible even with
+  `allowCanonicalNodeRemoval + adminApproved` because the post-mutator
+  re-check runs with defaults — the UI refuses honestly and surfaces the
+  server message verbatim.
 
 ## 4. Run and execution gaps
 

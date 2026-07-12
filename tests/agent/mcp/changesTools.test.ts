@@ -50,6 +50,25 @@ describe("changes.* MCP tools", () => {
     expect(event.source).toBe("ui");
   });
 
+  it("records canvas position moves as attributed graph events with a position diff", async () => {
+    // The S3 Design canvas persists drags via update_graph {positions}; layout changes are real
+    // workspace history, not cosmetic state.
+    await data("workspace.update_node_prompt", { id: "input_triage", prompt: "Position baseline." });
+    const before = (await data("changes.list", { limit: 1 })).events[0];
+    const result = await data("workspace.update_graph", { positions: { input_triage: { x: 640, y: 320 } }, source: "ui", summary: "Moved Publishing Input Triage on the canvas" });
+    expect(result.nodes.find((node: { id: string }) => node.id === "input_triage").position).toEqual({ x: 640, y: 320 });
+
+    const event = (await data("changes.list", { limit: 1 })).events[0];
+    expect(event.type).toBe("graph.updated");
+    expect(event.source).toBe("ui");
+    expect(event.reason).toBe("Moved Publishing Input Triage on the canvas");
+    expect(event.resultingRevisionId).toBeTruthy();
+
+    const { diff } = await data("changes.compare", { fromRevisionId: before.resultingRevisionId, toRevisionId: event.resultingRevisionId });
+    const changed = diff.nodes.changed.find((entry: { nodeId: string }) => entry.nodeId === "input_triage");
+    expect(changed.changedFields).toContain("position");
+  });
+
   it("compares two revisions with field-level changes", async () => {
     await data("workspace.update_node_prompt", { id: "input_triage", prompt: "Compare A." });
     const eventA = (await data("changes.list", { limit: 1 })).events[0];

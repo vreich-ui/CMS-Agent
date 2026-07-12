@@ -3,8 +3,21 @@ import { McpClientError } from "../mcp/client";
 import type { McpClient } from "../mcp/client";
 import type { ConnectionStatus, InitializeResult } from "../types/workspace";
 
+// Store-thrown errors travel as a generic JSON-RPC "Tool execution failed" wrapper with the real
+// message nested in error.data ({ok:false, error:{message}}). Surface the specific message —
+// conflict handling and refusal banners depend on the verbatim server text. Details were already
+// redacted at McpClientError construction, so this never widens what can leak.
+const nestedToolMessage = (details: unknown): string | null => {
+  if (!details || typeof details !== "object") return null;
+  const envelope = details as { error?: { message?: unknown }; message?: unknown };
+  if (envelope.error && typeof envelope.error.message === "string") return envelope.error.message;
+  if (typeof envelope.message === "string") return envelope.message;
+  return null;
+};
+
 export function getErrorMessage(error: unknown) {
-  return error instanceof McpClientError ? error.message : error instanceof Error ? error.message : "Unknown error";
+  if (error instanceof McpClientError) return nestedToolMessage(error.details) ?? error.message;
+  return error instanceof Error ? error.message : "Unknown error";
 }
 
 // Consumes the shared McpClient instead of building its own config, so "Test connection" always

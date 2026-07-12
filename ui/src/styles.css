@@ -131,6 +131,89 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .page-placeholder { display: grid; gap: 0.5rem; justify-items: start; max-width: 46rem; }
 
+/* Design-mode canvas (S3) — semantic tokens only. React Flow is themed by overriding its
+   documented CSS variables, scoped to this canvas; runtime theme switches flow through because
+   the tokens themselves are rewritten on documentElement. */
+.design-mode { display: grid; gap: 1rem; }
+.design-toolbar { align-items: start; display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; }
+.design-toolbar-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.design-saving { color: var(--color-text-muted); font-weight: 700; }
+.design-layers { border: 1px solid var(--color-border); border-radius: 0.8rem; display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0; padding: 0.6rem 0.9rem; }
+.design-layers legend { font-weight: 700; padding: 0 0.3rem; }
+.design-layer { align-items: center; display: flex; font-weight: 600; gap: 0.4rem; }
+.design-layer input { width: auto; accent-color: var(--color-accent); }
+.design-layer--unavailable { color: var(--color-text-muted); }
+.design-layer-note { font-size: 0.8rem; }
+.design-grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) 20rem; }
+.design-canvas {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 1.2rem;
+  height: 34rem;
+  min-width: 0;
+  overflow: hidden;
+}
+.design-canvas .react-flow {
+  --xy-background-color-default: var(--color-surface-muted);
+  --xy-node-background-color-default: var(--color-surface);
+  --xy-node-color-default: var(--color-text);
+  --xy-node-border-default: 1px solid var(--color-border);
+  --xy-node-boxshadow-selected-default: 0 0 0 3px var(--color-focus);
+  --xy-edge-stroke-default: var(--color-accent-muted);
+  --xy-edge-stroke-selected-default: var(--color-accent);
+  --xy-connectionline-stroke-default: var(--color-accent);
+  --xy-handle-background-color-default: var(--color-accent);
+  --xy-controls-button-background-color-default: var(--color-surface);
+  --xy-controls-button-background-color-hover-default: var(--color-surface-muted);
+  --xy-controls-button-color-default: var(--color-text);
+  --xy-controls-button-border-color-default: var(--color-border);
+  --xy-attribution-background-color-default: var(--color-surface-muted);
+  height: 100%;
+}
+.design-canvas .react-flow__node:focus-visible, .design-canvas .react-flow__edge:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+.design-node {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.8rem;
+  display: grid;
+  gap: 0.2rem;
+  height: 6rem;
+  justify-items: start;
+  overflow: hidden;
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  width: 13rem;
+}
+.design-node-name { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+.design-node-meta { color: var(--color-text-muted); font-size: 0.72rem; }
+.design-node-counts { color: var(--color-text-muted); font-size: 0.72rem; }
+.risk-badge { border-radius: 999px; display: inline-block; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.05em; padding: 0.1rem 0.5rem; text-transform: uppercase; }
+.risk-badge--read { background: var(--color-info-surface); color: var(--color-info-text); }
+.risk-badge--write { background: var(--color-warning-surface); color: var(--color-warning-text); }
+.risk-badge--publish, .risk-badge--admin { background: var(--color-danger-surface); color: var(--color-danger-text); }
+.design-edge--data .react-flow__edge-path, .design-edge--policy .react-flow__edge-path { stroke-dasharray: 6 4; }
+.design-rail { align-content: start; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 1.2rem; display: grid; gap: 0.9rem; min-width: 0; padding: 1rem; }
+.design-rail h3, .design-rail h4 { margin: 0; }
+.design-rail-facts { display: grid; gap: 0.3rem 0.8rem; grid-template-columns: max-content minmax(0, 1fr); margin: 0; }
+.design-rail-facts dt { color: var(--color-text-muted); font-weight: 800; }
+.design-rail-facts dd { margin: 0; overflow-wrap: anywhere; }
+.design-rail-deps { display: grid; gap: 0.4rem; list-style: none; margin: 0 0 0.6rem; padding: 0; }
+.design-rail-deps li { align-items: center; display: flex; gap: 0.6rem; justify-content: space-between; }
+.design-rail-actions { display: grid; gap: 0.5rem; justify-items: start; }
+.design-rail-danger { border-top: 1px solid var(--color-border-muted); display: grid; gap: 0.5rem; padding-top: 0.75rem; }
+.design-rail-danger button { background: var(--color-danger-text); }
+.design-rail-danger button:disabled { background: var(--color-accent-muted); }
+.design-list { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 1rem; padding: 0.75rem 1rem; }
+.design-list summary { cursor: pointer; font-weight: 700; }
+.design-list ul { display: grid; gap: 0.4rem; margin: 0.75rem 0 0; padding-left: 1.2rem; }
+.design-conflict { display: grid; gap: 0.5rem; justify-items: start; }
+.design-issues { margin: 0.4rem 0 0; padding-left: 1.2rem; }
+.design-empty { display: grid; gap: 0.5rem; justify-items: start; }
+@media (max-width: 980px) {
+  .design-grid { grid-template-columns: 1fr; }
+  .design-canvas { height: 26rem; }
+}
+
 /* Appearance settings. Swatch colors come inline from theme.ts (the palette source of truth). */
 .appearance-settings { display: grid; gap: 0.9rem; }
 .accent-switch { border: 0; display: grid; gap: 0.5rem; margin: 0; padding: 0; }
