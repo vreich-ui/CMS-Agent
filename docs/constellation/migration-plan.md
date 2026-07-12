@@ -120,6 +120,18 @@ session, tests updated, typecheck/tests/ui build green, stop at the boundary.
   actors always visible; restore-as-new-event; timeline scrubbing on the
   canvas; configuration surface ▸ History section appears. Depends on S1 +
   S3 (canvas) — ledger-only parts depend only on S1 + S2.
+  **Ledger slice done** (first vision-anchored session): `/changes` is the
+  attributed ledger over `changes.list/get/compare/restore` — calm rows
+  (no card stacking), actor chips (human/agent/system, meaning-bearing
+  colors), actor+operation filters, cursor paging, expand-in-place detail
+  (selection reveals, never navigates) with lazily-fetched field-level
+  diffs (timestamp noise filtered, honest empty/first-revision states),
+  and per-node restore behind an explicit confirmation that states the
+  append-only contract. Overview gained the Layer-2 awareness item for
+  agent/system-made changes (human-only activity stays quiet), citing the
+  latest event and deep-linking into the ledger. Remaining for the S6
+  completion slice: History mode on the canvas (timeline scrubbing) and
+  the configuration surface's History section (S4).
 - **S7 — Settings consolidation, legacy retirement & calm pass.**
   Connection · Storage · Projects · Exchange; Support tab retires; delete
   `ui/src/mcpClient.ts` shim; finish token migration of legacy CSS; split

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getErrorMessage } from "./useConnection";
 import type { McpClient } from "../mcp/client";
-import type { ModelUsageSummary, ProjectSummary, RepositoryHealthSummary, WorkflowExecutionRecord, WorkspaceNode } from "../types/workspace";
+import type { ModelUsageSummary, ProjectSummary, RepositoryHealthSummary, WorkflowExecutionRecord, WorkspaceChangeEvent, WorkspaceNode } from "../types/workspace";
 
 export type OverviewData = {
   nodes: WorkspaceNode[] | null;
@@ -9,9 +9,10 @@ export type OverviewData = {
   usageSummary: ModelUsageSummary | null;
   projects: ProjectSummary[] | null;
   repositoryHealth: RepositoryHealthSummary | null;
+  recentChangeEvents: WorkspaceChangeEvent[] | null;
 };
 
-const emptyData: OverviewData = { nodes: null, runs: null, usageSummary: null, projects: null, repositoryHealth: null };
+const emptyData: OverviewData = { nodes: null, runs: null, usageSummary: null, projects: null, repositoryHealth: null, recentChangeEvents: null };
 
 // Read-only overview loader. Each section loads independently so one failing MCP tool (or a
 // missing token) degrades that section instead of blanking the whole page. All data comes from
@@ -29,12 +30,14 @@ export function useOverview(client: McpClient, projectId?: string | null) {
     setLoading(true);
     try {
       const scope = projectId ? { projectId } : {};
-      const [nodes, runs, usageSummary, projects, repositoryHealth] = await Promise.allSettled([
+      const [nodes, runs, usageSummary, projects, repositoryHealth, recentChanges] = await Promise.allSettled([
         client.call<{ nodes: WorkspaceNode[] }>("workspace.get_nodes"),
         client.call<{ runs: WorkflowExecutionRecord[] }>("workflow.list_runs", scope),
         client.call<{ summary: ModelUsageSummary }>("usage.get_summary", scope),
         client.call<{ projects: ProjectSummary[] }>("project.list"),
-        client.call<{ health: RepositoryHealthSummary }>("repository.get_health")
+        client.call<{ health: RepositoryHealthSummary }>("repository.get_health"),
+        // Layer-2 awareness: recent change activity is workspace-wide, never project-scoped.
+        client.call<{ events: WorkspaceChangeEvent[] }>("changes.list", { limit: 50 })
       ]);
       const nextErrors: string[] = [];
       const section = <T, R>(result: PromiseSettledResult<T>, label: string, pick: (value: T) => R): R | null => {
@@ -47,7 +50,8 @@ export function useOverview(client: McpClient, projectId?: string | null) {
         runs: section(runs, "Runs", (value) => value.runs),
         usageSummary: section(usageSummary, "Usage", (value) => value.summary),
         projects: section(projects, "Projects", (value) => value.projects),
-        repositoryHealth: section(repositoryHealth, "Storage", (value) => value.health)
+        repositoryHealth: section(repositoryHealth, "Storage", (value) => value.health),
+        recentChangeEvents: section(recentChanges, "Changes", (value) => value.events)
       });
       setErrors([...new Set(nextErrors)]);
       setLoadedAt(new Date().toISOString());

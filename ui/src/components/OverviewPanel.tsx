@@ -1,4 +1,5 @@
 import { buildAttentionItems, summarizeNodes, summarizeRuns } from "../overview";
+import { summarizeRecentChanges } from "../changes";
 import type { AttentionItem } from "../overview";
 import { routeLabel, type AppRoute } from "../route";
 import { useOverview } from "../hooks/useOverview";
@@ -41,7 +42,12 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
 
 export function OverviewPanel({ client, projectId, onNavigate }: Props) {
   const { data, errors, loading, loadedAt, refresh } = useOverview(client, projectId);
-  const attention = buildAttentionItems({ runs: data.runs ?? [], projects: data.projects ?? [], repositoryHealth: data.repositoryHealth });
+  const attention = buildAttentionItems({
+    runs: data.runs ?? [],
+    projects: data.projects ?? [],
+    repositoryHealth: data.repositoryHealth,
+    recentChanges: data.recentChangeEvents ? summarizeRecentChanges(data.recentChangeEvents) : null
+  });
   const runOverview = data.runs ? summarizeRuns(data.runs) : null;
   const nodeOverview = data.nodes ? summarizeNodes(data.nodes) : null;
   const nothingLoaded = !data.nodes && !data.runs && !data.usageSummary && !data.projects && !data.repositoryHealth;

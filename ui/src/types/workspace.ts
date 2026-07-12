@@ -111,6 +111,49 @@ export type ConstellationStructure = {
   derivedExecutionEdges: Array<{ kind: "execution"; sourceId: string; targetId: string; derivedFrom: "dependsOn" }>;
 };
 
+// UI mirrors of the S1 immutable change history (src/agent/workspace/changeTypes.ts).
+export type WorkspaceActorKind = "human" | "agent" | "system";
+export type WorkspaceActor = { kind: WorkspaceActorKind; id?: string; label?: string };
+export type WorkspaceChangeSource = "mcp" | "ui" | "system";
+export type WorkspaceChangeOperation = "create" | "update" | "delete" | "clone" | "reorder" | "restore" | "import" | "record";
+export type WorkspaceChangeTarget = { type: "node" | "graph" | "relationship" | "workspace"; id?: string };
+
+export type WorkspaceChangeEvent = {
+  eventId: string;
+  type: string;
+  operation: WorkspaceChangeOperation;
+  target: WorkspaceChangeTarget;
+  actor: WorkspaceActor;
+  source: WorkspaceChangeSource;
+  reason?: string;
+  baseRevisionId?: string;
+  parentRevisionId?: string;
+  resultingRevisionId?: string;
+  workspaceVersion: number;
+  riskLevel?: string;
+  before?: unknown;
+  after?: unknown;
+  correlation?: { runId?: string; requestId?: string };
+  createdAt: string;
+};
+
+export type WorkspaceChangePage = { events: WorkspaceChangeEvent[]; nextCursor?: string };
+
+export type RevisionDiff = {
+  fromRevisionId: string;
+  toRevisionId: string;
+  nodes: {
+    added: WorkspaceNode[];
+    removed: WorkspaceNode[];
+    changed: Array<{ nodeId: string; changedFields: string[]; before: WorkspaceNode; after: WorkspaceNode }>;
+  };
+  relationships: {
+    added: WorkspaceRelationship[];
+    removed: WorkspaceRelationship[];
+    changedIds: string[];
+  };
+};
+
 export type ToolEnvelope<T> = {
   ok: boolean;
   data?: T;

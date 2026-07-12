@@ -1,5 +1,6 @@
 import type { ProjectSummary, RepositoryHealthSummary, WorkflowExecutionRecord, WorkspaceNode } from "./types/workspace.js";
 import type { AppRoute } from "./route.js";
+import type { RecentChangesSummary } from "./changes.js";
 
 // Pure Overview model. The Overview page leads with what needs attention right now (approvals,
 // failures, degraded storage, configuration gaps) and summarizes everything else. All inputs come
@@ -72,8 +73,30 @@ export function buildAttentionItems(input: {
   runs: WorkflowExecutionRecord[];
   projects: ProjectSummary[];
   repositoryHealth: RepositoryHealthSummary | null;
+  recentChanges?: RecentChangesSummary | null;
 }): AttentionItem[] {
   const items: AttentionItem[] = [];
+
+  // Layer-2 awareness (PRODUCT_VISION.md ▸ Attention hierarchy): surface recent changes made by
+  // agents or automation — the supervisor should never have to assume humans authored
+  // everything. Human-only activity is the supervisor's own work and is not news.
+  const changes = input.recentChanges;
+  if (changes && changes.byActor.agent + changes.byActor.system > 0) {
+    const parts = [
+      changes.byActor.agent > 0 ? `${changes.byActor.agent} by agents` : null,
+      changes.byActor.system > 0 ? `${changes.byActor.system} by the system` : null,
+      changes.byActor.human > 0 ? `${changes.byActor.human} by humans` : null
+    ].filter(Boolean).join(", ");
+    items.push({
+      id: "changes:recent",
+      severity: "info",
+      title: `${changes.total} recent workspace change${changes.total === 1 ? "" : "s"} (${parts})`,
+      detail: changes.latest
+        ? `Latest: ${changes.latest.title}${changes.latest.entityLabel ? ` · ${changes.latest.entityLabel}` : ""}${changes.latest.reason ? ` — ${changes.latest.reason}` : ""} (${changes.latest.when}).`
+        : "Open the ledger for the attributed history.",
+      target: { page: "changes" }
+    });
+  }
 
   const runsByRecency = [...input.runs].sort((a, b) => timestamp(b.updatedAt) - timestamp(a.updatedAt));
   for (const run of runsByRecency) {

@@ -131,6 +131,64 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .page-placeholder { display: grid; gap: 0.5rem; justify-items: start; max-width: 46rem; }
 
+/* Change ledger (History surface) — calm rows with subtle separators, not stacked cards.
+   Attribution chips use meaning-bearing families: humans green, agents accent, system muted. */
+.change-ledger-panel { display: grid; gap: 0.9rem; }
+.change-filters { display: flex; flex-wrap: wrap; gap: 1rem; }
+.change-filters label { flex: 0 1 14rem; font-weight: 600; }
+.change-ledger { display: grid; list-style: none; margin: 0; padding: 0; }
+.change-row { border-bottom: 1px solid var(--color-border-muted); }
+.change-row:last-child { border-bottom: 0; }
+.change-row-summary {
+  align-items: baseline;
+  background: transparent;
+  border-radius: 0.5rem;
+  color: var(--color-text);
+  display: flex;
+  font-weight: 500;
+  gap: 0.75rem;
+  padding: 0.65rem 0.4rem;
+  text-align: left;
+  width: 100%;
+}
+.change-row-summary:hover { background: var(--color-surface-muted); }
+.change-row-main { display: grid; flex: 1 1 auto; gap: 0.1rem; min-width: 0; }
+.change-row-reason { color: var(--color-text-muted); font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-row-when { color: var(--color-text-muted); flex: 0 0 auto; font-size: 0.8rem; }
+.actor-chip {
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.55rem;
+  text-transform: uppercase;
+}
+.actor-chip--human { background: var(--color-success-surface); color: var(--color-success-text); }
+.actor-chip--agent { background: var(--color-accent-surface); color: var(--color-accent-text); }
+.actor-chip--system { background: var(--color-surface-muted); border: 1px solid var(--color-border-muted); color: var(--color-text-muted); }
+.change-detail { background: var(--color-surface-muted); border-radius: 0.8rem; display: grid; gap: 0.75rem; margin: 0 0.4rem 0.75rem; padding: 0.9rem 1rem; }
+.change-facts { display: grid; gap: 0.3rem 0.8rem; grid-template-columns: max-content minmax(0, 1fr); margin: 0; }
+.change-facts dt { color: var(--color-text-muted); font-weight: 800; }
+.change-facts dd { margin: 0; overflow-wrap: anywhere; }
+.change-fields p { margin: 0.15rem 0; }
+.field-chip {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.4rem;
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  margin-right: 0.35rem;
+  padding: 0.05rem 0.45rem;
+}
+.change-restore { border-top: 1px solid var(--color-border-muted); display: grid; gap: 0.5rem; justify-items: start; padding-top: 0.75rem; }
+@media (max-width: 720px) {
+  .change-row-summary { flex-wrap: wrap; }
+  .change-facts { grid-template-columns: 1fr; }
+}
+
 /* Design-mode canvas (S3) — semantic tokens only. React Flow is themed by overriding its
    documented CSS variables, scoped to this canvas; runtime theme switches flow through because
    the tokens themselves are rewritten on documentElement. */
