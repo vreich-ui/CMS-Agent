@@ -13,6 +13,25 @@ export const matchMediaState = {
   }
 };
 
+// React Flow v12 needs ResizeObserver and DOMMatrixReadOnly to mount under jsdom. The no-op
+// observer means node measurement never completes, so canvas tests stay at smoke level; graph
+// interaction depth lives in the framework-free model tests and the live Playwright drive.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+(window as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver = ResizeObserverStub;
+
+class DOMMatrixReadOnlyStub {
+  m22 = 1;
+  constructor(transform?: string) {
+    const match = transform?.match(/scale\(([0-9.]+)\)/);
+    if (match) this.m22 = Number(match[1]);
+  }
+}
+(globalThis as unknown as { DOMMatrixReadOnly: typeof DOMMatrixReadOnlyStub }).DOMMatrixReadOnly = DOMMatrixReadOnlyStub;
+
 window.matchMedia = (query: string) => ({
   matches: matchMediaState.matches,
   media: query,

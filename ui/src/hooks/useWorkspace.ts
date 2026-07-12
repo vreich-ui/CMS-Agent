@@ -61,6 +61,17 @@ export function useWorkspace(client: McpClient) {
   const updateNodePatch = async (patch: Partial<WorkspaceNode>, summary: string) => { if (!selectedNode) return null; const result = await client.call<{ node: WorkspaceNode; workspaceVersion: number }>("workspace.update_node", { id: selectedNode.id, patch, ...mutationArgs(summary) }); await refreshNodes(result.workspaceVersion); return result; };
   const updateOutputSchema = async (schema: unknown) => { if (!selectedNode) return null; const result = await client.call<{ node: WorkspaceNode; workspaceVersion: number }>("workspace.update_node_output_schema", { id: selectedNode.id, schema, ...mutationArgs("UI output schema update") }); await refreshNodes(result.workspaceVersion); return result; };
   const reorderNodes = async (orderedNodeIds: string[]) => { const result = await client.call<{ workspaceVersion: number }>("workspace.reorder_nodes", { orderedNodeIds, ...mutationArgs("UI graph reorder") }); await refreshNodes(result.workspaceVersion); return result; };
+  // Design-canvas mutation: positions, dependency edits, and deletes in one atomic guarded call.
+  // Never sends orderedNodeIds — the server's reorder branch rewrites every position.y and would
+  // destroy the spatial layout the canvas exists to preserve. update_graph returns the full node
+  // list, so state applies directly with no refetch.
+  const updateGraph = async (update: { dependencies?: Record<string, string[]>; positions?: Record<string, { x: number; y: number }>; delete?: string[] }, summary: string) => {
+    const result = await client.call<{ nodes: WorkspaceNode[]; workspaceVersion: number }>("workspace.update_graph", { ...update, ...mutationArgs(summary), source: "ui" });
+    setNodes(result.nodes);
+    setWorkspaceVersion(result.workspaceVersion);
+    setSelectedId((current) => current && result.nodes.some((node) => node.id === current) ? current : null);
+    return result;
+  };
   const validateGraph = async () => client.call<{ validation: { valid: boolean; issues: string[] } }>("workspace.validate_graph", {});
   const loadSkills = async () => { const result = await client.call<{ skills: SkillDefinition[] }>("skill.list", {}); setSkills(result.skills); setSelectedSkillId((current) => current ?? result.skills[0]?.skillId ?? null); return result.skills; };
   const assignSkill = async () => { if (!selectedNode || !selectedSkillId) return null; const result = await client.call<{ node: WorkspaceNode; workspaceVersion: number }>("skill.assign", { nodeId: selectedNode.id, skillId: selectedSkillId, ...mutationArgs("UI skill assignment") }); await refreshNodes(result.workspaceVersion); return result; };
@@ -115,6 +126,7 @@ export function useWorkspace(client: McpClient) {
     updateNodePatch,
     updateOutputSchema,
     reorderNodes,
+    updateGraph,
     validateGraph,
     loadSkills,
     assignSkill,
