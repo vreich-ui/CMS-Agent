@@ -1,5 +1,15 @@
 # AGENTS.md
 
+## Read this first
+
+Reread `PRODUCT_VISION.md` (repo root) before every working session. It is
+the anchor for all product and design decisions: attention over information
+density, the graph as one view of an organization (not the product), the
+four-layer attention hierarchy, progressive disclosure, evidence-based
+explainability, and attribution-first history. Where any other document or
+earlier plan disagrees with it, the vision wins. Detailed UI specs live in
+`docs/constellation/`.
+
 ## Project goal
 
 Build a Netlify-hosted TypeScript agent runtime for content creation and publishing workflows using the OpenAI Agents SDK.
