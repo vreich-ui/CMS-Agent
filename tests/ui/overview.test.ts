@@ -89,6 +89,33 @@ describe("summarizeNodes", () => {
 });
 
 describe("buildAttentionItems", () => {
+  it("raises Layer-2 awareness for agent/system changes, citing the latest event", () => {
+    const items = buildAttentionItems({
+      runs: [],
+      projects: [],
+      repositoryHealth: healthyStorage,
+      recentChanges: {
+        total: 5,
+        byActor: { human: 2, agent: 2, system: 1 },
+        latest: { eventId: "e1", title: "Updated prompt", entityLabel: "Research Agent", actorKind: "agent", actorLabel: "optimizer-1", sourceLabel: "mcp", when: "2026-07-12 09:30 UTC", reason: "tighten scope", workspaceVersion: 9, structural: true }
+      }
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: "changes:recent", severity: "info", target: { page: "changes" } });
+    expect(items[0].title).toContain("2 by agents");
+    expect(items[0].detail).toContain("Updated prompt · Research Agent — tighten scope");
+  });
+
+  it("stays quiet when all recent changes are human-made (the supervisor's own work is not news)", () => {
+    const items = buildAttentionItems({
+      runs: [],
+      projects: [],
+      repositoryHealth: healthyStorage,
+      recentChanges: { total: 3, byActor: { human: 3, agent: 0, system: 0 } }
+    });
+    expect(items).toHaveLength(0);
+  });
+
   it("surfaces blocked runs awaiting approval as action items targeting the builder", () => {
     const blocked = run({
       runId: "run-blocked",
