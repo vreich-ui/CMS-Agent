@@ -228,7 +228,26 @@ export const validateJsonSchema = (schema: unknown): string[] => {
   }
   return [];
 };
-const normalizeNode = (node: WorkspaceNode): WorkspaceNode => ({ ...node, assignedSkills: node.assignedSkills ?? [], inputSchema: node.inputSchema ?? { type: "object" }, outputSchema: node.outputSchema ?? node.schema ?? { type: "object" }, updatedAt: node.updatedAt ?? now() });
+// Guarantee every collection/scalar field is present so a minimally-specified node (e.g. one an
+// agent creates via workspace.create_node with just id/name/prompt) is valid and — critically —
+// safe to iterate everywhere downstream. Missing dependsOn previously threw
+// "node.dependsOn is not iterable" from graph/revision code even though the node had been persisted.
+const normalizeNode = (node: WorkspaceNode): WorkspaceNode => ({
+  ...node,
+  kind: node.kind ?? "workspace",
+  description: node.description ?? "",
+  riskLevel: node.riskLevel ?? "read",
+  status: node.status ?? "draft",
+  position: node.position ?? { x: 0, y: 0 },
+  allowedTools: node.allowedTools ?? [],
+  assignedSkills: node.assignedSkills ?? [],
+  requiredInputs: node.requiredInputs ?? [],
+  produces: node.produces ?? [],
+  dependsOn: node.dependsOn ?? [],
+  inputSchema: node.inputSchema ?? { type: "object" },
+  outputSchema: node.outputSchema ?? node.schema ?? { type: "object" },
+  updatedAt: node.updatedAt ?? now()
+});
 const assertWorkspaceVersion = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => { if (meta?.expectedWorkspaceVersion !== undefined && document.workspaceVersion !== meta.expectedWorkspaceVersion) throw new Error(`workspace_version_conflict: expected ${meta.expectedWorkspaceVersion}, current ${document.workspaceVersion}`); };
 const assertBaseRevision = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => { if (meta?.baseRevisionId !== undefined && document.currentRevisionId !== meta.baseRevisionId) throw new Error(`revision_conflict: expected ${meta.baseRevisionId}, current ${document.currentRevisionId ?? "none"}`); };
 const operationForEventType = (eventType: string): WorkspaceChangeOperation => {
