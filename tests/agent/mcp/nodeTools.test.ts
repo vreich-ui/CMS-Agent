@@ -51,6 +51,21 @@ describe("node.* MCP tools", () => {
     expect((await data("node.retry", { runId: executed.execution.runId })).execution.status).toBe("completed");
   });
 
+  it("creates a minimally-specified agent node without a dependsOn-iteration error", async () => {
+    // An agent populating a fresh node may omit collection fields entirely. Previously this
+    // persisted the node but returned "node.dependsOn is not iterable"; normalizeNode now defaults
+    // every collection/scalar field so creation succeeds cleanly and the node is safe to iterate.
+    const created = await call("workspace.create_node", { node: { id: "sample_agent", name: "Sample Agent", prompt: "Draft something." } });
+    expect(created.result.structuredContent.ok).toBe(true);
+    const node = created.result.structuredContent.data.node;
+    expect(node).toMatchObject({ id: "sample_agent", dependsOn: [], allowedTools: [], requiredInputs: [], produces: [], riskLevel: "read", status: "draft" });
+
+    // The graph and downstream derivations tolerate the new node (no iteration throw anywhere).
+    expect((await data("workspace.get_graph")).nodes.some((n: { id: string }) => n.id === "sample_agent")).toBe(true);
+    expect((await data("workspace.validate_graph")).validation.valid).toBe(true);
+    expect((await data("node.prepare_execution", { nodeId: "sample_agent", input: {} })).preparation.resolvedNode.id).toBe("sample_agent");
+  });
+
   it("records usage exactly once per independent execution (double-count regression)", async () => {
     // mock mode: exactly one estimated record from the runtime.
     const mock = await data("node.execute", { nodeId: "input_triage", input: {}, executionMode: "mock" });
