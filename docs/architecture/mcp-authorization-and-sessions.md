@@ -94,6 +94,21 @@ a footgun: previously OAuth silently used memory unless `WORKSPACE_STORE=blobs` 
 connector would register a client and then fail `authorize` with `invalid_client` because the two
 requests hit different function instances.
 
+## Wire-facing tool naming
+
+Internally tools are defined with dotted namespaces (`workspace.get_nodes`, `changes.get`). Those
+names must never reach a remote client: connectors such as claude.ai forward `tools/list` names
+verbatim into the Anthropic Messages API, whose tool-name pattern is `^[a-zA-Z0-9_-]{1,64}$` — a
+single dotted name rejects the entire request (observed in production as
+`tools.92.custom.name: String should match pattern`, where index 92 was `changes.get`).
+
+The transport therefore serves **canonical underscore names only** (`workspace_get_nodes`) from
+`tools/list`, and `tools/call` resolves **both** the canonical and the legacy dotted spelling, so
+the in-app UI and existing scripts keep working unchanged. `canonicalToolName()` in `toolKit.ts` is
+the single mapping, and `tests/agent/mcp/toolNaming.test.ts` pins the pattern, uniqueness, and the
+dual-spelling contract. The server also answers the spec-required `ping` request, which clients use
+as a liveness probe.
+
 ## Configuration
 
 | Variable | Purpose | Default |

@@ -56,7 +56,7 @@ describe("mcp streamable-http session + auth", () => {
     const res = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, { "mcp-session-id": sessionId });
     expect(res.statusCode).toBe(200);
     expect(res.headers["mcp-protocol-version"]).toBe("2025-06-18");
-    expect(JSON.parse(res.body).result.tools.map((t: { name: string }) => t.name)).toContain("workspace.get_nodes");
+    expect(JSON.parse(res.body).result.tools.map((t: { name: string }) => t.name)).toContain("workspace_get_nodes");
   });
 
   it("returns 404 for an unknown or expired session id", async () => {

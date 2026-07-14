@@ -17,7 +17,7 @@ describe("changes.* MCP tools", () => {
   it("advertises the change-history and relationship tools", async () => {
     const response = await handler({ httpMethod: "POST", headers: { authorization: "Bearer test-token" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     const names = JSON.parse(response.body ?? "{}").result.tools.map((tool: { name: string }) => tool.name);
-    for (const name of ["changes.list", "changes.get", "changes.compare", "changes.restore", "workspace.update_relationships"]) expect(names).toContain(name);
+    for (const name of ["changes_list", "changes_get", "changes_compare", "changes_restore", "workspace_update_relationships"]) expect(names).toContain(name);
   });
 
   it("records an attributed change event for a mutation and honors baseRevisionId conflicts", async () => {
