@@ -27,6 +27,44 @@
   to = "/.netlify/functions/workspace-mcp"
   status = 200
 
+# MCP Authorization (OAuth) discovery + endpoints. These MUST precede the SPA catch-all below;
+# otherwise `/* -> /index.html` serves the dashboard HTML for these paths and a remote MCP client
+# (Claude's connector) can never discover the authorization server or complete the flow.
+[[redirects]]
+  from = "/.well-known/oauth-protected-resource"
+  to = "/.netlify/functions/oauth-protected-resource"
+  status = 200
+
+[[redirects]]
+  from = "/.well-known/oauth-protected-resource/*"
+  to = "/.netlify/functions/oauth-protected-resource"
+  status = 200
+
+[[redirects]]
+  from = "/.well-known/oauth-authorization-server"
+  to = "/.netlify/functions/oauth-authorization-server"
+  status = 200
+
+[[redirects]]
+  from = "/.well-known/oauth-authorization-server/*"
+  to = "/.netlify/functions/oauth-authorization-server"
+  status = 200
+
+[[redirects]]
+  from = "/oauth/register"
+  to = "/.netlify/functions/oauth-register"
+  status = 200
+
+[[redirects]]
+  from = "/oauth/authorize"
+  to = "/.netlify/functions/oauth-authorize"
+  status = 200
+
+[[redirects]]
+  from = "/oauth/token"
+  to = "/.netlify/functions/oauth-token"
+  status = 200
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
