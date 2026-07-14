@@ -76,8 +76,23 @@ Netlify Functions are stateless across invocations, so authorization codes, toke
 clients, and sessions cannot live in a module-level `Map` in production — the `authorize` call and
 the `token` call that follows it usually land on different invocations. A small TTL-aware key/value
 store mirrors the repository layer: an in-process `MemoryStateStore` for dev/test and a
-`BlobStateStore` selected by `WORKSPACE_STORE=blobs`. Expiry is enforced on read, so an
-eventually-consistent backend can never resurrect a dead session or token.
+`BlobStateStore` for production. Expiry is enforced on read, so an eventually-consistent backend can
+never resurrect a dead session or token.
+
+**Persistence is decoupled from `WORKSPACE_STORE`.** OAuth/session state has a hard durability
+requirement that workspace *data* does not: a deployment may legitimately run ephemeral in-memory
+workspace data, but the remote OAuth flow still spans multiple invocations and would break with an
+in-process store. `mcpStateUsesBlobs()` therefore resolves the state backend by precedence:
+
+1. `MCP_STATE_STORE=blobs|memory` — explicit override (and the knob tests use).
+2. `WORKSPACE_STORE=blobs` — if the workspace persists, so does auth state.
+3. A **Netlify Blobs context is connected** for this runtime (`netlifyBlobsContextConnected()`, set
+   by `connectLambdaBlobs`) — the default on a real deploy, so no env var is required.
+
+Otherwise it falls back to the shared in-process memory store (local `node`/`vitest`). This removed
+a footgun: previously OAuth silently used memory unless `WORKSPACE_STORE=blobs` was set, so a
+connector would register a client and then fail `authorize` with `invalid_client` because the two
+requests hit different function instances.
 
 ## Configuration
 
@@ -85,11 +100,13 @@ eventually-consistent backend can never resurrect a dead session or token.
 | --- | --- | --- |
 | `MCP_OAUTH_APPROVAL_SECRET` | Secret entered on the consent screen to approve a connection. | Falls back to `MCP_API_TOKEN` |
 | `MCP_REQUIRE_SESSION` | Require a valid `Mcp-Session-Id` on every non-`initialize` request. | `false` |
-| `WORKSPACE_STORE` | `blobs` persists sessions/OAuth state in Netlify Blobs (required in production). | `memory` |
+| `MCP_STATE_STORE` | Force the OAuth/session store to `blobs` or `memory`. | auto (Blobs on Netlify) |
+| `WORKSPACE_STORE` | Repository (workspace data) backend; `blobs` also forces auth-state Blobs. | `memory` |
 
 ## Connecting Claude
 
-1. Set `MCP_OAUTH_APPROVAL_SECRET` (and `WORKSPACE_STORE=blobs`) in Netlify.
+1. Set `MCP_OAUTH_APPROVAL_SECRET` in Netlify. (OAuth/session state auto-persists in Netlify Blobs;
+   no `WORKSPACE_STORE`/`MCP_STATE_STORE` change is required unless you want to force a backend.)
 2. Add `https://<host>/api/mcp` as a custom/remote MCP connector.
 3. When the browser opens the consent screen, enter the approval secret. The client receives a token
    and connects.

@@ -13,6 +13,14 @@ export const hasLambdaBlobsContext = (
 ): event is { blobs: string; headers: Record<string, string> } =>
   typeof event?.blobs === "string" && event.blobs.length > 0 && typeof event.headers === "object" && event.headers !== null;
 
+// Runtime capability signal: set once a real Blobs context has been connected in this process, so
+// other layers can tell they are running on Netlify (where Blobs are durable) rather than in a
+// local/test process. Used to persist MCP OAuth/session state in Blobs even when the workspace
+// data store was left at its ephemeral default — otherwise register/authorize/token, which span
+// separate stateless invocations, would each see an empty in-process Map.
+let blobsContextConnected = false;
+export const netlifyBlobsContextConnected = (): boolean => blobsContextConnected;
+
 // The decoded Blobs context holds an access token, so a decode/parse failure is surfaced as a
 // generic error — the original message (which can echo decoded token bytes) is never propagated
 // or logged.
@@ -20,6 +28,7 @@ export const connectLambdaBlobs = (event: LambdaBlobsEvent | null | undefined): 
   if (!hasLambdaBlobsContext(event)) return;
   try {
     connectLambda(event);
+    blobsContextConnected = true;
   } catch {
     throw new Error("Failed to initialize the Netlify Blobs Lambda context.");
   }

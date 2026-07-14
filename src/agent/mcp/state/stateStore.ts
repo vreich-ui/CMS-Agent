@@ -10,6 +10,7 @@
 // a background sweeper.
 
 import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "../../repository/blobs/blobClient.js";
+import { netlifyBlobsContextConnected } from "../../runtime/lambdaBlobs.js";
 
 export type Clock = () => number;
 
@@ -109,10 +110,23 @@ let sharedMemoryStore: MemoryStateStore | undefined;
 export const getSharedMemoryStateStore = (): MemoryStateStore => (sharedMemoryStore ??= new MemoryStateStore());
 export const resetSharedMemoryStateStore = (): void => sharedMemoryStore?.clear();
 
-const usesBlobBackend = (env: NodeJS.ProcessEnv = process.env): boolean => (env.WORKSPACE_STORE ?? "memory") === "blobs";
+// Decide whether MCP OAuth/session state persists in Blobs. This is deliberately decoupled from
+// WORKSPACE_STORE (which selects the *repository* backend): OAuth codes/tokens/clients and sessions
+// must survive across stateless invocations whenever we run on Netlify, even if a deployment
+// chooses ephemeral in-memory workspace data. Precedence:
+//   1. MCP_STATE_STORE=blobs|memory  — explicit override (also lets tests force a backend).
+//   2. WORKSPACE_STORE=blobs         — if the workspace persists, so does auth state.
+//   3. A Netlify Blobs context is connected for this runtime — the default on a real deploy.
+// Otherwise (local node/vitest) fall back to the shared in-process Memory store.
+export const mcpStateUsesBlobs = (env: NodeJS.ProcessEnv = process.env): boolean => {
+  const explicit = (env.MCP_STATE_STORE ?? "").trim().toLowerCase();
+  if (explicit === "blobs") return true;
+  if (explicit === "memory") return false;
+  if ((env.WORKSPACE_STORE ?? "memory") === "blobs") return true;
+  return netlifyBlobsContextConnected();
+};
 
-// Resolve the active state store at call time (never at import): Blob-backed when the workspace
-// runs on Blobs, otherwise the shared in-process Memory store. Handlers must have already run
+// Resolve the active state store at call time (never at import). Handlers must have already run
 // connectLambdaBlobs(event) before this is first touched in a Blob deployment.
 export const getMcpStateStore = (): McpStateStore =>
-  usesBlobBackend() ? new BlobStateStore() : getSharedMemoryStateStore();
+  mcpStateUsesBlobs() ? new BlobStateStore() : getSharedMemoryStateStore();

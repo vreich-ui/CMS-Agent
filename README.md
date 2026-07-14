@@ -44,6 +44,7 @@ MCP_REQUIRE_SESSION=false
 
 * `MCP_OAUTH_APPROVAL_SECRET` gates the `/oauth/authorize` consent screen — a human enters it to approve a connection. Falls back to `MCP_API_TOKEN` when unset; set a dedicated value in production.
 * `MCP_REQUIRE_SESSION`, when `true`, requires every non-`initialize` MCP request to carry a valid `Mcp-Session-Id`. Defaults to `false` so stateless bearer callers keep working.
+* `MCP_STATE_STORE` forces the OAuth/session store to `blobs` or `memory`. Normally unset: state auto-persists in Netlify Blobs whenever a Blobs context is present (required, because `register` and `authorize` hit different function instances).
 
 Do not commit real secrets. Configure production values in Netlify environment settings.
 
