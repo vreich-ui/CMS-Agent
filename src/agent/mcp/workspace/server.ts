@@ -29,7 +29,16 @@ export function createWorkspaceMcpServer(context: WorkspaceToolContext = {}) {
   return server;
 }
 
-export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolContext = {}) {
+export type HandleMcpOptions = {
+  // Protocol version negotiated by the transport for this initialize handshake. Defaults to the
+  // server's canonical version so existing stateless callers are unaffected.
+  protocolVersion?: string;
+  // Session id assigned by the transport, surfaced in the initialize result for clients that read
+  // it from the body as well as the Mcp-Session-Id response header.
+  sessionId?: string;
+};
+
+export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolContext = {}, options: HandleMcpOptions = {}) {
   const request = message as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
   const id = request.id ?? null;
   const tools = createWorkspaceTools(context);
@@ -39,7 +48,7 @@ export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolC
     switch (request.method) {
       case "initialize":
         createWorkspaceMcpServer();
-        return { jsonrpc: "2.0", id, result: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: {}, prompts: {}, resources: {} }, serverInfo: { name: MCP_SERVER_NAME, version: SERVER_VERSION }, instructions: "Stateless Netlify JSON-RPC MCP endpoint. Use tools/list and tools/call." } };
+        return { jsonrpc: "2.0", id, result: { protocolVersion: options.protocolVersion ?? MCP_PROTOCOL_VERSION, capabilities: { tools: {}, prompts: {}, resources: {} }, serverInfo: { name: MCP_SERVER_NAME, version: SERVER_VERSION }, ...(options.sessionId ? { sessionId: options.sessionId } : {}), instructions: "Session-aware Netlify Streamable-HTTP MCP endpoint. On initialize the server issues an Mcp-Session-Id header; send it on every subsequent request and DELETE it to end the session. Use tools/list and tools/call to program the workspace." } };
       case "notifications/initialized":
         return { jsonrpc: "2.0", id, result: {} };
       case "tools/list":

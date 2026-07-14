@@ -5,7 +5,16 @@ A Netlify-hosted TypeScript workspace for Agent SDK content workflows and a loca
 ## Endpoints
 
 * `POST /api/agent` runs agent workflows.
-* `POST /api/mcp` exposes the workspace MCP JSON-RPC server.
+* `POST /api/mcp` exposes the workspace MCP server over Streamable HTTP (JSON-RPC). `DELETE` ends a session; `GET` returns `405` (no server-initiated SSE stream).
+* `GET /api/workspace-mcp` (proxy) exposes the same MCP server behind a Netlify Identity session for the in-app UI.
+
+MCP Authorization (OAuth 2.1) lets remote clients such as Claude connect without a shared token:
+
+* `GET /.well-known/oauth-protected-resource` — RFC 9728 resource metadata.
+* `GET /.well-known/oauth-authorization-server` — RFC 8414 authorization-server metadata.
+* `POST /oauth/register` — RFC 7591 Dynamic Client Registration.
+* `GET|POST /oauth/authorize` — human consent screen; issues the authorization code.
+* `POST /oauth/token` — PKCE code exchange and refresh-token rotation.
 
 Both endpoints return structured JSON for errors and successful API responses, except MCP notifications may return `202` with an empty body.
 
@@ -26,6 +35,16 @@ MCP_API_TOKEN=
 * `AGENT_API_TOKEN` protects `POST /api/agent` with bearer-token authentication.
 * `MCP_API_TOKEN` protects `POST /api/mcp` with bearer-token authentication.
 
+Optional, for remote MCP clients (Claude) and stricter transports:
+
+```text
+MCP_OAUTH_APPROVAL_SECRET=
+MCP_REQUIRE_SESSION=false
+```
+
+* `MCP_OAUTH_APPROVAL_SECRET` gates the `/oauth/authorize` consent screen — a human enters it to approve a connection. Falls back to `MCP_API_TOKEN` when unset; set a dedicated value in production.
+* `MCP_REQUIRE_SESSION`, when `true`, requires every non-`initialize` MCP request to carry a valid `Mcp-Session-Id`. Defaults to `false` so stateless bearer callers keep working.
+
 Do not commit real secrets. Configure production values in Netlify environment settings.
 
 ## Authentication
@@ -42,26 +61,63 @@ Missing or invalid credentials return `401`.
 
 ### `/api/mcp`
 
-Requests must include:
+The endpoint accepts **either** the static workspace token **or** an OAuth-minted access token:
 
 ```http
-Authorization: Bearer <MCP_API_TOKEN>
+Authorization: Bearer <MCP_API_TOKEN | OAuth access token>
 ```
 
-Missing or invalid credentials return `401`.
+Missing or invalid credentials return `401` with a discovery pointer:
+
+```http
+WWW-Authenticate: Bearer resource_metadata="https://<host>/.well-known/oauth-protected-resource"
+```
 
 Authorization headers and token values must never be logged.
+
+### Connecting a remote MCP client (Claude)
+
+Add the deployed `https://<host>/api/mcp` URL as a custom/remote MCP connector. The client runs the
+standard MCP Authorization handshake with no manual token:
+
+1. The unauthenticated probe returns `401` + `WWW-Authenticate`, pointing at the protected-resource metadata.
+2. The client reads `/.well-known/oauth-protected-resource` → `/.well-known/oauth-authorization-server`, then registers itself at `/oauth/register` (Dynamic Client Registration).
+3. The client opens `/oauth/authorize` in a browser. This renders a small **consent screen** — enter the `MCP_OAUTH_APPROVAL_SECRET` to approve — and redirects straight back to the client with a one-time code.
+4. The client exchanges the code at `/oauth/token` (PKCE `S256`) for a bearer access token and connects.
+
+> Why this matters: previously there was no OAuth metadata, so the connector's browser step landed on
+> the SPA dashboard (served by the `/*` catch-all) and the flow could never complete. The well-known
+> routes are now registered **ahead of** the catch-all in `netlify.toml`, and the consent screen closes
+> the loop back to the client. Set `MCP_OAUTH_APPROVAL_SECRET` in Netlify before connecting.
+
+### Session control (Streamable HTTP)
+
+`initialize` returns a server-issued session id and the negotiated protocol version:
+
+```http
+Mcp-Session-Id: mcps_<hex>
+MCP-Protocol-Version: 2025-06-18
+```
+
+Send `Mcp-Session-Id` on every subsequent request. Unknown or expired sessions return `404` so the
+client re-initializes; `DELETE /api/mcp` with the header ends the session. Sessions expire on a sliding
+idle window (30 min) capped by an absolute max age (12 h). Stateless bearer callers that omit the header
+still work unless `MCP_REQUIRE_SESSION=true`.
 
 ## Architecture
 
 ```text
 netlify/functions/agent.mts   Thin /api/agent handler
-netlify/functions/mcp.mts     Thin /api/mcp handler
+netlify/functions/mcp.mts     Thin /api/mcp handler (auth, sessions, Streamable HTTP)
+netlify/functions/oauth-*.mts Thin OAuth discovery + authorize/token/register handlers
 src/agent/runtime             Agent orchestration, request validation, auth helpers
 src/agent/projects            Project profiles and registry
 src/agent/skills              Reusable local capabilities
 src/agent/workflows           Workflow definitions
 src/agent/mcp                 MCP setup and workspace server
+src/agent/mcp/transport       Streamable HTTP session lifecycle
+src/agent/mcp/auth            OAuth 2.1 authorization server (metadata, PKCE, tokens, consent)
+src/agent/mcp/state           TTL key/value store (memory + Netlify Blobs) for sessions and OAuth
 src/agent/memory              JSON memory exchange types and adapters
 src/agent/observability       Logging/tracing adapters
 ```
