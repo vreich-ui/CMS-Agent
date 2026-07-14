@@ -67,9 +67,11 @@ describe("mcp endpoint", () => {
 
   it("lists tools", async () => {
     const response = await call({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("workspace.get_nodes");
-    expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("usage.get_summary");
-    expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("repository.get_health");
+    // tools/list serves canonical underscore names only (Anthropic tool-name pattern); the dotted
+    // spellings remain accepted by tools/call for backward compatibility.
+    expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("workspace_get_nodes");
+    expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("usage_get_summary");
+    expect(response.json.result.tools.map((tool: { name: string }) => tool.name)).toContain("repository_get_health");
   });
 
   it("MCP repository health tool returns safe diagnostics", async () => {

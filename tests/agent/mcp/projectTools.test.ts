@@ -48,7 +48,7 @@ describe("project.* MCP tools", () => {
   it("advertises the project.* tools", async () => {
     const response = await call({ jsonrpc: "2.0", id: 1, method: "tools/list" });
     const names = response.json.result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).toEqual(expect.arrayContaining(["project.list", "project.get", "project.test_connection", "project.list_tools", "project.call_tool", "project.validate_handoff"]));
+    expect(names).toEqual(expect.arrayContaining(["project_list", "project_get", "project_test_connection", "project_list_tools", "project_call_tool", "project_validate_handoff"]));
   });
 
   it("project.list returns dr-lurie with safe metadata and no secrets", async () => {

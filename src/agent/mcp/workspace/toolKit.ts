@@ -14,6 +14,15 @@ export type WorkspaceTool = {
 
 export const objectSchema = (properties: JsonSchema = {}, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 export const ok = (data: unknown) => ({ ok: true, data });
+
+// Tool names that cross the wire must satisfy the Anthropic tool-name pattern
+// ^[a-zA-Z0-9_-]{1,64}$ — remote connectors (claude.ai) forward tools/list names verbatim into the
+// Messages API, which rejects the whole request if any name contains a dot. Internally tools are
+// defined with dotted namespaces ("workspace.get_nodes"); the transport serves the canonical
+// underscore form and accepts both spellings on tools/call so existing callers (UI, scripts) are
+// unaffected.
+export const ANTHROPIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+export const canonicalToolName = (name: string): string => name.replace(/\./g, "_");
 export const tool = (definition: WorkspaceTool) => definition;
 export const toolError = (error: unknown) => error instanceof ZodError ? { ok: false, error: { code: "validation_error", issues: error.issues } } : { ok: false, error: { code: "tool_error", message: error instanceof Error ? error.message : "Unknown error" } };
 

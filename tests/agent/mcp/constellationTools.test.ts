@@ -17,7 +17,7 @@ describe("constellation.* MCP tools", () => {
   it("advertises the five read-only constellation tools", async () => {
     const response = await handler({ httpMethod: "POST", headers: { authorization: "Bearer test-token" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     const names = JSON.parse(response.body ?? "{}").result.tools.map((tool: { name: string }) => tool.name);
-    for (const name of ["constellation.get_structure", "constellation.get_metrics", "constellation.get_relationship", "constellation.get_summary", "constellation.get_attention"]) expect(names).toContain(name);
+    for (const name of ["constellation_get_structure", "constellation_get_metrics", "constellation_get_relationship", "constellation_get_summary", "constellation_get_attention"]) expect(names).toContain(name);
   });
 
   it("returns structural data with derived execution edges matching the graph derivation", async () => {

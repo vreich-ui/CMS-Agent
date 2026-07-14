@@ -105,6 +105,12 @@ client re-initializes; `DELETE /api/mcp` with the header ends the session. Sessi
 idle window (30 min) capped by an absolute max age (12 h). Stateless bearer callers that omit the header
 still work unless `MCP_REQUIRE_SESSION=true`.
 
+### Tool naming
+
+`tools/list` serves canonical underscore names (`workspace_get_nodes`) because remote connectors
+forward them verbatim into the Anthropic API, which only accepts `^[a-zA-Z0-9_-]{1,64}$`.
+`tools/call` accepts both the canonical and the legacy dotted spelling (`workspace.get_nodes`).
+
 ## Architecture
 
 ```text
