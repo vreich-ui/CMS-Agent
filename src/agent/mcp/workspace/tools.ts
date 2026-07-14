@@ -12,6 +12,7 @@ import { getRun, listRuns, resetRun, runNextNode, startDryRun } from "../../work
 import { executeNode, getEffectivePrompt, getNodeDetails, listNodeExecutions, listNodeOutputs, prepareNodeExecution, validateAgainstNodeSchema } from "../../workspace/nodeRuntime.js";
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
 import { toProjectSummary, validateHandoff } from "../../projects/projectRegistry.js";
+import { createProject, deleteProject, projectCreateSchema, projectRegistrationContract, projectUpdateSchema, updateProject } from "../../projects/projectAdmin.js";
 import { ProjectMcpAdapter } from "../../projects/drLurie/adapter.js";
 import { skillDefinitionSchema, validateSkillDefinition } from "../../skills/skillValidator.js";
 import { resolveSkillsForNode } from "../../skills/skillResolver.js";
@@ -71,6 +72,9 @@ const budgetStatusInput = z.object({ projectId: z.string().min(1).optional(), ru
 const projectIdInput = z.object({ projectId: z.string().min(1) }).strict();
 const validateHandoffInput = z.object({ projectId: z.string().min(1), contentSource: z.unknown().optional(), articleBody: z.unknown().optional() }).strict();
 const projectCallToolInput = z.object({ projectId: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.string(), z.unknown()).default({}) }).strict();
+const projectCreateInput = z.object({ project: projectCreateSchema, ...mutationMeta }).strict();
+const projectUpdateInput = z.object({ projectId: z.string().min(1), patch: projectUpdateSchema, ...mutationMeta }).strict();
+const projectDeleteInput = z.object({ projectId: z.string().min(1), ...mutationMeta }).strict();
 const skillIdInput = z.object({ skillId: z.string().min(1) }).strict();
 const skillCreateInput = z.object({ skill: z.unknown(), ...mutationMeta }).strict();
 const skillUpdateInput = z.object({ skillId: z.string().min(1), patch: z.record(z.string(), z.unknown()), ...mutationMeta }).strict();
@@ -117,6 +121,24 @@ const budgetStatusJsonSchema = objectSchema({ projectId: { type: "string", minLe
 const projectIdJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 } }, ["projectId"]);
 const validateHandoffJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, contentSource: {}, articleBody: {} }, ["projectId"]);
 const projectCallToolJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, tool: { type: "string", minLength: 1 }, arguments: { type: "object", additionalProperties: true } }, ["projectId", "tool", "arguments"]);
+const projectDefinitionJsonSchema = objectSchema({
+  projectId: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{1,62}$", description: "Lowercase kebab-case id, e.g. acme-daily." },
+  name: { type: "string", minLength: 1, maxLength: 120 },
+  mcpEndpointEnvVar: { type: "string", pattern: "^[A-Z][A-Z0-9_]{2,63}$", description: "Environment variable NAME holding the MCP endpoint URL — never the URL itself." },
+  authMode: { type: "string", enum: ["none", "bearer_env"], default: "bearer_env" },
+  tokenEnvVar: { type: "string", pattern: "^[A-Z][A-Z0-9_]{2,63}$", description: "Environment variable NAME holding the bearer token — never the token itself. Required for bearer_env." },
+  allowedTools: { type: "array", items: { type: "string" }, default: [], description: "Remote tool allow-list; project.call_tool refuses anything not listed." },
+  contentContract: { type: "object", additionalProperties: false, properties: { contentContract: { type: "string" }, canonicalArticleBody: { type: "string" } } },
+  status: { type: "string", enum: ["active", "disabled"], default: "active" }
+}, ["projectId", "name", "mcpEndpointEnvVar"]);
+const projectCreateJsonSchema = objectSchema({ project: projectDefinitionJsonSchema, ...metaJson }, ["project"]);
+// Patch surface = the definition minus identity (projectId) and policy (publishingPolicy — server-controlled).
+const projectPatchJsonSchema = (() => {
+  const { projectId: _identity, ...patchable } = projectDefinitionJsonSchema.properties as Record<string, unknown>;
+  return objectSchema({ ...patchable, tokenEnvVar: { oneOf: [{ type: "string", pattern: "^[A-Z][A-Z0-9_]{2,63}$" }, { type: "null" }], description: "Env var NAME for the bearer token; null removes it (only valid when authMode is none)." } });
+})();
+const projectUpdateJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, patch: projectPatchJsonSchema, ...metaJson }, ["projectId", "patch"]);
+const projectDeleteJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, ...metaJson }, ["projectId"]);
 const skillIdJsonSchema = objectSchema({ skillId: { type: "string", minLength: 1 } }, ["skillId"]);
 const controlledToolIdJsonSchema = objectSchema({ toolId: { type: "string", minLength: 1 } }, ["toolId"]);
 const controlledToolTestJsonSchema = objectSchema({ toolId: { type: "string", minLength: 1 }, input: {}, runId: { type: "string" }, nodeId: { type: "string", minLength: 1 }, projectId: { type: "string" }, skillId: { type: "string" }, approvedToolIds: { type: "array", items: { type: "string" } }, runAuthorizedTools: { type: "array", items: { type: "string" } }, platformAllowedTools: { type: "array", items: { type: "string" } }, maxRiskLevel: { type: "string", enum: [...workspaceRiskLevels] } }, ["toolId", "nodeId"]);
@@ -240,6 +262,10 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "project.list_tools", description: "List a project's remote MCP tools via tools/list. Returns safe tool names and descriptions only.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok(await new ProjectMcpAdapter(config).listTools()); } }),
     tool({ name: "project.call_tool", description: "Call an approved read-only tool on a registered project MCP server. Publishing and mutation tools are blocked by project allowedTools.", zodSchema: projectCallToolInput, inputSchema: projectCallToolJsonSchema, execute: async (input) => { const data = projectCallToolInput.parse(input); const config = await requireProject(data.projectId); return ok({ call: await new ProjectMcpAdapter(config).callTool(data.tool, data.arguments) }); } }),
     tool({ name: "project.validate_handoff", description: "Dry structural validation of a handoff against the project content_source.v1 / article_body.v1 contract. Read-only; no publishing.", zodSchema: validateHandoffInput, inputSchema: validateHandoffJsonSchema, execute: async (input) => { const data = validateHandoffInput.parse(input); const config = await requireProject(data.projectId); return ok({ validation: validateHandoff(config, { contentSource: data.contentSource, articleBody: data.articleBody }) }); } }),
+    tool({ name: "project.get_registration_contract", description: "Machine-readable contract for onboarding a new publishing client: field rules, env-var naming conventions, and the step-by-step registration flow.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ contract: projectRegistrationContract() }); } }),
+    tool({ name: "project.create", description: "Register a new external publishing-client MCP connection. Endpoint/token are referenced by environment variable NAME only (never values); publishing stays disabled by policy.", zodSchema: projectCreateInput, inputSchema: projectCreateJsonSchema, execute: async (input) => { const data = projectCreateInput.parse(input); return ok({ project: await createProject(projectRepository, data.project) }); } }),
+    tool({ name: "project.update", description: "Patch a registered project's safe fields (name, env var names, auth mode, allowed tools, contract, status). Identity and publishing policy are not patchable.", zodSchema: projectUpdateInput, inputSchema: projectUpdateJsonSchema, execute: async (input) => { const data = projectUpdateInput.parse(input); return ok({ project: await updateProject(projectRepository, data.projectId, data.patch) }); } }),
+    tool({ name: "project.delete", description: "Remove an agent-registered project connection. Code-defined default projects cannot be deleted (set status to disabled instead).", zodSchema: projectDeleteInput, inputSchema: projectDeleteJsonSchema, execute: async (input) => { const data = projectDeleteInput.parse(input); return ok(await deleteProject(projectRepository, data.projectId)); } }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository })
   ];

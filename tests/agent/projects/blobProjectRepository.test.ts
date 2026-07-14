@@ -9,7 +9,8 @@ vi.mock("@netlify/blobs", () => ({
   getStore: vi.fn(() => ({
     get: vi.fn(async (key: string) => blobData.has(key) ? structuredClone(blobData.get(key)) : null),
     setJSON: vi.fn(async (key: string, value: unknown) => { blobData.set(key, structuredClone(value)); return { modified: true, etag: `etag-${key}` }; }),
-    list: vi.fn(async ({ prefix = "" }: { prefix?: string } = {}) => ({ blobs: [...blobData.keys()].filter((key) => key.startsWith(prefix)).map((key) => ({ key, etag: `etag-${key}` })), directories: [] }))
+    list: vi.fn(async ({ prefix = "" }: { prefix?: string } = {}) => ({ blobs: [...blobData.keys()].filter((key) => key.startsWith(prefix)).map((key) => ({ key, etag: `etag-${key}` })), directories: [] })),
+    delete: vi.fn(async (key: string) => { blobData.delete(key); })
   }))
 }));
 
@@ -43,6 +44,15 @@ describe("Blob project repository", () => {
       delete process.env.DR_LURIE_MCP_ENDPOINT;
       delete process.env.DR_LURIE_MCP_TOKEN;
     }
+  });
+
+  it("deletes a custom project blob and reports whether it existed", async () => {
+    blobData.set("projects/custom.json", { ...structuredClone(drLurieProjectConfig), projectId: "custom", name: "Custom" });
+    const repository = new RepositoryManager({ backend: "blobs" }).getProjectRepository();
+
+    expect(await repository.delete("custom")).toBe(true);
+    expect(blobData.has("projects/custom.json")).toBe(false);
+    expect(await repository.delete("custom")).toBe(false);
   });
 
   it("upgrades stale persisted dr-lurie defaults without removing custom project configs", async () => {

@@ -48,6 +48,12 @@ export class BlobProjectRepository implements ProjectRepository {
     return clone(config);
   }
 
+  async delete(projectId: string): Promise<boolean> {
+    const existed = (await getBlobJson<ProjectConnectionConfig>(this.store, projectKey(projectId))) !== null;
+    await this.store.delete(projectKey(projectId));
+    return existed;
+  }
+
   async health(): Promise<RepositoryHealth> {
     return { ...healthyRepositoryStatus("blobs"), version: "blobs.v1" };
   }

@@ -32,6 +32,10 @@ export class MemoryProjectRepository implements ProjectRepository {
     return clone(config);
   }
 
+  async delete(projectId: string): Promise<boolean> {
+    return this.projects.delete(projectId);
+  }
+
   async health(): Promise<RepositoryHealth> {
     return { ...healthyRepositoryStatus(this.backend), version: `${this.backend}.v1` };
   }
