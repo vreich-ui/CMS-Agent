@@ -474,4 +474,13 @@ The workspace MCP server exposes these read-only project tools (no publishing si
 * `project.list_tools` — list the project's remote tool names/descriptions via `tools/list`.
 * `project.validate_handoff` — dry, local structural validation of a handoff payload against the project's `content_source.v1` / `article_body.v1` contract.
 
-Publishing stays disabled: enabling it will require a future explicit `PUBLISH` approval gate, and until then these tools only read, initialize, list, and validate.
+Agents can also register new publishing clients beyond the code-defined defaults:
+
+* `project.get_registration_contract` — machine-readable onboarding contract: field rules, env-var naming conventions, and the step-by-step flow.
+* `project.create` — register a new client connection. Endpoint/token are referenced by environment variable **name** only (validated against an identifier pattern, so URLs/secrets cannot be persisted); the publishing policy is server-forced to disabled.
+* `project.update` — patch safe fields (name, env var names, auth mode, `allowedTools`, contract, status). Identity and publishing policy are not patchable.
+* `project.delete` — remove an agent-registered project. Code-defined defaults (dr-lurie) are protected — disable them instead.
+
+Typical agentic onboarding: `project.get_registration_contract` → `project.create` → set the referenced env vars in Netlify → `project.test_connection` → `project.list_tools` → `project.update` to allow-list safe tools → `project.validate_handoff`.
+
+Publishing stays disabled: enabling it will require a future explicit `PUBLISH` approval gate, and until then these tools only read, initialize, list, validate, and manage registry entries.
