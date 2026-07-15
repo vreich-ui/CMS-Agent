@@ -57,10 +57,11 @@ describe("controlled tool runtime", () => {
     expect((result as any).error.message).toBe("blob_prefix_not_allowed");
   });
 
-  it("enforces project MCP allowlists", async () => {
-    const result = await executeTool("project.call_tool", { projectId: "dr-lurie", tool: "publish_article", arguments: {} }, { runId: "run-tools", nodeId: "external_test", projectId: "dr-lurie", maxRiskLevel: "write", approvedToolIds: ["project.call_tool"], runAuthorizedTools: ["project.call_tool"] });
+  it("enforces project MCP tool permissions (needs_approval is held)", async () => {
+    // dr-lurie is full-access, but wipe_blob_stores is held for approval and must not run.
+    const result = await executeTool("project.call_tool", { projectId: "dr-lurie", tool: "wipe_blob_stores", arguments: {} }, { runId: "run-tools", nodeId: "external_test", projectId: "dr-lurie", maxRiskLevel: "write", approvedToolIds: ["project.call_tool"], runAuthorizedTools: ["project.call_tool"] });
     expect(result.ok).toBe(true);
-    expect(JSON.stringify(result.output)).toContain("Tool is not allowed for project");
+    expect(JSON.stringify(result.output)).toContain("requires approval");
   });
 
   it("records timeout behavior", async () => {

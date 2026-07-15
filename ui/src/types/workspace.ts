@@ -264,15 +264,34 @@ export type ProjectConnectionState = {
   tokenEnvVar?: string;
 };
 
+// Per-tool permission, mirroring Claude Code's allow/ask/deny model.
+export type ToolPermission = "allowed" | "needs_approval" | "blocked";
+
 export type ProjectSummary = {
   projectId: string;
   name: string;
   authMode: "none" | "bearer_env";
   allowedTools: string[];
+  // Client-wide fallback permission and flattened per-tool overrides. With the remote tool list
+  // (project.list_tools) these give every tool's effective permission on the Access page.
+  defaultToolPolicy: ToolPermission;
+  toolPolicies: Record<string, ToolPermission>;
   contentContract: { contentContract: string; canonicalArticleBody: string };
   publishingPolicy: { publishEnabled: boolean; requiresExplicitPublish: boolean; description: string };
   status: "active" | "disabled";
   connection: ProjectConnectionState;
+};
+
+// Result shape of project.list_tools (ProjectMcpAdapter.listTools).
+export type ProjectToolsResult = {
+  ok: boolean;
+  projectId: string;
+  connection: ProjectConnectionState;
+  tools: Array<{ name: string; description?: string }>;
+  allowedTools: string[];
+  defaultToolPolicy: ToolPermission;
+  toolPolicies: Record<string, ToolPermission>;
+  error?: string;
 };
 
 export type SkillDefinition = {

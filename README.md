@@ -456,9 +456,9 @@ CMS-Agent can register external **project** MCP servers and perform primitive, g
 
 * The project registry is defined in `src/agent/projects/projectTypes.ts` and `src/agent/projects/projectRegistry.ts`. Each project connection carries `projectId`, `name`, `mcpEndpointEnvVar`, `authMode`, `tokenEnvVar`, `allowedTools`, `contentContract`, `publishingPolicy`, and `status`.
 * Connection configs are stored **through repositories** (`ProjectRepository`, backed by memory or Netlify Blobs like the other repositories), seeded from the code-defined defaults — not from hardcoded runtime state.
-* The **Dr. Lurie** project (`dr-lurie`) is defined in `src/agent/projects/drLurie/definition.ts` with `contentContract: content_source.v1` and `canonicalArticleBody: article_body.v1`. Its publishing policy is disabled (`publishEnabled: false`, `requiresExplicitPublish: true`).
-  * Its allowlist is the safe read-only tools (`ping`, `registry_get`, `object_inventory`, `object_contract`) **plus the artifact/PDF capability that Dr. Lurie brokers** — this is how CMS-Agent reaches "PDF-Tool", through Dr. Lurie rather than a direct connection: `get_pdf_tool_storage_grant`, `create_artifact_from_url`, `create_artifact_upload_intent`, `save_artifact`, `get_artifact_metadata`, `search_artifacts`, `list_artifacts_for_request`, `list_artifacts_by_request`, `list_artifacts_by_kind`, `restore_artifact`, `soft_delete_artifact`, `verify_article_images`, `migrate_artifact_indexes`, `reconcile_artifact_indexes`. Typical flow: `get_pdf_tool_storage_grant` → pass the grant to pdf-tool calls / `create_artifact_*` → store the returned `ArtifactReference`s via `save_artifact`.
-  * Publishing, deploy, commerce, and destructive tools stay off the allowlist by design (`object_publish`, `release_to_production`, `save_json_blob_publish_by_time`, `trigger_netlify_build`, `site_apply_theme`, `product_set_price`, `commerce_orders`, `order_reissue`, `wipe_blob_stores`) — deny-all keeps them uncallable via `project.call_tool` until a future explicit `PUBLISH` gate.
+* The **Dr. Lurie** project (`dr-lurie`) is defined in `src/agent/projects/drLurie/definition.ts` with `contentContract: content_source.v1` and `canonicalArticleBody: article_body.v1`.
+  * Dr. Lurie is a publishing house whose CMS-Agent is the full writer + reviewer and orders artifacts, so this connection runs with **full access**: `defaultToolPolicy: "allowed"` makes every Dr. Lurie tool callable via `project.call_tool` — including publish/deploy and commerce. This is also how CMS-Agent reaches "PDF-Tool": through Dr. Lurie's brokered artifact tools (`get_pdf_tool_storage_grant` → `create_artifact_*` → `save_artifact`), not a direct connection.
+  * One safety valve: `wipe_blob_stores` irreversibly destroys **all** blob stores and is not a publishing operation, so it defaults to **needs approval** (`toolPolicies: { wipe_blob_stores: "needs_approval" }`) rather than auto-running. Operators narrow or widen any tool from the **Access** page.
 * Three additional MCP servers ship as code-defined defaults, each in its own folder under `src/agent/projects/` and following the same shape (`bearer_env` auth, publishing disabled, deny-all except an explicitly allow-listed set of **safe read-only** tools):
   * **PDF Tool** (`pdf-tool`, `src/agent/projects/pdfTool/definition.ts`) — server-side artifact/PDF/image generation. Allow-listed reads: `list_pdf_templates`, `get_pdf_template`, `get_agent_artifact_job_status`, `get_agent_artifact_by_filename`, `get_agent_artifact_by_slot`, `get_image_search_policy`, `get_image_search_bank`, `get_image_search_job_status`.
   * **Snoocle** (`snoocle`, `src/agent/projects/snoocle/definition.ts`) — audio-to-song-data foundry. Allow-listed reads: `server_status`, `list_songs`, `get_song`, `get_song_schema`, `list_song_versions`, `diff_song_versions`, `probe_audio`.
@@ -496,9 +496,17 @@ Agents can also register new publishing clients beyond the code-defined defaults
 
 * `project.get_registration_contract` — machine-readable onboarding contract: field rules, env-var naming conventions, and the step-by-step flow.
 * `project.create` — register a new client connection. Endpoint/token are referenced by environment variable **name** only (validated against an identifier pattern, so URLs/secrets cannot be persisted); the publishing policy is server-forced to disabled.
-* `project.update` — patch safe fields (name, env var names, auth mode, `allowedTools`, contract, status). Identity and publishing policy are not patchable.
+* `project.update` — patch safe fields (name, env var names, auth mode, `allowedTools`, `defaultToolPolicy`, `toolPolicies`, contract, status). Identity and publishing policy are not patchable.
 * `project.delete` — remove an agent-registered project. Code-defined defaults (dr-lurie) are protected — disable them instead.
 
-Typical agentic onboarding: `project.get_registration_contract` → `project.create` → set the referenced env vars in Netlify → `project.test_connection` → `project.list_tools` → `project.update` to allow-list safe tools → `project.validate_handoff`.
+Typical agentic onboarding: `project.get_registration_contract` → `project.create` → set the referenced env vars in Netlify → `project.test_connection` → `project.list_tools` → `project.update` to set tool permissions → `project.validate_handoff`.
 
-Publishing stays disabled: enabling it will require a future explicit `PUBLISH` approval gate, and until then these tools only read, initialize, list, validate, and manage registry entries.
+### Tool permissions (allow / needs approval / blocked)
+
+Every remote tool resolves to one of three permissions, mirroring Claude Code's allow/ask/deny model, enforced by `project.call_tool` (`src/agent/projects/projectTypes.ts` → `effectiveToolPermission`):
+
+* **Allowed** — the call is forwarded to the project's MCP server.
+* **Needs approval** — the call is held (`requiresApproval: true`) and never forwarded until a human flips it to allowed; nothing runs automatically.
+* **Blocked** — the call is refused before any transport.
+
+Precedence, highest first: an explicit `toolPolicies[tool]` entry, then a legacy `allowedTools` membership (`= allowed`), then the client-wide `defaultToolPolicy`, then `blocked` (deny-all). The **Access** page in the UI (`/access`) lists a project's tools and toggles each between the three states with check / raised-hand / no-entry icons; changes persist via `project.update` and take effect immediately. Registered clients still default to deny-all — `defaultToolPolicy` is only raised for a connection explicitly granted broader access (e.g. Dr. Lurie's full access).

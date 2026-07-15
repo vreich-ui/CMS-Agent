@@ -4,7 +4,7 @@ import { DR_LURIE_ALLOWED_TOOLS, DR_LURIE_ARTIFACT_TOOLS, DR_LURIE_SAFE_READ_ONL
 import { ProjectMcpAdapter, resolveProjectConnection } from "../../../src/agent/projects/projectMcpAdapter.js";
 import { toProjectSummary, validateHandoff } from "../../../src/agent/projects/projectRegistry.js";
 import type { McpTransport } from "../../../src/agent/projects/mcpClient.js";
-import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
+import { effectiveToolPermission, type ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 
 const env = { DR_LURIE_MCP_ENDPOINT: "https://dr-lurie.example/mcp", DR_LURIE_MCP_TOKEN: "super-secret-token" } as unknown as NodeJS.ProcessEnv;
 const SECRET = "super-secret-token";
@@ -50,10 +50,17 @@ describe("project registry + Dr. Lurie definition", () => {
     expect(drLurieProjectConfig.allowedTools).toContain("create_artifact_from_url");
   });
 
-  it("dr-lurie never allow-lists publishing, commerce, or destructive tools", () => {
-    for (const blocked of ["object_publish", "release_to_production", "save_json_blob_publish_by_time", "trigger_netlify_build", "site_apply_theme", "product_set_price", "commerce_orders", "order_reissue", "wipe_blob_stores"]) {
-      expect(drLurieProjectConfig.allowedTools).not.toContain(blocked);
+  it("dr-lurie runs with full access: every tool is allowed by default", () => {
+    expect(drLurieProjectConfig.defaultToolPolicy).toBe("allowed");
+    // Publishing and commerce tools — not in allowedTools, but allowed via the default policy.
+    for (const tool of ["object_publish", "release_to_production", "save_json_blob_publish_by_time", "trigger_netlify_build", "site_apply_theme", "product_set_price", "commerce_orders", "order_reissue"]) {
+      expect(effectiveToolPermission(drLurieProjectConfig, tool)).toBe("allowed");
     }
+  });
+
+  it("dr-lurie holds only wipe_blob_stores for approval as a safety valve", () => {
+    expect(effectiveToolPermission(drLurieProjectConfig, "wipe_blob_stores")).toBe("needs_approval");
+    expect(drLurieProjectConfig.toolPolicies).toMatchObject({ wipe_blob_stores: "needs_approval" });
   });
 
   it("upgrades a persisted stale dr-lurie project config safely", async () => {
@@ -137,13 +144,35 @@ describe("Dr. Lurie MCP adapter primitives", () => {
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 
-  it("callTool blocks publishing tools before transport", async () => {
+  it("callTool forwards publishing tools now that dr-lurie has full access", async () => {
+    const calls: RecordedCall[] = [];
+    const transport = fakeTransport({ "tools/call": { ok: true, published: true } }, calls);
+
+    const result = await new ProjectMcpAdapter(drLurieProjectConfig, { env, transport }).callTool("object_publish", {});
+
+    expect(result).toMatchObject({ ok: true, tool: "object_publish", permission: "allowed", result: { ok: true, published: true } });
+    expect(calls.map((call) => call.method)).toEqual(["tools/call"]);
+  });
+
+  it("callTool holds a needs_approval tool before transport (requiresApproval, no call)", async () => {
     const calls: RecordedCall[] = [];
     const transport = fakeTransport({ "tools/call": { ok: true } }, calls);
 
-    const result = await new ProjectMcpAdapter(drLurieProjectConfig, { env, transport }).callTool("publish_article", {});
+    const result = await new ProjectMcpAdapter(drLurieProjectConfig, { env, transport }).callTool("wipe_blob_stores", {});
 
-    expect(result).toMatchObject({ ok: false, tool: "publish_article", error: "Tool is not allowed for project: publish_article" });
+    expect(result).toMatchObject({ ok: false, tool: "wipe_blob_stores", permission: "needs_approval", requiresApproval: true });
+    expect(result.error).toContain("requires approval");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("callTool blocks a tool explicitly set to blocked, before transport", async () => {
+    const calls: RecordedCall[] = [];
+    const transport = fakeTransport({ "tools/call": { ok: true } }, calls);
+    const blockedConfig = { ...structuredClone(drLurieProjectConfig), toolPolicies: { object_publish: "blocked" as const } };
+
+    const result = await new ProjectMcpAdapter(blockedConfig, { env, transport }).callTool("object_publish", {});
+
+    expect(result).toMatchObject({ ok: false, tool: "object_publish", permission: "blocked", error: "Tool is not allowed for project: object_publish" });
     expect(calls).toHaveLength(0);
   });
 
@@ -160,19 +189,21 @@ describe("Dr. Lurie MCP adapter primitives", () => {
     expect(calls.map((call) => call.method)).toEqual(["tools/call"]);
   });
 
-  it("publishing and write tools remain blocked after a stale registry config is upgraded", async () => {
+  it("full access and the wipe_blob_stores safety valve are restored after a stale config is upgraded", async () => {
     const calls: RecordedCall[] = [];
     const transport = fakeTransport({ "tools/call": { ok: true } }, calls);
     const repository = new MemoryProjectRepository();
     await repository.save(staleDrLurieConfig());
     const upgraded = await repository.get("dr-lurie");
 
-    const publish = await new ProjectMcpAdapter(upgraded!, { env, transport }).callTool("publish_article", {});
-    const write = await new ProjectMcpAdapter(upgraded!, { env, transport }).callTool("save_json_blob_article", {});
+    expect(upgraded?.defaultToolPolicy).toBe("allowed");
+    const publish = await new ProjectMcpAdapter(upgraded!, { env, transport }).callTool("object_publish", {});
+    const wipe = await new ProjectMcpAdapter(upgraded!, { env, transport }).callTool("wipe_blob_stores", {});
 
-    expect(publish.ok).toBe(false);
-    expect(write.ok).toBe(false);
-    expect(calls).toHaveLength(0);
+    expect(publish.ok).toBe(true);
+    expect(wipe).toMatchObject({ ok: false, requiresApproval: true, permission: "needs_approval" });
+    // Only the allowed publish reached transport; the held wipe never did.
+    expect(calls).toHaveLength(1);
   });
 
   it("discovers contract/schema surfaces when the remote exposes them", async () => {

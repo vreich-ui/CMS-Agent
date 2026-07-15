@@ -4,6 +4,7 @@ import { OverviewPanel } from "./components/OverviewPanel";
 import { ConstellationPage } from "./components/pages/ConstellationPage";
 import { RunsPage } from "./components/pages/RunsPage";
 import { ChangesPage } from "./components/pages/ChangesPage";
+import { AccessPage } from "./components/pages/AccessPage";
 import { SettingsPage } from "./components/pages/SettingsPage";
 import { getErrorMessage } from "./hooks/useConnection";
 import { getAccessScreen } from "./accessState";
@@ -95,6 +96,7 @@ function App() {
       {route.page === "constellation" && <ConstellationPage legacy={route.legacy} mode={route.mode} onNavigate={navigate} selectedProjectId={selectedProjectId} client={client} workspace={workspace} workflowRun={workflowRun} refreshUsage={modelUsage.refreshUsage} onStatus={setStatus} onError={handleError} />}
       {route.page === "runs" && <RunsPage selectedProjectId={selectedProjectId} onNavigate={navigate} />}
       {route.page === "changes" && <ChangesPage client={client} selectedProjectId={selectedProjectId} onStatus={setStatus} onError={handleError} />}
+      {route.page === "access" && <AccessPage client={client} projects={projects.projects} projectsError={projects.error} onRefreshProjects={() => void projects.refresh()} selectedProjectId={selectedProjectId} onStatus={setStatus} onError={handleError} />}
       {route.page === "settings" && <SettingsPage connection={connection} client={client} token={token} onModeChange={handleModeChange} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} session={isDeployedMode ? session : null} onLogout={logout} isDeployedMode={isDeployedMode} workspace={workspace} modelUsage={modelUsage} activeRunId={workflowRun.currentRun?.runId} theme={theme} onStatus={setStatus} onError={handleError} />}
     </main>
   </div>;
