@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "mcp__CMS-Agent__workspace_create_node",
+      "mcp__CMS-Agent__workspace_clone_node",
+      "mcp__CMS-Agent__workspace_delete_node",
+      "mcp__CMS-Agent__workspace_update_node",
+      "mcp__CMS-Agent__workspace_update_graph",
+      "mcp__CMS-Agent__workspace_update_node_skills",
+      "mcp__CMS-Agent__workspace_update_node_dependencies",
+      "mcp__CMS-Agent__workspace_update_node_prompt",
+      "mcp__CMS-Agent__workspace_update_node_input_schema",
+      "mcp__CMS-Agent__workspace_update_node_output_schema",
+      "mcp__CMS-Agent__workspace_update_node_tools",
+      "mcp__CMS-Agent__workspace_update_node_metadata",
+      "mcp__CMS-Agent__workspace_update_node_model_config",
+      "mcp__CMS-Agent__workspace_update_relationships",
+      "mcp__CMS-Agent__workspace_reorder_nodes",
+      "mcp__CMS-Agent__workspace_import_workspace",
+      "mcp__CMS-Agent__skill_create",
+      "mcp__CMS-Agent__skill_update",
+      "mcp__CMS-Agent__skill_assign",
+      "mcp__CMS-Agent__skill_unassign",
+      "mcp__CMS-Agent__skill_clone",
+      "mcp__CMS-Agent__skill_delete",
+      "mcp__CMS-Agent__skill_restore_version"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
