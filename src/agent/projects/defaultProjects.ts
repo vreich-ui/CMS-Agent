@@ -4,5 +4,13 @@
 // project-agnostic and merely aggregates.
 import type { ProjectConnectionConfig } from "./projectTypes.js";
 import { drLurieProjectConfig } from "./drLurie/definition.js";
+import { pdfToolProjectConfig } from "./pdfTool/definition.js";
+import { snoocleProjectConfig } from "./snoocle/definition.js";
+import { monetizerProjectConfig } from "./monetizer/definition.js";
 
-export const defaultProjectConnections: ProjectConnectionConfig[] = [drLurieProjectConfig];
+export const defaultProjectConnections: ProjectConnectionConfig[] = [
+  drLurieProjectConfig,
+  pdfToolProjectConfig,
+  snoocleProjectConfig,
+  monetizerProjectConfig
+];
