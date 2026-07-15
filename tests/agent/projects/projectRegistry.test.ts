@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
-import { DR_LURIE_SAFE_READ_ONLY_TOOLS, drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
+import { DR_LURIE_ALLOWED_TOOLS, DR_LURIE_ARTIFACT_TOOLS, DR_LURIE_SAFE_READ_ONLY_TOOLS, drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
 import { ProjectMcpAdapter, resolveProjectConnection } from "../../../src/agent/projects/projectMcpAdapter.js";
 import { toProjectSummary, validateHandoff } from "../../../src/agent/projects/projectRegistry.js";
 import type { McpTransport } from "../../../src/agent/projects/mcpClient.js";
@@ -41,9 +41,19 @@ describe("project registry + Dr. Lurie definition", () => {
     expect(drLurie?.publishingPolicy).toMatchObject({ publishEnabled: false, requiresExplicitPublish: true });
   });
 
-  it("dr-lurie allowedTools includes exactly the safe read-only tools", () => {
-    expect(drLurieProjectConfig.allowedTools).toEqual([...DR_LURIE_SAFE_READ_ONLY_TOOLS]);
-    expect(drLurieProjectConfig.allowedTools).toEqual(["ping", "registry_get", "object_inventory", "object_contract"]);
+  it("dr-lurie allowedTools is the safe read-only tools plus the artifact/PDF capability", () => {
+    expect(drLurieProjectConfig.allowedTools).toEqual([...DR_LURIE_ALLOWED_TOOLS]);
+    expect(drLurieProjectConfig.allowedTools).toEqual([...DR_LURIE_SAFE_READ_ONLY_TOOLS, ...DR_LURIE_ARTIFACT_TOOLS]);
+    // The read-only tools remain allowed, and the artifact/PDF tools are now callable.
+    expect(drLurieProjectConfig.allowedTools).toEqual(expect.arrayContaining(["ping", "registry_get", "object_inventory", "object_contract"]));
+    expect(drLurieProjectConfig.allowedTools).toContain("get_pdf_tool_storage_grant");
+    expect(drLurieProjectConfig.allowedTools).toContain("create_artifact_from_url");
+  });
+
+  it("dr-lurie never allow-lists publishing, commerce, or destructive tools", () => {
+    for (const blocked of ["object_publish", "release_to_production", "save_json_blob_publish_by_time", "trigger_netlify_build", "site_apply_theme", "product_set_price", "commerce_orders", "order_reissue", "wipe_blob_stores"]) {
+      expect(drLurieProjectConfig.allowedTools).not.toContain(blocked);
+    }
   });
 
   it("upgrades a persisted stale dr-lurie project config safely", async () => {
@@ -53,7 +63,7 @@ describe("project registry + Dr. Lurie definition", () => {
     const upgraded = await repository.get("dr-lurie");
 
     expect(upgraded?.definitionVersion).toBe(drLurieProjectConfig.definitionVersion);
-    expect(upgraded?.allowedTools).toEqual(["ping", "registry_get", "object_inventory", "object_contract"]);
+    expect(upgraded?.allowedTools).toEqual([...DR_LURIE_ALLOWED_TOOLS]);
   });
 
   it("does not wipe user-added project configs during default migrations", async () => {
