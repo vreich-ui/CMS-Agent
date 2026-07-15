@@ -1513,8 +1513,8 @@ export const publishingConductorNodes = [
     "id": "publication_controller",
     "name": "Publication Controller",
     "kind": "controller",
-    "description": "Prepare an auditable publication decision record for future explicit approval; do not publish yet; validate Dr. Lurie artifact rules before any future publishing; do not call publishing tools in this workspace.",
-    "prompt": "Objective: Prepare an auditable publication decision record for future explicit approval; do not publish yet; validate Dr. Lurie artifact rules before any future publishing; do not call publishing tools in this workspace.\nInputs expected: publish_payload.\nOutput required: produce publication_decision.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "description": "Prepare an auditable publication decision record for future explicit approval; do not publish yet; validate the target project's artifact policy before any future publishing; do not call publishing tools in this workspace.",
+    "prompt": "Objective: Prepare an auditable publication decision record for future explicit approval; do not publish yet; validate the target project's artifact policy before any future publishing; do not call publishing tools in this workspace.\nInputs expected: publish_payload.\nOutput required: produce publication_decision.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1600,9 +1600,9 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-03T00:00:00.000Z",
     "metadata": {
       "approvalRequired": true,
-      "drLuriePolicy": [
+      "projectPolicyNotes": [
         "Do not publish yet",
-        "Validate artifactReferences and raw image artifact URL rules before future publishing"
+        "Validate the target project's artifact-reference and raw-image-URL rules before future publishing"
       ]
     }
   },
@@ -1610,8 +1610,8 @@ export const publishingConductorNodes = [
     "id": "learning_recorder",
     "name": "Learning Recorder",
     "kind": "learning",
-    "description": "Record structured workflow observations, including Dr. Lurie artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.",
-    "prompt": "Objective: Record structured workflow observations, including Dr. Lurie artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "description": "Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.",
+    "prompt": "Objective: Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [

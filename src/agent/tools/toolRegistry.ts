@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { repositoryManager } from "../runtime/repositories.js";
 import { getBudgetStatus, summarizeModelUsage } from "../observability/modelUsage.js";
-import { ProjectMcpAdapter } from "../projects/drLurie/adapter.js";
+import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { toProjectSummary } from "../projects/projectRegistry.js";
 import { getBlobJson, getCmsAgentBlobStore } from "../repository/blobs/blobClient.js";
 import type { ExecutionArtifact } from "../workspace/executionTypes.js";

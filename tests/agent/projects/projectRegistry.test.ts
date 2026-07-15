@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
 import { DR_LURIE_SAFE_READ_ONLY_TOOLS, drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
-import { ProjectMcpAdapter, resolveProjectConnection } from "../../../src/agent/projects/drLurie/adapter.js";
+import { ProjectMcpAdapter, resolveProjectConnection } from "../../../src/agent/projects/projectMcpAdapter.js";
 import { toProjectSummary, validateHandoff } from "../../../src/agent/projects/projectRegistry.js";
 import type { McpTransport } from "../../../src/agent/projects/mcpClient.js";
 import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";

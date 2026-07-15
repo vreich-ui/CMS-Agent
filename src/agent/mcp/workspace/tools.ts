@@ -13,7 +13,7 @@ import { executeNode, getEffectivePrompt, getNodeDetails, listNodeExecutions, li
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
 import { toProjectSummary, validateHandoff } from "../../projects/projectRegistry.js";
 import { createProject, deleteProject, projectCreateSchema, projectRegistrationContract, projectUpdateSchema, updateProject } from "../../projects/projectAdmin.js";
-import { ProjectMcpAdapter } from "../../projects/drLurie/adapter.js";
+import { ProjectMcpAdapter } from "../../projects/projectMcpAdapter.js";
 import { skillDefinitionSchema, validateSkillDefinition } from "../../skills/skillValidator.js";
 import { resolveSkillsForNode } from "../../skills/skillResolver.js";
 import type { SkillDefinition } from "../../skills/skillTypes.js";

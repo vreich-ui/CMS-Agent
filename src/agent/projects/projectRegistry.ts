@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { articleBodySchema } from "../mcp/workspace/store.js";
-import { toConnectionState } from "./drLurie/adapter.js";
+import { toConnectionState } from "./projectMcpAdapter.js";
 import type { ProjectConnectionConfig, ProjectSummary } from "./projectTypes.js";
 
 // Structural schema for the content_source.v1 handoff envelope (mirrors the input_triage node output).

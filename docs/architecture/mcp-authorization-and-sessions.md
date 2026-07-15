@@ -109,6 +109,24 @@ the single mapping, and `tests/agent/mcp/toolNaming.test.ts` pins the pattern, u
 dual-spelling contract. The server also answers the spec-required `ping` request, which clients use
 as a liveness probe.
 
+## Project independence and catalog scoping
+
+The workspace is a project-agnostic Agent SDK host. The independence contract:
+
+- **Generic core never imports from a client folder.** The project MCP adapter
+  (`projects/projectMcpAdapter.ts`) and the default-projects seed (`projects/defaultProjects.ts`)
+  are workspace-level modules; `projects/drLurie/` contains only Dr. Lurie's own definition,
+  artifact policy, and knowledge notes. (`drLurie/adapter.ts` remains as a deprecated re-export.)
+- **No per-project tools.** All `project.*` tools operate on any registered
+  `ProjectConnectionConfig`; project-specific behavior is data (allow-lists, contracts, env-var
+  names), never code in the tool layer.
+- **Seed graph is project-neutral.** The default Publishing Conductor nodes carry
+  `projectPolicyNotes` and neutral prompt text; client-specific policy prose belongs to that
+  client's project module.
+- **Catalog scoping.** `MCP_EXPOSED_TOOL_PREFIXES` (e.g. `workspace,node,project,workflow`) trims
+  both `tools/list` and `tools/call` to the listed namespaces for lighter connector contexts;
+  unset exposes everything.
+
 ## Configuration
 
 | Variable | Purpose | Default |
