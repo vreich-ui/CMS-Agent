@@ -457,6 +457,10 @@ CMS-Agent can register external **project** MCP servers and perform primitive, g
 * The project registry is defined in `src/agent/projects/projectTypes.ts` and `src/agent/projects/projectRegistry.ts`. Each project connection carries `projectId`, `name`, `mcpEndpointEnvVar`, `authMode`, `tokenEnvVar`, `allowedTools`, `contentContract`, `publishingPolicy`, and `status`.
 * Connection configs are stored **through repositories** (`ProjectRepository`, backed by memory or Netlify Blobs like the other repositories), seeded from the code-defined defaults — not from hardcoded runtime state.
 * The **Dr. Lurie** project (`dr-lurie`) is defined in `src/agent/projects/drLurie/definition.ts` with `contentContract: content_source.v1` and `canonicalArticleBody: article_body.v1`. Its publishing policy is disabled (`publishEnabled: false`, `requiresExplicitPublish: true`).
+* Three additional MCP servers ship as code-defined defaults, each in its own folder under `src/agent/projects/` and following the same shape (`bearer_env` auth, publishing disabled, deny-all except an explicitly allow-listed set of **safe read-only** tools):
+  * **PDF Tool** (`pdf-tool`, `src/agent/projects/pdfTool/definition.ts`) — server-side artifact/PDF/image generation. Allow-listed reads: `list_pdf_templates`, `get_pdf_template`, `get_agent_artifact_job_status`, `get_agent_artifact_by_filename`, `get_agent_artifact_by_slot`, `get_image_search_policy`, `get_image_search_bank`, `get_image_search_job_status`.
+  * **Snoocle** (`snoocle`, `src/agent/projects/snoocle/definition.ts`) — audio-to-song-data foundry. Allow-listed reads: `server_status`, `list_songs`, `get_song`, `get_song_schema`, `list_song_versions`, `diff_song_versions`, `probe_audio`.
+  * **Monetizer** (`monetizer`, `src/agent/projects/monetizer/definition.ts`) — affiliate/monetization intelligence. Allow-listed reads: `list_sources`, `list_connections`, `search_offers`, `performance`, `demand_signals`, `explain_decision`.
 * The MCP connection adapter lives in `src/agent/projects/mcpClient.ts` (a minimal JSON-RPC client) and `src/agent/projects/drLurie/adapter.ts` (the project adapter). It supports the primitive calls `initialize`, `tools/list`, best-effort schema/contract discovery, and a best-effort dry validation call.
 
 ### Environment variables
@@ -466,9 +470,15 @@ The project endpoint and bearer token are resolved from environment variables at
 ```text
 DR_LURIE_MCP_ENDPOINT=
 DR_LURIE_MCP_TOKEN=
+PDF_TOOL_MCP_ENDPOINT=
+PDF_TOOL_MCP_TOKEN=
+SNOOCLE_MCP_ENDPOINT=
+SNOOCLE_MCP_TOKEN=
+MONETIZER_MCP_ENDPOINT=
+MONETIZER_MCP_TOKEN=
 ```
 
-Only non-secret metadata is stored and returned. Project views expose the env var *names* plus `endpointConfigured` / `tokenConfigured` booleans — never the endpoint value, token, authorization header, cookies, or JWTs.
+Each connection uses its own `<CLIENT>_MCP_ENDPOINT` / `<CLIENT>_MCP_TOKEN` pair (per the `project_registration.v1` naming convention). Set the values in the Netlify deployment; no existing env var is reused across connections, because each outbound MCP server has its own endpoint and bearer token. Only non-secret metadata is stored and returned. Project views expose the env var *names* plus `endpointConfigured` / `tokenConfigured` booleans — never the endpoint value, token, authorization header, cookies, or JWTs.
 
 ### MCP tools
 
