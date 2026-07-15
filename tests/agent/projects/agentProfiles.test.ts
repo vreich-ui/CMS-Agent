@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getProject, listProjects, ProjectNotFoundError } from "../../../src/agent/projects/registry.js";
+import { getProject, listProjects, ProjectNotFoundError } from "../../../src/agent/projects/agentProfiles.js";
 
 describe("project registry", () => {
   it("resolves a known projectId", () => {

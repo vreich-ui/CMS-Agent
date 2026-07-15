@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getProject } from "../../../src/agent/projects/registry.js";
+import { getProject } from "../../../src/agent/projects/agentProfiles.js";
 import { getAllowedSkills } from "../../../src/agent/skills/registry.js";
 import type { ProjectProfile } from "../../../src/agent/runtime/types.js";
 
