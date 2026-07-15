@@ -1,4 +1,4 @@
-import { WorkspaceStateStore, createDefaultWorkspaceDocument, workspaceDocumentSchema, type WorkspaceDocument } from "../../mcp/workspace/store.js";
+import { WorkspaceStateStore, createDefaultWorkspaceDocument, parseWorkspaceDocumentTolerant, type WorkspaceDocument } from "../../mcp/workspace/store.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { WorkspaceRepository } from "../interfaces/WorkspaceRepository.js";
 import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
@@ -15,7 +15,11 @@ export class BlobWorkspaceRepository extends WorkspaceStateStore implements Work
       await this.save(document);
       return document;
     }
-    return workspaceDocumentSchema.parse(raw) as WorkspaceDocument;
+    // Tolerant parse: a single unusable node record must not brick every read/mutate. Invalid nodes
+    // are dropped and the healed document is written back so the repair is permanent.
+    const { document, droppedNodes } = parseWorkspaceDocumentTolerant(raw);
+    if (droppedNodes > 0) await this.save(document);
+    return document;
   }
 
   protected override async save(document: WorkspaceDocument) {

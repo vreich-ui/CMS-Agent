@@ -248,6 +248,42 @@ const normalizeNode = (node: WorkspaceNode): WorkspaceNode => ({
   outputSchema: node.outputSchema ?? node.schema ?? { type: "object" },
   updatedAt: node.updatedAt ?? now()
 });
+
+// Coerce a node argument to a plain object before it is spread into the store. MCP clients may send
+// a nested object parameter as a JSON string (the `node` field is schema-typed `{}`); left as a
+// string it would be spread into indexed characters and persisted as a node with no id/name/prompt.
+// A string is JSON-parsed; anything that is not a plain object is rejected outright.
+export const coerceNodeInput = (node: unknown): WorkspaceNode => {
+  let value: unknown = node;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { throw new Error("invalid_node: node string is not valid JSON"); }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_node: expected a node object");
+  return value as WorkspaceNode;
+};
+
+// Universal write-side guard: a node is only persistable if it satisfies the node schema (id, name,
+// and prompt present, etc.). Enforced in mutate() so no mutation path can ever write a node that a
+// later strict read would choke on. Returns the parsed/normalized node.
+const assertPersistableNode = (node: WorkspaceNode): WorkspaceNode => {
+  const parsed = workspaceNodeSchema.safeParse(node);
+  if (!parsed.success) throw new Error(`invalid_node: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"} ${issue.message}`).join("; ")}`);
+  return parsed.data as WorkspaceNode;
+};
+
+// Tolerant document parse used on read: a single unusable node record must never brick the entire
+// workspace. Node records that fail schema validation are dropped (their count reported) and the
+// rest of the document is parsed normally. Callers persist the healed document so the store repairs
+// itself. A structurally-broken document (not even an object with a nodes array) still throws.
+export const parseWorkspaceDocumentTolerant = (raw: unknown): { document: WorkspaceDocument; droppedNodes: number } => {
+  if (raw && typeof raw === "object" && Array.isArray((raw as { nodes?: unknown }).nodes)) {
+    const rawNodes = (raw as { nodes: unknown[] }).nodes;
+    const validNodes = rawNodes.filter((node) => workspaceNodeSchema.safeParse(node).success);
+    const document = workspaceDocumentSchema.parse({ ...(raw as object), nodes: validNodes }) as WorkspaceDocument;
+    return { document, droppedNodes: rawNodes.length - validNodes.length };
+  }
+  return { document: workspaceDocumentSchema.parse(raw) as WorkspaceDocument, droppedNodes: 0 };
+};
 const assertWorkspaceVersion = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => { if (meta?.expectedWorkspaceVersion !== undefined && document.workspaceVersion !== meta.expectedWorkspaceVersion) throw new Error(`workspace_version_conflict: expected ${meta.expectedWorkspaceVersion}, current ${document.workspaceVersion}`); };
 const assertBaseRevision = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => { if (meta?.baseRevisionId !== undefined && document.currentRevisionId !== meta.baseRevisionId) throw new Error(`revision_conflict: expected ${meta.baseRevisionId}, current ${document.currentRevisionId ?? "none"}`); };
 const operationForEventType = (eventType: string): WorkspaceChangeOperation => {
@@ -299,7 +335,9 @@ export class WorkspaceStateStore implements WorkspaceStore {
     const beforeNodes = structuredClone(document.nodes);
     const beforeRelationships = structuredClone(document.relationships ?? []);
     update(document);
-    document.nodes = document.nodes.map(normalizeNode);
+    // Normalize, then validate every node before anything is saved: save() does not re-validate, so
+    // this is the single backstop that guarantees no mutation persists a node a strict read rejects.
+    document.nodes = document.nodes.map(normalizeNode).map(assertPersistableNode);
     assertGraphValid(document.nodes);
     document.workspaceVersion += 1;
     document.updatedAt = now();
@@ -419,11 +457,11 @@ export class WorkspaceStateStore implements WorkspaceStore {
     }, meta, "node.output_schema_updated", id);
     return updated!;
   }
-  async createNode(node: WorkspaceNode, meta: WorkspaceMutationMeta, eventType = "node.created") { let workspaceVersion = 0; const normalized = normalizeNode(node); workspaceVersion = await this.mutate((document) => { if (document.nodes.some((existing) => existing.id === node.id)) throw new Error(`Duplicate node id: ${node.id}`); document.nodes = [...document.nodes, normalized]; }, meta, eventType, node.id); return { node: normalized, workspaceVersion }; }
+  async createNode(node: WorkspaceNode, meta: WorkspaceMutationMeta, eventType = "node.created") { let workspaceVersion = 0; const normalized = normalizeNode(coerceNodeInput(node)); workspaceVersion = await this.mutate((document) => { if (document.nodes.some((existing) => existing.id === normalized.id)) throw new Error(`Duplicate node id: ${normalized.id}`); document.nodes = [...document.nodes, normalized]; }, meta, eventType, normalized.id); return { node: normalized, workspaceVersion }; }
   async deleteNode(id: string, meta: WorkspaceMutationMeta) { let workspaceVersion = 0; workspaceVersion = await this.mutate((document) => { if (document.nodes.some((node) => node.dependsOn.includes(id))) throw new Error(`Cannot delete referenced node: ${id}`); document.nodes = document.nodes.filter((node) => node.id !== id); }, meta, "node.deleted", id); return { deleted: true as const, workspaceVersion }; }
   async cloneNode(id: string, newId: string, meta: WorkspaceMutationMeta) { const existing = await this.getNode(id); if (!existing) throw new Error(`Unknown node: ${id}`); const node = normalizeNode({ ...structuredClone(existing), id: newId, name: `${existing.name} Copy`, dependsOn: [...existing.dependsOn], updatedAt: now() }); let workspaceVersion = 0; workspaceVersion = await this.mutate((document) => { if (document.nodes.some((existingNode) => existingNode.id === newId)) throw new Error(`Duplicate node id: ${newId}`); document.nodes = [...document.nodes, node]; }, meta, "node.cloned", newId); return { node, workspaceVersion }; }
   async updateNode(id: string, patch: Partial<WorkspaceNode>, meta: WorkspaceMutationMeta, eventType = "node.updated") { let node: WorkspaceNode | undefined; const workspaceVersion = await this.mutate((document) => { const existing = document.nodes.find((candidate) => candidate.id === id); if (!existing) throw new Error(`Unknown node: ${id}`); node = normalizeNode({ ...existing, ...patch, id, updatedAt: now() }); document.nodes = upsertWorkspaceNode(document.nodes, node); }, meta, eventType, id); return { node: node!, workspaceVersion }; }
-  async updateGraph(update: WorkspaceGraphUpdate, meta: WorkspaceMutationMeta, eventType = "graph.updated") { let nodes: WorkspaceNode[] = []; const workspaceVersion = await this.mutate((document) => { nodes = [...document.nodes]; (update.delete ?? []).forEach((id) => { if (nodes.some((node) => node.dependsOn.includes(id)) && !(update.delete ?? []).includes(id)) throw new Error(`Cannot delete referenced node: ${id}`); nodes = nodes.filter((node) => node.id !== id); }); (update.create ?? []).forEach((node) => { if (nodes.some((existing) => existing.id === node.id)) throw new Error(`Duplicate node id: ${node.id}`); nodes.push(normalizeNode(node)); }); (update.update ?? []).forEach((patch) => { const existing = nodes.find((node) => node.id === patch.id); if (!existing) throw new Error(`Unknown node: ${patch.id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, ...patch, updatedAt: now() })); }); Object.entries(update.dependencies ?? {}).forEach(([id, dependsOn]) => { const existing = nodes.find((node) => node.id === id); if (!existing) throw new Error(`Unknown node: ${id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, dependsOn, updatedAt: now() })); }); Object.entries(update.positions ?? {}).forEach(([id, position]) => { const existing = nodes.find((node) => node.id === id); if (!existing) throw new Error(`Unknown node: ${id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, position, updatedAt: now() })); }); if (update.orderedNodeIds) { const ordered = update.orderedNodeIds.map((id) => nodes.find((node) => node.id === id)); if (ordered.some((node) => !node) || ordered.length !== nodes.length) throw new Error("orderedNodeIds must contain every node exactly once."); nodes = (ordered as WorkspaceNode[]).map((node, index) => normalizeNode({ ...node, position: node.position ? { ...node.position, y: index * 100 } : { x: 0, y: index * 100 }, updatedAt: now() })); } assertGraphValid(nodes, update.allowCanonicalNodeRemoval, update.adminApproved); document.nodes = nodes; }, meta, eventType); return { nodes: sortWorkspaceNodes(nodes), workspaceVersion }; }
+  async updateGraph(update: WorkspaceGraphUpdate, meta: WorkspaceMutationMeta, eventType = "graph.updated") { let nodes: WorkspaceNode[] = []; const workspaceVersion = await this.mutate((document) => { nodes = [...document.nodes]; (update.delete ?? []).forEach((id) => { if (nodes.some((node) => node.dependsOn.includes(id)) && !(update.delete ?? []).includes(id)) throw new Error(`Cannot delete referenced node: ${id}`); nodes = nodes.filter((node) => node.id !== id); }); (update.create ?? []).forEach((rawNode) => { const node = coerceNodeInput(rawNode); if (nodes.some((existing) => existing.id === node.id)) throw new Error(`Duplicate node id: ${node.id}`); nodes.push(normalizeNode(node)); }); (update.update ?? []).forEach((patch) => { const existing = nodes.find((node) => node.id === patch.id); if (!existing) throw new Error(`Unknown node: ${patch.id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, ...patch, updatedAt: now() })); }); Object.entries(update.dependencies ?? {}).forEach(([id, dependsOn]) => { const existing = nodes.find((node) => node.id === id); if (!existing) throw new Error(`Unknown node: ${id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, dependsOn, updatedAt: now() })); }); Object.entries(update.positions ?? {}).forEach(([id, position]) => { const existing = nodes.find((node) => node.id === id); if (!existing) throw new Error(`Unknown node: ${id}`); nodes = upsertWorkspaceNode(nodes, normalizeNode({ ...existing, position, updatedAt: now() })); }); if (update.orderedNodeIds) { const ordered = update.orderedNodeIds.map((id) => nodes.find((node) => node.id === id)); if (ordered.some((node) => !node) || ordered.length !== nodes.length) throw new Error("orderedNodeIds must contain every node exactly once."); nodes = (ordered as WorkspaceNode[]).map((node, index) => normalizeNode({ ...node, position: node.position ? { ...node.position, y: index * 100 } : { x: 0, y: index * 100 }, updatedAt: now() })); } assertGraphValid(nodes, update.allowCanonicalNodeRemoval, update.adminApproved); document.nodes = nodes; }, meta, eventType); return { nodes: sortWorkspaceNodes(nodes), workspaceVersion }; }
   async exportWorkspace() { return structuredClone(await this.load()); }
   async importWorkspace(workspace: { nodes?: WorkspaceNode[]; stageOutputs?: StageOutput[]; learningObservations?: LearningObservation[] }) {
     let workspaceVersion = 0;
@@ -458,7 +496,10 @@ export class JsonWorkspaceStore extends WorkspaceStateStore {
     if (this.loaded) return this.document;
     try {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8"));
-      this.document = workspaceDocumentSchema.parse(parsed) as WorkspaceDocument;
+      const { document, droppedNodes } = parseWorkspaceDocumentTolerant(parsed);
+      this.document = document;
+      // Persist the healed document so a dropped-node repair is permanent.
+      if (droppedNodes > 0) await this.save(this.document);
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         this.document = createDefaultWorkspaceDocument();
