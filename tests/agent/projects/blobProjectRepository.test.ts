@@ -46,6 +46,22 @@ describe("Blob project repository", () => {
     }
   });
 
+  it("self-heals a workspace blob poisoned with an invalid node on read", async () => {
+    const { createDefaultWorkspaceDocument } = await import("../../../src/agent/mcp/workspace/store.js");
+    const { BlobWorkspaceRepository } = await import("../../../src/agent/repository/blobs/BlobWorkspaceRepository.js");
+    const base = createDefaultWorkspaceDocument();
+    const validCount = base.nodes.length;
+    // A node with no id/name/prompt — the shape that bricked the live workspace.
+    const poisoned = { ...base, nodes: [...base.nodes, { "0": "{", kind: "workspace", updatedAt: new Date().toISOString() }] };
+    blobData.set("workspace/current.json", poisoned);
+
+    const nodes = await new BlobWorkspaceRepository().getNodes();
+    expect(nodes).toHaveLength(validCount);
+    // The heal is persisted: the stored blob no longer contains the poisoned record.
+    const healed = blobData.get("workspace/current.json") as { nodes: unknown[] };
+    expect(healed.nodes).toHaveLength(validCount);
+  });
+
   it("deletes a custom project blob and reports whether it existed", async () => {
     blobData.set("projects/custom.json", { ...structuredClone(drLurieProjectConfig), projectId: "custom", name: "Custom" });
     const repository = new RepositoryManager({ backend: "blobs" }).getProjectRepository();
