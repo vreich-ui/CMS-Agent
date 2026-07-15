@@ -53,6 +53,21 @@ describe("per-project hooks: validate_handoff policy + knowledge", () => {
     expect(data.validation.valid).toBe(true);
   });
 
+  it("coerces a stringified articleBody payload (MCP client serialization) before validation", async () => {
+    // Observed live: the connector delivered articleBody as a JSON string. The hook must still run
+    // over the parsed object and report policy findings.
+    const articleBody = JSON.stringify({
+      schema_version: "article_body.v1",
+      nodes: [{ id: "n_img", kind: "content", public: { title: "T", body: "Body.", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }]
+    });
+    const { data } = await call("project.validate_handoff", { projectId: "dr-lurie", articleBody });
+    const validation = data.validation;
+
+    expect(validation.checks.articleBody.valid).toBe(true);
+    expect(validation.projectPolicy.findings.map((finding: { code: string }) => finding.code)).toContain("raw_image_artifact_public_url");
+    expect(validation.valid).toBe(false);
+  });
+
   it("surfaces Dr. Lurie knowledge rules on project.get and null for hookless projects", async () => {
     const drLurie = await call("project.get", { projectId: "dr-lurie" });
     expect(drLurie.data.knowledge.projectId).toBe("dr-lurie");
