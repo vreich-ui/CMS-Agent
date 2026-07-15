@@ -109,6 +109,41 @@ the single mapping, and `tests/agent/mcp/toolNaming.test.ts` pins the pattern, u
 dual-spelling contract. The server also answers the spec-required `ping` request, which clients use
 as a liveness probe.
 
+## Project independence and catalog scoping
+
+The workspace is a project-agnostic Agent SDK host. The independence contract:
+
+- **Generic core never imports from a client folder.** The project MCP adapter
+  (`projects/projectMcpAdapter.ts`) and the default-projects seed (`projects/defaultProjects.ts`)
+  are workspace-level modules; `projects/drLurie/` contains only Dr. Lurie's own definition,
+  artifact policy, and knowledge notes. (`drLurie/adapter.ts` remains as a deprecated re-export.)
+- **No per-project tools.** All `project.*` tools operate on any registered
+  `ProjectConnectionConfig`; project-specific behavior is data (allow-lists, contracts, env-var
+  names), never code in the tool layer.
+- **Seed graph is project-neutral.** The default Publishing Conductor nodes carry
+  `projectPolicyNotes` and neutral prompt text; client-specific policy prose belongs to that
+  client's project module.
+- **Catalog scoping.** `MCP_EXPOSED_TOOL_PREFIXES` (e.g. `workspace,node,project,workflow`) trims
+  both `tools/list` and `tools/call` to the listed namespaces for lighter connector contexts;
+  unset exposes everything.
+- **Per-project hooks are the plugin seam.** `projects/projectHooks.ts` maps projectId → optional
+  code hooks: `validateHandoffPolicy` (extra findings layered onto `project.validate_handoff`;
+  `error` findings mark the handoff invalid, `warning` findings are advisory) and `knowledge`
+  (safe structured rules surfaced on `project.get`). Dr. Lurie's artifact policy and knowledge
+  rules are wired through this registry — client rules live as plugins, never in generic code.
+- **Deprecated tool aliases.** One-to-one duplicate tools resolve via `DEPRECATED_TOOL_ALIASES`
+  in `server.ts` (`node.list` → `workspace.get_nodes`, `node.get_execution` →
+  `node.list_executions`, `workspace.update_node_schema` → `workspace.update_node_output_schema`).
+  Aliases stay callable under both spellings but are not advertised by `tools/list`; alias
+  callability follows the alias name's namespace in the exposure allowlist.
+- **Self-healing is observable.** `repository.get_health` reports
+  `workspace.details.healedDroppedNodes` whenever a tolerant load dropped corrupt node records in
+  the current process, so a silent heal never goes unnoticed.
+- **Two "project" concepts, named apart.** Agent execution profiles for `/api/agent` live in
+  `projects/agentProfiles.ts` (formerly `registry.ts`); external client MCP connections live in
+  the `ProjectRepository`. Unifying them behind one registry is roadmap; the rename keeps the
+  concepts from blurring until then.
+
 ## Configuration
 
 | Variable | Purpose | Default |

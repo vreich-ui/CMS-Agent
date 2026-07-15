@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getProject } from "../../../src/agent/projects/registry.js";
+import { getProject } from "../../../src/agent/projects/agentProfiles.js";
 import { publishContent } from "../../../src/agent/skills/publish.js";
 
 describe("publishContent", () => {

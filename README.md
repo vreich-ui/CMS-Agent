@@ -111,6 +111,12 @@ still work unless `MCP_REQUIRE_SESSION=true`.
 forward them verbatim into the Anthropic API, which only accepts `^[a-zA-Z0-9_-]{1,64}$`.
 `tools/call` accepts both the canonical and the legacy dotted spelling (`workspace.get_nodes`).
 
+### Catalog scoping
+
+The full catalog is 100+ tools. Set `MCP_EXPOSED_TOOL_PREFIXES` (comma-separated namespaces, e.g.
+`workspace,node,project,workflow`) to expose only those namespaces — unexposed tools are neither
+listed nor callable. Unset exposes everything.
+
 ## Architecture
 
 ```text

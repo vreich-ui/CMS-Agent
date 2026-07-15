@@ -326,6 +326,12 @@ export class WorkspaceStateStore implements WorkspaceStore {
   protected changeSink?: WorkspaceChangeSink;
   constructor(document: WorkspaceDocument = createDefaultWorkspaceDocument()) { this.document = document; }
   attachChangeSink(sink: WorkspaceChangeSink) { this.changeSink = sink; }
+  // Process-local count of node records dropped by tolerant self-healing loads (see
+  // parseWorkspaceDocumentTolerant). Surfaced through repository health so a silent heal is
+  // observable instead of invisible; resets with the process/request lifecycle.
+  protected healedDroppedNodes = 0;
+  getHealedDroppedNodes(): number { return this.healedDroppedNodes; }
+
   protected async load() { return this.document; }
   protected async save(document: WorkspaceDocument) { this.document = document; }
   protected async mutate(update: (document: WorkspaceDocument) => void, meta?: WorkspaceMutationMeta, eventType = "workspace.updated", nodeId?: string) {
@@ -499,7 +505,10 @@ export class JsonWorkspaceStore extends WorkspaceStateStore {
       const { document, droppedNodes } = parseWorkspaceDocumentTolerant(parsed);
       this.document = document;
       // Persist the healed document so a dropped-node repair is permanent.
-      if (droppedNodes > 0) await this.save(this.document);
+      if (droppedNodes > 0) {
+        this.healedDroppedNodes += droppedNodes;
+        await this.save(this.document);
+      }
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         this.document = createDefaultWorkspaceDocument();

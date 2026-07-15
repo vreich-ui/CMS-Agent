@@ -26,7 +26,5 @@ export const drLurieProjectConfig: ProjectConnectionConfig = {
   status: "active"
 };
 
-// Code-defined default project connections. Repositories seed themselves from this list, so the
-// persisted registry (memory/blobs) always contains at least the known projects without hardcoding
-// them at the tool/runtime layer.
-export const defaultProjectConnections: ProjectConnectionConfig[] = [drLurieProjectConfig];
+// The default-projects seed list lives in ../defaultProjects.ts — this module defines ONLY the
+// Dr. Lurie connection so the workspace core never has to import from a client-specific folder.

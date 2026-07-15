@@ -4,18 +4,61 @@ import { createWorkspaceTools, toolError, type WorkspaceTool, type WorkspaceTool
 import { canonicalToolName } from "./toolKit.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 
+// Optional catalog scoping for connectors. The full workspace catalog is 100+ tools, which is a
+// heavy context load for MCP clients; MCP_EXPOSED_TOOL_PREFIXES (comma-separated namespace list,
+// e.g. "workspace,node,project") trims what tools/list advertises AND what tools/call will
+// execute. Unset or empty means everything is exposed — existing deployments are unaffected.
+// Prefixes match the tool namespace (the segment before the first "." / "_" group), so "node"
+// exposes node.* without accidentally exposing nothing or everything.
+const exposedToolPrefixes = (env: NodeJS.ProcessEnv = process.env): string[] | null => {
+  const raw = (env.MCP_EXPOSED_TOOL_PREFIXES ?? "").trim();
+  if (!raw) return null;
+  const prefixes = raw.split(",").map((prefix) => prefix.trim().toLowerCase()).filter(Boolean);
+  return prefixes.length ? prefixes : null;
+};
+
+export const isToolExposed = (dottedName: string, env: NodeJS.ProcessEnv = process.env): boolean => {
+  const prefixes = exposedToolPrefixes(env);
+  if (!prefixes) return true;
+  const namespace = dottedName.split(".")[0].toLowerCase();
+  return prefixes.includes(namespace);
+};
+
+// Deprecated tool aliases: old names that duplicated another tool one-to-one. Aliases resolve on
+// tools/call (both dotted and underscore spellings) but are NOT advertised by tools/list, shrinking
+// the catalog without breaking existing callers. An alias is callable when the ALIAS name passes
+// the exposure allowlist — the operator scopes by the names callers actually use.
+export const DEPRECATED_TOOL_ALIASES: Record<string, string> = {
+  "node.list": "workspace.get_nodes",
+  "node.get_execution": "node.list_executions",
+  "workspace.update_node_schema": "workspace.update_node_output_schema"
+};
+
 // Wire-facing tool listing and lookup. tools/list serves ONLY canonical (underscore) names — the
 // dotted internal names violate the Anthropic tool-name pattern and made claude.ai reject the
 // connector's entire tool list. tools/call resolves the canonical name and, for backward
-// compatibility, the legacy dotted spelling.
+// compatibility, the legacy dotted spelling. Both listing and lookup honor the exposure allowlist:
+// an unexposed tool is neither advertised nor callable (it reads as unknown).
 const listedTools = (tools: WorkspaceTool[]) =>
-  tools.map((tool) => ({ name: canonicalToolName(tool.name), description: tool.description, inputSchema: tool.inputSchema }));
+  tools
+    .filter((tool) => isToolExposed(tool.name))
+    .map((tool) => ({ name: canonicalToolName(tool.name), description: tool.description, inputSchema: tool.inputSchema }));
 
 const indexToolsByName = (tools: WorkspaceTool[]): Map<string, WorkspaceTool> => {
+  const all = new Map<string, WorkspaceTool>();
+  for (const tool of tools) all.set(tool.name, tool);
+
   const byName = new Map<string, WorkspaceTool>();
   for (const tool of tools) {
+    if (!isToolExposed(tool.name)) continue;
     byName.set(canonicalToolName(tool.name), tool);
     byName.set(tool.name, tool);
+  }
+  for (const [alias, target] of Object.entries(DEPRECATED_TOOL_ALIASES)) {
+    const tool = all.get(target);
+    if (!tool || !isToolExposed(alias)) continue;
+    byName.set(alias, tool);
+    byName.set(canonicalToolName(alias), tool);
   }
   return byName;
 };

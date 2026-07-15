@@ -1,4 +1,4 @@
-import { defaultProjectConnections } from "./drLurie/definition.js";
+import { defaultProjectConnections } from "./defaultProjects.js";
 import type { ProjectConnectionConfig } from "./projectTypes.js";
 
 const clone = <T>(value: T): T => structuredClone(value);

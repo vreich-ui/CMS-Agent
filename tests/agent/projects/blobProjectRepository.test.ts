@@ -55,11 +55,14 @@ describe("Blob project repository", () => {
     const poisoned = { ...base, nodes: [...base.nodes, { "0": "{", kind: "workspace", updatedAt: new Date().toISOString() }] };
     blobData.set("workspace/current.json", poisoned);
 
-    const nodes = await new BlobWorkspaceRepository().getNodes();
+    const repository = new BlobWorkspaceRepository();
+    const nodes = await repository.getNodes();
     expect(nodes).toHaveLength(validCount);
     // The heal is persisted: the stored blob no longer contains the poisoned record.
     const healed = blobData.get("workspace/current.json") as { nodes: unknown[] };
     expect(healed.nodes).toHaveLength(validCount);
+    // ...and observable: health reports how many records self-healing dropped.
+    expect((await repository.health()).details).toEqual({ healedDroppedNodes: 1 });
   });
 
   it("deletes a custom project blob and reports whether it existed", async () => {

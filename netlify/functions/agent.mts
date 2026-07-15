@@ -1,6 +1,6 @@
 import { ZodError } from "zod";
 import { validateRequest } from "../../src/agent/runtime/validateRequest.js";
-import { getProject, ProjectNotFoundError } from "../../src/agent/projects/registry.js";
+import { getProject, ProjectNotFoundError } from "../../src/agent/projects/agentProfiles.js";
 import { runAgent } from "../../src/agent/runtime/runAgent.js";
 import { hasBearerToken, unauthorizedResponse, type HeaderMap } from "../../src/agent/runtime/auth.js";
 import { connectLambdaBlobs } from "../../src/agent/runtime/lambdaBlobs.js";

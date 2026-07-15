@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { articleBodySchema } from "../mcp/workspace/store.js";
-import { toConnectionState } from "./drLurie/adapter.js";
+import { toConnectionState } from "./projectMcpAdapter.js";
+import { getProjectHooks, type ProjectPolicyFinding } from "./projectHooks.js";
 import type { ProjectConnectionConfig, ProjectSummary } from "./projectTypes.js";
 
 // Structural schema for the content_source.v1 handoff envelope (mirrors the input_triage node output).
@@ -34,17 +35,23 @@ const checkStructure = (present: boolean, contract: string, schema: z.ZodTypeAny
   return { present: true, valid: parsed.success, contract, issues: parsed.success ? [] : parsed.error.issues };
 };
 
+export type HandoffProjectPolicy = { applied: boolean; findings: ProjectPolicyFinding[] };
+
 export type HandoffValidation = {
   valid: boolean;
   projectId: string;
   contract: { contentContract: string; canonicalArticleBody: string };
   checks: { contentSource: StructureCheck; articleBody: StructureCheck };
+  // Project-specific policy layered via the hook registry (projectHooks.ts). "error" findings mark
+  // the handoff invalid; "warning" findings are advisory.
+  projectPolicy: HandoffProjectPolicy;
   issues: string[];
 };
 
 // Validate a handoff payload's structure against the project's declared content contract
-// (content_source.v1) and canonical article body (article_body.v1). This is a local, read-only,
-// dry structural check — it performs no network calls and no publishing side effects.
+// (content_source.v1) and canonical article body (article_body.v1), then layer the project's own
+// policy hook when one is registered. This is a local, read-only, dry check — it performs no
+// network calls and no publishing side effects.
 export function validateHandoff(config: ProjectConnectionConfig, payload: { contentSource?: unknown; articleBody?: unknown }): HandoffValidation {
   const { contentContract, canonicalArticleBody } = config.contentContract;
   const contentSourceSchema = contentContract === "content_source.v1" ? contentSourceV1Schema : null;
@@ -61,6 +68,13 @@ export function validateHandoff(config: ProjectConnectionConfig, payload: { cont
   if (contentSource.present && !contentSource.valid) issues.push(`contentSource does not satisfy ${contentContract}.`);
   if (articleBody.present && !articleBody.valid) issues.push(`articleBody does not satisfy ${canonicalArticleBody}.`);
 
+  const policyHook = getProjectHooks(config.projectId)?.validateHandoffPolicy;
+  const findings = policyHook && (contentSourcePresent || articleBodyPresent) ? policyHook(payload) : [];
+  const projectPolicy: HandoffProjectPolicy = { applied: Boolean(policyHook), findings };
+  for (const finding of findings) {
+    if (finding.severity === "error") issues.push(`[${config.projectId} policy] ${finding.code} at ${finding.path || "$"}: ${finding.message}`);
+  }
+
   const valid = issues.length === 0 && (contentSourcePresent || articleBodyPresent);
-  return { valid, projectId: config.projectId, contract: { contentContract, canonicalArticleBody }, checks: { contentSource, articleBody }, issues };
+  return { valid, projectId: config.projectId, contract: { contentContract, canonicalArticleBody }, checks: { contentSource, articleBody }, projectPolicy, issues };
 }
