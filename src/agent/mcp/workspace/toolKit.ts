@@ -23,6 +23,22 @@ export const ok = (data: unknown) => ({ ok: true, data });
 // unaffected.
 export const ANTHROPIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 export const canonicalToolName = (name: string): string => name.replace(/\./g, "_");
+
+// Some MCP clients serialize object-typed arguments as JSON strings (observed live with Claude's
+// connector: the `node` arg of workspace.create_node and the payload args of
+// project.validate_handoff both arrived stringified). For parameters that are contractually
+// objects, parse a string that contains a JSON object/array; anything else passes through
+// unchanged so downstream schema validation reports the real shape error.
+export const coerceJsonObjectInput = (value: unknown): unknown => {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+};
 export const tool = (definition: WorkspaceTool) => definition;
 export const toolError = (error: unknown) => error instanceof ZodError ? { ok: false, error: { code: "validation_error", issues: error.issues } } : { ok: false, error: { code: "tool_error", message: error instanceof Error ? error.message : "Unknown error" } };
 
