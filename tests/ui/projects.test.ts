@@ -7,6 +7,8 @@ const project = (projectId: string, name: string): ProjectSummary => ({
   name,
   authMode: "bearer_env",
   allowedTools: [],
+  defaultToolPolicy: "blocked",
+  toolPolicies: {},
   contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
   publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "" },
   status: "active",

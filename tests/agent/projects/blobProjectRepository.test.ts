@@ -83,7 +83,7 @@ describe("Blob project repository", () => {
     const custom = await repository.get("custom");
 
     expect(drLurie?.definitionVersion).toBe(drLurieProjectConfig.definitionVersion);
-    expect(drLurie?.allowedTools).toEqual(["ping", "registry_get", "object_inventory", "object_contract"]);
+    expect(drLurie?.allowedTools).toEqual(drLurieProjectConfig.allowedTools);
     expect(custom?.allowedTools).toEqual(["custom_read"]);
   });
 });

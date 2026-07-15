@@ -97,12 +97,12 @@ describe("project.* MCP tools", () => {
     expect(JSON.stringify(response.json)).not.toContain(ENDPOINT);
   });
 
-  it("project.call_tool blocks disallowed publishing and mutation tools before remote calls", async () => {
-    const publish = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "publish_article", arguments: {} });
-    const saveBlob = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "save_json_blob_article", arguments: {} });
+  it("project.call_tool holds a needs_approval tool before any remote call", async () => {
+    // dr-lurie runs with full access, but wipe_blob_stores is held for approval — it must not reach
+    // the remote server until a human allows it.
+    const wipe = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "wipe_blob_stores", arguments: {} });
 
-    expect(structured(publish).data.call).toMatchObject({ ok: false, tool: "publish_article", error: "Tool is not allowed for project: publish_article" });
-    expect(structured(saveBlob).data.call).toMatchObject({ ok: false, tool: "save_json_blob_article", error: "Tool is not allowed for project: save_json_blob_article" });
+    expect(structured(wipe).data.call).toMatchObject({ ok: false, tool: "wipe_blob_stores", permission: "needs_approval", requiresApproval: true });
     expect(remoteFetch).not.toHaveBeenCalled();
   });
 

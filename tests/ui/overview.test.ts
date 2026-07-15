@@ -29,6 +29,8 @@ const project = (overrides: Partial<ProjectSummary>): ProjectSummary => ({
   name: "Dr. Lurie",
   authMode: "bearer_env",
   allowedTools: [],
+  defaultToolPolicy: "blocked",
+  toolPolicies: {},
   contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
   publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "Publishing disabled" },
   status: "active",

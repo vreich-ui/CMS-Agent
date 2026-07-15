@@ -23,6 +23,11 @@ describe("parseRoute", () => {
     expect(parseRoute("/constellation/", "?mode=history")).toEqual({ page: "constellation", mode: "history" });
   });
 
+  it("parses the access page", () => {
+    expect(parseRoute("/access", "")).toEqual({ page: "access" });
+    expect(navPages.map((page) => page.page)).toContain("access");
+  });
+
   it("ignores trailing slashes", () => {
     expect(parseRoute("/runs/", "")).toEqual({ page: "runs" });
     expect(parseRoute("//settings//", "")).toEqual({ page: "settings" });

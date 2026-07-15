@@ -21,7 +21,7 @@ import { z } from "zod";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { defaultProjectConfigs } from "./defaultMigration.js";
 import { toProjectSummary } from "./projectRegistry.js";
-import { projectAuthModes, projectStatuses, type ProjectConnectionConfig, type ProjectPublishingPolicy, type ProjectSummary } from "./projectTypes.js";
+import { projectAuthModes, projectStatuses, toolPermissions, type ProjectConnectionConfig, type ProjectPublishingPolicy, type ProjectSummary } from "./projectTypes.js";
 
 // Lowercase-kebab project ids ("acme-daily"), matching the existing "dr-lurie" convention.
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -38,15 +38,24 @@ const contentContractSchema = z.object({
   canonicalArticleBody: z.string().min(1).default("article_body.v1")
 }).strict();
 
+const toolPermissionSchema = z.enum(toolPermissions);
+// Per-tool overrides: tool NAME -> permission. Capped so a patch can't smuggle in an unbounded map.
+const toolPoliciesSchema = z.record(z.string().min(1).max(128), toolPermissionSchema).refine(
+  (map) => Object.keys(map).length <= 256,
+  { message: "toolPolicies may not exceed 256 entries." }
+);
+
 export const projectCreateSchema = z.object({
   projectId: projectIdSchema,
   name: z.string().min(1).max(120),
   mcpEndpointEnvVar: envVarNameSchema,
   authMode: z.enum(projectAuthModes).default("bearer_env"),
   tokenEnvVar: envVarNameSchema.optional(),
-  // Deny-all by default: remote tools must be allow-listed explicitly before project.call_tool
-  // will forward to them.
+  // Deny-all by default: remote tools must be allow-listed explicitly (or via defaultToolPolicy)
+  // before project.call_tool will forward to them.
   allowedTools: z.array(z.string().min(1).max(128)).max(64).default([]),
+  defaultToolPolicy: toolPermissionSchema.optional(),
+  toolPolicies: toolPoliciesSchema.optional(),
   contentContract: contentContractSchema.default({ contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" }),
   status: z.enum(projectStatuses).default("active")
 }).strict();
@@ -57,6 +66,10 @@ export const projectUpdateSchema = z.object({
   authMode: z.enum(projectAuthModes).optional(),
   tokenEnvVar: envVarNameSchema.nullable().optional(),
   allowedTools: z.array(z.string().min(1).max(128)).max(64).optional(),
+  // The three-state permission control the Access page writes. toolPolicies replaces the whole map;
+  // defaultToolPolicy sets the client-wide fallback. Both are safe metadata (tool names, not secrets).
+  defaultToolPolicy: toolPermissionSchema.optional(),
+  toolPolicies: toolPoliciesSchema.optional(),
   contentContract: z.object({ contentContract: z.string().min(1), canonicalArticleBody: z.string().min(1) }).strict().optional(),
   status: z.enum(projectStatuses).optional()
 }).strict();
@@ -96,6 +109,8 @@ export async function createProject(repository: ProjectRepository, input: Projec
     authMode: input.authMode,
     ...(input.tokenEnvVar ? { tokenEnvVar: input.tokenEnvVar } : {}),
     allowedTools: [...input.allowedTools],
+    ...(input.defaultToolPolicy ? { defaultToolPolicy: input.defaultToolPolicy } : {}),
+    ...(input.toolPolicies ? { toolPolicies: { ...input.toolPolicies } } : {}),
     contentContract: { ...input.contentContract },
     publishingPolicy: { ...DISABLED_PUBLISHING_POLICY },
     status: input.status
@@ -113,6 +128,8 @@ export async function updateProject(repository: ProjectRepository, projectId: st
     ...(patch.mcpEndpointEnvVar !== undefined ? { mcpEndpointEnvVar: patch.mcpEndpointEnvVar } : {}),
     ...(patch.authMode !== undefined ? { authMode: patch.authMode } : {}),
     ...(patch.allowedTools !== undefined ? { allowedTools: [...patch.allowedTools] } : {}),
+    ...(patch.defaultToolPolicy !== undefined ? { defaultToolPolicy: patch.defaultToolPolicy } : {}),
+    ...(patch.toolPolicies !== undefined ? { toolPolicies: { ...patch.toolPolicies } } : {}),
     ...(patch.contentContract !== undefined ? { contentContract: { ...patch.contentContract } } : {}),
     ...(patch.status !== undefined ? { status: patch.status } : {}),
     // Identity and policy are not patchable; publishing stays server-controlled.

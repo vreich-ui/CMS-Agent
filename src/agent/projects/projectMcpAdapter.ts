@@ -3,7 +3,7 @@
 // project-specific policy (e.g. Dr. Lurie's artifact rules) belongs in that project's own folder.
 // It previously lived under projects/drLurie/, which made every generic caller appear coupled to
 // one client; projects/drLurie/adapter.ts remains as a deprecated re-export.
-import type { ProjectConnectionConfig, ProjectConnectionState } from "./projectTypes.js";
+import { effectiveToolPermission, toToolPolicyMap, type ProjectConnectionConfig, type ProjectConnectionState, type ToolPermission } from "./projectTypes.js";
 import { McpClientError, mcpCallTool, mcpInitialize, mcpListResources, mcpListTools, type McpClientOptions, type McpTransport } from "./mcpClient.js";
 
 // Resolve the MCP endpoint and bearer token from environment variables. Values are used only to make
@@ -30,10 +30,10 @@ const sanitizeError = (error: unknown): string =>
 export type ProjectAdapterDeps = { env?: NodeJS.ProcessEnv; transport?: McpTransport };
 export type SafeToolInfo = { name: string; description?: string };
 export type ConnectionTestResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; server?: { name?: string; version?: string; protocolVersion?: string }; error?: string };
-export type ListToolsResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tools: SafeToolInfo[]; allowedTools: string[]; error?: string };
+export type ListToolsResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tools: SafeToolInfo[]; allowedTools: string[]; defaultToolPolicy: ToolPermission; toolPolicies: Record<string, ToolPermission>; error?: string };
 export type ContractDiscoveryResult = { ok: boolean; available: boolean; schemaTools?: string[]; resources?: string[]; error?: string };
 export type DryValidateResult = { ok: boolean; available: boolean; toolName?: string; result?: unknown; error?: string };
-export type CallToolResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tool: string; result?: unknown; error?: string };
+export type CallToolResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tool: string; permission?: ToolPermission; requiresApproval?: boolean; result?: unknown; error?: string };
 
 // Adapter that performs primitive, guarded MCP calls against a project's external server. It never
 // executes publishing; it only initializes, lists tools, discovers contract/schema surfaces, and
@@ -77,29 +77,37 @@ export class ProjectMcpAdapter {
   async listTools(): Promise<ListToolsResult> {
     const connection = this.connectionState();
     const allowedTools = [...this.config.allowedTools];
+    const defaultToolPolicy = this.config.defaultToolPolicy ?? "blocked";
+    const toolPolicies = toToolPolicyMap(this.config);
     const resolved = this.requireConnection();
-    if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tools: [], allowedTools, error: resolved.error };
+    if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tools: [], allowedTools, defaultToolPolicy, toolPolicies, error: resolved.error };
     try {
       const { tools } = await mcpListTools(this.clientOptions(resolved));
       const safe = (tools ?? []).filter((tool) => typeof tool?.name === "string").map((tool) => ({ name: tool.name, description: tool.description }));
-      return { ok: true, projectId: this.config.projectId, connection, tools: safe, allowedTools };
+      return { ok: true, projectId: this.config.projectId, connection, tools: safe, allowedTools, defaultToolPolicy, toolPolicies };
     } catch (error) {
-      return { ok: false, projectId: this.config.projectId, connection, tools: [], allowedTools, error: sanitizeError(error) };
+      return { ok: false, projectId: this.config.projectId, connection, tools: [], allowedTools, defaultToolPolicy, toolPolicies, error: sanitizeError(error) };
     }
   }
 
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<CallToolResult> {
     const connection = this.connectionState();
-    if (!this.config.allowedTools.includes(name)) {
-      return { ok: false, projectId: this.config.projectId, connection, tool: name, error: `Tool is not allowed for project: ${name}` };
+    const permission = effectiveToolPermission(this.config, name);
+    if (permission === "blocked") {
+      return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, error: `Tool is not allowed for project: ${name}` };
+    }
+    if (permission === "needs_approval") {
+      // Held, not forwarded. A human must approve this tool for the project (flip it to "allowed" in
+      // the Access page) before the call can run — no transport happens here.
+      return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, requiresApproval: true, error: `Tool requires approval before it can run: ${name}` };
     }
     const resolved = this.requireConnection();
-    if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tool: name, error: resolved.error };
+    if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, error: resolved.error };
     try {
       const result = await mcpCallTool(this.clientOptions(resolved), name, args);
-      return { ok: true, projectId: this.config.projectId, connection, tool: name, result };
+      return { ok: true, projectId: this.config.projectId, connection, tool: name, permission, result };
     } catch (error) {
-      return { ok: false, projectId: this.config.projectId, connection, tool: name, error: sanitizeError(error) };
+      return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, error: sanitizeError(error) };
     }
   }
 

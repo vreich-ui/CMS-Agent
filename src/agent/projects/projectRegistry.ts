@@ -2,7 +2,7 @@ import { z } from "zod";
 import { articleBodySchema } from "../mcp/workspace/store.js";
 import { toConnectionState } from "./projectMcpAdapter.js";
 import { getProjectHooks, type ProjectPolicyFinding } from "./projectHooks.js";
-import type { ProjectConnectionConfig, ProjectSummary } from "./projectTypes.js";
+import { toToolPolicyMap, type ProjectConnectionConfig, type ProjectSummary } from "./projectTypes.js";
 
 // Structural schema for the content_source.v1 handoff envelope (mirrors the input_triage node output).
 const contentSourceV1Schema = z.object({
@@ -19,6 +19,8 @@ export function toProjectSummary(config: ProjectConnectionConfig, env: NodeJS.Pr
     name: config.name,
     authMode: config.authMode,
     allowedTools: [...config.allowedTools],
+    defaultToolPolicy: config.defaultToolPolicy ?? "blocked",
+    toolPolicies: toToolPolicyMap(config),
     contentContract: { ...config.contentContract },
     publishingPolicy: { ...config.publishingPolicy },
     status: config.status,

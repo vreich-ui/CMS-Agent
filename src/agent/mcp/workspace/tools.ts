@@ -128,7 +128,9 @@ const projectDefinitionJsonSchema = objectSchema({
   mcpEndpointEnvVar: { type: "string", pattern: "^[A-Z][A-Z0-9_]{2,63}$", description: "Environment variable NAME holding the MCP endpoint URL — never the URL itself." },
   authMode: { type: "string", enum: ["none", "bearer_env"], default: "bearer_env" },
   tokenEnvVar: { type: "string", pattern: "^[A-Z][A-Z0-9_]{2,63}$", description: "Environment variable NAME holding the bearer token — never the token itself. Required for bearer_env." },
-  allowedTools: { type: "array", items: { type: "string" }, default: [], description: "Remote tool allow-list; project.call_tool refuses anything not listed." },
+  allowedTools: { type: "array", items: { type: "string" }, default: [], description: "Legacy allow-list; a listed tool resolves to \"allowed\". toolPolicies/defaultToolPolicy are the richer control." },
+  defaultToolPolicy: { type: "string", enum: ["allowed", "needs_approval", "blocked"], description: "Fallback permission for any tool not named in allowedTools/toolPolicies. Absent = blocked (deny-all)." },
+  toolPolicies: { type: "object", additionalProperties: { type: "string", enum: ["allowed", "needs_approval", "blocked"] }, description: "Per-tool permission overrides (highest precedence): allowed | needs_approval | blocked." },
   contentContract: { type: "object", additionalProperties: false, properties: { contentContract: { type: "string" }, canonicalArticleBody: { type: "string" } } },
   status: { type: "string", enum: ["active", "disabled"], default: "active" }
 }, ["projectId", "name", "mcpEndpointEnvVar"]);
