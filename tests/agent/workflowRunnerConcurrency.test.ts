@@ -139,6 +139,28 @@ describe("Publishing Conductor runner state advancement", () => {
     expect(completedNodeIds(current)).toEqual([]);
   });
 
+  it("run_next_node on a terminal (blocked) run is an idempotent no-op", async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    const run = await startDryRun({ projectId: "dr-lurie", input: "idempotent" }, store);
+    const blocked = await drive(run.runId, store);
+    expect(blocked.status).toBe("blocked");
+    const artifactsBefore = blocked.artifacts.length;
+    const revBefore = blocked.rev;
+    const usageBefore = (await repositoryManager.getUsageRepository().list({ runId: run.runId })).length;
+
+    // Further advances on a blocked run change nothing: no node runs, no new artifacts, no new usage,
+    // and the revision does not move (the read-mutate-write cycle short-circuits before any save).
+    await runNextNode(run.runId, { executionRepository: store });
+    await runNextNode(run.runId, { executionRepository: store });
+    const after = (await getRun(run.runId, store))!;
+
+    expect(after.status).toBe("blocked");
+    expect(after.currentNodeId).toBe("publication_controller");
+    expect(after.artifacts).toHaveLength(artifactsBefore);
+    expect(after.rev).toBe(revBefore);
+    expect(await repositoryManager.getUsageRepository().list({ runId: run.runId })).toHaveLength(usageBefore);
+  });
+
   it("retry_node re-runs an already-completed node without leaving duplicate artifacts", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "dr-lurie", input: "retry" }, store);

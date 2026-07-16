@@ -64,7 +64,7 @@ const recordObservation = z.object({ observation: z.string().min(1), metadata: z
 const validateArticle = z.object({ articleBody: z.unknown() }).strict();
 const publishBuild = z.object({ articleBody: articleBodySchema, target: z.enum(["preview", "cms"]).default("preview") }).strict();
 const publishValidate = z.object({ payload: publishPayloadSchema }).strict();
-const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default("mock") }).strict();
+const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default("mock"), entrypoint: z.enum(["article_body"]).optional(), articleBody: z.unknown().optional() }).strict();
 const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), dependencies: z.record(z.string(), z.unknown()).optional(), approved: z.boolean().optional() }).strict();
 const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional() }).strict();
 const runIdInput = z.object({ runId: z.string().min(1) }).strict();
@@ -114,7 +114,7 @@ const validateArticleJsonSchema = objectSchema({ articleBody: articleBodyJsonSch
 const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, ["articleBody"]);
 const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
-const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 } }, ["projectId", "input"]);
+const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: "mock" }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { ...articleBodyJsonSchema, description: "A valid article_body.v1 supplied for a late-stage entrypoint run." } }, ["projectId", "input"]);
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
 const runNextNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
 const listRunsJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 } });
@@ -247,7 +247,18 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "publish.build_payload", description: "Build a dry-run publish payload without side effects.", zodSchema: publishBuild, inputSchema: publishBuildJsonSchema, execute: async (input) => { const data = publishBuild.parse(input); return ok({ payload: { articleBody: data.articleBody, target: data.target, dryRun: true, builtAt: new Date().toISOString() } }); } }),
     tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); return ok({ valid: parsed.success, issues: parsed.success ? [] : parsed.error.issues }); } }),
     tool({ name: "repository.get_health", description: "Return safe repository health metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ health: await repositoryManager.getRepositoryHealth() }); } }),
-    tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => { const data = startDryRunInput.parse(input); return ok({ run: await startDryRun(data, executionRepository) }); } }),
+    tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects. Supply entrypoint 'article_body' with a valid article_body.v1 to enter the run at the publish stages without re-running ideation/research/draft nodes.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => {
+      const data = startDryRunInput.parse(input);
+      let entrypoint: { nodeId: string; output: unknown } | undefined;
+      if (data.entrypoint === "article_body" || data.articleBody !== undefined) {
+        // A late-stage entry must carry a structurally valid article_body.v1; the run seeds it as the
+        // article_body output so publish_payload onward consume it directly.
+        const parsed = articleBodySchema.safeParse(coerceJsonObjectInput(data.articleBody));
+        if (!parsed.success) throw new Error(`invalid_article_body: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"} ${issue.message}`).join("; ")}`);
+        entrypoint = { nodeId: "article_body", output: parsed.data };
+      }
+      return ok({ run: await startDryRun({ projectId: data.projectId, input: data.input, workflowId: data.workflowId, executionMode: data.executionMode, entrypoint }, executionRepository) });
+    } }),
     tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await getRun(runIdInput.parse(input).runId, executionRepository) ?? null }) }),
     tool({ name: "workflow.list_runs", description: "List dry-run workflow executions.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => ok({ runs: await listRuns(listRunsInput.parse(input), executionRepository) }) }),
     tool({ name: "workflow.run_next_node", description: "Run exactly one dependency-ready Publishing Conductor node, stopping before publish-risk nodes unless approved is true.", zodSchema: runNextNodeInput, inputSchema: runNextNodeJsonSchema, execute: async (input) => { const data = runNextNodeInput.parse(input); return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); } }),
