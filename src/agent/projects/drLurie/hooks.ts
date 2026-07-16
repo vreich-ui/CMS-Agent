@@ -3,6 +3,7 @@
 // project.validate_handoff / project.get — never prose baked into generic prompts or tools.
 
 import { summarizeArtifactPolicyWarnings, validateNoRawImageArtifactPublicUrls, type ArtifactPolicyWarning } from "./artifactPolicy.js";
+import { evaluateDrLurieCallToolPolicy } from "./executablePolicy.js";
 import { drLurieProjectKnowledge } from "./knowledge.js";
 
 const validateHandoffPolicy = (payload: { contentSource?: unknown; articleBody?: unknown }): ArtifactPolicyWarning[] => [
@@ -16,5 +17,7 @@ const validateHandoffPolicy = (payload: { contentSource?: unknown; articleBody?:
 
 export const drLurieProjectHooks = {
   validateHandoffPolicy,
+  // Blocks legacy artifact fallback tools and fallback artifact-source arguments at call_tool time.
+  enforceCallToolPolicy: evaluateDrLurieCallToolPolicy,
   knowledge: drLurieProjectKnowledge
 };

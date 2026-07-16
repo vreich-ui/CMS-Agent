@@ -1,6 +1,6 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
-import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
+import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowEntrypoint, WorkflowExecutionRecord } from "./executionTypes.js";
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
@@ -30,29 +30,67 @@ const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: Workspa
   metadata: { dryRun: true, source: "workflow.run_next_node", estimateMethod: "deterministic_mock_length" }
 });
 
-export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode };
+export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
+
+// Transitive ancestors of a node (everything it depends on, directly or indirectly). Used to seed a
+// late-stage entrypoint: the entry node and all its ancestors are marked completed so the run enters
+// directly at the entry node's downstream successors without re-running earlier stages.
+const ancestorsOf = (nodes: WorkspaceNode[], targetId: string): Set<string> => {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const seen = new Set<string>();
+  const visit = (id: string) => { for (const dependency of byId.get(id)?.dependsOn ?? []) if (!seen.has(dependency)) { seen.add(dependency); visit(dependency); } };
+  visit(targetId);
+  return seen;
+};
 
 const buildInitialRun = (data: StartDryRunInput, runId = makeRunId()): WorkflowExecutionRecord => {
   const timestamp = now();
   const nodes = listWorkspaceNodes();
-  const firstNode = nodes.find((node) => node.dependsOn.length === 0) ?? nodes[0];
+  const entrypoint = data.entrypoint;
+  if (entrypoint && !nodes.some((node) => node.id === entrypoint.nodeId)) throw new Error(`Unknown entrypoint node: ${entrypoint.nodeId}`);
+  // Nodes seeded as completed for a late-stage entry: the entry node plus every ancestor. A full run
+  // (no entrypoint) seeds nothing, so every node starts queued exactly as before.
+  const seeded = entrypoint ? new Set([entrypoint.nodeId, ...ancestorsOf(nodes, entrypoint.nodeId)]) : new Set<string>();
+  const stageOutputs: Record<string, unknown> = {};
+  const artifacts: ExecutionArtifact[] = [];
+  const nodeStates: NodeExecutionState[] = nodes.map((node) => {
+    if (entrypoint && node.id === entrypoint.nodeId) {
+      // The entry node is completed with the supplied output, seeded so downstream nodes consume it.
+      stageOutputs[node.id] = entrypoint.output;
+      artifacts.push(buildArtifact(node, entrypoint.output));
+      return { nodeId: node.id, status: "completed", output: entrypoint.output, startedAt: timestamp, completedAt: timestamp, durationMs: 0, produces: [...node.produces], warnings: ["late_stage_entry_seeded"] };
+    }
+    if (seeded.has(node.id)) {
+      // Upstream ancestors are marked completed (skipped) — their outputs are not consumed downstream
+      // of the entry node, so only a skip marker is recorded and no stage output/artifact is emitted.
+      return { nodeId: node.id, status: "completed", output: { seeded: true, skipped: true, reason: "late_stage_entry", nodeId: node.id }, startedAt: timestamp, completedAt: timestamp, durationMs: 0, produces: [...node.produces], warnings: ["late_stage_entry_skipped"] };
+    }
+    return { nodeId: node.id, status: "queued", produces: [...node.produces] };
+  });
+  const completedIds = new Set(nodeStates.filter((state) => state.status === "completed").map((state) => state.nodeId));
+  // First runnable node: the first still-queued node whose dependencies are all satisfied. For a full
+  // run this is the first no-dependency node; for a seeded late-stage run it is the entry node's first
+  // downstream successor.
+  const firstRunnable = nodes.find((node) => nodeStates.find((state) => state.nodeId === node.id)?.status === "queued" && node.dependsOn.every((dependency) => completedIds.has(dependency)));
+  const anyQueued = nodeStates.some((state) => state.status === "queued");
   return {
     runId,
     workflowId: data.workflowId ?? WORKFLOW_ID,
     projectId: data.projectId,
-    status: "queued",
-    currentNodeId: firstNode?.id,
+    status: anyQueued ? "queued" : "completed",
+    currentNodeId: firstRunnable?.id,
     startedAt: timestamp,
     updatedAt: timestamp,
-    nodes: nodes.map((node) => ({ nodeId: node.id, status: node.id === firstNode?.id ? "queued" : "queued", produces: [...node.produces] })),
-    artifacts: [],
+    nodes: nodeStates,
+    artifacts,
     errors: [],
     approvalsRequired: [],
     initialInput: data.input,
-    stageOutputs: {},
+    stageOutputs,
     dryRun: true,
-    executionMode: data.executionMode ?? "mock"
+    executionMode: data.executionMode ?? "mock",
+    ...(entrypoint ? { entrypoint } : {})
   } as WorkflowExecutionRecord;
 };
 
@@ -116,7 +154,9 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
   return withRunLock(runId, async () => {
     const existing = await store.getRun(runId);
     if (!existing) throw new Error(`Unknown run: ${runId}`);
-    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode }, runId));
+    // Rebuild from the run's own starting shape, including a late-stage entrypoint, so reset restores
+    // the seeded state it began with rather than a full ideation-to-publish run.
+    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint }, runId));
   });
 }
 

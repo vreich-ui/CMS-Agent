@@ -1,7 +1,7 @@
 import { Agent, run, tool } from "@openai/agents";
 import { recordModelUsage, summarizeModelUsage, estimateModelCost } from "../../observability/modelUsage.js";
 import { repositoryManager } from "../../runtime/repositories.js";
-import { resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
+import { getTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { executeTool } from "../../tools/toolExecutor.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
@@ -54,8 +54,15 @@ export class OpenAINodeRunner implements NodeRunner {
     const effective = (await resolveEffectiveToolsForNode(node.id, { runId: context.run.runId, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun })).filter((t) => t.allowed);
     const sdkTools = effective.map((t) => tool({
       name: t.name.replace(/[^A-Za-z0-9_-]/g, "_"),
-      description: `Controlled CMS-Agent tool ${t.name}. All calls are audited through ToolExecutor.`,
-      parameters: { type: "object", additionalProperties: true } as any,
+      description: `${getTool(t.toolId)?.description ?? `Controlled CMS-Agent tool ${t.name}`} All calls are audited through ToolExecutor.`,
+      // Declared NON-strict on purpose. OpenAI rejects a strict function schema unless it sets
+      // additionalProperties:false and enumerates every property (a strict function with
+      // additionalProperties:true returns "400 Invalid schema for function ...: 'additionalProperties'
+      // is required to be supplied and to be false"). These controlled tools accept varied argument
+      // shapes and are re-validated by ToolExecutor at call time, so an open non-strict object schema
+      // is the correct declaration and keeps live (openai) execution working.
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: true } as any,
+      strict: false,
       execute: async (args: unknown) => {
         const result = await executeTool(t.toolId, redact(args), { runId: context.run.runId, nodeId: node.id, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun });
         if (!result.ok) throw new Error(result.denied ? `tool_denied:${result.denied.code}` : `tool_failed:${result.error?.code ?? "tool_failed"}`);

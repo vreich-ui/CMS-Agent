@@ -16,6 +16,17 @@ export const upsertWorkspaceNode = (nodes: WorkspaceNode[], node: WorkspaceNode)
     : [...nodes, node];
 
 const visibleString = z.string().min(1);
+// Reader-facing images must be materialized by the Dr. Lurie publishing backend, never hotlinked
+// from a remote origin (a remote/data/blob URL cannot be guaranteed to render at read time). These
+// two forms are kept in lock-step: the RegExp drives the Zod path (article_body.validate,
+// validate_handoff) and the negative-lookahead JSON Schema pattern drives the generic node output
+// validator (node.validate_output / node.execute), so both reject the same media.src values.
+// URL schemes are case-insensitive, so both forms match case-insensitively: the RegExp via the /i
+// flag, and the JSON Schema string — compiled by the generic validator as `new RegExp(pattern)` with
+// no flags — by baking case-insensitivity into its character classes and literals (HTTPS://, DATA:,
+// BLOB: must be rejected identically to their lowercase spellings).
+const REMOTE_MEDIA_URL_PATTERN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/|^data:|^blob:/i;
+const MATERIALIZED_IMAGE_SRC_PATTERN = "^(?!(?:[A-Za-z][A-Za-z0-9+.-]*:)?//)(?![Dd][Aa][Tt][Aa]:)(?![Bb][Ll][Oo][Bb]:).+$";
 const publicMediaSchema = z.object({
   type: z.enum(["image", "video", "audio", "embed"]),
   src: z.string().min(1).optional(),
@@ -26,6 +37,9 @@ const publicMediaSchema = z.object({
 }).strict().refine(
   (media) => media.src !== undefined || media.artifactReference !== undefined || media.embed !== undefined,
   { message: "Media requires at least one of src, artifactReference, or embed." }
+).refine(
+  (media) => !(media.type === "image" && typeof media.src === "string" && REMOTE_MEDIA_URL_PATTERN.test(media.src)),
+  { message: "Image media.src must be a materialized reference, not a remote, data, or blob URL.", path: ["src"] }
 );
 
 const publicNodeFieldsSchema = z.object({
@@ -95,8 +109,10 @@ export interface WorkspaceStore {
   updateRelationships(update: WorkspaceRelationshipsUpdate, meta: WorkspaceMutationMeta): Promise<{ relationships: WorkspaceRelationship[]; workspaceVersion: number; revisionId?: string }>;
   getNodes(): Promise<WorkspaceNode[]>;
   getNode(id: string): Promise<WorkspaceNode | undefined>;
-  updateNodePrompt(id: string, prompt: string, meta?: WorkspaceMutationMeta): Promise<WorkspaceNode>;
-  updateNodeSchema(id: string, schema: unknown, meta?: WorkspaceMutationMeta): Promise<WorkspaceNode>;
+  // Return the node together with the workspaceVersion the mutation produced. The caller reports and
+  // enforces THAT version, never a second racy read that could reflect a later, unrelated mutation.
+  updateNodePrompt(id: string, prompt: string, meta?: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
+  updateNodeSchema(id: string, schema: unknown, meta?: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
   createNode(node: WorkspaceNode, meta: WorkspaceMutationMeta, eventType?: string): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
   deleteNode(id: string, meta: WorkspaceMutationMeta): Promise<{ deleted: true; workspaceVersion: number }>;
   cloneNode(id: string, newId: string, meta: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
@@ -148,6 +164,15 @@ export const articleBodyJsonSchema = {
                 required: ["type"],
                 additionalProperties: false,
                 anyOf: [{ required: ["src"] }, { required: ["artifactReference"] }, { required: ["embed"] }],
+                // Image media.src may not be a remote/data/blob URL: images must be materialized by
+                // the Dr. Lurie backend. Expressed as if/then + a nested src pattern so the generic
+                // output validator enforces it exactly like the Zod publicMediaSchema does.
+                allOf: [
+                  {
+                    if: { properties: { type: { const: "image" } }, required: ["type"] },
+                    then: { properties: { src: { type: "string", minLength: 1, pattern: MATERIALIZED_IMAGE_SRC_PATTERN } } }
+                  }
+                ],
                 properties: {
                   type: { type: "string", enum: ["image", "video", "audio", "embed"] },
                   src: { type: "string", minLength: 1 },
@@ -447,21 +472,21 @@ export class WorkspaceStateStore implements WorkspaceStore {
   }
   async updateNodePrompt(id: string, prompt: string, meta?: WorkspaceMutationMeta) {
     let updated: WorkspaceNode | undefined;
-    await this.mutate((document) => {
+    const workspaceVersion = await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, prompt, updatedAt: now() };
       document.nodes = upsertWorkspaceNode(document.nodes, updated);
     }, meta, "node.prompt_updated", id);
-    return updated!;
+    return { node: updated!, workspaceVersion };
   }
   async updateNodeSchema(id: string, schema: unknown, meta?: WorkspaceMutationMeta) {
     let updated: WorkspaceNode | undefined;
-    await this.mutate((document) => {
+    const workspaceVersion = await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
       updated = { ...existing, schema, outputSchema: schema, updatedAt: now() };
       document.nodes = upsertWorkspaceNode(document.nodes, updated);
     }, meta, "node.output_schema_updated", id);
-    return updated!;
+    return { node: updated!, workspaceVersion };
   }
   async createNode(node: WorkspaceNode, meta: WorkspaceMutationMeta, eventType = "node.created") { let workspaceVersion = 0; const normalized = normalizeNode(coerceNodeInput(node)); workspaceVersion = await this.mutate((document) => { if (document.nodes.some((existing) => existing.id === normalized.id)) throw new Error(`Duplicate node id: ${normalized.id}`); document.nodes = [...document.nodes, normalized]; }, meta, eventType, normalized.id); return { node: normalized, workspaceVersion }; }
   async deleteNode(id: string, meta: WorkspaceMutationMeta) { let workspaceVersion = 0; workspaceVersion = await this.mutate((document) => { if (document.nodes.some((node) => node.dependsOn.includes(id))) throw new Error(`Cannot delete referenced node: ${id}`); document.nodes = document.nodes.filter((node) => node.id !== id); }, meta, "node.deleted", id); return { deleted: true as const, workspaceVersion }; }
