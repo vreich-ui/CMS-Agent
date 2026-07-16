@@ -11,6 +11,9 @@ export class BlobWorkspaceRepository extends WorkspaceStateStore implements Work
   protected override async load(): Promise<WorkspaceDocument> {
     const raw = await getBlobJson<unknown>(this.store, key);
     if (raw === null) {
+      // No stored document visible. Under eventual consistency a read can lag a write this same
+      // instance just committed, so prefer the locally-committed document over re-seeding a default.
+      if (this.document.workspaceVersion > 0) return this.document;
       const document = createDefaultWorkspaceDocument();
       await this.save(document);
       return document;
@@ -21,7 +24,14 @@ export class BlobWorkspaceRepository extends WorkspaceStateStore implements Work
     if (droppedNodes > 0) {
       this.healedDroppedNodes += droppedNodes;
       await this.save(document);
+      return document;
     }
+    // Optimistic-concurrency consistency: never return a version older than one this instance has
+    // already committed. An eventually-consistent read can lag a write we just made; returning the
+    // stale document would make getWorkspaceVersion() / expectedWorkspaceVersion checks report an
+    // older "current" version than a mutation already produced. Prefer the newer of the two.
+    if (this.document.workspaceVersion > document.workspaceVersion) return this.document;
+    this.document = document;
     return document;
   }
 

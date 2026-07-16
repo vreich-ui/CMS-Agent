@@ -97,6 +97,26 @@ describe("project.* MCP tools", () => {
     expect(JSON.stringify(response.json)).not.toContain(ENDPOINT);
   });
 
+  it("project.call_tool blocks legacy artifact fallback tools before any remote call", async () => {
+    // dr-lurie's config advertises these as allowed, but the executable policy blocks them so no
+    // transport happens — artifacts must go through the sanctioned materialization flow.
+    for (const tool of ["save_artifact", "create_artifact_from_url", "create_artifact_upload_intent"]) {
+      const response = await toolCall("project.call_tool", { projectId: "dr-lurie", tool, arguments: {} });
+      expect(structured(response).data.call).toMatchObject({ ok: false, tool, permission: "blocked", blockedByPolicy: true });
+      expect(structured(response).data.call.policyFindings.map((finding: { code: string }) => finding.code)).toContain("blocked_legacy_artifact_tool");
+    }
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
+  it("project.call_tool blocks fallback artifact-source arguments on an otherwise-allowed tool", async () => {
+    // get_artifact_metadata is allowed, but a public remote image URL argument is a fallback source
+    // and must be blocked before transport.
+    const response = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "get_artifact_metadata", arguments: { source: "https://cdn.example.com/hero.png" } });
+    expect(structured(response).data.call).toMatchObject({ ok: false, tool: "get_artifact_metadata", permission: "blocked", blockedByPolicy: true });
+    expect(structured(response).data.call.policyFindings.map((finding: { code: string }) => finding.code)).toContain("blocked_remote_image_url");
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
   it("project.call_tool holds a needs_approval tool before any remote call", async () => {
     // dr-lurie runs with full access, but wipe_blob_stores is held for approval — it must not reach
     // the remote server until a human allows it.

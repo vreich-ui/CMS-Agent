@@ -236,7 +236,7 @@ describe("mcp endpoint", () => {
     expect(response.json.result.structuredContent.data.valid).toBe(true);
   });
 
-  it("accepts supported public media", async () => {
+  it("accepts supported public media with a materialized image src", async () => {
     const response = await call({
       jsonrpc: "2.0",
       id: 55,
@@ -246,13 +246,27 @@ describe("mcp endpoint", () => {
         arguments: {
           articleBody: {
             schema_version: "article_body.v1",
-            nodes: [{ id: "n_Media", kind: "content", public: { media: { type: "image", src: "https://example.com/image.jpg", alt: "Example image" } } }]
+            nodes: [{ id: "n_Media", kind: "content", public: { media: { type: "image", src: "/media/req_demo/image.jpg", alt: "Example image" } } }]
           }
         }
       }
     });
 
     expect(response.json.result.structuredContent.data.valid).toBe(true);
+  });
+
+  it.each([
+    "https://example.com/image.jpg",
+    "http://example.com/image.jpg",
+    "//cdn.example.com/image.jpg",
+    "data:image/png;base64,iVBORw0KGgo="
+  ])("rejects a remote/data image src (%s) that is not materialized by the backend", async (src) => {
+    const response = await validateArticleBody({
+      schema_version: "article_body.v1",
+      nodes: [{ id: "n_Remote", kind: "content", public: { media: { type: "image", src, alt: "Remote image" } } }]
+    });
+
+    expect(response.json.result.structuredContent.data.valid).toBe(false);
   });
 
   it("rejects unsupported public media types", async () => {

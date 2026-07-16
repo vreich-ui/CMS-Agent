@@ -15,9 +15,15 @@ export type ProjectPolicyFinding = ArtifactPolicyWarning;
 
 export type ProjectHandoffPayload = { contentSource?: unknown; articleBody?: unknown };
 
+export type ProjectCallToolRequest = { tool: string; arguments?: Record<string, unknown> };
+
 export type ProjectHooks = {
   // Returns findings; severity "error" marks the handoff invalid, "warning" is advisory.
   validateHandoffPolicy?: (payload: ProjectHandoffPayload) => ProjectPolicyFinding[];
+  // Executable call-tool policy layered on top of the config permission model: given the tool name
+  // and arguments about to be forwarded, returns findings. Any "error" finding blocks the call
+  // before any remote transport, even when the config marks the tool "allowed".
+  enforceCallToolPolicy?: (call: ProjectCallToolRequest) => ProjectPolicyFinding[];
   // Safe, non-secret structured guidance for agents (rules, conventions, pitfalls).
   knowledge?: unknown;
 };
