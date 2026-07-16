@@ -52,4 +52,14 @@ describe("Dr. Lurie executable call-tool policy", () => {
     // A materialized site path (leading slash) is a valid reference, not a hand-authored key.
     expect(evaluateDrLurieCallToolPolicy({ tool: "verify_article_images", arguments: { src: "/media/req_demo/image.jpg" } })).toEqual([]);
   });
+
+  it("does not misclassify absolute materialized served paths as repo paths", () => {
+    // Leading-slash served paths (Astro/static build output) are materialized references, not repo
+    // sources, and must not be blocked — even when the directory name matches a repo root.
+    for (const src of ["/assets/req_demo/hero.png", "/public/img/logo.svg", "/_astro/index.abc123.js"]) {
+      expect(evaluateDrLurieCallToolPolicy({ tool: "verify_article_images", arguments: { src } })).toEqual([]);
+    }
+    // Relative repo/source paths (no leading slash) are still blocked.
+    expect(codes(evaluateDrLurieCallToolPolicy({ tool: "get_artifact_metadata", arguments: { path: "assets/hero.astro" } }))).toContain("blocked_repo_path");
+  });
 });

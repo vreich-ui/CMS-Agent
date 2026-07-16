@@ -37,10 +37,16 @@ const copiedArtifactRefPattern = new RegExp(`^images?/{1,2}[A-Za-z0-9._~/%-]+\\.
 // trailing filename+extension (no leading slash — a leading slash marks a materialized public path).
 const handAuthoredBlobKeyPattern = /^(?:images?|documents?|pdfs?|artifacts?|blobs?|uploads?|media|files?)\/[^\s]+\/[^\s/]+\.[a-z0-9]{2,5}$/i;
 // A repo / source path used as an artifact source: relative traversal, a known source directory root,
-// or a path (with separator) ending in a code/content file extension.
+// or a path (with separator) ending in a code/content file extension. These patterns describe
+// RELATIVE repo paths; an absolute served path (single leading slash, e.g. /assets/..., /_astro/...,
+// /media/...) is a materialized public reference and is excluded by isServedPath below.
 const repoTraversalPattern = /^\.\.?\//;
-const repoRootPattern = /^\/?(?:src|content|contents|pages|posts|app|components|public|assets|lib|packages|node_modules)\//i;
-const repoFileExtensionPattern = /\/[^\s/]+\.(?:md|mdx|markdown|astro|tsx?|jsx?|mjs|cjs|vue|svelte|html?|css|scss|json|ya?ml)$/i;
+const repoRootPattern = /^(?:src|content|contents|pages|posts|app|components|public|assets|lib|packages|node_modules)\//i;
+const repoFileExtensionPattern = /\/[^\s/]+\.(?:md|mdx|markdown|astro|tsx?|jsx?|mjs|cjs|vue|svelte|html?|scss|ya?ml)$/i;
+// A single leading slash marks an absolute, already-materialized served path (matches artifactPolicy's
+// treatment of /assets and /_astro). A double leading slash is protocol-relative and handled as a
+// remote URL, so it must NOT count as a served path here.
+const isServedPath = (value: string): boolean => value.startsWith("/") && !value.startsWith("//");
 
 const classifyValue = (value: string): { code: string; message: string } | undefined => {
   if (remoteImageUrlPattern.test(value) || dataImageUrlPattern.test(value)) {
@@ -52,7 +58,7 @@ const classifyValue = (value: string): { code: string; message: string } | undef
   if (handAuthoredBlobKeyPattern.test(value)) {
     return { code: "blocked_hand_authored_blob_key", message: "Hand-authored blob-store keys are not accepted; the backend assigns storage keys during materialization." };
   }
-  if (repoTraversalPattern.test(value) || repoRootPattern.test(value) || repoFileExtensionPattern.test(value)) {
+  if (!isServedPath(value) && (repoTraversalPattern.test(value) || repoRootPattern.test(value) || repoFileExtensionPattern.test(value))) {
     return { code: "blocked_repo_path", message: "Repository/source paths are not accepted artifact sources; artifacts must be materialized, not read from a repo path." };
   }
   return undefined;
