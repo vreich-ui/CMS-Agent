@@ -1,4 +1,5 @@
 import { RepositoryManager, type RepositoryHealthSummary } from "../repository/RepositoryManager.js";
+import { conductorCache } from "../workspace/conductor.js";
 
 let manager: RepositoryManager | undefined;
 
@@ -10,7 +11,9 @@ const usesBlobBackend = (env: NodeJS.ProcessEnv = process.env): boolean => (env.
 export const getRepositoryManager = (): RepositoryManager => (manager ??= new RepositoryManager());
 
 // Drop the memoized manager so the next access rebuilds it (used by tests and per-request refresh).
-export const resetRepositoryManager = (): void => { manager = undefined; };
+// The per-run conductor cache is cleared alongside it so a rebuilt manager never serves a run
+// context memoized against stale project/registry state.
+export const resetRepositoryManager = (): void => { manager = undefined; conductorCache.clear(); };
 
 // Per-request hook for Lambda handlers, called after connectLambda(event). Blob-backed stores
 // capture their credentials when getStore() runs, so we rebuild the manager each request to bind
