@@ -96,6 +96,14 @@ describe("validateOutput against the canonical article_body.v1 schema", () => {
     expect(materialized.ok).toBe(true);
   });
 
+  it("rejects remote image src case-insensitively (schemes are case-insensitive)", () => {
+    // The generic output validator compiles the JSON-schema pattern without the /i flag, so the
+    // pattern itself must be case-insensitive to match the Zod path. Uppercase schemes must not slip.
+    for (const src of ["HTTPS://example.com/x.png", "Http://example.com/x.png", "DATA:image/png;base64,AAAA", "BLOB:https://example.com/id"]) {
+      expect(validateOutput({ schema_version: "article_body.v1", nodes: [node({ type: "image", src })] }, articleBodyJsonSchema).ok).toBe(false);
+    }
+  });
+
   it("rejects a bad node id pattern and an unknown public field", () => {
     expect(validateOutput({ schema_version: "article_body.v1", nodes: [{ ...node(), id: "bad" }] }, articleBodyJsonSchema).ok).toBe(false);
     expect(validateOutput({ schema_version: "article_body.v1", nodes: [{ id: "n_A", kind: "content", public: { title: "t", bogus: "x" } }] }, articleBodyJsonSchema).ok).toBe(false);

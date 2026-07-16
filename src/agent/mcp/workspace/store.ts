@@ -21,8 +21,12 @@ const visibleString = z.string().min(1);
 // two forms are kept in lock-step: the RegExp drives the Zod path (article_body.validate,
 // validate_handoff) and the negative-lookahead JSON Schema pattern drives the generic node output
 // validator (node.validate_output / node.execute), so both reject the same media.src values.
+// URL schemes are case-insensitive, so both forms match case-insensitively: the RegExp via the /i
+// flag, and the JSON Schema string — compiled by the generic validator as `new RegExp(pattern)` with
+// no flags — by baking case-insensitivity into its character classes and literals (HTTPS://, DATA:,
+// BLOB: must be rejected identically to their lowercase spellings).
 const REMOTE_MEDIA_URL_PATTERN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/|^data:|^blob:/i;
-const MATERIALIZED_IMAGE_SRC_PATTERN = "^(?!(?:[a-z][a-z0-9+.-]*:)?//)(?!data:)(?!blob:).+$";
+const MATERIALIZED_IMAGE_SRC_PATTERN = "^(?!(?:[A-Za-z][A-Za-z0-9+.-]*:)?//)(?![Dd][Aa][Tt][Aa]:)(?![Bb][Ll][Oo][Bb]:).+$";
 const publicMediaSchema = z.object({
   type: z.enum(["image", "video", "audio", "embed"]),
   src: z.string().min(1).optional(),

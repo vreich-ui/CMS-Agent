@@ -23,10 +23,16 @@ export class RunScopedCache {
   private readonly cache = new Map<string, Map<string, unknown>>();
 
   async getOrLoad<T>(runId: string, key: string, loader: () => Promise<T> | T): Promise<T> {
-    const perRun = this.cache.get(runId);
-    if (perRun && perRun.has(key)) return perRun.get(key) as T;
+    const existing = this.cache.get(runId);
+    if (existing && existing.has(key)) return existing.get(key) as T;
     const value = await loader();
-    (perRun ?? this.cache.set(runId, new Map()).get(runId)!).set(key, value);
+    // Re-read after the await: a concurrent first-load for the same run may have created the inner
+    // map (or the same key) meanwhile. Reuse it instead of clobbering, and prefer an already-stored
+    // value so concurrent loads converge (the cached reads are run-invariant).
+    let perRun = this.cache.get(runId);
+    if (!perRun) { perRun = new Map(); this.cache.set(runId, perRun); }
+    if (perRun.has(key)) return perRun.get(key) as T;
+    perRun.set(key, value);
     return value;
   }
 
