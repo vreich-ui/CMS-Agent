@@ -1,7 +1,7 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
-import type { ExecutionArtifact, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
-import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
+import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
+import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import { recordModelUsage } from "../observability/modelUsage.js";
@@ -9,6 +9,8 @@ import { getNodeRunner } from "../execution/runnerRegistry.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 
 const WORKFLOW_ID = "publishing_conductor";
+const TERMINAL_STATUSES = new Set<ExecutionStatus>(["blocked", "cancelled", "completed", "failed"]);
+const MAX_SAVE_RETRIES = 5;
 const now = () => new Date().toISOString();
 const makeRunId = () => `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const duration = (startedAt?: string, endedAt = now()) => startedAt ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt)) : undefined;
@@ -75,6 +77,29 @@ const mockOutputForNode = (node: WorkspaceNode, run: WorkflowExecutionRecord) =>
 
 const buildArtifact = (node: WorkspaceNode, output: unknown): ExecutionArtifact => ({ id: `artifact_${node.id}_${Date.now()}`, nodeId: node.id, type: node.produces[0] ?? "mock_output", value: output, createdAt: now() });
 
+// Publish-risk nodes (riskLevel publish/admin) must never run without explicit approval — this is
+// the "stop before any publishing side effect" boundary, generalized beyond the single
+// publication_controller id so any future publish-risk node is gated the same way.
+const isPublishRisk = (node: WorkspaceNode): boolean => node.riskLevel === "publish" || node.riskLevel === "admin";
+const isConcurrencyConflict = (error: unknown): error is RunConcurrencyError => error instanceof RunConcurrencyError;
+
+// Per-run in-process mutex. Every mutation of a given run is serialized through a promise chain
+// keyed by runId, so overlapping run_next_node / reset / status calls in one process can never
+// interleave their read-mutate-write cycles (which was re-running already-completed nodes). Across
+// separate instances the repository's compare-and-swap is the backstop; this lock additionally
+// prevents wasted node executions within a process. The chain swallows errors so one failed task
+// never rejects a queued follower, and the map entry is dropped once it drains.
+const runLocks = new Map<string, Promise<unknown>>();
+function withRunLock<T>(runId: string, task: () => Promise<T>): Promise<T> {
+  const result = (runLocks.get(runId) ?? Promise.resolve()).then(task, task);
+  const tail = result.then(() => undefined, () => undefined);
+  runLocks.set(runId, tail);
+  void tail.then(() => { if (runLocks.get(runId) === tail) runLocks.delete(runId); });
+  return result;
+}
+
+export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean };
+
 export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord> {
   return store.createRun(buildInitialRun(data));
 }
@@ -88,23 +113,54 @@ export async function listRuns(filters: ListRunsInput = {}, store: ExecutionRepo
 }
 
 export async function resetRun(runId: string, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord> {
-  const existing = await store.getRun(runId);
-  if (!existing) throw new Error(`Unknown run: ${runId}`);
-  return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId }, runId));
+  return withRunLock(runId, async () => {
+    const existing = await store.getRun(runId);
+    if (!existing) throw new Error(`Unknown run: ${runId}`);
+    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode }, runId));
+  });
 }
 
-export async function runNextNode(runId: string, options: { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository } = {}): Promise<WorkflowExecutionRecord> {
+// Execute exactly one dependency-ready queued node and persist the whole state transition atomically.
+// Runs under the per-run lock; if the durable compare-and-swap still rejects (a writer on another
+// instance advanced the run), it reloads and retries from the fresh state — re-selecting the next
+// node so an already-completed node is never re-run.
+export async function runNextNode(runId: string, options: RunAdvanceOptions = {}): Promise<WorkflowExecutionRecord> {
   const store = options.executionRepository ?? repositoryManager.getExecutionRepository();
-  const run = await store.getRun(runId);
-  if (!run) throw new Error(`Unknown run: ${runId}`);
-  if (["blocked", "cancelled", "completed", "failed"].includes(run.status)) return run;
+  return withRunLock(runId, () => advanceRun(runId, store, options));
+}
 
-  const nodes = listWorkspaceNodes();
-  const nextNode = findNextRunnableNode(run, nodes);
-  if (!nextNode) return store.saveRun({ ...run, status: "completed", completedAt: now(), updatedAt: now(), currentNodeId: undefined });
+async function advanceRun(runId: string, store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
+  let latest: WorkflowExecutionRecord | undefined;
+  for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
+    const run = await store.getRun(runId);
+    if (!run) throw new Error(`Unknown run: ${runId}`);
+    latest = run;
+    if (TERMINAL_STATUSES.has(run.status)) return run;
 
-  const states = stateById(run);
-  const state = states.get(nextNode.id) as NodeExecutionState;
+    const nodes = listWorkspaceNodes();
+    const nextNode = findNextRunnableNode(run, nodes);
+    try {
+      if (!nextNode) return await store.saveRun({ ...run, status: "completed", completedAt: now(), updatedAt: now(), currentNodeId: undefined });
+      const prepared = await executeRunnableNode(run, nextNode, nodes, store, options);
+      const saved = await store.saveRun(prepared.run);
+      // Side effects (usage telemetry, workspace stage-output mirror) run only after the state
+      // transition is durably committed, so a discarded attempt on a CAS conflict leaves no phantom
+      // usage behind. They are non-authoritative — the run record itself already holds the output —
+      // so a failure here must not report an otherwise-successful advance as failed.
+      await prepared.commit?.().catch(() => undefined);
+      return saved;
+    } catch (error) {
+      if (isConcurrencyConflict(error)) continue;
+      throw error;
+    }
+  }
+  return (await store.getRun(runId)) ?? latest!;
+}
+
+type PreparedNode = { run: WorkflowExecutionRecord; commit?: () => Promise<void> };
+
+async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: WorkspaceNode, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<PreparedNode> {
+  const state = stateById(run).get(nextNode.id) as NodeExecutionState;
   const startedAt = now();
   state.status = "running";
   state.startedAt = startedAt;
@@ -113,23 +169,22 @@ export async function runNextNode(runId: string, options: { executionRepository?
   run.currentNodeId = nextNode.id;
   run.updatedAt = startedAt;
 
-  if (nextNode.id === "publication_controller") {
+  if (isPublishRisk(nextNode) && options.approved !== true) {
     const completedAt = now();
     state.status = "blocked";
     state.completedAt = completedAt;
     state.durationMs = duration(startedAt, completedAt);
-    state.output = { artifact: "publication_decision.v1", dryRun: true, decision: "blocked", approvalRequired: true, reason: "Dry-run publication controller requires explicit future approval before any publishing side effect." };
+    state.output = { artifact: nextNode.produces[0] ?? `${nextNode.id}.decision`, dryRun: true, decision: "blocked", approvalRequired: true, reason: `Dry-run stopped before publish-risk node ${nextNode.id}; explicit approval is required before any publishing side effect.` };
     state.warnings = ["approval_required", "no_publication_performed"];
     run.status = "blocked";
     run.updatedAt = completedAt;
-    run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", reason: "Publication requires explicit future approval; dry-run blocked before publishing.", requestedAt: completedAt }];
+    run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", reason: `Publish-risk node ${nextNode.id} requires explicit approval; dry-run blocked before publishing.`, requestedAt: completedAt }];
     run.stageOutputs[nextNode.id] = state.output;
     run.artifacts.push(buildArtifact(nextNode, state.output));
-    await recordDryRunNodeUsage(run, nextNode, state.input, state.output);
-    return store.saveRun(run);
+    return { run, commit: async () => { await recordDryRunNodeUsage(run, nextNode, state.input, state.output); } };
   }
 
-  const mode = ((run as any).executionMode ?? "mock") as ExecutionMode;
+  const mode = (run.executionMode ?? "mock") as ExecutionMode;
   const runner = getNodeRunner(mode);
   const result = await runner.run({ node: nextNode, input: state.input }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
   const completedAt = now();
@@ -142,19 +197,74 @@ export async function runNextNode(runId: string, options: { executionRepository?
     run.status = state.status;
     run.errors = [...run.errors, `${nextNode.id}:${result.code}`];
     run.updatedAt = completedAt;
-    return store.saveRun(run);
+    return { run };
   }
   const output = result.output;
   state.status = "completed";
   state.output = output;
   run.stageOutputs[nextNode.id] = output;
   run.artifacts.push(buildArtifact(nextNode, output));
-  if (mode === "mock") await recordDryRunNodeUsage(run, nextNode, state.input, output);
   run.updatedAt = completedAt;
   run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
-  if (options.workspaceRepository) await options.workspaceRepository.saveStageOutput(nextNode.id, output, `${run.runId}:${nextNode.id}`);
-  return store.saveRun(run);
+  return {
+    run,
+    commit: async () => {
+      if (mode === "mock") await recordDryRunNodeUsage(run, nextNode, state.input, output);
+      if (options.workspaceRepository) await options.workspaceRepository.saveStageOutput(nextNode.id, output, `${run.runId}:${nextNode.id}`);
+    }
+  };
+}
+
+// Update only the run-level status (pause/resume/cancel). Node completion state is never touched —
+// resume in particular must not resurrect node output — and the CAS retry keeps it from clobbering a
+// concurrent advance.
+export async function updateRunStatus(runId: string, status: ExecutionStatus, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord | undefined> {
+  return withRunLock(runId, async () => {
+    for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
+      const run = await store.getRun(runId);
+      if (!run) return undefined;
+      try {
+        return await store.saveRun({ ...run, status, updatedAt: now() });
+      } catch (error) {
+        if (isConcurrencyConflict(error)) continue;
+        throw error;
+      }
+    }
+    return store.getRun(runId);
+  });
+}
+
+// Explicitly retry a node: clear its status/output/artifact/stage output back to queued, then advance
+// once. This is the only sanctioned way (besides reset) to re-run a node that already completed.
+export async function retryNode(runId: string, nodeId: string | undefined, options: RunAdvanceOptions = {}): Promise<WorkflowExecutionRecord | undefined> {
+  const store = options.executionRepository ?? repositoryManager.getExecutionRepository();
+  return withRunLock(runId, async () => {
+    for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
+      const run = await store.getRun(runId);
+      if (!run) return undefined;
+      const node = run.nodes.find((candidate) => !nodeId || candidate.nodeId === nodeId);
+      if (!node) return run;
+      node.status = "queued";
+      delete node.errors;
+      delete node.output;
+      delete node.startedAt;
+      delete node.completedAt;
+      delete node.durationMs;
+      delete node.warnings;
+      delete run.stageOutputs[node.nodeId];
+      run.artifacts = run.artifacts.filter((artifact) => artifact.nodeId !== node.nodeId);
+      run.approvalsRequired = run.approvalsRequired.filter((approval) => approval.nodeId !== node.nodeId);
+      try {
+        await store.saveRun({ ...run, status: "queued", updatedAt: now() });
+        break;
+      } catch (error) {
+        if (isConcurrencyConflict(error)) continue;
+        throw error;
+      }
+    }
+    return advanceRun(runId, store, options);
+  });
 }
 
 export const publishingConductorWorkflowId = WORKFLOW_ID;
-export const __test__ = { buildInitialRun, findNextRunnableNode, mockOutputForNode, nodeById };
+export const __test__ = { buildInitialRun, findNextRunnableNode, mockOutputForNode, nodeById, isPublishRisk };
