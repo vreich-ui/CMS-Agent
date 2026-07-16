@@ -85,9 +85,15 @@ export class OpenAINodeRunner implements NodeRunner {
           return { ok: false, code: "output_validation_failed", message: "OpenAI output did not match node.outputSchema.", details: validated.errors };
         }
         const usage = result.rawResponses?.reduce((a: any, r: any) => ({ inputTokens: a.inputTokens + (r.usage?.inputTokens ?? r.usage?.input_tokens ?? 0), outputTokens: a.outputTokens + (r.usage?.outputTokens ?? r.usage?.output_tokens ?? 0), reasoningTokens: a.reasoningTokens + (r.usage?.reasoningTokens ?? r.usage?.output_tokens_details?.reasoning_tokens ?? 0) }), { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
-        const usageRecord = { inputTokens: usage?.inputTokens || 0, outputTokens: usage?.outputTokens || 0, reasoningTokens: usage?.reasoningTokens || 0, totalTokens: (usage?.inputTokens || 0) + (usage?.outputTokens || 0), actual: true };
-        await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "openai", ...usageRecord, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId } });
-        return { ok: true, output: validated.value, usage: usageRecord, trace: { responseId: result.lastResponseId, toolCount: effective.length } };
+        // Usage token fields only. `actual` marks the NodeRunnerResult.usage (estimated vs actual);
+        // it must NOT be spread into recordModelUsage, whose schema is strict and carries the
+        // estimated/actual distinction in `status`. Spreading `actual` there previously threw
+        // "unrecognized key: actual", failing an already-validated, successful model result.
+        const usageFields = { inputTokens: usage?.inputTokens || 0, outputTokens: usage?.outputTokens || 0, reasoningTokens: usage?.reasoningTokens || 0, totalTokens: (usage?.inputTokens || 0) + (usage?.outputTokens || 0) };
+        // Telemetry is non-authoritative: the validated output is the deliverable, so a usage-record
+        // write failure must never discard a successful node (matches the workflow executor's pattern).
+        await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "openai", ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId } }).catch(() => undefined);
+        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length } };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (msg === "model_timeout") return { ok: false, code: "model_timeout", message: "OpenAI node execution timed out." };
