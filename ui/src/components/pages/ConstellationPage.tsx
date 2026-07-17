@@ -51,7 +51,7 @@ export function ConstellationPage({ legacy, mode, onNavigate, selectedProjectId,
         </nav>
       </section>
       {legacy === "builder"
-        ? <LegacyBuilderPanel workspace={workspace} workflowRun={workflowRun} refreshUsage={refreshUsage} defaultProjectId={selectedProjectId ?? undefined} onStatus={onStatus} onError={onError} />
+        ? <LegacyBuilderPanel client={client} workspace={workspace} workflowRun={workflowRun} refreshUsage={refreshUsage} defaultProjectId={selectedProjectId ?? undefined} onStatus={onStatus} onError={onError} />
         : <LegacyNodesPanel client={client} workspace={workspace} workflowRun={workflowRun} onStatus={onStatus} onError={onError} />}
     </section>;
   }

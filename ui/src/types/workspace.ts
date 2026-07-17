@@ -298,3 +298,44 @@ export type SkillDefinition = {
   skillId: string; name: string; description: string; version: string; status: "draft" | "active" | "deprecated"; instructions: string; inputSchema: JsonValue; outputSchema: JsonValue; allowedTools: string[]; requiredArtifacts: string[]; producedArtifacts: string[]; examples: Array<{ name: string; input: JsonValue; output: JsonValue; notes?: string }>; preconditions: string[]; completionCriteria: string[]; blockerCriteria: string[]; memoryPolicy: JsonValue; toolPolicy: JsonValue; riskLevel: WorkspaceNode["riskLevel"]; metadata: Record<string, unknown>; createdAt: string; updatedAt: string;
 };
 export type SkillResolvedPolicy = { nodeId: string; skillIds: string[]; instructions: string; effectiveTools: string[]; requestedTools: string[]; deniedTools: string[]; conflicts: Array<{ severity: "warning" | "blocker"; source: string; message: string }>; };
+
+// UI mirrors of the publish gate (src/agent/workspace/publisher.ts) and the project publish-readiness
+// policy (src/agent/projects/drLurie/publishReadiness.ts). A readiness NO-GO / a publish
+// blocked_for_publish_execution result is an EXPECTED safety state, never a generic failure.
+export type PublishReadinessCheckStatus = "pass" | "fail" | "accepted_empty";
+export type PublishReadinessCheck = { key: string; label: string; status: PublishReadinessCheckStatus; detail?: string };
+
+export type PublishReadinessResult = {
+  status: "go" | "no_go";
+  state: "ready_for_publish_execution" | "blocked_for_publish_execution";
+  checklist: PublishReadinessCheck[];
+  blockers: string[];
+  requiredAction?: string;
+  hardConstraints: { contentPath: string; artifactProtocol: string; legacyFallbacksUsed: false };
+};
+
+// The workflow.publish_readiness envelope: available:false means the project has no readiness policy,
+// so only the generic publish gate applies (readiness is null).
+export type PublishReadinessResponse = { available: boolean; articleBodyValid: boolean; readiness: PublishReadinessResult | null };
+
+// The operator-supplied readiness input (server merges the run's article_body itself).
+export type PublishReadinessInput = {
+  verifiedMediaRefs?: string[];
+  taxonomy?: { tags?: string[]; acceptedEmpty?: boolean };
+  approval?: { pinned?: boolean; approvedBy?: string; approvedAt?: string };
+  releaseBehavior?: string;
+  hardConstraints?: { contentPath?: string; artifactProtocol?: string; legacyFallbacksUsed?: boolean };
+};
+
+export type PublishGate = { name: string; passed: boolean; reason?: string };
+export type PublishGates = { operatorEnabled: boolean; approved: boolean; live: boolean; allPassed: boolean; gates: PublishGate[] };
+export type PublishStep = { tool: string; ok: boolean; error?: string };
+export type PublishPlan = { projectId: string; requestId: string; nodeCount: number; publishedTime: string | null; toolSequence: string[] };
+// Resumable descriptor so the UI can present the halt without reconstructing the run.
+export type PublishBlockedState = { requestId: string; nodeAwaitingApproval: string; artifactSlot: string | null; requiredAction: string; resumable: true };
+
+export type PublishResult =
+  | { published: false; mode: "dry_run"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; reason: string; readiness?: PublishReadinessResult }
+  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; readiness?: PublishReadinessResult }
+  | { published: false; mode: "blocked_for_publish_execution"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; readiness: PublishReadinessResult; blocked: PublishBlockedState }
+  | { published: false; mode: "error"; gates: PublishGates; plan: PublishPlan | null; steps: PublishStep[]; error: string };

@@ -7,7 +7,7 @@ export function RunStatusPanel({ run }: { run: WorkflowExecutionRecord | null })
   const blocked = run.status === "blocked" || run.approvalsRequired.length > 0;
   return <section className="panel run-status-panel">
     <h2>Run summary</h2>
-    {blocked && <div className="status error" role="status"><strong>approval_required</strong><br />No publication was performed.</div>}
+    {blocked && <div className="status safety" role="status"><strong>approval_required</strong><br />Expected safety hold before publish-risk execution — no publication was performed.</div>}
     <dl>
       <dt>Run</dt><dd>{run.runId}</dd>
       <dt>Workflow</dt><dd>{run.workflowId}</dd>
