@@ -14,6 +14,7 @@ import { redactSensitiveKeys } from "../observability/redaction.js";
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
+import { getProjectHooks, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { LearningRepository } from "../repository/interfaces/LearningRepository.js";
@@ -30,13 +31,16 @@ export type PublishGate = { name: string; passed: boolean; reason?: string };
 export type PublishGates = { operatorEnabled: boolean; approved: boolean; live: boolean; allPassed: boolean; gates: PublishGate[] };
 export type PublishStep = { tool: string; ok: boolean; error?: string };
 export type PublishPlan = { projectId: string; requestId: string; nodeCount: number; publishedTime: string | null; toolSequence: string[] };
+// Resumable blocked-state descriptor so an operator/UI can act without reconstructing the run.
+export type PublishBlockedState = { requestId: string; nodeAwaitingApproval: string; artifactSlot: string | null; requiredAction: string; resumable: true };
 export type PublishResult =
-  | { published: false; mode: "dry_run"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; reason: string }
-  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown }
+  | { published: false; mode: "dry_run"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; reason: string; readiness?: PublishReadinessResult }
+  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; readiness?: PublishReadinessResult }
+  | { published: false; mode: "blocked_for_publish_execution"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; readiness: PublishReadinessResult; blocked: PublishBlockedState }
   | { published: false; mode: "error"; gates: PublishGates; plan: PublishPlan | null; steps: PublishStep[]; error: string };
 
 export type CallToolFn = (tool: string, args: Record<string, unknown>) => Promise<CallToolResult>;
-export type PublishRunInput = { runId: string; projectId?: string; requestId: string; approved?: boolean; live?: boolean; publishedTime?: string | null };
+export type PublishRunInput = { runId: string; projectId?: string; requestId: string; approved?: boolean; live?: boolean; publishedTime?: string | null; readiness?: PublishReadinessInput };
 export type PublisherDeps = {
   env?: NodeJS.ProcessEnv;
   executionRepository?: ExecutionRepository;
@@ -86,6 +90,14 @@ const findArticleBody = (run: WorkflowExecutionRecord): unknown =>
 
 const bodyHasMedia = (body: ArticleBody): boolean => body.nodes.some((node) => node.public.media !== undefined);
 
+// Identify the first media slot whose reference is not among the pdf-tool-verified refs, so a blocked
+// state can point at exactly which artifact slot needs materialization.
+const firstUnverifiedMediaSlot = (body: ArticleBody, verifiedRefs?: string[]): string | null => {
+  const verified = new Set((verifiedRefs ?? []).map((ref) => String(ref)));
+  const node = body.nodes.find((candidate) => typeof candidate.public.media?.src === "string" && !verified.has(candidate.public.media.src as string));
+  return node ? `node:${node.id}/public.media` : null;
+};
+
 // Execute (or plan) a live publish for a completed/late-stage run. Returns a dry-run plan unless every
 // gate passes. Never throws for gate/validation failures — those are returned as structured results;
 // only truly unexpected conditions throw.
@@ -113,16 +125,35 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     return { published: false, mode: "error", gates, plan: emptyPlan, steps: [], error: `no_valid_article_body: run ${input.runId} has no valid article_body.v1 to publish (${parsed.success ? "" : parsed.error.issues.map((issue) => issue.message).join("; ")}).` };
   }
   const body = parsed.data;
+  const toolSequence = ["save_json_blob_create_article_draft", "save_json_blob_checkout_request", "save_json_blob_publish_by_time", "save_json_blob_checkin_request"];
+  const plan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: body.nodes.length, publishedTime: input.publishedTime ?? null, toolSequence };
+
+  // Project publish-readiness policy (GO/NO-GO). Layered via the hook registry so other projects
+  // hosted by this workspace are NOT subject to Dr. Lurie's readiness rules. A NO-GO is an expected
+  // safety state (blocked_for_publish_execution), surfaced as a resumable blocked state — not a failure.
+  const readinessHook = getProjectHooks(projectId)?.evaluatePublishReadiness;
+  const readiness = readinessHook ? readinessHook({ articleBody: body, ...input.readiness }) : undefined;
+  if (readiness && readiness.status === "no_go") {
+    const artifactSlot = readiness.blockers.includes("media_artifacts_verified") ? firstUnverifiedMediaSlot(body, input.readiness?.verifiedMediaRefs) : null;
+    return {
+      published: false,
+      mode: "blocked_for_publish_execution",
+      gates,
+      plan,
+      steps: [],
+      readiness,
+      blocked: { requestId: input.requestId, nodeAwaitingApproval: "publication_controller", artifactSlot, requiredAction: readiness.requiredAction ?? `Resolve: ${readiness.blockers.join(", ")}.`, resumable: true }
+    };
+  }
+
+  // This path executes text-only publishes; image/document media needs the artifact upload flow.
   if (bodyHasMedia(body)) {
     return { published: false, mode: "error", gates, plan: emptyPlan, steps: [], error: "image_media_unsupported: this publish path handles text-only bodies; image/document media requires the Dr. Lurie artifact upload flow and is not published here." };
   }
 
-  const toolSequence = ["save_json_blob_create_article_draft", "save_json_blob_checkout_request", "save_json_blob_publish_by_time", "save_json_blob_checkin_request"];
-  const plan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: body.nodes.length, publishedTime: input.publishedTime ?? null, toolSequence };
-
   if (!gates.allPassed) {
     const reason = gates.gates.filter((gate) => !gate.passed).map((gate) => gate.reason).join(" ");
-    return { published: false, mode: "dry_run", gates, plan, steps: [], reason: reason || "One or more publish gates are not satisfied." };
+    return { published: false, mode: "dry_run", gates, plan, steps: [], reason: reason || "One or more publish gates are not satisfied.", readiness };
   }
 
   // All gates passed: drive the sanctioned publish sequence through the project's MCP tools.
@@ -145,7 +176,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     try { await call("save_json_blob_checkin_request", { request_id: input.requestId, lock_token: lockToken }); } catch { /* lock expires on its own */ }
 
     await learningRepository.recordObservation(`Live publish executed for ${projectId} request ${input.requestId}.`, { type: "publish_executed", projectId, requestId: input.requestId, runId: input.runId });
-    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(publishResult) };
+    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(publishResult), readiness };
   } catch (error) {
     const message = error instanceof Error ? error.message : "publish_failed";
     await learningRepository.recordObservation(`Live publish failed for ${projectId} request ${input.requestId}: ${message}`, { type: "publish_failed", projectId, requestId: input.requestId, runId: input.runId }).catch(() => undefined);
@@ -153,4 +184,23 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   }
 }
 
-export const __test__ = { evaluateGates, findLockToken, REQUEST_ID_PATTERN };
+// Dry publish-readiness evaluation with no gates and no side effects. Resolves the article body from
+// a runId (or a directly-supplied body) and runs the project's readiness hook. Returns available:false
+// with no readiness when the project has no readiness policy — the UI then shows only the generic gate.
+export async function evaluatePublishReadiness(
+  input: { projectId: string; runId?: string; articleBody?: unknown; readiness?: PublishReadinessInput },
+  deps: PublisherDeps = {}
+): Promise<{ available: boolean; articleBodyValid: boolean; readiness: PublishReadinessResult | null }> {
+  const executionRepository = deps.executionRepository ?? repositoryManager.getExecutionRepository();
+  let articleBody = input.articleBody;
+  if (articleBody === undefined && input.runId) {
+    const run = await executionRepository.getRun(input.runId);
+    articleBody = run ? findArticleBody(run) : undefined;
+  }
+  const articleBodyValid = articleBodySchema.safeParse(articleBody).success;
+  const hook = getProjectHooks(input.projectId)?.evaluatePublishReadiness;
+  if (!hook) return { available: false, articleBodyValid, readiness: null };
+  return { available: true, articleBodyValid, readiness: hook({ articleBody, ...input.readiness }) };
+}
+
+export const __test__ = { evaluateGates, findLockToken, firstUnverifiedMediaSlot, REQUEST_ID_PATTERN };
