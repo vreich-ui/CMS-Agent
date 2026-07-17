@@ -9,6 +9,7 @@
 // from a client folder directly.
 
 import type { ArtifactPolicyWarning } from "./drLurie/artifactPolicy.js";
+import type { PublishReadinessInput, PublishReadinessResult } from "./drLurie/publishReadiness.js";
 import { drLurieProjectHooks } from "./drLurie/hooks.js";
 
 export type ProjectPolicyFinding = ArtifactPolicyWarning;
@@ -17,6 +18,9 @@ export type ProjectHandoffPayload = { contentSource?: unknown; articleBody?: unk
 
 export type ProjectCallToolRequest = { tool: string; arguments?: Record<string, unknown> };
 
+// Re-exported so the generic publisher can consume readiness types without importing a client folder.
+export type { PublishReadinessInput, PublishReadinessResult } from "./drLurie/publishReadiness.js";
+
 export type ProjectHooks = {
   // Returns findings; severity "error" marks the handoff invalid, "warning" is advisory.
   validateHandoffPolicy?: (payload: ProjectHandoffPayload) => ProjectPolicyFinding[];
@@ -24,6 +28,10 @@ export type ProjectHooks = {
   // and arguments about to be forwarded, returns findings. Any "error" finding blocks the call
   // before any remote transport, even when the config marks the tool "allowed".
   enforceCallToolPolicy?: (call: ProjectCallToolRequest) => ProjectPolicyFinding[];
+  // Project GO/NO-GO readiness gate over a publish request, evaluated by the generic publisher. A
+  // NO-GO (blocked_for_publish_execution) is an expected safety state, not a failure. Projects
+  // without this hook are not subject to any extra publish-readiness constraints.
+  evaluatePublishReadiness?: (input: PublishReadinessInput) => PublishReadinessResult;
   // Safe, non-secret structured guidance for agents (rules, conventions, pitfalls).
   knowledge?: unknown;
 };

@@ -2,13 +2,18 @@ import { WorkspaceGraph } from "../WorkspaceGraph";
 import { WorkflowControls } from "../WorkflowControls";
 import { RunStatusPanel } from "../RunStatusPanel";
 import { NodeExecutionList } from "../NodeExecutionList";
+import { PublishReadinessPanel } from "../PublishReadinessPanel";
+import { usePublish } from "../../hooks/usePublish";
+import type { McpClient } from "../../mcp/client";
 import type { useWorkspace } from "../../hooks/useWorkspace";
 import type { useWorkflowRun } from "../../hooks/useWorkflowRun";
+import type { PublishReadinessInput } from "../../types/workspace";
 import type { StatusMessage } from "../../status";
 
 // Legacy Builder tab, embedded under /constellation?legacy=builder until S5 moves run controls
 // to Operate mode and the Runs page. JSX and handlers moved verbatim from App.
 type Props = {
+  client: McpClient;
   workspace: ReturnType<typeof useWorkspace>;
   workflowRun: ReturnType<typeof useWorkflowRun>;
   refreshUsage: () => Promise<void>;
@@ -17,7 +22,21 @@ type Props = {
   onError: (error: unknown) => void;
 };
 
-export function LegacyBuilderPanel({ workspace, workflowRun, refreshUsage, defaultProjectId, onStatus, onError }: Props) {
+export function LegacyBuilderPanel({ client, workspace, workflowRun, refreshUsage, defaultProjectId, onStatus, onError }: Props) {
+  const publish = usePublish(client);
+  const currentRun = workflowRun.currentRun;
+  const checkReadiness = (readiness: PublishReadinessInput) => {
+    if (!currentRun) return;
+    void publish.checkReadiness({ projectId: currentRun.projectId, runId: currentRun.runId, readiness })
+      .then((result) => onStatus({ tone: result.readiness && result.readiness.status === "no_go" ? "info" : "success", message: result.available ? `Publish readiness: ${result.readiness?.status ?? "evaluated"}.` : "No publish-readiness policy for this project." }))
+      .catch(onError);
+  };
+  const attemptPublish = (params: { requestId: string; approved: boolean; live: boolean; readiness: PublishReadinessInput }) => {
+    if (!currentRun) return;
+    void publish.publish({ projectId: currentRun.projectId, runId: currentRun.runId, ...params })
+      .then((result) => onStatus({ tone: result.mode === "live" ? "success" : result.mode === "error" ? "error" : "info", message: `Publish: ${result.mode}.` }))
+      .catch(onError);
+  };
   const loadWorkspace = async () => {
     try {
       await workspace.loadWorkspace();
@@ -52,5 +71,6 @@ export function LegacyBuilderPanel({ workspace, workflowRun, refreshUsage, defau
       <RunStatusPanel run={workflowRun.currentRun} />
       <NodeExecutionList run={workflowRun.currentRun} />
     </section>
+    <PublishReadinessPanel run={workflowRun.currentRun} readiness={publish.readiness} publishResult={publish.publishResult} loading={publish.loading} error={publish.error} onCheckReadiness={checkReadiness} onPublish={attemptPublish} />
   </section>;
 }

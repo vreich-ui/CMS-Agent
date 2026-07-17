@@ -301,6 +301,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .status.info { background: var(--color-info-surface); color: var(--color-info-text); }
 .status.success { background: var(--color-success-surface); color: var(--color-success-text); }
 .status.error { background: var(--color-danger-surface); color: var(--color-danger-text); }
+/* Safety hold: a publish NO-GO / blocked_for_publish_execution is an expected, resumable state — amber,
+   never the red of a genuine error. */
+.status.safety { background: var(--color-warning-surface); color: var(--color-warning-text); }
 .workspace-grid, .lower-grid, .support-grid, .tab-panel { display: grid; gap: 1rem; }
 .workspace-grid { grid-template-columns: minmax(0, 1.5fr) minmax(20rem, 0.85fr); }
 .lower-grid, .support-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -397,6 +400,30 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 980px) {
   .execution-grid { grid-template-columns: 1fr; }
 }
+
+/* Publish readiness gate */
+.publish-readiness-panel { display: grid; gap: 0.9rem; }
+.publish-readiness-panel .status { display: grid; gap: 0.35rem; }
+.publish-readiness-panel .status p { margin: 0; }
+.publish-form { display: grid; gap: 0.6rem; }
+.publish-field { color: var(--color-text-muted); display: grid; font-weight: 700; gap: 0.3rem; }
+.publish-field input, .publish-field select, .publish-field textarea { font-weight: 500; }
+.publish-check { align-items: center; display: flex; font-weight: 600; gap: 0.5rem; }
+.publish-check input { accent-color: var(--color-accent); width: auto; }
+.publish-gates { border: 1px solid var(--color-border); border-radius: 0.8rem; display: grid; gap: 0.4rem; padding: 0.6rem 0.8rem; }
+.publish-gates legend { font-weight: 800; padding: 0 0.35rem; }
+.publish-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.publish-blocked dl, .hard-constraints { display: grid; gap: 0.3rem 0.8rem; grid-template-columns: max-content minmax(0, 1fr); margin: 0.4rem 0; }
+.publish-blocked dt, .hard-constraints dt { color: inherit; font-weight: 800; opacity: 0.85; }
+.publish-blocked dd, .hard-constraints dd { margin: 0; overflow-wrap: anywhere; }
+.checklist { display: grid; gap: 0.5rem; list-style: none; margin: 0.25rem 0; padding: 0; }
+.checklist-item { display: flex; gap: 0.6rem; }
+.checklist-mark { flex: none; font-weight: 900; line-height: 1.4; width: 1rem; }
+.checklist-body { min-width: 0; overflow-wrap: anywhere; }
+.checklist-status { color: var(--color-text-muted); font-weight: 600; }
+.checklist-pass .checklist-mark { color: var(--color-success-text); }
+.checklist-fail .checklist-mark { color: var(--color-warning-text); }
+.checklist-accepted_empty .checklist-mark { color: var(--color-info-text); }
 
 .usage-panel { grid-column: 1 / -1; }
 .usage-panel .muted { color: var(--color-text-muted); margin: 0.25rem 0 0; }

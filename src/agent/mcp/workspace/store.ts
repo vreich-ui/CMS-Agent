@@ -346,6 +346,13 @@ const assertGraphValid = (nodes: WorkspaceNode[], allowCanonicalNodeRemoval = fa
   if (!validation.valid) throw new Error(validation.issues.join("; "));
 };
 
+// Bounded reconciliation for eventual-consistency reads (see mutate). Under Netlify Blobs' eventual
+// fallback a fresh serverless instance can read a workspace version older than one already committed
+// elsewhere; these short, backed-off reloads let the read catch up before a version check fires.
+const STALE_READ_RETRIES = 4;
+const STALE_READ_BACKOFF_MS = 75;
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export class WorkspaceStateStore implements WorkspaceStore {
   protected document: WorkspaceDocument;
   protected changeSink?: WorkspaceChangeSink;
@@ -360,7 +367,16 @@ export class WorkspaceStateStore implements WorkspaceStore {
   protected async load() { return this.document; }
   protected async save(document: WorkspaceDocument) { this.document = document; }
   protected async mutate(update: (document: WorkspaceDocument) => void, meta?: WorkspaceMutationMeta, eventType = "workspace.updated", nodeId?: string) {
-    const document = await this.load();
+    let document = await this.load();
+    // Eventual-consistency reconciliation: if the caller expects a NEWER version than we just read,
+    // our read is lagging a version already committed elsewhere (a fresh instance under Blobs'
+    // eventual fallback). Reload — strong-first — a few times so the version a prior mutation returned
+    // can be enforced instead of falsely conflicting. No-op on single-instance stores, where the read
+    // is always current, and when no expectedWorkspaceVersion is supplied.
+    for (let attempt = 0; meta?.expectedWorkspaceVersion !== undefined && document.workspaceVersion < meta.expectedWorkspaceVersion && attempt < STALE_READ_RETRIES; attempt++) {
+      await delay(STALE_READ_BACKOFF_MS * (attempt + 1));
+      document = await this.load();
+    }
     assertWorkspaceVersion(document, meta);
     assertBaseRevision(document, meta);
     const beforeNodes = structuredClone(document.nodes);
