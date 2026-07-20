@@ -3,7 +3,7 @@ import { AppearanceSettings } from "../AppearanceSettings";
 import { SchemaViewer } from "../SchemaViewer";
 import { Validator } from "../Validator";
 import { UsagePanel } from "../UsagePanel";
-import type { ConnectionMode, McpConnection } from "../../connection";
+import type { ConnectionMode, ControlPlane, McpConnection } from "../../connection";
 import type { McpClient } from "../../mcp/client";
 import type { useWorkspace } from "../../hooks/useWorkspace";
 import type { useModelUsage } from "../../hooks/useModelUsage";
@@ -29,6 +29,9 @@ type Props = {
   connection: McpConnection;
   client: McpClient;
   token: string;
+  controlPlane: ControlPlane;
+  cloudRunAvailable: boolean;
+  onPlaneChange: (plane: ControlPlane) => void;
   onModeChange: (mode: ConnectionMode) => void;
   onEndpointChange: (endpoint: string) => void;
   onTokenChange: (token: string) => void;
@@ -45,7 +48,7 @@ type Props = {
   onError: (error: unknown) => void;
 };
 
-export function SettingsPage({ connection, client, token, onModeChange, onEndpointChange, onTokenChange, onConnectionSuccess, onConnectionError, session, onLogout, isDeployedMode, workspace, modelUsage, activeRunId, theme, onStatus, onError }: Props) {
+export function SettingsPage({ connection, client, token, controlPlane, cloudRunAvailable, onPlaneChange, onModeChange, onEndpointChange, onTokenChange, onConnectionSuccess, onConnectionError, session, onLogout, isDeployedMode, workspace, modelUsage, activeRunId, theme, onStatus, onError }: Props) {
   const exportWorkspace = async () => {
     try {
       await workspace.exportWorkspace();
@@ -74,7 +77,7 @@ export function SettingsPage({ connection, client, token, onModeChange, onEndpoi
   return <section className="tab-panel" aria-label="Settings">
     <section className="panel settings-connection" aria-label="Connection settings">
       <div className="panel-heading"><div><h2>Connection</h2><p className="muted">Choose how the workspace talks to the MCP server. Tokens are redacted from errors and never rendered.</p></div>{isDeployedMode && session?.email && <div className="session-card"><span>Signed in as <strong>{session.email}</strong></span><button onClick={onLogout}>Log out</button></div>}</div>
-      <ConnectionPanel connection={connection} client={client} token={token} onModeChange={onModeChange} onEndpointChange={onEndpointChange} onTokenChange={onTokenChange} onConnectionSuccess={onConnectionSuccess} onConnectionError={onConnectionError} />
+      <ConnectionPanel connection={connection} client={client} token={token} controlPlane={controlPlane} cloudRunAvailable={cloudRunAvailable} onPlaneChange={onPlaneChange} onModeChange={onModeChange} onEndpointChange={onEndpointChange} onTokenChange={onTokenChange} onConnectionSuccess={onConnectionSuccess} onConnectionError={onConnectionError} />
     </section>
 
     <AppearanceSettings preference={theme.preference} resolvedMode={theme.resolvedMode} onModeChange={theme.setMode} onAccentChange={theme.setAccent} />
