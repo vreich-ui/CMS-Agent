@@ -11,7 +11,9 @@ per-node playbook injection replacing global observations (gap §6), and ~24 MCP
 (`evaluation.*`, `feedback.*`, `dataset.*`, `optimizer.*`, `playbook.*`). Ops note:
 add these namespaces to `MCP_EXPOSED_TOOL_PREFIXES` if the catalog is scoped.
 
-**Known follow-ups (tracked, deliberately out of the scaffold):** the conductor
+**Known follow-ups (tracked, deliberately out of the scaffold — now sequenced as
+`docs/platform/DIRECTION.md` Phases 4–8, with Netlify retained and the control
+plane switchable from the existing UI):** the conductor
 executes STATIC nodes (`nodes.ts`), so promoted prompts are live for independent
 execution and replay but reach full conductor runs only once the executor reads
 store nodes — the loop is self-consistent, but treat conductor behavior as unchanged
