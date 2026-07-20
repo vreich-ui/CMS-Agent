@@ -31,6 +31,20 @@ export type McpConnection = DirectConnection | SecureProxyConnection;
 export const defaultEndpointForMode = (mode: ConnectionMode): string =>
   mode === "secure-proxy" ? "/api/workspace-mcp" : "/api/mcp";
 
+// Which control plane the UI talks to (DIRECTION.md Phase 4). Netlify is the default and is never
+// retired; Cloud Run is offered only when a build-time endpoint is configured. This is a separate
+// axis from the auth mode: the Cloud Run plane always uses direct token auth against its absolute
+// URL (the Identity secure proxy is a Netlify-only construct), so selecting it implies direct mode.
+export type ControlPlane = "netlify" | "cloud-run";
+
+// The Cloud Run endpoint is injected by the React layer from import.meta.env, keeping this module
+// framework-free (root vitest tests it directly). Empty/absent means the Cloud Run plane is hidden.
+export const controlPlaneAvailable = (cloudRunEndpoint: string | undefined): boolean =>
+  typeof cloudRunEndpoint === "string" && cloudRunEndpoint.trim().length > 0;
+
+export const resolveControlPlaneEndpoint = (plane: ControlPlane, mode: ConnectionMode, cloudRunEndpoint: string | undefined): string =>
+  plane === "cloud-run" ? (cloudRunEndpoint?.trim() ?? "") : defaultEndpointForMode(mode);
+
 export type ConnectionAuthSummary =
   | { kind: "direct-missing-token"; label: string }
   | { kind: "direct-ready"; label: string }

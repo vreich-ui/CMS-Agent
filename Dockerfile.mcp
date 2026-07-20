@@ -1,0 +1,21 @@
+# Cloud Run MCP Service image (docs/platform/DIRECTION.md Phase 4a). Serves the workspace MCP
+# endpoint + OAuth flow — the same control plane as the Netlify Functions — as a long-lived HTTP
+# server. Like the conductor-job image, it runs the TypeScript sources directly via tsx (the repo
+# has no emit step); the only build is installing production dependencies.
+FROM node:22-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+
+FROM node:22-slim
+ENV NODE_ENV=production
+# Cloud Run injects PORT (default 8080); the server reads it.
+ENV PORT=8080
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json tsconfig.json ./
+COPY src ./src
+USER node
+EXPOSE 8080
+# --import tsx registers the loader in-process so SIGTERM reaches the server for graceful drain.
+ENTRYPOINT ["node", "--import", "tsx", "src/agent/entrypoints/mcpServerMainRun.ts"]

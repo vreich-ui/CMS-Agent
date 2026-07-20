@@ -1,0 +1,7 @@
+# Builds the Cloud Run MCP Service image from Dockerfile.mcp (DIRECTION.md Phase 4a). `gcloud builds
+# submit --tag` only builds a file named `Dockerfile`, so this config selects Dockerfile.mcp
+# explicitly. Usage: gcloud builds submit --config cloudbuild.mcp.yaml --substitutions _IMAGE=<ref>
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Dockerfile.mcp", "-t", "${_IMAGE}", "."]
+images: ["${_IMAGE}"]

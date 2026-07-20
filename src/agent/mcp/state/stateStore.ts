@@ -122,7 +122,11 @@ export const mcpStateUsesBlobs = (env: NodeJS.ProcessEnv = process.env): boolean
   const explicit = (env.MCP_STATE_STORE ?? "").trim().toLowerCase();
   if (explicit === "blobs") return true;
   if (explicit === "memory") return false;
-  if ((env.WORKSPACE_STORE ?? "memory") === "blobs") return true;
+  // "gcs" and "blobs" both back the store through getCmsAgentBlobStore() — on the Cloud Run MCP
+  // Service the registered GCS transport makes sessions + OAuth state durable and shared across
+  // instances (DIRECTION.md Phase 4), so no session affinity is required.
+  const workspaceStore = env.WORKSPACE_STORE ?? "memory";
+  if (workspaceStore === "blobs" || workspaceStore === "gcs") return true;
   return netlifyBlobsContextConnected();
 };
 

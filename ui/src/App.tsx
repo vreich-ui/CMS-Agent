@@ -16,8 +16,8 @@ import { useProjects } from "./hooks/useProjects";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useWorkflowRun } from "./hooks/useWorkflowRun";
 import { useModelUsage } from "./hooks/useModelUsage";
-import { defaultEndpointForMode } from "./connection";
-import type { ConnectionMode, McpConnection } from "./connection";
+import { controlPlaneAvailable, defaultEndpointForMode, resolveControlPlaneEndpoint } from "./connection";
+import type { ConnectionMode, ControlPlane, McpConnection } from "./connection";
 import { distinctRunProjectIds } from "./projects";
 import { readStorage, writeStorage } from "./storage";
 import type { StatusMessage } from "./status";
@@ -27,9 +27,13 @@ const TOKEN_KEY = "cms-agent.mcpToken";
 const PROJECT_KEY = "cms-agent.projectId";
 const isDeployedMode = !import.meta.env.DEV;
 const DEFAULT_MODE: ConnectionMode = isDeployedMode ? "secure-proxy" : "direct";
+// Cloud Run control-plane endpoint (Phase 4b). Configured at build time; absent means the switch
+// is hidden and the UI is Netlify-only, exactly as before.
+const CLOUD_RUN_MCP_URL = (import.meta.env.VITE_CLOUD_RUN_MCP_URL as string | undefined)?.trim() || undefined;
 
 function App() {
   const { session, login, logout } = useIdentitySession(isDeployedMode);
+  const [controlPlane, setControlPlane] = useState<ControlPlane>("netlify");
   const [mode, setMode] = useState<ConnectionMode>(DEFAULT_MODE);
   const [endpoint, setEndpoint] = useState(defaultEndpointForMode(DEFAULT_MODE));
   const [token, setToken] = useState(() => isDeployedMode ? "" : readStorage(TOKEN_KEY) ?? "");
@@ -63,7 +67,17 @@ function App() {
 
   const handleModeChange = (nextMode: ConnectionMode) => {
     setMode(nextMode);
-    setEndpoint(defaultEndpointForMode(nextMode));
+    setEndpoint(resolveControlPlaneEndpoint(controlPlane, nextMode, CLOUD_RUN_MCP_URL));
+  };
+
+  // Flip the whole UI between the Netlify and Cloud Run control planes. Selecting Cloud Run forces
+  // direct token auth and repoints the endpoint; flipping back restores the Netlify default. This
+  // is the "quick switch" — one control, every UI call follows the connection's endpoint.
+  const handlePlaneChange = (nextPlane: ControlPlane) => {
+    setControlPlane(nextPlane);
+    const nextMode: ConnectionMode = nextPlane === "cloud-run" ? "direct" : DEFAULT_MODE;
+    setMode(nextMode);
+    setEndpoint(resolveControlPlaneEndpoint(nextPlane, nextMode, CLOUD_RUN_MCP_URL));
   };
 
   useEffect(() => {
@@ -97,7 +111,7 @@ function App() {
       {route.page === "runs" && <RunsPage selectedProjectId={selectedProjectId} onNavigate={navigate} />}
       {route.page === "changes" && <ChangesPage client={client} selectedProjectId={selectedProjectId} onStatus={setStatus} onError={handleError} />}
       {route.page === "access" && <AccessPage client={client} projects={projects.projects} projectsError={projects.error} onRefreshProjects={() => void projects.refresh()} selectedProjectId={selectedProjectId} onStatus={setStatus} onError={handleError} />}
-      {route.page === "settings" && <SettingsPage connection={connection} client={client} token={token} onModeChange={handleModeChange} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} session={isDeployedMode ? session : null} onLogout={logout} isDeployedMode={isDeployedMode} workspace={workspace} modelUsage={modelUsage} activeRunId={workflowRun.currentRun?.runId} theme={theme} onStatus={setStatus} onError={handleError} />}
+      {route.page === "settings" && <SettingsPage connection={connection} client={client} token={token} controlPlane={controlPlane} cloudRunAvailable={controlPlaneAvailable(CLOUD_RUN_MCP_URL)} onPlaneChange={handlePlaneChange} onModeChange={handleModeChange} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} session={isDeployedMode ? session : null} onLogout={logout} isDeployedMode={isDeployedMode} workspace={workspace} modelUsage={modelUsage} activeRunId={workflowRun.currentRun?.runId} theme={theme} onStatus={setStatus} onError={handleError} />}
     </main>
   </div>;
 }

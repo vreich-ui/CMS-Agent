@@ -14,7 +14,8 @@
     "test:openai:smoke": "node scripts/openai-smoke.mjs",
     "test:ui": "npm --prefix ui run test",
     "job:conductor": "tsx src/agent/entrypoints/runConductorJobMain.ts",
-    "job:migrate-store": "tsx src/agent/entrypoints/migrateStoreJobMain.ts"
+    "job:migrate-store": "tsx src/agent/entrypoints/migrateStoreJobMain.ts",
+    "serve:mcp": "tsx src/agent/entrypoints/mcpServerMainRun.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.21.0",

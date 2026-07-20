@@ -1,11 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { defaultEndpointForMode, redactSecretText, redactSecretValue, summarizeConnectionAuth } from "../../ui/src/connection.js";
+import { controlPlaneAvailable, defaultEndpointForMode, redactSecretText, redactSecretValue, resolveControlPlaneEndpoint, summarizeConnectionAuth } from "../../ui/src/connection.js";
 import type { McpConnection } from "../../ui/src/connection.js";
 
 describe("defaultEndpointForMode", () => {
   it("maps each mode to its endpoint default", () => {
     expect(defaultEndpointForMode("direct")).toBe("/api/mcp");
     expect(defaultEndpointForMode("secure-proxy")).toBe("/api/workspace-mcp");
+  });
+});
+
+describe("control-plane switch (Phase 4b)", () => {
+  const cloudRun = "https://cms-agent-mcp.example.run.app/mcp";
+
+  it("offers the Cloud Run plane only when an endpoint is configured", () => {
+    expect(controlPlaneAvailable(cloudRun)).toBe(true);
+    expect(controlPlaneAvailable(undefined)).toBe(false);
+    expect(controlPlaneAvailable("   ")).toBe(false);
+  });
+
+  it("resolves the endpoint per plane; Netlify keeps the mode defaults, Cloud Run uses its URL", () => {
+    expect(resolveControlPlaneEndpoint("netlify", "direct", cloudRun)).toBe("/api/mcp");
+    expect(resolveControlPlaneEndpoint("netlify", "secure-proxy", cloudRun)).toBe("/api/workspace-mcp");
+    expect(resolveControlPlaneEndpoint("cloud-run", "direct", cloudRun)).toBe(cloudRun);
+    // Cloud Run ignores the auth mode axis (it is always direct-token against its URL).
+    expect(resolveControlPlaneEndpoint("cloud-run", "secure-proxy", cloudRun)).toBe(cloudRun);
+    // Defensive: a cloud-run selection with no configured URL resolves to empty, never a Netlify path.
+    expect(resolveControlPlaneEndpoint("cloud-run", "direct", undefined)).toBe("");
   });
 });
 

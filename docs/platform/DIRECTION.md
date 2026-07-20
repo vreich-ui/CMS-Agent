@@ -173,7 +173,16 @@ plane so its heavy loops run as Jobs without time limits.
 Full strategy, product choices, and its own basic→advanced staging:
 **`docs/improvement/STRATEGY.md`**.
 
-### Phase 4 — Dual control plane with a UI switch (Netlify NOT retired) — revised July 2026
+### Phase 4 — Dual control plane with a UI switch (Netlify NOT retired) — revised July 2026 ✅ implemented
+
+> **Status:** shipped. The MCP transport core was extracted from `netlify/functions/mcp.mts`
+> into `src/agent/mcp/http/mcpEndpoint.ts` (the `.mts` is now a thin adapter, mirroring the
+> OAuth pattern), so Netlify and Cloud Run share ONE implementation. The Cloud Run MCP
+> Service (`src/agent/entrypoints/mcpServerMain.ts`, `npm run serve:mcp`, `Dockerfile.mcp`)
+> serves `/mcp` + `/healthz` + the full OAuth flow; sessions/OAuth state persist in GCS
+> (`mcpStateUsesBlobs` now includes `gcs`) so **no session affinity is required**. The UI
+> gained a "Control plane: Netlify | Cloud Run" toggle in the existing connection panel,
+> shown only when `VITE_CLOUD_RUN_MCP_URL` is set. Deploy steps: `docs/platform/PHASE4_RUNBOOK.md`.
 
 Netlify keeps serving everything it serves today. A second, Google-hosted control
 plane comes up beside it, and **which plane the Constellation UI talks to becomes a
