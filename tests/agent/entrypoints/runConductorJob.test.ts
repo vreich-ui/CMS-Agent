@@ -61,6 +61,12 @@ describe("runConductorJob (Cloud Run job entrypoint)", () => {
     await expect(runConductorJob({ projectId: "dr-lurie" })).rejects.toThrow(/NETLIFY_BLOBS_SITE_ID/);
   });
 
+  it("refuses the gcs backend without a bucket", async () => {
+    process.env.WORKSPACE_STORE = "gcs";
+    delete process.env.GCS_BUCKET;
+    await expect(runConductorJob({ projectId: "dr-lurie" })).rejects.toThrow(/GCS_BUCKET/);
+  });
+
   it("stops between nodes when the abort signal fires, leaving the run resumable", async () => {
     const controller = new AbortController();
     controller.abort();

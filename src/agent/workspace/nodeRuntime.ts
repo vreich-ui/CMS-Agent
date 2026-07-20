@@ -79,7 +79,7 @@ export async function prepareNodeExecution(data: { nodeId: string; input?: unkno
   });
 }
 
-export async function executeNode(data: { nodeId: string; input?: unknown; runId?: string; dependencyOutputs?: Record<string, unknown>; executionMode?: ExecutionMode; modelConfig?: Record<string, unknown>; expectedWorkspaceVersion?: number }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository(), executionRepository: repositoryManager.getExecutionRepository() }) {
+export async function executeNode(data: { nodeId: string; input?: unknown; runId?: string; dependencyOutputs?: Record<string, unknown>; executionMode?: ExecutionMode; modelConfig?: Record<string, unknown>; promptOverride?: string; expectedWorkspaceVersion?: number }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository(), executionRepository: repositoryManager.getExecutionRepository() }) {
   if (data.expectedWorkspaceVersion !== undefined && data.expectedWorkspaceVersion !== await repos.workspaceRepository.getWorkspaceVersion()) throw new Error("stale_workspace_version");
   const node = await repos.workspaceRepository.getNode(data.nodeId);
   if (!node) throw new Error(`Unknown node: ${data.nodeId}`);
@@ -94,7 +94,10 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   const run: WorkflowExecutionRecord = { runId, workflowId: "independent_node", projectId: "workspace", status: "running", currentNodeId: node.id, startedAt, updatedAt: startedAt, nodes: [state], artifacts: [], errors: [], approvalsRequired: [], stageOutputs: prep.dependencyOutputs as Record<string, unknown>, dryRun: true, executionMode: data.executionMode ?? "mock" };
   await repos.executionRepository.createRun(run);
   const runner = getNodeRunner(data.executionMode ?? "mock");
-  const result = await runner.run({ node: { ...node, modelConfig: { ...node.modelConfig, ...data.modelConfig } }, input: state.input }, { run, executionRepository: repos.executionRepository, workspaceRepository: repos.workspaceRepository, suppliedDependencies: data.dependencyOutputs });
+  // promptOverride is an internal replay lever (improvement trials run prompt variants against
+  // frozen inputs); it is deliberately NOT exposed on the public node.execute MCP tool — the
+  // sanctioned public mutation path stays workspace.update_node_prompt.
+  const result = await runner.run({ node: { ...node, prompt: data.promptOverride ?? node.prompt, modelConfig: { ...node.modelConfig, ...data.modelConfig } }, input: state.input }, { run, executionRepository: repos.executionRepository, workspaceRepository: repos.workspaceRepository, suppliedDependencies: data.dependencyOutputs });
   const endedAt = now();
   state.completedAt = endedAt; state.durationMs = duration(startedAt, endedAt);
   if (!result.ok) { state.status = "failed"; state.errors = [result.code, result.message]; run.status = "failed"; run.errors = state.errors; }

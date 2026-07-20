@@ -1,6 +1,6 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../repository/RepositoryHealth.js";
 import type { SkillRepository } from "../repository/interfaces/SkillRepository.js";
-import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "../repository/blobs/blobClient.js";
+import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "../repository/blobs/blobClient.js";
 import type { SkillDefinition, SkillEvent, SkillListFilters, SkillMutationMeta, SkillVersionSnapshot } from "./skillTypes.js";
 import { assertValidSkill, skillDefinitionSchema } from "./skillValidator.js";
 
@@ -62,5 +62,5 @@ export class BlobSkillRepository extends MemorySkillRepository {
   private eventKey = (eventId: string) => `skills/events/${eventId}.json`;
   protected override async load(): Promise<SkillDocument> { const listed = await this.store.list({ prefix: "skills/current/" }); if (!listed.blobs.length) { const doc = createDocument(); await this.save(doc); return doc; } const skills = (await Promise.all(listed.blobs.map((b) => getBlobJson<SkillDefinition>(this.store, b.key)))).filter(Boolean).map((s) => skillDefinitionSchema.parse(s)); const versionsList = await this.store.list({ prefix: "skills/versions/" }); const versions = (await Promise.all(versionsList.blobs.map((b) => getBlobJson<SkillVersionSnapshot>(this.store, b.key)))).filter(Boolean) as SkillVersionSnapshot[]; const eventsList = await this.store.list({ prefix: "skills/events/" }); const events = (await Promise.all(eventsList.blobs.map((b) => getBlobJson<SkillEvent>(this.store, b.key)))).filter(Boolean) as SkillEvent[]; return { schemaVersion: 1, skillVersion: Math.max(0, ...events.map((e) => e.skillVersion)), updatedAt: now(), skills, versions, events }; }
   protected override async save(doc: SkillDocument) { const current = await this.store.list({ prefix: "skills/current/" }); const desired = new Set(doc.skills.map((s) => this.currentKey(s.skillId))); await Promise.all([...current.blobs.filter((b) => !desired.has(b.key)).map((b) => this.store.delete(b.key)), ...doc.skills.map((s) => this.store.setJSON(this.currentKey(s.skillId), s)), ...doc.versions.map((v) => this.store.setJSON(this.versionKey(v.skillId, v.versionId), v)), ...doc.events.map((e) => this.store.setJSON(this.eventKey(e.id), e))]); }
-  override async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus("blobs"), version: "blobs.v1" }; }
+  override async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" }; }
 }

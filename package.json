@@ -13,12 +13,15 @@
     "ui:build": "npm --prefix ui run build",
     "test:openai:smoke": "node scripts/openai-smoke.mjs",
     "test:ui": "npm --prefix ui run test",
-    "job:conductor": "tsx src/agent/entrypoints/runConductorJobMain.ts"
+    "job:conductor": "tsx src/agent/entrypoints/runConductorJobMain.ts",
+    "job:migrate-store": "tsx src/agent/entrypoints/migrateStoreJobMain.ts"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.21.0",
     "@modelcontextprotocol/sdk": "^1.18.1",
     "@netlify/blobs": "^10.7.9",
     "@openai/agents": "^0.13.1",
+    "openai": "^6.46.0",
     "tsx": "^4.19.0",
     "zod": "^4.4.3"
   },

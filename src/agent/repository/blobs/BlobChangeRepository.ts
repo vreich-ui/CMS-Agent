@@ -1,7 +1,7 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { ChangeRepository } from "../interfaces/ChangeRepository.js";
 import type { RecordEnvelope } from "../RecordEnvelope.js";
-import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 import { filterAndPageEvents } from "../memory/MemoryChangeRepository.js";
 import type { WorkspaceChangeEvent, WorkspaceChangeFilters, WorkspaceChangeRecordInput, WorkspaceRevision } from "../../workspace/changeTypes.js";
 
@@ -24,7 +24,7 @@ export class BlobChangeRepository implements ChangeRepository {
   constructor(private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
 
   async health(): Promise<RepositoryHealth> {
-    return { ...healthyRepositoryStatus("blobs"), version: "blobs.v1" };
+    return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" };
   }
 
   async record(input: WorkspaceChangeRecordInput) {

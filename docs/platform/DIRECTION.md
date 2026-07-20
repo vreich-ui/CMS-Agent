@@ -23,7 +23,9 @@ Two forces drove this:
 This decision also *executes* the repo's own open architectural item: the two-plane
 split (control vs execution) recorded in `docs/SESSION_HANDOFF.md` §5, which was
 "NOT STARTED" at the time of writing. The execution plane lands on Google Cloud; the
-control plane follows in the final phase.
+control plane gains a Google home **alongside** Netlify in Phase 4 — Netlify is NOT
+retired; the active control plane becomes a user-facing switch in the existing UI
+(revised July 2026; retirement is deferred indefinitely as an optional Phase 9).
 
 ## 2. Verified platform facts (July 2026)
 
@@ -118,7 +120,7 @@ additive and reversible.
   adopt Blobs `onlyIfMatch` on `mutate()`'s save path to close the lost-update race
   while still on Netlify. One-line class of change; worth doing if Phase 2 is far off.
 
-### Phase 1 — Execution plane on Cloud Run (basic functioning structure)
+### Phase 1 — Execution plane on Cloud Run (basic functioning structure) ✅ implemented
 
 The smallest move that removes the 15-minute ceiling.
 
@@ -137,19 +139,31 @@ The smallest move that removes the 15-minute ceiling.
   Netlify paths untouched and still working.
 - **Rollback**: delete the Cloud Run resources; nothing on Netlify changed.
 
-### Phase 2 — State to Firestore/GCS (correctness + independence)
+### Phase 2 — State to GCS (correctness + independence) ✅ implemented
 
-- Add `firestore/` (or `gcs/`) repository implementations behind
-  `RepositoryManager` for: Workspace, Execution, Usage, Change, Artifact, Project,
-  Skill, Learning. Fold in per-project namespacing here (SESSION_HANDOFF §5.2 —
-  `projects/<id>/…` scoping) so keys are only re-cut once.
-- Dual-run window (write both, read old → read new), then cut over.
-- **Acceptance**: concurrent-writer test demonstrates the lost-update race is closed
-  (transactions/preconditions); change history and revisions intact across cutover;
-  `repository.get_health` reports the new backend honestly.
-- **Rollback**: flip `WORKSPACE_STORE` back to blobs during the dual-run window.
+> **Status/decision update:** shipped as a **GCS-only backend** (`WORKSPACE_STORE=gcs`),
+> not Firestore+GCS. Implementation review showed nothing needs multi-document
+> transactions — the entire persistence model is JSON-at-keys with single-key optimistic
+> concurrency — so GCS generation preconditions (`ifGenerationMatch`) cover it completely
+> while **reusing every blob repository class unchanged** via a drop-in `BlobStoreClient`
+> transport (`src/agent/repository/gcs/gcsStoreClient.ts`). The workspace document save
+> is now ETag-conditional (hard CAS; concurrent writers get `workspace_version_conflict`),
+> run saves already carried CAS, and first-write seeding is create-only. Cutover is
+> freeze → migrate (`npm run job:migrate-store`) → `--verify` → flip env, instead of a
+> dual-write window — right-sized for a single-operator system. Firestore remains the
+> upgrade path if query patterns ever demand it. Procedure, acceptance checks, and the
+> split-brain note: `docs/platform/PHASE2_RUNBOOK.md`.
 
-### Phase 3 — Improvement Engine, GCP-native (advanced)
+- Original sketch (superseded above): Firestore/GCS repository implementations behind
+  `RepositoryManager`; per-project namespacing folded in (shipped as the
+  `GCS_KEY_PREFIX` seam); dual-run window then cut over.
+- **Acceptance** (met — `tests/agent/gcsBackend.test.ts`): concurrent-writer tests prove
+  the lost-update race closed for both runs and the workspace document; migration
+  verify checks history byte-for-byte; `repository.get_health` reports `backend: "gcs"`.
+- **Rollback**: flip `WORKSPACE_STORE` back to blobs during the window (source store is
+  never mutated); after going live, bucket object versioning is the recovery mechanism.
+
+### Phase 3 — Improvement Engine, GCP-native (advanced) ✅ implemented
 
 The deferred design — evaluation rubrics, LLM judges, feedback capture,
 champion/challenger replay trials, GEPA-style prompt optimization, ACE playbooks,
@@ -159,22 +173,88 @@ plane so its heavy loops run as Jobs without time limits.
 Full strategy, product choices, and its own basic→advanced staging:
 **`docs/improvement/STRATEGY.md`**.
 
-### Phase 4 — Control plane, UI, auth; retire Netlify
+### Phase 4 — Dual control plane with a UI switch (Netlify NOT retired) — revised July 2026
 
-- Workspace MCP server → Cloud Run Service per Google's MCP hosting guidance
-  (Streamable HTTP; session affinity; session state externalized to Firestore).
-- React SPA → Firebase Hosting. Netlify Identity → Firebase Auth / Identity
-  Platform (Identity is deprecated regardless). Wipe `/api/workspace-mcp` and the
-  Identity plumbing as already planned in SESSION_HANDOFF §5.1.
-- DNS cutover; decommission Netlify.
-- **Acceptance**: existing MCP clients connect via OAuth to the Cloud Run endpoint;
-  UI fully functional against it; no Netlify dependencies remain in `netlify.toml`
-  paths that matter.
+Netlify keeps serving everything it serves today. A second, Google-hosted control
+plane comes up beside it, and **which plane the Constellation UI talks to becomes a
+quick switch inside the existing Netlify-served UI** — no new UI is built.
+
+- **4a — Cloud Run MCP Service**: the same workspace MCP server (same repo, same
+  tool registry) served from a Cloud Run Service per Google's MCP-hosting guidance
+  (Streamable HTTP at `/mcp`; a thin Node server mounts the existing web-standard
+  handler; `WORKSPACE_STORE=gcs`; session affinity on, session state externalization
+  as a follow-up). Netlify's `/api/mcp` continues running unchanged.
+- **4b — Control-plane switch in the existing UI**: the connection panel already
+  models explicit modes and arbitrary endpoints (the S0 credential-lifecycle
+  redesign); add a labeled preset toggle — **"Control plane: Netlify | Cloud Run"** —
+  fed by a build-time-configured Cloud Run endpoint. One click flips every UI call;
+  flipping back is the rollback. This is deliberately a switch in the CMS GUI, not a
+  new frontend.
+- **Coexistence rule (from the Phase 2 split-brain note):** the planes do NOT share
+  a store — Netlify's plane reads Netlify Blobs, the Cloud Run plane reads GCS.
+  After the Phase 2 cutover, GCS is authoritative: run execution on Cloud Run,
+  treat the Netlify plane as a read-only legacy view, and re-run the (idempotent)
+  migration if legacy state ever changes. The switch makes plane choice explicit
+  instead of implicit.
+- Auth: the Cloud Run endpoint reuses the existing MCP OAuth/token auth. Firebase
+  Auth / SPA rehosting are NOT in scope (they belong to the optional Phase 9).
+- **Acceptance**: the same MCP client and the Netlify-served UI can each connect to
+  both planes; the UI toggle flips between them without a redeploy; Netlify paths
+  untouched.
+
+### Phase 5 — Executor reads store nodes (promotions reach conductor runs)
+
+Today `executor.ts` runs the STATIC node definitions in `nodes.ts`, so optimizer
+promotions are live for independent execution and replay but not full conductor
+runs. Make the executor resolve nodes from the workspace repository (canonical-node
+guards and late-stage seeding preserved), behind a
+`WORKSPACE_NODES_SOURCE=static|store` flag defaulting to `static`, flipped after a
+side-by-side mock-run comparison shows identical topology. This closes the loudest
+Phase 3 caveat.
+
+### Phase 6 — First-class Anthropic runner
+
+Claude agents work today via the `openai_compatible` provider pointed at a gateway
+(LiteLLM / OpenRouter) — config-only, but structured-output fidelity must be
+validated per model. This phase adds a native path: an `anthropic` provider entry
+(`ANTHROPIC_API_KEY` env NAME) backed by a runner speaking the Messages API with
+tool use + schema-enforced output, registered alongside the OpenAI runner. Judges
+can then be cross-family with Claude natively (the recommended judge setup).
+
+### Phase 7 — Engine maturation
+
+- LLM-driven playbook curation (Reflector→Curator via a synthetic node; today's
+  `playbook.curate` is heuristic).
+- Automatic post-run reflection (hooked after conductor runs / as a scheduled
+  Cloud Run job) instead of manual `optimizer.propose` calls.
+- Published-analytics ingestion: Monetizer `performance`/`demand_signals` →
+  `feedback.record` outcome records, closing the outer loop.
+- `IMPROVEMENT_AUTO_PROMOTE` flag: eval-gated automatic promotion for low-risk
+  nodes (promotion stays human-approved by default).
+- Model-ladder enforcement in the conductor's planning (today it is advisory via
+  `optimizer.status`).
+
+### Phase 8 — Fine-tuning flywheel (trigger-based)
+
+Already-shipped `dataset.export_sft` / `export_preferences` feed Unsloth QLoRA
+(spot GPU Cloud Run Job / GKE) → LoRA adapters served via vLLM behind the
+`openai_compatible` provider → eval-gated adapter promotion (champion/challenger,
+same discipline as prompts). Triggers unchanged: per-subtask volume×cost becomes
+material, or evals show a quality ceiling prompt optimization can't break with
+≥500–2,000 approved examples accumulated.
+
+### Phase 9 (optional, deferred indefinitely) — Netlify retirement
+
+Only if coexistence ever stops being worth it: SPA → Firebase Hosting, Netlify
+Identity (deprecated) → Firebase Auth, DNS cutover, decommission. Nothing in
+Phases 4–8 depends on it.
 
 ## 6. Sequencing rationale
 
-The improvement engine deliberately comes **after** the execution plane (Phase 3
+The improvement engine deliberately came **after** the execution plane (Phase 3
 after Phase 1–2): its workloads are precisely the long batch jobs Netlify cannot
-run, so building it first would mean building it twice. Conversely, Phases 1–2 are
-small, mechanical, and de-risked by the repo's existing seams (web-standard
-handlers; the repository pattern; the documented two-plane intent).
+run, so building it first would have meant building it twice. Phases 4–8 (revised)
+keep Netlify as a permanent fallback: the Google control plane arrives as a
+switchable alternative rather than a replacement, the executor fix makes
+promotions fully live, the Anthropic runner and engine-maturation items deepen the
+loop, and the flywheel stays trigger-based rather than scheduled.

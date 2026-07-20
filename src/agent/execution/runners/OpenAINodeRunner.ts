@@ -1,5 +1,7 @@
 import { Agent, run, tool } from "@openai/agents";
 import { recordModelUsage, summarizeModelUsage, estimateModelCost } from "../../observability/modelUsage.js";
+import { buildAgentModel, resolveProvider } from "../providers/providerRegistry.js";
+import { renderPlaybookForPrompt } from "../../improvement/playbook.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { getTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { executeTool } from "../../tools/toolExecutor.js";
@@ -37,21 +39,27 @@ export class OpenAINodeRunner implements NodeRunner {
   supports(mode: ExecutionMode) { return mode === "openai"; }
   validateConfiguration(node: WorkspaceNode) {
     const c = cfg(node); const errors: string[] = [];
-    if ((stringFrom(c.provider) ?? "openai") !== "openai") errors.push("Only provider=openai is supported.");
+    try { resolveProvider(c); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
     if (!node.outputSchema) errors.push("outputSchema is required.");
     if (numberFrom(c.budgetUsd) !== undefined && numberFrom(c.budgetUsd)! < 0) errors.push("budgetUsd must be non-negative.");
     return errors.length ? { ok: false as const, errors } : { ok: true as const };
   }
   async run({ node, input }: NodeRunnerInput, context: NodeRunnerContext): Promise<NodeRunnerResult> {
-    if (!process.env.OPENAI_API_KEY) return { ok: false, code: "invalid_node_configuration", message: "OPENAI_API_KEY is required for openai execution." };
     const valid = this.validateConfiguration(node); if (!valid.ok) return { ok: false, code: "invalid_node_configuration", message: valid.errors.join("; ") };
-    const c = cfg(node); const budgetUsd = numberFrom(c.budgetUsd);
+    const c = cfg(node);
+    const provider = resolveProvider(c);
+    if (!process.env[provider.apiKeyEnv]) return { ok: false, code: "invalid_node_configuration", message: `${provider.apiKeyEnv} is required for ${provider.label} execution.` };
+    const budgetUsd = numberFrom(c.budgetUsd);
     if (budgetUsd !== undefined) {
       const spent = await summarizeModelUsage({ runId: context.run.runId });
       const reserve = estimateModelCost({ model: stringFrom(c.model) ?? process.env.OPENAI_AGENT_MODEL ?? "gpt-5.5", inputTokens: 1000, outputTokens: numberFrom(c.maxOutputTokens) ?? 1000 });
       if (spent.totalCostUsdEstimate + reserve > budgetUsd) return { ok: false, code: "budget_exceeded", message: "Estimated node budget would be exceeded.", details: { spentUsdEstimate: spent.totalCostUsdEstimate, reserveUsdEstimate: reserve, budgetUsd } };
     }
-    const effective = (await resolveEffectiveToolsForNode(node.id, { runId: context.run.runId, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun })).filter((t) => t.allowed);
+    // Empty allowedTools short-circuits tool resolution: the policy layer denies every tool for
+    // such nodes anyway (node_tool_not_allowed), and skipping the lookup lets synthetic,
+    // non-persisted nodes (the improvement judge/reflector) run through this runner without
+    // tripping the resolver's unknown-node guard. Behavior for real nodes is unchanged.
+    const effective = node.allowedTools.length === 0 ? [] : (await resolveEffectiveToolsForNode(node.id, { runId: context.run.runId, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun })).filter((t) => t.allowed);
     const sdkTools = effective.map((t) => tool({
       name: t.name.replace(/[^A-Za-z0-9_-]/g, "_"),
       description: `${getTool(t.toolId)?.description ?? `Controlled CMS-Agent tool ${t.name}`} All calls are audited through ToolExecutor.`,
@@ -69,11 +77,15 @@ export class OpenAINodeRunner implements NodeRunner {
         return redact(result.output);
       }
     }));
-    const observations = await repositoryManager.getLearningRepository().listObservations().catch(() => []);
+    // Node-scoped ACE playbook replaces the old inject-every-global-observation behavior
+    // (data-model-gaps §6): curated, deduplicated, size-budgeted lessons for THIS node only.
+    // Synthetic improvement nodes have no playbook, so judge prompts stay uncontaminated.
+    const playbook = await repositoryManager.getImprovementRepository().getPlaybook(node.id).catch(() => undefined);
+    const playbookText = playbook ? renderPlaybookForPrompt(playbook) : "";
     const { model, settings } = modelSettings(node);
     const outputType = { type: "json_schema" as const, name: `${node.id}_output`, strict: false, schema: node.outputSchema as any };
-    const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, observations), model, modelSettings: settings, tools: sdkTools, outputType });
-    const prompt = JSON.stringify(redact({ input, dependencyOutputs: Object.fromEntries(node.dependsOn.map((d) => [d, context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d]])), observations, outputSchema: node.outputSchema }));
+    const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, playbookText), model: buildAgentModel(provider, model), modelSettings: settings, tools: sdkTools, outputType });
+    const prompt = JSON.stringify(redact({ input, dependencyOutputs: Object.fromEntries(node.dependsOn.map((d) => [d, context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d]])), ...(playbookText ? { playbook: playbookText } : {}), outputSchema: node.outputSchema }));
     const timeoutMs = numberFrom(c.timeout) ?? 60000;
     const maxRetries = Math.max(0, Math.floor(numberFrom(c.retryCount) ?? 0));
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -92,7 +104,7 @@ export class OpenAINodeRunner implements NodeRunner {
         const usageFields = { inputTokens: usage?.inputTokens || 0, outputTokens: usage?.outputTokens || 0, reasoningTokens: usage?.reasoningTokens || 0, totalTokens: (usage?.inputTokens || 0) + (usage?.outputTokens || 0) };
         // Telemetry is non-authoritative: the validated output is the deliverable, so a usage-record
         // write failure must never discard a successful node (matches the workflow executor's pattern).
-        await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "openai", ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId } }).catch(() => undefined);
+        await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId } }).catch(() => undefined);
         return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length } };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);

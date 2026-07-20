@@ -1,7 +1,7 @@
 import type { WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import { RunConcurrencyError, type ExecutionRepository } from "../interfaces/ExecutionRepository.js";
-import { getBlobJson, getBlobJsonWithEtag, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getBlobJsonWithEtag, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 const runKey = (runId: string) => `runs/${runId}.json`;
@@ -68,5 +68,5 @@ export class BlobExecutionRepository implements ExecutionRepository {
     return clone(next);
   }
 
-  async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus("blobs"), version: "blobs.v1" }; }
+  async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" }; }
 }

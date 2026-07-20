@@ -10,7 +10,9 @@ const runMock = vi.fn(async () => ({
 vi.mock("@openai/agents", () => ({
   Agent: class { constructor(_config: unknown) {} },
   run: (...args: unknown[]) => runMock(...(args as [])),
-  tool: (definition: unknown) => definition
+  tool: (definition: unknown) => definition,
+  // The provider registry imports this class; default-provider paths never instantiate it.
+  OpenAIChatCompletionsModel: class { constructor(_client: unknown, _model: string) {} }
 }));
 
 import { executeNode } from "../../../src/agent/workspace/nodeRuntime.js";
