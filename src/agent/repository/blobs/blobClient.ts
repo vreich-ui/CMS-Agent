@@ -4,7 +4,17 @@ import { getStore, type Store } from "@netlify/blobs";
 // delete keep type-checking; callers feature-detect it before relying on ETag-based writes.
 export type BlobStoreClient = Pick<Store, "get" | "setJSON" | "list" | "delete"> & Partial<Pick<Store, "getWithMetadata">>;
 
-export const getCmsAgentBlobStore = (): BlobStoreClient => getStore({ name: process.env.NETLIFY_BLOBS_STORE_NAME ?? "cms-agent" });
+// Inside the Netlify runtime, getStore({ name }) binds to the per-request Blobs context that the
+// Lambda handlers connect. Outside it (the Cloud Run job entrypoint — DIRECTION.md Phase 1) there
+// is no such context, so explicit credentials are read from NETLIFY_BLOBS_SITE_ID +
+// NETLIFY_BLOBS_TOKEN, putting the client in API mode against the same store. The dedicated env
+// names (not NETLIFY_SITE_ID) guarantee Netlify deployments never switch modes accidentally.
+export const getCmsAgentBlobStore = (): BlobStoreClient => {
+  const name = process.env.NETLIFY_BLOBS_STORE_NAME ?? "cms-agent";
+  const siteID = process.env.NETLIFY_BLOBS_SITE_ID?.trim();
+  const token = process.env.NETLIFY_BLOBS_TOKEN?.trim();
+  return siteID && token ? getStore({ name, siteID, token }) : getStore({ name });
+};
 
 export const strongConsistency = { consistency: "strong" as const };
 const eventualConsistency = { consistency: "eventual" as const };

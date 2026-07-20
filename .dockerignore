@@ -1,0 +1,17 @@
+# Only src/, package manifests, and tsconfig ship in the image (see Dockerfile).
+node_modules
+ui
+dist
+docs
+tests
+scripts
+netlify
+netlify.toml
+.netlify
+.git
+.github
+DrLurieBlog
+Other
+*.md
+.env
+.env.*
