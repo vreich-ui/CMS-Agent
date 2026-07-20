@@ -1,7 +1,7 @@
 import type { ModelUsageFilters, ModelUsageRecord } from "../../observability/modelUsageTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { UsageRepository } from "../interfaces/UsageRepository.js";
-import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 const key = (usageId: string) => `usage/${usageId}.json`;
@@ -31,5 +31,5 @@ export class BlobUsageRepository implements UsageRepository {
       .map((record) => clone(record));
   }
   clear(): void { throw new Error("BlobUsageRepository.clear is only available in memory mode."); }
-  async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus("blobs"), version: "blobs.v1" }; }
+  async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" }; }
 }

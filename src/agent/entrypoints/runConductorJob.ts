@@ -9,6 +9,8 @@ import { readFile } from "node:fs/promises";
 import { planRun, summarizeRunCost, type RunCostLedger, type RunPlan } from "../workspace/conductor.js";
 import { summarizeModelUsage } from "../observability/modelUsage.js";
 import { getRun, retryNode, runNextNode, startDryRun } from "../workspace/executor.js";
+import { registerCmsAgentStoreFactory, type BlobStoreClient } from "../repository/blobs/blobClient.js";
+import { createGcsStoreClient } from "../repository/gcs/gcsStoreClient.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "../workspace/executionTypes.js";
@@ -57,6 +59,22 @@ const outcomeFor = (status: ExecutionStatus, stopped: boolean): ConductorJobOutc
   return stopped ? "stopped" : "step_limit";
 };
 
+// Fail fast on store misconfiguration before minting a run record, and register the GCS transport
+// (DIRECTION.md Phase 2) so the lazily-built repositories bind to it on first access. Exported for
+// the sibling entrypoints (migration job) and tests.
+export function bootstrapWorkspaceStore(): void {
+  const workspaceStore = process.env.WORKSPACE_STORE ?? "memory";
+  if (workspaceStore === "blobs" && !(process.env.NETLIFY_BLOBS_SITE_ID?.trim() && process.env.NETLIFY_BLOBS_TOKEN?.trim())) {
+    throw new Error("WORKSPACE_STORE=blobs outside the Netlify runtime requires NETLIFY_BLOBS_SITE_ID and NETLIFY_BLOBS_TOKEN so the job reads and writes the same production store.");
+  }
+  if (workspaceStore === "gcs") {
+    if (!process.env.GCS_BUCKET?.trim()) {
+      throw new Error("WORKSPACE_STORE=gcs requires GCS_BUCKET (and optionally GCS_KEY_PREFIX) so the job can reach the production bucket.");
+    }
+    registerCmsAgentStoreFactory(() => createGcsStoreClient() as unknown as BlobStoreClient);
+  }
+}
+
 export async function runConductorJob(options: ConductorJobOptions): Promise<ConductorJobResult> {
   const log = options.log ?? (() => undefined);
   const mode: ExecutionMode = options.executionMode ?? "mock";
@@ -65,9 +83,7 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
   if (mode === "openai" && !process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is required for executionMode=openai; refusing to create a run that would fail its first node.");
   }
-  if ((process.env.WORKSPACE_STORE ?? "memory") === "blobs" && !(process.env.NETLIFY_BLOBS_SITE_ID?.trim() && process.env.NETLIFY_BLOBS_TOKEN?.trim())) {
-    throw new Error("WORKSPACE_STORE=blobs outside the Netlify runtime requires NETLIFY_BLOBS_SITE_ID and NETLIFY_BLOBS_TOKEN so the job reads and writes the same production store.");
-  }
+  bootstrapWorkspaceStore();
 
   const executionRepository = repositoryManager.getExecutionRepository();
   const workspaceRepository = repositoryManager.getWorkspaceRepository();

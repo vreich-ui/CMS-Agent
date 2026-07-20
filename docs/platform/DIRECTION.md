@@ -137,17 +137,29 @@ The smallest move that removes the 15-minute ceiling.
   Netlify paths untouched and still working.
 - **Rollback**: delete the Cloud Run resources; nothing on Netlify changed.
 
-### Phase 2 — State to Firestore/GCS (correctness + independence)
+### Phase 2 — State to GCS (correctness + independence) ✅ implemented
 
-- Add `firestore/` (or `gcs/`) repository implementations behind
-  `RepositoryManager` for: Workspace, Execution, Usage, Change, Artifact, Project,
-  Skill, Learning. Fold in per-project namespacing here (SESSION_HANDOFF §5.2 —
-  `projects/<id>/…` scoping) so keys are only re-cut once.
-- Dual-run window (write both, read old → read new), then cut over.
-- **Acceptance**: concurrent-writer test demonstrates the lost-update race is closed
-  (transactions/preconditions); change history and revisions intact across cutover;
-  `repository.get_health` reports the new backend honestly.
-- **Rollback**: flip `WORKSPACE_STORE` back to blobs during the dual-run window.
+> **Status/decision update:** shipped as a **GCS-only backend** (`WORKSPACE_STORE=gcs`),
+> not Firestore+GCS. Implementation review showed nothing needs multi-document
+> transactions — the entire persistence model is JSON-at-keys with single-key optimistic
+> concurrency — so GCS generation preconditions (`ifGenerationMatch`) cover it completely
+> while **reusing every blob repository class unchanged** via a drop-in `BlobStoreClient`
+> transport (`src/agent/repository/gcs/gcsStoreClient.ts`). The workspace document save
+> is now ETag-conditional (hard CAS; concurrent writers get `workspace_version_conflict`),
+> run saves already carried CAS, and first-write seeding is create-only. Cutover is
+> freeze → migrate (`npm run job:migrate-store`) → `--verify` → flip env, instead of a
+> dual-write window — right-sized for a single-operator system. Firestore remains the
+> upgrade path if query patterns ever demand it. Procedure, acceptance checks, and the
+> split-brain note: `docs/platform/PHASE2_RUNBOOK.md`.
+
+- Original sketch (superseded above): Firestore/GCS repository implementations behind
+  `RepositoryManager`; per-project namespacing folded in (shipped as the
+  `GCS_KEY_PREFIX` seam); dual-run window then cut over.
+- **Acceptance** (met — `tests/agent/gcsBackend.test.ts`): concurrent-writer tests prove
+  the lost-update race closed for both runs and the workspace document; migration
+  verify checks history byte-for-byte; `repository.get_health` reports `backend: "gcs"`.
+- **Rollback**: flip `WORKSPACE_STORE` back to blobs during the window (source store is
+  never mutated); after going live, bucket object versioning is the recovery mechanism.
 
 ### Phase 3 — Improvement Engine, GCP-native (advanced)
 

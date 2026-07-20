@@ -25,10 +25,10 @@ import { MemoryUsageRepository } from "./memory/MemoryUsageRepository.js";
 import { MemoryWorkspaceRepository } from "./memory/MemoryWorkspaceRepository.js";
 import { MemoryChangeRepository } from "./memory/MemoryChangeRepository.js";
 
-export type RepositoryBackend = "memory" | "json" | "blobs";
+export type RepositoryBackend = "memory" | "json" | "blobs" | "gcs";
 
 export const repositoryConfigSchema = z.object({
-  backend: z.enum(["memory", "json", "blobs"]).default("memory"),
+  backend: z.enum(["memory", "json", "blobs", "gcs"]).default("memory"),
   workspaceId: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
   runId: z.string().min(1).optional()
@@ -64,7 +64,10 @@ export class RepositoryManager {
 
   constructor(context: Partial<RepositoryContext> = {}) {
     this.context = resolveContext(context);
-    if (this.context.backend === "blobs") {
+    // "gcs" reuses the blob repository classes verbatim: they consume the BlobStoreClient surface,
+    // and getCmsAgentBlobStore() hands them the GCS transport registered by the entrypoint
+    // (registerCmsAgentStoreFactory in blobClient.ts). Same logic, different bytes.
+    if (this.context.backend === "blobs" || this.context.backend === "gcs") {
       this.workspaceRepository = new BlobWorkspaceRepository();
       this.executionRepository = new BlobExecutionRepository();
       this.artifactRepository = new BlobArtifactRepository();

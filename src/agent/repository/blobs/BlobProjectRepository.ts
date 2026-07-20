@@ -2,7 +2,7 @@ import { defaultProjectConfigs, migrateDefaultProjectConfig } from "../../projec
 import type { ProjectConnectionConfig } from "../../projects/projectTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { ProjectRepository } from "../interfaces/ProjectRepository.js";
-import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 const projectKey = (projectId: string) => `projects/${projectId}.json`;
@@ -55,6 +55,6 @@ export class BlobProjectRepository implements ProjectRepository {
   }
 
   async health(): Promise<RepositoryHealth> {
-    return { ...healthyRepositoryStatus("blobs"), version: "blobs.v1" };
+    return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" };
   }
 }

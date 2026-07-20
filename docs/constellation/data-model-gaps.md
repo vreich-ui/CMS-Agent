@@ -291,6 +291,14 @@ redesign; the UI must not fake it.
   concurrent Lambda writers both pass the optimistic check and the last write
   wins, silently discarding versions. Matters more once the UI makes
   mutations routine.
+  > **Status update (platform Phase 2, implemented):** closed at the store layer.
+  > `BlobWorkspaceRepository.save` is now conditional on the last-accepted ETag
+  > (losers get `workspace_version_conflict`; seeding is create-only), and run saves
+  > already carried revision+ETag CAS. On the **GCS backend** (`WORKSPACE_STORE=gcs`,
+  > `docs/platform/PHASE2_RUNBOOK.md`) ETags are always present (object generations)
+  > and reads are strongly consistent, making the CAS deterministic; on Netlify Blobs
+  > the same code degrades to the historical behavior only where the environment
+  > exposes no ETags. Race tests: `tests/agent/gcsBackend.test.ts`.
 - **Learning blob dead branch**: observations are written into the workspace
   document, but `BlobLearningRepository.listObservations` scans a `learning/`
   prefix nothing writes (`BlobLearningRepository.ts:12-21`).

@@ -2,7 +2,7 @@ import type { LearningObservation } from "../../mcp/workspace/store.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { LearningRepository } from "../interfaces/LearningRepository.js";
 import type { WorkspaceRepository } from "../interfaces/WorkspaceRepository.js";
-import { getBlobJson, getCmsAgentBlobStore, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -20,5 +20,5 @@ export class BlobLearningRepository implements LearningRepository {
     return records.filter((record): record is LearningObservation => record !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((record) => clone(record));
   }
 
-  async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus("blobs"), version: "blobs.v1" }; }
+  async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" }; }
 }

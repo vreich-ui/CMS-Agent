@@ -1,8 +1,20 @@
 import { getStore, type Store } from "@netlify/blobs";
+import type { RepositoryBackend } from "../RepositoryManager.js";
 
 // `getWithMetadata` is optional so lightweight test doubles that only implement get/setJSON/list/
 // delete keep type-checking; callers feature-detect it before relying on ETag-based writes.
 export type BlobStoreClient = Pick<Store, "get" | "setJSON" | "list" | "delete"> & Partial<Pick<Store, "getWithMetadata">>;
+
+// Alternate store transports (the GCS backend — DIRECTION.md Phase 2) register a factory here from
+// their entrypoint instead of being imported by this module, so @google-cloud/storage never lands
+// in Netlify function bundles. Registration must happen before the first repository access; the
+// repository manager is built lazily, so an entrypoint that registers at startup is always early
+// enough.
+let externalStoreFactory: (() => BlobStoreClient) | undefined;
+export const registerCmsAgentStoreFactory = (factory: (() => BlobStoreClient) | undefined): void => { externalStoreFactory = factory; };
+
+// Which transport the blob-shaped repositories are actually running on, for honest health labels.
+export const storeBackendLabel = (): RepositoryBackend => ((process.env.WORKSPACE_STORE ?? "") === "gcs" ? "gcs" : "blobs");
 
 // Inside the Netlify runtime, getStore({ name }) binds to the per-request Blobs context that the
 // Lambda handlers connect. Outside it (the Cloud Run job entrypoint — DIRECTION.md Phase 1) there
@@ -10,6 +22,10 @@ export type BlobStoreClient = Pick<Store, "get" | "setJSON" | "list" | "delete">
 // NETLIFY_BLOBS_TOKEN, putting the client in API mode against the same store. The dedicated env
 // names (not NETLIFY_SITE_ID) guarantee Netlify deployments never switch modes accidentally.
 export const getCmsAgentBlobStore = (): BlobStoreClient => {
+  if (externalStoreFactory) return externalStoreFactory();
+  if ((process.env.WORKSPACE_STORE ?? "") === "gcs") {
+    throw new Error("WORKSPACE_STORE=gcs requires the entrypoint to register the GCS store factory (registerCmsAgentStoreFactory) before repositories are built — see docs/platform/PHASE2_RUNBOOK.md.");
+  }
   const name = process.env.NETLIFY_BLOBS_STORE_NAME ?? "cms-agent";
   const siteID = process.env.NETLIFY_BLOBS_SITE_ID?.trim();
   const token = process.env.NETLIFY_BLOBS_TOKEN?.trim();
