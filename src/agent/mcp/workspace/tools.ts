@@ -7,6 +7,7 @@ export { metaJson, mutationMeta, objectSchema, ok, tool, toolError, workspaceAct
 export type { JsonSchema, WorkspaceTool } from "./toolKit.js";
 import { createChangesTools } from "./changesTools.js";
 import { createConstellationTools } from "./constellationTools.js";
+import { createImprovementTools } from "./improvementTools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { getRun, listRuns, resetRun, retryNode, runNextNode, startDryRun, updateRunStatus } from "../../workspace/executor.js";
 import { conductorCache, getRunContext, planRun, summarizeRunCost, RUN_CONTEXT_KEY } from "../../workspace/conductor.js";
@@ -325,7 +326,8 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "project.update", description: "Patch a registered project's safe fields (name, env var names, auth mode, allowed tools, contract, status). Identity and publishing policy are not patchable.", zodSchema: projectUpdateInput, inputSchema: projectUpdateJsonSchema, execute: async (input) => { const data = projectUpdateInput.parse(input); return ok({ project: await updateProject(projectRepository, data.projectId, data.patch) }); } }),
     tool({ name: "project.delete", description: "Remove an agent-registered project connection. Code-defined default projects cannot be deleted (set status to disabled instead).", zodSchema: projectDeleteInput, inputSchema: projectDeleteJsonSchema, execute: async (input) => { const data = projectDeleteInput.parse(input); return ok(await deleteProject(projectRepository, data.projectId)); } }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
-    ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository })
+    ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository }),
+    ...createImprovementTools({ workspaceRepository, executionRepository, learningRepository, evaluationRepository: repositoryManager.getEvaluationRepository(), improvementRepository: repositoryManager.getImprovementRepository(), meta })
   ];
 }
 

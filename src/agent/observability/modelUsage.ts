@@ -11,7 +11,11 @@ export const modelPricingCatalog: Record<string, { inputUsdPerMillion: number; o
   "gpt-5.5": { inputUsdPerMillion: 5, outputUsdPerMillion: 15, cachedInputUsdPerMillion: 1.25, placeholder: true, note: "Placeholder estimate; not billing-grade." },
   "gpt-5.5-mini": { inputUsdPerMillion: 0.6, outputUsdPerMillion: 2.4, cachedInputUsdPerMillion: 0.15, placeholder: true, note: "Placeholder estimate; not billing-grade." },
   "gpt-4.1": { inputUsdPerMillion: 2, outputUsdPerMillion: 8, cachedInputUsdPerMillion: 0.5, placeholder: true, note: "Placeholder estimate; not billing-grade." },
-  "gpt-4.1-mini": { inputUsdPerMillion: 0.4, outputUsdPerMillion: 1.6, cachedInputUsdPerMillion: 0.1, placeholder: true, note: "Placeholder estimate; not billing-grade." }
+  "gpt-4.1-mini": { inputUsdPerMillion: 0.4, outputUsdPerMillion: 1.6, cachedInputUsdPerMillion: 0.1, placeholder: true, note: "Placeholder estimate; not billing-grade." },
+  // Model-tiering candidates (docs/improvement/STRATEGY.md §4) reachable via the provider registry.
+  "gemini-3.1-flash-lite": { inputUsdPerMillion: 0.25, outputUsdPerMillion: 1.5, placeholder: true, note: "Placeholder estimate; not billing-grade." },
+  "gemini-3.5-flash": { inputUsdPerMillion: 0.75, outputUsdPerMillion: 4.5, placeholder: true, note: "Placeholder estimate; not billing-grade." },
+  "qwen3-8b": { inputUsdPerMillion: 0.1, outputUsdPerMillion: 0.3, placeholder: true, note: "Self-hosted vLLM amortized estimate; not billing-grade." }
 };
 
 export const usageFiltersSchema = z.object({

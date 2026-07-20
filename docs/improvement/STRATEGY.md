@@ -1,10 +1,27 @@
 # Agent Improvement Engine — strategy (research record, July 2026)
 
-Status: **strategy decided, implementation deferred** to Phase 3 of
-`docs/platform/DIRECTION.md` (after the execution plane lands on Cloud Run, so the
-engine's batch loops are not built twice). This document preserves the verified
-research and the chosen techniques so future work starts from decisions, not from
-scratch.
+Status: **implemented (scaffold, mock-runnable end-to-end)** as Phase 3 of
+`docs/platform/DIRECTION.md`. What shipped: `src/agent/improvement/` (types, mock+LLM
+rubric judge with both-ordering pairwise, ACE playbooks, replay harness with
+stage-output-suppressing trial facade, GEPA-style optimizer with propose→trial→promote
+and a stale-baseline guard, cost-aware model ladder), Evaluation/Improvement
+repositories (memory + blob/GCS), the provider registry (openai | google
+OpenAI-compat | openai_compatible; env-var NAMES only) wired into the runner, the
+per-node playbook injection replacing global observations (gap §6), and ~24 MCP tools
+(`evaluation.*`, `feedback.*`, `dataset.*`, `optimizer.*`, `playbook.*`). Ops note:
+add these namespaces to `MCP_EXPOSED_TOOL_PREFIXES` if the catalog is scoped.
+
+**Known follow-ups (tracked, deliberately out of the scaffold):** the conductor
+executes STATIC nodes (`nodes.ts`), so promoted prompts are live for independent
+execution and replay but reach full conductor runs only once the executor reads
+store nodes — the loop is self-consistent, but treat conductor behavior as unchanged
+until that lands; LLM-driven playbook curation (current `playbook.curate` is
+heuristic); automatic post-run reflection; analytics ingestion (Monetizer
+`performance` → `feedback.record` outcomes); auto-promotion flag (promotion is
+human-approved by design today); model-ladder enforcement in the conductor.
+
+This document preserves the verified research and the chosen techniques behind that
+implementation.
 
 Goal: every agent in the constellation gets measurably better **in its own role**
 over time while getting **cheaper**, using feedback from (a) human edits/approvals,

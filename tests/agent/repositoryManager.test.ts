@@ -58,7 +58,9 @@ describe("RepositoryManager", () => {
       learning: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       usage: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       skill: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
-      change: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
+      change: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      evaluation: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      improvement: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
     });
   });
 
@@ -72,7 +74,9 @@ describe("RepositoryManager", () => {
       manager.getLearningRepository(),
       manager.getUsageRepository(),
       manager.getSkillRepository(),
-      manager.getChangeRepository()
+      manager.getChangeRepository(),
+      manager.getEvaluationRepository(),
+      manager.getImprovementRepository()
     ]) {
       await expect(repository.health()).resolves.toEqual({ backend: "memory", readable: true, writable: true, version: "memory.v1" });
     }

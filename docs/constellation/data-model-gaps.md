@@ -248,6 +248,14 @@ fake entities, no unexplained placeholders:
 - **Evaluation**: review-stage nodes exist in the canonical graph, but no
   evaluation results/relationship data is modeled; modal ▸ Evaluation is a
   placeholder.
+  > **Status update (platform Phase 3, implemented):** first-class evaluation now
+  > exists — versioned per-node `EvalRubric`s, append-only `EvalResult`s (criterion
+  > scores + evidence + subject provenance), pairwise comparisons with both-ordering
+  > position-bias control, and `FeedbackRecord`s (approve/reject/edit-diff/outcome),
+  > exposed via the `evaluation.*`/`feedback.*` MCP tools and stored through
+  > Evaluation/Improvement repositories on all backends. The Evaluation UI section
+  > can consume `evaluation.list_results`. Experiments/A-B exist as optimizer
+  > proposals + replay trials (`optimizer.*`). See `docs/improvement/STRATEGY.md`.
 - **Per-edge activity metrics**: Operate-mode connector-thickness encoding
   needs interaction counts per relationship; nothing records per-edge
   activity today (usage is per node/run/model/project). Requires backend
@@ -311,6 +319,11 @@ redesign; the UI must not fake it.
 - OpenAI runner injects **all** learning observations into every prompt
   (`OpenAINodeRunner.ts:65,69`), ignoring skill memory-policy namespaces;
   `retention` on `SkillMemoryPolicy` is never enforced.
+  > **Status update (platform Phase 3, implemented):** the runner now injects the
+  > node's curated ACE playbook (deduplicated, budgeted, per-node — `playbook.*`
+  > tools) instead of global observations. `learning.*` tools and storage are
+  > untouched; `playbook.migrate_observations` curates legacy observations that
+  > carry `metadata.nodeId`. `SkillMemoryPolicy.retention` remains unenforced.
 
 ## 7. UI-layer debt (beyond the credential bug)
 
