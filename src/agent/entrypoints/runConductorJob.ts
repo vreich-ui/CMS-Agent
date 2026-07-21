@@ -32,6 +32,10 @@ export type ConductorJobOptions = {
    * readiness policy, workflow.publish_run) still apply — this only lifts the executor's stop. */
   approved?: boolean;
   maxSteps?: number;
+  /** Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the run halts
+   * (status blocked, paused for budget) before dispatching the node that would push accrued
+   * estimated model cost to/over the ceiling; that node is not executed and the run stays resumable. */
+  budgetUsd?: number;
   log?: (line: string) => void;
   /** Graceful stop (Cloud Run SIGTERM): finish the in-flight node, persist, return; the run stays
    * resumable via resumeRunId. */
@@ -95,8 +99,8 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
     run = existing;
     log(`Resuming run ${run.runId} (status ${run.status})`);
   } else {
-    run = await startDryRun({ projectId: options.projectId, input: options.input, executionMode: mode }, executionRepository);
-    log(`Started run ${run.runId} (project ${options.projectId}, mode ${mode}, ${run.nodes.length} nodes)`);
+    run = await startDryRun({ projectId: options.projectId, input: options.input, executionMode: mode, budgetUsd: options.budgetUsd }, executionRepository);
+    log(`Started run ${run.runId} (project ${options.projectId}, mode ${mode}, ${run.nodes.length} nodes${options.budgetUsd !== undefined ? `, budget $${options.budgetUsd}` : ""})`);
   }
 
   let steps = 0;
@@ -140,6 +144,9 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
   if (run.approvalsRequired.length > 0) {
     log(`Approvals required: ${run.approvalsRequired.map((approval) => `${approval.nodeId} — ${approval.reason}`).join("; ")}`);
   }
+  if (run.budgetBlock) {
+    log(`Paused for budget: ${run.budgetBlock.reason}`);
+  }
   return { run, outcome, steps, ledger, plan };
 }
 
@@ -173,13 +180,17 @@ export async function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv): P
   const maxStepsRaw = flagValue(argv, "max-steps") ?? env.MAX_STEPS;
   const maxSteps = maxStepsRaw === undefined ? undefined : Number.parseInt(maxStepsRaw, 10);
   if (maxSteps !== undefined && (!Number.isFinite(maxSteps) || maxSteps < 1)) throw new Error(`--max-steps must be a positive integer.`);
+  const budgetRaw = flagValue(argv, "budget") ?? env.RUN_BUDGET_USD;
+  const budgetUsd = budgetRaw === undefined ? undefined : Number.parseFloat(budgetRaw);
+  if (budgetUsd !== undefined && (!Number.isFinite(budgetUsd) || budgetUsd < 0)) throw new Error(`--budget / RUN_BUDGET_USD must be a non-negative number.`);
   return {
     projectId: flagValue(argv, "project") ?? env.PROJECT_ID ?? "dr-lurie",
     executionMode: mode,
     input,
     resumeRunId: flagValue(argv, "run") ?? env.RESUME_RUN_ID ?? undefined,
     approved: hasFlag(argv, "approved") || env.RUN_APPROVED === "true" ? true : undefined,
-    maxSteps
+    maxSteps,
+    budgetUsd
   };
 }
 
@@ -197,7 +208,8 @@ const summarize = (result: ConductorJobResult): string => JSON.stringify({
   cost: {
     totalTokens: result.ledger.totalTokens,
     totalCostUsdEstimate: result.ledger.totalCostUsdEstimate,
-    mostExpensiveNodeId: result.ledger.mostExpensiveNodeId
+    mostExpensiveNodeId: result.ledger.mostExpensiveNodeId,
+    ...(result.ledger.budget ? { budget: result.ledger.budget } : {})
   },
   nextStep: result.plan.reason
 });

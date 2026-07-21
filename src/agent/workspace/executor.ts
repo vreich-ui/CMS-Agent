@@ -4,7 +4,7 @@ import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowEn
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
-import { recordModelUsage } from "../observability/modelUsage.js";
+import { recordModelUsage, summarizeModelUsage, evaluateRunBudget } from "../observability/modelUsage.js";
 import { getNodeRunner } from "../execution/runnerRegistry.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 
@@ -30,7 +30,7 @@ const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: Workspa
   metadata: { dryRun: true, source: "workflow.run_next_node", estimateMethod: "deterministic_mock_length" }
 });
 
-export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint };
+export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
 
 // Transitive ancestors of a node (everything it depends on, directly or indirectly). Used to seed a
@@ -90,7 +90,8 @@ const buildInitialRun = (data: StartDryRunInput, runId = makeRunId()): WorkflowE
     stageOutputs,
     dryRun: true,
     executionMode: data.executionMode ?? "mock",
-    ...(entrypoint ? { entrypoint } : {})
+    ...(entrypoint ? { entrypoint } : {}),
+    ...(data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {})
   } as WorkflowExecutionRecord;
 };
 
@@ -156,7 +157,7 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     if (!existing) throw new Error(`Unknown run: ${runId}`);
     // Rebuild from the run's own starting shape, including a late-stage entrypoint, so reset restores
     // the seeded state it began with rather than a full ideation-to-publish run.
-    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint }, runId));
+    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, runId));
   });
 }
 
@@ -181,7 +182,34 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const nextNode = findNextRunnableNode(run, nodes);
     try {
       if (!nextNode) return await store.saveRun({ ...run, status: "completed", completedAt: now(), updatedAt: now(), currentNodeId: undefined });
+      // Budget gate (F2): before dispatching the next node, halt the run if its accrued
+      // (actual+estimated) model cost has reached the configured per-run ceiling. The pending node
+      // stays queued — never partially charged — so raising budgetUsd and resuming continues here.
+      // Default OFF: with no budgetUsd configured the gate is skipped entirely (no extra read).
+      if (run.budgetUsd !== undefined) {
+        const usage = await summarizeModelUsage({ runId });
+        const budget = evaluateRunBudget(run.budgetUsd, usage.totalCostUsdEstimate);
+        if (budget?.overBudget) {
+          const blockedAt = now();
+          return await store.saveRun({
+            ...run,
+            status: "blocked",
+            currentNodeId: nextNode.id,
+            updatedAt: blockedAt,
+            budgetBlock: {
+              blockedAt,
+              budgetUsd: budget.budgetUsd,
+              spentUsdEstimate: budget.spentUsdEstimate,
+              nextNodeId: nextNode.id,
+              reason: `Run paused for budget: estimated spend $${budget.spentUsdEstimate} reached the configured ceiling $${budget.budgetUsd}; node ${nextNode.id} was not executed. Raise budgetUsd and resume to continue.`
+            }
+          });
+        }
+      }
       const prepared = await executeRunnableNode(run, nextNode, nodes, store, options);
+      // A run that clears the budget gate is no longer paused for budget: drop any stale marker so a
+      // resumed-under-ceiling run doesn't keep reporting "paused for budget".
+      if (prepared.run.budgetBlock) prepared.run.budgetBlock = undefined;
       const saved = await store.saveRun(prepared.run);
       // Side effects (usage telemetry, workspace stage-output mirror) run only after the state
       // transition is durably committed, so a discarded attempt on a CAS conflict leaves no phantom
