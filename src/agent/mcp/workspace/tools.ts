@@ -18,9 +18,9 @@ import { toProjectSummary, validateHandoff } from "../../projects/projectRegistr
 import { getProjectHooks } from "../../projects/projectHooks.js";
 import { createProject, deleteProject, projectCreateSchema, projectRegistrationContract, projectUpdateSchema, updateProject } from "../../projects/projectAdmin.js";
 import { ProjectMcpAdapter } from "../../projects/projectMcpAdapter.js";
-import { skillDefinitionSchema, validateSkillDefinition } from "../../skills/skillValidator.js";
+import { normalizeSkillInput, skillDefinitionSchema, validateSkillDefinition } from "../../skills/skillValidator.js";
 import { resolveSkillsForNode } from "../../skills/skillResolver.js";
-import type { SkillDefinition } from "../../skills/skillTypes.js";
+import { skillStatuses, type SkillDefinition } from "../../skills/skillTypes.js";
 import { listTools as listControlledTools, getTool as getControlledTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { executeTool, getToolExecution, listToolExecutions } from "../../tools/toolExecutor.js";
 
@@ -184,6 +184,39 @@ const nodeQueryJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 
 const nodeRetryJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string" }, executionId: { type: "string" } }, ["runId"]);
 
 const skillMutationJsonSchema = objectSchema({ skillId: { type: "string", minLength: 1 }, newSkillId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, versionId: { type: "string", minLength: 1 }, skill: {}, patch: { type: "object" }, workspaceSystemPolicy: { type: "string" }, projectPolicy: { type: "string" }, runInstructions: { type: "string" }, platformTools: { type: "array", items: { type: "string" } }, runAuthorizedTools: { type: "array", items: { type: "string" } }, riskPolicy: { type: "string", enum: [...workspaceRiskLevels] }, ...metaJson });
+// skill.create advertises exactly its accept shape: a nested `skill` object requiring only the
+// authoring essentials (skillId/name/description/instructions). Everything else is server-defaulted
+// (see normalizeSkillInput) and validated by skillDefinitionSchema. Sharing the broad
+// skillMutationJsonSchema (above) previously advertised flat fields (newSkillId/runInstructions/…)
+// the strict handler rejects — the same "advertised but rejected" trap the node tools already avoid.
+const skillDefinitionJsonSchema = objectSchema({
+  skillId: { type: "string", minLength: 1, description: "Stable unique skill id, e.g. my_skill." },
+  name: { type: "string", minLength: 1 },
+  description: { type: "string", minLength: 1 },
+  instructions: { type: "string", minLength: 1, description: "What a node does when it runs this skill." },
+  version: { type: "string", minLength: 1, description: "Defaults to 1.0.0." },
+  status: { type: "string", enum: [...skillStatuses], description: "Defaults to active." },
+  riskLevel: { type: "string", enum: [...workspaceRiskLevels], description: "Defaults to read." },
+  inputSchema: { description: "JSON Schema for the skill input; defaults to { type: object }." },
+  outputSchema: { description: "JSON Schema for the skill output; defaults to { type: object }." },
+  allowedTools: { type: "array", items: { type: "string" } },
+  requiredArtifacts: { type: "array", items: { type: "string" } },
+  producedArtifacts: { type: "array", items: { type: "string" } },
+  examples: { type: "array", items: objectSchema({ name: { type: "string", minLength: 1 }, input: {}, output: {}, notes: { type: "string" } }, ["name", "input", "output"]), description: "Recommended; a basic placeholder is generated if omitted." },
+  preconditions: { type: "array", items: { type: "string" } },
+  completionCriteria: { type: "array", items: { type: "string" } },
+  blockerCriteria: { type: "array", items: { type: "string" } },
+  memoryPolicy: objectSchema({ namespaces: { type: "array", items: { type: "string" } }, read: { type: "boolean" }, write: { type: "boolean" }, retention: { type: "string" } }),
+  toolPolicy: objectSchema({ requestedTools: { type: "array", items: { type: "string" } }, mutatingToolsRequireApproval: { type: "boolean" }, notes: { type: "string" } }),
+  metadata: { type: "object" },
+  createdAt: { type: "string", format: "date-time", description: "Server-owned; omit and the server stamps it." },
+  updatedAt: { type: "string", format: "date-time", description: "Server-owned; omit and the server stamps it." }
+}, ["skillId", "name", "description", "instructions"]);
+const skillCreateJsonSchema = objectSchema({ skill: skillDefinitionJsonSchema, ...metaJson }, ["skill"]);
+// Remote MCP clients (e.g. connectors) serialize object-typed arguments as JSON strings; the `skill`
+// field arrives stringified and, left uncoerced, fails skillDefinitionSchema.parse with "expected
+// object, received string". Coerce it back exactly as workspace.create_node coerces its `node` arg.
+const coerceSkillArg = (input: unknown): unknown => (!!input && typeof input === "object" && !Array.isArray(input)) ? { ...(input as Record<string, unknown>), skill: coerceJsonObjectInput((input as Record<string, unknown>).skill) } : input;
 
 
 // Request-scoped attribution context. The secure proxy stamps a verified human actor via
@@ -237,7 +270,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "tool.list_executions", description: "List controlled tool execution audit records.", zodSchema: listToolExecutionsInput, inputSchema: toolExecutionJsonSchema, execute: async (input) => ok({ executions: listToolExecutions(listToolExecutionsInput.parse(input)) }) }),
     tool({ name: "skill.list", description: "List reusable workspace skills.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ skills: await skillRepository.list() }); } }),
     tool({ name: "skill.get", description: "Get one reusable workspace skill.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok({ skill: await skillRepository.get(skillIdInput.parse(input).skillId) ?? null }) }),
-    tool({ name: "skill.create", description: "Create a versioned reusable skill.", zodSchema: skillCreateInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillCreateInput.parse(input); return ok(await skillRepository.create(skillDefinitionSchema.parse(data.skill), meta(data))); } }),
+    tool({ name: "skill.create", description: "Create a versioned reusable skill from a nested `skill` object; only skillId/name/description/instructions are required, other fields are defaulted.", zodSchema: skillCreateInput, inputSchema: skillCreateJsonSchema, execute: async (input) => { const data = skillCreateInput.parse(coerceSkillArg(input)); return ok(await skillRepository.create(skillDefinitionSchema.parse(normalizeSkillInput(data.skill)), meta(data))); } }),
     tool({ name: "skill.update", description: "Patch a reusable skill and create a version snapshot.", zodSchema: skillUpdateInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillUpdateInput.parse(input); return ok(await skillRepository.update(data.skillId, data.patch as Partial<SkillDefinition>, meta(data))); } }),
     tool({ name: "skill.delete", description: "Delete a reusable skill definition.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok(await skillRepository.delete(skillIdInput.parse(input).skillId)) }),
     tool({ name: "skill.clone", description: "Clone a reusable skill under a new id.", zodSchema: skillCloneInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillCloneInput.parse(input); return ok(await skillRepository.clone(data.skillId, data.newSkillId, meta(data))); } }),

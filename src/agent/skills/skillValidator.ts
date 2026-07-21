@@ -14,6 +14,43 @@ export const skillDefinitionSchema = z.object({
   riskLevel: z.enum(workspaceRiskLevels), metadata: z.record(z.string(), z.unknown()), createdAt: z.string().datetime(), updatedAt: z.string().datetime()
 }).strict() as z.ZodType<SkillDefinition>;
 
+// Complete a partially-specified skill so a caller only supplies the authoring essentials
+// (skillId, name, description, instructions; riskLevel optional). Server-owned bookkeeping
+// (createdAt/updatedAt/version/status) and every collection/policy field are defaulted here, then
+// the UNCHANGED skillDefinitionSchema validates the result — this normalizes input, it never
+// relaxes validation. Mirrors normalizeNode, which lets workspace.create_node accept a minimal node.
+// A non-object candidate passes through untouched so the schema reports the real shape error.
+export function normalizeSkillInput(candidate: unknown): unknown {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
+  const input = candidate as Record<string, unknown>;
+  const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+  const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+  const skillId = input.skillId;
+  const timestamp = new Date().toISOString();
+  const allowedTools = list(input.allowedTools);
+  const examples = list(input.examples);
+  return {
+    skillId, name: input.name, description: input.description, instructions: input.instructions,
+    version: input.version ?? "1.0.0",
+    status: input.status ?? "active",
+    inputSchema: input.inputSchema ?? { type: "object" },
+    outputSchema: input.outputSchema ?? { type: "object" },
+    allowedTools,
+    requiredArtifacts: list(input.requiredArtifacts),
+    producedArtifacts: list(input.producedArtifacts),
+    examples: examples.length ? examples : [{ name: "basic", input: {}, output: {} }],
+    preconditions: list(input.preconditions),
+    completionCriteria: list(input.completionCriteria),
+    blockerCriteria: list(input.blockerCriteria),
+    memoryPolicy: { namespaces: typeof skillId === "string" ? [skillId] : [], read: true, write: false, ...(isObject(input.memoryPolicy) ? input.memoryPolicy : {}) },
+    toolPolicy: { requestedTools: allowedTools, mutatingToolsRequireApproval: true, ...(isObject(input.toolPolicy) ? input.toolPolicy : {}) },
+    riskLevel: input.riskLevel ?? "read",
+    metadata: isObject(input.metadata) ? input.metadata : {},
+    createdAt: typeof input.createdAt === "string" ? input.createdAt : timestamp,
+    updatedAt: timestamp
+  };
+}
+
 const validateSimpleExample = (schema: unknown, value: unknown, label: string): string[] => {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
   const typed = schema as { type?: unknown; required?: unknown; properties?: unknown };
