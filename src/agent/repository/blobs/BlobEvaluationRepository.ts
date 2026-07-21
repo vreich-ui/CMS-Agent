@@ -1,8 +1,8 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { RecordEnvelope } from "../RecordEnvelope.js";
 import type { WorkspaceMutationMeta } from "../../mcp/workspace/store.js";
-import type { EvalResultFilters, EvaluationRepository, FeedbackFilters } from "../interfaces/EvaluationRepository.js";
-import { makeImprovementId, validateRubric, type EvalResult, type EvalRubric, type EvalRubricVersionSnapshot, type FeedbackRecord, type PairwiseResult, type RubricStatus } from "../../improvement/improvementTypes.js";
+import type { EvalResultFilters, EvaluationRepository, FeedbackFilters, RegressionReportFilters } from "../interfaces/EvaluationRepository.js";
+import { makeImprovementId, validateRubric, type EvalResult, type EvalRubric, type EvalRubricVersionSnapshot, type FeedbackRecord, type PairwiseResult, type RegressionReport, type RubricStatus } from "../../improvement/improvementTypes.js";
 import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 
 const now = () => new Date().toISOString();
@@ -11,6 +11,7 @@ const rubricVersionKey = (rubricId: string, versionId: string) => `evaluation/ru
 const resultKey = (evalId: string) => `evaluation/results/${evalId}.json`;
 const pairwiseKey = (comparisonId: string) => `evaluation/pairwise/${comparisonId}.json`;
 const feedbackKey = (feedbackId: string) => `evaluation/feedback/${feedbackId}.json`;
+const regressionKey = (reportId: string) => `evaluation/regression/${reportId}.json`;
 
 const envelope = <T>(id: string, recordType: string, createdAt: string, data: T): RecordEnvelope<T> =>
   ({ id, record_type: recordType, schema_version: `${recordType}.v1`, created_at: createdAt, updated_at: createdAt, data });
@@ -97,4 +98,11 @@ export class BlobEvaluationRepository implements EvaluationRepository {
     const records = await this.loadEnvelopes<FeedbackRecord>("evaluation/feedback/");
     return newestFirst(records.filter((record) => (!filters.nodeId || record.nodeId === filters.nodeId) && (!filters.runId || record.runId === filters.runId) && (!filters.kind || record.kind === filters.kind)), filters.limit);
   }
+
+  async recordRegressionReport(report: RegressionReport) { await this.store.setJSON(regressionKey(report.reportId), envelope(report.reportId, "regression_report", report.createdAt, report)); return report; }
+  async listRegressionReports(filters: RegressionReportFilters = {}) {
+    const reports = await this.loadEnvelopes<RegressionReport>("evaluation/regression/");
+    return newestFirst(reports.filter((report) => (!filters.nodeId || report.nodeId === filters.nodeId)), filters.limit);
+  }
+  async getLatestRegressionReport(nodeId: string) { return (await this.listRegressionReports({ nodeId, limit: 1 }))[0]; }
 }
