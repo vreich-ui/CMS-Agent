@@ -17,6 +17,7 @@ import { applyPlaybookDelta, renderPlaybookForPrompt } from "../../improvement/p
 import { scoreOutput } from "../../improvement/rubricJudge.js";
 import { buildDataset, exportPreferences, exportSft, type ReplayDeps } from "../../improvement/replay.js";
 import { analyzeNode, optimizerStatus, promoteProposal, proposeImprovement, runTrial } from "../../improvement/optimizer.js";
+import { runRegression } from "../../improvement/regression.js";
 
 const now = () => new Date().toISOString();
 const modeSchema = z.enum(["mock", "openai"]).default("mock");
@@ -57,6 +58,8 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
   const applyDeltaInput = z.object({ nodeId: z.string().min(1), delta: z.unknown(), ...mutationMeta }).strict();
   const curateInput = z.object({ nodeId: z.string().min(1), mode: modeSchema }).strict();
   const migrateInput = z.object({ dryRun: z.boolean().optional() }).strict();
+  const runRegressionInput = z.object({ nodeId: z.string().min(1), datasetId: z.string().min(1).optional(), rubricId: z.string().min(1).optional(), mode: modeSchema, caseLimit: z.number().int().min(1).max(100).optional() }).strict();
+  const listRegressionInput = z.object({ nodeId: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional() }).strict();
 
   const resolveRubric = async (nodeId: string, rubricId?: string): Promise<EvalRubric> => {
     if (rubricId) {
@@ -104,6 +107,8 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
     } }),
     tool({ name: "evaluation.list_results", description: "List evaluation results, newest first.", zodSchema: listResultsInput, inputSchema: objectSchema({ nodeId: { type: "string" }, runId: { type: "string" }, rubricId: { type: "string" }, trialId: { type: "string" }, from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" }, limit: { type: "integer", minimum: 1, maximum: 200 } }), execute: async (input) => ok({ results: await evaluationRepository.listResults(listResultsInput.parse(input)) }) }),
     tool({ name: "evaluation.get_result", description: "Get one evaluation result.", zodSchema: z.object({ evalId: z.string().min(1) }).strict(), inputSchema: objectSchema({ evalId: { type: "string", minLength: 1 } }, ["evalId"]), execute: async (input) => ok({ result: await evaluationRepository.getResult(z.object({ evalId: z.string().min(1) }).strict().parse(input).evalId) ?? null }) }),
+    tool({ name: "evaluation.run_regression", description: "Pre-ship regression gate for a node: re-run the node over a frozen replay dataset and rubric-score each output (mode=openai LLM judge or deterministic mock), then compare the aggregate to the node's last stored baseline. Returns a RegressionReport with per-case pass/fail and an aggregate verdict (baseline_set on the first run, else improved | held | regressed). REPORTS ONLY — never applies, promotes, or publishes; promotion stays optimizer.promote / the human path.", zodSchema: runRegressionInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, datasetId: { type: "string", description: "Frozen dataset to replay; omit to use the node's newest dataset or freeze one from history." }, rubricId: { type: "string", description: "Rubric to score against; omit to use the node's active rubric." }, mode: modeJson, caseLimit: { type: "integer", minimum: 1, maximum: 100 } }, ["nodeId"]), execute: async (input) => ok({ report: await runRegression(runRegressionInput.parse(input), replayDeps) }) }),
+    tool({ name: "evaluation.list_regression_reports", description: "List stored regression-gate reports (newest first). The newest for a node is the baseline the next evaluation.run_regression compares against.", zodSchema: listRegressionInput, inputSchema: objectSchema({ nodeId: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }), execute: async (input) => ok({ reports: await evaluationRepository.listRegressionReports(listRegressionInput.parse(input)) }) }),
 
     tool({ name: "feedback.record", description: "Record human/analytics feedback: approve, reject, edit (with diff), or a published-performance outcome. Edit diffs are redacted before persistence.", zodSchema: feedbackRecordInput, inputSchema: objectSchema({ kind: { type: "string", enum: [...feedbackKinds] }, nodeId: { type: "string" }, runId: { type: "string" }, evalId: { type: "string" }, editDiff: { type: "object" }, outcome: { type: "object" }, note: { type: "string" }, ...metaJson }, ["kind"]), execute: async (input) => {
       const data = feedbackRecordInput.parse(input);

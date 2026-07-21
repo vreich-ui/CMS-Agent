@@ -14,6 +14,7 @@ import { getProjectHooks } from "../projects/projectHooks.js";
 import { toProjectSummary } from "../projects/projectRegistry.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { ModelUsageSummary } from "../observability/modelUsageTypes.js";
+import { evaluateRunBudget, type RunBudgetEvaluation } from "../observability/modelUsage.js";
 import { listWorkspaceNodes } from "./nodes.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "./executionTypes.js";
 
@@ -87,6 +88,11 @@ export type StageCost = {
   reusable: boolean;
 };
 
+// Budget view attached to a run's cost ledger when a per-run ceiling is configured. `blocked` is the
+// dashboard's "paused for budget" flag; it is true only while the run is halted at the budget gate
+// (status blocked with a budgetBlock marker), never for an approval block or a normal pause.
+export type RunBudgetLedger = RunBudgetEvaluation & { blocked: boolean; reason?: string };
+
 export type RunCostLedger = {
   runId: string;
   status: ExecutionStatus;
@@ -98,6 +104,8 @@ export type RunCostLedger = {
   mostExpensiveNodeId?: string;
   reusableNodeIds: string[];
   remainingNodeIds: string[];
+  // Present only when the run carries a budgetUsd ceiling (Default OFF otherwise).
+  budget?: RunBudgetLedger;
 };
 
 // Build a per-node cost ledger by joining the run's node states with the usage summary the runner
@@ -117,6 +125,8 @@ export function summarizeRunCost(run: WorkflowExecutionRecord, usage: ModelUsage
     };
   });
   const mostExpensive = stages.reduce<StageCost | undefined>((top, stage) => (!top || stage.costUsdEstimate > top.costUsdEstimate ? stage : top), undefined);
+  // Reuse the same accrued cost figure the gate reads (usage.totalCostUsdEstimate) — no second path.
+  const budgetEval = evaluateRunBudget(run.budgetUsd, usage.totalCostUsdEstimate);
   return {
     runId: run.runId,
     status: run.status,
@@ -127,7 +137,8 @@ export function summarizeRunCost(run: WorkflowExecutionRecord, usage: ModelUsage
     stages,
     mostExpensiveNodeId: mostExpensive && mostExpensive.costUsdEstimate > 0 ? mostExpensive.nodeId : undefined,
     reusableNodeIds: stages.filter((stage) => stage.reusable).map((stage) => stage.nodeId),
-    remainingNodeIds: stages.filter((stage) => stage.status === "queued").map((stage) => stage.nodeId)
+    remainingNodeIds: stages.filter((stage) => stage.status === "queued").map((stage) => stage.nodeId),
+    ...(budgetEval ? { budget: { ...budgetEval, blocked: run.status === "blocked" && !!run.budgetBlock, reason: run.budgetBlock?.reason } } : {})
   };
 }
 
@@ -157,7 +168,10 @@ export function planRun(run: WorkflowExecutionRecord): RunPlan {
     return { ...base, strategy: "poll", reason: "Run is terminal; poll status and artifacts instead of rerunning.", narrowerThanFullRun: true };
   }
   if (run.status === "blocked") {
-    return { ...base, strategy: "resume", reason: "Run is blocked awaiting approval; supply approval and continue rather than restarting.", narrowerThanFullRun: true };
+    const reason = run.budgetBlock
+      ? `Run paused for budget (estimated $${run.budgetBlock.spentUsdEstimate} of $${run.budgetBlock.budgetUsd} ceiling reached before ${run.budgetBlock.nextNodeId ?? "the next node"}); raise budgetUsd and resume, or accept the partial result. Resuming re-checks the ceiling.`
+      : "Run is blocked awaiting approval; supply approval and continue rather than restarting.";
+    return { ...base, strategy: "resume", reason, narrowerThanFullRun: true };
   }
   if (articleBodyReady) {
     return { ...base, strategy: "late_stage_rerun", recommendedEntrypoint: "article_body", reason: "article_body is complete; a re-run can enter at the publish stages reusing the existing body instead of re-running ideation/research/draft.", narrowerThanFullRun: true };

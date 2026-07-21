@@ -120,6 +120,46 @@ export type TrialRecord = {
   createdAt: string;
 };
 
+// Pre-ship regression gate (docs/improvement/STRATEGY.md §2/§3): re-run a node over a FROZEN replay
+// dataset and rubric-score each output, then compare the aggregate to the node's last stored
+// baseline. Reports only — promotion/publish stay the existing explicit paths. Each run's report is
+// stored in the evaluation substrate and becomes the baseline the next run compares against ("last
+// stored baseline"). NOTE: latest-report-as-baseline means a slow multi-run drift can stay "held"
+// against each immediate predecessor; freeze a known-good dataset to anchor the comparison.
+export type RegressionCaseResult = {
+  caseId: string;
+  runId: string;
+  status: "completed" | "failed";
+  evalId?: string;
+  normalizedScore?: number;
+  pass?: boolean;
+};
+export type RegressionVerdict = "baseline_set" | "improved" | "held" | "regressed";
+export type RegressionReportSummary = {
+  casesTotal: number;
+  casesScored: number;
+  casesFailed: number;
+  casesPassed: number;
+  passRate: number;   // 0..1 over scored cases
+  meanScore: number;  // 0..1 mean normalized rubric score over scored cases
+  threshold: number;  // rubric.passThreshold, carried for context
+};
+export type RegressionReport = {
+  reportId: string;
+  nodeId: string;
+  datasetId: string;
+  rubricId: string;
+  executionMode: "mock" | "openai";
+  cases: RegressionCaseResult[];
+  summary: RegressionReportSummary;
+  // The prior stored report this run was compared against (absent on the first, baseline_set run).
+  baseline?: { reportId: string; meanScore: number; passRate: number; createdAt: string };
+  verdict: RegressionVerdict;
+  // this-run minus baseline (absent on baseline_set).
+  delta?: { meanScore: number; passRate: number };
+  createdAt: string;
+};
+
 export type PlaybookItemKind = "strategy" | "pitfall" | "constraint";
 export type PlaybookItem = {
   itemId: string;

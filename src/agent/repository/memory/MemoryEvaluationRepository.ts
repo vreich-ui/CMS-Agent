@@ -1,15 +1,15 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { WorkspaceMutationMeta } from "../../mcp/workspace/store.js";
-import type { EvalResultFilters, EvaluationRepository, FeedbackFilters } from "../interfaces/EvaluationRepository.js";
-import { makeImprovementId, validateRubric, type EvalResult, type EvalRubric, type EvalRubricVersionSnapshot, type FeedbackRecord, type PairwiseResult, type RubricStatus } from "../../improvement/improvementTypes.js";
+import type { EvalResultFilters, EvaluationRepository, FeedbackFilters, RegressionReportFilters } from "../interfaces/EvaluationRepository.js";
+import { makeImprovementId, validateRubric, type EvalResult, type EvalRubric, type EvalRubricVersionSnapshot, type FeedbackRecord, type PairwiseResult, type RegressionReport, type RubricStatus } from "../../improvement/improvementTypes.js";
 
 const now = () => new Date().toISOString();
 const clone = <T>(value: T): T => structuredClone(value);
 const newestFirst = <T extends { createdAt: string }>(records: T[], limit?: number) =>
   [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit ?? 100).map(clone);
 
-type EvaluationState = { evalVersion: number; rubrics: Map<string, EvalRubric>; versions: EvalRubricVersionSnapshot[]; results: EvalResult[]; pairwise: PairwiseResult[]; feedback: FeedbackRecord[] };
-const createState = (): EvaluationState => ({ evalVersion: 0, rubrics: new Map(), versions: [], results: [], pairwise: [], feedback: [] });
+type EvaluationState = { evalVersion: number; rubrics: Map<string, EvalRubric>; versions: EvalRubricVersionSnapshot[]; results: EvalResult[]; pairwise: PairwiseResult[]; feedback: FeedbackRecord[]; regressionReports: RegressionReport[] };
+const createState = (): EvaluationState => ({ evalVersion: 0, rubrics: new Map(), versions: [], results: [], pairwise: [], feedback: [], regressionReports: [] });
 
 export class MemoryEvaluationRepository implements EvaluationRepository {
   private static states = new Map<string, EvaluationState>();
@@ -76,4 +76,10 @@ export class MemoryEvaluationRepository implements EvaluationRepository {
   async listFeedback(filters: FeedbackFilters = {}) {
     return newestFirst(this.state().feedback.filter((record) => (!filters.nodeId || record.nodeId === filters.nodeId) && (!filters.runId || record.runId === filters.runId) && (!filters.kind || record.kind === filters.kind)), filters.limit);
   }
+
+  async recordRegressionReport(report: RegressionReport) { this.state().regressionReports.push(clone(report)); return clone(report); }
+  async listRegressionReports(filters: RegressionReportFilters = {}) {
+    return newestFirst(this.state().regressionReports.filter((report) => (!filters.nodeId || report.nodeId === filters.nodeId)), filters.limit);
+  }
+  async getLatestRegressionReport(nodeId: string) { return (await this.listRegressionReports({ nodeId, limit: 1 }))[0]; }
 }

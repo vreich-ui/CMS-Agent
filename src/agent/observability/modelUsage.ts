@@ -98,6 +98,36 @@ export async function summarizeModelUsage(filters: ModelUsageFilters = {}, store
   return summary;
 }
 
+export type RunBudgetEvaluation = {
+  budgetUsd: number;
+  spentUsdEstimate: number;
+  remainingUsdEstimate: number;
+  percentUsed: number;
+  // True once accrued (actual+estimated) cost has REACHED the ceiling — the conductor's halt
+  // predicate. Uses `>=` so a run stops before the node that would cross the ceiling, matching the
+  // "halt at the node that would cross" contract.
+  overBudget: boolean;
+  status: "ok" | "warning" | "exceeded";
+};
+
+// Pure, synchronous budget evaluation reused by the conductor gate and the run cost ledger so both
+// read the SAME accrued cost figure (summary.totalCostUsdEstimate) — no second cost path. Returns
+// undefined when no ceiling is configured (Default OFF): callers skip the gate entirely.
+export function evaluateRunBudget(budgetUsd: number | undefined, spentUsdEstimate: number): RunBudgetEvaluation | undefined {
+  if (budgetUsd === undefined) return undefined;
+  const ceiling = Math.max(0, budgetUsd);
+  const overBudget = spentUsdEstimate >= ceiling;
+  const percentUsed = ceiling > 0 ? Math.round((spentUsdEstimate / ceiling) * 10000) / 100 : (overBudget ? 100 : 0);
+  return {
+    budgetUsd: ceiling,
+    spentUsdEstimate: roundUsd(spentUsdEstimate),
+    remainingUsdEstimate: roundUsd(Math.max(0, ceiling - spentUsdEstimate)),
+    percentUsed,
+    overBudget,
+    status: overBudget ? "exceeded" : percentUsed >= 80 ? "warning" : "ok"
+  };
+}
+
 export async function getBudgetStatus(input: { projectId?: string; runId?: string; budgetUsd?: number }, store: UsageRepository = repositoryManager.getUsageRepository()): Promise<BudgetStatus> {
   const budgetUsd = Math.max(0, input.budgetUsd ?? 0);
   const summary = await summarizeModelUsage({ projectId: input.projectId, runId: input.runId }, store);
