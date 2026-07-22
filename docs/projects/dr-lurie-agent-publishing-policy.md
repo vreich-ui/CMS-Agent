@@ -1,5 +1,23 @@
 # Dr. Lurie agent publishing policy
 
+## TL;DR (for humans)
+
+**What this is:** the rulebook an AI agent follows to publish an article to the Dr. Lurie site — everything it needs *beyond* the raw MCP tool list. The detail below is written for the agents; this box is the map for a person.
+
+**How publishing actually works now:**
+- Articles are **governed JSON objects** (`content_item`), not markdown files — created and edited through the object MCP verbs, validated, then committed. The old markdown pipeline is frozen and its post collection was wiped.
+- An article is a sequence of **functional blocks** (hook, agitation, proof, resolution, …), each tagged with its persuasive role and written in rich text — never one wall of text.
+- **Images are made by PDF-Tool and referenced by a public `/img/…` path.** Agents never invent storage keys or paste raw blob keys into the article body.
+- **Publishing is free; releasing costs money.** Agents publish many articles as invisible commits, then trigger **one** Netlify build for the whole batch. *(Interim measure — a successor release policy is planned; see §7.)*
+- **Four independent gates** guard go-live (tool access → publish enablement → object-store approval → content validation). Clearing one never clears another.
+- Agents **look answers up** (`object_contract`, `object_inventory`, `object_validate`) instead of guessing and burning tokens on failed writes. §3 is that map.
+
+**Why it exists:** both repos carried two generations of publishing machinery. This document names the one live path, cites the enforcing code for every rule, and registers the stale mechanisms to avoid — so an agent publishes correctly on the first try and a human can see the whole contract at a glance.
+
+**Companion:** this policy is mirrored into the client repo (`vreich-ui/Dr-Lurie-Blog`, `docs/agents/publishing-policy.md`) so agents on that side see the same contract. Keep the two copies in sync.
+
+---
+
 **Status: v2 proposed — 2026-07-22. Derived from code and docs in `vreich-ui/Dr-Lurie-Blog` (at PR #463) and `vreich-ui/CMS-Agent`. Every rule cites the enforcing code or the authoritative doc. Where this policy disagrees with an older doc in either repo, this policy names that doc stale and wins. v2 adds the operational layer (discovery map, locks/versions, error catalog, dedup/variants, taxonomy authoring, attribution, limits) so agents look answers up instead of burning tokens probing for them.**
 
 This is the policy an agent needs *beyond* the MCP tool contract: which pipeline to use, where its JSON goes, what shape the content must have, what the gates are, how to recover from every error class, what costs money, and which mechanisms are stale and must never be used.
