@@ -363,7 +363,9 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
       }
     } catch { /* enforcement is advisory; never fail a run because the ladder could not be computed */ }
   }
-  const runner = getNodeRunner(mode);
+  // Provider-aware dispatch (Phase 6): a node whose modelConfig.provider is "anthropic" runs on the
+  // native Anthropic Messages runner; every other provider stays on the OpenAI(-compatible) path.
+  const runner = getNodeRunner(mode, effectiveNode.modelConfig as Record<string, unknown> | undefined);
   const result = await runner.run({ node: effectiveNode, input: state.input }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
   const completedAt = now();
   state.completedAt = completedAt;

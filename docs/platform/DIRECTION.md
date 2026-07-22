@@ -235,7 +235,7 @@ workspace repository (canonical-node guards and late-stage seeding preserved), b
 `WORKSPACE_NODES_SOURCE=static|store` flag defaulting to `static`, flipped after a
 side-by-side mock-run comparison shows identical topology.
 
-### Phase 6 — First-class Anthropic runner
+### Phase 6 — First-class Anthropic runner ✅ implemented
 
 Claude agents work today via the `openai_compatible` provider pointed at a gateway
 (LiteLLM / OpenRouter) — config-only, but structured-output fidelity must be
@@ -243,6 +243,23 @@ validated per model. This phase adds a native path: an `anthropic` provider entr
 (`ANTHROPIC_API_KEY` env NAME) backed by a runner speaking the Messages API with
 tool use + schema-enforced output, registered alongside the OpenAI runner. Judges
 can then be cross-family with Claude natively (the recommended judge setup).
+
+> **Status:** shipped. `AnthropicNodeRunner`
+> (`src/agent/execution/runners/AnthropicNodeRunner.ts`) speaks the Anthropic Messages
+> API directly (dependency-free `fetch`; no `@anthropic-ai/sdk`), using the forced-tool
+> idiom — a single `emit_output` tool whose `input_schema` is the node's `outputSchema`,
+> with `tool_choice` pinned to it — for schema-enforced structured output, then validates
+> against the node schema exactly like the OpenAI runner. `resolveProvider` gained an
+> `anthropic` entry (`ANTHROPIC_API_KEY`, optional `ANTHROPIC_BASE_URL` / model via
+> `ANTHROPIC_MODEL`); `getNodeRunner(mode, modelConfig)` is now **provider-aware** — a node
+> or rubric whose `modelConfig.provider` is `"anthropic"` runs on the native runner in any
+> live mode, everything else stays on the OpenAI(-compatible) path, and `mock` is
+> untouched. Wiring `getNodeRunner` through the judge (`rubricJudge.ts`) delivers
+> **cross-family judging**: set a rubric's `judgeModelConfig.provider` to `"anthropic"` and
+> a Claude judge grades an OpenAI generator natively. Sampling params are omitted (current
+> Claude models reject them). Covered by `tests/agent/anthropicRunner.test.ts`. Follow-up:
+> bridging CMS-Agent's controlled tools into the Messages tool loop for tool-using
+> conductor nodes — until then, keep tool-using nodes on the OpenAI runner.
 
 ### Phase 7 — Engine maturation (partially implemented)
 

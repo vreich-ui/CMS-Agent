@@ -8,7 +8,7 @@ import OpenAI from "openai";
 
 export type ResolvedProvider = {
   label: string;
-  kind: "default" | "openai_compatible";
+  kind: "default" | "openai_compatible" | "anthropic";
   baseURL?: string;
   apiKeyEnv: string;
 };
@@ -22,6 +22,9 @@ const asString = (value: unknown): string | undefined => (typeof value === "stri
 export function resolveProvider(modelConfig: Record<string, unknown> = {}): ResolvedProvider {
   const provider = asString(modelConfig.provider) ?? "openai";
   if (provider === "openai") return { label: "openai", kind: "default", apiKeyEnv: "OPENAI_API_KEY" };
+  // Native Anthropic path (Phase 6): resolved so the provider is a first-class, known value, but the
+  // Messages API request is issued by AnthropicNodeRunner, not the OpenAI-compatible client below.
+  if (provider === "anthropic") return { label: "anthropic", kind: "anthropic", baseURL: asString(modelConfig.baseURL), apiKeyEnv: asString(modelConfig.apiKeyEnv) ?? "ANTHROPIC_API_KEY" };
   if (provider === "google") return { label: "google", kind: "openai_compatible", baseURL: GOOGLE_OPENAI_COMPAT_BASE_URL, apiKeyEnv: asString(modelConfig.apiKeyEnv) ?? "GEMINI_API_KEY" };
   if (provider === "openai_compatible") {
     const baseURL = asString(modelConfig.baseURL);
@@ -29,7 +32,7 @@ export function resolveProvider(modelConfig: Record<string, unknown> = {}): Reso
     if (!baseURL || !apiKeyEnv) throw new Error("provider=openai_compatible requires modelConfig.baseURL and modelConfig.apiKeyEnv (an environment-variable NAME, never a value).");
     return { label: `openai_compatible:${new URL(baseURL).host}`, kind: "openai_compatible", baseURL, apiKeyEnv };
   }
-  throw new Error(`Unknown provider "${provider}" (expected openai, google, or openai_compatible).`);
+  throw new Error(`Unknown provider "${provider}" (expected openai, anthropic, google, or openai_compatible).`);
 }
 
 // Default provider keeps today's exact code path (a model-name string resolved by the SDK's
@@ -37,6 +40,9 @@ export function resolveProvider(modelConfig: Record<string, unknown> = {}): Reso
 // pointed at their baseURL.
 export function buildAgentModel(resolved: ResolvedProvider, modelName: string): string | Model {
   if (resolved.kind === "default") return modelName;
+  // Defensive: anthropic nodes are dispatched to AnthropicNodeRunner and never reach here. If they do,
+  // fail loudly rather than silently building an OpenAI client against the Anthropic endpoint.
+  if (resolved.kind === "anthropic") throw new Error("provider=anthropic runs on the native AnthropicNodeRunner, not the OpenAI-compatible path.");
   const apiKey = process.env[resolved.apiKeyEnv];
   if (!apiKey) throw new Error(`${resolved.apiKeyEnv} is required for provider ${resolved.label}.`);
   return new OpenAIChatCompletionsModel(new OpenAI({ baseURL: resolved.baseURL, apiKey }), modelName);

@@ -73,7 +73,10 @@ const syntheticJudgeRun = (mode: ExecutionMode): WorkflowExecutionRecord => {
 async function runJudge(rubric: EvalRubric, prompt: string, outputSchema: unknown, input: unknown, deps: JudgeDeps): Promise<unknown> {
   const node = syntheticJudgeNode(rubric, prompt, outputSchema);
   const run = syntheticJudgeRun("openai");
-  const result = await getNodeRunner("openai").run({ node, input: { input } }, { run, executionRepository: deps.executionRepository });
+  // Cross-family judging (Phase 6): when the rubric's judgeModelConfig.provider is "anthropic", the
+  // judge runs natively on Claude (a Claude judge grading an OpenAI generator, the recommended setup);
+  // otherwise it stays on the OpenAI(-compatible) path. Same synthetic-node plumbing either way.
+  const result = await getNodeRunner("openai", node.modelConfig as Record<string, unknown> | undefined).run({ node, input: { input } }, { run, executionRepository: deps.executionRepository });
   if (!result.ok) throw new Error(`judge_failed: ${result.code}: ${result.message}`);
   return result.output;
 }
