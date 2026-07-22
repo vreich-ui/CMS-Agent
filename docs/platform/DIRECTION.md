@@ -246,8 +246,15 @@ can then be cross-family with Claude natively (the recommended judge setup).
 
 ### Phase 7 — Engine maturation (partially implemented)
 
-- LLM-driven playbook curation (Reflector→Curator via a synthetic node; today's
-  `playbook.curate` is heuristic).
+- **LLM-driven playbook curation ✅ implemented.** `curatePlaybook()`
+  (`src/agent/improvement/curator.ts`) derives an ACE playbook delta from a node's
+  evaluation evidence: `mode=mock` (default) keeps the deterministic heuristic (weakest
+  rubric criterion → pitfall lesson), `mode=openai` runs a Reflector→Curator synthetic
+  node for richer adds (strategy/pitfall/constraint) plus retirement of stale lessons.
+  The LLM output is mapped to a validated `PlaybookDelta` by the pure
+  `curatorDeltaFromOutput` and applied through `applyPlaybookDelta` (dedup + item/char
+  budget enforced). Curator model via `IMPROVEMENT_CURATOR_MODEL`. Wired into the
+  `playbook.curate` MCP tool. Covered by `tests/agent/playbookCuration.test.ts`.
 - **Automatic post-run reflection ✅ implemented.** `reflectAfterRun()`
   (`src/agent/improvement/reflection.ts`) fires GEPA-style reflection
   (`optimizer.propose`) for the nodes that executed when a conductor run reaches

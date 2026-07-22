@@ -18,8 +18,10 @@ plane switchable from the existing UI):** ~~the conductor executes STATIC nodes
 reads store nodes~~ — **RESOLVED (Phase 5): the executor resolves nodes from the
 workspace store under `WORKSPACE_NODES_SOURCE=store`, so promoted prompts reach full
 conductor runs behind a canonical-node guard that pins topology and publish-risk
-gates**; LLM-driven playbook curation (current `playbook.curate` is
-heuristic); ~~automatic post-run reflection~~ **RESOLVED (Phase 7):
+gates**; ~~LLM-driven playbook curation (current `playbook.curate` is
+heuristic)~~ **RESOLVED (Phase 7): `curatePlaybook` adds a `mode=openai`
+Reflector→Curator pass (heuristic stays the default `mock` mode)**;
+~~automatic post-run reflection~~ **RESOLVED (Phase 7):
 `IMPROVEMENT_POST_RUN_REFLECT` fires `optimizer.propose` for the nodes that executed
 when a run completes — propose-only, evidence-gated, deduped, best-effort, default
 OFF**; analytics ingestion (Monetizer

@@ -18,6 +18,7 @@ import { scoreOutput } from "../../improvement/rubricJudge.js";
 import { buildDataset, exportPreferences, exportSft, type ReplayDeps } from "../../improvement/replay.js";
 import { analyzeNode, optimizerStatus, promoteProposal, proposeImprovement, runTrial } from "../../improvement/optimizer.js";
 import { autoPromoteProposals } from "../../improvement/autoPromote.js";
+import { curatePlaybook } from "../../improvement/curator.js";
 import { runRegression } from "../../improvement/regression.js";
 
 const now = () => new Date().toISOString();
@@ -164,14 +165,9 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       const existing = await improvementRepository.getPlaybook(data.nodeId);
       return ok({ playbook: await improvementRepository.savePlaybook(applyPlaybookDelta(existing, data.nodeId, delta, now())) });
     } }),
-    tool({ name: "playbook.curate", description: "Heuristic Reflector/Curator pass: derive a playbook delta from the node's recent evaluation evidence (worst criterion becomes a pitfall lesson). LLM curation is a documented follow-up.", zodSchema: curateInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, mode: modeJson }, ["nodeId"]), execute: async (input) => {
+    tool({ name: "playbook.curate", description: "Reflector→Curator pass: derive a playbook delta from the node's evaluation evidence and apply it (dedup + item/char budget enforced). mode=mock (default) is the deterministic heuristic (weakest rubric criterion becomes a pitfall lesson); mode=openai runs the Curator LLM for richer adds (strategy/pitfall/constraint) plus retirement of stale lessons. A no-evidence node is a no-op.", zodSchema: curateInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, mode: modeJson }, ["nodeId"]), execute: async (input) => {
       const data = curateInput.parse(input);
-      const analysis = await analyzeNode({ nodeId: data.nodeId }, replayDeps);
-      const worst = analysis.worstCriteria[0];
-      if (!worst) return ok({ playbook: await improvementRepository.getPlaybook(data.nodeId) ?? null, curated: false, reason: "No criterion-level evaluation evidence yet." });
-      const delta: PlaybookDelta = { add: [{ text: `Recent evaluations score weakest on "${worst.criterionId}" (mean ${worst.meanScore}/${worst.maxScore}); address it explicitly before completing.`, kind: "pitfall", provenance: { source: "reflector", evalIds: analysis.evidence.evalIds.slice(0, 5) } }] };
-      const existing = await improvementRepository.getPlaybook(data.nodeId);
-      return ok({ playbook: await improvementRepository.savePlaybook(applyPlaybookDelta(existing, data.nodeId, delta, now())), curated: true });
+      return ok(await curatePlaybook(data, replayDeps));
     } }),
     tool({ name: "playbook.migrate_observations", description: "One-shot curation of legacy global learning observations into per-node playbooks (observations with metadata.nodeId only). The learning.* tools stay untouched.", zodSchema: migrateInput, inputSchema: objectSchema({ dryRun: { type: "boolean" } }), execute: async (input) => {
       const data = migrateInput.parse(input);
