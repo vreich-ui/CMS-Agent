@@ -13,14 +13,27 @@ add these namespaces to `MCP_EXPOSED_TOOL_PREFIXES` if the catalog is scoped.
 
 **Known follow-ups (tracked, deliberately out of the scaffold — now sequenced as
 `docs/platform/DIRECTION.md` Phases 4–8, with Netlify retained and the control
-plane switchable from the existing UI):** the conductor
-executes STATIC nodes (`nodes.ts`), so promoted prompts are live for independent
-execution and replay but reach full conductor runs only once the executor reads
-store nodes — the loop is self-consistent, but treat conductor behavior as unchanged
-until that lands; LLM-driven playbook curation (current `playbook.curate` is
-heuristic); automatic post-run reflection; analytics ingestion (Monetizer
-`performance` → `feedback.record` outcomes); auto-promotion flag (promotion is
-human-approved by design today); model-ladder enforcement in the conductor.
+plane switchable from the existing UI):** ~~the conductor executes STATIC nodes
+(`nodes.ts`), so promoted prompts reach full conductor runs only once the executor
+reads store nodes~~ — **RESOLVED (Phase 5): the executor resolves nodes from the
+workspace store under `WORKSPACE_NODES_SOURCE=store`, so promoted prompts reach full
+conductor runs behind a canonical-node guard that pins topology and publish-risk
+gates**; ~~LLM-driven playbook curation (current `playbook.curate` is
+heuristic)~~ **RESOLVED (Phase 7): `curatePlaybook` adds a `mode=openai`
+Reflector→Curator pass (heuristic stays the default `mock` mode)**;
+~~automatic post-run reflection~~ **RESOLVED (Phase 7):
+`IMPROVEMENT_POST_RUN_REFLECT` fires `optimizer.propose` for the nodes that executed
+when a run completes — propose-only, evidence-gated, deduped, best-effort, default
+OFF**; ~~auto-promotion flag~~ **RESOLVED
+(Phase 7): `IMPROVEMENT_AUTO_PROMOTE` auto-promotes trial-proven proposals for
+low-risk nodes only (default OFF; human `optimizer.promote` stays the default)**;
+~~analytics ingestion (Monetizer `performance` → `feedback.record` outcomes)~~
+**RESOLVED (Phase 7): `ingestMonetizerAnalytics` / `feedback.ingest_monetizer`
+record Monetizer `performance` + `demand_signals` as feedback outcomes**;
+~~model-ladder enforcement in the conductor~~
+**RESOLVED (Phase 7): `IMPROVEMENT_MODEL_LADDER_ENFORCE` applies the cheapest
+eval-qualified model at conductor dispatch as a downshift-only per-run override
+(default OFF)**.
 
 This document preserves the verified research and the chosen techniques behind that
 implementation.

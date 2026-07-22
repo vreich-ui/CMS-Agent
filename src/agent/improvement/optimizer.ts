@@ -4,10 +4,11 @@
 // evidence-cited, one-step reversible via changes.restore. PROPOSE-ONLY by default: promotion is a
 // separate explicit call carrying the caller's mutation meta; nothing auto-applies.
 //
-// Scope note (loud, from the Phase 3 design review): conductor runs execute the STATIC node
-// definitions in nodes.ts, so a promoted prompt is live for independent execution and replay —
-// the loop is self-consistent — but full conductor runs pick it up only after the executor reads
-// store nodes (tracked follow-up in docs/improvement/STRATEGY.md).
+// Scope note (updated — Phase 5 landed): a promoted prompt is live for independent execution and
+// replay, and now ALSO for full conductor runs when WORKSPACE_NODES_SOURCE=store (the executor
+// resolves nodes from the workspace store behind a canonical-node guard — see executor.ts /
+// docs/platform/DIRECTION.md Phase 5). With the default WORKSPACE_NODES_SOURCE=static the conductor
+// still runs the static nodes.ts definitions, so treat conductor pickup as opt-in until that flip.
 import { getNodeRunner } from "../execution/runnerRegistry.js";
 import type { WorkspaceNode } from "../workspace/nodeTypes.js";
 import type { WorkflowExecutionRecord } from "../workspace/executionTypes.js";

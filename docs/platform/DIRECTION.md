@@ -211,17 +211,31 @@ quick switch inside the existing Netlify-served UI** — no new UI is built.
   both planes; the UI toggle flips between them without a redeploy; Netlify paths
   untouched.
 
-### Phase 5 — Executor reads store nodes (promotions reach conductor runs)
+### Phase 5 — Executor reads store nodes (promotions reach conductor runs) ✅ implemented
 
-Today `executor.ts` runs the STATIC node definitions in `nodes.ts`, so optimizer
-promotions are live for independent execution and replay but not full conductor
-runs. Make the executor resolve nodes from the workspace repository (canonical-node
-guards and late-stage seeding preserved), behind a
+> **Status:** shipped. `executor.ts` now resolves the conductor node list through
+> `resolveConductorNodes()`, gated by `WORKSPACE_NODES_SOURCE=static|store` and
+> defaulting to `static` (behavior unchanged until an operator flips it). In `store`
+> mode each canonical node is overlaid with its stored counterpart, so optimizer
+> promotions (`updateNodePrompt`) and authoring edits to schemas, tools, skills, and
+> model config reach FULL conductor runs — not just independent execution and replay.
+> The **canonical-node guard** pins the DAG topology (id, `dependsOn`, `produces`),
+> grid position, node status, and the publish-risk classification (`riskLevel`) to the
+> static definition, so a store edit can change how a node runs but never rewire the
+> graph or downgrade a publish gate. A canonical node missing from the store is seeded
+> from static (late-stage seeding preserved); a store-read failure falls back to static
+> so a transient repository error never aborts a run. Covered by
+> `tests/agent/workspaceNodeSource.test.ts` (topology-identical guard proven
+> end-to-end). This closes the loudest Phase 3 caveat.
+
+Original sketch (as shipped above): today `executor.ts` runs the STATIC node
+definitions in `nodes.ts`, so optimizer promotions are live for independent execution
+and replay but not full conductor runs. Make the executor resolve nodes from the
+workspace repository (canonical-node guards and late-stage seeding preserved), behind a
 `WORKSPACE_NODES_SOURCE=static|store` flag defaulting to `static`, flipped after a
-side-by-side mock-run comparison shows identical topology. This closes the loudest
-Phase 3 caveat.
+side-by-side mock-run comparison shows identical topology.
 
-### Phase 6 — First-class Anthropic runner
+### Phase 6 — First-class Anthropic runner ✅ implemented
 
 Claude agents work today via the `openai_compatible` provider pointed at a gateway
 (LiteLLM / OpenRouter) — config-only, but structured-output fidelity must be
@@ -230,18 +244,77 @@ validated per model. This phase adds a native path: an `anthropic` provider entr
 tool use + schema-enforced output, registered alongside the OpenAI runner. Judges
 can then be cross-family with Claude natively (the recommended judge setup).
 
-### Phase 7 — Engine maturation
+> **Status:** shipped. `AnthropicNodeRunner`
+> (`src/agent/execution/runners/AnthropicNodeRunner.ts`) speaks the Anthropic Messages
+> API directly (dependency-free `fetch`; no `@anthropic-ai/sdk`), using the forced-tool
+> idiom — a single `emit_output` tool whose `input_schema` is the node's `outputSchema`,
+> with `tool_choice` pinned to it — for schema-enforced structured output, then validates
+> against the node schema exactly like the OpenAI runner. `resolveProvider` gained an
+> `anthropic` entry (`ANTHROPIC_API_KEY`, optional `ANTHROPIC_BASE_URL` / model via
+> `ANTHROPIC_MODEL`); `getNodeRunner(mode, modelConfig)` is now **provider-aware** — a node
+> or rubric whose `modelConfig.provider` is `"anthropic"` runs on the native runner in any
+> live mode, everything else stays on the OpenAI(-compatible) path, and `mock` is
+> untouched. Wiring `getNodeRunner` through the judge (`rubricJudge.ts`) delivers
+> **cross-family judging**: set a rubric's `judgeModelConfig.provider` to `"anthropic"` and
+> a Claude judge grades an OpenAI generator natively. Sampling params are omitted (current
+> Claude models reject them). Covered by `tests/agent/anthropicRunner.test.ts`. Follow-up:
+> bridging CMS-Agent's controlled tools into the Messages tool loop for tool-using
+> conductor nodes — until then, keep tool-using nodes on the OpenAI runner.
 
-- LLM-driven playbook curation (Reflector→Curator via a synthetic node; today's
-  `playbook.curate` is heuristic).
-- Automatic post-run reflection (hooked after conductor runs / as a scheduled
-  Cloud Run job) instead of manual `optimizer.propose` calls.
-- Published-analytics ingestion: Monetizer `performance`/`demand_signals` →
-  `feedback.record` outcome records, closing the outer loop.
-- `IMPROVEMENT_AUTO_PROMOTE` flag: eval-gated automatic promotion for low-risk
-  nodes (promotion stays human-approved by default).
-- Model-ladder enforcement in the conductor's planning (today it is advisory via
-  `optimizer.status`).
+### Phase 7 — Engine maturation (partially implemented)
+
+- **LLM-driven playbook curation ✅ implemented.** `curatePlaybook()`
+  (`src/agent/improvement/curator.ts`) derives an ACE playbook delta from a node's
+  evaluation evidence: `mode=mock` (default) keeps the deterministic heuristic (weakest
+  rubric criterion → pitfall lesson), `mode=openai` runs a Reflector→Curator synthetic
+  node for richer adds (strategy/pitfall/constraint) plus retirement of stale lessons.
+  The LLM output is mapped to a validated `PlaybookDelta` by the pure
+  `curatorDeltaFromOutput` and applied through `applyPlaybookDelta` (dedup + item/char
+  budget enforced). Curator model via `IMPROVEMENT_CURATOR_MODEL`. Wired into the
+  `playbook.curate` MCP tool. Covered by `tests/agent/playbookCuration.test.ts`.
+- **Automatic post-run reflection ✅ implemented.** `reflectAfterRun()`
+  (`src/agent/improvement/reflection.ts`) fires GEPA-style reflection
+  (`optimizer.propose`) for the nodes that executed when a conductor run reaches
+  `completed` — the single completion transition in `executor.ts` is the trigger, so
+  it covers MCP `workflow.run_all`, the Cloud Run job, and replay alike. Gated by
+  `IMPROVEMENT_POST_RUN_REFLECT` (default OFF). It is **propose-only** (drafts a
+  proposal; promotion stays `optimizer.promote` / the auto-promote path),
+  **best-effort** (a reflection error can never fail a run — the flag check
+  short-circuits before any repository access when OFF), **evidence-gated** (a node
+  needs ≥ `IMPROVEMENT_POST_RUN_REFLECT_MIN_SAMPLES` recorded eval results), **deduped**
+  (a node with an open proposal for its current prompt is skipped, so repeated runs
+  don't stack identical drafts), and **bounded** (`IMPROVEMENT_POST_RUN_REFLECT_MAX_NODES`
+  per run). Reflection mode is `IMPROVEMENT_POST_RUN_REFLECT_MODE` (default `mock`, no
+  model spend). Covered by `tests/agent/postRunReflection.test.ts`. Scheduled-job
+  reflection can reuse the same entrypoint; not yet wired.
+- **Published-analytics ingestion ✅ implemented.** `ingestMonetizerAnalytics()`
+  (`src/agent/improvement/monetizerIngest.ts`) pulls the Monetizer project's read-only
+  `performance` / `demand_signals` telemetry and records each as a `feedback.record`
+  OUTCOME (`source: monetizer:<signal>`), so published-content analytics feed
+  `optimizer.analyze` — closing the outer loop. Pull-based (a scheduled job or the
+  `feedback.ingest_monetizer` MCP tool is the trigger; it never fires from a run),
+  read-only against Monetizer's safe allow-list, best-effort per signal, and reached
+  through the standard `ProjectMcpAdapter` (endpoint/token via env NAMES). Covered by
+  `tests/agent/monetizerIngest.test.ts`.
+- **`IMPROVEMENT_AUTO_PROMOTE` flag ✅ implemented.** `autoPromoteProposals()`
+  (`src/agent/improvement/autoPromote.ts`) promotes proposals whose champion/challenger
+  TRIAL already proves the change is better (decisive challenger win, no case failures,
+  meanChallengerScore ≥ `IMPROVEMENT_AUTO_PROMOTE_MIN_SCORE`), for LOW-RISK nodes only —
+  publish/admin nodes are never auto-promoted. Gated by `IMPROVEMENT_AUTO_PROMOTE`
+  (default OFF — promotion stays the human `optimizer.promote` path). Fires best-effort
+  from the run-completion hook and is also exposed as the `optimizer.auto_promote` MCP
+  tool (explicit human trigger, with a `dryRun` preview). Fresh (un-trialed) proposals —
+  e.g. those drafted by post-run reflection — are never auto-promoted; auto-TRIALING is a
+  separate, not-yet-wired step. Promotion still runs through the versioned funnel (stale-
+  baseline guard, `changes.restore` rollback). Covered by `tests/agent/autoPromote.test.ts`.
+- **Model-ladder enforcement in the conductor ✅ implemented.** `enforceModelLadder()`
+  (`src/agent/improvement/modelLadder.ts`) applies the cheapest model whose rubric
+  pass-rate clears the threshold (over ≥ `minSamples` evaluated outputs) at conductor
+  dispatch, gated by `IMPROVEMENT_MODEL_LADDER_ENFORCE` (default OFF — advisory via
+  `optimizer.status` unless enabled; tune with `IMPROVEMENT_MODEL_LADDER_THRESHOLD` /
+  `IMPROVEMENT_MODEL_LADDER_MIN_SAMPLES`). It is a downshift-only, per-run override —
+  never a workspace mutation, so disabling the flag fully reverts — building on Phase 5's
+  store-node `modelConfig` overlay. Covered by `tests/agent/modelLadderEnforcement.test.ts`.
 
 ### Phase 8 — Fine-tuning flywheel (trigger-based)
 
@@ -251,6 +324,18 @@ Already-shipped `dataset.export_sft` / `export_preferences` feed Unsloth QLoRA
 same discipline as prompts). Triggers unchanged: per-subtask volume×cost becomes
 material, or evals show a quality ceiling prompt optimization can't break with
 ≥500–2,000 approved examples accumulated.
+
+> **Trigger ✅ implemented.** `evaluateFineTuneReadiness()`
+> (`src/agent/improvement/fineTune.ts`) reports, per node, whether accumulated
+> approved SFT examples (eval-attributed outputs clearing the export bar) and decisive
+> preference pairs cross the configured thresholds (`IMPROVEMENT_FINETUNE_MIN_EXAMPLES`,
+> default 500 — the low end of the band above; `IMPROVEMENT_FINETUNE_MIN_PREFERENCE_PAIRS`,
+> default 200), returning a recommendation (`insufficient_data` | `accumulate` |
+> `ready_sft` | `ready_preferences` | `ready_both`). REPORT-ONLY — it never launches a
+> job (tuning infra stays external); an operator or a scheduled job acts on the
+> recommendation and then uses the existing exporters. Exposed as the
+> `dataset.finetune_readiness` MCP tool. Covered by `tests/agent/fineTuneTrigger.test.ts`.
+> The tuning-execution + adapter-promotion legs remain external/manual as described above.
 
 ### Phase 9 (optional, deferred indefinitely) — Netlify retirement
 

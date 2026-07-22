@@ -17,6 +17,10 @@ import { applyPlaybookDelta, renderPlaybookForPrompt } from "../../improvement/p
 import { scoreOutput } from "../../improvement/rubricJudge.js";
 import { buildDataset, exportPreferences, exportSft, type ReplayDeps } from "../../improvement/replay.js";
 import { analyzeNode, optimizerStatus, promoteProposal, proposeImprovement, runTrial } from "../../improvement/optimizer.js";
+import { autoPromoteProposals } from "../../improvement/autoPromote.js";
+import { curatePlaybook } from "../../improvement/curator.js";
+import { ingestMonetizerAnalytics, MONETIZER_SIGNALS } from "../../improvement/monetizerIngest.js";
+import { evaluateFineTuneReadiness } from "../../improvement/fineTune.js";
 import { runRegression } from "../../improvement/regression.js";
 
 const now = () => new Date().toISOString();
@@ -45,15 +49,18 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
   const listResultsInput = z.object({ nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), rubricId: z.string().min(1).optional(), trialId: z.string().min(1).optional(), from: z.string().datetime().optional(), to: z.string().datetime().optional(), limit: z.number().int().min(1).max(200).optional() }).strict();
   const feedbackRecordInput = z.object({ kind: z.enum(feedbackKinds), nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), evalId: z.string().min(1).optional(), editDiff: z.unknown().optional(), outcome: z.unknown().optional(), note: z.string().min(1).optional(), ...mutationMeta }).strict();
   const listFeedbackInput = z.object({ nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), kind: z.enum(feedbackKinds).optional(), limit: z.number().int().min(1).max(200).optional() }).strict();
+  const ingestMonetizerInput = z.object({ nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), signals: z.array(z.enum(["performance", "demand_signals"])).min(1).optional(), args: z.unknown().optional(), note: z.string().min(1).optional(), ...mutationMeta }).strict();
   const datasetBuildInput = z.object({ nodeId: z.string().min(1), name: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional(), projectId: z.string().min(1).optional() }).strict();
   const datasetIdInput = z.object({ datasetId: z.string().min(1) }).strict();
   const nodeFilterInput = z.object({ nodeId: z.string().min(1).optional() }).strict();
   const exportSftInput = z.object({ nodeId: z.string().min(1), minScore: z.number().min(0).max(1).optional(), limit: z.number().int().min(1).max(500).optional() }).strict();
   const exportPrefInput = z.object({ nodeId: z.string().min(1), limit: z.number().int().min(1).max(500).optional() }).strict();
+  const fineTuneReadinessInput = z.object({ nodeId: z.string().min(1), minScore: z.number().min(0).max(1).optional() }).strict();
   const analyzeInput = z.object({ nodeId: z.string().min(1), from: z.string().datetime().optional(), to: z.string().datetime().optional() }).strict();
   const proposeInput = z.object({ nodeId: z.string().min(1), mode: modeSchema }).strict();
   const runTrialInput = z.object({ proposalId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), promptVariant: z.string().min(1).optional(), modelConfigVariant: z.unknown().optional(), datasetId: z.string().min(1).optional(), rubricId: z.string().min(1).optional(), mode: modeSchema, caseLimit: z.number().int().min(1).max(100).optional() }).strict();
   const promoteInput = z.object({ proposalId: z.string().min(1), ...mutationMeta }).strict();
+  const autoPromoteInput = z.object({ nodeId: z.string().min(1).optional(), dryRun: z.boolean().optional(), minScore: z.number().min(0).max(1).optional(), max: z.number().int().min(1).max(50).optional(), ...mutationMeta }).strict();
   const nodeIdInput = z.object({ nodeId: z.string().min(1) }).strict();
   const applyDeltaInput = z.object({ nodeId: z.string().min(1), delta: z.unknown(), ...mutationMeta }).strict();
   const curateInput = z.object({ nodeId: z.string().min(1), mode: modeSchema }).strict();
@@ -128,12 +135,18 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       return ok({ feedback: await evaluationRepository.recordFeedback(record) });
     } }),
     tool({ name: "feedback.list", description: "List feedback records, newest first.", zodSchema: listFeedbackInput, inputSchema: objectSchema({ nodeId: { type: "string" }, runId: { type: "string" }, kind: { type: "string", enum: [...feedbackKinds] }, limit: { type: "integer", minimum: 1, maximum: 200 } }), execute: async (input) => ok({ records: await evaluationRepository.listFeedback(listFeedbackInput.parse(input)) }) }),
+    tool({ name: "feedback.ingest_monetizer", description: "Outer-loop ingestion (DIRECTION Phase 7): pull the Monetizer project's read-only performance / demand_signals telemetry and record each as a feedback OUTCOME (source monetizer:<signal>), so published-content analytics feed optimizer.analyze. Optionally attribute to a nodeId/runId and pass Monetizer query args. Requires the Monetizer connection (MONETIZER_MCP_ENDPOINT / MONETIZER_MCP_TOKEN). Best-effort per signal; nothing external is written.", zodSchema: ingestMonetizerInput, inputSchema: objectSchema({ nodeId: { type: "string" }, runId: { type: "string" }, signals: { type: "array", items: { type: "string", enum: [...MONETIZER_SIGNALS] }, description: "Which signals to pull (default both)." }, args: { type: "object", description: "Query args forwarded to the Monetizer tool." }, note: { type: "string" }, ...metaJson }), execute: async (input) => {
+      const data = ingestMonetizerInput.parse(input);
+      const stamped = meta(data);
+      return ok({ result: await ingestMonetizerAnalytics({ nodeId: data.nodeId, runId: data.runId, signals: data.signals, args: coerceJsonObjectInput(data.args) as Record<string, unknown> | undefined, actor: stamped.actor, note: data.note }, { evaluationRepository }) });
+    } }),
 
     tool({ name: "dataset.build", description: "Freeze a replay dataset for a node from completed historical executions (inputs + champion outputs) for offline champion/challenger trials.", zodSchema: datasetBuildInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, name: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 }, projectId: { type: "string" } }, ["nodeId"]), execute: async (input) => ok({ dataset: await buildDataset(datasetBuildInput.parse(input), replayDeps) }) }),
     tool({ name: "dataset.list", description: "List replay datasets.", zodSchema: nodeFilterInput, inputSchema: objectSchema({ nodeId: { type: "string" } }), execute: async (input) => ok({ datasets: await improvementRepository.listDatasets(nodeFilterInput.parse(input)) }) }),
     tool({ name: "dataset.get", description: "Get one replay dataset.", zodSchema: datasetIdInput, inputSchema: objectSchema({ datasetId: { type: "string", minLength: 1 } }, ["datasetId"]), execute: async (input) => ok({ dataset: await improvementRepository.getDataset(datasetIdInput.parse(input).datasetId) ?? null }) }),
     tool({ name: "dataset.export_sft", description: "Export judge-approved traces for a node as chat-format SFT JSONL (Vertex tuning / Unsloth compatible), with provenance metadata.", zodSchema: exportSftInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, minScore: { type: "number", minimum: 0, maximum: 1 }, limit: { type: "integer", minimum: 1, maximum: 500 } }, ["nodeId"]), execute: async (input) => ok(await exportSft(exportSftInput.parse(input), replayDeps)) }),
     tool({ name: "dataset.export_preferences", description: "Export chosen/rejected preference pairs from decisive pairwise trial verdicts (DPO/ORPO-ready JSONL); inconsistent verdicts are excluded and counted.", zodSchema: exportPrefInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, limit: { type: "integer", minimum: 1, maximum: 500 } }, ["nodeId"]), execute: async (input) => ok(await exportPreferences(exportPrefInput.parse(input), replayDeps)) }),
+    tool({ name: "dataset.finetune_readiness", description: "Fine-tuning flywheel trigger (DIRECTION Phase 8): report whether a node has accumulated enough approved SFT examples and decisive preference pairs to warrant a tuning run (thresholds via IMPROVEMENT_FINETUNE_MIN_EXAMPLES / IMPROVEMENT_FINETUNE_MIN_PREFERENCE_PAIRS). REPORT-ONLY — never launches a job; when ready, pair with dataset.export_sft / dataset.export_preferences. Optional minScore mirrors the export bar.", zodSchema: fineTuneReadinessInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, minScore: { type: "number", minimum: 0, maximum: 1, description: "Approve outputs at/above this normalized score instead of the rubric pass flag." } }, ["nodeId"]), execute: async (input) => ok({ readiness: await evaluateFineTuneReadiness(fineTuneReadinessInput.parse(input), replayDeps) }) }),
 
     tool({ name: "optimizer.analyze", description: "Evidence-cited diagnosis of a node: eval score aggregates, worst criteria, run failure codes, and feedback counts.", zodSchema: analyzeInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" } }, ["nodeId"]), execute: async (input) => ok({ analysis: await analyzeNode(analyzeInput.parse(input), replayDeps) }) }),
     tool({ name: "optimizer.propose", description: "GEPA-style reflection: diagnose from eval evidence and propose a prompt mutation. PROPOSE-ONLY — nothing is applied until optimizer.promote.", zodSchema: proposeInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, mode: modeJson }, ["nodeId"]), execute: async (input) => { const data = proposeInput.parse(input); return ok({ proposal: await proposeImprovement(data, replayDeps) }); } }),
@@ -146,6 +159,11 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       return ok(await promoteProposal({ proposalId: data.proposalId, meta: meta(data) }, replayDeps));
     } }),
     tool({ name: "optimizer.status", description: "Proposals, trial summaries, and the cost-aware model-ladder recommendation for a node.", zodSchema: nodeFilterInput, inputSchema: objectSchema({ nodeId: { type: "string" } }), execute: async (input) => ok({ status: await optimizerStatus(nodeFilterInput.parse(input), replayDeps) }) }),
+    tool({ name: "optimizer.auto_promote", description: "Eval-gated automatic promotion (DIRECTION Phase 7): promote proposals whose champion/challenger TRIAL already proves the change is better, for LOW-RISK nodes only (publish/admin nodes are never auto-promoted). Only 'trialed' proposals qualify — a fresh 'proposed' draft has no trial evidence and is skipped. Set dryRun:true to preview eligibility without promoting. This is an explicit human trigger; the IMPROVEMENT_AUTO_PROMOTE flag governs the AUTOMATIC post-run path.", zodSchema: autoPromoteInput, inputSchema: objectSchema({ nodeId: { type: "string" }, dryRun: { type: "boolean", description: "Preview eligible proposals without promoting." }, minScore: { type: "number", minimum: 0, maximum: 1, description: "Min trial meanChallengerScore to qualify (default 0.7)." }, max: { type: "integer", minimum: 1, maximum: 50, description: "Max promotions this pass (default 3)." }, ...metaJson }), execute: async (input) => {
+      const data = autoPromoteInput.parse(input);
+      const stamped = meta(data);
+      return ok({ result: await autoPromoteProposals({ nodeId: data.nodeId, dryRun: data.dryRun, minScore: data.minScore, max: data.max, actor: stamped.actor }, replayDeps) });
+    } }),
 
     tool({ name: "playbook.get", description: "Get a node's ACE playbook (curated, budgeted lessons) and its rendered prompt-injection form.", zodSchema: nodeIdInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 } }, ["nodeId"]), execute: async (input) => {
       const playbook = await improvementRepository.getPlaybook(nodeIdInput.parse(input).nodeId) ?? null;
@@ -157,14 +175,9 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       const existing = await improvementRepository.getPlaybook(data.nodeId);
       return ok({ playbook: await improvementRepository.savePlaybook(applyPlaybookDelta(existing, data.nodeId, delta, now())) });
     } }),
-    tool({ name: "playbook.curate", description: "Heuristic Reflector/Curator pass: derive a playbook delta from the node's recent evaluation evidence (worst criterion becomes a pitfall lesson). LLM curation is a documented follow-up.", zodSchema: curateInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, mode: modeJson }, ["nodeId"]), execute: async (input) => {
+    tool({ name: "playbook.curate", description: "Reflector→Curator pass: derive a playbook delta from the node's evaluation evidence and apply it (dedup + item/char budget enforced). mode=mock (default) is the deterministic heuristic (weakest rubric criterion becomes a pitfall lesson); mode=openai runs the Curator LLM for richer adds (strategy/pitfall/constraint) plus retirement of stale lessons. A no-evidence node is a no-op.", zodSchema: curateInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, mode: modeJson }, ["nodeId"]), execute: async (input) => {
       const data = curateInput.parse(input);
-      const analysis = await analyzeNode({ nodeId: data.nodeId }, replayDeps);
-      const worst = analysis.worstCriteria[0];
-      if (!worst) return ok({ playbook: await improvementRepository.getPlaybook(data.nodeId) ?? null, curated: false, reason: "No criterion-level evaluation evidence yet." });
-      const delta: PlaybookDelta = { add: [{ text: `Recent evaluations score weakest on "${worst.criterionId}" (mean ${worst.meanScore}/${worst.maxScore}); address it explicitly before completing.`, kind: "pitfall", provenance: { source: "reflector", evalIds: analysis.evidence.evalIds.slice(0, 5) } }] };
-      const existing = await improvementRepository.getPlaybook(data.nodeId);
-      return ok({ playbook: await improvementRepository.savePlaybook(applyPlaybookDelta(existing, data.nodeId, delta, now())), curated: true });
+      return ok(await curatePlaybook(data, replayDeps));
     } }),
     tool({ name: "playbook.migrate_observations", description: "One-shot curation of legacy global learning observations into per-node playbooks (observations with metadata.nodeId only). The learning.* tools stay untouched.", zodSchema: migrateInput, inputSchema: objectSchema({ dryRun: { type: "boolean" } }), execute: async (input) => {
       const data = migrateInput.parse(input);
