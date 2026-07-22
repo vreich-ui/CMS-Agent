@@ -265,8 +265,17 @@ can then be cross-family with Claude natively (the recommended judge setup).
   reflection can reuse the same entrypoint; not yet wired.
 - Published-analytics ingestion: Monetizer `performance`/`demand_signals` →
   `feedback.record` outcome records, closing the outer loop.
-- `IMPROVEMENT_AUTO_PROMOTE` flag: eval-gated automatic promotion for low-risk
-  nodes (promotion stays human-approved by default).
+- **`IMPROVEMENT_AUTO_PROMOTE` flag ✅ implemented.** `autoPromoteProposals()`
+  (`src/agent/improvement/autoPromote.ts`) promotes proposals whose champion/challenger
+  TRIAL already proves the change is better (decisive challenger win, no case failures,
+  meanChallengerScore ≥ `IMPROVEMENT_AUTO_PROMOTE_MIN_SCORE`), for LOW-RISK nodes only —
+  publish/admin nodes are never auto-promoted. Gated by `IMPROVEMENT_AUTO_PROMOTE`
+  (default OFF — promotion stays the human `optimizer.promote` path). Fires best-effort
+  from the run-completion hook and is also exposed as the `optimizer.auto_promote` MCP
+  tool (explicit human trigger, with a `dryRun` preview). Fresh (un-trialed) proposals —
+  e.g. those drafted by post-run reflection — are never auto-promoted; auto-TRIALING is a
+  separate, not-yet-wired step. Promotion still runs through the versioned funnel (stale-
+  baseline guard, `changes.restore` rollback). Covered by `tests/agent/autoPromote.test.ts`.
 - **Model-ladder enforcement in the conductor ✅ implemented.** `enforceModelLadder()`
   (`src/agent/improvement/modelLadder.ts`) applies the cheapest model whose rubric
   pass-rate clears the threshold (over ≥ `minSamples` evaluated outputs) at conductor

@@ -17,6 +17,7 @@ import { applyPlaybookDelta, renderPlaybookForPrompt } from "../../improvement/p
 import { scoreOutput } from "../../improvement/rubricJudge.js";
 import { buildDataset, exportPreferences, exportSft, type ReplayDeps } from "../../improvement/replay.js";
 import { analyzeNode, optimizerStatus, promoteProposal, proposeImprovement, runTrial } from "../../improvement/optimizer.js";
+import { autoPromoteProposals } from "../../improvement/autoPromote.js";
 import { runRegression } from "../../improvement/regression.js";
 
 const now = () => new Date().toISOString();
@@ -54,6 +55,7 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
   const proposeInput = z.object({ nodeId: z.string().min(1), mode: modeSchema }).strict();
   const runTrialInput = z.object({ proposalId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), promptVariant: z.string().min(1).optional(), modelConfigVariant: z.unknown().optional(), datasetId: z.string().min(1).optional(), rubricId: z.string().min(1).optional(), mode: modeSchema, caseLimit: z.number().int().min(1).max(100).optional() }).strict();
   const promoteInput = z.object({ proposalId: z.string().min(1), ...mutationMeta }).strict();
+  const autoPromoteInput = z.object({ nodeId: z.string().min(1).optional(), dryRun: z.boolean().optional(), minScore: z.number().min(0).max(1).optional(), max: z.number().int().min(1).max(50).optional(), ...mutationMeta }).strict();
   const nodeIdInput = z.object({ nodeId: z.string().min(1) }).strict();
   const applyDeltaInput = z.object({ nodeId: z.string().min(1), delta: z.unknown(), ...mutationMeta }).strict();
   const curateInput = z.object({ nodeId: z.string().min(1), mode: modeSchema }).strict();
@@ -146,6 +148,11 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       return ok(await promoteProposal({ proposalId: data.proposalId, meta: meta(data) }, replayDeps));
     } }),
     tool({ name: "optimizer.status", description: "Proposals, trial summaries, and the cost-aware model-ladder recommendation for a node.", zodSchema: nodeFilterInput, inputSchema: objectSchema({ nodeId: { type: "string" } }), execute: async (input) => ok({ status: await optimizerStatus(nodeFilterInput.parse(input), replayDeps) }) }),
+    tool({ name: "optimizer.auto_promote", description: "Eval-gated automatic promotion (DIRECTION Phase 7): promote proposals whose champion/challenger TRIAL already proves the change is better, for LOW-RISK nodes only (publish/admin nodes are never auto-promoted). Only 'trialed' proposals qualify — a fresh 'proposed' draft has no trial evidence and is skipped. Set dryRun:true to preview eligibility without promoting. This is an explicit human trigger; the IMPROVEMENT_AUTO_PROMOTE flag governs the AUTOMATIC post-run path.", zodSchema: autoPromoteInput, inputSchema: objectSchema({ nodeId: { type: "string" }, dryRun: { type: "boolean", description: "Preview eligible proposals without promoting." }, minScore: { type: "number", minimum: 0, maximum: 1, description: "Min trial meanChallengerScore to qualify (default 0.7)." }, max: { type: "integer", minimum: 1, maximum: 50, description: "Max promotions this pass (default 3)." }, ...metaJson }), execute: async (input) => {
+      const data = autoPromoteInput.parse(input);
+      const stamped = meta(data);
+      return ok({ result: await autoPromoteProposals({ nodeId: data.nodeId, dryRun: data.dryRun, minScore: data.minScore, max: data.max, actor: stamped.actor }, replayDeps) });
+    } }),
 
     tool({ name: "playbook.get", description: "Get a node's ACE playbook (curated, budgeted lessons) and its rendered prompt-injection form.", zodSchema: nodeIdInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 } }, ["nodeId"]), execute: async (input) => {
       const playbook = await improvementRepository.getPlaybook(nodeIdInput.parse(input).nodeId) ?? null;

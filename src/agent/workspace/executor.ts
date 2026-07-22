@@ -8,6 +8,7 @@ import { recordModelUsage, summarizeModelUsage, evaluateRunBudget } from "../obs
 import { getNodeRunner } from "../execution/runnerRegistry.js";
 import { enforceModelLadder, modelLadderEnforcementEnabled } from "../improvement/modelLadder.js";
 import { postRunReflectionEnabled, reflectAfterRun } from "../improvement/reflection.js";
+import { autoPromoteEnabled, autoPromoteProposals } from "../improvement/autoPromote.js";
 import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 
@@ -220,27 +221,39 @@ export async function runNextNode(runId: string, options: RunAdvanceOptions = {}
   return withRunLock(runId, () => advanceRun(runId, store, options));
 }
 
-// Phase 7 (DIRECTION §7): automatic post-run reflection. When IMPROVEMENT_POST_RUN_REFLECT is on, a
-// completed run fires GEPA-style reflection (optimizer.propose) for the nodes that executed, so the
-// learning loop advances without a human kicking it. PROPOSE-ONLY (nothing is applied) and fully
-// best-effort — the flag check short-circuits before any repository access when OFF, and every error
-// is swallowed so reflection can never fail or delay-fault an otherwise-successful run. The store node
-// source (Phase 5) is honored via options.workspaceRepository so a reflected node's prompt matches
-// what actually ran.
+// Phase 7 (DIRECTION §7): post-run learning-loop actions. When a run completes, two independently
+// flag-gated, best-effort steps can fire so the loop advances without a human kicking it:
+//   1. IMPROVEMENT_POST_RUN_REFLECT — GEPA-style reflection (optimizer.propose) for the nodes that
+//      executed. PROPOSE-ONLY: nothing is applied.
+//   2. IMPROVEMENT_AUTO_PROMOTE — eval-gated auto-promotion of trial-proven proposals for low-risk
+//      nodes (never a publish/admin node; fresh un-trialed proposals are never touched).
+// Both are fired AFTER the durable save and can never fail the run: each flag check short-circuits
+// before any repository access when OFF, and every error is swallowed. The store node source (Phase 5)
+// is honored via options.workspaceRepository so a reflected node's prompt matches what actually ran.
 async function reflectOnCompletedRun(run: WorkflowExecutionRecord, store: ExecutionRepository, options: RunAdvanceOptions): Promise<void> {
-  if (!postRunReflectionEnabled()) return;
-  try {
-    const deps: OptimizerDeps = {
-      workspaceRepository: options.workspaceRepository ?? repositoryManager.getWorkspaceRepository(),
-      executionRepository: store,
-      improvementRepository: repositoryManager.getImprovementRepository(),
-      evaluationRepository: repositoryManager.getEvaluationRepository()
-    };
-    const result = await reflectAfterRun(run, deps);
-    if (result.proposals.length || result.errors.length) {
-      console.info("improvement.post_run_reflection", { runId: run.runId, mode: result.mode, candidates: result.candidates, proposals: result.proposals.length, skipped: result.skipped.length, errors: result.errors.length });
-    }
-  } catch { /* reflection is advisory; a run must never fail because the loop could not reflect */ }
+  if (!postRunReflectionEnabled() && !autoPromoteEnabled()) return;
+  const deps: OptimizerDeps = {
+    workspaceRepository: options.workspaceRepository ?? repositoryManager.getWorkspaceRepository(),
+    executionRepository: store,
+    improvementRepository: repositoryManager.getImprovementRepository(),
+    evaluationRepository: repositoryManager.getEvaluationRepository()
+  };
+  if (postRunReflectionEnabled()) {
+    try {
+      const result = await reflectAfterRun(run, deps);
+      if (result.proposals.length || result.errors.length) {
+        console.info("improvement.post_run_reflection", { runId: run.runId, mode: result.mode, candidates: result.candidates, proposals: result.proposals.length, skipped: result.skipped.length, errors: result.errors.length });
+      }
+    } catch { /* reflection is advisory; a run must never fail because the loop could not reflect */ }
+  }
+  if (autoPromoteEnabled()) {
+    try {
+      const result = await autoPromoteProposals({}, deps);
+      if (result.promoted.length || result.errors.length) {
+        console.info("improvement.auto_promote", { runId: run.runId, promoted: result.promoted.length, skipped: result.skipped.length, errors: result.errors.length });
+      }
+    } catch { /* auto-promotion is advisory; a run must never fail because the loop could not promote */ }
+  }
 }
 
 async function advanceRun(runId: string, store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {

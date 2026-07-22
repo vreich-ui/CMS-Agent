@@ -23,8 +23,10 @@ heuristic); ~~automatic post-run reflection~~ **RESOLVED (Phase 7):
 `IMPROVEMENT_POST_RUN_REFLECT` fires `optimizer.propose` for the nodes that executed
 when a run completes — propose-only, evidence-gated, deduped, best-effort, default
 OFF**; analytics ingestion (Monetizer
-`performance` → `feedback.record` outcomes); auto-promotion flag (promotion is
-human-approved by design today); ~~model-ladder enforcement in the conductor~~
+`performance` → `feedback.record` outcomes); ~~auto-promotion flag~~ **RESOLVED
+(Phase 7): `IMPROVEMENT_AUTO_PROMOTE` auto-promotes trial-proven proposals for
+low-risk nodes only (default OFF; human `optimizer.promote` stays the default)**;
+~~model-ladder enforcement in the conductor~~
 **RESOLVED (Phase 7): `IMPROVEMENT_MODEL_LADDER_ENFORCE` applies the cheapest
 eval-qualified model at conductor dispatch as a downshift-only per-run override
 (default OFF)**.
