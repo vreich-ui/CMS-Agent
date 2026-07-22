@@ -7,6 +7,8 @@ import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepo
 import { recordModelUsage, summarizeModelUsage, evaluateRunBudget } from "../observability/modelUsage.js";
 import { getNodeRunner } from "../execution/runnerRegistry.js";
 import { enforceModelLadder, modelLadderEnforcementEnabled } from "../improvement/modelLadder.js";
+import { postRunReflectionEnabled, reflectAfterRun } from "../improvement/reflection.js";
+import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 
 const WORKFLOW_ID = "publishing_conductor";
@@ -218,6 +220,29 @@ export async function runNextNode(runId: string, options: RunAdvanceOptions = {}
   return withRunLock(runId, () => advanceRun(runId, store, options));
 }
 
+// Phase 7 (DIRECTION §7): automatic post-run reflection. When IMPROVEMENT_POST_RUN_REFLECT is on, a
+// completed run fires GEPA-style reflection (optimizer.propose) for the nodes that executed, so the
+// learning loop advances without a human kicking it. PROPOSE-ONLY (nothing is applied) and fully
+// best-effort — the flag check short-circuits before any repository access when OFF, and every error
+// is swallowed so reflection can never fail or delay-fault an otherwise-successful run. The store node
+// source (Phase 5) is honored via options.workspaceRepository so a reflected node's prompt matches
+// what actually ran.
+async function reflectOnCompletedRun(run: WorkflowExecutionRecord, store: ExecutionRepository, options: RunAdvanceOptions): Promise<void> {
+  if (!postRunReflectionEnabled()) return;
+  try {
+    const deps: OptimizerDeps = {
+      workspaceRepository: options.workspaceRepository ?? repositoryManager.getWorkspaceRepository(),
+      executionRepository: store,
+      improvementRepository: repositoryManager.getImprovementRepository(),
+      evaluationRepository: repositoryManager.getEvaluationRepository()
+    };
+    const result = await reflectAfterRun(run, deps);
+    if (result.proposals.length || result.errors.length) {
+      console.info("improvement.post_run_reflection", { runId: run.runId, mode: result.mode, candidates: result.candidates, proposals: result.proposals.length, skipped: result.skipped.length, errors: result.errors.length });
+    }
+  } catch { /* reflection is advisory; a run must never fail because the loop could not reflect */ }
+}
+
 async function advanceRun(runId: string, store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
   let latest: WorkflowExecutionRecord | undefined;
   for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
@@ -229,7 +254,16 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const nodes = await resolveConductorNodes(options.workspaceRepository);
     const nextNode = findNextRunnableNode(run, nodes);
     try {
-      if (!nextNode) return await store.saveRun({ ...run, status: "completed", completedAt: now(), updatedAt: now(), currentNodeId: undefined });
+      if (!nextNode) {
+        // Terminal transition for a run that ran to the end. This is the single place a run becomes
+        // "completed" (node execution never sets it), so it is the natural trigger for Phase 7
+        // automatic post-run reflection. Reflection is fired best-effort AFTER the durable save and
+        // can never fail the run (see reflectOnCompletedRun); default OFF, so this is a no-op unless
+        // an operator opts in.
+        const completed = await store.saveRun({ ...run, status: "completed", completedAt: now(), updatedAt: now(), currentNodeId: undefined });
+        await reflectOnCompletedRun(completed, store, options);
+        return completed;
+      }
       // Budget gate (F2): before dispatching the next node, halt the run if its accrued
       // (actual+estimated) model cost has reached the configured per-run ceiling. The pending node
       // stays queued — never partially charged — so raising budgetUsd and resuming continues here.

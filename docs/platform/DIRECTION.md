@@ -248,8 +248,21 @@ can then be cross-family with Claude natively (the recommended judge setup).
 
 - LLM-driven playbook curation (Reflector→Curator via a synthetic node; today's
   `playbook.curate` is heuristic).
-- Automatic post-run reflection (hooked after conductor runs / as a scheduled
-  Cloud Run job) instead of manual `optimizer.propose` calls.
+- **Automatic post-run reflection ✅ implemented.** `reflectAfterRun()`
+  (`src/agent/improvement/reflection.ts`) fires GEPA-style reflection
+  (`optimizer.propose`) for the nodes that executed when a conductor run reaches
+  `completed` — the single completion transition in `executor.ts` is the trigger, so
+  it covers MCP `workflow.run_all`, the Cloud Run job, and replay alike. Gated by
+  `IMPROVEMENT_POST_RUN_REFLECT` (default OFF). It is **propose-only** (drafts a
+  proposal; promotion stays `optimizer.promote` / the auto-promote path),
+  **best-effort** (a reflection error can never fail a run — the flag check
+  short-circuits before any repository access when OFF), **evidence-gated** (a node
+  needs ≥ `IMPROVEMENT_POST_RUN_REFLECT_MIN_SAMPLES` recorded eval results), **deduped**
+  (a node with an open proposal for its current prompt is skipped, so repeated runs
+  don't stack identical drafts), and **bounded** (`IMPROVEMENT_POST_RUN_REFLECT_MAX_NODES`
+  per run). Reflection mode is `IMPROVEMENT_POST_RUN_REFLECT_MODE` (default `mock`, no
+  model spend). Covered by `tests/agent/postRunReflection.test.ts`. Scheduled-job
+  reflection can reuse the same entrypoint; not yet wired.
 - Published-analytics ingestion: Monetizer `performance`/`demand_signals` →
   `feedback.record` outcome records, closing the outer loop.
 - `IMPROVEMENT_AUTO_PROMOTE` flag: eval-gated automatic promotion for low-risk

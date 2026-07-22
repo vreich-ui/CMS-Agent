@@ -19,7 +19,10 @@ reads store nodes~~ — **RESOLVED (Phase 5): the executor resolves nodes from t
 workspace store under `WORKSPACE_NODES_SOURCE=store`, so promoted prompts reach full
 conductor runs behind a canonical-node guard that pins topology and publish-risk
 gates**; LLM-driven playbook curation (current `playbook.curate` is
-heuristic); automatic post-run reflection; analytics ingestion (Monetizer
+heuristic); ~~automatic post-run reflection~~ **RESOLVED (Phase 7):
+`IMPROVEMENT_POST_RUN_REFLECT` fires `optimizer.propose` for the nodes that executed
+when a run completes — propose-only, evidence-gated, deduped, best-effort, default
+OFF**; analytics ingestion (Monetizer
 `performance` → `feedback.record` outcomes); auto-promotion flag (promotion is
 human-approved by design today); ~~model-ladder enforcement in the conductor~~
 **RESOLVED (Phase 7): `IMPROVEMENT_MODEL_LADDER_ENFORCE` applies the cheapest
