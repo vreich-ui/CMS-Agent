@@ -1,0 +1,344 @@
+From f41b35ae47bc856ba7db43ad8197adfb0706ee21 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 22 Jul 2026 16:23:07 +0000
+Subject: [PATCH] Phase 7: enforce the model ladder in the conductor
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The cost-aware model ladder (recommendModel) was advisory only — surfaced via
+optimizer.status but never applied. This wires enforcement: enforceModelLadder()
+applies the cheapest model whose rubric pass-rate clears the threshold (over at
+least minSamples evaluated outputs) to the node about to run, at conductor dispatch.
+
+Gated by IMPROVEMENT_MODEL_LADDER_ENFORCE (default OFF, so the ladder stays advisory
+unless an operator opts in), tunable via IMPROVEMENT_MODEL_LADDER_THRESHOLD /
+IMPROVEMENT_MODEL_LADDER_MIN_SAMPLES. It is downshift-only and eval-gated, and a
+per-run override rather than a workspace mutation — persisting a model choice stays
+the human-approved optimizer.promote path, so disabling the flag fully reverts. Builds
+directly on Phase 5's store-node modelConfig overlay. Enforcement is best-effort: an
+eval-repository error leaves the node on its configured model and never fails a run.
+
+Also refreshes the optimizer.ts scope note now that Phase 5 landed.
+
+Tests: tests/agent/modelLadderEnforcement.test.ts (7 cases) — cheapest-qualified
+selection (skips a cheaper failing model), no-op when already on the recommended
+model, insufficient-samples guard, threshold override, flag parsing, and an
+end-to-end proof the conductor tags the dispatched node in mock mode with the flag on
+and stays untouched with it off. Full suite 590 passing, typecheck clean.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019ig6tFHByknHnBMFp2UiVN
+---
+ .env.example                               |  13 +++
+ docs/improvement/STRATEGY.md               |   5 +-
+ docs/platform/DIRECTION.md                 |  12 ++-
+ src/agent/improvement/modelLadder.ts       |  38 +++++++
+ src/agent/improvement/optimizer.ts         |   9 +-
+ src/agent/workspace/executor.ts            |  18 +++-
+ tests/agent/modelLadderEnforcement.test.ts | 113 +++++++++++++++++++++
+ 7 files changed, 199 insertions(+), 9 deletions(-)
+ create mode 100644 tests/agent/modelLadderEnforcement.test.ts
+
+diff --git a/.env.example b/.env.example
+index d200c7a..5c79445 100644
+--- a/.env.example
++++ b/.env.example
+@@ -30,6 +30,19 @@ MCP_EXPOSED_TOOL_PREFIXES=
+ # after a side-by-side mock run confirms identical topology. Values: "static" | "store".
+ WORKSPACE_NODES_SOURCE=static
+ 
++# Model-ladder ENFORCEMENT (docs/platform/DIRECTION.md Phase 7). When "true"/"1"/"on", the conductor
++# applies the cheapest model whose rubric pass-rate clears the threshold (from recorded eval results)
++# for each node at dispatch time. Default OFF — the ladder stays advisory (optimizer.status) unless
++# enabled. It is a per-run override, never a persisted workspace mutation, so turning it off fully
++# reverts. Overrides the model NAME only; ensure each node's eval-attributed candidate models are
++# reachable via that node's provider before enabling.
++IMPROVEMENT_MODEL_LADDER_ENFORCE=false
++# Optional tuning for enforcement. Threshold is a 0..1 pass-rate (default 0.7); min-samples is the
++# minimum evaluated outputs before a model may be enforced (default 3). A model is only enforced when
++# it clears the threshold over at least this many samples. (optimizer.status uses the 0.7/3 defaults.)
++IMPROVEMENT_MODEL_LADDER_THRESHOLD=0.7
++IMPROVEMENT_MODEL_LADDER_MIN_SAMPLES=3
++
+ # External project MCP connections (resolved at request time; never persisted).
+ # One <CLIENT>_MCP_ENDPOINT / <CLIENT>_MCP_TOKEN pair per connected MCP server. Set the values in the
+ # Netlify deployment; only the env var NAMES live in code, so no secrets are ever persisted.
+diff --git a/docs/improvement/STRATEGY.md b/docs/improvement/STRATEGY.md
+index c02c536..b3ca12f 100644
+--- a/docs/improvement/STRATEGY.md
++++ b/docs/improvement/STRATEGY.md
+@@ -21,7 +21,10 @@ conductor runs behind a canonical-node guard that pins topology and publish-risk
+ gates**; LLM-driven playbook curation (current `playbook.curate` is
+ heuristic); automatic post-run reflection; analytics ingestion (Monetizer
+ `performance` → `feedback.record` outcomes); auto-promotion flag (promotion is
+-human-approved by design today); model-ladder enforcement in the conductor.
++human-approved by design today); ~~model-ladder enforcement in the conductor~~
++**RESOLVED (Phase 7): `IMPROVEMENT_MODEL_LADDER_ENFORCE` applies the cheapest
++eval-qualified model at conductor dispatch as a downshift-only per-run override
++(default OFF)**.
+ 
+ This document preserves the verified research and the chosen techniques behind that
+ implementation.
+diff --git a/docs/platform/DIRECTION.md b/docs/platform/DIRECTION.md
+index 7eeabc3..60aa1c3 100644
+--- a/docs/platform/DIRECTION.md
++++ b/docs/platform/DIRECTION.md
+@@ -244,7 +244,7 @@ validated per model. This phase adds a native path: an `anthropic` provider entr
+ tool use + schema-enforced output, registered alongside the OpenAI runner. Judges
+ can then be cross-family with Claude natively (the recommended judge setup).
+ 
+-### Phase 7 — Engine maturation
++### Phase 7 — Engine maturation (partially implemented)
+ 
+ - LLM-driven playbook curation (Reflector→Curator via a synthetic node; today's
+   `playbook.curate` is heuristic).
+@@ -254,8 +254,14 @@ can then be cross-family with Claude natively (the recommended judge setup).
+   `feedback.record` outcome records, closing the outer loop.
+ - `IMPROVEMENT_AUTO_PROMOTE` flag: eval-gated automatic promotion for low-risk
+   nodes (promotion stays human-approved by default).
+-- Model-ladder enforcement in the conductor's planning (today it is advisory via
+-  `optimizer.status`).
++- **Model-ladder enforcement in the conductor ✅ implemented.** `enforceModelLadder()`
++  (`src/agent/improvement/modelLadder.ts`) applies the cheapest model whose rubric
++  pass-rate clears the threshold (over ≥ `minSamples` evaluated outputs) at conductor
++  dispatch, gated by `IMPROVEMENT_MODEL_LADDER_ENFORCE` (default OFF — advisory via
++  `optimizer.status` unless enabled; tune with `IMPROVEMENT_MODEL_LADDER_THRESHOLD` /
++  `IMPROVEMENT_MODEL_LADDER_MIN_SAMPLES`). It is a downshift-only, per-run override —
++  never a workspace mutation, so disabling the flag fully reverts — building on Phase 5's
++  store-node `modelConfig` overlay. Covered by `tests/agent/modelLadderEnforcement.test.ts`.
+ 
+ ### Phase 8 — Fine-tuning flywheel (trigger-based)
+ 
+diff --git a/src/agent/improvement/modelLadder.ts b/src/agent/improvement/modelLadder.ts
+index 62c9d36..b7da18e 100644
+--- a/src/agent/improvement/modelLadder.ts
++++ b/src/agent/improvement/modelLadder.ts
+@@ -3,6 +3,8 @@
+ // intuition. Pure function over recorded results plus the (placeholder) pricing catalog.
+ import { modelPricingCatalog } from "../observability/modelUsage.js";
+ import type { EvalResult } from "./improvementTypes.js";
++import type { EvaluationRepository } from "../repository/interfaces/EvaluationRepository.js";
++import type { WorkspaceNode } from "../workspace/nodeTypes.js";
+ 
+ export type ModelLadderCandidate = { model: string; samples: number; passRate: number; meanScore: number; costIndexUsdPerMillion?: number; meetsThreshold: boolean };
+ export type ModelLadderRecommendation = { nodeId: string; threshold: number; minSamples: number; recommended?: string; reason: string; candidates: ModelLadderCandidate[] };
+@@ -39,3 +41,39 @@ export function recommendModel(params: { nodeId: string; results: EvalResult[];
+   }
+   return { nodeId: params.nodeId, threshold, minSamples, reason: candidates.length ? "No model meets the threshold with enough samples yet; keep evaluating before shifting tiers." : "No model-attributed eval results yet; run evaluations with subject model attribution first.", candidates };
+ }
++
++// ── Model-ladder ENFORCEMENT (docs/platform/DIRECTION.md Phase 7) ────────────────────────────────
++// recommendModel() above is advisory (surfaced only via optimizer.status). Enforcement APPLIES that
++// pick at conductor dispatch so a run actually uses the cheaper tier. It is:
++//   • Gated by IMPROVEMENT_MODEL_LADDER_ENFORCE — default OFF, so the ladder stays advisory unless an
++//     operator opts in (after confirming the eval-attributed candidate models are reachable by each
++//     node's provider — enforcement overrides the model NAME only, not the provider/baseURL).
++//   • A per-RUN override, NOT a workspace mutation: it never persists a model change (persisting a
++//     model choice stays the human-approved optimizer.promote path), so flipping the flag off fully
++//     reverts behavior. Enforcement builds directly on Phase 5's store-node modelConfig overlay.
++//   • DOWNSHIFT-ONLY and eval-gated: recommendModel only returns a model that clears the pass-rate
++//     threshold over >= minSamples evaluated outputs; if that equals the node's current model (or none
++//     qualifies) the node's modelConfig is returned unchanged.
++export const modelLadderEnforcementEnabled = (): boolean => /^(1|true|on|yes)$/i.test(process.env.IMPROVEMENT_MODEL_LADDER_ENFORCE?.trim() ?? "");
++
++const envThreshold = (): number | undefined => { const value = Number(process.env.IMPROVEMENT_MODEL_LADDER_THRESHOLD); return Number.isFinite(value) && value > 0 && value <= 1 ? value : undefined; };
++const envMinSamples = (): number | undefined => { const value = Number(process.env.IMPROVEMENT_MODEL_LADDER_MIN_SAMPLES); return Number.isFinite(value) && value >= 1 ? Math.floor(value) : undefined; };
++
++export type ModelLadderEnforcement = { applied: boolean; nodeId: string; fromModel?: string; toModel?: string; reason: string; recommendation: ModelLadderRecommendation };
++
++// Compute the enforced modelConfig for a node from its recorded eval results. Returns the (possibly
++// overridden) modelConfig plus a decision record for telemetry. Pure aside from the single
++// listResults read; makes no mutation and never throws on a well-formed repository.
++export async function enforceModelLadder(node: WorkspaceNode, evaluationRepository: EvaluationRepository): Promise<{ modelConfig: WorkspaceNode["modelConfig"]; enforcement: ModelLadderEnforcement }> {
++  const results = await evaluationRepository.listResults({ nodeId: node.id, limit: 200 });
++  const recommendation = recommendModel({ nodeId: node.id, results, threshold: envThreshold(), minSamples: envMinSamples() });
++  const currentModel = typeof node.modelConfig?.model === "string" ? (node.modelConfig.model as string) : undefined;
++  const recommended = recommendation.recommended;
++  if (!recommended || recommended === currentModel) {
++    return { modelConfig: node.modelConfig, enforcement: { applied: false, nodeId: node.id, fromModel: currentModel, toModel: recommended, reason: recommended ? "already_on_recommended_model" : recommendation.reason, recommendation } };
++  }
++  return {
++    modelConfig: { ...(node.modelConfig ?? {}), model: recommended },
++    enforcement: { applied: true, nodeId: node.id, fromModel: currentModel, toModel: recommended, reason: recommendation.reason, recommendation }
++  };
++}
+diff --git a/src/agent/improvement/optimizer.ts b/src/agent/improvement/optimizer.ts
+index c604f91..d8098d5 100644
+--- a/src/agent/improvement/optimizer.ts
++++ b/src/agent/improvement/optimizer.ts
+@@ -4,10 +4,11 @@
+ // evidence-cited, one-step reversible via changes.restore. PROPOSE-ONLY by default: promotion is a
+ // separate explicit call carrying the caller's mutation meta; nothing auto-applies.
+ //
+-// Scope note (loud, from the Phase 3 design review): conductor runs execute the STATIC node
+-// definitions in nodes.ts, so a promoted prompt is live for independent execution and replay —
+-// the loop is self-consistent — but full conductor runs pick it up only after the executor reads
+-// store nodes (tracked follow-up in docs/improvement/STRATEGY.md).
++// Scope note (updated — Phase 5 landed): a promoted prompt is live for independent execution and
++// replay, and now ALSO for full conductor runs when WORKSPACE_NODES_SOURCE=store (the executor
++// resolves nodes from the workspace store behind a canonical-node guard — see executor.ts /
++// docs/platform/DIRECTION.md Phase 5). With the default WORKSPACE_NODES_SOURCE=static the conductor
++// still runs the static nodes.ts definitions, so treat conductor pickup as opt-in until that flip.
+ import { getNodeRunner } from "../execution/runnerRegistry.js";
+ import type { WorkspaceNode } from "../workspace/nodeTypes.js";
+ import type { WorkflowExecutionRecord } from "../workspace/executionTypes.js";
+diff --git a/src/agent/workspace/executor.ts b/src/agent/workspace/executor.ts
+index 84c534e..25b2ea4 100644
+--- a/src/agent/workspace/executor.ts
++++ b/src/agent/workspace/executor.ts
+@@ -6,6 +6,7 @@ import { repositoryManager } from "../runtime/repositories.js";
+ import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
+ import { recordModelUsage, summarizeModelUsage, evaluateRunBudget } from "../observability/modelUsage.js";
+ import { getNodeRunner } from "../execution/runnerRegistry.js";
++import { enforceModelLadder, modelLadderEnforcementEnabled } from "../improvement/modelLadder.js";
+ import type { ExecutionMode } from "../execution/executionContext.js";
+ 
+ const WORKFLOW_ID = "publishing_conductor";
+@@ -300,8 +301,23 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
+   }
+ 
+   const mode = (run.executionMode ?? "mock") as ExecutionMode;
++  // Phase 7 (DIRECTION §7): model-ladder enforcement. When IMPROVEMENT_MODEL_LADDER_ENFORCE is on,
++  // the cheapest eval-qualified model for this node is applied for THIS run only (a per-run override,
++  // never a workspace mutation — see modelLadder.ts). Best-effort: any enforcement error leaves the
++  // node on its configured model so a transient eval-repository issue never blocks a run. Default OFF,
++  // so nextNode is dispatched unchanged unless an operator opts in.
++  let effectiveNode = nextNode;
++  if (modelLadderEnforcementEnabled()) {
++    try {
++      const { modelConfig, enforcement } = await enforceModelLadder(nextNode, repositoryManager.getEvaluationRepository());
++      if (enforcement.applied) {
++        effectiveNode = { ...nextNode, modelConfig };
++        state.warnings = [...(state.warnings ?? []), `model_ladder_enforced:${enforcement.fromModel ?? "default"}->${enforcement.toModel}`];
++      }
++    } catch { /* enforcement is advisory; never fail a run because the ladder could not be computed */ }
++  }
+   const runner = getNodeRunner(mode);
+-  const result = await runner.run({ node: nextNode, input: state.input }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
++  const result = await runner.run({ node: effectiveNode, input: state.input }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
+   const completedAt = now();
+   state.completedAt = completedAt;
+   state.durationMs = duration(startedAt, completedAt);
+diff --git a/tests/agent/modelLadderEnforcement.test.ts b/tests/agent/modelLadderEnforcement.test.ts
+new file mode 100644
+index 0000000..12bdf7a
+--- /dev/null
++++ b/tests/agent/modelLadderEnforcement.test.ts
+@@ -0,0 +1,113 @@
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import type { EvaluationRepository } from "../../src/agent/repository/interfaces/EvaluationRepository.js";
++import type { EvalResult } from "../../src/agent/improvement/improvementTypes.js";
++import type { WorkspaceNode } from "../../src/agent/workspace/nodeTypes.js";
++import { enforceModelLadder, modelLadderEnforcementEnabled } from "../../src/agent/improvement/modelLadder.js";
++import { getRun, runNextNode, startDryRun } from "../../src/agent/workspace/executor.js";
++import { repositoryManager, resetRepositoryManager } from "../../src/agent/runtime/repositories.js";
++
++// Phase 7 (docs/platform/DIRECTION.md §7): model-ladder ENFORCEMENT. recommendModel() is advisory;
++// enforcement applies the cheapest eval-qualified model at conductor dispatch, gated by
++// IMPROVEMENT_MODEL_LADDER_ENFORCE (default OFF) and as a per-run override (never a mutation).
++
++let counter = 0;
++const evalResult = (nodeId: string, model: string, pass: boolean): EvalResult => ({
++  evalId: `eval_${counter++}`,
++  rubricId: "rub_test",
++  nodeId,
++  subjectHash: "hash",
++  subject: { model },
++  scores: [],
++  normalizedScore: pass ? 0.9 : 0.4,
++  pass,
++  judge: { mode: "mock", model: "judge" },
++  createdAt: "2026-07-01T00:00:00.000Z"
++});
++const repeat = (n: number, make: () => EvalResult): EvalResult[] => Array.from({ length: n }, make);
++const stubRepo = (results: EvalResult[]): EvaluationRepository => ({ listResults: async () => results } as unknown as EvaluationRepository);
++const node = (model?: string): WorkspaceNode => ({ id: "n", modelConfig: model ? { model } : undefined } as unknown as WorkspaceNode);
++
++const LADDER_ENV = ["IMPROVEMENT_MODEL_LADDER_ENFORCE", "IMPROVEMENT_MODEL_LADDER_THRESHOLD", "IMPROVEMENT_MODEL_LADDER_MIN_SAMPLES"];
++const clearLadderEnv = () => { for (const key of LADDER_ENV) delete process.env[key]; };
++
++describe("modelLadderEnforcementEnabled", () => {
++  afterEach(clearLadderEnv);
++  it("defaults OFF and treats only truthy strings as enabled", () => {
++    delete process.env.IMPROVEMENT_MODEL_LADDER_ENFORCE; expect(modelLadderEnforcementEnabled()).toBe(false);
++    for (const on of ["true", "1", "on", "yes", "TRUE"]) { process.env.IMPROVEMENT_MODEL_LADDER_ENFORCE = on; expect(modelLadderEnforcementEnabled()).toBe(true); }
++    for (const off of ["false", "0", "", "no"]) { process.env.IMPROVEMENT_MODEL_LADDER_ENFORCE = off; expect(modelLadderEnforcementEnabled()).toBe(false); }
++  });
++});
++
++describe("enforceModelLadder", () => {
++  afterEach(clearLadderEnv);
++
++  it("downshifts to the cheapest model that CLEARS the threshold, skipping a cheaper failing model", async () => {
++    // qwen3-8b is cheapest (0.4) but fails the threshold; gemini-3.1-flash-lite (1.75) passes and is
++    // cheaper than the node's gpt-5.5 (20) — so gemini is enforced, not qwen and not gpt-5.5.
++    const results = [
++      ...repeat(5, () => evalResult("n", "gpt-5.5", true)),
++      ...repeat(4, () => evalResult("n", "gemini-3.1-flash-lite", true)),
++      ...repeat(1, () => evalResult("n", "qwen3-8b", true)), ...repeat(3, () => evalResult("n", "qwen3-8b", false))
++    ];
++    const { modelConfig, enforcement } = await enforceModelLadder(node("gpt-5.5"), stubRepo(results));
++    expect(enforcement.applied).toBe(true);
++    expect(enforcement.fromModel).toBe("gpt-5.5");
++    expect(enforcement.toModel).toBe("gemini-3.1-flash-lite");
++    expect(modelConfig?.model).toBe("gemini-3.1-flash-lite");
++  });
++
++  it("does not override when the node is already on the recommended model", async () => {
++    const results = repeat(4, () => evalResult("n", "gemini-3.1-flash-lite", true));
++    const { modelConfig, enforcement } = await enforceModelLadder(node("gemini-3.1-flash-lite"), stubRepo(results));
++    expect(enforcement.applied).toBe(false);
++    expect(enforcement.reason).toBe("already_on_recommended_model");
++    expect(modelConfig).toEqual({ model: "gemini-3.1-flash-lite" });
++  });
++
++  it("does not override when no model has enough samples", async () => {
++    const results = repeat(2, () => evalResult("n", "gemini-3.1-flash-lite", true)); // < default minSamples (3)
++    const { modelConfig, enforcement } = await enforceModelLadder(node("gpt-5.5"), stubRepo(results));
++    expect(enforcement.applied).toBe(false);
++    expect(modelConfig).toEqual({ model: "gpt-5.5" });
++  });
++
++  it("honors IMPROVEMENT_MODEL_LADDER_THRESHOLD (a borderline model qualifies only under a lower bar)", async () => {
++    const results = [...repeat(2, () => evalResult("n", "gemini-3.1-flash-lite", true)), ...repeat(1, () => evalResult("n", "gemini-3.1-flash-lite", false))]; // 0.667 pass-rate, 3 samples
++    expect((await enforceModelLadder(node("gpt-5.5"), stubRepo(results))).enforcement.applied).toBe(false); // default 0.7 bar
++    process.env.IMPROVEMENT_MODEL_LADDER_THRESHOLD = "0.6";
++    expect((await enforceModelLadder(node("gpt-5.5"), stubRepo(results))).enforcement.applied).toBe(true);
++  });
++});
++
++describe("conductor honors model-ladder enforcement at dispatch (integration)", () => {
++  beforeEach(() => { clearLadderEnv(); resetRepositoryManager(); });
++  afterEach(() => { clearLadderEnv(); resetRepositoryManager(); });
++
++  const seedTriageEvals = async () => {
++    const evalRepo = repositoryManager.getEvaluationRepository();
++    for (const result of repeat(4, () => evalResult("input_triage", "gemini-3.1-flash-lite", true))) await evalRepo.recordResult(result);
++  };
++  const runFirstNode = async () => {
++    const store = repositoryManager.getExecutionRepository();
++    const run = await startDryRun({ projectId: "dr-lurie", input: "x" }, store);
++    await runNextNode(run.runId, { executionRepository: store });
++    return (await getRun(run.runId, store))!.nodes.find((n) => n.nodeId === "input_triage")!;
++  };
++
++  it("tags the dispatched node when the flag is on and a cheaper model qualifies", async () => {
++    process.env.IMPROVEMENT_MODEL_LADDER_ENFORCE = "true";
++    await seedTriageEvals();
++    const triage = await runFirstNode();
++    expect(triage.status).toBe("completed");
++    expect(triage.warnings ?? []).toContain("model_ladder_enforced:default->gemini-3.1-flash-lite");
++  });
++
++  it("does not tag the node when enforcement is off (default), even with qualifying evals", async () => {
++    delete process.env.IMPROVEMENT_MODEL_LADDER_ENFORCE;
++    await seedTriageEvals();
++    const triage = await runFirstNode();
++    expect(triage.status).toBe("completed");
++    expect((triage.warnings ?? []).some((w) => w.startsWith("model_ladder_enforced"))).toBe(false);
++  });
++});
+-- 
+2.43.0
+
