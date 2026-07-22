@@ -24,10 +24,12 @@ Reflector→Curator pass (heuristic stays the default `mock` mode)**;
 ~~automatic post-run reflection~~ **RESOLVED (Phase 7):
 `IMPROVEMENT_POST_RUN_REFLECT` fires `optimizer.propose` for the nodes that executed
 when a run completes — propose-only, evidence-gated, deduped, best-effort, default
-OFF**; analytics ingestion (Monetizer
-`performance` → `feedback.record` outcomes); ~~auto-promotion flag~~ **RESOLVED
+OFF**; ~~auto-promotion flag~~ **RESOLVED
 (Phase 7): `IMPROVEMENT_AUTO_PROMOTE` auto-promotes trial-proven proposals for
 low-risk nodes only (default OFF; human `optimizer.promote` stays the default)**;
+~~analytics ingestion (Monetizer `performance` → `feedback.record` outcomes)~~
+**RESOLVED (Phase 7): `ingestMonetizerAnalytics` / `feedback.ingest_monetizer`
+record Monetizer `performance` + `demand_signals` as feedback outcomes**;
 ~~model-ladder enforcement in the conductor~~
 **RESOLVED (Phase 7): `IMPROVEMENT_MODEL_LADDER_ENFORCE` applies the cheapest
 eval-qualified model at conductor dispatch as a downshift-only per-run override

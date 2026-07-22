@@ -19,6 +19,7 @@ import { buildDataset, exportPreferences, exportSft, type ReplayDeps } from "../
 import { analyzeNode, optimizerStatus, promoteProposal, proposeImprovement, runTrial } from "../../improvement/optimizer.js";
 import { autoPromoteProposals } from "../../improvement/autoPromote.js";
 import { curatePlaybook } from "../../improvement/curator.js";
+import { ingestMonetizerAnalytics, MONETIZER_SIGNALS } from "../../improvement/monetizerIngest.js";
 import { runRegression } from "../../improvement/regression.js";
 
 const now = () => new Date().toISOString();
@@ -47,6 +48,7 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
   const listResultsInput = z.object({ nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), rubricId: z.string().min(1).optional(), trialId: z.string().min(1).optional(), from: z.string().datetime().optional(), to: z.string().datetime().optional(), limit: z.number().int().min(1).max(200).optional() }).strict();
   const feedbackRecordInput = z.object({ kind: z.enum(feedbackKinds), nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), evalId: z.string().min(1).optional(), editDiff: z.unknown().optional(), outcome: z.unknown().optional(), note: z.string().min(1).optional(), ...mutationMeta }).strict();
   const listFeedbackInput = z.object({ nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), kind: z.enum(feedbackKinds).optional(), limit: z.number().int().min(1).max(200).optional() }).strict();
+  const ingestMonetizerInput = z.object({ nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), signals: z.array(z.enum(["performance", "demand_signals"])).min(1).optional(), args: z.unknown().optional(), note: z.string().min(1).optional(), ...mutationMeta }).strict();
   const datasetBuildInput = z.object({ nodeId: z.string().min(1), name: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional(), projectId: z.string().min(1).optional() }).strict();
   const datasetIdInput = z.object({ datasetId: z.string().min(1) }).strict();
   const nodeFilterInput = z.object({ nodeId: z.string().min(1).optional() }).strict();
@@ -131,6 +133,11 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       return ok({ feedback: await evaluationRepository.recordFeedback(record) });
     } }),
     tool({ name: "feedback.list", description: "List feedback records, newest first.", zodSchema: listFeedbackInput, inputSchema: objectSchema({ nodeId: { type: "string" }, runId: { type: "string" }, kind: { type: "string", enum: [...feedbackKinds] }, limit: { type: "integer", minimum: 1, maximum: 200 } }), execute: async (input) => ok({ records: await evaluationRepository.listFeedback(listFeedbackInput.parse(input)) }) }),
+    tool({ name: "feedback.ingest_monetizer", description: "Outer-loop ingestion (DIRECTION Phase 7): pull the Monetizer project's read-only performance / demand_signals telemetry and record each as a feedback OUTCOME (source monetizer:<signal>), so published-content analytics feed optimizer.analyze. Optionally attribute to a nodeId/runId and pass Monetizer query args. Requires the Monetizer connection (MONETIZER_MCP_ENDPOINT / MONETIZER_MCP_TOKEN). Best-effort per signal; nothing external is written.", zodSchema: ingestMonetizerInput, inputSchema: objectSchema({ nodeId: { type: "string" }, runId: { type: "string" }, signals: { type: "array", items: { type: "string", enum: [...MONETIZER_SIGNALS] }, description: "Which signals to pull (default both)." }, args: { type: "object", description: "Query args forwarded to the Monetizer tool." }, note: { type: "string" }, ...metaJson }), execute: async (input) => {
+      const data = ingestMonetizerInput.parse(input);
+      const stamped = meta(data);
+      return ok({ result: await ingestMonetizerAnalytics({ nodeId: data.nodeId, runId: data.runId, signals: data.signals, args: coerceJsonObjectInput(data.args) as Record<string, unknown> | undefined, actor: stamped.actor, note: data.note }, { evaluationRepository }) });
+    } }),
 
     tool({ name: "dataset.build", description: "Freeze a replay dataset for a node from completed historical executions (inputs + champion outputs) for offline champion/challenger trials.", zodSchema: datasetBuildInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, name: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 }, projectId: { type: "string" } }, ["nodeId"]), execute: async (input) => ok({ dataset: await buildDataset(datasetBuildInput.parse(input), replayDeps) }) }),
     tool({ name: "dataset.list", description: "List replay datasets.", zodSchema: nodeFilterInput, inputSchema: objectSchema({ nodeId: { type: "string" } }), execute: async (input) => ok({ datasets: await improvementRepository.listDatasets(nodeFilterInput.parse(input)) }) }),

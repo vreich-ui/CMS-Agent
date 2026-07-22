@@ -270,8 +270,15 @@ can then be cross-family with Claude natively (the recommended judge setup).
   per run). Reflection mode is `IMPROVEMENT_POST_RUN_REFLECT_MODE` (default `mock`, no
   model spend). Covered by `tests/agent/postRunReflection.test.ts`. Scheduled-job
   reflection can reuse the same entrypoint; not yet wired.
-- Published-analytics ingestion: Monetizer `performance`/`demand_signals` →
-  `feedback.record` outcome records, closing the outer loop.
+- **Published-analytics ingestion ✅ implemented.** `ingestMonetizerAnalytics()`
+  (`src/agent/improvement/monetizerIngest.ts`) pulls the Monetizer project's read-only
+  `performance` / `demand_signals` telemetry and records each as a `feedback.record`
+  OUTCOME (`source: monetizer:<signal>`), so published-content analytics feed
+  `optimizer.analyze` — closing the outer loop. Pull-based (a scheduled job or the
+  `feedback.ingest_monetizer` MCP tool is the trigger; it never fires from a run),
+  read-only against Monetizer's safe allow-list, best-effort per signal, and reached
+  through the standard `ProjectMcpAdapter` (endpoint/token via env NAMES). Covered by
+  `tests/agent/monetizerIngest.test.ts`.
 - **`IMPROVEMENT_AUTO_PROMOTE` flag ✅ implemented.** `autoPromoteProposals()`
   (`src/agent/improvement/autoPromote.ts`) promotes proposals whose champion/challenger
   TRIAL already proves the change is better (decisive challenger win, no case failures,
