@@ -308,6 +308,18 @@ same discipline as prompts). Triggers unchanged: per-subtask volume×cost become
 material, or evals show a quality ceiling prompt optimization can't break with
 ≥500–2,000 approved examples accumulated.
 
+> **Trigger ✅ implemented.** `evaluateFineTuneReadiness()`
+> (`src/agent/improvement/fineTune.ts`) reports, per node, whether accumulated
+> approved SFT examples (eval-attributed outputs clearing the export bar) and decisive
+> preference pairs cross the configured thresholds (`IMPROVEMENT_FINETUNE_MIN_EXAMPLES`,
+> default 500 — the low end of the band above; `IMPROVEMENT_FINETUNE_MIN_PREFERENCE_PAIRS`,
+> default 200), returning a recommendation (`insufficient_data` | `accumulate` |
+> `ready_sft` | `ready_preferences` | `ready_both`). REPORT-ONLY — it never launches a
+> job (tuning infra stays external); an operator or a scheduled job acts on the
+> recommendation and then uses the existing exporters. Exposed as the
+> `dataset.finetune_readiness` MCP tool. Covered by `tests/agent/fineTuneTrigger.test.ts`.
+> The tuning-execution + adapter-promotion legs remain external/manual as described above.
+
 ### Phase 9 (optional, deferred indefinitely) — Netlify retirement
 
 Only if coexistence ever stops being worth it: SPA → Firebase Hosting, Netlify
