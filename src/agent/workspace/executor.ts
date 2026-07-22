@@ -6,6 +6,7 @@ import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import { recordModelUsage, summarizeModelUsage, evaluateRunBudget } from "../observability/modelUsage.js";
 import { getNodeRunner } from "../execution/runnerRegistry.js";
+import { enforceModelLadder, modelLadderEnforcementEnabled } from "../improvement/modelLadder.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 
 const WORKFLOW_ID = "publishing_conductor";
@@ -44,9 +45,55 @@ const ancestorsOf = (nodes: WorkspaceNode[], targetId: string): Set<string> => {
   return seen;
 };
 
-const buildInitialRun = (data: StartDryRunInput, runId = makeRunId()): WorkflowExecutionRecord => {
+// Phase 5 (docs/platform/DIRECTION.md §5): the conductor can resolve node definitions from the
+// workspace store so optimizer-promoted prompts — and authoring edits to schemas, tools, skills, and
+// model config — reach FULL conductor runs, not just independent node execution and replay. Gated by
+// WORKSPACE_NODES_SOURCE and defaulting to the static definitions, so behavior is unchanged until an
+// operator flips it after a side-by-side mock run confirms identical topology.
+const nodeSource = (): "static" | "store" => (process.env.WORKSPACE_NODES_SOURCE?.trim().toLowerCase() === "store" ? "store" : "static");
+
+// Canonical-node guard. Fields the store OWNS (how a node runs) are overlaid from the promoted/edited
+// store node; everything that defines the shape of the conductor — the DAG topology (id, dependsOn,
+// produces), grid position, node status, and crucially the publish-risk classification (riskLevel) —
+// stays pinned to the canonical Publishing Conductor definition. A store edit can therefore change how
+// a node runs but never rewire the graph or downgrade a publish-risk gate, so promotions apply while
+// the topology stays provably identical to static.
+const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): WorkspaceNode => ({
+  ...canonical,
+  name: stored.name ?? canonical.name,
+  description: stored.description ?? canonical.description,
+  prompt: stored.prompt ?? canonical.prompt,
+  schema: stored.schema ?? canonical.schema,
+  inputSchema: stored.inputSchema ?? canonical.inputSchema,
+  outputSchema: stored.outputSchema ?? canonical.outputSchema,
+  allowedTools: stored.allowedTools ? [...stored.allowedTools] : canonical.allowedTools,
+  assignedSkills: stored.assignedSkills ? [...stored.assignedSkills] : canonical.assignedSkills,
+  modelConfig: stored.modelConfig ?? canonical.modelConfig,
+  executionConfig: stored.executionConfig ?? canonical.executionConfig,
+  metadata: stored.metadata ?? canonical.metadata,
+  updatedAt: stored.updatedAt ?? canonical.updatedAt
+});
+
+// Resolve the conductor node list. Static mode (default) is exactly listWorkspaceNodes(). Store mode
+// overlays each canonical node with its stored counterpart when present; a canonical node MISSING from
+// the store is seeded from the static definition (late-stage seeding preserved), and non-canonical
+// store nodes are ignored — the conductor runs its canonical topology only. A store-read failure falls
+// back to the static definitions so a transient repository error never aborts a run.
+export async function resolveConductorNodes(workspaceRepository?: WorkspaceRepository): Promise<WorkspaceNode[]> {
+  const canonical = listWorkspaceNodes();
+  if (nodeSource() !== "store") return canonical;
+  let stored: WorkspaceNode[];
+  try {
+    stored = await (workspaceRepository ?? repositoryManager.getWorkspaceRepository()).getNodes();
+  } catch {
+    return canonical;
+  }
+  const storedById = new Map(stored.map((node) => [node.id, node]));
+  return canonical.map((node) => { const match = storedById.get(node.id); return match ? overlayStoreNode(node, match) : node; });
+}
+
+const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId = makeRunId()): WorkflowExecutionRecord => {
   const timestamp = now();
-  const nodes = listWorkspaceNodes();
   const entrypoint = data.entrypoint;
   if (entrypoint && !nodes.some((node) => node.id === entrypoint.nodeId)) throw new Error(`Unknown entrypoint node: ${entrypoint.nodeId}`);
   // Nodes seeded as completed for a late-stage entry: the entry node plus every ancestor. A full run
@@ -139,8 +186,8 @@ function withRunLock<T>(runId: string, task: () => Promise<T>): Promise<T> {
 
 export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean };
 
-export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord> {
-  return store.createRun(buildInitialRun(data));
+export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository): Promise<WorkflowExecutionRecord> {
+  return store.createRun(buildInitialRun(data, await resolveConductorNodes(workspaceRepository)));
 }
 
 export async function getRun(runId: string, store: ExecutionRepository = repositoryManager.getExecutionRepository()) {
@@ -157,7 +204,8 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     if (!existing) throw new Error(`Unknown run: ${runId}`);
     // Rebuild from the run's own starting shape, including a late-stage entrypoint, so reset restores
     // the seeded state it began with rather than a full ideation-to-publish run.
-    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, runId));
+    const nodes = await resolveConductorNodes();
+    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId));
   });
 }
 
@@ -178,7 +226,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     latest = run;
     if (TERMINAL_STATUSES.has(run.status)) return run;
 
-    const nodes = listWorkspaceNodes();
+    const nodes = await resolveConductorNodes(options.workspaceRepository);
     const nextNode = findNextRunnableNode(run, nodes);
     try {
       if (!nextNode) return await store.saveRun({ ...run, status: "completed", completedAt: now(), updatedAt: now(), currentNodeId: undefined });
@@ -253,8 +301,23 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
   }
 
   const mode = (run.executionMode ?? "mock") as ExecutionMode;
+  // Phase 7 (DIRECTION §7): model-ladder enforcement. When IMPROVEMENT_MODEL_LADDER_ENFORCE is on,
+  // the cheapest eval-qualified model for this node is applied for THIS run only (a per-run override,
+  // never a workspace mutation — see modelLadder.ts). Best-effort: any enforcement error leaves the
+  // node on its configured model so a transient eval-repository issue never blocks a run. Default OFF,
+  // so nextNode is dispatched unchanged unless an operator opts in.
+  let effectiveNode = nextNode;
+  if (modelLadderEnforcementEnabled()) {
+    try {
+      const { modelConfig, enforcement } = await enforceModelLadder(nextNode, repositoryManager.getEvaluationRepository());
+      if (enforcement.applied) {
+        effectiveNode = { ...nextNode, modelConfig };
+        state.warnings = [...(state.warnings ?? []), `model_ladder_enforced:${enforcement.fromModel ?? "default"}->${enforcement.toModel}`];
+      }
+    } catch { /* enforcement is advisory; never fail a run because the ladder could not be computed */ }
+  }
   const runner = getNodeRunner(mode);
-  const result = await runner.run({ node: nextNode, input: state.input }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
+  const result = await runner.run({ node: effectiveNode, input: state.input }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
   const completedAt = now();
   state.completedAt = completedAt;
   state.durationMs = duration(startedAt, completedAt);
@@ -335,4 +398,4 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
 }
 
 export const publishingConductorWorkflowId = WORKFLOW_ID;
-export const __test__ = { buildInitialRun, findNextRunnableNode, mockOutputForNode, nodeById, isPublishRisk };
+export const __test__ = { buildInitialRun, findNextRunnableNode, mockOutputForNode, nodeById, isPublishRisk, nodeSource, overlayStoreNode, resolveConductorNodes };

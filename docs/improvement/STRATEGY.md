@@ -13,14 +13,18 @@ add these namespaces to `MCP_EXPOSED_TOOL_PREFIXES` if the catalog is scoped.
 
 **Known follow-ups (tracked, deliberately out of the scaffold — now sequenced as
 `docs/platform/DIRECTION.md` Phases 4–8, with Netlify retained and the control
-plane switchable from the existing UI):** the conductor
-executes STATIC nodes (`nodes.ts`), so promoted prompts are live for independent
-execution and replay but reach full conductor runs only once the executor reads
-store nodes — the loop is self-consistent, but treat conductor behavior as unchanged
-until that lands; LLM-driven playbook curation (current `playbook.curate` is
+plane switchable from the existing UI):** ~~the conductor executes STATIC nodes
+(`nodes.ts`), so promoted prompts reach full conductor runs only once the executor
+reads store nodes~~ — **RESOLVED (Phase 5): the executor resolves nodes from the
+workspace store under `WORKSPACE_NODES_SOURCE=store`, so promoted prompts reach full
+conductor runs behind a canonical-node guard that pins topology and publish-risk
+gates**; LLM-driven playbook curation (current `playbook.curate` is
 heuristic); automatic post-run reflection; analytics ingestion (Monetizer
 `performance` → `feedback.record` outcomes); auto-promotion flag (promotion is
-human-approved by design today); model-ladder enforcement in the conductor.
+human-approved by design today); ~~model-ladder enforcement in the conductor~~
+**RESOLVED (Phase 7): `IMPROVEMENT_MODEL_LADDER_ENFORCE` applies the cheapest
+eval-qualified model at conductor dispatch as a downshift-only per-run override
+(default OFF)**.
 
 This document preserves the verified research and the chosen techniques behind that
 implementation.

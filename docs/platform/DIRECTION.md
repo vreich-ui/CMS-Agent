@@ -211,15 +211,29 @@ quick switch inside the existing Netlify-served UI** — no new UI is built.
   both planes; the UI toggle flips between them without a redeploy; Netlify paths
   untouched.
 
-### Phase 5 — Executor reads store nodes (promotions reach conductor runs)
+### Phase 5 — Executor reads store nodes (promotions reach conductor runs) ✅ implemented
 
-Today `executor.ts` runs the STATIC node definitions in `nodes.ts`, so optimizer
-promotions are live for independent execution and replay but not full conductor
-runs. Make the executor resolve nodes from the workspace repository (canonical-node
-guards and late-stage seeding preserved), behind a
+> **Status:** shipped. `executor.ts` now resolves the conductor node list through
+> `resolveConductorNodes()`, gated by `WORKSPACE_NODES_SOURCE=static|store` and
+> defaulting to `static` (behavior unchanged until an operator flips it). In `store`
+> mode each canonical node is overlaid with its stored counterpart, so optimizer
+> promotions (`updateNodePrompt`) and authoring edits to schemas, tools, skills, and
+> model config reach FULL conductor runs — not just independent execution and replay.
+> The **canonical-node guard** pins the DAG topology (id, `dependsOn`, `produces`),
+> grid position, node status, and the publish-risk classification (`riskLevel`) to the
+> static definition, so a store edit can change how a node runs but never rewire the
+> graph or downgrade a publish gate. A canonical node missing from the store is seeded
+> from static (late-stage seeding preserved); a store-read failure falls back to static
+> so a transient repository error never aborts a run. Covered by
+> `tests/agent/workspaceNodeSource.test.ts` (topology-identical guard proven
+> end-to-end). This closes the loudest Phase 3 caveat.
+
+Original sketch (as shipped above): today `executor.ts` runs the STATIC node
+definitions in `nodes.ts`, so optimizer promotions are live for independent execution
+and replay but not full conductor runs. Make the executor resolve nodes from the
+workspace repository (canonical-node guards and late-stage seeding preserved), behind a
 `WORKSPACE_NODES_SOURCE=static|store` flag defaulting to `static`, flipped after a
-side-by-side mock-run comparison shows identical topology. This closes the loudest
-Phase 3 caveat.
+side-by-side mock-run comparison shows identical topology.
 
 ### Phase 6 — First-class Anthropic runner
 
@@ -230,7 +244,7 @@ validated per model. This phase adds a native path: an `anthropic` provider entr
 tool use + schema-enforced output, registered alongside the OpenAI runner. Judges
 can then be cross-family with Claude natively (the recommended judge setup).
 
-### Phase 7 — Engine maturation
+### Phase 7 — Engine maturation (partially implemented)
 
 - LLM-driven playbook curation (Reflector→Curator via a synthetic node; today's
   `playbook.curate` is heuristic).
@@ -240,8 +254,14 @@ can then be cross-family with Claude natively (the recommended judge setup).
   `feedback.record` outcome records, closing the outer loop.
 - `IMPROVEMENT_AUTO_PROMOTE` flag: eval-gated automatic promotion for low-risk
   nodes (promotion stays human-approved by default).
-- Model-ladder enforcement in the conductor's planning (today it is advisory via
-  `optimizer.status`).
+- **Model-ladder enforcement in the conductor ✅ implemented.** `enforceModelLadder()`
+  (`src/agent/improvement/modelLadder.ts`) applies the cheapest model whose rubric
+  pass-rate clears the threshold (over ≥ `minSamples` evaluated outputs) at conductor
+  dispatch, gated by `IMPROVEMENT_MODEL_LADDER_ENFORCE` (default OFF — advisory via
+  `optimizer.status` unless enabled; tune with `IMPROVEMENT_MODEL_LADDER_THRESHOLD` /
+  `IMPROVEMENT_MODEL_LADDER_MIN_SAMPLES`). It is a downshift-only, per-run override —
+  never a workspace mutation, so disabling the flag fully reverts — building on Phase 5's
+  store-node `modelConfig` overlay. Covered by `tests/agent/modelLadderEnforcement.test.ts`.
 
 ### Phase 8 — Fine-tuning flywheel (trigger-based)
 
