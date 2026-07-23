@@ -1,0 +1,103 @@
+# LibreChat self-hosted "agent cockpit" — GCP single-VM Docker Compose stack.
+#
+# Services:
+#   api          LibreChat server (chat UI + Agent Builder + native MCP client)
+#   mongodb      Conversation / agent / user store (persistent volume)
+#   meilisearch  Full-text conversation search (persistent volume)
+#   caddy        Reverse proxy, terminates TLS on :443 for ${DOMAIN}
+#
+# The api port (3080) is NEVER published to the host — only Caddy is reachable
+# from outside, and only on 443 (and 80 for ACME if you use the HTTP-01 path).
+# Network-level privacy is enforced by the GCP firewall (see scripts/provision-gcp.sh);
+# application-level auth is LibreChat's own login with registration disabled.
+#
+# All secrets come from ./.env (never committed). Copy .env.example -> .env,
+# fill it in, then: docker compose up -d
+#
+# Persistence: mongodb_data, meili_data, librechat_uploads, librechat_images and
+# librechat_logs are named volumes and survive `docker compose down` / `up`.
+# (They are only destroyed by `docker compose down -v`.)
+
+services:
+  api:
+    image: ghcr.io/danny-avila/librechat:latest # pin to a release tag (e.g. :v0.8.x) in production
+    container_name: librechat-api
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - meilisearch
+    env_file:
+      - .env
+    environment:
+      # Bind to all interfaces inside the container so Caddy (a sibling container)
+      # can reach it. This is container-internal only; nothing is published to the host.
+      HOST: 0.0.0.0
+      PORT: 3080
+      # Point at the compose service names, overriding the localhost defaults in .env.example.
+      MONGO_URI: mongodb://mongodb:27017/LibreChat
+      MEILI_HOST: http://meilisearch:7700
+      # File-based config that wires the three MCP servers + provider endpoints.
+      CONFIG_PATH: /app/librechat.yaml
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro
+      - librechat_uploads:/app/uploads
+      - librechat_images:/app/client/public/images
+      - librechat_logs:/app/api/logs
+    expose:
+      - "3080" # internal to the compose network only — deliberately NOT `ports:`
+
+  mongodb:
+    image: mongo:7
+    container_name: librechat-mongodb
+    restart: unless-stopped
+    command: mongod --quiet
+    volumes:
+      - mongodb_data:/data/db
+    # No published ports — reachable only from the api container on the compose network.
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    container_name: librechat-meilisearch
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?set MEILI_MASTER_KEY in .env}
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_ENV: production
+    volumes:
+      - meili_data:/meili_data
+    # No published ports — reachable only from the api container on the compose network.
+
+  caddy:
+    # Built from Dockerfile.caddy so the Cloudflare DNS module is available for the
+    # DNS-01 challenge (keeps port 80 closed at the firewall). If you use the HTTP-01
+    # path instead (open :80 to the internet), you can swap this for `image: caddy:2-alpine`.
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: librechat-caddy:local
+    container_name: librechat-caddy
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+      - "80:80"        # only used by the HTTP-01 fallback; harmless if firewalled off
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      # Only needed for the DNS-01 (default) path. Leave blank if using HTTP-01.
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  mongodb_data:
+  meili_data:
+  librechat_uploads:
+  librechat_images:
+  librechat_logs:
+  caddy_data:
+  caddy_config:

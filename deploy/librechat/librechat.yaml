@@ -1,0 +1,85 @@
+# LibreChat configuration — agent cockpit for the existing MCP stack.
+# Reference: https://www.librechat.ai/docs/configuration/librechat_yaml
+#
+# This file is mounted read-only into the api container at /app/librechat.yaml.
+# Secrets are NEVER written here — every credential is a ${ENV_VAR} placeholder
+# resolved from ./.env at load time. Restart the api container to reload:
+#   docker compose restart api
+#
+# Match `version` to your installed LibreChat release (this was authored against 1.3.13).
+version: 1.3.13
+
+cache: true
+
+# ── Interface ────────────────────────────────────────────────────────────────
+# Agent Builder is the whole point of this deployment, so agents are enabled.
+# Sharing/public are OFF: this is a single/limited-user private cockpit.
+interface:
+  agents:
+    use: true
+    create: true
+    share: false
+    public: false
+  modelSelect: true
+  parameters: true
+  presets: true
+  marketplace:
+    use: false
+
+# ── MCP servers ──────────────────────────────────────────────────────────────
+# The three already-running MCP endpoints this cockpit consumes. LibreChat is a
+# CLIENT of these servers — it does not wrap or re-implement any engine.
+#
+# All three are streamable-HTTP endpoints behind header auth. Auth values are
+# ${ENV_VAR} placeholders (filled from .env); no literal secret ever lives here.
+# Timeouts are deliberately generous — node execution / optimizer trials are slow.
+#   timeout      per-request tool-call ceiling (ms). 300000 = 5 min.
+#   initTimeout  handshake/connect ceiling (ms).
+# After editing, restart the api container and confirm in the UI:
+#   Agents -> new agent -> Tools -> each server expands and lists its tools.
+mcpServers:
+  # (1) cms-agent-gcloud — workspace + node + skill + improvement tools.
+  #     This is the engine you program. VERIFIED LIVE at authoring time:
+  #     21-node pipeline, read/write/publish tools present. Read-only smoke
+  #     agent (see agents/workspace-inspector.md) targets THIS server.
+  cms-agent-gcloud:
+    type: streamable-http
+    url: https://cms-agent-mcp-itbzhq23nq-uc.a.run.app/mcp
+    headers:
+      Authorization: "Bearer ${CMS_AGENT_KEY}"
+    timeout: 300000
+    initTimeout: 30000
+    serverInstructions: true
+
+  # (2) promoter — header auth is X-Promoter-Key (per the deployment spec).
+  #     The Cloud Run URL was not published in the spec; set PROMOTER_MCP_URL in
+  #     .env to the real "https://<promoter-host>/mcp" before bringing this up.
+  promoter:
+    type: streamable-http
+    url: "${PROMOTER_MCP_URL}"
+    headers:
+      X-Promoter-Key: "${PROMOTER_KEY}"
+    timeout: 300000
+    initTimeout: 30000
+    serverInstructions: true
+
+  # (3) monetizer — affiliate/monetization intelligence.
+  #     The spec did not state monetizer's header name; the engine connects to it
+  #     with a bearer token, so we default to Authorization: Bearer. If the
+  #     monetizer service expects a custom header instead (as promoter does),
+  #     change the header key below and keep the ${MONETIZER_KEY} placeholder.
+  monetizer:
+    type: streamable-http
+    url: https://monetizer-99287560712.europe-west1.run.app/mcp
+    headers:
+      Authorization: "Bearer ${MONETIZER_KEY}"
+    timeout: 300000
+    initTimeout: 30000
+    serverInstructions: true
+
+# ── Providers ────────────────────────────────────────────────────────────────
+# Multi-provider is a hard requirement. Anthropic, OpenAI and Google are enabled
+# purely by setting their server-side keys in .env (ANTHROPIC_API_KEY,
+# OPENAI_API_KEY, GOOGLE_KEY). With the keys present LibreChat auto-registers each
+# as a selectable endpoint and per-agent provider — no explicit block needed here.
+# (Add an `endpoints:` section only to curate/rename the visible model list.)
