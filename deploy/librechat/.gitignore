@@ -1,0 +1,9 @@
+# Never commit real secrets or runtime state from this deployment directory.
+.env
+.env.*
+!.env.example
+*.secret
+secrets.txt
+# Any local override / data that might get created next to the compose file.
+docker-compose.override.yml
+data/

@@ -1,0 +1,11 @@
+# Caddy built with the Cloudflare DNS module so the DNS-01 ACME challenge works
+# (real TLS without opening inbound port 80). If your DNS is hosted elsewhere,
+# replace the module below with the matching caddy-dns provider, e.g.:
+#   --with github.com/caddy-dns/googleclouddns
+#   --with github.com/caddy-dns/route53
+# and update the `dns` directive in the Caddyfile accordingly.
+FROM caddy:2-builder AS builder
+RUN xcaddy build --with github.com/caddy-dns/cloudflare
+
+FROM caddy:2-alpine
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy

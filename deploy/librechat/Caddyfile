@@ -1,0 +1,42 @@
+# Caddy reverse proxy — terminates TLS for ${DOMAIN} and proxies to the
+# LibreChat api container. The api port (3080) is never exposed to the host.
+#
+# DEFAULT: DNS-01 challenge via Cloudflare. This obtains a real Let's Encrypt
+# certificate WITHOUT needing inbound port 80, so the GCP firewall can stay
+# locked to 443-from-your-IP only (see scripts/provision-gcp.sh). Requires the
+# Cloudflare DNS module (built in Dockerfile.caddy) and CLOUDFLARE_API_TOKEN in .env.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+
+	encode zstd gzip
+
+	# Sensible security headers for a private app.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+
+	reverse_proxy api:3080
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ALTERNATIVE: HTTP-01 challenge (simplest, but requires inbound :80 from the
+# public internet so Let's Encrypt can reach it — i.e. NOT firewalled to your IP).
+# To use it: (a) delete the `tls { dns ... }` block above, (b) switch the caddy
+# service in docker-compose.yml to `image: caddy:2-alpine`, and (c) open tcp:80
+# to 0.0.0.0/0 in the firewall. The site stays gated by LibreChat login, but this
+# is less private than the DNS-01 default. Recommended only if you cannot use DNS-01.
+#
+# {$DOMAIN} {
+#     encode zstd gzip
+#     reverse_proxy api:3080
+# }
