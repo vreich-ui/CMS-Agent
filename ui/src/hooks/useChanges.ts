@@ -20,6 +20,11 @@ export function useChanges(client: McpClient) {
   const load = useCallback(async (activeFilters: ChangeLedgerFilters, cursor?: string) => {
     const seq = ++requestSeq.current;
     setLoading(true);
+    // A fresh (non-"load more") load never shows a stale list while it's in flight — covers both
+    // a filter change (applyFilters already clears, so this is a no-op there) and a client change
+    // (this effect's OTHER trigger, via `load`'s own [client] dependency below), where a previous
+    // connection's events must never linger under the new one.
+    if (!cursor) { setEvents([]); setNextCursor(undefined); }
     try {
       const page = await client.call<WorkspaceChangePage>("changes.list", listChangesArgs(activeFilters, PAGE_SIZE, cursor));
       if (seq !== requestSeq.current) return; // a newer request superseded this one

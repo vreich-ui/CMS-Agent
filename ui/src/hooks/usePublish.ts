@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { McpClient } from "../mcp/client";
 import { getErrorMessage } from "./useConnection";
 import type { PublishReadinessInput, PublishReadinessResponse, PublishResult } from "../types/workspace";
@@ -75,6 +75,10 @@ export function usePublish(client: McpClient) {
     setPublishResult(null);
     setError(null);
   }, []);
+
+  // A readiness verdict or publish result evaluated against one connection is meaningless (and
+  // misleading) once the UI points at a different one — clear it the instant the client changes.
+  useEffect(() => { reset(); }, [client, reset]);
 
   return { readiness, publishResult, loading, error, checkReadiness, publish, reset };
 }

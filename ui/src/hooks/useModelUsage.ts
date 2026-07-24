@@ -31,6 +31,16 @@ export function useModelUsage(client: McpClient, runId?: string | null, projectI
     }
   }, [budgetUsd, client, filters]);
 
+  // Usage/budget figures are meaningless against the wrong connection — a Netlify budget number
+  // must never linger once the UI is pointed at Cloud Run. Reset (never re-fetch here: there is
+  // no run/project scope to refresh without one) whenever the client changes, independent of the
+  // runId-gated refresh below.
+  useEffect(() => {
+    setSummary(emptySummary);
+    setRecords([]);
+    setBudgetStatus(emptyBudget);
+  }, [client]);
+
   useEffect(() => {
     if (runId) void refreshUsage().catch(() => undefined);
   }, [refreshUsage, runId]);
