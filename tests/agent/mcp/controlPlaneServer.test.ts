@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AddressInfo } from "node:net";
 import { createServer, type Server } from "node:http";
 import { routeControlPlaneRequest } from "../../../src/agent/mcp/http/controlPlaneRouter.js";
-import { handleNodeRequest } from "../../../src/agent/entrypoints/mcpServerMain.js";
+import { handleNodeRequest, parseAllowedOrigins, isOriginAllowed, corsResponseHeaders, corsPreflightHeaders } from "../../../src/agent/entrypoints/mcpServerMain.js";
 import { mcpStateUsesBlobs } from "../../../src/agent/mcp/state/stateStore.js";
 import { resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 
@@ -74,6 +74,122 @@ describe("handleNodeRequest (node:http translation)", () => {
     const response = await fetch(`${baseUrl}/healthz`);
     expect(response.status).toBe(200);
     expect((await response.json()).status).toBe("ok");
+  });
+
+  describe("CORS (browser control-plane access)", () => {
+    const ALLOWED_ORIGIN = "https://ui.example.com";
+    const DISALLOWED_ORIGIN = "https://evil.example.com";
+    beforeEach(() => { process.env.MCP_ALLOWED_ORIGINS = ALLOWED_ORIGIN; });
+
+    it("answers an OPTIONS preflight for an allowed origin with 204 + full CORS headers, no token required", async () => {
+      const response = await fetch(`${baseUrl}/mcp`, { method: "OPTIONS", headers: { origin: ALLOWED_ORIGIN } });
+      expect(response.status).toBe(204);
+      expect(response.headers.get("access-control-allow-origin")).toBe(ALLOWED_ORIGIN);
+      expect(response.headers.get("access-control-allow-methods")).toBe("POST, OPTIONS");
+      expect(response.headers.get("access-control-allow-headers")).toBe("authorization, content-type, mcp-session-id, mcp-protocol-version");
+      expect(response.headers.get("access-control-max-age")).toBe("86400");
+      expect(await response.text()).toBe("");
+    });
+
+    it("answers a preflight from a disallowed origin with 204 but omits every CORS header", async () => {
+      const response = await fetch(`${baseUrl}/mcp`, { method: "OPTIONS", headers: { origin: DISALLOWED_ORIGIN } });
+      expect(response.status).toBe(204);
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+      expect(response.headers.get("access-control-allow-methods")).toBeNull();
+    });
+
+    it("preflight succeeds with MCP_ALLOWED_ORIGINS unset — default deny, no CORS headers, still no token needed", async () => {
+      delete process.env.MCP_ALLOWED_ORIGINS;
+      const response = await fetch(`${baseUrl}/mcp`, { method: "OPTIONS", headers: { origin: ALLOWED_ORIGIN } });
+      expect(response.status).toBe(204);
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    });
+
+    it("echoes Access-Control-Allow-Origin and exposes MCP session headers on a real authenticated POST from an allowed origin", async () => {
+      const response = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-token", "content-type": "application/json", origin: ALLOWED_ORIGIN },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("access-control-allow-origin")).toBe(ALLOWED_ORIGIN);
+      expect(response.headers.get("access-control-expose-headers")).toBe("mcp-session-id, mcp-protocol-version");
+    });
+
+    it("still requires a valid bearer on POST from an allowed origin — CORS is not an auth bypass", async () => {
+      const response = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: ALLOWED_ORIGIN },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })
+      });
+      expect(response.status).toBe(401);
+      // Still carries CORS headers so the browser can actually read the 401 / WWW-Authenticate
+      // instead of surfacing an opaque network failure.
+      expect(response.headers.get("access-control-allow-origin")).toBe(ALLOWED_ORIGIN);
+    });
+
+    it("a disallowed origin gets no ACAO header even on an otherwise-normal response (auth unaffected)", async () => {
+      const response = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-token", "content-type": "application/json", origin: DISALLOWED_ORIGIN },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })
+      });
+      expect(response.status).toBe(200); // auth still succeeds — CORS and auth are independent
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    });
+
+    it("a request with no Origin header (non-browser caller) is unaffected by CORS", async () => {
+      const response = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    });
+  });
+});
+
+describe("CORS helpers (pure)", () => {
+  it("parseAllowedOrigins trims, drops empties, and parses one or many origins", () => {
+    expect(parseAllowedOrigins(undefined)).toEqual([]);
+    expect(parseAllowedOrigins("")).toEqual([]);
+    expect(parseAllowedOrigins("   ")).toEqual([]);
+    expect(parseAllowedOrigins("https://ui.example.com")).toEqual(["https://ui.example.com"]);
+    expect(parseAllowedOrigins(" https://a.example.com , https://b.example.com ,, ")).toEqual(["https://a.example.com", "https://b.example.com"]);
+  });
+
+  it("isOriginAllowed matches exact entries and an explicit wildcard; an empty (unset) list denies everything", () => {
+    expect(isOriginAllowed("https://ui.example.com", ["https://ui.example.com"])).toBe(true);
+    expect(isOriginAllowed("https://evil.example.com", ["https://ui.example.com"])).toBe(false);
+    expect(isOriginAllowed(undefined, ["https://ui.example.com"])).toBe(false);
+    expect(isOriginAllowed("https://anything.example.com", ["*"])).toBe(true);
+    expect(isOriginAllowed("https://ui.example.com", [])).toBe(false);
+  });
+
+  it("corsResponseHeaders echoes the origin verbatim and exposes MCP session headers only when allowed", () => {
+    expect(corsResponseHeaders("https://ui.example.com", ["https://ui.example.com"])).toEqual({
+      "access-control-allow-origin": "https://ui.example.com",
+      "access-control-expose-headers": "mcp-session-id, mcp-protocol-version",
+      vary: "origin"
+    });
+    // Even with a wildcard entry, the literal request origin is echoed back, never "*".
+    expect(corsResponseHeaders("https://ui.example.com", ["*"])["access-control-allow-origin"]).toBe("https://ui.example.com");
+    expect(corsResponseHeaders("https://evil.example.com", ["https://ui.example.com"])).toEqual({});
+    expect(corsResponseHeaders(undefined, ["https://ui.example.com"])).toEqual({});
+  });
+
+  it("corsPreflightHeaders adds allow-methods/allow-headers/max-age on top of the response headers, or nothing when denied", () => {
+    expect(corsPreflightHeaders("https://ui.example.com", ["https://ui.example.com"])).toEqual({
+      "access-control-allow-origin": "https://ui.example.com",
+      "access-control-expose-headers": "mcp-session-id, mcp-protocol-version",
+      vary: "origin",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "authorization, content-type, mcp-session-id, mcp-protocol-version",
+      "access-control-max-age": "86400"
+    });
+    expect(corsPreflightHeaders("https://evil.example.com", ["https://ui.example.com"])).toEqual({});
+    expect(corsPreflightHeaders(undefined, [])).toEqual({});
   });
 });
 
