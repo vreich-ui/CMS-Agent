@@ -183,6 +183,13 @@ Full strategy, product choices, and its own basic→advanced staging:
 > (`mcpStateUsesBlobs` now includes `gcs`) so **no session affinity is required**. The UI
 > gained a "Control plane: Netlify | Cloud Run" toggle in the existing connection panel,
 > shown only when `VITE_CLOUD_RUN_MCP_URL` is set. Deploy steps: `docs/platform/PHASE4_RUNBOOK.md`.
+> **CORS ✅ implemented:** the Cloud Run Service is the plane a browser reaches cross-origin
+> (Netlify's `mcp.mts` adapter is same-origin with its own UI and needs none), so
+> `mcpServerMain.ts` answers `OPTIONS` preflight before any auth check — never requiring a
+> bearer token — and echoes `Access-Control-Allow-Origin` on real responses for origins on
+> the `MCP_ALLOWED_ORIGINS` allow-list (comma-separated; unset denies every origin, no
+> wildcard default). Auth/session/dispatch behavior for non-`OPTIONS` requests is unchanged.
+> Covered by `tests/agent/mcp/controlPlaneServer.test.ts`.
 
 Netlify keeps serving everything it serves today. A second, Google-hosted control
 plane comes up beside it, and **which plane the Constellation UI talks to becomes a
