@@ -40,11 +40,17 @@ gcloud builds submit --project "$PROJECT" --config cloudbuild.mcp.yaml --substit
 
 # 2. Deploy as a Service. Session affinity is NOT required (GCS-shared state), but harmless to keep.
 #    MCP_API_TOKEN is the bearer the UI's direct mode sends; keep it in Secret Manager.
+#    MCP_ALLOWED_ORIGINS is the browser CORS allow-list. Unset denies EVERY origin (no wildcard
+#    default), so a browser-driven UI fails its preflight and reports "Failed to fetch" until its
+#    exact origin — scheme + host, no trailing slash, no path — is listed. Netlify deploy previews
+#    are separate origins; list each one, or use a single "*" to accept any.
+#    gcloud splits --set-env-vars on commas, so the ^:^ delimiter is required once any value
+#    (like a multi-origin allow-list) contains a comma of its own.
 gcloud run deploy cms-agent-mcp \
   --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
   --cpu 1 --memory 512Mi --min-instances 0 --max-instances 4 --port 8080 \
-  --no-allow-unauthenticated \
-  --set-env-vars "WORKSPACE_STORE=gcs,GCS_BUCKET=<bucket>,MCP_STATE_STORE=blobs" \
+  --allow-unauthenticated \
+  --set-env-vars "^:^WORKSPACE_STORE=gcs:GCS_BUCKET=<bucket>:MCP_STATE_STORE=blobs:MCP_ALLOWED_ORIGINS=https://<site>.netlify.app" \
   --set-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest"
 
 # 3. Note the service URL; the MCP endpoint is <url>/mcp and health is <url>/healthz.
@@ -53,16 +59,49 @@ gcloud run services describe cms-agent-mcp --project "$PROJECT" --region "$REGIO
 
 Auth choices:
 - **`--no-allow-unauthenticated`** puts Cloud Run IAM (`roles/run.invoker`) in front —
-  strongest, but the browser UI then needs an identity token. For a browser-driven UI,
-  either allow unauthenticated at the platform edge and rely on the app's own
-  `MCP_API_TOKEN`/OAuth bearer (the app never trusts the network), or front it with IAP.
-  Start with app-level bearer auth (`MCP_API_TOKEN`) which the switch already uses.
+  strongest, but it is **incompatible with browser access**, and not just for the
+  authenticated request: IAM rejects the unauthenticated CORS preflight at the platform
+  edge, before the container runs, with no CORS headers on the 403. A browser cannot
+  attach a Google identity token, so no amount of app-level CORS can rescue it — the
+  fetch fails before auth is ever attempted. Use it only for server-side callers
+  (the LibreChat cockpit, the conductor job, `gcloud`-signed curl).
+- For the **browser UI** (4b), allow unauthenticated at the platform edge and rely on the
+  app's own `MCP_API_TOKEN`/OAuth bearer — the app never trusts the network and still
+  returns 401 without a valid bearer — or front it with IAP. This is what the switch uses.
 - OAuth discovery/flow is served too (`/.well-known/oauth-*`, `/oauth/*`), so remote
   MCP connectors (Claude) can authorize against the Cloud Run plane exactly as against
   Netlify.
 
 Health check: `curl <url>/healthz` → `{"status":"ok","service":"cms-agent-mcp","store":"gcs"}`.
 Smoke the MCP endpoint: `curl -XPOST <url>/mcp -H "authorization: Bearer <MCP_API_TOKEN>" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`.
+
+### Diagnosing "Failed to fetch" from the browser
+
+`Failed to fetch` is the browser's generic message for a request that never completed at
+the network/CORS layer — the response was blocked or never arrived, so the status code
+never reaches JS. One preflight probe distinguishes every cause; run it with the UI's
+real origin:
+
+```bash
+curl -sS -i -X OPTIONS <url>/mcp \
+  -H "Origin: https://<site>.netlify.app" -H "Access-Control-Request-Method: POST"
+```
+
+| Response | Cause | Fix |
+| --- | --- | --- |
+| `403`, Google-generated body, no `access-control-*` | Cloud Run IAM is rejecting the preflight (`--no-allow-unauthenticated`) | Redeploy with `--allow-unauthenticated`; app-level bearer auth still applies |
+| `401` | Revision predates the CORS layer — pre-fix code required a bearer on OPTIONS | Rebuild + redeploy (steps 1–2) from a commit containing the CORS layer |
+| `204`, but **no** `access-control-allow-origin` | Origin is not on the allow-list (`MCP_ALLOWED_ORIGINS` unset = deny all, or an exact-match miss) | `gcloud run services update cms-agent-mcp --region "$REGION" --update-env-vars "MCP_ALLOWED_ORIGINS=https://<site>.netlify.app"` |
+| `204` **with** `access-control-allow-origin` echoing the origin | CORS is healthy; the failure is elsewhere | Check `<url>/healthz`, DNS, and that `VITE_CLOUD_RUN_MCP_URL` matches the current service URL |
+
+Merging a PR does not deploy this service — there is no CI/CD for the MCP image. Any
+change under `src/agent/` reaches Cloud Run only after steps 1–2 are re-run, so confirm
+the live revision's image tag before concluding a fix is deployed:
+
+```bash
+gcloud run services describe cms-agent-mcp --project "$PROJECT" --region "$REGION" \
+  --format 'value(spec.template.spec.containers[0].image)'
+```
 
 ## Turn on the UI switch (4b)
 
