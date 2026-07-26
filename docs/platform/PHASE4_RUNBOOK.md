@@ -44,13 +44,15 @@ gcloud builds submit --project "$PROJECT" --config cloudbuild.mcp.yaml --substit
 #    default), so a browser-driven UI fails its preflight and reports "Failed to fetch" until its
 #    exact origin — scheme + host, no trailing slash, no path — is listed. Netlify deploy previews
 #    are separate origins; list each one, or use a single "*" to accept any.
-#    gcloud splits --set-env-vars on commas, so the ^:^ delimiter is required once any value
-#    (like a multi-origin allow-list) contains a comma of its own.
+#    gcloud splits --set-env-vars on commas, so a multi-origin allow-list needs a ^delim^ prefix
+#    to choose a different separator. The delimiter must be a character that appears in NO value:
+#    ":" is wrong here — every origin contains "://", so ^:^ splits mid-URL and gcloud rejects the
+#    fragment as a malformed entry. "|" is safe.
 gcloud run deploy cms-agent-mcp \
   --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
   --cpu 1 --memory 512Mi --min-instances 0 --max-instances 4 --port 8080 \
   --allow-unauthenticated \
-  --set-env-vars "^:^WORKSPACE_STORE=gcs:GCS_BUCKET=<bucket>:MCP_STATE_STORE=blobs:MCP_ALLOWED_ORIGINS=https://<site>.netlify.app" \
+  --set-env-vars "^|^WORKSPACE_STORE=gcs|GCS_BUCKET=<bucket>|MCP_STATE_STORE=blobs|MCP_ALLOWED_ORIGINS=https://<site>.netlify.app,http://localhost:5173" \
   --set-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest"
 
 # 3. Note the service URL; the MCP endpoint is <url>/mcp and health is <url>/healthz.
@@ -91,7 +93,7 @@ curl -sS -i -X OPTIONS <url>/mcp \
 | --- | --- | --- |
 | `403`, Google-generated body, no `access-control-*` | Cloud Run IAM is rejecting the preflight (`--no-allow-unauthenticated`) | Redeploy with `--allow-unauthenticated`; app-level bearer auth still applies |
 | `401` | Revision predates the CORS layer — pre-fix code required a bearer on OPTIONS | Rebuild + redeploy (steps 1–2) from a commit containing the CORS layer |
-| `204`, but **no** `access-control-allow-origin` | Origin is not on the allow-list (`MCP_ALLOWED_ORIGINS` unset = deny all, or an exact-match miss) | `gcloud run services update cms-agent-mcp --region "$REGION" --update-env-vars "MCP_ALLOWED_ORIGINS=https://<site>.netlify.app"` |
+| `204`, but **no** `access-control-allow-origin` | Origin is not on the allow-list (`MCP_ALLOWED_ORIGINS` unset = deny all, or an exact-match miss) | `gcloud run services update cms-agent-mcp --region "$REGION" --update-env-vars "MCP_ALLOWED_ORIGINS=https://<site>.netlify.app"` — for more than one origin, switch the separator: `--update-env-vars "^\|^MCP_ALLOWED_ORIGINS=https://<site>.netlify.app,http://localhost:5173"` |
 | `204` **with** `access-control-allow-origin` echoing the origin | CORS is healthy; the failure is elsewhere | Check `<url>/healthz`, DNS, and that `VITE_CLOUD_RUN_MCP_URL` matches the current service URL |
 
 Merging a PR does not deploy this service — there is no CI/CD for the MCP image. Any
