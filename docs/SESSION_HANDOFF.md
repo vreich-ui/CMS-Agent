@@ -43,4 +43,7 @@ Protection rings (ratified): Ring 0 services — publishing agents may call, nev
 3. Verify plane state before acting: `repository_get_health` (expect `gcs`, v≥69), `workspace_validate_graph`, `constellation_get_attention`, `project_list`.
 4. Immediately startable without ENV: R-0 (CI), R-11 read-only (S4 inspector), W-2, W-3. Deliver repo changes as a patch-series zip (no push access).
 
+**Wave 1 ran 2026-07-26** (`docs/plan/CHANGE-PLAN.md` §2b): W-3 done (workspace **v70**), W-2 partial (both records disabled; snoocle de-seeded in the repo patch; **monetizer kept** — `feedback.ingest_monetizer` depends on it), R-0 done (CI + two-plane drift detector, 136-tool manifest), R-11 read-only done. Suite: 707 root + 55 ui tests, green.
+Add to §4's bug list, learned the hard way: bug 4 (R-4) hides *every* refusal — `project.delete` on a code-defined default returns a bare `-32603` that is indistinguishable from a crash. Read `error.data`, or the source, before believing a tool is broken.
+
 Deep background per topic: `docs/plan/findings/` (migration, image pipeline, contract alignment, tool bugs, voice object, fleet alignment, self-describing engine) and `docs/plan/GUI-PLAN.md` / `TEST-PROTOCOL.md`.
