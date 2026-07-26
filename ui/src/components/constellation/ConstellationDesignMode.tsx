@@ -41,10 +41,12 @@ export function ConstellationDesignMode({ client, workspace, onStatus, onError }
   const [conflict, setConflict] = useState<string | null>(null);
   const [issues, setIssues] = useState<string[] | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<DesignEdgeModel | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const savingRef = useRef(false);
 
-  const { nodes, selectedId, selectedNode, setSelectedId, loadWorkspace, updateGraph, validateGraph } = workspace;
+  // Node loading (and its own loading/error state) is entirely useWorkspace's concern — it
+  // auto-loads whenever `client` changes, including the very first render, so this component
+  // never triggers it directly and never duplicates the fetch.
+  const { nodes, selectedId, selectedNode, setSelectedId, loadWorkspace, updateGraph, validateGraph, loading: nodesLoading, loadError } = workspace;
 
   const loadStructure = async () => {
     try {
@@ -57,21 +59,16 @@ export function ConstellationDesignMode({ client, workspace, onStatus, onError }
     }
   };
 
+  // Stored relationships are a SEPARATE fetch from useWorkspace's nodes, so they need their OWN
+  // client-keyed reload: switching control plane / connection must not leave the canvas pairing
+  // the NEW client's (already-reset) nodes with the PREVIOUS client's stale edges. Reset first,
+  // then reload, every time `client` changes (including the very first render).
   useEffect(() => {
-    const bootstrap = async () => {
-      if (nodes.length === 0) {
-        try {
-          await loadWorkspace();
-        } catch (error) {
-          setLoadError(getErrorMessage(error));
-          return;
-        }
-      }
-      await loadStructure();
-    };
-    void bootstrap();
-    // Mount-only: loadWorkspace/loadStructure are stable enough for a one-time bootstrap.
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    setRelationships([]);
+    void loadStructure();
+    // loadStructure is redefined every render and closes over the current client/onStatus; [client]
+    // alone is the correct re-run signal (a fresh client is exactly a fresh loadStructure).
+  }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const persist = async (update: GraphUpdate, summary: string) => {
     if (savingRef.current) {
@@ -180,7 +177,14 @@ export function ConstellationDesignMode({ client, workspace, onStatus, onError }
       <h3>Workspace not loaded</h3>
       <p className="muted">{loadError}</p>
       <p className="muted">Check the connection in Settings, then try again.</p>
-      <button onClick={() => { setLoadError(null); void loadWorkspace().then(loadStructure).catch((error) => setLoadError(getErrorMessage(error))); }}>Retry</button>
+      <button onClick={() => { void loadWorkspace().then(loadStructure).catch((error) => onError(error)); }}>Retry</button>
+    </section>;
+  }
+
+  if (nodesLoading && nodes.length === 0) {
+    return <section className="panel design-empty">
+      <h3>Loading workspace…</h3>
+      <p className="muted">Fetching nodes from the current connection.</p>
     </section>;
   }
 

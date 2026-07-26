@@ -28,6 +28,10 @@ export function useOverview(client: McpClient, projectId?: string | null) {
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    // Reset before fetching (not just after) — this refetches on every [client] change (below),
+    // so a control-plane switch must never leave the PREVIOUS connection's overview sections
+    // visible while the new one loads.
+    setData(emptyData);
     try {
       const scope = projectId ? { projectId } : {};
       const [nodes, runs, usageSummary, projects, repositoryHealth, recentChanges] = await Promise.allSettled([

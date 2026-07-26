@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { McpClient } from "../mcp/client";
 import type { WorkflowExecutionRecord } from "../types/workspace";
 
@@ -107,6 +107,16 @@ export function useWorkflowRun(client: McpClient) {
     if (!currentRun && !selectedRunId) return null;
     return loadRun(currentRun?.runId ?? selectedRunId!);
   }, [currentRun, loadRun, selectedRunId]);
+
+  // A run/run-list is inherently tied to the connection it was loaded from — a run ID from
+  // Netlify's execution repository has no meaning against Cloud Run's and vice versa. There is no
+  // "default" run to auto-fetch (run state is entirely user-action-driven, and stays that way
+  // here — this only clears the PREVIOUS connection's stale run out of view on a client change).
+  useEffect(() => {
+    setCurrentRun(null);
+    setRuns([]);
+    setSelectedRunId(null);
+  }, [client]);
 
   const nodeStatusById = useMemo(() => new Map(currentRun?.nodes.map((node) => [node.nodeId, node.status]) ?? []), [currentRun]);
 

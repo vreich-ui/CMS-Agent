@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RJSFSchema } from "@rjsf/utils";
 import type { McpClient } from "../mcp/client";
 import type { ArticleBodySchema, ArticleValidationResult, RepositoryHealthSummary, SkillDefinition, SkillResolvedPolicy, WorkspaceDocument, WorkspaceNode } from "../types/workspace";
@@ -25,24 +25,86 @@ export function useWorkspace(client: McpClient) {
   const [skills, setSkills] = useState<SkillDefinition[]>([]);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [resolvedSkillPolicy, setResolvedSkillPolicy] = useState<SkillResolvedPolicy | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Every piece of state above belongs to a specific McpClient (i.e. a specific control-plane
+  // connection). The instant the client identity changes, reset it all — SYNCHRONOUSLY, during
+  // render, not inside a useEffect. An effect-based reset still lags one commit behind the client
+  // change, so a render could briefly paint the PREVIOUS client's nodes under the NEW connection;
+  // updating state mid-render (React's documented pattern for "adjusting state when a prop
+  // changes") makes React discard that render and restart before anything is painted, so the
+  // previous plane's data is never visible even for one frame. loadedFor is otherwise unused —
+  // it exists only to detect the transition.
+  const [loadedFor, setLoadedFor] = useState(client);
+  if (loadedFor !== client) {
+    setLoadedFor(client);
+    setNodes([]);
+    setSelectedId(null);
+    setPromptDraft("");
+    setWorkspaceVersion(undefined);
+    setArticleSchema(undefined);
+    setSkills([]);
+    setSelectedSkillId(null);
+    setResolvedSkillPolicy(null);
+    setLoadError(null);
+    setLoading(true);
+  }
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedId) ?? null, [nodes, selectedId]);
   const selectedSchema = asSchema(selectedNode?.outputSchema ?? selectedNode?.schema);
 
   useEffect(() => {
-    if (selectedNode) setPromptDraft(selectedNode.prompt);
+    setPromptDraft(selectedNode ? selectedNode.prompt : "");
   }, [selectedNode]);
 
+  // The most recent client the hook has been asked to load for, updated every render. Each
+  // loadWorkspace() invocation is permanently bound (via useCallback's [client] dep) to the
+  // client value it was created for; comparing against this ref after every await is how it
+  // detects that it has been SUPERSEDED by a newer client before applying its result — otherwise
+  // an out-of-order response (client A's request resolves AFTER client B's already has) could
+  // silently overwrite B's fresh state with A's stale one.
+  const activeClientRef = useRef(client);
+  activeClientRef.current = client;
+
+  // Manages its own loading/error state so both the automatic client-change load below AND a
+  // manual call (a "Retry" button, the legacy "Load workspace" button) report through the same
+  // loading/loadError fields — callers that want to react themselves still get the rejection.
   const loadWorkspace = useCallback(async () => {
-    const [{ nodes: nextNodes }, { schema }] = await Promise.all([
-      client.call<{ nodes: WorkspaceNode[] }>("workspace.get_nodes"),
-      client.call<{ schema: ArticleBodySchema }>("article_body.get_schema")
-    ]);
-    setNodes(nextNodes);
-    setArticleSchema(schema);
-    setWorkspaceVersion((await client.call<WorkspaceDocument>("workspace.export_workspace")).workspaceVersion);
-    setSelectedId((current) => current ?? nextNodes[0]?.id ?? null);
+    const forClient = client;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [{ nodes: nextNodes }, { schema }] = await Promise.all([
+        client.call<{ nodes: WorkspaceNode[] }>("workspace.get_nodes"),
+        client.call<{ schema: ArticleBodySchema }>("article_body.get_schema")
+      ]);
+      if (activeClientRef.current !== forClient) return; // superseded — a newer client already owns this state
+      setNodes(nextNodes);
+      setArticleSchema(schema);
+      const { workspaceVersion: nextVersion } = await client.call<WorkspaceDocument>("workspace.export_workspace");
+      if (activeClientRef.current !== forClient) return;
+      setWorkspaceVersion(nextVersion);
+      setSelectedId((current) => current ?? nextNodes[0]?.id ?? null);
+    } catch (error) {
+      if (activeClientRef.current === forClient) setLoadError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      if (activeClientRef.current === forClient) setLoading(false);
+    }
   }, [client]);
+
+  // Auto-load whenever the client identity changes (including the very first render) — the fix
+  // for the split-brain bug: switching control plane / connection previously left this hook's
+  // state (and everything that reads it — the node inspector, the Constellation canvas) showing
+  // whatever the PREVIOUS client last loaded, because nothing ever re-fetched. Race-safety against
+  // a superseded, out-of-order response is loadWorkspace's own concern (see activeClientRef
+  // above), so this effect needs no cancellation flag of its own. Failures are swallowed here —
+  // they are already captured in loadError for any UI that wants to show them; a caller that needs
+  // the rejection (e.g. a "Retry" button) calls loadWorkspace() itself.
+  useEffect(() => {
+    void loadWorkspace().catch(() => { /* surfaced via loadError; see comment above */ });
+  }, [client, loadWorkspace]);
 
   const mutationArgs = (summary: string) => ({ expectedWorkspaceVersion: workspaceVersion ?? 0, summary });
 
@@ -113,6 +175,8 @@ export function useWorkspace(client: McpClient) {
     skills,
     selectedSkillId,
     resolvedSkillPolicy,
+    loading,
+    loadError,
     setSelectedId,
     setPromptDraft,
     setSelectedSkillId,
