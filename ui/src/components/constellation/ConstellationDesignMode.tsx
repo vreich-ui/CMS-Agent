@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DesignCanvas } from "./DesignCanvas";
 import { SummaryRail } from "./SummaryRail";
+import { NodeInspector } from "../NodeInspector";
 import { LayerToggles } from "./LayerToggles";
 import { GraphListView } from "./GraphListView";
 import {
@@ -19,12 +20,15 @@ import {
 import { getErrorMessage } from "../../hooks/useConnection";
 import type { useWorkspace } from "../../hooks/useWorkspace";
 import type { McpClient } from "../../mcp/client";
-import type { ConstellationStructure, WorkspaceRelationship } from "../../types/workspace";
+import type { ConstellationStructure, ProjectSummary, WorkspaceRelationship } from "../../types/workspace";
 import type { StatusMessage } from "../../status";
 
 type Props = {
   client: McpClient;
   workspace: ReturnType<typeof useWorkspace>;
+  // The selected client, for the S4 inspector's Identity layer. null is a legitimate state ("All
+  // projects"), not a missing prop — the inspector renders the layer as unavailable and says why.
+  project: ProjectSummary | null;
   onStatus: (status: StatusMessage) => void;
   onError: (error: unknown) => void;
 };
@@ -34,13 +38,17 @@ type GraphUpdate = { dependencies?: Record<string, string[]>; positions?: Record
 // Design mode container: owns relationship/layer/conflict state and the single persist pipeline.
 // Every mutation is version-guarded; conflicts surface verbatim with an explicit reload action —
 // never a silent retry.
-export function ConstellationDesignMode({ client, workspace, onStatus, onError }: Props) {
+export function ConstellationDesignMode({ client, workspace, project, onStatus, onError }: Props) {
   const [relationships, setRelationships] = useState<WorkspaceRelationship[]>([]);
   const [layers, setLayers] = useState<DesignLayers>(defaultDesignLayers);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
   const [issues, setIssues] = useState<string[] | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<DesignEdgeModel | null>(null);
+  // S4 inspector visibility. Opened from the rail, closed by the operator or by deselecting —
+  // it renders in a grid column beside the canvas, never as an overlay (no absolute panels, no
+  // z-index), so the graph stays visible while you read a node.
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const savingRef = useRef(false);
 
   // Node loading (and its own loading/error state) is entirely useWorkspace's concern — it
@@ -233,8 +241,17 @@ export function ConstellationDesignMode({ client, workspace, onStatus, onError }
         onDeleteNode={handleDeleteNode}
         onDeleteEdge={(edge) => { handleRemoveDependency(edge.target, edge.source); setSelectedEdge(null); }}
         onClearSelection={() => setSelectedEdge(null)}
+        onOpenDetails={() => setInspectorOpen((open) => !open)}
+        detailsOpen={inspectorOpen}
       />
     </div>
+
+    {inspectorOpen && selectedNode && <NodeInspector
+      node={selectedNode}
+      client={client}
+      project={project}
+      onClose={() => setInspectorOpen(false)}
+    />}
 
     <GraphListView entries={listEntries} />
   </section>;

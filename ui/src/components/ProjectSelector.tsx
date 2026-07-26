@@ -1,4 +1,5 @@
 import { buildProjectOptions } from "../projects";
+import { projectConnectionBadge } from "../nodeInspector";
 import type { ProjectSummary } from "../types/workspace";
 
 // GitHub-selector spirit: always available, upper-left, low visual emphasis, keyboard operable.
@@ -16,6 +17,11 @@ type Props = {
 
 export function ProjectSelector({ projects, runProjectIds, selectedProjectId, onSelect, error, onRetry }: Props) {
   const groups = buildProjectOptions(projects, runProjectIds, selectedProjectId);
+  // Connection badge (CHANGE-PLAN R-11): whether the selected client is reachable at all is
+  // context for everything else on screen, so it belongs next to the selector rather than three
+  // clicks away on the Access page. `title` carries the env var names — a badge that says "not
+  // configured" without naming what to configure is a dead end.
+  const badge = projectConnectionBadge(projects?.find((project) => project.projectId === selectedProjectId) ?? null);
   return <div className="project-selector">
     <label>
       <span className="project-selector-label">Project</span>
@@ -30,6 +36,7 @@ export function ProjectSelector({ projects, runProjectIds, selectedProjectId, on
         </optgroup>}
       </select>
     </label>
+    {badge && <span className={`connection-badge connection-badge--${badge.tone}`} title={badge.title}>{badge.label}</span>}
     {error && onRetry && <button type="button" className="link-button" onClick={onRetry} title={error}>Retry projects</button>}
   </div>;
 }

@@ -605,3 +605,53 @@ th { color: var(--color-text-muted); font-size: 0.8rem; text-transform: uppercas
   .access-tool-row { align-items: stretch; flex-direction: column; }
   .permission-toggle { justify-content: space-between; }
 }
+
+/* S4 node inspector (CHANGE-PLAN R-11, read-only). Semantic tokens only, no absolute positioning
+   and no z-index: the inspector is a grid sibling of the canvas, so the graph stays visible while
+   a node is being read. */
+.connection-badge { border-radius: 999px; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.04em; padding: 0.1rem 0.5rem; text-transform: uppercase; white-space: nowrap; }
+.connection-badge--ok { background: var(--color-success-surface); color: var(--color-success-text); }
+.connection-badge--warning { background: var(--color-warning-surface); color: var(--color-warning-text); }
+.connection-badge--danger { background: var(--color-danger-surface); color: var(--color-danger-text); }
+
+.node-inspector { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 1.2rem; display: grid; gap: 0.9rem; margin-top: 1rem; min-width: 0; padding: 1rem; }
+.node-inspector-header { align-items: start; display: flex; gap: 1rem; justify-content: space-between; }
+.node-inspector-header h3 { margin: 0; }
+.node-inspector-header p { margin: 0.2rem 0 0; }
+.node-inspector-header-actions { display: flex; gap: 0.5rem; }
+
+.node-inspector-layers { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+/* Every non-live identity state is visibly muted: a contract that was never fetched must never
+   read like a fresh one. */
+.node-inspector-identity--no_project,
+.node-inspector-identity--unconfigured,
+.node-inspector-identity--unreachable { background: var(--color-surface-muted); color: var(--color-text-muted); opacity: 0.75; }
+.node-inspector-identity--live { background: var(--color-success-surface); color: var(--color-success-text); }
+.node-inspector-identity-note { margin: 0; }
+
+.node-inspector-errors { color: var(--color-danger-text); display: grid; gap: 0.3rem; list-style: none; margin: 0; padding: 0; }
+
+.node-inspector-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.node-inspector-tab { align-items: center; background: transparent; border: 1px solid var(--color-border-muted); border-radius: 999px; color: var(--color-text-muted); cursor: pointer; display: inline-flex; font-weight: 700; gap: 0.35rem; padding: 0.3rem 0.8rem; }
+.node-inspector-tab:hover { color: var(--color-text); }
+.node-inspector-tab:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.node-inspector-tab--active { background: var(--color-accent-surface); border-color: var(--color-accent-surface); color: var(--color-accent-text); }
+.node-inspector-tab-badge { background: var(--color-warning-surface); color: var(--color-warning-text); }
+.node-inspector-tab-badge--blocker { background: var(--color-danger-surface); color: var(--color-danger-text); }
+
+.node-inspector-panel { display: grid; gap: 0.6rem; min-width: 0; }
+.node-inspector-panel h4 { margin: 0.4rem 0 0; }
+.node-inspector-prompt { background: var(--color-code-surface); border-radius: 0.6rem; color: var(--color-code-text); margin: 0; max-height: 24rem; overflow: auto; padding: 0.7rem; white-space: pre-wrap; word-break: break-word; }
+.node-inspector-note { background: var(--color-info-surface); border-radius: 0.6rem; color: var(--color-info-text); margin: 0; padding: 0.5rem 0.7rem; }
+.node-inspector-note--warning { background: var(--color-warning-surface); color: var(--color-warning-text); }
+
+.node-inspector-tool-group { display: grid; gap: 0.3rem; min-width: 0; }
+.node-inspector-tools { border-collapse: collapse; font-size: 0.86rem; width: 100%; }
+.node-inspector-tools th, .node-inspector-tools td { border-bottom: 1px solid var(--color-border-muted); padding: 0.3rem 0.5rem; text-align: left; vertical-align: top; }
+.node-inspector-tools thead th { color: var(--color-text-muted); font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; }
+.node-inspector-tool-row--denied { background: var(--color-warning-surface); color: var(--color-warning-text); }
+
+.node-inspector-conflicts, .node-inspector-warnings { display: grid; gap: 0.35rem; list-style: none; margin: 0; padding: 0; }
+.node-inspector-conflict, .node-inspector-warning { border-radius: 0.6rem; padding: 0.4rem 0.6rem; }
+.node-inspector-conflict--warning, .node-inspector-warning--warning { background: var(--color-warning-surface); color: var(--color-warning-text); }
+.node-inspector-conflict--blocker, .node-inspector-warning--blocker { background: var(--color-danger-surface); color: var(--color-danger-text); }
