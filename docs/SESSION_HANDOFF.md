@@ -14,8 +14,10 @@ The workspace was audited end-to-end, aligned around one principle — **the cli
 ## 2. Standing blockers (nothing client-facing works until these)
 
 Cloud Run env vars, set by Wolf manually (values live in Netlify site config; they never pass through MCP):
-`DR_LURIE_MCP_ENDPOINT/_TOKEN` (ENV-1) · `PDF_TOOL_MCP_ENDPOINT/_TOKEN` (ENV-2) · `PLATFORM_MCP_ENDPOINT/_TOKEN` (ENV-3).
+`DR_LURIE_MCP_ENDPOINT/_TOKEN` (ENV-1) · `PDF_TOOL_MCP_ENDPOINT/_TOKEN` (ENV-2) · ~~`PLATFORM_MCP_ENDPOINT/_TOKEN` (ENV-3)~~ **done 2026-07-27**.
 Verify with `project_test_connection` — it fails closed, which is correct.
+
+ENV-1 and ENV-2 remain. With ENV-3 in, client 0 is registered and **T-1 passed GO** (TEST-PROTOCOL Appendix C): the mcp.ts move is verified in both directions and nothing on the client side blocks anything.
 
 ## 3. The client model
 
@@ -44,6 +46,7 @@ Protection rings (ratified): Ring 0 services — publishing agents may call, nev
 4. Immediately startable without ENV: R-0 (CI), R-11 read-only (S4 inspector), W-2, W-3. Deliver repo changes as a patch-series zip (no push access).
 
 **Wave 1 ran 2026-07-26** (`docs/plan/CHANGE-PLAN.md` §2b): W-3 done (workspace **v70**), W-2 partial (both records disabled; snoocle de-seeded in the repo patch; **monetizer kept** — `feedback.ingest_monetizer` depends on it), R-0 done (CI + two-plane drift detector, 136-tool manifest), R-11 read-only done. Suite: 707 root + 55 ui tests, green.
+**Wave 2 ran 2026-07-27**: W-1 (platform = client 0, deny-by-default + 5 read-only contract tools) and T-1 (Tiers 0–3, **GO**). Bug-list updates from it: bug 2 (R-2) is no longer *blocking* anything — no blocker-severity skill conflict survives; the T2.6 finding grew from 1 node to **14** (all carrying an ungrantable `stage.save_output`, harmless to execution but the noise that hid the real defect); and `project.create` does not bump `workspaceVersion`, so drift checks keyed on it are blind to connection changes.
 Add to §4's bug list, learned the hard way: bug 4 (R-4) hides *every* refusal — `project.delete` on a code-defined default returns a bare `-32603` that is indistinguishable from a crash. Read `error.data`, or the source, before believing a tool is broken.
 
 Deep background per topic: `docs/plan/findings/` (migration, image pipeline, contract alignment, tool bugs, voice object, fleet alignment, self-describing engine) and `docs/plan/GUI-PLAN.md` / `TEST-PROTOCOL.md`.

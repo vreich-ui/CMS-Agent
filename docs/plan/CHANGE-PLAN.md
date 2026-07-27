@@ -35,7 +35,7 @@ Status: ☐ planned · ⧗ blocked · ✅ done this session.
 |---|---|---|
 | ENV-1 ☐ | Set `DR_LURIE_MCP_ENDPOINT` / `DR_LURIE_MCP_TOKEN` on Cloud Run | copy from Netlify site config; blocks all client-0001 work |
 | ENV-2 ☐ | Set `PDF_TOOL_MCP_ENDPOINT` / `PDF_TOOL_MCP_TOKEN` on Cloud Run | blocks the image pipeline via `project.call_tool` |
-| ENV-3 ☐ | Set `PLATFORM_MCP_ENDPOINT` / `PLATFORM_MCP_TOKEN` on Cloud Run | endpoint = platform site's `/mcp` (now live per §0); token minted platform-side |
+| ENV-3 ✅ | Set `PLATFORM_MCP_ENDPOINT` / `PLATFORM_MCP_TOKEN` on Cloud Run | **Done 2026-07-27** (Wolf). Verified: `endpointConfigured`/`tokenConfigured` both true, `test_connection` → `Platform_MCP_Server` |
 | ENV-4 ☐ | After W-2: remove `SNOOCLE_*` env vars | cleanup only, after deletion. **Scope narrowed:** keep `MONETIZER_*` — `feedback.ingest_monetizer` still uses that connection (see W-2) |
 
 Verify each with `project.test_connection` — currently fail-closed, which is correct.
@@ -44,7 +44,7 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 | id | change | depends on | detail |
 |---|---|---|---|
-| W-1 ☐ | **Register `platform` as client 0** — `project.create` per the registration contract: `projectId: platform`, `mcpEndpointEnvVar: PLATFORM_MCP_ENDPOINT`, `tokenEnvVar: PLATFORM_MCP_TOKEN` | ENV-3 | then `test_connection` → `list_tools` → allow-list read-only contract tools first (`object_contract`, `registry_get`, `object_inventory`, `object_validate`, `ping`), widen later behind the same gate as dr-lurie |
+| W-1 ✅ | **Register `platform` as client 0** — `project.create` per the registration contract: `projectId: platform`, `mcpEndpointEnvVar: PLATFORM_MCP_ENDPOINT`, `tokenEnvVar: PLATFORM_MCP_TOKEN` | ENV-3 | then `test_connection` → `list_tools` → allow-list read-only contract tools first (`object_contract`, `registry_get`, `object_inventory`, `object_validate`, `ping`), widen later behind the same gate as dr-lurie |
 | W-2 ◑ | **Retire `snoocle`; keep `monetizer`** | none | Both records **disabled** via `project.update` (ledgered, reversible) — `project.delete` refuses a code-defined default ("re-seeded on read"). Repo commit removes snoocle from `defaultProjectConnections`, so `project.delete snoocle` works once it lands. **monetizer is NOT a fake registration**: `improvement/monetizerIngest.ts` imports `monetizerProjectConfig` to power the `feedback.ingest_monetizer` tool, so deleting it drops a live tool from the wire surface. Retiring it is a decision about the Phase 7 outer loop, not registry hygiene. pdf-tool untouched — Ring 0 |
 | W-3 ✅ | **Generalize `learning_recorder` prompt** — last mechanical "Dr. Lurie" in contract-logic context | none | Done, workspace v69→v70. Now "project artifact/rendering failures", matching the node's own description. Full-node patch used deliberately (R-1) |
 | W-4 ⧗ | **Generalize the five editorial-voice nodes** (`topic_opportunity`, `research`, `brief_architect`, `draft_writer`, `trust_factual`) to fetch voice from the client | **P-2 (voice object)** | do NOT do earlier — there is nowhere to fetch voice from; premature generalization degrades writing quality |
@@ -86,7 +86,7 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 | id | change | unblocks |
 |---|---|---|
-| P-1 ☐ | Client-0 self-README content — Claude Code bootstrap for narrative; taxonomy terms (`engine`, `node`, `skill`, `tool`, `policy`) registered so generated docs resolve | T-3 |
+| P-1 ◑ | Client-0 self-README content — **appears substantially done** (16 published pages incl. a per-type manual; zero `content_item` objects yet). Re-verify and close — Claude Code bootstrap for narrative; taxonomy terms (`engine`, `node`, `skill`, `tool`, `policy`) registered so generated docs resolve | T-3 |
 | P-2 ☐ | Voice object type (`vox_`, modeled on theme, resolve-by-reference) + `vox_drlurie_default` seed | W-4, W-5 |
 | P-3 ☐ | Machine-readable request-id pattern in `object_contract` (today prose-only in the `id_object` constraint) | closes the orphaned-artifact class fleet-wide |
 | P-4 ☐ | Delete the two orphaned test artifacts (needs admin): sha `5b62bc51…` under `req_smoke_imagepipeline_20260726_01` (soft-delete) and `req_cms_agent_image_smoke_20260726` (orphan — needs reconcile or direct blob access) | hygiene |
@@ -95,7 +95,7 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 | id | milestone | gate | depends on |
 |---|---|---|---|
-| T-1 ☐ | Conformance vs client 0: Tiers 0–3 | machine verdict on the mcp.ts move, both directions | ENV-3, W-1 |
+| T-1 ✅ | Conformance vs client 0: Tiers 0–3 | **GO on client 0** — see TEST-PROTOCOL Appendix C. mcp.ts move verified both directions; all remaining failures are workspace-side | ENV-3, W-1 |
 | T-2 ☐ | Full dry-run pipeline vs client 0 (Tier 6) | contract-driven method proven on a second client | T-1 |
 | T-3 ☐ | **First live publish (Tier 8) = engine docs to client 0** | human approval at the publish call; replaces throwaway smoke articles permanently | T-2, P-1, R-12 |
 | T-4 ☐ | Dr. Lurié readiness → live (Tier 7 → 8) | the three locks open deliberately: `publishEnabled`, `publish_executor` activation, pinned approval — each human-gated | ENV-1/2, T-3 |
@@ -136,6 +136,20 @@ Suite after the wave: **707 root tests** (was 668), **55 ui tests** (was 45), bo
 
 ---
 
+## 2c. Execution log — 2026-07-27, wave 2 (W-1 + T-1, unblocked by ENV-3)
+
+| id | outcome |
+|---|---|
+| ENV-3 ✅ | Confirmed live from the workspace side: both `connection` booleans true on first read. |
+| W-1 ✅ | `platform` registered as client 0 — deny-by-default, five read-only contract tools allowed (`ping`, `registry_get`, `object_contract`, `object_inventory`, `object_validate`). All five verified present among the 51 tools platform exposes: no phantom grants. Publishing policy server-forced disabled, as designed. |
+| T-1 ✅ | **GO on client 0.** Tier 0 green (T0.1/T0.7 superseded by the R-0 drift detector; T0.6 pending merge). Tier 1 9/9. Tier 2 finds 4 R-5 disagreements + 14 ungrantable tool grants + the T2.8 attention gap, and confirms T2.4 is FIXED. Tier 3 10/10 against the client's own validator, including 6/6 correct refusals. Full detail: TEST-PROTOCOL Appendix C. |
+
+**What T-1 settles.** The mcp.ts split works in both directions: platform announces itself from site-identity, serves its contract, and enforces that contract exactly as documented — no drift between the two. Nothing found on client 0 blocks anything. Every open failure is workspace-side authoring or observability.
+
+**Findings that change the plan.** (1) **T2.6 is 14 nodes, not one** — and verified harmless to execution (the executor calls `saveStageOutput` directly), so it is a config-honesty defect rather than a functional one, but it is the noise that hid `contract_intelligence`. (2) **T2.4 is fixed** — no blocker-severity conflicts remain anywhere; the two survivors are `warning` and are the publish gate working. (3) **T2.7 passes** on the assertion's own "non-entry node" wording — `input_triage` is the entry node. (4) **Tier 2 has an approval-context artifact**: effective resolution carries no approvals, so every `requiresApproval` tool reads `approval_required` there; automating this tier without accounting for it would produce permanent false failures. (5) **`project.create` does not bump `workspaceVersion`** — the project registry is a separate repository, so any drift check keyed on `workspaceVersion` alone is blind to connection changes. (6) **P-1 looks substantially done** on client 0, and three client-side observations are logged in Appendix C for the platform repo.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -146,4 +160,11 @@ Suite after the wave: **707 root tests** (was 668), **55 ui tests** (was 45), bo
 
 Say **go** (or mark exceptions by ID) and I execute in this order: **W-2, W-3** (workspace, reversible) → **R-11 read-only + R-0** delivered as a patch series via the zip handoff → **W-1 + T-1** the moment ENV-3 lands. Everything else follows the spine.
 
-**Wave 1 executed 2026-07-26** — see §2b. Next without new approval: `project.delete snoocle` once the patch lands. Next needing approval: **R-4** (now the highest-value repo fix — it gates both diagnosis and the S4 write path), then **R-1**.
+**Wave 1 executed 2026-07-26** — see §2b. **Wave 2 executed 2026-07-27** (W-1 + T-1) — see §2c.
+
+Next without new approval: `project.delete snoocle` once the wave-1 patch lands.
+Next needing approval, in the order I would take them:
+1. **T2.6 cleanup** (14 nodes carrying an ungrantable `stage.save_output`) — cheap, and it clears the noise hiding real denials. Needs a decision: raise those nodes to `riskLevel: write`, or drop the dead grant. I recommend dropping the grant, since the executor persists stage outputs itself.
+2. **R-4** — typed version-conflict envelope. Still the highest-value repo fix: it gates diagnosis generally and the S4 write path specifically.
+3. **T-2** — full dry-run pipeline vs client 0. Now unblocked by T-1, but it executes nodes, so it is a deliberate step rather than a sweep.
+4. **R-1**, then **R-10** (attention resolution — T2.8 is the reason nothing above is visible in the product).
