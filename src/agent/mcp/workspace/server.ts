@@ -1,6 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createWorkspaceTools, toolError, type WorkspaceTool, type WorkspaceToolContext } from "./tools.js";
+import { toolErrorSummary } from "./toolKit.js";
 import { canonicalToolName } from "./toolKit.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 
@@ -134,6 +135,12 @@ export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolC
         return { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } };
     }
   } catch (error) {
-    return { jsonrpc: "2.0", id, error: { code: -32603, message: "Tool execution failed", data: toolError(error) } };
+    // R-4: report WHAT failed, not just THAT something did. Every failure used to come back as the
+    // same "Tool execution failed" sentence with the real cause in `data`, which MCP clients do not
+    // show — so a correct, deliberate refusal (default_project_protected, version_conflict) was
+    // indistinguishable from a crash. The structured envelope still travels in `data`; the message
+    // now leads with the machine-readable code.
+    const envelope = toolError(error);
+    return { jsonrpc: "2.0", id, error: { code: -32603, message: toolErrorSummary(envelope), data: envelope } };
   }
 }

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { articleBodyJsonSchema, articleBodySchema, validateJsonSchema, type WorkspaceMutationMeta } from "./store.js";
 import { workspaceRiskLevels, type WorkspaceNode } from "../../workspace/nodeTypes.js";
 import { type WorkspaceActor, type WorkspaceChangeSource } from "../../workspace/changeTypes.js";
-import { coerceJsonObjectInput, metaJson, mutationMeta, objectSchema, ok, tool, toolError, type JsonSchema, type WorkspaceTool } from "./toolKit.js";
+import { coerceJsonObjectInput, metaJson, mutationMeta, objectSchema, ok, tool, toolError, type JsonSchema, type WorkspaceTool, MissingPatchFieldError } from "./toolKit.js";
 export { metaJson, mutationMeta, objectSchema, ok, tool, toolError, workspaceActorSchema } from "./toolKit.js";
 export type { JsonSchema, WorkspaceTool } from "./toolKit.js";
 import { createChangesTools } from "./changesTools.js";
@@ -58,6 +58,19 @@ const createNodeInput = z.object({ node: z.any(), ...mutationMeta }).strict();
 const deleteNodeInput = z.object({ id: z.string().min(1), ...mutationMeta }).strict();
 const cloneNodeInput = z.object({ id: z.string().min(1), newId: z.string().min(1), ...mutationMeta }).strict();
 const updateNodeInput = z.object({ id: z.string().min(1), patch: z.record(z.string(), z.unknown()), ...mutationMeta }).strict();
+
+// R-1 — data-loss guard for the single-field node writers.
+//
+// These tools build their store patch as `{ [field]: data.patch[field] }`. When the caller's patch
+// omits that field the expression yields `{ allowedTools: undefined }`, and the store's
+// `{ ...existing, ...patch }` merge then overwrites the stored array with undefined, which
+// normalizeNode quietly rounds down to []. The call returned ok:true while destroying the field —
+// reproduced against a live workspace. Refuse instead: a writer asked to write nothing is a caller
+// bug, and the only safe answer is to not write.
+const requirePatchField = (patch: Record<string, unknown>, field: string, toolName: string): unknown => {
+  if (!(field in patch) || patch[field] === undefined) throw new MissingPatchFieldError(toolName, field);
+  return patch[field];
+};
 const updateGraphInput = z.object({ create: z.array(z.any()).optional(), update: z.array(z.record(z.string(), z.unknown()).and(z.object({ id: z.string().min(1) }))).optional(), delete: z.array(z.string().min(1)).optional(), dependencies: z.record(z.string(), z.array(z.string().min(1))).optional(), orderedNodeIds: z.array(z.string().min(1)).optional(), positions: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).optional(), allowCanonicalNodeRemoval: z.boolean().optional(), adminApproved: z.boolean().optional(), ...mutationMeta }).strict();
 const validateNodeInput = z.object({ node: z.any().optional(), id: z.string().min(1).optional() }).strict();
 const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(), stageOutputs: z.array(stageOutputImport).optional(), learningObservations: z.array(learningObservationImport).optional() }).strict();
@@ -291,8 +304,8 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "workspace.update_node_prompt", description: "Update a node prompt.", zodSchema: updatePrompt, inputSchema: updatePromptJsonSchema, execute: async (input) => { const data = updatePrompt.parse(input); return ok(await workspaceRepository.updateNodePrompt(data.id, data.prompt, meta(data))); } }),
     tool({ name: "workspace.update_node_input_schema", description: "Update node input JSON Schema.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const issues = validateJsonSchema(data.schema); if (issues.length) throw new Error(issues.join("; ")); return ok(await workspaceRepository.updateNode(data.id, { inputSchema: data.schema }, meta(data), "node.input_schema_updated")); } }),
     tool({ name: "workspace.update_node_output_schema", description: "Update node output JSON Schema draft 2020-12.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const issues = validateJsonSchema(data.schema); if (issues.length) throw new Error(issues.join("; ")); return ok(await workspaceRepository.updateNode(data.id, { outputSchema: data.schema, schema: data.schema }, meta(data), "node.output_schema_updated")); } }),
-    ...[["workspace.update_node_tools", "allowedTools", "node.tools_updated"], ["workspace.update_node_skills", "assignedSkills", "node.skills_updated"], ["workspace.update_node_dependencies", "dependsOn", "node.dependencies_updated"]].map(([name, field, eventType]) => tool({ name, description: `Update node ${field}.`, zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); return ok(await workspaceRepository.updateNode(data.id, { [field]: data.patch[field] } as Partial<WorkspaceNode>, meta(data), eventType)); } })),
-    ...[["workspace.update_node_metadata", "metadata"], ["workspace.update_node_model_config", "modelConfig"]].map(([name, field]) => tool({ name, description: `Update node ${field}.`, zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); return ok(await workspaceRepository.updateNode(data.id, { [field]: data.patch[field] } as Partial<WorkspaceNode>, meta(data), field === "modelConfig" ? "node.model_config_updated" : "node.updated")); } })),
+    ...[["workspace.update_node_tools", "allowedTools", "node.tools_updated"], ["workspace.update_node_skills", "assignedSkills", "node.skills_updated"], ["workspace.update_node_dependencies", "dependsOn", "node.dependencies_updated"]].map(([name, field, eventType]) => tool({ name, description: `Update node ${field}.`, zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); return ok(await workspaceRepository.updateNode(data.id, { [field]: requirePatchField(data.patch, field, name) } as Partial<WorkspaceNode>, meta(data), eventType)); } })),
+    ...[["workspace.update_node_metadata", "metadata"], ["workspace.update_node_model_config", "modelConfig"]].map(([name, field]) => tool({ name, description: `Update node ${field}.`, zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); return ok(await workspaceRepository.updateNode(data.id, { [field]: requirePatchField(data.patch, field, name) } as Partial<WorkspaceNode>, meta(data), field === "modelConfig" ? "node.model_config_updated" : "node.updated")); } })),
     tool({ name: "workspace.reorder_nodes", description: "Reorder nodes without changing dependencies.", zodSchema: updateGraphInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateGraphInput.parse(input); return ok(await workspaceRepository.updateGraph(data, meta(data), "graph.reordered")); } }),
     tool({ name: "workspace.update_graph", description: "Atomically update workflow graph.", zodSchema: updateGraphInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateGraphInput.parse(input); return ok(await workspaceRepository.updateGraph(data, meta(data), "graph.updated")); } }),
     tool({ name: "workspace.validate_graph", description: "Validate workflow graph.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); const { validateWorkspaceGraph } = await import("../../workspace/nodes.js"); const nodes = await workspaceRepository.getNodes(); return ok({ validation: validateWorkspaceGraph(nodes) }); } }),
@@ -359,7 +372,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "project.update", description: "Patch a registered project's safe fields (name, env var names, auth mode, allowed tools, contract, status). Identity and publishing policy are not patchable.", zodSchema: projectUpdateInput, inputSchema: projectUpdateJsonSchema, execute: async (input) => { const data = projectUpdateInput.parse(input); return ok({ project: await updateProject(projectRepository, data.projectId, data.patch) }); } }),
     tool({ name: "project.delete", description: "Remove an agent-registered project connection. Code-defined default projects cannot be deleted (set status to disabled instead).", zodSchema: projectDeleteInput, inputSchema: projectDeleteJsonSchema, execute: async (input) => { const data = projectDeleteInput.parse(input); return ok(await deleteProject(projectRepository, data.projectId)); } }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
-    ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository }),
+    ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),
     ...createImprovementTools({ workspaceRepository, executionRepository, learningRepository, evaluationRepository: repositoryManager.getEvaluationRepository(), improvementRepository: repositoryManager.getImprovementRepository(), meta })
   ];
 }

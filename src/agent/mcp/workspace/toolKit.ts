@@ -2,6 +2,10 @@
 // tools.ts, changesTools.ts, and constellationTools.ts can all use them without import cycles.
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { workspaceActorKinds, workspaceChangeSources } from "../../workspace/changeTypes.js";
+import { WorkspaceToolError } from "../../workspace/workspaceErrors.js";
+
+// Re-exported so tool modules keep a single import site for raising and classifying failures.
+export { WorkspaceToolError, WorkspaceVersionConflictError, MissingPatchFieldError } from "../../workspace/workspaceErrors.js";
 
 export type JsonSchema = Record<string, unknown>;
 export type WorkspaceTool = {
@@ -40,7 +44,32 @@ export const coerceJsonObjectInput = (value: unknown): unknown => {
   }
 };
 export const tool = (definition: WorkspaceTool) => definition;
-export const toolError = (error: unknown) => error instanceof ZodError ? { ok: false, error: { code: "validation_error", issues: error.issues } } : { ok: false, error: { code: "tool_error", message: error instanceof Error ? error.message : "Unknown error" } };
+
+// Anything carrying a string `code` is treated as already-typed — this picks up ProjectAdminError
+// (default_project_protected, unknown_project, project_exists) without coupling this module to it.
+const codedError = (error: unknown): { code: string; message: string } | null => {
+  if (!(error instanceof Error)) return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.length > 0 ? { code, message: error.message } : null;
+};
+
+export type ToolErrorEnvelope = { ok: false; error: { code: string; message?: string; issues?: unknown } & Record<string, unknown> };
+
+export const toolError = (error: unknown): ToolErrorEnvelope => {
+  if (error instanceof ZodError) return { ok: false, error: { code: "validation_error", issues: error.issues } };
+  if (error instanceof WorkspaceToolError) return { ok: false, error: { code: error.code, message: error.message, ...error.details } };
+  const coded = codedError(error);
+  if (coded) return { ok: false, error: { code: coded.code, message: coded.message } };
+  return { ok: false, error: { code: "tool_error", message: error instanceof Error ? error.message : "Unknown error" } };
+};
+
+// One-line summary for the JSON-RPC `error.message`, so the transport stops reporting every failure
+// as the same opaque sentence. The structured envelope still travels in `error.data`.
+export const toolErrorSummary = (envelope: ToolErrorEnvelope): string => {
+  const { code, message } = envelope.error;
+  if (code === "validation_error") return "validation_error: input did not match the tool schema.";
+  return message ? `${code}: ${message}` : code;
+};
 
 export const workspaceActorSchema = z.object({ kind: z.enum(workspaceActorKinds), id: z.string().min(1).optional(), label: z.string().min(1).optional() }).strict();
 export const mutationMeta = {

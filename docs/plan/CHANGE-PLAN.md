@@ -54,13 +54,13 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 **R-0 ✅ CI (GitHub Actions).** `npm test` + `npm run test:ui` + both builds on every push, plus the two-plane drift detector. **Gates everything below** — 94 tests, zero automation today; nothing on this list stays fixed without it.
 
-**R-1 ☐ Data-loss fix: single-field `update_node_*` writers.** `update_node_tools/_skills/_dependencies/_metadata/_model_config` write `undefined` over the target field when the patch omits it — reproduced: `ok:true` while wiping `allowedTools`. Fix: reject a patch missing the target field. *Highest severity on the list.*
+**R-1 ✅ Data-loss fix: single-field `update_node_*` writers.** `update_node_tools/_skills/_dependencies/_metadata/_model_config` write `undefined` over the target field when the patch omits it — reproduced: `ok:true` while wiping `allowedTools`. Fix: reject a patch missing the target field. *Highest severity on the list.*
 
 **R-2 ☐ Skill-compatibility resolver fix.** Any skill `outputSchema` with `additionalProperties`/`properties`/`required` reports blocker-incompatible regardless of actual compatibility; only bare `{"type":"object"}` passes. Current skills work because we flattened them — the next properly-specified skill re-triggers it.
 
 **R-3 ☐ Coerce stringified JSON in `update_node_output_schema` / `_input_schema`.** `coerceJsonObjectInput(data.schema)` + declare `schema: {type:["object","boolean"]}` — the defense `create_node` already has, per the codebase's own documented client-stringify behavior.
 
-**R-4 ☐ Typed version-conflict envelope.** `{ok:false, code:"version_conflict", currentVersion, currentRevisionId}` instead of bare `-32603`. Precondition for multi-agent editing and for the S4 save path. Also surface `error.data` detail generally — it exists but clients only see "Tool execution failed".
+**R-4 ✅ Typed version-conflict envelope.** `{ok:false, code:"version_conflict", currentVersion, currentRevisionId}` instead of bare `-32603`. Precondition for multi-agent editing and for the S4 save path. Also surface `error.data` detail generally — it exists but clients only see "Tool execution failed".
 
 **R-5 ☐ Reconcile the two resolvers.** `skill_resolve_for_node` says `effectiveTools:["project.call_tool"]` where `node_get_effective_tools` says `allowed:false` for the same nodes. One semantics, one answer; the GUI can't render two truths.
 
@@ -72,7 +72,7 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 **R-9 ☐ `requestId` on runs and usage records.** The change ledger already carries `correlation.requestId`; runs and usage don't. This is the join key between platform workflow records and workspace runs — without it the learning corpus sees outcomes without method.
 
-**R-10 ☐ Attention resolution.** `constellation.get_attention` must report: blocker-severity skill conflicts, skill-requested-but-denied tools, `dependsOn`≠`requiredInputs`, unconfigured project connections, and (after R-12) stale docs. Today it returns `[]` against real defects.
+**R-10 ✅ Attention resolution.** `constellation.get_attention` must report: blocker-severity skill conflicts, skill-requested-but-denied tools, `dependsOn`≠`requiredInputs`, unconfigured project connections, and (after R-12) stale docs. Today it returns `[]` against real defects.
 
 **R-11 ◑ S4 node inspector — read-only DONE, write path still blocked on R-4.** Three-layer rendering per node: Method (stored, always) / Effective (resolved, always) / Identity (live contract fetch — greyed "client contract unreachable (`<ENV_VAR>`)" when down, run controls disabled, `fetchedAt` always shown, never stale-as-live). Tabs: Prompt, Tools (own vs effective with `denialReasons`), Skills (with conflicts), Overview, Schemas. Connection badge on the project selector. **Write path ships only after R-4.** This closes your stated gap: seeing node instructions and attributes.
 
@@ -150,6 +150,21 @@ Suite after the wave: **707 root tests** (was 668), **55 ui tests** (was 45), bo
 
 ---
 
+## 2d. Execution log — 2026-07-27, wave 3 (approved: R-4, R-1, T2.6 cleanup + R-10)
+
+| id | outcome |
+|---|---|
+| T2.6 ✅ | 14 nodes stripped of the ungrantable `stage.save_output` grant — **in the live workspace** (v70 → v84, graph valid, verified: the tool now denies with `node_tool_not_allowed` first, i.e. the node no longer requests it) **and in `publishingConductorNodes`**, which would otherwise have re-seeded the defect into every new workspace. The set was recomputed from the tool registry rather than trusted from the earlier sweep. |
+| R-4 ✅ | Typed failure envelopes. `code` + structured details; conflicts carry `currentVersion`/`currentRevisionId`; `ProjectAdminError` codes surface generically; the JSON-RPC message leads with the code. Message text kept byte-compatible so existing callers that match on it still work. |
+| R-1 ✅ | The five single-field `update_node_*` writers now refuse a patch that omits their target field. Regression test verified by reverting the guard (8 failures, including the field-survival assertion). |
+| R-10 ✅ | `get_attention` reports five previously invisible classes, each evidence-cited. Absent inputs skip their check rather than reporting a false clean; entry nodes are exempt from the dependency check. |
+
+Suite after the wave: **742 root tests** (was 707), 55 ui, both builds, drift clean.
+
+**Findings.** (1) The T2.6 defect existed in **both** the live workspace and the code defaults — fixing data alone would have been undone by the next fresh workspace, exactly the snoocle trap. Worth a standing habit: after any workspace-data fix, check whether the seeded defaults carry the same thing. (2) R-4 nearly shipped as a breaking change — three existing tests match on the conflict message text, and they were right to; the fix is additive-only. (3) `get_attention` on a fresh workspace now legitimately reports the three unconfigured default clients, so "no runs" and "nothing wrong" are finally distinguishable. (4) The two-plane drift detector caught the one wire-surface change in this wave (`get_attention`'s description) and required a deliberate manifest regeneration — R-0 paying for itself twice in two waves.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -162,9 +177,12 @@ Say **go** (or mark exceptions by ID) and I execute in this order: **W-2, W-3** 
 
 **Wave 1 executed 2026-07-26** — see §2b. **Wave 2 executed 2026-07-27** (W-1 + T-1) — see §2c.
 
-Next without new approval: `project.delete snoocle` once the wave-1 patch lands.
-Next needing approval, in the order I would take them:
-1. **T2.6 cleanup** (14 nodes carrying an ungrantable `stage.save_output`) — cheap, and it clears the noise hiding real denials. Needs a decision: raise those nodes to `riskLevel: write`, or drop the dead grant. I recommend dropping the grant, since the executor persists stage outputs itself.
-2. **R-4** — typed version-conflict envelope. Still the highest-value repo fix: it gates diagnosis generally and the S4 write path specifically.
-3. **T-2** — full dry-run pipeline vs client 0. Now unblocked by T-1, but it executes nodes, so it is a deliberate step rather than a sweep.
-4. **R-1**, then **R-10** (attention resolution — T2.8 is the reason nothing above is visible in the product).
+**Wave 3 executed 2026-07-27** (R-4, R-1, R-10, T2.6) — see §2d.
+
+Blocked on Wolf: **ENV-1/ENV-2 tokens are rejected (HTTP 401 on both `dr-lurie` and `pdf-tool`)** — the vars are set and the endpoints answer, so the token values are wrong, stale, or rotated; and **the Cloud Run deploy has not picked up the merged code**, which is why `project.delete snoocle` still refuses.
+
+Next, in the order I would take them:
+1. **`project.delete snoocle`** — one call, the moment the deploy rolls out.
+2. **R-11 write path** — now unblocked by R-4, which was its stated precondition.
+3. **T-2** — full dry-run pipeline vs client 0. Unblocked by T-1, but it executes nodes, so it is a deliberate step rather than a sweep.
+4. **R-2** (skill-schema resolver) — no longer blocking anything, but it is what forces the 7 placeholder skill `outputSchema`s to stay flattened.

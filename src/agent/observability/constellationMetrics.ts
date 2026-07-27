@@ -3,7 +3,7 @@
 // data. Nothing here invents numbers: usage keeps its estimated/actual split, derived values name
 // their basis, and metrics the raw data cannot support are explicit nulls with reasons.
 
-import type { WorkspaceNode } from "../workspace/nodeTypes.js";
+import type { WorkspaceNode, WorkspaceRiskLevel } from "../workspace/nodeTypes.js";
 import type { WorkflowExecutionRecord } from "../workspace/executionTypes.js";
 import type { DerivedExecutionEdge, WorkspaceRelationship } from "../workspace/relationshipTypes.js";
 import type { ModelUsageRecord } from "./modelUsageTypes.js";
@@ -17,6 +17,29 @@ export type ConstellationInputs = {
   runs: WorkflowExecutionRecord[];
   usageRecords: ModelUsageRecord[];
   toolExecutions: ToolExecutionRecord[];
+  // R-10 inputs. Optional so every existing caller and test keeps working: when a field is absent
+  // the corresponding check is skipped rather than reporting a false clean. get_attention supplies
+  // all three.
+  skillPolicies?: NodeSkillPolicySnapshot[];
+  projects?: ProjectConnectionSnapshot[];
+  toolRiskLevels?: Record<string, WorkspaceRiskLevel>;
+};
+
+// Just enough of skill.resolve_for_node to judge conflicts and denied requests, kept structural so
+// this module stays free of skill-layer imports.
+export type NodeSkillPolicySnapshot = {
+  nodeId: string;
+  conflicts: { severity: "warning" | "blocker"; source: string; message: string }[];
+  requestedTools: string[];
+  deniedTools: string[];
+  effectiveTools: string[];
+};
+
+// Just enough of project.list to judge whether a connection can actually be used.
+export type ProjectConnectionSnapshot = {
+  projectId: string;
+  status: "active" | "disabled";
+  connection: { endpointConfigured: boolean; tokenConfigured: boolean; mcpEndpointEnvVar: string; tokenEnvVar?: string };
 };
 
 const INDEPENDENT_WORKFLOW_ID = "independent_node";
@@ -286,5 +309,121 @@ export function buildAttentionItems(inputs: ConstellationInputs): ConstellationA
     });
   }
 
+  items.push(...configurationAttentionItems(inputs));
+
   return items.sort((a, b) => severityRank[a.severity] - severityRank[b.severity] || a.id.localeCompare(b.id));
+}
+
+// R-10 — configuration and connection defects.
+//
+// get_attention used to return [] against a workspace with 18 real defects in it, which meant every
+// finding in this session had to be dug out by hand and none of it was visible in the product. These
+// checks report the classes the audit actually found, each citing the evidence that proves it rather
+// than a score.
+const riskRank: Record<WorkspaceRiskLevel, number> = { read: 1, write: 2, publish: 3, admin: 4 };
+
+const sameSet = (a: string[], b: string[]): boolean => {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((value, index) => value === right[index]);
+};
+
+export function configurationAttentionItems(inputs: ConstellationInputs): ConstellationAttentionItem[] {
+  const items: ConstellationAttentionItem[] = [];
+  const nodes = [...inputs.nodes].sort((a, b) => a.id.localeCompare(b.id));
+
+  for (const node of nodes) {
+    // dependsOn vs requiredInputs. Entry nodes (no dependencies) legitimately declare an external
+    // envelope as their required input, so comparing them would report a permanent false positive.
+    const dependsOn = node.dependsOn ?? [];
+    const requiredInputs = node.requiredInputs ?? [];
+    if (dependsOn.length > 0 && !sameSet(dependsOn, requiredInputs)) {
+      items.push({
+        id: `attn_dependency_mismatch_${node.id}`,
+        severity: "warning",
+        title: `${node.id} disagrees with itself about its inputs`,
+        detail: "dependsOn drives execution order; requiredInputs is what the node claims it needs. When they differ, one of them is wrong.",
+        reasons: [`dependsOn = [${[...dependsOn].sort().join(", ")}]`, `requiredInputs = [${[...requiredInputs].sort().join(", ")}]`],
+        evidence: { nodeIds: [node.id] }
+      });
+    }
+
+    // A tool the node grants itself that its own riskLevel can never authorize. Harmless to
+    // execution, but it advertises a capability that cannot exist and puts a permanent false denial
+    // into every effective-tools report — which is exactly the noise a real defect hid behind.
+    if (inputs.toolRiskLevels) {
+      const nodeRank = riskRank[node.riskLevel ?? "read"];
+      const ungrantable = (node.allowedTools ?? [])
+        .filter((toolId) => {
+          const toolRisk = inputs.toolRiskLevels?.[toolId];
+          return toolRisk !== undefined && riskRank[toolRisk] > nodeRank;
+        })
+        .sort();
+      if (ungrantable.length) {
+        items.push({
+          id: `attn_ungrantable_tools_${node.id}`,
+          severity: "warning",
+          title: `${node.id} grants itself ${ungrantable.length} tool${ungrantable.length === 1 ? "" : "s"} its risk level forbids`,
+          detail: `The node is riskLevel "${node.riskLevel ?? "read"}", so the policy resolver can never grant these. Either raise the node's risk level or drop the grant.`,
+          reasons: ungrantable.map((toolId) => `${toolId} is riskLevel ${inputs.toolRiskLevels?.[toolId]}, above the node's ${node.riskLevel ?? "read"}`),
+          evidence: { nodeIds: [node.id] }
+        });
+      }
+    }
+  }
+
+  // Skill conflicts. A blocker is action-severity: it is not advisory, it means the resolved policy
+  // is incoherent.
+  for (const policy of [...(inputs.skillPolicies ?? [])].sort((a, b) => a.nodeId.localeCompare(b.nodeId))) {
+    const blockers = policy.conflicts.filter((conflict) => conflict.severity === "blocker");
+    if (blockers.length) {
+      items.push({
+        id: `attn_skill_blocker_${policy.nodeId}`,
+        severity: "action",
+        title: `${policy.nodeId} has a blocker-severity skill conflict`,
+        detail: "A blocker conflict means the node's resolved skill policy is incoherent, not merely suboptimal.",
+        reasons: blockers.map((conflict) => `${conflict.source}: ${conflict.message}`),
+        evidence: { nodeIds: [policy.nodeId] }
+      });
+    }
+
+    // A skill that asks for a tool the node denies: the skill's instructions assume a capability the
+    // node cannot exercise, so the node will fail at exactly the step the skill was added for.
+    const node = inputs.nodes.find((candidate) => candidate.id === policy.nodeId);
+    const deniedButRequested = policy.requestedTools
+      .filter((toolId) => policy.deniedTools.includes(toolId) || !(node?.allowedTools ?? []).includes(toolId))
+      .sort();
+    if (deniedButRequested.length) {
+      items.push({
+        id: `attn_skill_requests_denied_tool_${policy.nodeId}`,
+        severity: "warning",
+        title: `${policy.nodeId} has a skill requesting ${deniedButRequested.length} tool${deniedButRequested.length === 1 ? "" : "s"} the node denies`,
+        detail: "The skill's instructions assume a capability the node cannot exercise.",
+        reasons: deniedButRequested.map((toolId) => `skill requests ${toolId}; the node does not grant it`),
+        evidence: { nodeIds: [policy.nodeId] }
+      });
+    }
+  }
+
+  // Unconfigured client connections. An active project whose endpoint or token is missing fails
+  // closed at call time — correct behaviour, but silent until something tries to publish.
+  for (const project of [...(inputs.projects ?? [])].sort((a, b) => a.projectId.localeCompare(b.projectId))) {
+    if (project.status !== "active") continue;
+    const missing = [
+      ...(project.connection.endpointConfigured ? [] : [project.connection.mcpEndpointEnvVar]),
+      ...(project.connection.tokenEnvVar && !project.connection.tokenConfigured ? [project.connection.tokenEnvVar] : [])
+    ];
+    if (!missing.length) continue;
+    items.push({
+      id: `attn_project_unconfigured_${project.projectId}`,
+      severity: "action",
+      title: `Client ${project.projectId} is active but not configured`,
+      detail: "Calls to this client fail closed until the deployment provides these environment variables. Nothing downstream of it can run.",
+      reasons: missing.map((envVar) => `${envVar} is not configured on this deployment`),
+      evidence: {}
+    });
+  }
+
+  return items;
 }
