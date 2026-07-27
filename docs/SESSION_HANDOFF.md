@@ -11,15 +11,26 @@ The workspace was audited end-to-end, aligned around one principle — **the cli
 
 **All further work is governed by `docs/plan/CHANGE-PLAN.md` — 25 items with IDs (ENV/W/R/P/T) and a dependency spine. No code or MCP changes outside approved plan items.**
 
-## 2. Standing blockers — **the connections regressed; check before trusting this section**
+## 2. Standing blockers — **none as of 2026-07-27 (re-verified after redeploy)**
 
-⚠️ **As of the end of 2026-07-27 all three client connections were DOWN again**, reporting `endpointConfigured: false`, and the deployed surface had reverted to pre-R-3 code — i.e. the revision serving traffic predated the day's merges. Workspace state was unaffected (v84, `gcs`, healthy), which is exactly what makes this misleading. **The cause is almost certainly the `--set-env-vars` trap described further down: it replaces the whole environment and the runbook's deploy command omits the client variables.** First action for a fresh session: `project_test_connection` on `platform`, `dr-lurie` and `pdf-tool`, and check the live `update_node_output_schema` input schema — if `schema` is `{}` rather than `{"type":["object","boolean"]}`, the revision is stale.
+All three client connections verified live on revision **cms-agent-mcp-00028-8f4**: `platform` → `Platform_MCP_Server` 0.1.0, `dr-lurie` → `Dr_Lurie_MCP_Server` 0.1.0, `pdf-tool` → `pdf-tool-agent-artifacts` 0.2.0. The merged code is confirmed live by function, not by assumption: a **stringified** schema sent to `workspace_update_node_output_schema` was accepted, which only post-R-3 code does. Workspace **v85**.
 
-The values themselves are known-good: all three were verified working earlier that day. ~~ENV-1 `DR_LURIE_MCP_*`~~ · ~~ENV-2 `PDF_TOOL_MCP_*`~~ · ~~ENV-3 `PLATFORM_MCP_*`~~ were each confirmed with a real handshake, and the brokered artifact chain (`dr-lurie.get_pdf_tool_storage_grant` → pdf-tool with the grant as `storage`) was proven **through `project.call_tool`** on the GCloud plane, not just via direct session connectors. `project.delete snoocle` also succeeded, closing W-2 — so the code HAD rolled out at that point and has since been rolled back or redeployed over.
-
-Verify with `project_test_connection` — it fails closed, which is correct. **Caution when it reports 401:** the transport bearer (`*_MCP_TOKEN`) and the client's *storage* credential are different layers. A transport 401 fails the whole call; a storage 401 comes back as a **successful** call carrying `isError:true` and a Netlify Blobs 401 inside the tool result. Wave 4 lost time re-blaming the bearer for the latter.
+Verify with `project_test_connection` — it fails closed, which is correct. **Caution when it reports 401:** the transport bearer (`*_MCP_TOKEN`) and the client's *storage* credential are different layers. A transport 401 fails the whole call; a storage 401 comes back as a **successful** call carrying `isError:true` and a Netlify Blobs 401 inside the tool result.
 
 Left over: **ENV-4**, cleanup only — drop the unused `SNOOCLE_*` vars, keep `MONETIZER_*` (`feedback.ingest_monetizer` depends on it).
+
+### The deploy trap, now fixed at source
+
+It bit twice: `--set-env-vars` / `--set-secrets` REPLACE a service's entire environment, and the runbook's copy-pasteable command listed only the four store/CORS variables — so every release silently deleted the six client-connection variables while `repository.get_health` stayed green (workspace state is GCS, independent of the revision). It reads as a credentials problem and is not one.
+
+Fixed by changing the thing people actually copy, not just adding a warning:
+
+- **`scripts/deploy-mcp.sh`** — one committed release command. Merge-style `--update-env-vars` / `--update-secrets`, image tagged with the git SHA so "which commit is live?" is answerable, prints the serving revision's full environment, then runs the verification below.
+- **`npm run verify:deploy`** — `MCP_URL=… MCP_API_TOKEN=… npm run verify:deploy`. Hashes the served tool surface and compares it to the committed manifest (catches a stale revision — health checks cannot), and reports endpoint/token configuration per project (catches a wiped environment). Both incidents, one command.
+- Runbook commands corrected in PHASE4 (service) and PHASE2 (conductor job). PHASE1's `--set-*` is left as-is because it *creates* the job, with a note not to copy it into an update.
+- To drop one variable later: `--remove-env-vars KEY`. Never re-list everything with `--set-*`.
+
+**Merging is not deploying.** There is no CI/CD for the MCP image; `cloudbuild.mcp.yaml` only builds it. Confirm the live revision before concluding a fix shipped.
 
 With ENV-3 in, client 0 is registered and **T-1 passed GO** (TEST-PROTOCOL Appendix C): the mcp.ts move is verified in both directions and nothing on the client side blocks anything.
 

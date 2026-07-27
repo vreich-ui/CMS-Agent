@@ -62,9 +62,11 @@ The window only needs to cover active writes — for a single-operator system, m
 4. **Verify**: `npm run job:migrate-store -- --verify` — exits non-zero on any missing or
    mismatched key. Do not proceed until it exits 0.
 5. **Flip the Cloud Run job**: `gcloud run jobs update conductor-run \
-   --set-env-vars "WORKSPACE_STORE=gcs,GCS_BUCKET=<bucket>,..." \
+   --update-env-vars "WORKSPACE_STORE=gcs,GCS_BUCKET=<bucket>,..." \
    --remove-env-vars NETLIFY_BLOBS_SITE_ID --clear-secrets ...netlify-blobs-token...`
-   (keep OPENAI secrets). Execute a mock run; confirm it appears in `workflow.list_runs`
+   (keep OPENAI secrets). **`--update-env-vars`, not `--set-env-vars`** — the `--set-*` variants replace
+   the job's entire environment, which is how the MCP service lost six variables twice (see
+   PHASE4_RUNBOOK). Execute a mock run; confirm it appears in `workflow.list_runs`
    **via the job's own summary** and the bucket (`gcloud storage ls gs://$BUCKET/runs/`).
 6. **Netlify control plane**: continues reading/writing Netlify Blobs until Phase 4 —
    see the split-brain note below.

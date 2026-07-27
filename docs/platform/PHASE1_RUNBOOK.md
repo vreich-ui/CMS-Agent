@@ -66,6 +66,9 @@ printf '%s' "<openai-key>"        | gcloud secrets create openai-api-key      --
 printf '%s' "<netlify-pat>"       | gcloud secrets create netlify-blobs-token --project "$PROJECT" --data-file=-
 
 # 3. Create the job (dedicated least-privilege service account recommended)
+#    --set-env-vars / --set-secrets are correct HERE because this CREATES the job — there is nothing to
+#    preserve. Do not copy these flags into a later `jobs update`: --set-* replaces the whole
+#    environment, which is how the MCP service lost six variables twice (see PHASE4_RUNBOOK).
 gcloud run jobs create conductor-run \
   --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
   --cpu 1 --memory 1Gi --max-retries 0 --task-timeout 3600 \
