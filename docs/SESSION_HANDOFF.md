@@ -11,13 +11,15 @@ The workspace was audited end-to-end, aligned around one principle — **the cli
 
 **All further work is governed by `docs/plan/CHANGE-PLAN.md` — 25 items with IDs (ENV/W/R/P/T) and a dependency spine. No code or MCP changes outside approved plan items.**
 
-## 2. Standing blockers (nothing client-facing works until these)
+## 2. Standing blockers — **none as of 2026-07-27**
 
-Cloud Run env vars, set by Wolf manually (values live in Netlify site config; they never pass through MCP):
-`DR_LURIE_MCP_ENDPOINT/_TOKEN` (ENV-1) · `PDF_TOOL_MCP_ENDPOINT/_TOKEN` (ENV-2) · ~~`PLATFORM_MCP_ENDPOINT/_TOKEN` (ENV-3)~~ **done 2026-07-27**.
-Verify with `project_test_connection` — it fails closed, which is correct.
+All three connection env vars are in and verified: ~~ENV-1 `DR_LURIE_MCP_*`~~ · ~~ENV-2 `PDF_TOOL_MCP_*`~~ · ~~ENV-3 `PLATFORM_MCP_*`~~. All four registered projects handshake, and the brokered artifact chain (`dr-lurie.get_pdf_tool_storage_grant` → pdf-tool with the grant as `storage`) is proven **through `project.call_tool`** on the GCloud plane, not just via direct session connectors. The Cloud Run deploy has also picked up the merged code — proven by `project.delete snoocle` succeeding, which closes W-2.
 
-ENV-1 and ENV-2 remain. With ENV-3 in, client 0 is registered and **T-1 passed GO** (TEST-PROTOCOL Appendix C): the mcp.ts move is verified in both directions and nothing on the client side blocks anything.
+Verify with `project_test_connection` — it fails closed, which is correct. **Caution when it reports 401:** the transport bearer (`*_MCP_TOKEN`) and the client's *storage* credential are different layers. A transport 401 fails the whole call; a storage 401 comes back as a **successful** call carrying `isError:true` and a Netlify Blobs 401 inside the tool result. Wave 4 lost time re-blaming the bearer for the latter.
+
+Left over: **ENV-4**, cleanup only — drop the unused `SNOOCLE_*` vars, keep `MONETIZER_*` (`feedback.ingest_monetizer` depends on it).
+
+With ENV-3 in, client 0 is registered and **T-1 passed GO** (TEST-PROTOCOL Appendix C): the mcp.ts move is verified in both directions and nothing on the client side blocks anything.
 
 ## 3. The client model
 
@@ -49,6 +51,8 @@ Protection rings (ratified): Ring 0 services — publishing agents may call, nev
 **Wave 1 ran 2026-07-26** (`docs/plan/CHANGE-PLAN.md` §2b): W-3 done (workspace **v70**), W-2 partial (both records disabled; snoocle de-seeded in the repo patch; **monetizer kept** — `feedback.ingest_monetizer` depends on it), R-0 done (CI + two-plane drift detector, 136-tool manifest), R-11 read-only done. Suite: 707 root + 55 ui tests, green.
 **Wave 2 ran 2026-07-27**: W-1 (platform = client 0, deny-by-default + 5 read-only contract tools) and T-1 (Tiers 0–3, **GO**). Bug-list updates from it: bug 2 (R-2) is no longer *blocking* anything — no blocker-severity skill conflict survives; the T2.6 finding grew from 1 node to **14** (all carrying an ungrantable `stage.save_output`, harmless to execution but the noise that hid the real defect); and `project.create` does not bump `workspaceVersion`, so drift checks keyed on it are blind to connection changes.
 **Wave 3 ran 2026-07-27**: R-4, R-1, R-10, the T2.6 cleanup (live workspace **v84** plus the seeded code defaults), and the **R-11 write path** (unblocked by R-4). See CHANGE-PLAN §2d. Editing a node now happens in S4, not the legacy JSON textareas — every write carries a mandatory reason, a confirmed diff, and an `expectedWorkspaceVersion`.
+**Wave 4 ran 2026-07-27**: ENV-1 + ENV-2 landed and verified end-to-end, W-2 closed (`snoocle` deleted — the deploy had rolled out). See CHANGE-PLAN §2e. Three findings promote **R-8** to the front of the repo queue: `project.list` reports `platform`'s `allowedTools` as `[]` while five `toolPolicies` grants are live and callable (so `toolPolicies` is the enforced list and any UI reading `allowedTools` misrenders client 0 as capability-free); `article_body`'s `requiredPdfToolCapabilities` enum — the authoritative pdf-tool capability set the earlier findings cited — no longer exists, generalized away by the contract-as-truth wave, leaving the 14-tool allow-list hand-kept against nothing; and the artifact job lifecycle is allow-listed except its resume leg (`resume_agent_artifact_job` denied while `create_agent_artifact_job` is granted, so an approval-blocked job cannot be resumed through the workspace).
+
 Standing habit earned the hard way, twice: **after any workspace-data fix, check whether the code-defined defaults carry the same defect.** snoocle and the 14 ungrantable tool grants were both re-seeding traps — the data write looks complete and the next fresh workspace undoes it.
 
 Deep background per topic: `docs/plan/findings/` (migration, image pipeline, contract alignment, tool bugs, voice object, fleet alignment, self-describing engine) and `docs/plan/GUI-PLAN.md` / `TEST-PROTOCOL.md`.
