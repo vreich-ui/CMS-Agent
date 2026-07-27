@@ -60,6 +60,7 @@ const makeClient = (overrides: Overrides = {}): McpClient => ({
     if (name === "node.get_effective_skills") {
       return { policy: { nodeId: "trust_factual", skillIds: ["article_body"], instructions: "Cite a primary source.", effectiveTools: ["stage.get_output"], requestedTools: ["stage.get_output"], deniedTools: [], conflicts: [{ severity: "blocker", source: "output_schema", message: "skill outputSchema is not compatible" }] } } as T;
     }
+    if (name === "skill.list") return { skills: [{ skillId: "article_body", name: "Article body" }, { skillId: "seo_review", name: "SEO review" }] } as T;
     if (name === "project.test_connection") return { connected: false, error: "DR_LURIE_MCP_ENDPOINT is not reachable" } as T;
     throw new Error(`unexpected tool call: ${name}`);
   }
@@ -159,14 +160,221 @@ describe("NodeInspector", () => {
     expect(screen.getByText("stage.get_output")).toBeInTheDocument();
   });
 
-  // Read-only phase: the write path ships only after R-4. No save affordance may exist to be
-  // mistaken for one.
-  it("offers no save or edit control anywhere in the inspector", async () => {
+  // The write path exists now (R-4 landed), so the invariant is no longer "no save button" — it is
+  // that a save is impossible until there is a change AND a reason. Schemas stay read-only until R-3.
+  it("keeps the save disabled until there is something to save", async () => {
     renderInspector();
 
     await waitFor(() => expect(screen.getByText(/An assigned skill appends/)).toBeInTheDocument());
-    const labels = screen.getAllByRole("button").map((button) => button.textContent ?? "");
 
-    expect(labels.some((label) => /save|apply|update|edit|delete/i.test(label))).toBe(false);
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+    expect(screen.getByText("No pending changes.")).toBeInTheDocument();
+  });
+
+  it("offers no schema editing, since writing one through the wrong path is worse than leaving it", async () => {
+    const user = userEvent.setup();
+    renderInspector();
+    await waitFor(() => expect(screen.getByText(/An assigned skill appends/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Schemas" }));
+
+    expect(screen.getByText(/Schemas stay read-only here/)).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /schema/i })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------- write path (R-11 phase 2)
+describe("NodeInspector write path", () => {
+  const renderWithSave = (overrides: Overrides = {}, extra: Partial<{ workspaceVersion: number; onSaved: () => void; onReloadWorkspace: () => void }> = {}) => {
+    const calls: { name: string; args: Record<string, unknown> }[] = [];
+    const base = makeClient(overrides);
+    const client: McpClient = {
+      method: base.method,
+      call: async <T,>(name: string, args?: Record<string, unknown>): Promise<T> => {
+        calls.push({ name, args: args ?? {} });
+        if (name === "workspace.update_node") {
+          const override = overrides["workspace.update_node"];
+          if (override) return override() as T;
+          return { node, workspaceVersion: 85 } as T;
+        }
+        return base.call<T>(name, args);
+      }
+    };
+    render(<NodeInspector node={node} client={client} project={project()} workspaceVersion={84} onClose={() => {}} {...extra} />);
+    return calls;
+  };
+
+  const waitLoaded = () => waitFor(() => expect(screen.getByText(/An assigned skill appends/)).toBeInTheDocument());
+
+  it("starts with nothing pending and the save disabled", async () => {
+    renderWithSave();
+    await waitLoaded();
+
+    expect(screen.getByText("No pending changes.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+  });
+
+  it("shows a field-level diff once the prompt is edited", async () => {
+    const user = userEvent.setup();
+    renderWithSave();
+    await waitLoaded();
+
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+
+    const footer = screen.getByRole("group", { name: "Save changes" });
+    expect(within(footer).getByText(/1 pending change/)).toBeInTheDocument();
+    expect(within(footer).getByText("Prompt")).toBeInTheDocument();
+    // The diff states the before and after, not just that something changed.
+    expect(within(footer).getByText("30 characters")).toBeInTheDocument();
+    expect(within(footer).getByText("37 characters")).toBeInTheDocument();
+  });
+
+  // The rule that keeps the ledger worth reading.
+  it("refuses to save without a reason, and says why the reason exists", async () => {
+    const user = userEvent.setup();
+    renderWithSave();
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+
+    expect(screen.getByText(/reason of at least 8 characters is required/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+  });
+
+  it("enables the save once a real reason is given", async () => {
+    const user = userEvent.setup();
+    renderWithSave();
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "tightening the blocker criteria");
+
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeEnabled();
+  });
+
+  // Nothing is written until the operator has confirmed the diff.
+  it("writes nothing until the confirmation step is accepted", async () => {
+    const user = userEvent.setup();
+    const calls = renderWithSave();
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "tightening the blocker criteria");
+    await user.click(screen.getByRole("button", { name: "Review and save" }));
+
+    expect(screen.getByText(/Apply these 1 change/)).toBeInTheDocument();
+    expect(calls.some((call) => call.name === "workspace.update_node")).toBe(false);
+  });
+
+  it("sends a minimal version-guarded patch carrying the reason and ui source, and no actor", async () => {
+    const user = userEvent.setup();
+    const calls = renderWithSave();
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "tightening the blocker criteria");
+    await user.click(screen.getByRole("button", { name: "Review and save" }));
+    await user.click(screen.getByRole("button", { name: "Confirm save" }));
+
+    const write = calls.find((call) => call.name === "workspace.update_node");
+    expect(write).toBeDefined();
+    expect(write!.args).toMatchObject({
+      id: "trust_factual",
+      expectedWorkspaceVersion: 84,
+      source: "ui",
+      reason: "tightening the blocker criteria"
+    });
+    // Only the edited field travels, and the actor is left to the server's verified identity.
+    expect(Object.keys(write!.args.patch as object)).toEqual(["prompt"]);
+    expect(write!.args).not.toHaveProperty("actor");
+  });
+
+  it("toggling a tool checkbox produces an allowedTools patch", async () => {
+    const user = userEvent.setup();
+    const calls = renderWithSave();
+    await waitLoaded();
+    await user.click(screen.getByRole("button", { name: /^Tools/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Grant stage.get_output" }));
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "dropping an ungrantable grant");
+    await user.click(screen.getByRole("button", { name: "Review and save" }));
+    await user.click(screen.getByRole("button", { name: "Confirm save" }));
+
+    const write = calls.find((call) => call.name === "workspace.update_node");
+    expect(Object.keys(write!.args.patch as object)).toEqual(["allowedTools"]);
+    expect((write!.args.patch as { allowedTools: string[] }).allowedTools).not.toContain("stage.get_output");
+  });
+
+  // R-4's whole purpose, seen from the UI: a conflict names the version someone else landed on and
+  // offers an explicit reload instead of retrying behind the operator's back.
+  it("reports a version conflict with the current version and an explicit reload", async () => {
+    const user = userEvent.setup();
+    const reloads: string[] = [];
+    renderWithSave(
+      {
+        "workspace.update_node": () => {
+          throw Object.assign(new Error("MCP tool returned an error."), {
+            details: { error: { code: "version_conflict", message: "workspace_version_conflict: expected 84, current 85.", currentVersion: 85, currentRevisionId: "rev_9" } }
+          });
+        }
+      },
+      { onReloadWorkspace: () => { reloads.push("reload"); } }
+    );
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "tightening the blocker criteria");
+    await user.click(screen.getByRole("button", { name: "Review and save" }));
+    await user.click(screen.getByRole("button", { name: "Confirm save" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("version_conflict")).toBeInTheDocument();
+    expect(within(alert).getByText(/Current workspace version: v85 \(rev_9\)/)).toBeInTheDocument();
+    expect(screen.getByText(/will not retry silently/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Reload workspace" }));
+    expect(reloads).toEqual(["reload"]);
+  });
+
+  it("does not present an unclassifiable failure as a conflict", async () => {
+    const user = userEvent.setup();
+    renderWithSave({ "workspace.update_node": () => { throw new Error("network down"); } });
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "tightening the blocker criteria");
+    await user.click(screen.getByRole("button", { name: "Review and save" }));
+    await user.click(screen.getByRole("button", { name: "Confirm save" }));
+
+    expect(await screen.findByText(/Nothing was written/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reload workspace" })).not.toBeInTheDocument();
+  });
+
+  it("refetches the workspace after a successful save", async () => {
+    const user = userEvent.setup();
+    const saved: string[] = [];
+    renderWithSave({}, { onSaved: () => { saved.push("saved"); } });
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "tightening the blocker criteria");
+    await user.click(screen.getByRole("button", { name: "Review and save" }));
+    await user.click(screen.getByRole("button", { name: "Confirm save" }));
+
+    await waitFor(() => expect(saved).toEqual(["saved"]));
+  });
+
+  it("discards changes back to the stored node", async () => {
+    const user = userEvent.setup();
+    renderWithSave();
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+    expect(screen.getByText(/1 pending change/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
+
+    expect(screen.getByText("No pending changes.")).toBeInTheDocument();
+  });
+
+  it("blocks saving when the workspace version is unknown, rather than writing unguarded", async () => {
+    const user = userEvent.setup();
+    render(<NodeInspector node={node} client={makeClient()} project={project()} onClose={() => {}} />);
+    await waitLoaded();
+    await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "tightening the blocker criteria");
+
+    expect(screen.getByText(/cannot be version-guarded/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
   });
 });

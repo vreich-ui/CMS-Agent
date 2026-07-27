@@ -655,3 +655,23 @@ th { color: var(--color-text-muted); font-size: 0.8rem; text-transform: uppercas
 .node-inspector-conflict, .node-inspector-warning { border-radius: 0.6rem; padding: 0.4rem 0.6rem; }
 .node-inspector-conflict--warning, .node-inspector-warning--warning { background: var(--color-warning-surface); color: var(--color-warning-text); }
 .node-inspector-conflict--blocker, .node-inspector-warning--blocker { background: var(--color-danger-surface); color: var(--color-danger-text); }
+
+/* S4 write path (R-11 phase 2). */
+.node-inspector-field { display: grid; gap: 0.3rem; }
+.node-inspector-prompt-input { background: var(--color-code-surface); border: 1px solid var(--color-border); border-radius: 0.6rem; color: var(--color-code-text); font-family: ui-monospace, monospace; font-size: 0.84rem; padding: 0.7rem; resize: vertical; width: 100%; }
+.node-inspector-skill-list { display: grid; gap: 0.3rem; list-style: none; margin: 0; padding: 0; }
+.node-inspector-skill-list label { align-items: center; display: flex; gap: 0.5rem; }
+.node-inspector-save { border-top: 1px solid var(--color-border); display: grid; gap: 0.6rem; padding-top: 0.9rem; }
+.node-inspector-save h4 { margin: 0; }
+.node-inspector-save-actions, .node-inspector-confirm { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.node-inspector-confirm { align-items: center; background: var(--color-warning-surface); border-radius: 0.6rem; color: var(--color-warning-text); padding: 0.6rem 0.8rem; }
+.node-inspector-confirm p { margin: 0; width: 100%; }
+.node-inspector-diff { display: grid; gap: 0.3rem; list-style: none; margin: 0; padding: 0; }
+.node-inspector-diff-before { color: var(--color-danger-text); }
+.node-inspector-diff-after { color: var(--color-success-text); }
+.node-inspector-blockers { color: var(--color-warning-text); display: grid; gap: 0.25rem; list-style: none; margin: 0; padding: 0; }
+.node-inspector-saved { background: var(--color-success-surface); border-radius: 0.6rem; color: var(--color-success-text); margin: 0; padding: 0.5rem 0.7rem; }
+.node-inspector-failure { border-radius: 0.6rem; display: grid; gap: 0.4rem; padding: 0.6rem 0.8rem; }
+.node-inspector-failure p { margin: 0; }
+.node-inspector-failure--conflict { background: var(--color-warning-surface); color: var(--color-warning-text); }
+.node-inspector-failure--validation, .node-inspector-failure--missing_patch_field, .node-inspector-failure--unknown { background: var(--color-danger-surface); color: var(--color-danger-text); }

@@ -286,3 +286,119 @@ export const isInspectorTab = (value: unknown): value is InspectorTab =>
 // Every fetched layer shows when it was fetched. Absent means "never fetched" and says so, rather
 // than rendering an empty timestamp that reads as fresh.
 export const formatFetchedAt = (fetchedAt: string | null): string => (fetchedAt ? `fetched ${fetchedAt}` : "never fetched");
+
+// ---------------------------------------------------------------------------- write path (R-11 phase 2)
+//
+// Shipped only now that R-4 gives conflicts a typed envelope: before that, a failed save could not
+// tell "someone else edited this" from "the server broke", and a UI that cannot distinguish those
+// has no honest recovery to offer. Every rule below is here because the change ledger is only as
+// good as what the UI insists on before writing.
+
+export type NodeDraft = {
+  prompt: string;
+  allowedTools: string[];
+  assignedSkills: string[];
+};
+
+export const draftFromNode = (node: WorkspaceNode): NodeDraft => ({
+  prompt: node.prompt ?? "",
+  allowedTools: [...(node.allowedTools ?? [])],
+  assignedSkills: [...(node.assignedSkills ?? [])]
+});
+
+export type DraftChange = { field: keyof NodeDraft; label: string; before: string; after: string };
+
+const listText = (values: string[]): string => (values.length ? [...values].sort().join(", ") : "—");
+const sameMembers = (a: string[], b: string[]): boolean => a.length === b.length && [...a].sort().every((value, index) => value === [...b].sort()[index]);
+
+// The diff the operator confirms before anything is written. Field-level and human-readable on
+// purpose: "you are about to change these three things" is reviewable, "save?" is not.
+export function draftChanges(node: WorkspaceNode, draft: NodeDraft): DraftChange[] {
+  const changes: DraftChange[] = [];
+  const stored = draftFromNode(node);
+
+  if (stored.prompt !== draft.prompt) {
+    changes.push({ field: "prompt", label: "Prompt", before: `${stored.prompt.length} characters`, after: `${draft.prompt.length} characters` });
+  }
+  if (!sameMembers(stored.allowedTools, draft.allowedTools)) {
+    changes.push({ field: "allowedTools", label: "Allowed tools", before: listText(stored.allowedTools), after: listText(draft.allowedTools) });
+  }
+  if (!sameMembers(stored.assignedSkills, draft.assignedSkills)) {
+    changes.push({ field: "assignedSkills", label: "Assigned skills", before: listText(stored.assignedSkills), after: listText(draft.assignedSkills) });
+  }
+  return changes;
+}
+
+// Only changed fields travel. `workspace.update_node` merges (`{...existing, ...patch}`), so a
+// minimal patch cannot clobber anything — and unlike the single-field writers it never had the R-1
+// wipe. Sending the whole node would make every save look like it touched everything in the ledger.
+export function buildNodePatch(node: WorkspaceNode, draft: NodeDraft): Partial<WorkspaceNode> {
+  const patch: Partial<WorkspaceNode> = {};
+  for (const change of draftChanges(node, draft)) {
+    if (change.field === "prompt") patch.prompt = draft.prompt;
+    if (change.field === "allowedTools") patch.allowedTools = [...draft.allowedTools];
+    if (change.field === "assignedSkills") patch.assignedSkills = [...draft.assignedSkills];
+  }
+  return patch;
+}
+
+// A reason is mandatory, not encouraged. With agents doing most of the editing, "why" is the only
+// thing a human reviewing the ledger later can actually act on.
+export const MIN_REASON_LENGTH = 8;
+
+export function saveBlockers(node: WorkspaceNode, draft: NodeDraft, reason: string, workspaceVersion?: number): string[] {
+  const blockers: string[] = [];
+  if (draftChanges(node, draft).length === 0) blockers.push("Nothing has changed.");
+  if (reason.trim().length < MIN_REASON_LENGTH) blockers.push(`A reason of at least ${MIN_REASON_LENGTH} characters is required — it is what a human reviewing the change ledger will read.`);
+  if (workspaceVersion === undefined) blockers.push("The workspace version is unknown, so this save cannot be version-guarded. Reload first.");
+  return blockers;
+}
+
+// Mutation arguments. Deliberately omits `actor`: the server resolves it from the verified identity
+// the secure proxy stamped, and a tool-supplied actor OVERRIDES that (meta() prefers the argument),
+// so self-declaring here would replace a verified human with an unverified guess.
+export const mutationArgsFor = (reason: string, summary: string, workspaceVersion: number) => ({
+  expectedWorkspaceVersion: workspaceVersion,
+  source: "ui" as const,
+  reason: reason.trim(),
+  summary
+});
+
+export type WriteFailure = {
+  kind: "conflict" | "missing_patch_field" | "validation" | "unknown";
+  code: string;
+  message: string;
+  currentVersion?: number;
+  currentRevisionId?: string;
+  recovery: string;
+};
+
+// Reads R-4's typed envelope off an McpClientError. Both shapes are handled: `error.data` from a
+// JSON-RPC error, and the `structuredContent.error` envelope. A save that cannot be classified says
+// so rather than pretending to be a conflict — guessing "reload and retry" at a real bug would loop
+// the operator forever.
+export function classifyWriteFailure(error: unknown): WriteFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  const details = (error as { details?: unknown } | null)?.details;
+  const envelope = (details as { error?: Record<string, unknown> } | undefined)?.error ?? (details as Record<string, unknown> | undefined);
+  const code = typeof envelope?.code === "string" ? envelope.code : "";
+  const detailMessage = typeof envelope?.message === "string" ? envelope.message : message;
+
+  if (code === "version_conflict" || code === "revision_conflict") {
+    return {
+      kind: "conflict",
+      code,
+      message: detailMessage,
+      ...(typeof envelope?.currentVersion === "number" ? { currentVersion: envelope.currentVersion } : {}),
+      ...(typeof envelope?.currentRevisionId === "string" ? { currentRevisionId: envelope.currentRevisionId } : {}),
+      recovery: "Someone else changed the workspace. Reload to that version, then re-apply your edit — this UI will not retry silently."
+    };
+  }
+  if (code === "missing_patch_field") {
+    return { kind: "missing_patch_field", code, message: detailMessage, recovery: "The save was refused before it could overwrite anything. This is a bug in the editor, not in your edit." };
+  }
+  if (code === "validation_error") {
+    return { kind: "validation", code, message: detailMessage, recovery: "The edit does not match the node's schema. Fix the highlighted field and try again." };
+  }
+  return { kind: "unknown", code: code || "unknown", message: detailMessage, recovery: "The save did not complete. Nothing was written. Reload to confirm the current state before trying again." };
+}

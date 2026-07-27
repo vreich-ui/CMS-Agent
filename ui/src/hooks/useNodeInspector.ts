@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { McpClient } from "../mcp/client";
 import type { EffectivePrompt, EffectiveTool } from "../nodeInspector";
-import type { SkillResolvedPolicy } from "../types/workspace";
+import type { SkillDefinition, SkillResolvedPolicy } from "../types/workspace";
 
 // Effective-layer loader for the S4 inspector (CHANGE-PLAN R-11, read-only phase).
 //
@@ -19,6 +19,9 @@ export type NodeInspectorState = {
   effectivePrompt: EffectivePrompt | null;
   effectiveTools: EffectiveTool[] | null;
   skillPolicy: SkillResolvedPolicy | null;
+  // The registry the Skills tab offers for assignment. Workspace-wide rather than per-node, so a
+  // failure here disables assignment without touching the rest of the inspector.
+  skills: SkillDefinition[] | null;
   loading: boolean;
   errors: string[];
   fetchedAt: string | null;
@@ -31,6 +34,7 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
   const [effectivePrompt, setEffectivePrompt] = useState<EffectivePrompt | null>(null);
   const [effectiveTools, setEffectiveTools] = useState<EffectiveTool[] | null>(null);
   const [skillPolicy, setSkillPolicy] = useState<SkillResolvedPolicy | null>(null);
+  const [skills, setSkills] = useState<SkillDefinition[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
@@ -44,6 +48,7 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
       setEffectivePrompt(null);
       setEffectiveTools(null);
       setSkillPolicy(null);
+      setSkills(null);
       setErrors([]);
       setFetchedAt(null);
       setLoading(false);
@@ -54,10 +59,11 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
     setLoading(true);
     setErrors([]);
 
-    const [prompt, tools, skills] = await Promise.allSettled([
+    const [prompt, tools, skills, registry] = await Promise.allSettled([
       client.call<EffectivePrompt>("node.get_effective_prompt", { nodeId }),
       client.call<{ tools: EffectiveTool[] }>("node.get_effective_tools", { nodeId }),
-      client.call<{ policy: SkillResolvedPolicy }>("node.get_effective_skills", { nodeId })
+      client.call<{ policy: SkillResolvedPolicy }>("node.get_effective_skills", { nodeId }),
+      client.call<{ skills: SkillDefinition[] }>("skill.list")
     ]);
 
     if (requestId !== activeRequest.current) return;
@@ -72,8 +78,11 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
     setSkillPolicy(skills.status === "fulfilled" ? skills.value.policy ?? null : null);
     if (skills.status === "rejected") failures.push(`Skill policy unavailable: ${errorMessage(skills.reason)}`);
 
+    setSkills(registry.status === "fulfilled" ? registry.value.skills ?? [] : null);
+    if (registry.status === "rejected") failures.push(`Skill registry unavailable: ${errorMessage(registry.reason)}`);
+
     setErrors(failures);
-    setFetchedAt(failures.length === 3 ? null : new Date().toISOString());
+    setFetchedAt(failures.length === 4 ? null : new Date().toISOString());
     setLoading(false);
   }, [client, nodeId]);
 
@@ -83,9 +92,10 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
     setEffectivePrompt(null);
     setEffectiveTools(null);
     setSkillPolicy(null);
+    setSkills(null);
     setFetchedAt(null);
     void reload();
   }, [reload]);
 
-  return { effectivePrompt, effectiveTools, skillPolicy, loading, errors, fetchedAt, reload };
+  return { effectivePrompt, effectiveTools, skillPolicy, skills, loading, errors, fetchedAt, reload };
 }
