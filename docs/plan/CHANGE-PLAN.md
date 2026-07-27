@@ -33,10 +33,10 @@ Status: ☐ planned · ⧗ blocked · ✅ done this session.
 
 | id | change | notes |
 |---|---|---|
-| ENV-1 ☐ | Set `DR_LURIE_MCP_ENDPOINT` / `DR_LURIE_MCP_TOKEN` on Cloud Run | copy from Netlify site config; blocks all client-0001 work |
-| ENV-2 ☐ | Set `PDF_TOOL_MCP_ENDPOINT` / `PDF_TOOL_MCP_TOKEN` on Cloud Run | blocks the image pipeline via `project.call_tool` |
+| ENV-1 ✅ | Set `DR_LURIE_MCP_ENDPOINT` / `DR_LURIE_MCP_TOKEN` on Cloud Run | **Done 2026-07-27** (Wolf). Verified: `test_connection` → `Dr_Lurie_MCP_Server` 0.1.0; `project.call_tool("dr-lurie","ping")` → `Dr_Lurie_Science_MCP`. First paste was the wrong token (401); the fix was re-copying the right one |
+| ENV-2 ✅ | Set `PDF_TOOL_MCP_ENDPOINT` / `PDF_TOOL_MCP_TOKEN` on Cloud Run | **Done 2026-07-27** (Wolf). Verified: `test_connection` → `pdf-tool-agent-artifacts` 0.2.0, and the **brokered chain proven through `project.call_tool`** — see §2e |
 | ENV-3 ✅ | Set `PLATFORM_MCP_ENDPOINT` / `PLATFORM_MCP_TOKEN` on Cloud Run | **Done 2026-07-27** (Wolf). Verified: `endpointConfigured`/`tokenConfigured` both true, `test_connection` → `Platform_MCP_Server` |
-| ENV-4 ☐ | After W-2: remove `SNOOCLE_*` env vars | cleanup only, after deletion. **Scope narrowed:** keep `MONETIZER_*` — `feedback.ingest_monetizer` still uses that connection (see W-2) |
+| ENV-4 ☐ | After W-2: remove `SNOOCLE_*` env vars | **Now actionable** — W-2 closed 2026-07-27, snoocle is deleted from the registry. Cleanup only. **Scope narrowed:** keep `MONETIZER_*` — `feedback.ingest_monetizer` still uses that connection (see W-2) |
 
 Verify each with `project.test_connection` — currently fail-closed, which is correct.
 
@@ -45,7 +45,7 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 | id | change | depends on | detail |
 |---|---|---|---|
 | W-1 ✅ | **Register `platform` as client 0** — `project.create` per the registration contract: `projectId: platform`, `mcpEndpointEnvVar: PLATFORM_MCP_ENDPOINT`, `tokenEnvVar: PLATFORM_MCP_TOKEN` | ENV-3 | then `test_connection` → `list_tools` → allow-list read-only contract tools first (`object_contract`, `registry_get`, `object_inventory`, `object_validate`, `ping`), widen later behind the same gate as dr-lurie |
-| W-2 ◑ | **Retire `snoocle`; keep `monetizer`** | none | Both records **disabled** via `project.update` (ledgered, reversible) — `project.delete` refuses a code-defined default ("re-seeded on read"). Repo commit removes snoocle from `defaultProjectConnections`, so `project.delete snoocle` works once it lands. **monetizer is NOT a fake registration**: `improvement/monetizerIngest.ts` imports `monetizerProjectConfig` to power the `feedback.ingest_monetizer` tool, so deleting it drops a live tool from the wire surface. Retiring it is a decision about the Phase 7 outer loop, not registry hygiene. pdf-tool untouched — Ring 0 |
+| W-2 ✅ | **Retire `snoocle`; keep `monetizer`** — `project.delete snoocle` succeeded 2026-07-27 once the deploy carried the de-seeded defaults; registry is now dr-lurie / monetizer / pdf-tool / platform | none | Both records **disabled** via `project.update` (ledgered, reversible) — `project.delete` refuses a code-defined default ("re-seeded on read"). Repo commit removes snoocle from `defaultProjectConnections`, so `project.delete snoocle` works once it lands. **monetizer is NOT a fake registration**: `improvement/monetizerIngest.ts` imports `monetizerProjectConfig` to power the `feedback.ingest_monetizer` tool, so deleting it drops a live tool from the wire surface. Retiring it is a decision about the Phase 7 outer loop, not registry hygiene. pdf-tool untouched — Ring 0 |
 | W-3 ✅ | **Generalize `learning_recorder` prompt** — last mechanical "Dr. Lurie" in contract-logic context | none | Done, workspace v69→v70. Now "project artifact/rendering failures", matching the node's own description. Full-node patch used deliberately (R-1) |
 | W-4 ⧗ | **Generalize the five editorial-voice nodes** (`topic_opportunity`, `research`, `brief_architect`, `draft_writer`, `trust_factual`) to fetch voice from the client | **P-2 (voice object)** | do NOT do earlier — there is nowhere to fetch voice from; premature generalization degrades writing quality |
 | W-5 ⧗ | **Split `dr_lurie_dtc_science_editorial`** into a client-neutral craft skill + per-publication voice record | P-2, W-4 | the skill's content seeds the first `vox_drlurie_default` record |
@@ -166,6 +166,26 @@ Suite after the wave: **742 root tests** (was 707), 55 ui, both builds, drift cl
 
 ---
 
+## 2e. Execution log — 2026-07-27, wave 4 (ENV-1 + ENV-2 landed; W-2 closed)
+
+| id | outcome |
+|---|---|
+| ENV-1 ✅ | `dr-lurie` reachable. `test_connection` → `Dr_Lurie_MCP_Server` 0.1.0, protocol 2025-06-18; `project.call_tool("dr-lurie","ping")` → `Dr_Lurie_Science_MCP`. |
+| ENV-2 ✅ | `pdf-tool` reachable. `test_connection` → `pdf-tool-agent-artifacts` 0.2.0. |
+| — ✅ | **The brokered artifact chain is proven through `project.call_tool` on the GCloud plane** — not just via direct session connectors as in the 2026-07-26 image-pipeline proof. `dr-lurie.get_pdf_tool_storage_grant` → `pdf-tool.list_pdf_templates` + `get_image_search_policy`, each passing the whole grant as `storage`, both returning real data out of Dr. Lurie's Blob stores (11 templates; live 5-provider search policy). This is the T-4 precondition that could not be tested before. |
+| W-2 ✅ | `project.delete snoocle` returned `deleted:true` — so **the Cloud Run deploy has picked up the merged code** (the de-seeded `defaultProjectConnections`). That closes the second standing blocker recorded in §4. Registry is now dr-lurie / monetizer / pdf-tool / platform. |
+| — ✅ | Attention re-read after the connections came up: the three unconfigured-client items are **gone**, leaving only the two `warning`s that are the publish gate working as designed. Workspace **v84**, `gcs` healthy, all nine stores readable/writable. |
+
+**Findings.**
+
+1. **A 401 here has two distinct layers, and they look identical in `test_connection`.** The transport bearer (`*_MCP_TOKEN`, what CMS-Agent presents to the client) is separate from the client's *storage* credential. Calling `pdf-tool.list_pdf_templates` with the transport fixed but **no `storage` grant** returns `ok:true` at the MCP layer with `isError:true` and `Netlify Blobs has generated an internal error (401 status code)` inside the tool result. Read the envelope before re-blaming the bearer: a transport 401 fails the whole call, a storage 401 comes back as a successful call carrying a tool-level error.
+2. **`project.list` misreports `platform`'s grants.** It shows `allowedTools: []` while `toolPolicies` grants five read-only contract tools — and those five really are callable (`ping` resolved `permission:"allowed"` and answered). So `allowedTools` and `toolPolicies` are two lists that can disagree, and the *enforced* one is `toolPolicies`. Any UI reading `allowedTools` (the S4 connection badge, the project selector) will render client 0 as having zero capability. Straight into **R-8**'s remit; worth a display fix before S5.
+3. **R-8 lost its workspace-side source of truth.** `docs/plan/findings/image-pipeline-status.md` derived the authoritative pdf-tool capability set from `article_body`'s `requiredPdfToolCapabilities` enum — that enum no longer exists, having been generalized away by the contract-as-truth wave (correctly: it was a hardcoded client convention). The 14-tool allow-list is now hand-kept with nothing declaring what is required, which is exactly the condition that caused the original pdf-tool regression.
+4. **Two allow-list gaps in the artifact job lifecycle**, both pre-existing rather than regressions: `create_agent_artifact_job` is allowed but **`resume_agent_artifact_job` is not**, so a job that blocks awaiting operator approval cannot be resumed through the workspace; and `get_image_model_policy` is not allowed though model routing is read from it. Both are read/resume legs of flows whose other halves are granted.
+5. **`article_body` holds the grant that matters and it now works.** Its prompt requires validating through the client's own validator via `project.call_tool`; the node grants that tool, and effective resolution denies it only with `approval_required` (the known no-approval-context artifact of that read), not `node_tool_not_allowed`. `publish_executor` by contrast is denied with **both** reasons — it genuinely lacks the grant, which is the publish lock holding. When T-4 opens the locks, granting `publish_executor` `project.call_tool` is a deliberate step, not a bug fix.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -180,11 +200,13 @@ Say **go** (or mark exceptions by ID) and I execute in this order: **W-2, W-3** 
 
 **Wave 3 executed 2026-07-27** (R-4, R-1, R-10, T2.6) — see §2d.
 
-Blocked on Wolf: **ENV-1/ENV-2 tokens are rejected (HTTP 401 on both `dr-lurie` and `pdf-tool`)** — the vars are set and the endpoints answer, so the token values are wrong, stale, or rotated; and **the Cloud Run deploy has not picked up the merged code**, which is why `project.delete snoocle` still refuses.
+**Wave 4 executed 2026-07-27** (ENV-1, ENV-2, W-2) — see §2e.
+
+**Nothing is blocked on Wolf.** Both former blockers cleared 2026-07-27: the ENV-1/ENV-2 tokens are correct (all four connections handshake, and the brokered chain runs through `project.call_tool`), and the Cloud Run deploy has picked up the merged code (proven by `project.delete snoocle` succeeding). The only ENV item left is **ENV-4**, pure cleanup: drop the now-unused `SNOOCLE_*` vars, keep `MONETIZER_*`.
 
 Next, in the order I would take them:
-1. **`project.delete snoocle`** — one call, the moment the deploy rolls out.
-2. **R-3** — coerce stringified JSON in the schema writers. Now the smallest thing standing between S4 and full node editing: it is the only reason the Schemas tab is read-only.
-3. **T-2** — full dry-run pipeline vs client 0. Unblocked by T-1, but it executes nodes, so it is a deliberate step rather than a sweep.
+1. **R-3** — coerce stringified JSON in the schema writers. The smallest thing standing between S4 and full node editing: it is the only reason the Schemas tab is read-only.
+2. **T-2** — full dry-run pipeline vs client 0. Unblocked by T-1, and now that ENV-1/2 are live it can exercise the real client path rather than a stubbed one. It executes nodes (model spend), so it is a deliberate step rather than a sweep.
+3. **R-8** — promoted by wave 4's findings 2–4: three separate allow-list/reporting defects surfaced the moment the connections came up (`platform`'s `allowedTools: []`, the vanished `requiredPdfToolCapabilities` source of truth, the missing `resume_agent_artifact_job` / `get_image_model_policy` grants). Two hand-kept lists with no declared requirement is the condition that caused the original pdf-tool regression.
 4. **R-2** (skill-schema resolver) — no longer blocking anything, but it is what forces the 7 placeholder skill `outputSchema`s to stay flattened.
 5. **R-5** (reconcile the two resolvers) — the inspector currently renders the disagreement rather than resolving it, which is honest but not a fix.
