@@ -288,6 +288,28 @@ export const coerceNodeInput = (node: unknown): WorkspaceNode => {
   return value as WorkspaceNode;
 };
 
+// R-3 — the same client-stringification defense as coerceNodeInput, for the two schema writers.
+//
+// update_node_input_schema / update_node_output_schema declared `schema: {}` and passed the argument
+// straight to validateJsonSchema, so a client that serialized the schema as a JSON string got
+// "JSON Schema must be an object or boolean" and had to fall back to workspace.update_node — which
+// is why the S4 inspector's Schemas tab shipped read-only. Parse the string back first.
+//
+// A JSON Schema is legally an object OR a boolean (`true`/`false` are the permit-all / permit-nothing
+// schemas), so both shapes survive the round trip, including a stringified bare boolean. Anything
+// else is refused rather than written: an array or a number here means the caller sent the wrong
+// thing, and silently persisting it would corrupt the node exactly as the stringified `node` arg
+// once did.
+export const coerceSchemaInput = (schema: unknown): unknown => {
+  let value: unknown = schema;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value.trim()); } catch { throw new Error("invalid_schema: schema string is not valid JSON"); }
+  }
+  if (typeof value === "boolean") return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_schema: expected a JSON Schema object or boolean");
+  return value;
+};
+
 // Universal write-side guard: a node is only persistable if it satisfies the node schema (id, name,
 // and prompt present, etc.). Enforced in mutate() so no mutation path can ever write a node that a
 // later strict read would choke on. Returns the parsed/normalized node.

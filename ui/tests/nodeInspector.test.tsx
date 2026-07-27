@@ -161,7 +161,7 @@ describe("NodeInspector", () => {
   });
 
   // The write path exists now (R-4 landed), so the invariant is no longer "no save button" — it is
-  // that a save is impossible until there is a change AND a reason. Schemas stay read-only until R-3.
+  // that a save is impossible until there is a change AND a reason.
   it("keeps the save disabled until there is something to save", async () => {
     renderInspector();
 
@@ -171,14 +171,16 @@ describe("NodeInspector", () => {
     expect(screen.getByText("No pending changes.")).toBeInTheDocument();
   });
 
-  it("offers no schema editing, since writing one through the wrong path is worse than leaving it", async () => {
+  it("offers both schemas as editable JSON, and keeps the deprecated alias derived", async () => {
     const user = userEvent.setup();
     renderInspector();
     await waitFor(() => expect(screen.getByText(/An assigned skill appends/)).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Schemas" }));
 
-    expect(screen.getByText(/Schemas stay read-only here/)).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /schema/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Input schema JSON" })).toHaveValue('{\n  "type": "object"\n}');
+    expect(screen.getByRole("textbox", { name: "Output schema JSON" })).toBeInTheDocument();
+    // The alias is written for you rather than edited, so it can never trail a stale copy.
+    expect(screen.getByText(/Derived, not edited/)).toBeInTheDocument();
   });
 });
 
@@ -376,5 +378,71 @@ describe("NodeInspector write path", () => {
 
     expect(screen.getByText(/cannot be version-guarded/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+  });
+
+  // The schema editors go through the identical discipline as every other field: a diff, a reason, a
+  // version guard — and a parse verdict while typing, since a dropped brace should not have to wait
+  // for the save bar to be noticed.
+  const editSchema = async (user: ReturnType<typeof userEvent.setup>, label: string, json: string) => {
+    await user.click(screen.getByRole("button", { name: "Schemas" }));
+    const field = screen.getByRole("textbox", { name: label });
+    await user.clear(field);
+    await user.type(field, json.replace(/[{[]/g, "$&$&"));  // userEvent treats { and [ as key descriptors
+  };
+
+  it("reports invalid schema JSON both inline and as a save blocker", async () => {
+    const user = userEvent.setup();
+    renderWithSave();
+    await waitLoaded();
+    await editSchema(user, "Input schema JSON", '{"type":');
+
+    // Inline, next to the field the operator is typing in…
+    const panel = screen.getByLabelText("Schemas");
+    expect(within(panel).getByText(/Input schema is not valid JSON/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Input schema JSON" })).toHaveClass("node-inspector-textarea--invalid");
+    // …and again in the save bar, which is what actually withholds the write.
+    const footer = screen.getByRole("group", { name: "Save changes" });
+    expect(within(footer).getByText(/Input schema is not valid JSON/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+  });
+
+  it("refuses to treat a cleared schema as a deletion", async () => {
+    const user = userEvent.setup();
+    renderWithSave();
+    await waitLoaded();
+    await user.click(screen.getByRole("button", { name: "Schemas" }));
+    await user.clear(screen.getByRole("textbox", { name: "Output schema JSON" }));
+
+    const footer = screen.getByRole("group", { name: "Save changes" });
+    expect(within(footer).getByText(/Output schema is empty/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+  });
+
+  it("saves an edited output schema and the deprecated alias together", async () => {
+    const user = userEvent.setup();
+    const calls = renderWithSave();
+    await waitLoaded();
+    await editSchema(user, "Output schema JSON", '{"type":"object","required":["headline"]}');
+    await user.type(screen.getByRole("textbox", { name: /Reason/ }), "requiring a headline on the output");
+    await user.click(screen.getByRole("button", { name: "Review and save" }));
+    await user.click(screen.getByRole("button", { name: "Confirm save" }));
+
+    const write = calls.find((call) => call.name === "workspace.update_node");
+    expect(write).toBeDefined();
+    expect(write!.args).toMatchObject({ expectedWorkspaceVersion: 84, source: "ui", reason: "requiring a headline on the output" });
+    expect(write!.args.patch).toEqual({
+      outputSchema: { type: "object", required: ["headline"] },
+      schema: { type: "object", required: ["headline"] }
+    });
+  });
+
+  it("does not flag reformatting as a change", async () => {
+    const user = userEvent.setup();
+    renderWithSave();
+    await waitLoaded();
+    // Same schema the node already stores, just collapsed onto one line.
+    await editSchema(user, "Input schema JSON", '{"type":"object"}');
+
+    expect(screen.getByText("No pending changes.")).toBeInTheDocument();
   });
 });

@@ -659,6 +659,12 @@ th { color: var(--color-text-muted); font-size: 0.8rem; text-transform: uppercas
 /* S4 write path (R-11 phase 2). */
 .node-inspector-field { display: grid; gap: 0.3rem; }
 .node-inspector-prompt-input { background: var(--color-code-surface); border: 1px solid var(--color-border); border-radius: 0.6rem; color: var(--color-code-text); font-family: ui-monospace, monospace; font-size: 0.84rem; padding: 0.7rem; resize: vertical; width: 100%; }
+/* Schema editors reuse the prompt input's monospace treatment; the invalid state is a real border
+   colour rather than a class that styles nothing, so a dropped brace is visible before the save bar. */
+.node-inspector-schema-editor { display: grid; gap: 0.4rem; }
+.node-inspector-schema-editor textarea { background: var(--color-code-surface); border: 1px solid var(--color-border); border-radius: 0.6rem; color: var(--color-code-text); font-family: ui-monospace, monospace; font-size: 0.84rem; padding: 0.7rem; resize: vertical; width: 100%; }
+.node-inspector-textarea--invalid { border-color: var(--color-danger-text); }
+.node-inspector-schema-error { color: var(--color-danger-text); margin: 0; }
 .node-inspector-skill-list { display: grid; gap: 0.3rem; list-style: none; margin: 0; padding: 0; }
 .node-inspector-skill-list label { align-items: center; display: flex; gap: 0.5rem; }
 .node-inspector-save { border-top: 1px solid var(--color-border); display: grid; gap: 0.6rem; padding-top: 0.9rem; }

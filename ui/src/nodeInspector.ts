@@ -298,18 +298,74 @@ export type NodeDraft = {
   prompt: string;
   allowedTools: string[];
   assignedSkills: string[];
+  inputSchema: string;
+  outputSchema: string;
 };
+
+// Schemas live in the draft as TEXT, not as parsed objects. The operator edits JSON by hand, so
+// mid-edit text is routinely invalid; holding the raw text means a stray keystroke surfaces a blocker
+// instead of silently reverting the field to the last value that happened to parse.
+export const SCHEMA_DRAFT_FIELDS = ["inputSchema", "outputSchema"] as const;
+export type SchemaDraftField = (typeof SCHEMA_DRAFT_FIELDS)[number];
+const SCHEMA_LABELS: Record<SchemaDraftField, string> = { inputSchema: "Input schema", outputSchema: "Output schema" };
+
+const schemaToText = (value: unknown): string => (value === undefined ? "" : JSON.stringify(value, null, 2));
 
 export const draftFromNode = (node: WorkspaceNode): NodeDraft => ({
   prompt: node.prompt ?? "",
   allowedTools: [...(node.allowedTools ?? [])],
-  assignedSkills: [...(node.assignedSkills ?? [])]
+  assignedSkills: [...(node.assignedSkills ?? [])],
+  inputSchema: schemaToText(node.inputSchema),
+  outputSchema: schemaToText(node.outputSchema)
 });
+
+// Mirrors the server's store.coerceSchemaInput contract (R-3) on purpose: the editor should refuse
+// exactly what the writer would refuse, so the operator finds out while typing rather than after a
+// failed save. A JSON Schema is legally an object OR a boolean, so both pass; an array or a number is
+// valid JSON but not a schema, and clearing the field is refused outright because
+// `{...existing, inputSchema: undefined}` would round-trip through normalizeNode into
+// `{"type":"object"}` — a silent rewrite dressed up as a deletion.
+export type SchemaParse = { ok: true; value: unknown } | { ok: false; error: string };
+
+export function parseSchemaDraft(text: string): SchemaParse {
+  const trimmed = text.trim();
+  if (!trimmed) return { ok: false, error: "is empty — write {} for an unconstrained schema rather than clearing the field" };
+  let parsed: unknown;
+  try { parsed = JSON.parse(trimmed); } catch { return { ok: false, error: "is not valid JSON" }; }
+  if (typeof parsed === "boolean") return { ok: true, value: parsed };
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, error: "must be a JSON Schema object or boolean" };
+  return { ok: true, value: parsed };
+}
 
 export type DraftChange = { field: keyof NodeDraft; label: string; before: string; after: string };
 
 const listText = (values: string[]): string => (values.length ? [...values].sort().join(", ") : "—");
 const sameMembers = (a: string[], b: string[]): boolean => a.length === b.length && [...a].sort().every((value, index) => value === [...b].sort()[index]);
+
+// A schema diff shows compact JSON rather than a character count: "4 characters longer" is not
+// something an operator can review, whereas the shape is.
+const SCHEMA_PREVIEW_LIMIT = 60;
+const schemaSummary = (text: string): string => {
+  if (!text.trim()) return "not set";
+  const parsed = parseSchemaDraft(text);
+  if (!parsed.ok) return "invalid";
+  const compact = JSON.stringify(parsed.value);
+  return compact.length > SCHEMA_PREVIEW_LIMIT ? `${compact.slice(0, SCHEMA_PREVIEW_LIMIT)}…` : compact;
+};
+
+// Compared semantically, so reformatting whitespace or re-indenting is not a change and never reaches
+// the ledger. Key REORDERING does count as a change (JSON.stringify is order-sensitive) — that is a
+// deliberate edit to the stored document, not cosmetics. Unparseable draft text always reports as a
+// change so "Nothing has changed" can never hide a typo the operator is looking straight at.
+const schemaChange = (node: WorkspaceNode, draft: NodeDraft, field: SchemaDraftField): DraftChange | null => {
+  const storedText = draftFromNode(node)[field];
+  const draftText = draft[field];
+  if (storedText.trim() === draftText.trim()) return null;
+  const parsedDraft = parseSchemaDraft(draftText);
+  const parsedStored = parseSchemaDraft(storedText);
+  if (parsedDraft.ok && parsedStored.ok && JSON.stringify(parsedDraft.value) === JSON.stringify(parsedStored.value)) return null;
+  return { field, label: SCHEMA_LABELS[field], before: schemaSummary(storedText), after: schemaSummary(draftText) };
+};
 
 // The diff the operator confirms before anything is written. Field-level and human-readable on
 // purpose: "you are about to change these three things" is reviewable, "save?" is not.
@@ -326,6 +382,10 @@ export function draftChanges(node: WorkspaceNode, draft: NodeDraft): DraftChange
   if (!sameMembers(stored.assignedSkills, draft.assignedSkills)) {
     changes.push({ field: "assignedSkills", label: "Assigned skills", before: listText(stored.assignedSkills), after: listText(draft.assignedSkills) });
   }
+  for (const field of SCHEMA_DRAFT_FIELDS) {
+    const change = schemaChange(node, draft, field);
+    if (change) changes.push(change);
+  }
   return changes;
 }
 
@@ -338,6 +398,21 @@ export function buildNodePatch(node: WorkspaceNode, draft: NodeDraft): Partial<W
     if (change.field === "prompt") patch.prompt = draft.prompt;
     if (change.field === "allowedTools") patch.allowedTools = [...draft.allowedTools];
     if (change.field === "assignedSkills") patch.assignedSkills = [...draft.assignedSkills];
+    if (change.field === "inputSchema") {
+      const parsed = parseSchemaDraft(draft.inputSchema);
+      if (parsed.ok) patch.inputSchema = parsed.value as WorkspaceNode["inputSchema"];
+    }
+    if (change.field === "outputSchema") {
+      const parsed = parseSchemaDraft(draft.outputSchema);
+      // The dedicated writer (workspace.update_node_output_schema) sets outputSchema AND the
+      // deprecated `schema` alias together, and normalizeNode falls back to `schema` when
+      // outputSchema is absent. Writing only one would leave the alias trailing a stale copy of the
+      // schema, visible in this very tab. Keep them in lockstep.
+      if (parsed.ok) {
+        patch.outputSchema = parsed.value as WorkspaceNode["outputSchema"];
+        patch.schema = parsed.value as WorkspaceNode["schema"];
+      }
+    }
   }
   return patch;
 }
@@ -348,7 +423,17 @@ export const MIN_REASON_LENGTH = 8;
 
 export function saveBlockers(node: WorkspaceNode, draft: NodeDraft, reason: string, workspaceVersion?: number): string[] {
   const blockers: string[] = [];
-  if (draftChanges(node, draft).length === 0) blockers.push("Nothing has changed.");
+  const changes = draftChanges(node, draft);
+  if (changes.length === 0) blockers.push("Nothing has changed.");
+  // Only a CHANGED schema field is validated. A node whose stored schema is already unparseable must
+  // not become uneditable in every other respect — that would make the one bad field a lock on the
+  // whole node.
+  const changed = new Set(changes.map((change) => change.field));
+  for (const field of SCHEMA_DRAFT_FIELDS) {
+    if (!changed.has(field)) continue;
+    const parsed = parseSchemaDraft(draft[field]);
+    if (!parsed.ok) blockers.push(`${SCHEMA_LABELS[field]} ${parsed.error}.`);
+  }
   if (reason.trim().length < MIN_REASON_LENGTH) blockers.push(`A reason of at least ${MIN_REASON_LENGTH} characters is required — it is what a human reviewing the change ledger will read.`);
   if (workspaceVersion === undefined) blockers.push("The workspace version is unknown, so this save cannot be version-guarded. Reload first.");
   return blockers;

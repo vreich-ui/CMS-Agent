@@ -15,9 +15,11 @@ import {
   MIN_REASON_LENGTH,
   mutationArgsFor,
   nodeWarnings,
+  parseSchemaDraft,
   promptComposition,
   runControlsEnabled,
   saveBlockers,
+  SCHEMA_DRAFT_FIELDS,
   summarizeSkillPolicy,
   summarizeToolRows,
   type InspectorTab,
@@ -306,16 +308,33 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
     </div>}
 
     {tab === "schemas" && <div className="node-inspector-panel" aria-label="Schemas">
-      <h4>Input schema</h4>
-      <SchemaViewer schema={node.inputSchema as RJSFSchema | undefined} emptyMessage="No input schema stored." />
-
-      <h4>Output schema</h4>
-      <SchemaViewer schema={node.outputSchema as RJSFSchema | undefined} emptyMessage="No output schema stored." />
+      {SCHEMA_DRAFT_FIELDS.map((field) => {
+        const parsed = parseSchemaDraft(draft[field]);
+        const label = field === "inputSchema" ? "Input schema" : "Output schema";
+        return <div key={field} className="node-inspector-schema-editor">
+          <h4>{label}</h4>
+          <label className="node-inspector-field">
+            <span className="muted">JSON Schema — an object, or <code>true</code>/<code>false</code></span>
+            <textarea
+              aria-label={`${label} JSON`}
+              className={parsed.ok ? undefined : "node-inspector-textarea--invalid"}
+              rows={12}
+              spellCheck={false}
+              value={draft[field]}
+              onChange={(event) => setDraft((current) => ({ ...current, [field]: event.target.value }))}
+            />
+          </label>
+          {/* The parse verdict is shown while typing rather than saved for the blocker list, so the
+              operator sees which brace they dropped at the moment they drop it. */}
+          {parsed.ok
+            ? <p className="muted">Valid JSON Schema.</p>
+            : <p className="node-inspector-schema-error" role="status">{label} {parsed.error}.</p>}
+        </div>;
+      })}
 
       <h4>Deprecated <code>schema</code> alias</h4>
       <SchemaViewer schema={node.schema as RJSFSchema | undefined} emptyMessage="Not set." />
-
-      <p className="muted">Schemas stay read-only here: editing them needs the coercion fix in R-3, and a schema written through the wrong path is worse than one left alone.</p>
+      <p className="muted">Derived, not edited: saving the output schema writes this alias in lockstep, exactly as <code>workspace.update_node_output_schema</code> does, so it can never trail a stale copy.</p>
     </div>}
 
     {/* The save bar is always visible, so an edit made on one tab is never lost by switching to
