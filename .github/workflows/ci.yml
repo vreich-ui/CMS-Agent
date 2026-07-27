@@ -44,9 +44,20 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
       - name: Install
         run: npm ci --no-audit --no-fund
+      # The root tsconfig includes tests/**/*.test.ts, and tests/ui/* deliberately import framework-
+      # free logic out of ui/src (the architecture keeps pure logic there and tests it with the root
+      # vitest). Those modules' type imports reach ui-only dependencies — ui/src/types/workspace.ts
+      # imports RJSFSchema from @rjsf/utils — which live in ui/node_modules, not the root tree. So a
+      # root-only install cannot typecheck the root project. `npm run typecheck` has in fact never
+      # worked in a clean root-only checkout; with no CI, nothing ever ran it that way. Installing
+      # the ui workspace here is what makes the root typecheck honest.
+      - name: Install (ui workspace — needed for the root typecheck, see above)
+        run: npm ci --prefix ui --no-audit --no-fund
       - name: Typecheck (npm run build)
         run: npm run build
       - name: Test
