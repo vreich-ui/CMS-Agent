@@ -84,9 +84,27 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 **R-15 ☐ UI/engine type correspondence test.** `ui/src/types/workspace.ts` re-declares engine types by hand and has drifted: `WorkflowExecutionRecord` is missing `rev`, `entrypoint`, `budgetUsd`, `budgetBlock`; `RunBudgetBlock` and `WorkflowEntrypoint` have no UI counterpart. Trees are isolated at build time so duplication is structural — add the correspondence test `toolDenialReasons` / `executionStatuses` / `workspaceActorKinds` already have.
 
-**R-16 ☐ Validate node output against its own `outputSchema` at execution time.** T-2 F-1: `article_body` completed and persisted an artifact that fails all six required fields of its own schema. Nothing checks it. *Highest severity on the current list* — it means a dry run cannot certify the contract path, only that the graph advances.
+**R-16 ✅ Validate node output against its own `outputSchema` at execution time.** Done 2026-07-27 — the executor validates after the runner returns and **fails closed**: status `failed`, the schema issues named in `errors`, and neither the stage output nor the artifact written, so a malformed value cannot reach a downstream node or the ledger. Proven by forcing a runner to return the exact literal T-2 caught. Original note: T-2 F-1: `article_body` completed and persisted an artifact that fails all six required fields of its own schema. Nothing checks it. *Highest severity on the current list* — it means a dry run cannot certify the contract path, only that the graph advances.
 
-**R-17 ☐ Refresh the mock runner against the current node schemas.** T-2 F-1: the mock output for `article_body` is the pre-contract-as-truth `{schema_version, nodes}` shape. Mock fixtures must be derived from each node's `outputSchema` rather than hand-written, or they will drift again the next time a node is generalized.
+**R-17 ✅ Refresh the mock runner against the current node schemas.** Done 2026-07-27 — `execution/mockOutputFromSchema.ts` derives fixtures FROM each node's schema, including `anyOf`/`oneOf`/`allOf`; a drift guard asserts every canonical node's mock validates, plus the strictest schema in the repo. Also removed a SECOND hand-written copy of the same fixtures from `executor.ts`. Original note: T-2 F-1: the mock output for `article_body` is the pre-contract-as-truth `{schema_version, nodes}` shape. Mock fixtures must be derived from each node's `outputSchema` rather than hand-written, or they will drift again the next time a node is generalized.
+
+**R-22 ☐ The conductor ignores the live workspace by default — decide the default.** Found while building R-17. `resolveConductorNodes()` returns the STATIC hardcoded definitions unless `WORKSPACE_NODES_SOURCE=store`, so a run executes `src/agent/workspace/nodes.ts` (last touched 2026-07-03), not the live workspace. The six nodes the contract-alignment wave rebuilt therefore do not participate in a run, and **`contract_intelligence` does not exist in the seeded set at all** — the real explanation of T-2's F-7 rather than a graph-validator gap. So **T-2 exercised an obsolete pipeline**. The gate is deliberate ("behavior is unchanged until an operator flips it after a side-by-side mock run confirms identical topology") — but the topology is no longer identical, so it now hides the alignment work rather than protecting it. **Wolf's call:** flip the default to `store`, or re-seed `nodes.ts` from live.
+
+**R-23 ☐ THREE competing `article_body` schemas, and a name that no longer describes anything.** Found by Wolf challenging the "legacy" claim — and it sharpens R-22.
+
+| # | Where | Shape | Strict |
+|---|---|---|---|
+| 1 | `nodes.ts` seeded — what the conductor runs in static mode | `{artifact, summary}` | open |
+| 2 | `store.ts:196` — installed as article_body's schema in **every fresh workspace** | `{schema_version, nodes[]}` — the legacy monolith | `additionalProperties: false` |
+| 3 | Live workspace (v85) | `{artifact, summary, clientProjectId, clientObjectType, contractSource, body}` | open |
+
+**Correction to §2i's F-1:** the old hand-written mock was NOT simply stale — it is **valid against #2**, verified. It was written to match the legacy monolith `store.ts` still installs. "The fixture drifted" was the wrong diagnosis; one node has three schemas and the fixture matched one of them.
+
+**The naming debt.** The client's object types are `page`, `section`, `navigation`, `taxonomy`, `site`, `template`, `section_template`, `theme`, `product`, `content_item`, `tracking_config` — **there is no `article` object**. Nothing publishes an "article body"; a publish writes ONE object of the type named in `clientObjectType`, shaped by the client's contract at run time. #3 models that correctly, so the structure is right and the artifact name `article_body.v1` is a leftover from the Dr-Lurié-era monolith. #2 IS that monolith, the same legacy surface R-6 already targets via `article_body_validate` / `article_body_get_schema`.
+
+Recommended: delete #2 (it silently overrides the seeded schema on every fresh workspace), resolve #1 via R-22, and rename the artifact to describe "one client object".
+
+⚠️ *Not verified today.* The object-type list is from a live `object_contract` read recorded in `docs/plan/findings/`, not a fresh read — the client connections were down and the session's MCP link dropped. **Dr-Lurié is the authority to re-check**: the client brings its own publishing rules, so the client's contract decides this, not the workspace's vocabulary.
 
 **R-18 ☐ Report why a run stopped.** T-2 F-2: `run_all` halts before publish-risk nodes with `status: "running"` and `approvalsRequired: []`, so the gate is invisible to the UI and to an operator. Record the hold. Also F-3: add a distinct `paused` state — `pause_run` currently reports `blocked`, which already means publish-gate hold and budget hold.
 
@@ -291,6 +309,25 @@ Seven findings became R-16 through R-21 plus the earlier R-15. Two are worth rea
 Also observed, live and in one payload: **R-5 reproduced.** `node.prepare_execution` returned `resolvedSkills.effectiveTools: ["project.call_tool"]` alongside `resolvedEffectiveTools` marking `project.call_tool` `allowed: false`. The two resolvers disagree inside a single response.
 
 **T-3 should not proceed on this.** The publish locks are all still closed and correct, but the evidence T-2 was meant to produce — that the contract-driven path builds a valid client object — was not produced, because the thing that would have caught the failure does not exist yet (R-16). Fix R-16/R-17, re-run Tier 6, then reconsider.
+
+---
+
+## 2j. Execution log — 2026-07-27, wave 9 (R-16 + R-17)
+
+**R-16 — the missing check.** The executor now validates every node's output against that node's own `outputSchema` before it counts as completed, and fails closed: `status: "failed"`, the individual schema issues in `errors`, and **neither the stage output nor the artifact written**. Verified by forcing a runner to return the exact literal T-2 caught: `["output_schema_violation", "$.artifact is required", "$.summary is required"]`, zero artifacts, no stage output. Note where the gap was — the single-node path (`nodeRuntime`) already validated; only the workflow path did not, so the more casual path was the stricter one.
+
+**R-17 — fixtures derived from schemas.** `execution/mockOutputFromSchema.ts` generates mock output FROM each node's schema: const, enum, type unions, recursive required, minLength, minItems, minProperties, numeric bounds, best-effort pattern, and `anyOf`/`oneOf`/`allOf`. Dry-run markers are applied as HINTS only where the schema permits, so a strict schema is never polluted to make a fixture read nicely. `anyOf`/`oneOf` are resolved by generating a candidate per branch and letting the REAL validator pick one that holds against the full schema — siblings, `dependentRequired` and nested `if`/`then` included — rather than guessing.
+
+That combinator support was NOT in the first attempt, and Wolf's challenge exposed it: against `articleBodyJsonSchema` the generator emitted `public: {}` and failed with `"$.nodes[0].public must match at least one allowed schema"`. The drift guard missed it because it only covered the seeded schemas, none of which use `anyOf`. The guard now also covers that schema — the strictest in the repo, exercising `additionalProperties:false`, a pattern, an enum, `minItems`, nesting, `anyOf` and `dependentRequired` at once.
+
+Two smaller things surfaced:
+
+1. **A second hand-written copy of the same fixtures lived in `executor.ts`**, exported only for tests. Two implementations of "what a mock output looks like" is how they drifted apart unnoticed; there is now one.
+2. **A test was codifying the bug.** `workspaceExecution.test.ts` asserted `toMatchObject({ schema_version: "article_body.v1" })` — a shape the node's own schema does not allow. It passed only because nothing validated the output. It now asserts the node satisfies its declared schema.
+
+See R-22 and R-23 for what this uncovered; **R-23 corrects §2i's F-1 diagnosis.**
+
+Suite: **827 root** (was 806), 88 ui, both typechecks, both builds, all three locks green.
 
 ---
 

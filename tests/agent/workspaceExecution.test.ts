@@ -3,6 +3,8 @@ import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.
 import type { ExecutionRepository } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import { getRun, runNextNode, startDryRun } from "../../src/agent/workspace/executor.js";
 import { repositoryManager } from "../../src/agent/runtime/repositories.js";
+import { validateOutput } from "../../src/agent/execution/outputValidator.js";
+import { listWorkspaceNodes } from "../../src/agent/workspace/nodes.js";
 
 const completeUntil = async (runId: string, targetNodeId: string, store: ExecutionRepository) => {
   let run = await getRun(runId, store);
@@ -73,7 +75,16 @@ describe("Publishing Conductor dry-run execution", () => {
     const advanced = await completeUntil(run.runId, "article_body", store);
 
     expect(advanced.nodes.find((node) => node.nodeId === "article_body")?.produces).toContain("article_body.v1");
-    expect(advanced.stageOutputs.article_body).toMatchObject({ schema_version: "article_body.v1" });
+
+    // This assertion used to read `toMatchObject({ schema_version: "article_body.v1" })`, which
+    // codified the defect T-2 found: `schema_version` is the pre-contract-as-truth shape, and the
+    // node's own outputSchema requires `artifact` and `summary` instead. The old assertion therefore
+    // passed only because nothing validated the output (R-16) and the fixture was hand-written (R-17).
+    // The honest assertion is that the node satisfies its own declared schema.
+    const node = listWorkspaceNodes().find((candidate) => candidate.id === "article_body")!;
+    const validation = validateOutput(advanced.stageOutputs.article_body, node.outputSchema);
+    expect(validation.ok, !validation.ok ? validation.errors.join("; ") : "").toBe(true);
+    expect(advanced.stageOutputs.article_body).toMatchObject({ artifact: "article_body.v1" });
   });
 
   it("publish_payload remains dry-run", async () => {

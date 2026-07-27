@@ -6,6 +6,8 @@ import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import { recordModelUsage, summarizeModelUsage, evaluateRunBudget } from "../observability/modelUsage.js";
 import { getNodeRunner } from "../execution/runnerRegistry.js";
+import { validateOutput } from "../execution/outputValidator.js";
+import { mockOutputForNode as mockOutputForNodeShared } from "../execution/runners/MockNodeRunner.js";
 import { enforceModelLadder, modelLadderEnforcementEnabled } from "../improvement/modelLadder.js";
 import { postRunReflectionEnabled, reflectAfterRun } from "../improvement/reflection.js";
 import { autoPromoteEnabled, autoPromoteProposals } from "../improvement/autoPromote.js";
@@ -158,11 +160,10 @@ const findNextRunnableNode = (run: WorkflowExecutionRecord, nodes: WorkspaceNode
   });
 };
 
-const mockOutputForNode = (node: WorkspaceNode, run: WorkflowExecutionRecord) => {
-  if (node.id === "article_body") return { schema_version: "article_body.v1", nodes: [{ id: "n_dryRunIntro", kind: "content", visibility: "public", public: { title: "Dry-run article", body: "Deterministic mock article body for Publishing Conductor dry-run execution." } }] };
-  if (node.id === "publish_payload") return { artifact: "dry_run_publish_payload.v1", dryRun: true, target: "preview", articleBody: run.stageOutputs.article_body, publicationSideEffects: false };
-  return { artifact: node.produces[0] ?? `${node.id}.mock.v1`, nodeId: node.id, dryRun: true, summary: `Dry-run mock output for ${node.name}.`, dependencyOutputs: node.dependsOn };
-};
+// Kept as a re-export so the existing __test__ surface stays stable. The implementation is shared with
+// MockNodeRunner (R-17) — this file used to carry a SECOND hand-written copy of the same fixtures, which
+// is precisely how two implementations of "what a mock output looks like" drifted apart unnoticed.
+const mockOutputForNode = (node: WorkspaceNode, run: WorkflowExecutionRecord) => mockOutputForNodeShared(node, run);
 
 const buildArtifact = (node: WorkspaceNode, output: unknown): ExecutionArtifact => ({ id: `artifact_${node.id}_${Date.now()}`, nodeId: node.id, type: node.produces[0] ?? "mock_output", value: output, createdAt: now() });
 
@@ -380,6 +381,39 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
     return { run };
   }
   const output = result.output;
+
+  // R-16 — a node's output must satisfy the node's OWN output schema before it counts as completed.
+  //
+  // Nothing checked this. T-2 found `article_body` reporting `completed`, persisting an artifact, and
+  // handing downstream nodes a value that failed all six required fields of its schema; the same run
+  // also carried a `publish_payload` output missing the `summary` its schema requires. Both passed
+  // because the executor took the runner's word for it.
+  //
+  // The consequence was bigger than the two bad fixtures: a dry run could only ever prove that the
+  // graph advanced, never that any node produced what it promised — which is exactly the assurance a
+  // dry run exists to give before a live publish. The single-node path (nodeRuntime) already validated;
+  // the workflow path did not, so the cheaper check was the stricter one.
+  //
+  // A violation is a FAILURE, not a warning: the stage output and artifact are not written, so a
+  // malformed value cannot reach a downstream node or the artifact ledger. Failing closed here is what
+  // makes a green run mean something.
+  const outputValidation = validateOutput(output, nextNode.outputSchema);
+  if (!outputValidation.ok) {
+    state.status = "failed";
+    state.errors = ["output_schema_violation", ...outputValidation.errors];
+    state.output = {
+      error: {
+        code: "output_schema_violation",
+        message: `${nextNode.id} produced output that does not satisfy its own outputSchema.`,
+        details: { issues: outputValidation.errors }
+      }
+    };
+    run.status = "failed";
+    run.errors = [...run.errors, `${nextNode.id}:output_schema_violation`];
+    run.updatedAt = completedAt;
+    return { run };
+  }
+
   state.status = "completed";
   state.output = output;
   run.stageOutputs[nextNode.id] = output;
