@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { Glossary } from "./Glossary";
 import { SchemaViewer } from "./SchemaViewer";
+import { explainDenialReasons } from "../explain";
 import { useClientContract } from "../hooks/useClientContract";
 import { useNodeInspector } from "../hooks/useNodeInspector";
 import {
@@ -140,17 +142,18 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
       </div>
     </header>
 
+    {/* The three layers were previously explained only in `title=` attributes — invisible to touch,
+        keyboard and screen-reader users, which this project's accessibility spec rules out as a sole
+        channel. The definitions now live in a readable disclosure below. */}
     <div className="node-inspector-layers" role="group" aria-label="Resolution layers">
-      <span className="badge" title="Stored on the node.">Method · stored</span>
-      <span className="badge" title={`Resolved by the workspace. ${formatFetchedAt(fetchedAt)}.`}>Effective · {formatFetchedAt(fetchedAt)}</span>
-      <span
-        className={`badge node-inspector-identity node-inspector-identity--${identity.state}`}
-        title={identity.state === "live" ? `${identity.message} ${formatFetchedAt(identity.fetchedAt)}.` : identity.message}
-      >
+      <span className="badge">Method · stored</span>
+      <span className="badge">Effective · {formatFetchedAt(fetchedAt)}</span>
+      <span className={`badge node-inspector-identity node-inspector-identity--${identity.state}`}>
         Identity · {identity.state === "live" ? formatFetchedAt(identity.fetchedAt) : identity.state.replace("_", " ")}
       </span>
-      {workspaceVersion !== undefined && <span className="badge" title="Every save is guarded against this version.">v{workspaceVersion}</span>}
+      {workspaceVersion !== undefined && <span className="badge">v{workspaceVersion} <span className="muted">· saves are guarded against this version</span></span>}
     </div>
+    <Glossary id="layer" />
 
     {identity.state !== "live" && <p className="node-inspector-identity-note muted">
       {identity.message} Run controls are disabled until the client contract can be fetched.
@@ -229,11 +232,25 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
                     />
                   </td>
                   <td>{stateLabel(row)}</td>
-                  <td>{row.denialReasons.length ? row.denialReasons.join(", ") : "—"}</td>
+                  {/* The reason a specific tool was refused is the primary content of its row, so the
+                      plain-language label is always visible — never collapsed and never a bare enum.
+                      The raw code stays beside it for grepping and for the runbooks; the full
+                      definition and the remedy live in the glossary under the table. */}
+                  <td>{row.denialReasons.length
+                    ? <ul className="node-inspector-why">
+                        {explainDenialReasons(row.denialReasons).map(({ code, term }) => <li key={code}>
+                          {term ? <>{term.label} <code className="node-inspector-why-code">{code}</code></> : <code>{code}</code>}
+                        </li>)}
+                      </ul>
+                    : "—"}</td>
                 </tr>)}
               </tbody>
             </table>
           </div>)}
+      {effectiveTools !== null && <>
+        <Glossary id="denial" />
+        <Glossary id="risk" />
+      </>}
     </div>}
 
     {tab === "skills" && <div className="node-inspector-panel" aria-label="Skills">
@@ -258,11 +275,14 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
         ? <p className="empty-state">The skill policy could not be resolved, so conflicts are unknown — not clean.</p>
         : skillSummary.conflicts.length === 0
           ? <p className="muted">No conflicts reported.</p>
-          : <ul className="node-inspector-conflicts">
-              {skillSummary.conflicts.map((conflict, index) => <li key={`${conflict.source}-${index}`} className={`node-inspector-conflict node-inspector-conflict--${conflict.severity}`}>
-                <span className="badge">{conflict.severity}</span> <code>{conflict.source}</code> {conflict.message}
-              </li>)}
-            </ul>}
+          : <>
+              <ul className="node-inspector-conflicts">
+                {skillSummary.conflicts.map((conflict, index) => <li key={`${conflict.source}-${index}`} className={`node-inspector-conflict node-inspector-conflict--${conflict.severity}`}>
+                  <span className="badge">{conflict.severity}</span> <code>{conflict.source}</code> {conflict.message}
+                </li>)}
+              </ul>
+              <Glossary id="severity" />
+            </>}
 
       <h4>Resolved tools</h4>
       <dl className="design-rail-facts">
@@ -286,6 +306,7 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
         <dt>Produces</dt><dd>{node.produces?.join(", ") || "—"}</dd>
         <dt>Updated</dt><dd>{node.updatedAt ?? "unknown"}</dd>
       </dl>
+      <Glossary id="risk" />
 
       <h4>Consistency</h4>
       {warnings.length === 0

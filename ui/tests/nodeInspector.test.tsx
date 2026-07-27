@@ -95,7 +95,44 @@ describe("NodeInspector", () => {
     await user.click(screen.getByRole("button", { name: /^Tools/ }));
 
     expect(screen.getByText("project.call_tool")).toBeInTheDocument();
-    expect(screen.getByText("risk_level_exceeds_authorization")).toBeInTheDocument();
+    // Scoped to the row: the code now also appears in the denial glossary below the table.
+    const row = screen.getByRole("row", { name: /project\.call_tool/ });
+    expect(within(row).getByText("risk_level_exceeds_authorization")).toBeInTheDocument();
+  });
+
+  // The Why column used to print the bare enum, on the one screen whose entire purpose is explaining
+  // why a tool did not resolve.
+  it("translates the denial reason into plain language while keeping the raw code", async () => {
+    const user = userEvent.setup();
+    renderInspector();
+    await waitFor(() => expect(screen.getByText(/An assigned skill appends/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /^Tools/ }));
+
+    const row = screen.getByRole("row", { name: /project\.call_tool/ });
+    // Visible in the row, not hidden behind a disclosure — for this tool it is the primary content.
+    expect(within(row).getByText("Above the node's risk ceiling")).toBeInTheDocument();
+    // And the code survives beside it, because the runbooks and the agents both use it.
+    expect(within(row).getByText("risk_level_exceeds_authorization")).toBeInTheDocument();
+  });
+
+  it("offers the denial and risk vocabularies as collapsed disclosures under the table", async () => {
+    const user = userEvent.setup();
+    renderInspector();
+    await waitFor(() => expect(screen.getByText(/An assigned skill appends/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /^Tools/ }));
+
+    expect(screen.getByText("Why can a tool be denied?")).toBeInTheDocument();
+    expect(screen.getByText("What do read, write, publish and admin mean?")).toBeInTheDocument();
+  });
+
+  it("explains the three resolution layers in readable text rather than only a tooltip", async () => {
+    renderInspector();
+    await waitFor(() => expect(screen.getByText(/An assigned skill appends/)).toBeInTheDocument());
+
+    // The layer badges no longer rely on title= to carry their meaning.
+    const layers = screen.getByRole("group", { name: "Resolution layers" });
+    expect(layers.querySelectorAll("[title]")).toHaveLength(0);
+    expect(screen.getByText("What are the Method, Effective and Identity layers?")).toBeInTheDocument();
   });
 
   it("surfaces a blocker skill conflict instead of leaving it invisible", async () => {
