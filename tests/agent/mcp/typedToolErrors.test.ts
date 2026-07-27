@@ -142,4 +142,13 @@ describe("toolError classification", () => {
   it("summarizes an envelope as code plus message", () => {
     expect(toolErrorSummary(toolError(new MissingPatchFieldError("t", "f")))).toContain("missing_patch_field:");
   });
+
+  // The conflict messages keep their historical machine-readable prefix, so the summary must not
+  // stutter it back: "version_conflict: workspace_version_conflict: ..." reads like a bug.
+  it("does not double a prefix a self-labelling message already carries", () => {
+    const summary = toolErrorSummary(toolError(new WorkspaceVersionConflictError({ conflict: "workspace_version", expectedVersion: 1, currentVersion: 2 })));
+
+    expect(summary).toBe("workspace_version_conflict: expected 1, current 2. Reload and re-apply.");
+    expect(summary).not.toContain("version_conflict: workspace_version_conflict");
+  });
 });

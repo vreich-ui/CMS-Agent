@@ -74,7 +74,7 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 **R-10 ✅ Attention resolution.** `constellation.get_attention` must report: blocker-severity skill conflicts, skill-requested-but-denied tools, `dependsOn`≠`requiredInputs`, unconfigured project connections, and (after R-12) stale docs. Today it returns `[]` against real defects.
 
-**R-11 ◑ S4 node inspector — read-only DONE, write path still blocked on R-4.** Three-layer rendering per node: Method (stored, always) / Effective (resolved, always) / Identity (live contract fetch — greyed "client contract unreachable (`<ENV_VAR>`)" when down, run controls disabled, `fetchedAt` always shown, never stale-as-live). Tabs: Prompt, Tools (own vs effective with `denialReasons`), Skills (with conflicts), Overview, Schemas. Connection badge on the project selector. **Write path ships only after R-4.** This closes your stated gap: seeing node instructions and attributes.
+**R-11 ✅ S4 node inspector — read-only AND write path both landed.** Three-layer rendering per node: Method (stored, always) / Effective (resolved, always) / Identity (live contract fetch — greyed "client contract unreachable (`<ENV_VAR>`)" when down, run controls disabled, `fetchedAt` always shown, never stale-as-live). Tabs: Prompt, Tools (own vs effective with `denialReasons`), Skills (with conflicts), Overview, Schemas. Connection badge on the project selector. **Write path ships only after R-4.** This closes your stated gap: seeing node instructions and attributes.
 
 **R-12 ☐ Docs generator + Tier D.** Introspection → self-description artifacts (stamped `workspaceVersion`/`revisionId`) → `content_source.v1` envelopes → normal pipeline → client 0. Tier D diffs published `sourceWorkspaceVersion` against live workspace; stale → attention item. Repo-analysis narrative docs regenerate in CI on merge; per-object mechanics docs derive from introspection only.
 
@@ -158,6 +158,7 @@ Suite after the wave: **707 root tests** (was 668), **55 ui tests** (was 45), bo
 | R-4 ✅ | Typed failure envelopes. `code` + structured details; conflicts carry `currentVersion`/`currentRevisionId`; `ProjectAdminError` codes surface generically; the JSON-RPC message leads with the code. Message text kept byte-compatible so existing callers that match on it still work. |
 | R-1 ✅ | The five single-field `update_node_*` writers now refuse a patch that omits their target field. Regression test verified by reverting the guard (8 failures, including the field-survival assertion). |
 | R-10 ✅ | `get_attention` reports five previously invisible classes, each evidence-cited. Absent inputs skip their check rather than reporting a false clean; entry nodes are exempt from the dependency check. |
+| R-11 ✅ | **Write path shipped**, R-4 having removed its stated blocker. Prompt / tools / skills are editable; a mandatory reason (≥8 chars), a field-level diff confirmation, and a version-guarded minimal patch gate every write; a conflict reports the version someone else landed on and offers an explicit reload rather than retrying silently. Schemas stay read-only pending R-3. No `actor` is sent — the server's verified identity wins, and a tool-supplied actor would override it. |
 
 Suite after the wave: **742 root tests** (was 707), 55 ui, both builds, drift clean.
 
@@ -183,6 +184,7 @@ Blocked on Wolf: **ENV-1/ENV-2 tokens are rejected (HTTP 401 on both `dr-lurie` 
 
 Next, in the order I would take them:
 1. **`project.delete snoocle`** — one call, the moment the deploy rolls out.
-2. **R-11 write path** — now unblocked by R-4, which was its stated precondition.
+2. **R-3** — coerce stringified JSON in the schema writers. Now the smallest thing standing between S4 and full node editing: it is the only reason the Schemas tab is read-only.
 3. **T-2** — full dry-run pipeline vs client 0. Unblocked by T-1, but it executes nodes, so it is a deliberate step rather than a sweep.
 4. **R-2** (skill-schema resolver) — no longer blocking anything, but it is what forces the 7 placeholder skill `outputSchema`s to stay flattened.
+5. **R-5** (reconcile the two resolvers) — the inspector currently renders the disagreement rather than resolving it, which is honest but not a fix.

@@ -54,7 +54,7 @@ export function ConstellationDesignMode({ client, workspace, project, onStatus, 
   // Node loading (and its own loading/error state) is entirely useWorkspace's concern — it
   // auto-loads whenever `client` changes, including the very first render, so this component
   // never triggers it directly and never duplicates the fetch.
-  const { nodes, selectedId, selectedNode, setSelectedId, loadWorkspace, updateGraph, validateGraph, loading: nodesLoading, loadError } = workspace;
+  const { nodes, selectedId, selectedNode, setSelectedId, loadWorkspace, updateGraph, validateGraph, loading: nodesLoading, loadError, workspaceVersion } = workspace;
 
   const loadStructure = async () => {
     try {
@@ -250,7 +250,10 @@ export function ConstellationDesignMode({ client, workspace, project, onStatus, 
       node={selectedNode}
       client={client}
       project={project}
+      workspaceVersion={workspaceVersion}
       onClose={() => setInspectorOpen(false)}
+      onSaved={async () => { await loadWorkspace(); onStatus({ tone: "success", message: "Node saved. The change is in the ledger with your reason." }); }}
+      onReloadWorkspace={() => void handleReload()}
     />}
 
     <GraphListView entries={listEntries} />

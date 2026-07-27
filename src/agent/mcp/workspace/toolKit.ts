@@ -68,7 +68,12 @@ export const toolError = (error: unknown): ToolErrorEnvelope => {
 export const toolErrorSummary = (envelope: ToolErrorEnvelope): string => {
   const { code, message } = envelope.error;
   if (code === "validation_error") return "validation_error: input did not match the tool schema.";
-  return message ? `${code}: ${message}` : code;
+  if (!message) return code;
+  // The conflict messages keep their historical `workspace_version_conflict: …` / `revision_conflict: …`
+  // prefix for backward compatibility, so prepending the code again would read
+  // "version_conflict: workspace_version_conflict: …". Any message that already leads with a
+  // snake_case token and a colon is self-labelling; leave it alone.
+  return /^[a-z][a-z0-9_]*: /.test(message) ? message : `${code}: ${message}`;
 };
 
 export const workspaceActorSchema = z.object({ kind: z.enum(workspaceActorKinds), id: z.string().min(1).optional(), label: z.string().min(1).optional() }).strict();

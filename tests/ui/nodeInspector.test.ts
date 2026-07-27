@@ -17,6 +17,12 @@ import {
   runControlsEnabled,
   summarizeSkillPolicy,
   summarizeToolRows,
+  buildNodePatch,
+  classifyWriteFailure,
+  draftChanges,
+  draftFromNode,
+  mutationArgsFor,
+  saveBlockers,
   type EffectiveTool
 } from "../../ui/src/nodeInspector.js";
 import type { ProjectSummary, SkillResolvedPolicy, WorkspaceNode } from "../../ui/src/types/workspace.js";
@@ -274,5 +280,120 @@ describe("tab identifiers", () => {
     expect(["prompt", "tools", "skills", "overview", "schemas"].every(isInspectorTab)).toBe(true);
     expect(isInspectorTab("model")).toBe(false);
     expect(isInspectorTab(undefined)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------- write path (R-11 phase 2)
+describe("draft changes and patch construction", () => {
+  const stored = node({ prompt: "Objective: verify.", allowedTools: ["a", "b"], assignedSkills: ["s1"] });
+
+  it("reports nothing to save when the draft matches the node", () => {
+    expect(draftChanges(stored, draftFromNode(stored))).toEqual([]);
+    expect(buildNodePatch(stored, draftFromNode(stored))).toEqual({});
+  });
+
+  it("treats tool order as insignificant", () => {
+    expect(draftChanges(stored, { ...draftFromNode(stored), allowedTools: ["b", "a"] })).toEqual([]);
+  });
+
+  it("reports each changed field with a readable before and after", () => {
+    const changes = draftChanges(stored, { prompt: "New.", allowedTools: ["a"], assignedSkills: [] });
+
+    expect(changes.map((change) => change.field)).toEqual(["prompt", "allowedTools", "assignedSkills"]);
+    expect(changes[1]).toMatchObject({ label: "Allowed tools", before: "a, b", after: "a" });
+    expect(changes[2].after).toBe("—");
+  });
+
+  // A patch carrying untouched fields would make every ledger entry look like a full rewrite.
+  it("sends only the fields that changed", () => {
+    expect(buildNodePatch(stored, { ...draftFromNode(stored), prompt: "New." })).toEqual({ prompt: "New." });
+  });
+
+  it("can clear a list deliberately", () => {
+    expect(buildNodePatch(stored, { ...draftFromNode(stored), assignedSkills: [] })).toEqual({ assignedSkills: [] });
+  });
+});
+
+describe("save preconditions", () => {
+  const stored = node({ prompt: "p", allowedTools: [] });
+  const changed = { ...draftFromNode(stored), prompt: "changed" };
+
+  it("blocks a save with no changes", () => {
+    expect(saveBlockers(stored, draftFromNode(stored), "a good long reason", 12).join(" ")).toContain("Nothing has changed");
+  });
+
+  it("blocks a save with no reason, because the ledger is only as good as its reasons", () => {
+    expect(saveBlockers(stored, changed, "", 12).join(" ")).toContain("reason of at least");
+  });
+
+  it("blocks a reason that is only whitespace", () => {
+    expect(saveBlockers(stored, changed, "        ", 12).join(" ")).toContain("reason of at least");
+  });
+
+  it("blocks a save that cannot be version-guarded", () => {
+    expect(saveBlockers(stored, changed, "a good long reason", undefined).join(" ")).toContain("version-guarded");
+  });
+
+  it("allows a changed draft with a real reason and a known version", () => {
+    expect(saveBlockers(stored, changed, "tightening the blocker criteria", 12)).toEqual([]);
+  });
+});
+
+describe("mutation arguments", () => {
+  it("version-guards the write and attributes it to the ui with the operator's reason", () => {
+    expect(mutationArgsFor("  because the tool was never grantable  ", "S4 prompt edit", 84)).toEqual({
+      expectedWorkspaceVersion: 84,
+      source: "ui",
+      reason: "because the tool was never grantable",
+      summary: "S4 prompt edit"
+    });
+  });
+
+  // The server resolves the actor from the verified identity the proxy stamped, and a tool-supplied
+  // actor overrides it — so sending one here would replace a verified human with a guess.
+  it("does not self-declare an actor", () => {
+    expect(mutationArgsFor("a good long reason", "s", 1)).not.toHaveProperty("actor");
+  });
+});
+
+describe("write failure classification", () => {
+  const failure = (data: unknown) => Object.assign(new Error("MCP tool returned an error."), { details: data });
+
+  it("recognizes a version conflict and keeps the recovery target", () => {
+    const result = classifyWriteFailure(failure({ error: { code: "version_conflict", message: "workspace_version_conflict: expected 84, current 85.", currentVersion: 85, currentRevisionId: "rev_9" } }));
+
+    expect(result).toMatchObject({ kind: "conflict", code: "version_conflict", currentVersion: 85, currentRevisionId: "rev_9" });
+    expect(result.recovery).toContain("will not retry silently");
+  });
+
+  it("recognizes a revision conflict", () => {
+    expect(classifyWriteFailure(failure({ error: { code: "revision_conflict", currentRevisionId: "rev_b" } })).kind).toBe("conflict");
+  });
+
+  it("reads the envelope when it arrives unwrapped", () => {
+    expect(classifyWriteFailure(failure({ code: "version_conflict", currentVersion: 3 })).currentVersion).toBe(3);
+  });
+
+  it("classifies the R-1 refusal as an editor bug, not the operator's problem", () => {
+    const result = classifyWriteFailure(failure({ error: { code: "missing_patch_field", field: "allowedTools" } }));
+
+    expect(result.kind).toBe("missing_patch_field");
+    expect(result.recovery).toContain("bug in the editor");
+  });
+
+  it("classifies a schema violation", () => {
+    expect(classifyWriteFailure(failure({ error: { code: "validation_error" } })).kind).toBe("validation");
+  });
+
+  // Guessing "reload and retry" at a real bug loops the operator forever.
+  it("does not pretend an unclassifiable failure is a conflict", () => {
+    const result = classifyWriteFailure(failure({ error: { code: "tool_error", message: "boom" } }));
+
+    expect(result.kind).toBe("unknown");
+    expect(result.recovery).toContain("Nothing was written");
+  });
+
+  it("survives an error with no details at all", () => {
+    expect(classifyWriteFailure(new Error("network down"))).toMatchObject({ kind: "unknown", message: "network down" });
   });
 });
