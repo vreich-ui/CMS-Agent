@@ -12,6 +12,8 @@
     "drift:update": "tsx scripts/twoPlaneDrift.ts --write",
     "test:glossary": "tsx scripts/generateGlossary.ts",
     "glossary:update": "tsx scripts/generateGlossary.ts --write",
+    "test:objects": "tsx scripts/generateObjectDocs.ts",
+    "objects:update": "tsx scripts/generateObjectDocs.ts --write",
     "build": "npm run typecheck",
     "ui:dev": "npm --prefix ui run dev",
     "ui:build": "npm --prefix ui run build",

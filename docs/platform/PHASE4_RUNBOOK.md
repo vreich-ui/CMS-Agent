@@ -96,6 +96,38 @@ curl -sS -i -X OPTIONS <url>/mcp \
 | `204`, but **no** `access-control-allow-origin` | Origin is not on the allow-list (`MCP_ALLOWED_ORIGINS` unset = deny all, or an exact-match miss) | `gcloud run services update cms-agent-mcp --region "$REGION" --update-env-vars "MCP_ALLOWED_ORIGINS=https://<site>.netlify.app"` — for more than one origin, switch the separator: `--update-env-vars "^\|^MCP_ALLOWED_ORIGINS=https://<site>.netlify.app,http://localhost:5173"` |
 | `204` **with** `access-control-allow-origin` echoing the origin | CORS is healthy; the failure is elsewhere | Check `<url>/healthz`, DNS, and that `VITE_CLOUD_RUN_MCP_URL` matches the current service URL |
 
+### ⚠️ Re-deploying with `--set-env-vars` wipes the client connection variables
+
+**This has bitten twice. `--set-env-vars` REPLACES the service's entire environment**, and the step-2
+command above lists only the four store/CORS variables. Re-running it verbatim to ship new code
+therefore silently deletes `DR_LURIE_MCP_ENDPOINT/_TOKEN`, `PDF_TOOL_MCP_ENDPOINT/_TOKEN` and
+`PLATFORM_MCP_ENDPOINT/_TOKEN` (CHANGE-PLAN ENV-1/2/3) — every client connection fails closed with
+"endpoint is not configured" while the workspace itself stays perfectly healthy, because workspace
+state lives in GCS and is independent of the revision. The symptom looks like a credentials problem
+and is not one.
+
+Two safe options:
+
+```bash
+# A. Preferred for a redeploy: --update-env-vars MERGES instead of replacing.
+gcloud run deploy cms-agent-mcp --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
+  --update-env-vars "^|^WORKSPACE_STORE=gcs|GCS_BUCKET=<bucket>|MCP_STATE_STORE=blobs|MCP_ALLOWED_ORIGINS=<origins>"
+
+# B. If you must use --set-env-vars, list ALL of them, client variables included.
+```
+
+Either way, verify afterwards rather than assuming — one call per connection, and it fails closed so a
+pass is meaningful:
+
+```bash
+# Through the MCP endpoint: project.test_connection for each of platform, dr-lurie, pdf-tool.
+# Expect endpointConfigured:true, tokenConfigured:true, and a serverInfo name back.
+```
+
+A rollback to an earlier revision has the same effect for the same reason: revisions predating ENV-1/2/3
+never had those variables. If all three connections drop at once while `repository.get_health` is
+green, suspect the revision, not the tokens.
+
 Merging a PR does not deploy this service — there is no CI/CD for the MCP image. Any
 change under `src/agent/` reaches Cloud Run only after steps 1–2 are re-run, so confirm
 the live revision's image tag before concluding a fix is deployed:

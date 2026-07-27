@@ -1,4 +1,5 @@
 import { Glossary } from "./Glossary";
+import { ObjectAbout } from "./ObjectAbout";
 import type { WorkflowExecutionRecord } from "../types/workspace";
 
 const value = (text?: string) => text?.trim() || "—";
@@ -8,6 +9,7 @@ export function RunStatusPanel({ run }: { run: WorkflowExecutionRecord | null })
   const blocked = run.status === "blocked" || run.approvalsRequired.length > 0;
   return <section className="panel run-status-panel">
     <h2>Run summary</h2>
+    <ObjectAbout id="run" />
     {blocked && <div className="status safety" role="status"><strong>approval_required</strong><br />Expected safety hold before publish-risk execution — no publication was performed. A hold is the design working, not a failure.</div>}
     <dl>
       <dt>Run</dt><dd>{run.runId}</dd>

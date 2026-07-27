@@ -227,7 +227,7 @@ Suite after the wave: **780 root** (was 769), **72 ui** (was 68), typecheck clea
 | Applied | Inspector (denial reasons, risk, layers, severities), Access page (permissions), Changes ledger (actors), Run summary (run states). |
 | `docs/ui-glossary.md` | **Generated** from the same registry by `scripts/generateGlossary.ts`, locked in CI (`npm run test:glossary`) exactly as the tool manifest is. |
 
-**Research the design rests on, so it is not relitigated.** NN/g on progressive disclosure: at most two levels, and the progression mechanism must be obvious. GOV.UK's Details guidance: *"do not use it to hide information the majority of your users will need"*, and their research found users skip disclosures whose trigger text does not say what is inside — some avoid them believing they navigate away. Hence two rules held throughout: **trigger text is phrased as the question the reader would ask**, and **a per-row denial reason is never collapsed** — the plain-language label renders inline because for that row it *is* the primary content; only the fuller definition and remedy sit behind the disclosure. The raw code always stays beside the label, because operators grep for it, agents emit it, and the runbooks quote it.
+**Research the design rests on, so it is not relitigated.** NN/g on progressive disclosure: at most two levels, and the progression mechanism must be obvious. The U.S. Web Design System's disclosure guidance: do not condense content *"if users need to see most or all of the information on a page"*, and *"aim for informative labels … rather than vague ones like 'Click here'"*. Hence two rules held throughout: **trigger text is phrased as the question the reader would ask**, and **a per-row denial reason is never collapsed** — the plain-language label renders inline because for that row it *is* the primary content; only the fuller definition and remedy sit behind the disclosure. The raw code always stays beside the label, because operators grep for it, agents emit it, and the runbooks quote it.
 
 **Why the registry is data rather than copy in components.** These same definitions are what client 0 has to publish as the engine's self-README (P-1 / R-12). One registry feeds the interface and the generated document; two copies would drift, and glossary drift is the invisible kind — nobody re-reads a definitions page, so a stale one is trusted indefinitely. The generator is deliberately **the shape R-12 needs** (a stamped artifact derived from introspection, not hand-authored prose) rather than R-12 itself, so that work inherits it instead of replacing it.
 
@@ -236,6 +236,31 @@ Suite after the wave: **780 root** (was 769), **72 ui** (was 68), typecheck clea
 Suite after the wave: **797 root** (was 780), **82 ui** (was 72), typecheck clean both projects, both builds, drift clean, glossary lock verified to bite.
 
 **Still open, deliberately** (named rather than silently skipped): the `WorkflowControls` button row still does not say that Reset discards run state or that Run All spends real money; the Design canvas does not say that dragging a node mints a ledger revision; `PublishReadinessPanel`'s hard-constraints checkbox and release-behavior options remain unexplained on the irreversible path; `Validator.tsx` still has no help text at all. Those are copy-and-consequence work on individual surfaces, not vocabulary — a second pass, and the registry does not block them.
+
+---
+
+## 2h. Execution log — 2026-07-27, wave 7 (the engine's object model)
+
+**Correction to wave 6's brief.** Wave 6 built a glossary of coded ENUM VALUES. What was actually asked for was **object descriptions** — the engine's own object types, described for humans, in a form that can be applied to client 0. Wave 6 is not wasted (the badge vocabularies genuinely had no legend) but it answered a narrower question. This wave answers the one that was asked.
+
+| what | outcome |
+|---|---|
+| `ui/src/objectModel.ts` | The engine's 11 core object types — workspace, node, skill, project, run, stage output, change event, artifact, relationship, learning observation, tool — each with what it is, why it exists, how it is identified, its lifecycle, its relations, where it is seen, and the trap that most often costs someone time. Plus a 12th entry naming the Phase 7 improvement objects rather than implying the model stops at publishing. |
+| `components/ObjectAbout.tsx` | "What is a node?" as a collapsed disclosure at the TOP of a surface — "what am I looking at" precedes "what do these badges mean". Same native `<details>` mechanics as `Glossary`. Applied to the node inspector and the run summary. |
+| `docs/engine-objects.md` | Generated human document. |
+| `docs/generated/engine-objects.content_source.json` | **12 `content_source.v1` envelopes, ready for the publishing pipeline.** This is the P-1 / R-12 path made concrete: the engine's self-description enters client 0 the same way any other content does — through the nodes, the reviews and the publish gate — rather than as hand-written pages bypassing the pipeline it is meant to demonstrate on itself. |
+| CI | `npm run test:objects` locks both artifacts to the registry, alongside the manifest and glossary locks. |
+
+**Verified against the engine, not against my reading of it.** Every tool cited in an object description is asserted to exist in `docs/mcp-tool-manifest.json`, in wire form, and not to be a deprecated alias — so a renamed tool fails CI rather than leaving a confidently wrong sentence in front of an operator. And the emitted envelopes were validated through `project.validate_handoff` against client 0: `valid: true`, zero issues. That check was then confirmed non-vacuous by feeding it an empty summary, which it rejected with the exact schema issue.
+
+**Two findings from the object-model audit.**
+
+1. **The UI's duplicated type file has already drifted from the engine.** `ui/src/types/workspace.ts` re-declares engine types by hand, and `WorkflowExecutionRecord` there is missing `rev`, `entrypoint`, `budgetUsd` and `budgetBlock` — so the UI has no type-level awareness of run CAS concurrency or budget pausing, and `RunBudgetBlock` / `WorkflowEntrypoint` have no UI counterpart at all. The trees are isolated at build time (`ui/tsconfig.json` includes only `ui/src`; no alias), so duplication is structural; what is missing is the correspondence test that `toolDenialReasons` / `executionStatuses` / `workspaceActorKinds` now have. Worth an R item.
+2. **`ArtifactReference` is not an engine type.** It is the external pdf-tool payload shape, surviving here only as a string field inside `article_body.v1`. Several findings documents refer to it as though it were a first-class object. The engine's artifact object is `ExecutionArtifact`.
+
+**Citations re-anchored.** The disclosure-pattern guidance in source comments and tests cited GOV.UK, a UK-government design system. The primary market is the USA, so those are now NN/g (US) and the U.S. Web Design System, which give the same guidance in their own words: do not condense content "if users need to see most or all of the information on a page", and "aim for informative labels … rather than vague ones like 'Click here'". No behaviour change.
+
+Suite after the wave: **806 root** (was 797), **88 ui** (was 82), typecheck clean both projects, both builds, all three locks green.
 
 ---
 
