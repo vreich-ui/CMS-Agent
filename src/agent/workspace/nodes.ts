@@ -71,7 +71,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -162,7 +161,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -255,7 +253,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -349,7 +346,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -443,7 +439,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -536,7 +531,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -629,7 +623,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -723,7 +716,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -816,7 +808,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -910,7 +901,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -1003,7 +993,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -1096,7 +1085,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -1189,7 +1177,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [
@@ -1282,7 +1269,6 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.save_output",
       "stage.list_outputs"
     ],
     "requiredInputs": [

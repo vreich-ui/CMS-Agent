@@ -22,7 +22,12 @@ export const fixtureNode = (id: string, dependsOn: string[] = [], overrides: Par
   outputSchema: { type: "object" },
   allowedTools: [],
   assignedSkills: [],
-  requiredInputs: [],
+  // Mirrors dependsOn so the fixture is internally consistent. It previously left this empty while
+  // dependsOn was populated, which R-10's dependency check correctly reports as a defect — these
+  // fixtures are for exercising usage/run/relationship aggregation, so an incidental config
+  // inconsistency in them would just be noise in unrelated tests. Deliberate mismatches are
+  // modelled explicitly in tests/agent/observability/attentionConfiguration.test.ts.
+  requiredInputs: [...dependsOn],
   produces: [],
   riskLevel: "read",
   dependsOn,

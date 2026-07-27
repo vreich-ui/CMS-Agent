@@ -45,7 +45,17 @@ describe("constellation.* MCP tools", () => {
     expect(summary.runs.total).toBe(0);
     expect(summary.usage.unattributedRecordCount).toBe(0);
     expect(summary.caveats.length).toBeGreaterThan(0);
-    expect((await data("constellation.get_attention")).items).toEqual([]);
+    // R-10: "no runs yet" is not the same as "nothing needs attention". A fresh workspace has no
+    // run history but its client connections are genuinely unconfigured in a test environment, and
+    // that is exactly the class this endpoint used to hide by returning []. Assert no RUN-derived
+    // item, and that what remains is the honest configuration report.
+    const attention = (await data("constellation.get_attention")).items as { id: string; severity: string }[];
+    expect(attention.filter((item) => item.id.startsWith("attn_run_") || item.id.startsWith("attn_output_validation_"))).toEqual([]);
+    expect(attention.map((item) => item.id).sort()).toEqual([
+      "attn_project_unconfigured_dr-lurie",
+      "attn_project_unconfigured_monetizer",
+      "attn_project_unconfigured_pdf-tool"
+    ]);
   });
 
   it("aggregates a real dry-run into metrics, summary, and evidence-cited attention", async () => {

@@ -3,6 +3,11 @@ import { objectSchema, ok, tool, type WorkspaceTool } from "./toolKit.js";
 import type { WorkspaceRepository } from "../../repository/interfaces/WorkspaceRepository.js";
 import type { ExecutionRepository } from "../../repository/interfaces/ExecutionRepository.js";
 import type { UsageRepository } from "../../repository/interfaces/UsageRepository.js";
+import type { SkillRepository } from "../../repository/interfaces/SkillRepository.js";
+import type { ProjectRepository } from "../../repository/interfaces/ProjectRepository.js";
+import { resolveSkillsForNode } from "../../skills/skillResolver.js";
+import { toProjectSummary } from "../../projects/projectRegistry.js";
+import { listTools } from "../../tools/toolResolver.js";
 import { listToolExecutions } from "../../tools/toolExecutor.js";
 import { aggregateAgentMetrics, aggregateRelationshipMetrics, buildAttentionItems, buildConstellationSummary, deriveExecutionEdges, type ConstellationInputs } from "../../observability/constellationMetrics.js";
 
@@ -38,11 +43,16 @@ export type ConstellationToolDeps = {
   workspaceRepository: WorkspaceRepository;
   executionRepository: ExecutionRepository;
   usageRepository: UsageRepository;
+  // R-10: get_attention has to reach the skill and project layers to report the defect classes it
+  // was previously blind to. Optional so existing callers/tests construct these tools unchanged —
+  // the checks that need them are simply skipped when absent.
+  skillRepository?: SkillRepository;
+  projectRepository?: ProjectRepository;
 };
 
 type Filters = { projectId?: string; runId?: string; from?: string; to?: string };
 
-export function createConstellationTools({ workspaceRepository, executionRepository, usageRepository }: ConstellationToolDeps): WorkspaceTool[] {
+export function createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }: ConstellationToolDeps): WorkspaceTool[] {
   // Raw records are gathered here and only aggregates leave the tools; the raw runs/usage/tool
   // records remain available through their existing dedicated tools.
   const gatherInputs = async (filters: Filters = {}): Promise<ConstellationInputs> => {
@@ -58,6 +68,28 @@ export function createConstellationTools({ workspaceRepository, executionReposit
       (!filters.to || run.startedAt <= filters.to)
     );
     return { nodes, relationships, runs, usageRecords, toolExecutions: listToolExecutions() };
+  };
+
+  // R-10: the extra reads only get_attention needs. Kept out of gatherInputs so the metrics and
+  // summary tools do not pay for a per-node skill resolution they never look at.
+  const gatherConfigurationInputs = async (base: ConstellationInputs): Promise<ConstellationInputs> => {
+    const toolRiskLevels = Object.fromEntries(listTools().map((definition) => [definition.toolId, definition.riskLevel]));
+
+    const skillPolicies = skillRepository
+      ? await Promise.all(base.nodes.map(async (node) => {
+          const policy = await resolveSkillsForNode(node, skillRepository);
+          return { nodeId: node.id, conflicts: policy.conflicts, requestedTools: policy.requestedTools, deniedTools: policy.deniedTools, effectiveTools: policy.effectiveTools };
+        }))
+      : undefined;
+
+    const projects = projectRepository
+      ? (await projectRepository.list()).map((config) => {
+          const summary = toProjectSummary(config);
+          return { projectId: summary.projectId, status: summary.status, connection: summary.connection };
+        })
+      : undefined;
+
+    return { ...base, toolRiskLevels, ...(skillPolicies ? { skillPolicies } : {}), ...(projects ? { projects } : {}) };
   };
 
   return [
@@ -119,12 +151,12 @@ export function createConstellationTools({ workspaceRepository, executionReposit
     }),
     tool({
       name: "constellation.get_attention",
-      description: "Attention items with explicit evidence-citing reasons (failed runs, pending approvals, validation failures, pricing caveats, relationship issues). No composite scores. Read-only.",
+      description: "Attention items with explicit evidence-citing reasons: failed runs, pending approvals, output-validation failures, pricing caveats, relationship issues, and (R-10) configuration defects — blocker-severity skill conflicts, skills requesting tools the node denies, dependsOn/requiredInputs disagreements, tools a node grants itself above its own risk level, and active client connections whose environment variables are unconfigured. No composite scores. Read-only.",
       zodSchema: attentionInput,
       inputSchema: attentionJsonSchema,
       execute: async (input) => {
         const filters = attentionInput.parse(input);
-        return ok({ items: buildAttentionItems(await gatherInputs(filters)) });
+        return ok({ items: buildAttentionItems(await gatherConfigurationInputs(await gatherInputs(filters))) });
       }
     })
   ];

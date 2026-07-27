@@ -1,0 +1,145 @@
+// R-1 (data-loss guard) and R-4 (typed failure envelopes), driven through the real Netlify adapter
+// so the assertions cover what a client actually receives on the wire — the layer where both
+// defects were invisible.
+import { beforeEach, describe, expect, it } from "vitest";
+import { handler } from "../../../netlify/functions/mcp.mjs";
+import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { toolError, toolErrorSummary, MissingPatchFieldError, WorkspaceVersionConflictError, WorkspaceToolError } from "../../../src/agent/mcp/workspace/toolKit.js";
+
+const call = async (name: string, args: Record<string, unknown> = {}) => {
+  process.env.MCP_API_TOKEN = "test-token";
+  const response = await handler({
+    httpMethod: "POST",
+    headers: { authorization: "Bearer test-token" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })
+  });
+  const parsed = JSON.parse(response.body);
+  return { rpcError: parsed.error, structured: parsed.result?.structuredContent };
+};
+
+const NODE = "topic_opportunity";
+
+beforeEach(() => {
+  process.env.MCP_API_TOKEN = "test-token";
+  resetRepositoryManager();
+});
+
+describe("R-1 — single-field writers refuse a patch missing their target field", () => {
+  // The original defect, stated as a test: this call used to return ok:true while wiping
+  // allowedTools to []. The node's tools surviving the call is the actual assertion.
+  it("does not wipe allowedTools when the patch omits it", async () => {
+    const before = await repositoryManager.getWorkspaceRepository().getNode(NODE);
+    expect(before?.allowedTools.length).toBeGreaterThan(0);
+
+    const { rpcError } = await call("workspace_update_node_tools", { id: NODE, patch: {} });
+
+    expect(rpcError).toBeDefined();
+    expect(rpcError.data.error.code).toBe("missing_patch_field");
+    const after = await repositoryManager.getWorkspaceRepository().getNode(NODE);
+    expect(after?.allowedTools).toEqual(before?.allowedTools);
+  });
+
+  it("names the tool and the field it required", async () => {
+    const { rpcError } = await call("workspace_update_node_tools", { id: NODE, patch: {} });
+
+    expect(rpcError.data.error).toMatchObject({ code: "missing_patch_field", tool: "workspace.update_node_tools", field: "allowedTools" });
+    expect(rpcError.message).toContain("missing_patch_field");
+  });
+
+  it("refuses an explicit undefined the same way as an omitted field", async () => {
+    const { rpcError } = await call("workspace_update_node_tools", { id: NODE, patch: { allowedTools: undefined } });
+
+    expect(rpcError.data.error.code).toBe("missing_patch_field");
+  });
+
+  it.each([
+    ["workspace_update_node_tools", "allowedTools"],
+    ["workspace_update_node_skills", "assignedSkills"],
+    ["workspace_update_node_dependencies", "dependsOn"],
+    ["workspace_update_node_metadata", "metadata"],
+    ["workspace_update_node_model_config", "modelConfig"]
+  ])("guards %s on %s", async (toolName, field) => {
+    const { rpcError } = await call(toolName, { id: NODE, patch: {} });
+
+    expect(rpcError.data.error).toMatchObject({ code: "missing_patch_field", field });
+  });
+
+  // The guard must not become a wall: a patch that DOES carry the field still writes.
+  it("still writes when the field is present", async () => {
+    const { structured } = await call("workspace_update_node_tools", { id: NODE, patch: { allowedTools: ["stage.get_output"] } });
+
+    expect(structured.ok).toBe(true);
+    expect(structured.data.node.allowedTools).toEqual(["stage.get_output"]);
+  });
+
+  it("accepts an empty array as a deliberate clear, since the field is present", async () => {
+    const { structured } = await call("workspace_update_node_tools", { id: NODE, patch: { allowedTools: [] } });
+
+    expect(structured.ok).toBe(true);
+    expect(structured.data.node.allowedTools).toEqual([]);
+  });
+});
+
+describe("R-4 — typed failure envelopes on the wire", () => {
+  it("returns a recoverable version_conflict carrying the current version", async () => {
+    const current = await repositoryManager.getWorkspaceRepository().getWorkspaceVersion();
+    const { rpcError } = await call("workspace_update_node_prompt", { id: NODE, prompt: "x", expectedWorkspaceVersion: current + 99 });
+
+    expect(rpcError.data.error).toMatchObject({ code: "version_conflict", expectedVersion: current + 99, currentVersion: current });
+    // The whole point: a client can reload to exactly this state instead of guessing.
+    expect(rpcError.data.error.currentVersion).toBe(current);
+  });
+
+  it("leads the JSON-RPC message with the code instead of a constant sentence", async () => {
+    const current = await repositoryManager.getWorkspaceRepository().getWorkspaceVersion();
+    const { rpcError } = await call("workspace_update_node_prompt", { id: NODE, prompt: "x", expectedWorkspaceVersion: current + 99 });
+
+    expect(rpcError.message).toContain("version_conflict");
+    expect(rpcError.message).not.toBe("Tool execution failed");
+  });
+
+  // The failure that made a correct refusal look like a crash.
+  it("surfaces a project refusal by its own code", async () => {
+    const { rpcError } = await call("project_delete", { projectId: "dr-lurie" });
+
+    expect(rpcError.data.error.code).toBe("default_project_protected");
+    expect(rpcError.message).toContain("default_project_protected");
+  });
+
+  it("still reports an unknown tool distinctly", async () => {
+    const { rpcError } = await call("workspace_not_a_tool", {});
+
+    expect(rpcError.code).toBe(-32602);
+    expect(rpcError.message).toContain("Unknown tool");
+  });
+
+  it("classifies a schema violation as validation_error with issues", async () => {
+    const { rpcError } = await call("workspace_update_node_tools", { patch: { allowedTools: [] } });
+
+    expect(rpcError.data.error.code).toBe("validation_error");
+    expect(Array.isArray(rpcError.data.error.issues)).toBe(true);
+  });
+});
+
+describe("toolError classification", () => {
+  it("renders a WorkspaceToolError with its code and details", () => {
+    expect(toolError(new WorkspaceToolError("some_code", "why", { extra: 1 }))).toEqual({
+      ok: false,
+      error: { code: "some_code", message: "why", extra: 1 }
+    });
+  });
+
+  it("renders a revision conflict with both revision ids", () => {
+    const envelope = toolError(new WorkspaceVersionConflictError({ conflict: "revision", expectedRevisionId: "rev_a", currentRevisionId: "rev_b", currentVersion: 7 }));
+
+    expect(envelope.error).toMatchObject({ code: "revision_conflict", expectedRevisionId: "rev_a", currentRevisionId: "rev_b", currentVersion: 7 });
+  });
+
+  it("falls back to tool_error for an untyped throw, so nothing is misreported as typed", () => {
+    expect(toolError(new Error("boom")).error).toEqual({ code: "tool_error", message: "boom" });
+  });
+
+  it("summarizes an envelope as code plus message", () => {
+    expect(toolErrorSummary(toolError(new MissingPatchFieldError("t", "f")))).toContain("missing_patch_field:");
+  });
+});

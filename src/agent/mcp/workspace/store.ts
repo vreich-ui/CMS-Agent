@@ -5,6 +5,7 @@ import { listWorkspaceNodes, sortWorkspaceNodes } from "../../workspace/nodes.js
 import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceEvent, type WorkspaceNode, type WorkspaceVersionSnapshot } from "../../workspace/nodeTypes.js";
 import { validateWorkspaceGraph } from "../../workspace/nodes.js";
 import { relationshipDirections, relationshipKinds, type WorkspaceRelationship, type WorkspaceRelationshipsUpdate } from "../../workspace/relationshipTypes.js";
+import { WorkspaceVersionConflictError } from "../../workspace/workspaceErrors.js";
 import { type WorkspaceActor, type WorkspaceChangeCorrelation, type WorkspaceChangeOperation, type WorkspaceChangeSink, type WorkspaceChangeSource, type WorkspaceChangeTarget, type WorkspaceRevision } from "../../workspace/changeTypes.js";
 import { redactSensitiveKeys } from "../../observability/redaction.js";
 
@@ -309,8 +310,28 @@ export const parseWorkspaceDocumentTolerant = (raw: unknown): { document: Worksp
   }
   return { document: workspaceDocumentSchema.parse(raw) as WorkspaceDocument, droppedNodes: 0 };
 };
-const assertWorkspaceVersion = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => { if (meta?.expectedWorkspaceVersion !== undefined && document.workspaceVersion !== meta.expectedWorkspaceVersion) throw new Error(`workspace_version_conflict: expected ${meta.expectedWorkspaceVersion}, current ${document.workspaceVersion}`); };
-const assertBaseRevision = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => { if (meta?.baseRevisionId !== undefined && document.currentRevisionId !== meta.baseRevisionId) throw new Error(`revision_conflict: expected ${meta.baseRevisionId}, current ${document.currentRevisionId ?? "none"}`); };
+// R-4: a conflict is a typed, recoverable outcome, not an anonymous crash. The current version and
+// revision travel with it so a caller can reload to exactly this state and re-apply.
+const assertWorkspaceVersion = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => {
+  if (meta?.expectedWorkspaceVersion !== undefined && document.workspaceVersion !== meta.expectedWorkspaceVersion) {
+    throw new WorkspaceVersionConflictError({
+      conflict: "workspace_version",
+      expectedVersion: meta.expectedWorkspaceVersion,
+      currentVersion: document.workspaceVersion,
+      currentRevisionId: document.currentRevisionId
+    });
+  }
+};
+const assertBaseRevision = (document: WorkspaceDocument, meta?: WorkspaceMutationMeta) => {
+  if (meta?.baseRevisionId !== undefined && document.currentRevisionId !== meta.baseRevisionId) {
+    throw new WorkspaceVersionConflictError({
+      conflict: "revision",
+      expectedRevisionId: meta.baseRevisionId,
+      currentRevisionId: document.currentRevisionId,
+      currentVersion: document.workspaceVersion
+    });
+  }
+};
 const operationForEventType = (eventType: string): WorkspaceChangeOperation => {
   if (eventType === "node.created") return "create";
   if (eventType === "node.cloned") return "clone";
