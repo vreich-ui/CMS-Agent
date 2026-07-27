@@ -180,7 +180,10 @@ export const buildManifest = (tools: ToolFingerprint[]): Manifest => ({
   tools
 });
 
-const readManifest = async (): Promise<Manifest | null> => {
+// Exported so scripts/verifyDeployment.ts can compare the LIVE revision's served surface against the
+// same committed manifest this detector locks — "merged" and "deployed" are different facts, and
+// nothing checked the second one until a stale revision served pre-R-3 code for hours.
+export const readManifest = async (): Promise<Manifest | null> => {
   try {
     return JSON.parse(await readFile(MANIFEST_PATH, "utf8")) as Manifest;
   } catch (error) {
