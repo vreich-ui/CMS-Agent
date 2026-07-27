@@ -148,17 +148,40 @@ T5.1–T5.4 are blocked until the planes are reconciled — the UI and Cowork cu
 
 ## Tier 6 — Node & workflow execution (dry run)
 
+**Executed 2026-07-27 against client 0 (`platform`), `executionMode: "mock"`, `budgetUsd: 1`, run `run_1785154072610_3tmmv9`. Zero model spend — mock needs no model calls, so this tier no longer has to wait for a paid window.**
+
 | id | Assertion | Status |
 |---|---|---|
-| T6.1 | `node.prepare_execution` resolves inputs from upstream stage outputs | ⬜ |
-| T6.2 | `workflow.start_dry_run` completes the chain `input_triage → article_body` | ⬜ |
-| T6.3 | Every node output validates against its own `outputSchema` | ⬜ |
-| T6.4 | **Negative:** a node returning `{"output": {...}}` wrapper is rejected | ⬜ |
-| T6.5 | Run record carries `dryRun:true` throughout | ✅ observed on 3 historical runs |
-| T6.6 | `workflow.retry_node` re-runs one node without disturbing others | ⬜ |
-| T6.7 | `workflow.pause_run` / `resume_run` preserve stage outputs | ⬜ |
-| T6.8 | `workflow.get_run_cost` returns per-node cost with its pricing caveat | ⬜ |
-| T6.9 | **Negative:** `publication_controller` and `publish_executor` block on `approvalRequired` | ⬜ |
+| T6.1 | `node.prepare_execution` resolves inputs from upstream stage outputs | ✅ PASS — resolved prompt + skill instructions + effective tools, and reported `missingInputs: [review_aggregator, contract_intelligence]` with `readinessStatus: "missing_inputs"` rather than proceeding |
+| T6.2 | `workflow.start_dry_run` completes the chain `input_triage → article_body` | ✅ PASS — 15 of 18 nodes completed through `article_body`; the 3 remaining are the publish stages |
+| T6.3 | Every node output validates against its own `outputSchema` | ❌ **FAIL** — `article_body`'s mock output violates all six required fields of its own schema, and the node completed anyway. See F-1 |
+| T6.4 | **Negative:** a node returning `{"output": {...}}` wrapper is rejected | ✅ PASS — `node.validate_output` rejects it (`$.artifact is required`, `$.summary is required`) |
+| T6.5 | Run record carries `dryRun:true` throughout | ✅ PASS — on the run and on every node output |
+| T6.6 | `workflow.retry_node` re-runs one node without disturbing others | ⬜ not run — blocked by F-4 (the tool advertises no `runId`/`nodeId`, so correct arguments cannot be derived from its schema) |
+| T6.7 | `workflow.pause_run` / `resume_run` preserve stage outputs | ✅ PASS — all 15 stage outputs intact across pause → resume (`rev` 16 → 17). But see F-3: pause reports status `blocked` |
+| T6.8 | `workflow.get_run_cost` returns per-node cost with its pricing caveat | ✅ PASS — per-node ledger, `mostExpensiveNodeId`, a budget block (`2.94% of $1`), and a `plan` recommending `late_stage_rerun` at `article_body`. See F-5 on mock cost accrual |
+| T6.9 | **Negative:** `publication_controller` and `publish_executor` block on `approvalRequired` | ◑ **PARTIAL** — the run did stop before the publish stages, but recorded `approvalsRequired: []` and left status `running`. Nothing states a gate is holding. See F-2 |
+
+### Findings
+
+**F-1 — the mock runner is stale, and node output is not validated (highest severity).**
+`article_body`'s mock output is `{schema_version, nodes}` — the OLD baked `article_body.v1` shape, from before the contract-as-truth wave generalized the node to an envelope. Its current `outputSchema` requires `artifact`, `summary`, `clientProjectId`, `clientObjectType`, `contractSource`, `body`. Fed back through `node.validate_output`: **invalid on all six**. The node nonetheless reported `completed` and its artifact was persisted to GCS, then consumed downstream. Two defects in one: the mock runner was never updated with the node, and nothing validates a node's output against its own schema at execution time — so T6.3 was not merely unproven, it was unenforced. A dry run therefore cannot certify the contract path; it certifies only that the graph advances.
+
+**F-2 — a run that stops at a gate does not say so.**
+`workflow.run_all` halted before `publish_payload`, which is the correct behaviour, but left `status: "running"` with `approvalsRequired: []` and no error. The UI keys its safety-hold display off `status === "blocked" || approvalsRequired.length > 0`, so a run stopped by the publish gate renders as one that simply stopped. The gate works; its reporting does not.
+
+**F-3 — `pause_run` reports `blocked`, which already means two other things.**
+There is no `paused` state in `executionStatuses`, so a deliberate pause is indistinguishable from a publish-gate hold or a budget hold by status alone.
+
+**F-4 — `workflow.run_all` and `workflow.retry_node` advertise the wrong input schema.**
+Both serve the generic node-mutation schema (`id`, `patch`, `create`, `positions`, …) with `additionalProperties: false`, and neither declares `runId`. `run_all` in fact requires `runId` — passing `id` fails validation. So the advertised contract is wrong in both directions: it omits the required parameter and forbids it. A strict client that validates before sending cannot call these tools at all. Same class as R-3, on the run controls.
+
+**F-5 — mock runs accrue estimated cost against the budget ceiling.**
+The mock run recorded 4,655 tokens and `$0.029415` against `budgetUsd: 1` despite making no model calls. A low ceiling would therefore block a run that costs nothing.
+
+**F-6 — GCS 429 during `run_all`.** `artifacts/artifact_angle_strategy_….json` exceeded the object-mutation rate limit mid-run. The run recovered and continued, but a full run writes artifacts fast enough to trip Cloud Storage's per-object write limit.
+
+**F-7 — `contract_intelligence` is not in the workflow sequence** though `article_body` declares it in both `dependsOn` and `requiredInputs`, and `workspace.validate_graph` still reports the graph valid. Either the conductor's sequence omits a required node or the dependency names something that is not a node; either way the graph validator does not catch it.
 
 T6.4 matters — `publish_executor` and `publish_payload` prompts both explicitly forbid wrapping output in `actual/output/data/result/markdown`, which means it has happened.
 

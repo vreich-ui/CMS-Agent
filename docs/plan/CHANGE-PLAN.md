@@ -82,6 +82,20 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 **R-14 ☐ S5 Operate / S6 History.** Per the GUI plan — after S4 stabilizes.
 
+**R-15 ☐ UI/engine type correspondence test.** `ui/src/types/workspace.ts` re-declares engine types by hand and has drifted: `WorkflowExecutionRecord` is missing `rev`, `entrypoint`, `budgetUsd`, `budgetBlock`; `RunBudgetBlock` and `WorkflowEntrypoint` have no UI counterpart. Trees are isolated at build time so duplication is structural — add the correspondence test `toolDenialReasons` / `executionStatuses` / `workspaceActorKinds` already have.
+
+**R-16 ☐ Validate node output against its own `outputSchema` at execution time.** T-2 F-1: `article_body` completed and persisted an artifact that fails all six required fields of its own schema. Nothing checks it. *Highest severity on the current list* — it means a dry run cannot certify the contract path, only that the graph advances.
+
+**R-17 ☐ Refresh the mock runner against the current node schemas.** T-2 F-1: the mock output for `article_body` is the pre-contract-as-truth `{schema_version, nodes}` shape. Mock fixtures must be derived from each node's `outputSchema` rather than hand-written, or they will drift again the next time a node is generalized.
+
+**R-18 ☐ Report why a run stopped.** T-2 F-2: `run_all` halts before publish-risk nodes with `status: "running"` and `approvalsRequired: []`, so the gate is invisible to the UI and to an operator. Record the hold. Also F-3: add a distinct `paused` state — `pause_run` currently reports `blocked`, which already means publish-gate hold and budget hold.
+
+**R-19 ☐ Fix the advertised input schemas on `workflow.run_all` / `workflow.retry_node`.** T-2 F-4: both serve the generic mutation schema, omitting the required `runId` while `additionalProperties: false` forbids it. A strict client cannot call them. Same class as R-3.
+
+**R-20 ☐ Mock runs should not accrue cost against `budgetUsd`.** T-2 F-5: a mock run recorded $0.029 estimated against the ceiling despite making no model calls.
+
+**R-21 ☐ Graph validation misses a dependency that is not a node.** T-2 F-7: `article_body` declares `contract_intelligence` in `dependsOn` and `requiredInputs`, it is absent from the conductor sequence, and `validate_graph` still returns valid.
+
 ### P — platform repo (their side; for the record, so dependencies are visible)
 
 | id | change | unblocks |
@@ -96,7 +110,7 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 | id | milestone | gate | depends on |
 |---|---|---|---|
 | T-1 ✅ | Conformance vs client 0: Tiers 0–3 | **GO on client 0** — see TEST-PROTOCOL Appendix C. mcp.ts move verified both directions; all remaining failures are workspace-side | ENV-3, W-1 |
-| T-2 ☐ | Full dry-run pipeline vs client 0 (Tier 6) | contract-driven method proven on a second client | T-1 |
+| T-2 ◑ | Full dry-run pipeline vs client 0 (Tier 6) — **executed 2026-07-27 in `mock` mode at zero model spend.** 6 of 9 assertions PASS, T6.3 **FAIL**, T6.9 partial, T6.6 blocked. Seven findings, see §2i and TEST-PROTOCOL Tier 6 | contract-driven method proven on a second client | T-1 |
 | T-3 ☐ | **First live publish (Tier 8) = engine docs to client 0** | human approval at the publish call; replaces throwaway smoke articles permanently | T-2, P-1, R-12 |
 | T-4 ☐ | Dr. Lurié readiness → live (Tier 7 → 8) | the three locks open deliberately: `publishEnabled`, `publish_executor` activation, pinned approval — each human-gated | ENV-1/2, T-3 |
 
@@ -261,6 +275,22 @@ Suite after the wave: **797 root** (was 780), **82 ui** (was 72), typecheck clea
 **Citations re-anchored.** The disclosure-pattern guidance in source comments and tests cited GOV.UK, a UK-government design system. The primary market is the USA, so those are now NN/g (US) and the U.S. Web Design System, which give the same guidance in their own words: do not condense content "if users need to see most or all of the information on a page", and "aim for informative labels … rather than vague ones like 'Click here'". No behaviour change.
 
 Suite after the wave: **806 root** (was 797), **88 ui** (was 82), typecheck clean both projects, both builds, all three locks green.
+
+---
+
+## 2i. Execution log — 2026-07-27, wave 8 (T-2, Tier 6)
+
+**Ran at zero model spend.** `workflow.start_dry_run` defaults to `executionMode: "mock"`, so the protocol's "Tier 6 costs tokens — nightly, not per-commit" note is only true of the `openai` mode. The whole chain was exercised against client 0 for nothing, with `budgetUsd: 1` as a belt-and-braces ceiling. Run `run_1785154072610_3tmmv9`, 15 of 18 nodes completed through `article_body`.
+
+**Result: 6 PASS, 1 FAIL, 1 partial, 1 not run.** Full table and evidence in TEST-PROTOCOL Tier 6.
+
+The FAIL is the one that matters. **`article_body` completed, and persisted an artifact, whose value fails all six required fields of that node's own `outputSchema`** — the mock runner still emits the pre-contract-as-truth `{schema_version, nodes}` shape. Fed back through `node.validate_output` it is invalid on every required field. So two things are true at once: the mock fixtures drifted when the node was generalized, and **nothing validates a node's output against its schema at execution time**. T6.3 was not unproven, it was unenforced. The consequence is that a dry run certifies only that the graph advances — not that the contract path works — which is precisely what T-2 was supposed to establish before T-3.
+
+Seven findings became R-16 through R-21 plus the earlier R-15. Two are worth reading even if the rest are queued: a run halted by the publish gate reports `status: "running"` with no approval recorded, so the gate is invisible to the UI (R-18); and `workflow.run_all` / `retry_node` advertise the generic mutation schema, omitting the `runId` they require while forbidding it via `additionalProperties: false` (R-19) — the same defect class as R-3, on the run controls.
+
+Also observed, live and in one payload: **R-5 reproduced.** `node.prepare_execution` returned `resolvedSkills.effectiveTools: ["project.call_tool"]` alongside `resolvedEffectiveTools` marking `project.call_tool` `allowed: false`. The two resolvers disagree inside a single response.
+
+**T-3 should not proceed on this.** The publish locks are all still closed and correct, but the evidence T-2 was meant to produce — that the contract-driven path builds a valid client object — was not produced, because the thing that would have caught the failure does not exist yet (R-16). Fix R-16/R-17, re-run Tier 6, then reconsider.
 
 ---
 
