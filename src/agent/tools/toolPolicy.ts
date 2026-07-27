@@ -1,14 +1,16 @@
 import type { WorkspaceRiskLevel, WorkspaceNode } from "../workspace/nodeTypes.js";
 import type { SkillDefinition } from "../skills/skillTypes.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
-import type { ToolDefinition, ToolExecutionContext, ToolPolicyResult } from "./toolTypes.js";
+import type { ToolDefinition, ToolDenialReason, ToolExecutionContext, ToolPolicyResult } from "./toolTypes.js";
 
 const riskRank: Record<WorkspaceRiskLevel, number> = { read: 1, write: 2, publish: 3, admin: 4 };
 const includes = (list: string[] | undefined, toolId: string) => !list || list.length === 0 || list.includes(toolId);
 
 export function evaluateToolPolicy(input: { tool: ToolDefinition; context: ToolExecutionContext; node?: WorkspaceNode; skill?: SkillDefinition; project?: ProjectConnectionConfig }): ToolPolicyResult {
   const { tool, context, node, skill, project } = input;
-  const reasons: string[] = [];
+  // Typed against toolDenialReasons so a new refusal cannot be introduced without also appearing in
+  // the declared vocabulary the UI explains.
+  const reasons: ToolDenialReason[] = [];
   if (!tool.enabled) reasons.push("tool_disabled");
   if (node && !node.allowedTools.includes(tool.toolId)) reasons.push("node_tool_not_allowed");
   if (skill && !skill.allowedTools.includes(tool.toolId)) reasons.push("skill_tool_not_allowed");

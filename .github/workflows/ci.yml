@@ -7,7 +7,8 @@
 # Four jobs, deliberately separate so a red build names the failure rather than "CI failed":
 #   workspace  — typecheck (this repo's `build`) + the node test suite
 #   ui         — the ui workspace's own vitest (jsdom) + its production build
-#   drift      — the two-plane drift detector (netlify vs cloud-run MCP surface + manifest lock)
+#   drift      — the two-plane drift detector (netlify vs cloud-run MCP surface + manifest lock),
+#                plus the generated-glossary lock (docs/ui-glossary.md vs ui/src/explain.ts)
 #   summary    — one required-status target so branch protection needs a single check name
 #
 # No secrets are used or needed: every check runs in-process against memory repositories.
@@ -100,6 +101,12 @@ jobs:
       # plane. Intentional surface changes: `npm run drift:update`, then commit the manifest.
       - name: Detect two-plane drift
         run: npm run test:drift
+      # Same lock, different artifact: docs/ui-glossary.md is generated from ui/src/explain.ts, the
+      # registry the interface itself reads. A stale glossary is the kind of wrong nobody notices,
+      # because nobody re-reads a definitions page. Intentional copy changes:
+      # `npm run glossary:update`, then commit the doc.
+      - name: Detect glossary drift
+        run: npm run test:glossary
 
   summary:
     name: CI

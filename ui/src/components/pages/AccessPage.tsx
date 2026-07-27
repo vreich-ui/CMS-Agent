@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Glossary } from "../Glossary";
 import { PermissionToggle } from "../PermissionToggle";
 import { buildToolRows, nextToolPolicies, permissionMeta, summarizePermissions } from "../../toolPermissions";
 import type { McpClient } from "../../mcp/client";
@@ -114,6 +115,11 @@ export function AccessPage({ client, projects, projectsError, onRefreshProjects,
           <span className="permission-chip permission-chip--deny">{counts.blocked} blocked</span>
         </p>}
       </div>
+
+      {/* The three states' meanings previously existed only inside PermissionToggle's `title=`
+          tooltips, so a keyboard or touch user could set a permission without ever reading what it
+          does — on the surface that governs what agents may call on a client's live server. */}
+      {summary && <Glossary id="permission" />}
 
       {summary && <div className="access-default">
         <div className="access-default-text">

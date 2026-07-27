@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Glossary } from "../Glossary";
 import { actorKindOptions, describeChangeEvent, diffRange, formatChangeTime, operationOptions, restoreTarget, summarizeDiff, type ChangedFieldSummary, type ChangeLedgerFilters } from "../../changes";
 import { useChanges } from "../../hooks/useChanges";
 import { getErrorMessage } from "../../hooks/useConnection";
@@ -148,7 +149,10 @@ export function ChangesPage({ client, selectedProjectId, onStatus, onError }: Pr
                 {expanded && <EventDetail event={event} diff={diffs[event.eventId] ?? null} onRestore={handleRestore} restoring={restoring} />}
               </li>;
             })}
+
           </ul>}
+
+      <Glossary id="actor" />
 
       {changes.loading && <p className="muted" aria-live="polite">Loading changes…</p>}
       {changes.nextCursor && !changes.loading && <button className="link-button" onClick={changes.loadMore}>Load older changes</button>}

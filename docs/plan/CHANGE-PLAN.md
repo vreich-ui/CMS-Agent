@@ -208,6 +208,37 @@ Suite after the wave: **780 root** (was 769), **72 ui** (was 68), typecheck clea
 
 ---
 
+## 2g. Execution log — 2026-07-27, wave 6 (the explanation layer)
+
+**The brief:** client 0 is `platform`, whose site is the engine's self-README, so it is worth documenting how the engine works in human terms — and enhancing the existing habit of pairing UI with its own explanations, secondary where the layout allows.
+
+**What the audit found.** The house voice was already consistent (one `muted` sentence under each `h2`, declarative, paired with its limit) and `PRODUCT_VISION.md` already mandates the behaviour: *"when something is highlighted the interface should also explain why."* The gap was not missing prose. It was **undocumented vocabularies** and **explanation trapped in `title=` attributes**:
+
+- `risk-badge` (`read`/`write`/`publish`/`admin`) — the ladder that gates tool access at execution time — had **no legend anywhere in the product**, and the load-bearing fact (a node's own risk level is the *ceiling* for the tools it may call) appeared in no surface at all.
+- `execution-pill`, `actor-chip`, `permission-chip` — colour-coded families with no legend, though `information-architecture.md` states outright that "colour never carries status alone".
+- The Tools tab's **"Why" column printed raw resolver enums** (`risk_level_exceeds_authorization`) on the one screen whose entire purpose is explaining why a tool did not resolve.
+- The Method/Effective/Identity model and the three permission states existed **only in `title=` tooltips** — which fail touch, keyboard, screen-reader, fine-motor and cognitively-loaded users (MDN), and which this project's own accessibility spec already rules out as a sole channel.
+
+| what | outcome |
+|---|---|
+| `ui/src/explain.ts` | The vocabulary registry: 7 vocabularies, 30 terms, each with the raw code, a human label, a plain sentence, and — for anything a human can act on — a remedy. Framework-free, tested by root vitest, per the standing architectural constraint. |
+| `toolDenialReasons` | The resolver's 8 refusal codes were inline string literals in `toolPolicy.ts`. They are **user-facing**, so they are now a declared `as const` contract in `toolTypes.ts` and `reasons` is typed against it — a new refusal cannot be added without appearing in the vocabulary a human reads. |
+| `components/Glossary.tsx` | Level-2 progressive disclosure over a vocabulary. Native `<details>`: keyboard-operable and screen-reader-navigable with no ARIA or key handling of our own, no `z-index`, no absolute positioning, collapsed by default. |
+| Applied | Inspector (denial reasons, risk, layers, severities), Access page (permissions), Changes ledger (actors), Run summary (run states). |
+| `docs/ui-glossary.md` | **Generated** from the same registry by `scripts/generateGlossary.ts`, locked in CI (`npm run test:glossary`) exactly as the tool manifest is. |
+
+**Research the design rests on, so it is not relitigated.** NN/g on progressive disclosure: at most two levels, and the progression mechanism must be obvious. GOV.UK's Details guidance: *"do not use it to hide information the majority of your users will need"*, and their research found users skip disclosures whose trigger text does not say what is inside — some avoid them believing they navigate away. Hence two rules held throughout: **trigger text is phrased as the question the reader would ask**, and **a per-row denial reason is never collapsed** — the plain-language label renders inline because for that row it *is* the primary content; only the fuller definition and remedy sit behind the disclosure. The raw code always stays beside the label, because operators grep for it, agents emit it, and the runbooks quote it.
+
+**Why the registry is data rather than copy in components.** These same definitions are what client 0 has to publish as the engine's self-README (P-1 / R-12). One registry feeds the interface and the generated document; two copies would drift, and glossary drift is the invisible kind — nobody re-reads a definitions page, so a stale one is trusted indefinitely. The generator is deliberately **the shape R-12 needs** (a stamped artifact derived from introspection, not hand-authored prose) rather than R-12 itself, so that work inherits it instead of replacing it.
+
+**A note on one deleted test, because the judgement is the point.** A rule asserting "a term's label must differ from its de-underscored code" caught exactly one real defect — `tool_disabled`, whose label was the circular "Tool disabled", now "Switched off in the registry". It then flagged `approval_required` and `needs_approval`, where the de-underscored form *is* the product's established term (it appears verbatim in the Access page copy and in `permissionMeta`), so diverging would have been the inconsistency. Label informativeness is a judgement, not a predicate; a rule needing a growing exemption list teaches people to add exemptions instead of thinking. The fix was kept, the rule was dropped, and the reasoning is recorded in the test file so it is not re-added. What replaced it is mechanical and meaningful: labels must be distinct within a vocabulary.
+
+Suite after the wave: **797 root** (was 780), **82 ui** (was 72), typecheck clean both projects, both builds, drift clean, glossary lock verified to bite.
+
+**Still open, deliberately** (named rather than silently skipped): the `WorkflowControls` button row still does not say that Reset discards run state or that Run All spends real money; the Design canvas does not say that dragging a node mints a ledger revision; `PublishReadinessPanel`'s hard-constraints checkbox and release-behavior options remain unexplained on the irreversible path; `Validator.tsx` still has no help text at all. Those are copy-and-consequence work on individual surfaces, not vocabulary — a second pass, and the registry does not block them.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).

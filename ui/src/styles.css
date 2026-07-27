@@ -656,6 +656,32 @@ th { color: var(--color-text-muted); font-size: 0.8rem; text-transform: uppercas
 .node-inspector-conflict--warning, .node-inspector-warning--warning { background: var(--color-warning-surface); color: var(--color-warning-text); }
 .node-inspector-conflict--blocker, .node-inspector-warning--blocker { background: var(--color-danger-surface); color: var(--color-danger-text); }
 
+/* Vocabulary disclosures (ui/src/explain.ts + components/Glossary.tsx). Quiet by default: a closed
+   summary reads as one muted line so a surface stays calm for someone who already knows the terms,
+   per PRODUCT_VISION's "optimize for attention, not information density". Semantic tokens only, no
+   z-index, no absolute positioning. */
+.glossary { border-top: 1px dashed var(--color-border-muted); margin-top: 0.75rem; padding-top: 0.5rem; }
+.glossary > summary { color: var(--color-text-muted); cursor: pointer; font-size: 0.86rem; }
+.glossary > summary:hover { color: var(--color-accent-text); }
+.glossary[open] > summary { color: var(--color-text); font-weight: 700; margin-bottom: 0.4rem; }
+.glossary-blurb { margin-bottom: 0.5rem; }
+.glossary-terms { display: grid; gap: 0.3rem 0.7rem; grid-template-columns: max-content minmax(0, 1fr); margin: 0; }
+.glossary-terms dt { white-space: nowrap; }
+.glossary-terms dd { color: var(--color-text-muted); margin: 0; }
+.glossary-label { font-weight: 700; }
+/* The remedy is the actionable half, so it is the part that is not muted. */
+.glossary-remedy { color: var(--color-text); }
+@media (max-width: 720px) {
+  /* Two columns of definitions collapse badly on a phone; stack them instead of truncating. */
+  .glossary-terms { grid-template-columns: minmax(0, 1fr); }
+  .glossary-terms dt { white-space: normal; }
+  .glossary-terms dd { margin-bottom: 0.4rem; }
+}
+
+/* Denial reasons in the Tools table: plain-language label on its own line, raw code beside it. */
+.node-inspector-why { display: grid; gap: 0.2rem; list-style: none; margin: 0; padding: 0; }
+.node-inspector-why-code { color: var(--color-text-muted); font-size: 0.78rem; }
+
 /* S4 write path (R-11 phase 2). */
 .node-inspector-field { display: grid; gap: 0.3rem; }
 .node-inspector-prompt-input { background: var(--color-code-surface); border: 1px solid var(--color-border); border-radius: 0.6rem; color: var(--color-code-text); font-family: ui-monospace, monospace; font-size: 0.84rem; padding: 0.7rem; resize: vertical; width: 100%; }
