@@ -16,8 +16,8 @@ describe("Glossary", () => {
   });
 
   it("phrases the trigger as the question the reader would ask", () => {
-    // GOV.UK's research: users skip disclosures whose trigger text does not say what is inside, and
-    // some avoid them believing they navigate away.
+    // USWDS: "aim for informative labels ... rather than vague ones like 'Click here'". A trigger that
+    // does not say what is inside gets skipped.
     render(<Glossary id="denial" />);
     expect(screen.getByText("Why can a tool be denied?")).toBeInTheDocument();
   });

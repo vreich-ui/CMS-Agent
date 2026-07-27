@@ -107,6 +107,10 @@ jobs:
       # `npm run glossary:update`, then commit the doc.
       - name: Detect glossary drift
         run: npm run test:glossary
+      # docs/engine-objects.md and the content_source.v1 envelopes for client 0's self-README are both
+      # generated from ui/src/objectModel.ts. Intentional changes: `npm run objects:update`, then commit.
+      - name: Detect object-docs drift
+        run: npm run test:objects
 
   summary:
     name: CI

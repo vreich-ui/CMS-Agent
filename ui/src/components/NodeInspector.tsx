@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Glossary } from "./Glossary";
+import { ObjectAbout } from "./ObjectAbout";
 import { SchemaViewer } from "./SchemaViewer";
 import { explainDenialReasons } from "../explain";
 import { useClientContract } from "../hooks/useClientContract";
@@ -141,6 +142,8 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
         <button className="link-button" onClick={onClose}>Close</button>
       </div>
     </header>
+
+    <ObjectAbout id="node" />
 
     {/* The three layers were previously explained only in `title=` attributes — invisible to touch,
         keyboard and screen-reader users, which this project's accessibility spec rules out as a sole

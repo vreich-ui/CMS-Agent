@@ -21,8 +21,8 @@
 //
 //  - Definitions are secondary information: needed once, then learned. They belong at progressive
 //    disclosure LEVEL 2, behind a `<details>` with a descriptive summary — NN/g's rule is at most two
-//    levels and a clear progression mechanism, and GOV.UK's Details guidance is "do not use it to
-//    hide information the majority of your users will need".
+//    levels and a clear progression mechanism, and the U.S. Web Design System's disclosure guidance is
+//    not to condense content "if users need to see most or all of the information on a page".
 //  - Which is exactly why a per-row DENIAL REASON is NOT collapsed. When a specific tool is refused,
 //    the reason is the primary content of that row, so it renders inline and visible. The glossary
 //    behind it explains the vocabulary; the row explains this case.

@@ -9,10 +9,10 @@ import { vocabulary, type VocabularyId } from "../explain";
 //   - it needs no z-index and no absolute positioning, both of which this project's IA spec forbids;
 //   - it collapses by default, so a surface stays calm for the operator who already knows the terms.
 //
-// The summary line is phrased as the question the reader would actually ask, because GOV.UK's research
-// found users skip disclosures whose link text does not tell them what is inside — and some avoid them
-// entirely, believing they navigate away. Definitions are legitimate Details content: needed once, then
-// learned. Anything a reader needs EVERY time stays outside a disclosure.
+// The summary line is phrased as the question the reader would actually ask, per the U.S. Web Design
+// System's rule for disclosure labels: "aim for informative labels … rather than vague ones like
+// 'Click here'". Definitions are legitimate content to condense — needed once, then learned. Anything a
+// reader needs EVERY time stays outside a disclosure, which is why a denial reason does not live here.
 export function Glossary({ id, className }: { id: VocabularyId; className?: string }) {
   const vocab = vocabulary(id);
   return <details className={className ? `glossary ${className}` : "glossary"}>
