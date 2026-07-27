@@ -58,7 +58,7 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 **R-2 ☐ Skill-compatibility resolver fix.** Any skill `outputSchema` with `additionalProperties`/`properties`/`required` reports blocker-incompatible regardless of actual compatibility; only bare `{"type":"object"}` passes. Current skills work because we flattened them — the next properly-specified skill re-triggers it.
 
-**R-3 ☐ Coerce stringified JSON in `update_node_output_schema` / `_input_schema`.** `coerceJsonObjectInput(data.schema)` + declare `schema: {type:["object","boolean"]}` — the defense `create_node` already has, per the codebase's own documented client-stringify behavior.
+**R-3 ✅ Coerce stringified JSON in `update_node_output_schema` / `_input_schema`.** Done 2026-07-27 via `store.coerceSchemaInput`, modelled on the `coerceNodeInput` that already defends `create_node` (the defense lives in the store, not in `coerceJsonObjectInput`). Both writers coerce before validating; `schema` is now advertised as `{type:["object","boolean"]}` instead of permit-anything `{}`, which reshaped two tools and required a deliberate manifest regeneration. **Correction to this item's premise:** R-3 was recorded as "the only reason the S4 Schemas tab is read-only", and that was wrong — S4 saves through `workspace.update_node`, which never touched the schema writers. The tab was never blocked by this; it is editable as of the same commit (see §2f). R-3's real beneficiaries are `ui/src/hooks/useWorkspace.ts` `updateOutputSchema` (the legacy textarea path) and any agent or script calling the dedicated writers.
 
 **R-4 ✅ Typed version-conflict envelope.** `{ok:false, code:"version_conflict", currentVersion, currentRevisionId}` instead of bare `-32603`. Precondition for multi-agent editing and for the S4 save path. Also surface `error.data` detail generally — it exists but clients only see "Tool execution failed".
 
@@ -158,7 +158,7 @@ Suite after the wave: **707 root tests** (was 668), **55 ui tests** (was 45), bo
 | R-4 ✅ | Typed failure envelopes. `code` + structured details; conflicts carry `currentVersion`/`currentRevisionId`; `ProjectAdminError` codes surface generically; the JSON-RPC message leads with the code. Message text kept byte-compatible so existing callers that match on it still work. |
 | R-1 ✅ | The five single-field `update_node_*` writers now refuse a patch that omits their target field. Regression test verified by reverting the guard (8 failures, including the field-survival assertion). |
 | R-10 ✅ | `get_attention` reports five previously invisible classes, each evidence-cited. Absent inputs skip their check rather than reporting a false clean; entry nodes are exempt from the dependency check. |
-| R-11 ✅ | **Write path shipped**, R-4 having removed its stated blocker. Prompt / tools / skills are editable; a mandatory reason (≥8 chars), a field-level diff confirmation, and a version-guarded minimal patch gate every write; a conflict reports the version someone else landed on and offers an explicit reload rather than retrying silently. Schemas stay read-only pending R-3. No `actor` is sent — the server's verified identity wins, and a tool-supplied actor would override it. |
+| R-11 ✅ | **Write path shipped**, R-4 having removed its stated blocker. Prompt / tools / skills are editable; a mandatory reason (≥8 chars), a field-level diff confirmation, and a version-guarded minimal patch gate every write; a conflict reports the version someone else landed on and offers an explicit reload rather than retrying silently. **Schemas editable as of 2026-07-27** (§2f) — the read-only note attributing it to R-3 was a mis-diagnosis. No `actor` is sent — the server's verified identity wins, and a tool-supplied actor would override it. |
 
 Suite after the wave: **742 root tests** (was 707), 55 ui, both builds, drift clean.
 
@@ -186,6 +186,28 @@ Suite after the wave: **742 root tests** (was 707), 55 ui, both builds, drift cl
 
 ---
 
+## 2f. Execution log — 2026-07-27, wave 5 (R-3 + the S4 Schemas tab)
+
+| id | outcome |
+|---|---|
+| R-3 ✅ | `store.coerceSchemaInput` — a string is JSON-parsed before validation, an object passes through, a **boolean** passes through (`true`/`false` are legal JSON Schemas, including stringified), and an array/number/null/missing value is refused with `invalid_schema: …` rather than written. Both schema writers coerce before `validateJsonSchema`. The advertised `schema` parameter is tightened from `{}` to `{"type":["object","boolean"]}`. |
+| R-11 (schemas) ✅ | **The S4 Schemas tab is editable**, through the identical write discipline as every other field: field-level diff, mandatory ≥8-char reason, version-guarded minimal patch, no `actor`. `inputSchema`/`outputSchema` are threaded through `NodeDraft` → `draftFromNode` → `draftChanges` → `buildNodePatch` → `saveBlockers`. |
+
+**Design decisions worth knowing, because each one is a trap avoided.**
+
+1. **Schemas live in the draft as TEXT, not parsed objects.** The operator edits JSON by hand and mid-edit text is routinely invalid; holding the raw text means a stray keystroke shows a blocker instead of silently reverting the field to the last value that happened to parse.
+2. **Diffed semantically, so reformatting never reaches the ledger.** Re-indenting or collapsing to one line is not a change. Key *reordering* is (JSON.stringify is order-sensitive) — that is a deliberate edit to the stored document, not cosmetics. Unparseable text always reports as a change, so "Nothing has changed" can never hide a typo the operator is looking straight at.
+3. **Clearing a schema is refused outright.** `{...existing, inputSchema: undefined}` round-trips through `normalizeNode` into `{"type":"object"}` — a silent rewrite dressed up as a deletion. The blocker tells the operator to write `{}` if that is what they mean. This is the R-1 failure mode wearing a different hat.
+4. **The deprecated `schema` alias is written in lockstep with `outputSchema`.** The dedicated MCP writer sets both, and `normalizeNode` falls back to `schema` when `outputSchema` is absent; writing only one would leave the alias trailing a stale copy of the schema, visible in this very tab. It is rendered read-only with a note saying it is derived.
+5. **Only a CHANGED schema field is validated.** A node whose stored schema is already unparseable must not become uneditable in every other respect — otherwise one bad field locks the whole node.
+6. **The parse verdict renders inline while typing** as well as in the save bar, so a dropped brace is visible where it was dropped. The invalid state is a real border colour, not a class that styles nothing.
+
+**Finding: R-3 was mis-attributed in the plan.** The item read "the only reason the S4 Schemas tab is read-only", and `NodeInspector.tsx` said the same in the tab body. Both were wrong: the S4 write path saves via `workspace.update_node` with a merged patch object and never calls the schema writers, and `update_node` always merged correctly. The tab could have been editable at any point since R-11. R-3 remains a real fix for real callers — `useWorkspace.updateOutputSchema` (the legacy textarea path) calls the writer directly, as would any agent or script using the dedicated tools — but it was never what gated the tab. Worth noting as a pattern: a blocker recorded once and then cited by later documents acquires the appearance of having been verified.
+
+Suite after the wave: **780 root** (was 769), **72 ui** (was 68), typecheck clean both projects, both builds green, drift clean after a deliberate manifest regeneration.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -204,9 +226,10 @@ Say **go** (or mark exceptions by ID) and I execute in this order: **W-2, W-3** 
 
 **Nothing is blocked on Wolf.** Both former blockers cleared 2026-07-27: the ENV-1/ENV-2 tokens are correct (all four connections handshake, and the brokered chain runs through `project.call_tool`), and the Cloud Run deploy has picked up the merged code (proven by `project.delete snoocle` succeeding). The only ENV item left is **ENV-4**, pure cleanup: drop the now-unused `SNOOCLE_*` vars, keep `MONETIZER_*`.
 
+**Wave 5 executed 2026-07-27** (R-3 + the S4 Schemas tab) — see §2f.
+
 Next, in the order I would take them:
-1. **R-3** — coerce stringified JSON in the schema writers. The smallest thing standing between S4 and full node editing: it is the only reason the Schemas tab is read-only.
-2. **T-2** — full dry-run pipeline vs client 0. Unblocked by T-1, and now that ENV-1/2 are live it can exercise the real client path rather than a stubbed one. It executes nodes (model spend), so it is a deliberate step rather than a sweep.
-3. **R-8** — promoted by wave 4's findings 2–4: three separate allow-list/reporting defects surfaced the moment the connections came up (`platform`'s `allowedTools: []`, the vanished `requiredPdfToolCapabilities` source of truth, the missing `resume_agent_artifact_job` / `get_image_model_policy` grants). Two hand-kept lists with no declared requirement is the condition that caused the original pdf-tool regression.
-4. **R-2** (skill-schema resolver) — no longer blocking anything, but it is what forces the 7 placeholder skill `outputSchema`s to stay flattened.
-5. **R-5** (reconcile the two resolvers) — the inspector currently renders the disagreement rather than resolving it, which is honest but not a fix.
+1. **T-2** — full dry-run pipeline vs client 0. Unblocked by T-1, and now that ENV-1/2 are live it can exercise the real client path rather than a stubbed one. It executes nodes (model spend), so it is a deliberate step rather than a sweep.
+2. **R-8** — promoted by wave 4's findings 2–4: three separate allow-list/reporting defects surfaced the moment the connections came up (`platform`'s `allowedTools: []`, the vanished `requiredPdfToolCapabilities` source of truth, the missing `resume_agent_artifact_job` / `get_image_model_policy` grants). Two hand-kept lists with no declared requirement is the condition that caused the original pdf-tool regression.
+3. **R-2** (skill-schema resolver) — no longer blocking anything, but it is what forces the 7 placeholder skill `outputSchema`s to stay flattened. Now that schemas are editable in S4, this is the next thing an operator will walk into.
+4. **R-5** (reconcile the two resolvers) — the inspector currently renders the disagreement rather than resolving it, which is honest but not a fix.

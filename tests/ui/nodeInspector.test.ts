@@ -22,6 +22,7 @@ import {
   draftChanges,
   draftFromNode,
   mutationArgsFor,
+  parseSchemaDraft,
   saveBlockers,
   type EffectiveTool
 } from "../../ui/src/nodeInspector.js";
@@ -297,7 +298,7 @@ describe("draft changes and patch construction", () => {
   });
 
   it("reports each changed field with a readable before and after", () => {
-    const changes = draftChanges(stored, { prompt: "New.", allowedTools: ["a"], assignedSkills: [] });
+    const changes = draftChanges(stored, { prompt: "New.", allowedTools: ["a"], assignedSkills: [], inputSchema: "", outputSchema: "" });
 
     expect(changes.map((change) => change.field)).toEqual(["prompt", "allowedTools", "assignedSkills"]);
     expect(changes[1]).toMatchObject({ label: "Allowed tools", before: "a, b", after: "a" });
@@ -311,6 +312,100 @@ describe("draft changes and patch construction", () => {
 
   it("can clear a list deliberately", () => {
     expect(buildNodePatch(stored, { ...draftFromNode(stored), assignedSkills: [] })).toEqual({ assignedSkills: [] });
+  });
+});
+
+describe("schema draft parsing", () => {
+  it("accepts an object, both booleans, and rejects everything that is not a schema", () => {
+    expect(parseSchemaDraft('{"type":"object"}')).toEqual({ ok: true, value: { type: "object" } });
+    // A JSON Schema is legally a boolean; the editor must not be stricter than the writer.
+    expect(parseSchemaDraft("true")).toEqual({ ok: true, value: true });
+    expect(parseSchemaDraft("false")).toEqual({ ok: true, value: false });
+    expect(parseSchemaDraft("  {}  ")).toEqual({ ok: true, value: {} });
+
+    expect(parseSchemaDraft("{ not json")).toMatchObject({ ok: false });
+    expect(parseSchemaDraft("[]")).toMatchObject({ ok: false });
+    expect(parseSchemaDraft("42")).toMatchObject({ ok: false });
+    expect(parseSchemaDraft("null")).toMatchObject({ ok: false });
+  });
+
+  it("refuses an empty field rather than treating it as a deletion", () => {
+    // `{...existing, inputSchema: undefined}` round-trips through normalizeNode into
+    // {"type":"object"} — a silent rewrite dressed up as a deletion.
+    const parsed = parseSchemaDraft("   ");
+    expect(parsed.ok).toBe(false);
+    expect(parsed.ok === false && parsed.error).toContain("{}");
+  });
+});
+
+describe("schema fields in the write discipline", () => {
+  const withSchemas = node({
+    prompt: "p",
+    inputSchema: { type: "object", properties: { a: { type: "string" } } },
+    outputSchema: { type: "object", required: ["b"] }
+  });
+
+  it("round-trips stored schemas into editable text with no phantom change", () => {
+    const draft = draftFromNode(withSchemas);
+    expect(draft.inputSchema).toContain('"type": "object"');
+    expect(draftChanges(withSchemas, draft)).toEqual([]);
+    expect(buildNodePatch(withSchemas, draft)).toEqual({});
+  });
+
+  it("ignores reformatting but reports a real edit", () => {
+    const draft = draftFromNode(withSchemas);
+    // Same schema, collapsed to one line — cosmetics must not reach the ledger.
+    const reformatted = { ...draft, inputSchema: JSON.stringify(withSchemas.inputSchema) };
+    expect(draftChanges(withSchemas, reformatted)).toEqual([]);
+
+    const edited = { ...draft, inputSchema: '{"type":"object","properties":{"a":{"type":"number"}}}' };
+    const changes = draftChanges(withSchemas, edited);
+    expect(changes.map((change) => change.field)).toEqual(["inputSchema"]);
+    expect(changes[0].label).toBe("Input schema");
+  });
+
+  it("shows the shape in the diff, not a character count", () => {
+    const edited = { ...draftFromNode(withSchemas), inputSchema: "true" };
+    expect(draftChanges(withSchemas, edited)[0].after).toBe("true");
+  });
+
+  it("reports unparseable text as a change so it cannot hide behind \"nothing changed\"", () => {
+    const edited = { ...draftFromNode(withSchemas), outputSchema: '{"type":"object"' };
+    const changes = draftChanges(withSchemas, edited);
+    expect(changes.map((change) => change.field)).toEqual(["outputSchema"]);
+    expect(changes[0].after).toBe("invalid");
+  });
+
+  // The dedicated MCP writer sets both; writing one would leave the alias trailing a stale schema.
+  it("writes the deprecated schema alias in lockstep with outputSchema", () => {
+    const edited = { ...draftFromNode(withSchemas), outputSchema: '{"type":"object","required":["c"]}' };
+    expect(buildNodePatch(withSchemas, edited)).toEqual({
+      outputSchema: { type: "object", required: ["c"] },
+      schema: { type: "object", required: ["c"] }
+    });
+  });
+
+  it("does not touch the alias when only the input schema changes", () => {
+    const edited = { ...draftFromNode(withSchemas), inputSchema: "{}" };
+    expect(buildNodePatch(withSchemas, edited)).toEqual({ inputSchema: {} });
+  });
+
+  it("blocks a save whose changed schema does not parse", () => {
+    const edited = { ...draftFromNode(withSchemas), inputSchema: "{ nope" };
+    expect(saveBlockers(withSchemas, edited, "a good long reason", 12).join(" ")).toContain("Input schema is not valid JSON");
+  });
+
+  it("blocks clearing a schema", () => {
+    const edited = { ...draftFromNode(withSchemas), outputSchema: "" };
+    expect(saveBlockers(withSchemas, edited, "a good long reason", 12).join(" ")).toContain("Output schema is empty");
+  });
+
+  // A node whose stored schema is already bad must not become uneditable in every other respect.
+  it("lets an unrelated edit save even when a stored schema is unparseable", () => {
+    const broken = node({ prompt: "p", inputSchema: "not a schema at all" as unknown as WorkspaceNode["inputSchema"] });
+    const edited = { ...draftFromNode(broken), prompt: "improved" };
+    expect(saveBlockers(broken, edited, "a good long reason", 12)).toEqual([]);
+    expect(buildNodePatch(broken, edited)).toEqual({ prompt: "improved" });
   });
 });
 
