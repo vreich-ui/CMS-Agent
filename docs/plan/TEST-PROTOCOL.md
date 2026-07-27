@@ -265,6 +265,68 @@ Executed against `CMS_Agent_GCloud` (canonical). All writes reverted; workspace 
 
 ---
 
+## Appendix C — T-1 conformance vs client 0 (platform), 2026-07-27
+
+Executed against `CMS_Agent_GCloud` (canonical, workspace **v70**) with `platform` registered as client 0 (W-1) after ENV-3 landed. Note: `project.create` did not bump `workspaceVersion` — the project registry is a separate repository from the node workspace, so a connection change is invisible to any drift check keyed on `workspaceVersion` alone. Read-only throughout: the only client tools reachable were the five on platform's allow-list (`ping`, `registry_get`, `object_contract`, `object_inventory`, `object_validate`) — every mutating verb was refused by policy, not by intent.
+
+### Verdict: **GO on client 0.** The mcp.ts move is verified in both directions.
+
+Every failure below is workspace-side (node authoring and observability). Client 0 passed everything asked of it.
+
+**Tier 0 — preconditions**
+
+| id | verdict | evidence |
+|---|---|---|
+| T0.1 | **superseded** | "both planes report the same `workspaceVersion`" was written when split-brain was live. Netlify is now a deliberately frozen archive, so version equality is not the invariant any more — the replacement is R-0's code-level two-plane drift detector (136 tools identical, manifest-locked). |
+| T0.2′ | ✅ PASS | `project.test_connection("platform")` → `ok:true`, `serverInfo.name: "Platform_MCP_Server"`, protocol `2025-06-18`. This independently confirms §0's claim that `serverInfo.name` now derives from site-identity. |
+| T0.3′ | ✅ PASS | `ping` via `project.call_tool` → `ok:true`. |
+| T0.4 | ✅ PASS | 9/9 repositories `gcs`, healthy, readable + writable. |
+| T0.5 | ✅ PASS | `workspace.validate_graph` → `valid:true`, zero issues. |
+| T0.6 | ⧗ pending merge | CI exists (wave-1 patch series) but is not on `main` yet. Becomes PASS on merge. |
+| T0.7′ | **superseded** + PASS | Cross-plane allow-list equality is moot with one live plane. The meaningful check — every allow-listed tool actually exists on the remote — passes 5/5 against platform's 51 exposed tools. No phantom grants. |
+
+**Tier 1 — read surface: 9/9 PASS.** 21 nodes with all 18 keys; 27 graph edges ≡ 27 `dependsOn` union; 12 skills; 31 tools all carrying `riskLevel`/`sideEffect`/`requiresApproval`; 5 projects; 3 runs with per-node `durationMs`; change events carrying `before`/`after` plus a `parentRevisionId`/`resultingRevisionId` chain. T1.9 negative swept clean — no `Bearer`, no token, no resolved endpoint URL in any response. Two naming notes: the revision-chain fields are `parentRevisionId`/`resultingRevisionId`, not the `baseRevisionId` this document assumed; and 7 of 12 skills still carry a placeholder `outputSchema: {"type":"object"}` (the R-2 flattening workaround, not a defect in itself).
+
+**Tier 2 — effective-config resolution, all 21 nodes**
+
+| id | verdict | detail |
+|---|---|---|
+| T2.1 | ✅ PASS | Effective prompt = own prompt + injected skill instructions. 9 of 21 nodes have instructions injected. |
+| T2.2 | ✅ PASS | No node's allow-set exceeds its own `allowedTools`. No privilege escalation anywhere. |
+| T2.3 | ✅ PASS | Every denial carries a non-empty `denialReasons`. |
+| T2.4 | ✅ **PASS — fixed since Appendix A** | The `article_body` blocker-severity conflict is gone. The only conflicts left are `severity:"warning"` on `publication_controller` / `publish_executor` (`tool_policy`: "Tool not granted by effective policy: project.call_tool") — the publish gate working as designed. |
+| T2.5 | ❌ FAIL (4) | `article_body`, `contract_intelligence`, `publish_payload`, `artifact_plan`. All four: the skill resolver reports `effectiveTools:["project.call_tool"]` while `node.get_effective_tools` reports that same tool `allowed:false, denialReasons:["approval_required"]`. This is R-5, and these four are the exhaustive current list. |
+| T2.6 | ❌ FAIL (14) | **Wider than Appendix A recorded.** Not `contract_intelligence` — that one is now T2.5. Fourteen nodes carry `stage.save_output` (riskLevel `write`) in `allowedTools` while the node's own `riskLevel` is `read`, so the resolver can never grant it: `topic_opportunity`, `reader_insight`, `research`, `objection_mapping`, `input_triage`, `narrative_movement`, `angle_strategy`, `brief_architect`, `draft_writer`, `human_texture`, `trust_factual`, `emotional_resonance`, `reader_simulation`, `review_aggregator`. **Severity, verified against the executor:** nothing is functionally broken — `executor.ts:393` and `nodeRuntime.ts:107` call `saveStageOutput` directly, so stage outputs persist regardless of the grant. The defect is that 14 nodes advertise a capability that is permanently unreachable, which (a) misleads anyone reading the config and (b) plants a permanent false denial in every effective-tools report — exactly the noise that let `contract_intelligence`'s real problem hide. Fix is one of: raise those nodes to `riskLevel: write`, or drop the dead grant. |
+| T2.7 | ✅ PASS on the correct reading | The assertion is scoped to *non-entry* nodes. The only mismatch is `input_triage` (`dependsOn: []` vs `requiredInputs: ["content_source.v1"]`) — it is the entry node, and `content_source.v1` is an external envelope, not an upstream node id. `trust_factual`, the node Appendix A recorded as failing, now matches. |
+| T2.8 | ❌ FAIL | `constellation.get_attention` → `items: []` against 4 T2.5 and 14 T2.6 findings. R-10 unchanged. |
+
+**Semantics caveat that matters for reading Tier 2:** the effective-resolution context carries no approvals, so *every* `requiresApproval` tool shows `approval_required` in this view. "Denied here" is not "denied at run time" — a run with a pinned approval resolves differently. Any future automated assertion on Tier 2 must account for this or it will report false failures forever.
+
+**Tier 3 — contract validation against client 0's own validator: 10/10 PASS.** Per R-6, the client's `object_validate` was the only authority used; the local `article_body_validate` was not called.
+
+Positive (4/4): `page_home`, `site_platform`, `nav_header`, `tax_platform` all return `summary.level: "ready"`, `eligible: true`, zero blockers.
+
+Negative (6/6 correctly rejected):
+
+| case | verbatim client refusal |
+|---|---|
+| `brandTokens` via `set_site_fields` | `"'brandTokens' cannot be patched via set_site_fields (the palette changes only via site_apply_theme)."` (`invalid_op`) |
+| nonexistent patch op | `"Invalid discriminator value. Expected 'set_page_meta' \| 'upsert_section' \| …"` (`invalid_op`) |
+| malformed section id | `"Section ids must match s_<lowercase alphanumerics>"` (`invalid_op`) |
+| required field nulled | `schema_zod`: `"title: Invalid input: expected string, received undefined"` |
+| dangling reference | `references`: `"page.template.ref \"tpl_does_not_exist_1234\" does not resolve to an existing template."` |
+| leaf-rule violation | `structure_placeable`: `"Section type(s) with no standalone component: card — placing them directly on a page breaks the build…"` |
+
+No documented constraint failed to enforce live. That is the strongest single result in this run: client 0's contract and its enforcement do not disagree.
+
+### Client-side observations for the platform repo (not workspace defects)
+
+1. **P-1 looks substantially done.** Client 0 now carries 16 published pages including a per-type manual (`page_manual` plus `content_item`, `page`, `section`, `section_template`, `site`, `taxonomy`, `template`, `theme`, `tracking_config`, `product`, `roles`, `lifecycle`, `navigation`, `genesis`), 2 navigations, a taxonomy, 5 section templates and a theme. The plan still lists P-1 as NOT DONE — worth re-marking. Note the manual is built as `page` objects; there are **zero `content_item` objects** on client 0 yet.
+2. **Two different self-names.** `initialize` reports `serverInfo.name: "Platform_MCP_Server"`; `ping` reports `"server": "Platform_MCP"`. Harmless today, but a conformance surface that says two things about its own identity is the kind of thing site-identity was meant to make single-sourced.
+3. **Possible PageType mislabel on `page_home`.** A rejection message for a card placed on `page_home` read `"Section types not allowed on PageType system"`, implying `page_home.pageType` is `"system"` rather than `"home"`. The rejection was correct either way (the leaf rule alone blocks it), so this is not a gate failure — but if `page_home` really is typed `system`, then `structure_home_footer` (blocks_publish for pageType `home`) is not applying to the home page. **Unresolved here on purpose:** confirming it needs `object_get`, which is deliberately not on client 0's allow-list. Widening that list is a Ring-1 change and wants approval, not an agent deciding on its own.
+
+---
+
 ## Appendix B — Implementation notes
 
 Put the protocol in the repo as `tests/protocol/`, one file per tier, driven by a shared MCP client so each tier is runnable standalone. Tiers 0–4 and 7 need no model calls and are cheap enough for CI. Tier 6 costs tokens — nightly, not per-commit. Tier 8 never runs unattended.

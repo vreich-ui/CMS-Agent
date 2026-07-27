@@ -12,5 +12,5 @@
     "types": ["node", "vitest/globals"],
     "outDir": "dist"
   },
-  "include": ["netlify/functions/**/*.mts", "src/**/*.ts", "tests/**/*.test.ts"]
+  "include": ["netlify/functions/**/*.mts", "src/**/*.ts", "scripts/**/*.ts", "tests/**/*.test.ts"]
 }

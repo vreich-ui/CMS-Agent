@@ -1,0 +1,119 @@
+# CI (CHANGE-PLAN R-0).
+#
+# Before this workflow the repo had 94 test files and zero automation: every fix on the R-list was
+# one careless commit away from silently regressing. This gates every push and pull request on the
+# checks a human was previously expected to remember.
+#
+# Four jobs, deliberately separate so a red build names the failure rather than "CI failed":
+#   workspace  — typecheck (this repo's `build`) + the node test suite
+#   ui         — the ui workspace's own vitest (jsdom) + its production build
+#   drift      — the two-plane drift detector (netlify vs cloud-run MCP surface + manifest lock)
+#   summary    — one required-status target so branch protection needs a single check name
+#
+# No secrets are used or needed: every check runs in-process against memory repositories.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes the in-flight run obsolete — cancel it rather than paying
+# for both. Never cancels on the default branch, where every commit's verdict is worth keeping.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  # package.json declares engines.node >= 20; CI pins the version the container images build on.
+  NODE_VERSION: "22"
+
+jobs:
+  workspace:
+    name: workspace (typecheck + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      # The root tsconfig includes tests/**/*.test.ts, and tests/ui/* deliberately import framework-
+      # free logic out of ui/src (the architecture keeps pure logic there and tests it with the root
+      # vitest). Those modules' type imports reach ui-only dependencies — ui/src/types/workspace.ts
+      # imports RJSFSchema from @rjsf/utils — which live in ui/node_modules, not the root tree. So a
+      # root-only install cannot typecheck the root project. `npm run typecheck` has in fact never
+      # worked in a clean root-only checkout; with no CI, nothing ever ran it that way. Installing
+      # the ui workspace here is what makes the root typecheck honest.
+      - name: Install (ui workspace — needed for the root typecheck, see above)
+        run: npm ci --prefix ui --no-audit --no-fund
+      - name: Typecheck (npm run build)
+        run: npm run build
+      - name: Test
+        run: npm test
+
+  ui:
+    name: ui (tests + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install (ui workspace)
+        run: npm ci --prefix ui --no-audit --no-fund
+      - name: Test
+        run: npm run test:ui
+      - name: Build
+        run: npm run ui:build
+
+  drift:
+    name: two-plane drift detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      # Drives the Netlify Functions adapter and the Cloud Run control-plane router in-process and
+      # fails if they no longer advertise the same MCP tool surface, if that surface has drifted
+      # from docs/mcp-tool-manifest.json, or if a deprecated alias stopped resolving on either
+      # plane. Intentional surface changes: `npm run drift:update`, then commit the manifest.
+      - name: Detect two-plane drift
+        run: npm run test:drift
+
+  summary:
+    name: CI
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [workspace, ui, drift]
+    steps:
+      # `needs` alone does not fail this job when a dependency is skipped or cancelled, which would
+      # let a required check pass on a run that never verified anything. Assert explicitly.
+      - name: Verify all checks succeeded
+        run: |
+          echo "workspace: ${{ needs.workspace.result }}"
+          echo "ui:        ${{ needs.ui.result }}"
+          echo "drift:     ${{ needs.drift.result }}"
+          test "${{ needs.workspace.result }}" = "success" \
+            && test "${{ needs.ui.result }}" = "success" \
+            && test "${{ needs.drift.result }}" = "success"

@@ -12,6 +12,10 @@ type SummaryRailProps = {
   onDeleteNode: () => void;
   onDeleteEdge: (edge: DesignEdgeModel) => void;
   onClearSelection: () => void;
+  // S4 (CHANGE-PLAN R-11): opens the read-only node inspector. The rail deliberately stays a
+  // summary — "4 tools" — and the inspector is where "which four, and do they resolve" lives.
+  onOpenDetails: () => void;
+  detailsOpen: boolean;
 };
 
 const nameFor = (nodes: WorkspaceNode[], id: string) => nodes.find((node) => node.id === id)?.name ?? id;
@@ -19,7 +23,7 @@ const nameFor = (nodes: WorkspaceNode[], id: string) => nodes.find((node) => nod
 // The rail is the keyboard/list-based equivalent of every drag-only canvas interaction:
 // add/remove dependencies without drawing edges, delete with typed confirmation. It lives in a
 // grid column — no absolute positioning, no z-index.
-export function SummaryRail({ node, nodes, selectedEdge, saving, onAddDependency, onRemoveDependency, onDeleteNode, onDeleteEdge, onClearSelection }: SummaryRailProps) {
+export function SummaryRail({ node, nodes, selectedEdge, saving, onAddDependency, onRemoveDependency, onDeleteNode, onDeleteEdge, onClearSelection, onOpenDetails, detailsOpen }: SummaryRailProps) {
   const [dependencyChoice, setDependencyChoice] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
@@ -37,7 +41,7 @@ export function SummaryRail({ node, nodes, selectedEdge, saving, onAddDependency
             <p className="muted">Removing this edge removes the dependency of <strong>{nameFor(nodes, selectedEdge.target)}</strong> on <strong>{nameFor(nodes, selectedEdge.source)}</strong>.</p>
             <button disabled={saving} onClick={() => onDeleteEdge(selectedEdge)}>Remove dependency</button>
           </div>
-        : <p className="muted">Stored {selectedEdge.kind} relationships are read-only on the canvas. Editing arrives with the node details modal (S4).</p>}
+        : <p className="muted">Stored {selectedEdge.kind} relationships are read-only on the canvas. Editing arrives with the S4 write path (after R-4).</p>}
       <button className="link-button" onClick={onClearSelection}>Clear selection</button>
     </aside>;
   }
@@ -83,7 +87,11 @@ export function SummaryRail({ node, nodes, selectedEdge, saving, onAddDependency
       <button disabled={saving || !dependencyChoice} onClick={() => { onAddDependency(dependencyChoice); setDependencyChoice(""); }}>Add</button>
     </section>
 
-    <button disabled title="Arrives with the node details modal (S4)">Open details (arrives in S4)</button>
+    <button
+      onClick={onOpenDetails}
+      aria-pressed={detailsOpen}
+      title="Prompt, tools, skills, schemas and consistency warnings for this node (read-only)"
+    >{detailsOpen ? "Details open" : "Open details"}</button>
 
     <section aria-label="Delete node" className="design-rail-danger">
       <h4>Delete node</h4>

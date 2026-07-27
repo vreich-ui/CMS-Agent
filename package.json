@@ -8,6 +8,8 @@
     "dev": "netlify dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:drift": "tsx scripts/twoPlaneDrift.ts",
+    "drift:update": "tsx scripts/twoPlaneDrift.ts --write",
     "build": "npm run typecheck",
     "ui:dev": "npm --prefix ui run dev",
     "ui:build": "npm --prefix ui run build",

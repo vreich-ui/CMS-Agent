@@ -3,6 +3,7 @@ import { LegacyNodesPanel } from "../legacy/LegacyNodesPanel";
 import { ConstellationDesignMode } from "../constellation/ConstellationDesignMode";
 import { formatRoute, type AppRoute, type ConstellationMode, type LegacyPanel } from "../../route";
 import type { McpClient } from "../../mcp/client";
+import type { ProjectSummary } from "../../types/workspace";
 import type { useWorkspace } from "../../hooks/useWorkspace";
 import type { useWorkflowRun } from "../../hooks/useWorkflowRun";
 import type { StatusMessage } from "../../status";
@@ -15,6 +16,7 @@ type Props = {
   mode?: ConstellationMode;
   onNavigate: (route: AppRoute) => void;
   selectedProjectId: string | null;
+  projects: ProjectSummary[] | null;
   client: McpClient;
   workspace: ReturnType<typeof useWorkspace>;
   workflowRun: ReturnType<typeof useWorkflowRun>;
@@ -35,7 +37,7 @@ const interceptClick = (event: React.MouseEvent, navigate: () => void) => {
   }
 };
 
-export function ConstellationPage({ legacy, mode, onNavigate, selectedProjectId, client, workspace, workflowRun, refreshUsage, onStatus, onError }: Props) {
+export function ConstellationPage({ legacy, mode, onNavigate, selectedProjectId, projects, client, workspace, workflowRun, refreshUsage, onStatus, onError }: Props) {
   if (legacy) {
     return <section className="tab-panel" aria-label="Constellation">
       <section className="panel constellation-intro">
@@ -76,6 +78,6 @@ export function ConstellationPage({ legacy, mode, onNavigate, selectedProjectId,
         {legacyTabs.map((tab) => <a key={tab.id} href={formatRoute({ page: "constellation", legacy: tab.id })} onClick={(event) => interceptClick(event, () => onNavigate({ page: "constellation", legacy: tab.id }))}>{tab.label}</a>)}
       </nav>
     </section>
-    <ConstellationDesignMode client={client} workspace={workspace} onStatus={onStatus} onError={onError} />
+    <ConstellationDesignMode client={client} workspace={workspace} project={projects?.find((project) => project.projectId === selectedProjectId) ?? null} onStatus={onStatus} onError={onError} />
   </section>;
 }

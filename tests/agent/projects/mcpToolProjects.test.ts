@@ -1,26 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
 import { PDF_TOOL_SAFE_READ_ONLY_TOOLS, pdfToolProjectConfig } from "../../../src/agent/projects/pdfTool/definition.js";
-import { SNOOCLE_SAFE_READ_ONLY_TOOLS, snoocleProjectConfig } from "../../../src/agent/projects/snoocle/definition.js";
 import { MONETIZER_SAFE_READ_ONLY_TOOLS, monetizerProjectConfig } from "../../../src/agent/projects/monetizer/definition.js";
+import { defaultProjectConnections } from "../../../src/agent/projects/defaultProjects.js";
 import { toProjectSummary } from "../../../src/agent/projects/projectRegistry.js";
 import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 
 const cases = [
   { config: pdfToolProjectConfig, projectId: "pdf-tool", name: "PDF Tool", endpointEnvVar: "PDF_TOOL_MCP_ENDPOINT", tokenEnvVar: "PDF_TOOL_MCP_TOKEN", tools: PDF_TOOL_SAFE_READ_ONLY_TOOLS },
-  { config: snoocleProjectConfig, projectId: "snoocle", name: "Snoocle", endpointEnvVar: "SNOOCLE_MCP_ENDPOINT", tokenEnvVar: "SNOOCLE_MCP_TOKEN", tools: SNOOCLE_SAFE_READ_ONLY_TOOLS },
   { config: monetizerProjectConfig, projectId: "monetizer", name: "Monetizer", endpointEnvVar: "MONETIZER_MCP_ENDPOINT", tokenEnvVar: "MONETIZER_MCP_TOKEN", tools: MONETIZER_SAFE_READ_ONLY_TOOLS }
 ] as const;
 
 // Tools that must never be allow-listed by default — any mutating / publishing / registration verb.
 const MUTATING_PREFIXES = ["create", "update", "delete", "publish", "import", "set", "save", "register", "ingest", "pause", "run", "trigger", "acquire", "normalize", "trim", "convert", "reconcile", "analyze_and_store"];
 
-describe("MCP tool project defaults (pdf-tool, snoocle, monetizer)", () => {
-  it("seeds all three MCP tool projects by default alongside dr-lurie", async () => {
+describe("MCP tool project defaults (pdf-tool, monetizer)", () => {
+  it("seeds both MCP tool projects by default alongside dr-lurie", async () => {
     const repository = new MemoryProjectRepository();
     const ids = (await repository.list()).map((project) => project.projectId);
 
-    expect(ids).toEqual(expect.arrayContaining(["dr-lurie", "pdf-tool", "snoocle", "monetizer"]));
+    expect(ids).toEqual(expect.arrayContaining(["dr-lurie", "pdf-tool", "monetizer"]));
+  });
+
+  // CHANGE-PLAN W-2. Membership in defaultProjectConnections is what makes project.delete refuse
+  // an id ("default_project_protected", because a seeded project is re-created on the next read).
+  // snoocle had to leave this list before its persisted record could actually be deleted; if it
+  // ever comes back as a default, the delete silently stops working again.
+  it("no longer seeds snoocle, so its persisted record can be deleted", () => {
+    expect(defaultProjectConnections.map((project) => project.projectId)).not.toContain("snoocle");
+  });
+
+  // pdf-tool is a Ring-0 service, not a client: it is the artifact engine every publishing run
+  // calls through project.call_tool. Its seeded status is the guard that stops it being mistaken
+  // for a deletable client again.
+  it("keeps pdf-tool seeded and therefore protected from deletion", () => {
+    expect(defaultProjectConnections.map((project) => project.projectId)).toContain("pdf-tool");
   });
 
   for (const testCase of cases) {
