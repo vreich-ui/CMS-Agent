@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 import { evaluatePlatformPublishReadiness, PLATFORM_RELEASE_BEHAVIORS } from "../../../src/agent/projects/platform/publishReadiness.js";
 import { getProjectHooks } from "../../../src/agent/projects/projectHooks.js";
 
-const validBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] };
+// article_body emits the CLIENT-shaped envelope and the readiness gate validates it against that
+// node's own outputSchema, so the fixtures carry the envelope with the client's object under `body` —
+// the shape a real pipeline output has.
+const envelope = (body: unknown) => ({
+  artifact: "article_body.v1",
+  summary: "Reader-facing body assembled for the readiness tests.",
+  clientProjectId: "platform",
+  clientObjectType: "content_item",
+  contractSource: { tool: "contract_get", fetchedAt: "2026-07-16T00:00:00.000Z" },
+  body
+});
+const validBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] });
 const ready = {
   articleBody: validBody,
   taxonomy: { tags: ["engine"] },
@@ -34,7 +45,7 @@ describe("Platform publish readiness", () => {
   });
 
   it("does not trust Blob-shaped media unless pdf-tool materialization is verified", () => {
-    const body = { schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] };
+    const body = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] });
     expect(evaluatePlatformPublishReadiness({ ...ready, articleBody: body }).blockers).toContain("media_artifacts_verified");
     expect(evaluatePlatformPublishReadiness({ ...ready, articleBody: body, verifiedMediaRefs: ["image/req_x/abc.png"] }).status).toBe("go");
   });

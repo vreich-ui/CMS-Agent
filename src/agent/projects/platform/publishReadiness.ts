@@ -10,7 +10,8 @@
 // their policy (see ../projectHooks.ts) so one client's rule change can never silently move another
 // client's gate.
 
-import { articleBodySchema } from "../../mcp/workspace/store.js";
+import { validateOutput } from "../../execution/outputValidator.js";
+import { getWorkspaceNode } from "../../workspace/nodes.js";
 import type { PublishReadinessCheck, PublishReadinessInput, PublishReadinessResult } from "../drLurie/publishReadiness.js";
 
 export const PLATFORM_REQUIRED_CONTENT_PATH = "article_body.v1";
@@ -27,8 +28,14 @@ export const PLATFORM_RELEASE_BEHAVIORS = ["publish_now", "publish_only", "build
 // A Blob-shaped artifact pointer that LOOKS materialized but must be proven so for this request.
 const blobShapedRef = /^(?:images?|pdfs?|documents?)\/[^\s/]+\/[^\s/]+\.[a-z0-9]{2,5}$/i;
 
-const mediaSrcsOf = (body: { nodes: Array<{ public: { media?: { src?: string } } }> }): string[] =>
-  body.nodes.map((node) => node.public.media?.src).filter((src): src is string => typeof src === "string");
+// article_body emits the CLIENT-shaped envelope; the client's own object — whose blocks carry the
+// media references this gate inspects — sits one level down under `body`.
+type ClientObject = { nodes?: Array<{ public?: { media?: { src?: unknown } } }> };
+const clientObjectOf = (envelope: unknown): ClientObject =>
+  (envelope && typeof envelope === "object" ? ((envelope as Record<string, unknown>).body as ClientObject) : undefined) ?? {};
+
+const mediaSrcsOf = (body: ClientObject): string[] =>
+  (Array.isArray(body.nodes) ? body.nodes : []).map((node) => node?.public?.media?.src).filter((src): src is string => typeof src === "string");
 
 export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): PublishReadinessResult {
   const checklist: PublishReadinessCheck[] = [];
@@ -37,17 +44,23 @@ export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): 
   const acceptedEmpty = (key: string, label: string, detail?: string) => checklist.push({ key, label, status: "accepted_empty", detail });
   const fail = (key: string, label: string, detail: string) => { checklist.push({ key, label, status: "fail", detail }); blockers.push(key); };
 
-  // 1. article_body.v1 valid — the canonical workspace body contract; the client-side content_item
-  // shape is validated by the CLIENT's own validator (object_validate), which the publication
-  // controller requires as separate evidence. This check gates only the workspace-side contract.
-  const body = articleBodySchema.safeParse(input.articleBody);
-  if (body.success) pass("article_body_valid", "article_body.v1 valid");
-  else fail("article_body_valid", "article_body.v1 valid", `invalid article body: ${body.error.issues.slice(0, 3).map((issue) => issue.message).join("; ")}`);
+  // 1. article_body.v1 valid — checked against the article_body node's OWN outputSchema, which is the
+  // single authority for "is this a valid body": the same schema the executor enforces at execution
+  // time, buildInitialRun enforces on a seeded late-stage entrypoint, and the publisher enforces before
+  // publishing, so the entrypoint, the publisher and this readiness gate cannot drift apart. This used
+  // to parse the workspace-local articleBodySchema ({schema_version, nodes}) — a shape the node never
+  // emits — which is what made `article_body_valid` unsatisfiable for real pipeline output.
+  // The client-side content_item shape is still validated by the CLIENT's own validator
+  // (object_validate), which the publication controller requires as separate evidence; this check gates
+  // only the workspace-side contract.
+  const body = validateOutput(input.articleBody, getWorkspaceNode("article_body")?.outputSchema);
+  if (body.ok) pass("article_body_valid", "article_body.v1 valid");
+  else fail("article_body_valid", "article_body.v1 valid", `invalid article body: ${body.errors.slice(0, 3).join("; ")}`);
 
   // 2. Blob artifacts verified — no Blob-shaped media trusted unless pdf-tool materialization for
   // THIS request is confirmed by the caller.
   const verified = new Set((input.verifiedMediaRefs ?? []).map((ref) => String(ref)));
-  const mediaSrcs = body.success ? mediaSrcsOf(body.data) : [];
+  const mediaSrcs = body.ok ? mediaSrcsOf(clientObjectOf(input.articleBody)) : [];
   const unverified = mediaSrcs.filter((src) => blobShapedRef.test(src) && !verified.has(src));
   if (mediaSrcs.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", "no media artifacts");
   else if (unverified.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", `${mediaSrcs.length} media reference(s) confirmed`);
@@ -72,7 +85,7 @@ export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): 
 
   // 6. Hard constraints — same three keys as every readiness surface renders; platform's values.
   const declared = input.hardConstraints ?? {};
-  const contentPath = declared.contentPath ?? (body.success ? PLATFORM_REQUIRED_CONTENT_PATH : undefined);
+  const contentPath = declared.contentPath ?? (body.ok ? PLATFORM_REQUIRED_CONTENT_PATH : undefined);
   if (contentPath === PLATFORM_REQUIRED_CONTENT_PATH) pass("hard_content_path", `contentPath = ${PLATFORM_REQUIRED_CONTENT_PATH}`);
   else fail("hard_content_path", `contentPath = ${PLATFORM_REQUIRED_CONTENT_PATH}`, `got ${contentPath ?? "(none)"}`);
   if (declared.artifactProtocol === PLATFORM_REQUIRED_ARTIFACT_PROTOCOL) pass("hard_artifact_protocol", `artifactProtocol = ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL}`);

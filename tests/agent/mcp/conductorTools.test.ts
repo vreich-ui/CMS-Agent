@@ -8,7 +8,18 @@ const post = async (body: unknown) => {
 };
 const call = async (name: string, args: Record<string, unknown> = {}) => (await post({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }));
 const data = async (name: string, args: Record<string, unknown> = {}) => (await call(name, args)).result.structuredContent.data;
-const validArticleBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] };
+// R-23 — article_body emits the CLIENT-shaped envelope ({artifact, summary, clientProjectId,
+// clientObjectType, contractSource, body}); the client's own object lives under `.body`. A late-stage
+// entrypoint is validated against the article_body node's own outputSchema, so the seed must be the
+// full envelope, not the bare client object.
+const validArticleBody = {
+  artifact: "article_body.v1",
+  summary: "Reader body for the late-stage re-run plan.",
+  clientProjectId: "dr-lurie",
+  clientObjectType: "content_item",
+  contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-16T00:00:00.000Z" },
+  body: { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] }
+};
 
 describe("conductor cost-control MCP tools", () => {
   beforeEach(() => { process.env.MCP_API_TOKEN = "test-token"; delete process.env.WORKSPACE_STORE; resetRepositoryManager(); });

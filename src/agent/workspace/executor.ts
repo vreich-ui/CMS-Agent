@@ -101,10 +101,33 @@ export async function resolveConductorNodes(workspaceRepository?: WorkspaceRepos
   return canonical.map((node) => { const match = storedById.get(node.id); return match ? overlayStoreNode(node, match) : node; });
 }
 
+// A late-stage entrypoint seeds a node output the run then treats as if that node had produced it. R-16
+// validates output at EXECUTION time — and a seeded node never executes, so until this existed the
+// entrypoint was a way past the validator entirely: a structurally wrong body could be seeded as
+// `completed`, emit an artifact, and be consumed by publish_payload and the publish gate downstream.
+// That is exactly the defect F-1/T6.3 named, reachable through a different door, and it sits on the T-3
+// path because workflow.get_run_cost actively recommends late-stage entry as the cheapest way to make
+// progress.
+//
+// The seeded output is now held to the node's OWN outputSchema — whatever that schema currently is —
+// so this stays correct through R-23 renaming the contract, and refuses BEFORE a run is created rather
+// than leaving a half-seeded run behind.
+export class InvalidEntrypointOutputError extends Error {
+  readonly code = "invalid_entrypoint_output";
+  constructor(readonly nodeId: string, readonly issues: string[]) {
+    super(`invalid_entrypoint_output: supplied output for ${nodeId} does not satisfy that node's outputSchema: ${issues.join("; ")}`);
+  }
+}
+
 const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId = makeRunId()): WorkflowExecutionRecord => {
   const timestamp = now();
   const entrypoint = data.entrypoint;
   if (entrypoint && !nodes.some((node) => node.id === entrypoint.nodeId)) throw new Error(`Unknown entrypoint node: ${entrypoint.nodeId}`);
+  if (entrypoint) {
+    const entryNode = nodes.find((node) => node.id === entrypoint.nodeId)!;
+    const validation = validateOutput(entrypoint.output, entryNode.outputSchema);
+    if (!validation.ok) throw new InvalidEntrypointOutputError(entrypoint.nodeId, validation.errors);
+  }
   // Nodes seeded as completed for a late-stage entry: the entry node plus every ancestor. A full run
   // (no entrypoint) seeds nothing, so every node starts queued exactly as before.
   const seeded = entrypoint ? new Set([entrypoint.nodeId, ...ancestorsOf(nodes, entrypoint.nodeId)]) : new Set<string>();

@@ -7,7 +7,19 @@ import { repositoryManager, resetRepositoryManager } from "../../src/agent/runti
 import { handler } from "../../netlify/functions/mcp.mjs";
 
 const TERMINAL = ["completed", "failed", "blocked", "cancelled"];
-const validArticleBody = { schema_version: "article_body.v1", nodes: [{ id: "n_intro", kind: "content", visibility: "public", public: { title: "Supplied Title", body: "Supplied reader-facing body." } }] };
+// R-16 hole: the entrypoint seeds a node output that never executes, so it used to bypass output
+// validation entirely. buildInitialRun now holds it to the article_body node's OWN outputSchema —
+// which is the CLIENT-shaped envelope, not the workspace-local {schema_version, nodes} shape this
+// fixture used to carry. That old fixture is exactly what the node rejects (all six required fields),
+// so a test built on it was asserting the defect could reach the publish path.
+const validArticleBody = {
+  artifact: "article_body.v1",
+  summary: "Supplied client-shaped body for a late-stage entrypoint run.",
+  clientProjectId: "dr-lurie",
+  clientObjectType: "content_item",
+  contractSource: { tool: "object_contract", objectType: "content_item", fetchedAt: "2026-07-28T00:00:00.000Z" },
+  body: { slug: "supplied-title", title: "Supplied Title", nodes: [{ id: "n_intro", kind: "content", visibility: "public", public: { title: "Supplied Title", body: "Supplied reader-facing body." } }] }
+};
 const entrypoint = { nodeId: "article_body", output: validArticleBody };
 
 const drive = async (runId: string, store: ExecutionRepository, options: { approved?: boolean } = {}) => {
@@ -127,6 +139,56 @@ describe("late-stage entrypoint via the MCP endpoint", () => {
 
   it("rejects an invalid supplied article body before creating a run", async () => {
     const res = await call("workflow.start_dry_run", { projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [] } });
-    expect(JSON.stringify(res.error ?? {})).toContain("invalid_article_body");
+    // The superseded workspace-local shape is now precisely what gets refused, and the error names the
+    // fields the node actually requires rather than a generic "invalid article body".
+    expect(JSON.stringify(res.error ?? {})).toContain("invalid_entrypoint_output");
+    expect(JSON.stringify(res.error ?? {})).toContain("$.clientObjectType is required");
+  });
+});
+
+// R-16 hole. validateOutput runs at EXECUTION time, and a seeded entrypoint node never executes — so
+// until buildInitialRun validated the seeded value, a late-stage entry was a way straight past the
+// validator: a structurally wrong body could be seeded `completed`, emit an artifact, and be consumed by
+// publish_payload and the publish gate. That is F-1/T6.3 reachable through a different door, on the T-3
+// path, and workflow.get_run_cost actively recommends late-stage entry as the cheapest way to progress.
+describe("R-16 — a seeded entrypoint output cannot bypass output validation", () => {
+  const call = async (name: string, args: Record<string, unknown> = {}) => {
+    const response = await handler({ httpMethod: "POST", headers: { authorization: "Bearer test-token" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });
+    return JSON.parse(response.body ?? "{}");
+  };
+  beforeEach(() => { process.env.MCP_API_TOKEN = "test-token"; delete process.env.WORKSPACE_STORE; resetRepositoryManager(); });
+  afterEach(() => { delete process.env.MCP_API_TOKEN; resetRepositoryManager(); });
+
+  it("refuses the superseded workspace-local shape, naming every field the node requires", async () => {
+    const res = await call("workflow.start_dry_run", { projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B" } }] } });
+    const error = JSON.stringify(res.error ?? {});
+    expect(error).toContain("invalid_entrypoint_output");
+    for (const field of ["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"]) {
+      expect(error).toContain(`$.${field} is required`);
+    }
+  });
+
+  it("creates no run at all when the seeded output is invalid", async () => {
+    const before = (await call("workflow.list_runs", {})).result.structuredContent.data.runs.length;
+    await call("workflow.start_dry_run", { projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [] } });
+    const after = (await call("workflow.list_runs", {})).result.structuredContent.data.runs.length;
+    // Refused BEFORE creation — no half-seeded run, and nothing for a later step to pick up and trust.
+    expect(after).toBe(before);
+  });
+
+  it("accepts a body that satisfies the node's own outputSchema", async () => {
+    const res = await call("workflow.start_dry_run", { projectId: "platform", input: {}, entrypoint: "article_body", articleBody: validArticleBody });
+    expect(res.error).toBeUndefined();
+    const run = res.result.structuredContent.data.run;
+    expect(run.stageOutputs.article_body).toMatchObject({ artifact: "article_body.v1", clientObjectType: "content_item" });
+  });
+
+  it("holds the seeded output to the SAME schema the executor enforces on a real execution", async () => {
+    // One authority, not two. If article_body's outputSchema changes (R-23 renaming the contract, say),
+    // both paths move together — there is no second copy of "what a body looks like" to drift.
+    const schema = (await call("node.get_output_schema", { nodeId: "article_body" })).result.structuredContent.data;
+    const validated = await call("node.validate_output", { nodeId: "article_body", value: validArticleBody });
+    expect(validated.result.structuredContent.data.validation.valid).toBe(true);
+    expect(JSON.stringify(schema)).toContain("clientObjectType");
   });
 });
