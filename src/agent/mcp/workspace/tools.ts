@@ -148,7 +148,7 @@ const validateArticleJsonSchema = objectSchema({ articleBody: articleBodyJsonSch
 const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, ["articleBody"]);
 const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
-const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: "mock" }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { ...articleBodyJsonSchema, description: "A valid article_body.v1 supplied for a late-stage entrypoint run." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." } }, ["projectId", "input"]);
+const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: "mock" }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." } }, ["projectId", "input"]);
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
 const runNextNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
 
@@ -347,11 +347,21 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       const data = startDryRunInput.parse(input);
       let entrypoint: { nodeId: string; output: unknown } | undefined;
       if (data.entrypoint === "article_body" || data.articleBody !== undefined) {
-        // A late-stage entry must carry a structurally valid article_body.v1; the run seeds it as the
-        // article_body output so publish_payload onward consume it directly.
-        const parsed = articleBodySchema.safeParse(coerceJsonObjectInput(data.articleBody));
-        if (!parsed.success) throw new Error(`invalid_article_body: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"} ${issue.message}`).join("; ")}`);
-        entrypoint = { nodeId: "article_body", output: parsed.data };
+        // The supplied body is seeded as the article_body output and consumed by publish_payload onward.
+        //
+        // It used to be checked against articleBodySchema — the workspace-local {schema_version, nodes}
+        // shape. That is the wrong authority twice over: it is a workspace-local schema being treated as
+        // authoritative (the precise thing the alignment wave forbade), and it is now provably
+        // INCOMPATIBLE with the node it feeds. Confirmed live against the deployed revision:
+        // node.validate_output for article_body rejects a {schema_version, nodes} body on all six of its
+        // required fields. So the old gate admitted exactly the bodies the node would refuse, and the
+        // seeding path then skipped R-16 because a seeded node never executes.
+        //
+        // buildInitialRun now validates the seeded output against the entry node's OWN outputSchema and
+        // throws InvalidEntrypointOutputError before a run is created. This call only coerces and hands
+        // it over, so the check stays correct through R-23 renaming the contract — there is no second
+        // copy of "what an article body looks like" to drift.
+        entrypoint = { nodeId: "article_body", output: coerceJsonObjectInput(data.articleBody) };
       }
       // The `input` envelope gets the same coercion `articleBody` already had. Some MCP clients serialize
       // object-typed arguments as JSON strings (documented in toolKit.ts, observed live with Claude's
