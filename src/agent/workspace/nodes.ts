@@ -364,11 +364,6 @@ export const publishingConductorNodes = [
       "y": 0
     },
     "updatedAt": "2026-07-03T00:00:00.000Z",
-    "modelConfig": {
-      "toolCallLimit": 12,
-      "timeout": 180000,
-      "retryCount": 1
-    },
     "metadata": {
       "externalStageMapping": "research",
       "approvalRequired": false
@@ -1016,11 +1011,6 @@ export const publishingConductorNodes = [
       "y": 360
     },
     "updatedAt": "2026-07-03T00:00:00.000Z",
-    "modelConfig": {
-      "toolCallLimit": 8,
-      "timeout": 120000,
-      "retryCount": 1
-    },
     "metadata": {
       "approvalRequired": false
     }
@@ -1783,3 +1773,4 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
   if (publicationController && !publicationController.dependsOn.includes("publish_payload")) issues.push("publication_controller must depend on publish_payload");
   return issues.length ? { valid: false, issues } : { valid: true, issues: [] };
 }
+
