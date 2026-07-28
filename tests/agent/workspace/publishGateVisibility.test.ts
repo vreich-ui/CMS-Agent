@@ -14,9 +14,15 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
   return response.result.structuredContent;
 };
 
+// Client-shaped envelope: the article_body node's own outputSchema is the authority, and a seeded
+// entrypoint output is now validated against it before the run is created.
 const articleBody = {
-  schema_version: "article_body.v1",
-  nodes: [{ id: "n_a1", kind: "content", visibility: "public", public: { title: "Gate", body: "Publish gate visibility fixture." } }]
+  artifact: "article_body.v1",
+  summary: "Publish gate visibility fixture.",
+  clientProjectId: "platform",
+  clientObjectType: "content_item",
+  contractSource: { tool: "object_contract", objectType: "content_item" },
+  body: { slug: "gate", title: "Gate", nodes: [{ id: "n_a1", kind: "content", visibility: "public", public: { title: "Gate", body: "Publish gate visibility fixture." } }] }
 };
 
 // Drive a late-stage run up to (but not into) the publish-risk node. The entrypoint seeds article_body and

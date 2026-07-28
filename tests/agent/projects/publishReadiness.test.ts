@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { evaluateDrLuriePublishReadiness } from "../../../src/agent/projects/drLurie/publishReadiness.js";
 
-const validBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] };
+// article_body emits the CLIENT-shaped envelope and the readiness gate validates it against that
+// node's own outputSchema, so the fixtures carry the envelope with Dr. Lurie's content_item under
+// `body` — the shape a real pipeline output has.
+const envelope = (body: unknown) => ({
+  artifact: "article_body.v1",
+  summary: "Reader-facing body assembled for the readiness tests.",
+  clientProjectId: "dr-lurie",
+  clientObjectType: "content_item",
+  contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-16T00:00:00.000Z" },
+  body
+});
+const validBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] });
 const ready = {
   articleBody: validBody,
   taxonomy: { tags: ["science"] },
@@ -29,7 +40,7 @@ describe("Dr. Lurie publish readiness", () => {
   });
 
   it("does not trust Blob-shaped media unless pdf-tool materialization is verified", () => {
-    const body = { schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] };
+    const body = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] });
     const unverified = evaluateDrLuriePublishReadiness({ ...ready, articleBody: body });
     expect(unverified.blockers).toContain("media_artifacts_verified");
     // Confirming the ref as materialized clears the blocker.
