@@ -3,7 +3,7 @@ import type { WorkspaceNode, WorkspaceGraphValidation } from "./nodeTypes.js";
 export const publishingConductorNodes = [
   {
     "id": "input_triage",
-    "name": "Publishing Input Triage",
+    "name": "CMS Input Triage",
     "kind": "intake",
     "description": "Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.",
     "prompt": "Objective: Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.\nInputs expected: user request and any supplied content_source.v1 envelope.\nOutput required: produce content_source.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
@@ -73,6 +73,7 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [],
     "requiredInputs": [
       "content_source.v1"
     ],
@@ -83,10 +84,10 @@ export const publishingConductorNodes = [
     "dependsOn": [],
     "status": "active",
     "position": {
-      "x": 0,
-      "y": 0
+      "x": -391,
+      "y": 148
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:39.528Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -96,7 +97,7 @@ export const publishingConductorNodes = [
     "name": "Topic Opportunity Agent",
     "kind": "strategy",
     "description": "Assess topic viability, audience value, search/editorial opportunity, and recommended positioning.",
-    "prompt": "Objective: Assess topic viability, audience value, search/editorial opportunity, and recommended positioning.\nInputs expected: input_triage.\nOutput required: produce topic_opportunity.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Decide whether the request should become a Dr. Lurie article, page section, content update, product/resource support asset, or no-build recommendation.\nInputs expected: input_triage.\nOutput required: produce topic_opportunity.v1 with recommended content route, reader value, DTC/business value, SEO/search intent notes when relevant, evidence depth needed, and cost path.\nCost policy: choose the smallest workflow that can satisfy the request safely. Recommend deep research only for scientific, medical-adjacent, current, comparative, regulatory, or claim-heavy work. Recommend skipping redundant strategy passes when the request is simple.\nDTC policy: prefer content that moves a reader toward a useful next step: related reading, newsletter, routine decision, product/resource consideration, or trust-building.\nCompletion criteria: the route, audience value, evidence need, and blockers are explicit.\nBlocker criteria: unclear target, unsafe request, no viable reader value, missing critical input, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -163,6 +164,9 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [
+      "seo_review"
+    ],
     "requiredInputs": [
       "input_triage"
     ],
@@ -178,7 +182,7 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 0
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:29.314Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -255,6 +259,7 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [],
     "requiredInputs": [
       "topic_opportunity"
     ],
@@ -270,7 +275,7 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 0
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:31.995Z",
     "metadata": {
       "externalStageMapping": "reader_insight",
       "approvalRequired": false
@@ -281,7 +286,7 @@ export const publishingConductorNodes = [
     "name": "Research Agent",
     "kind": "research",
     "description": "Gather source-backed claims, evidence, examples, constraints, and open questions for the article.",
-    "prompt": "Objective: Gather source-backed claims, evidence, examples, constraints, and open questions for the article.\nInputs expected: reader_insight.\nOutput required: produce research_brief.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Gather only the evidence needed to support the article's material claims, reader decisions, and Dr. Lurie trust standard.\nInputs expected: reader_insight.\nOutput required: produce research_brief.v1 with sourced facts, practical implications, claim risk notes, open questions, and source references.\nCost policy: do not browse by default. Use web.search/web.fetch only for claims that are scientific, medical-adjacent, current, comparative, regulatory, or otherwise source-sensitive. Prefer primary scientific, clinical, regulatory, or manufacturer/source-owner pages when available. Stop once reliable evidence covers the decision the article must help the reader make.\nEvidence policy: separate sourced facts, interpretation, uncertainty, and unsupported claims. Flag claims that should be softened or removed.\nCompletion criteria: required inputs are addressed, sources are concise and relevant, output matches schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unavailable evidence for important claims, unsafe medical certainty, contradictory instructions, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -346,7 +351,12 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.list_outputs"
+      "stage.list_outputs",
+      "web.search",
+      "web.fetch"
+    ],
+    "assignedSkills": [
+      "web_research"
     ],
     "requiredInputs": [
       "reader_insight"
@@ -363,7 +373,7 @@ export const publishingConductorNodes = [
       "x": 840,
       "y": 0
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:34.813Z",
     "metadata": {
       "externalStageMapping": "research",
       "approvalRequired": false
@@ -441,6 +451,7 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [],
     "requiredInputs": [
       "research"
     ],
@@ -456,7 +467,7 @@ export const publishingConductorNodes = [
       "x": 1120,
       "y": 0
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:37.183Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -533,6 +544,7 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [],
     "requiredInputs": [
       "objection_mapping"
     ],
@@ -548,7 +560,7 @@ export const publishingConductorNodes = [
       "x": 0,
       "y": 180
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:41.916Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -625,6 +637,7 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [],
     "requiredInputs": [
       "narrative_movement"
     ],
@@ -640,7 +653,7 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 180
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:44.162Z",
     "metadata": {
       "externalStageMapping": "angle",
       "approvalRequired": false
@@ -651,7 +664,7 @@ export const publishingConductorNodes = [
     "name": "Brief Architect",
     "kind": "planning",
     "description": "Convert strategy into an executable article brief with structure, claims, proof points, and acceptance criteria.",
-    "prompt": "Objective: Convert strategy into an executable article brief with structure, claims, proof points, and acceptance criteria.\nInputs expected: angle_strategy.\nOutput required: produce article_brief.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Convert upstream strategy and evidence into one executable Dr. Lurie article/content brief.\nInputs expected: angle_strategy, plus prior topic, reader, research, objection, and narrative outputs through stageOutputs.\nOutput required: produce article_brief.v1 with title/slug direction, reader promise, article structure, claim/proof map, DTC next step, SEO/meta notes, tone guardrails, acceptance criteria, and what to skip.\nCost policy: collapse duplicate strategy into this brief. Do not ask downstream agents to rediscover the angle. Include only sections, claims, and review needs that materially improve the article.\nDTC policy: make the content useful first and commercially aware second. Add a low-pressure next step only where it fits the reader journey.\nContract policy: note likely target object type, expected article_body/content_item fields, taxonomy needs, and whether contract_intelligence must inspect anything beyond content_item.\nCompletion criteria: the draft writer can write without guessing; research and factual risks are visible; blockers are explicit.\nBlocker criteria: missing strategy, missing evidence for required claims, unsafe medical certainty, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -717,6 +730,10 @@ export const publishingConductorNodes = [
       "workspace.get_node",
       "stage.get_output",
       "stage.list_outputs"
+    ],
+    "assignedSkills": [
+      "article_structuring",
+      "dr_lurie_dtc_science_editorial"
     ],
     "requiredInputs": [
       "angle_strategy"
@@ -733,7 +750,7 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 180
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:53.811Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -743,7 +760,7 @@ export const publishingConductorNodes = [
     "name": "Full Draft Writer",
     "kind": "drafting",
     "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
-    "prompt": "Objective: Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.\nInputs expected: brief_architect.\nOutput required: produce draft.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in Dr. Lurie's DTC science voice.\nInputs expected: brief_architect.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nStyle policy: calm, precise, practical, science-led, and reader-first. Avoid hype, fear tactics, diagnosis, fake urgency, and unsupported medical certainty. Use concrete routine decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into article_body/content_item nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; blockers are explicit.\nBlocker criteria: missing brief, missing evidence for required claims, unsafe medical certainty, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -810,6 +827,9 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [
+      "dr_lurie_dtc_science_editorial"
+    ],
     "requiredInputs": [
       "brief_architect"
     ],
@@ -825,7 +845,7 @@ export const publishingConductorNodes = [
       "x": 840,
       "y": 180
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:56.191Z",
     "metadata": {
       "externalStageMapping": "draft",
       "approvalRequired": false
@@ -903,6 +923,9 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [
+      "dr_lurie_dtc_science_editorial"
+    ],
     "requiredInputs": [
       "draft_writer"
     ],
@@ -918,7 +941,7 @@ export const publishingConductorNodes = [
       "x": 1120,
       "y": 180
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:30:58.359Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -928,7 +951,7 @@ export const publishingConductorNodes = [
     "name": "Trust / Factual Editor",
     "kind": "review",
     "description": "Check claims, citations, hedging, trust signals, factual risk, and unsupported assertions.",
-    "prompt": "Objective: Check claims, citations, hedging, trust signals, factual risk, and unsupported assertions.\nInputs expected: draft_writer.\nOutput required: produce trust_factual_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Check the draft for claim safety, citation sufficiency, hedging, reader trust, and Dr. Lurie science standards.\nInputs expected: draft_writer and research.\nOutput required: produce trust_factual_review.v1 with claims to keep, soften, support, remove, or re-source; citation gaps; medical/compliance risk; and concise revision instructions.\nCost policy: use existing research first. Fetch only source URLs already cited or clearly necessary to resolve a material uncertainty. Do not run broad new research unless the draft contains an important unsupported claim.\nEvidence policy: distinguish sourced facts, interpretation, and uncertainty. Flag unsupported claims and overconfident medical language. Prefer softer practical phrasing when evidence is limited.\nCompletion criteria: factual risks are prioritized, actionable, and tied to the draft; blockers are explicit.\nBlocker criteria: missing draft, missing research for material claims, unavailable source evidence, unsafe medical certainty, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -993,24 +1016,31 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "workspace.get_node",
       "stage.get_output",
-      "stage.list_outputs"
+      "stage.list_outputs",
+      "web.fetch"
+    ],
+    "assignedSkills": [
+      "factual_review",
+      "source_verification"
     ],
     "requiredInputs": [
-      "draft_writer"
+      "draft_writer",
+      "research"
     ],
     "produces": [
       "trust_factual_review.v1"
     ],
     "riskLevel": "read",
     "dependsOn": [
-      "draft_writer"
+      "draft_writer",
+      "research"
     ],
     "status": "active",
     "position": {
       "x": 0,
       "y": 360
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:31:01.239Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -1087,22 +1117,27 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [
+      "dr_lurie_dtc_science_editorial"
+    ],
     "requiredInputs": [
-      "draft_writer"
+      "draft_writer",
+      "input_triage"
     ],
     "produces": [
       "emotional_resonance_review.v1"
     ],
     "riskLevel": "read",
     "dependsOn": [
-      "draft_writer"
+      "draft_writer",
+      "input_triage"
     ],
     "status": "active",
     "position": {
       "x": 280,
       "y": 360
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:31:03.530Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -1179,6 +1214,7 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [],
     "requiredInputs": [
       "draft_writer"
     ],
@@ -1194,7 +1230,7 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 360
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:31:05.878Z",
     "metadata": {
       "approvalRequired": false
     }
@@ -1271,6 +1307,7 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.list_outputs"
     ],
+    "assignedSkills": [],
     "requiredInputs": [
       "human_texture",
       "trust_factual",
@@ -1292,8 +1329,226 @@ export const publishingConductorNodes = [
       "x": 840,
       "y": 360
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T07:31:08.168Z",
     "metadata": {
+      "approvalRequired": false
+    }
+  },
+  {
+    "id": "contract_intelligence",
+    "name": "Contract Intelligence Agent",
+    "kind": "research",
+    "description": "Fetch the target client's live object contract at runtime and reduce it to the rules downstream nodes must obey. The client contract is the single source of truth; never author content rules from memory or from a workspace-local copy.",
+    "prompt": "Objective: Fetch the target client's LIVE object contract and reduce it to the rules every downstream node must obey. The client's contract is the single source of truth for content shape, ids, media paths, taxonomy, and publishing gates. Never author these rules from memory, from a workspace-local schema, or from another client's contract.\nInputs expected: article_brief, plus the target client projectId and object type from the run context.\nContract discovery policy: resolve the client project first, then call its contract surface read-only through project.call_tool. Prefer, in order: (1) the client's own contract tool for the target object type (e.g. object_contract), (2) its registry/component tool for component, page-type and taxonomy options, (3) its inventory tool for reusable recipes and existing patterns. Record the exact tool name and fetch timestamp you used, so downstream nodes can prove the contract was fetched rather than assumed. If the client exposes a contract for a different object type than requested, report that rather than substituting one.\nOutput required: produce contract_intelligence.v1 carrying, at minimum: clientProjectId, clientObjectType, the fetched body schema or a faithful reduction of it, the id conventions (object id and node/child id patterns), the media/artifact path convention (raw artifact reference field vs public serving path, and which fields accept which), the taxonomy source and whether unknown terms block, the enumerated structural constraints with their severity and whether each is enforced live, the publish policy including whether approval is required and any pinning rules, and contractSource {tool, fetchedAtISO}.\nGeneralization policy: this node must work for ANY client the workflow encounters, not one named client. Do not hardcode a client's field names, path prefixes, or object types into your reasoning; read them from the contract you fetched and pass them forward as data. Where a client's contract is silent, say so explicitly as an assumption rather than filling the gap from another client's conventions.\nCompletion criteria: a downstream node can construct and validate a client object using only your output plus the client's own validator, without guessing and without consulting any workspace-local schema.\nBlocker criteria: the client project is unreachable or unconfigured, its contract tools are unavailable or denied by policy, the requested object type is unsupported, the contract cannot be fetched read-only, or the contract declares constraints this workspace cannot satisfy.\nTool policy: use only allowedTools; reach the client only through project.call_tool and only with read-only contract, registry, inventory, and validation operations; never publish, create, patch, or otherwise mutate the client.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "schema": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {
+          "const": "contract_intelligence.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "bodySchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "idConventions": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "mediaConvention": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "taxonomy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "constraints": {
+          "type": "array"
+        },
+        "publishPolicy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "mediaPolicy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "contract_findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "stageOutputs": {
+          "type": "object"
+        },
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {
+          "const": "contract_intelligence.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "bodySchema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "idConventions": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "mediaConvention": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "taxonomy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "constraints": {
+          "type": "array"
+        },
+        "publishPolicy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "mediaPolicy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "contract_findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool"
+    ],
+    "assignedSkills": [
+      "dr_lurie_contract_intelligence"
+    ],
+    "requiredInputs": [
+      "brief_architect"
+    ],
+    "produces": [
+      "contract_intelligence.v1"
+    ],
+    "riskLevel": "write",
+    "dependsOn": [
+      "brief_architect"
+    ],
+    "status": "active",
+    "position": {
+      "x": 1420,
+      "y": 700
+    },
+    "updatedAt": "2026-07-26T13:01:25.205Z",
+    "metadata": {
+      "projectId": "dr-lurie",
       "approvalRequired": false
     }
   },
@@ -1301,13 +1556,17 @@ export const publishingConductorNodes = [
     "id": "article_body",
     "name": "Article Body Builder",
     "kind": "builder",
-    "description": "Build canonical article_body.v1 structured article content. Markdown is not canonical and is only a render/export adapter.",
-    "prompt": "Objective: Build canonical article_body.v1 structured article content. Markdown is not canonical and is only a render/export adapter. Reader-visible image nodes must specify rendering.placement, normally 'inline'.\nInputs expected: review_aggregator.\nOutput required: produce article_body.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "description": "Build the client's content object in the client's own shape, using the contract fetched at runtime by contract_intelligence. The client contract is the only source of truth; no workspace-local content schema is authoritative.",
+    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content) and contract_intelligence (the client contract). Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_tool, read-only, and record the outcome in clientValidation {tool, valid, issues}. If the client's validator requires an existing draft object, follow the contract's stated workflow to obtain one without publishing. If the client cannot be reached or its validator is denied by policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; every media reference is verified and in the correct form for its field; clientValidation records a real result from the client; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client only through project.call_tool and only with read-only contract and validation operations; never create, patch, publish, or release from this node.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
         "artifact",
-        "summary"
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "body"
       ],
       "additionalProperties": true,
       "properties": {
@@ -1317,6 +1576,49 @@ export const publishingConductorNodes = [
         "summary": {
           "type": "string",
           "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "body": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "mediaPathConvention": {
+          "type": "string"
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "notes": {
           "type": "array",
@@ -1345,7 +1647,11 @@ export const publishingConductorNodes = [
       "type": "object",
       "required": [
         "artifact",
-        "summary"
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "body"
       ],
       "additionalProperties": true,
       "properties": {
@@ -1355,6 +1661,49 @@ export const publishingConductorNodes = [
         "summary": {
           "type": "string",
           "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "body": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "mediaPathConvention": {
+          "type": "string"
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "notes": {
           "type": "array",
@@ -1368,45 +1717,369 @@ export const publishingConductorNodes = [
       "workspace.get_node",
       "stage.get_output",
       "stage.save_output",
-      "stage.list_outputs"
+      "stage.list_outputs",
+      "project.call_tool"
+    ],
+    "assignedSkills": [
+      "dr_lurie_contract_intelligence"
     ],
     "requiredInputs": [
-      "review_aggregator"
+      "review_aggregator",
+      "contract_intelligence"
     ],
     "produces": [
       "article_body.v1"
     ],
     "riskLevel": "write",
     "dependsOn": [
-      "review_aggregator"
+      "review_aggregator",
+      "contract_intelligence"
     ],
     "status": "active",
     "position": {
       "x": 1120,
       "y": 360
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-27T11:53:09.386Z",
     "metadata": {
+      "approvalRequired": false,
       "externalStageMapping": "final_article",
       "canonicalRules": [
-        "article_body.v1 is canonical article content",
-        "Markdown is only a render/export adapter",
-        "Reader-visible image nodes require rendering.placement"
+        "The client's fetched contract is the only authoritative content schema",
+        "body must be emitted in the client's own object shape, not a workspace shape",
+        "Renderable media fields carry the client's public path; raw artifact keys only in the client's designated reference fields",
+        "Workspace-local article schemas are advisory and must never be used to validate"
+      ]
+    }
+  },
+  {
+    "id": "artifact_plan",
+    "name": "Artifact Planning Agent",
+    "kind": "adapter",
+    "description": "Plan and verify media/artifact requirements against the client's declared artifact protocol and id conventions. No legacy fallbacks, no unverified media.",
+    "prompt": "Objective: Plan and verify every media/artifact need for the client-shaped body produced by article_body, using only the artifact protocol the client's contract declares.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: article_body (client-shaped body plus its artifact references).\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy: never mark a slot has_trusted_artifact because a key merely matches a pattern. Trust requires verification evidence from the artifact service that the reference was materialized for this request, with matching key, digest, content type, size and timestamp — record it in the slot's verification field. Where the artifact service offers an explicit verification tool, use it and keep its proof. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both — the raw reference for the client's reference fields and publicPath for its rendered fields. Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream.\nBlocker criteria: missing body; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Reach external services only through project.call_tool. Read-only policy and status lookups are allowed; do not publish, release, or mutate the client from this node.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "artifactProtocol",
+        "media_slots"
       ],
-      "approvalRequired": false
+      "properties": {
+        "artifact": {
+          "const": "artifact_plan.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestIdConvention": {
+          "type": "string"
+        },
+        "requestIdConfirmedByClient": {
+          "type": "boolean"
+        },
+        "media_slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "slotId",
+              "purpose",
+              "status"
+            ],
+            "properties": {
+              "slotId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "enum": [
+                  "has_trusted_artifact",
+                  "needs_generation",
+                  "blocked"
+                ]
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "placement": {
+                "type": "string"
+              },
+              "desiredKind": {
+                "type": "string"
+              },
+              "artifactReference": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "verification": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "publicPath": {
+                "type": "string"
+              },
+              "missingCapability": {
+                "type": "string"
+              },
+              "blocker": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "artifactReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "requiredArtifactCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "stageOutputs": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "artifactProtocol",
+        "media_slots"
+      ],
+      "properties": {
+        "artifact": {
+          "const": "artifact_plan.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestIdConvention": {
+          "type": "string"
+        },
+        "requestIdConfirmedByClient": {
+          "type": "boolean"
+        },
+        "media_slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "slotId",
+              "purpose",
+              "status"
+            ],
+            "properties": {
+              "slotId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "enum": [
+                  "has_trusted_artifact",
+                  "needs_generation",
+                  "blocked"
+                ]
+              },
+              "nodeId": {
+                "type": "string"
+              },
+              "placement": {
+                "type": "string"
+              },
+              "desiredKind": {
+                "type": "string"
+              },
+              "artifactReference": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "verification": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "publicPath": {
+                "type": "string"
+              },
+              "missingCapability": {
+                "type": "string"
+              },
+              "blocker": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "artifactReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "requiredArtifactCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool"
+    ],
+    "assignedSkills": [
+      "dr_lurie_contract_intelligence"
+    ],
+    "requiredInputs": [
+      "article_body"
+    ],
+    "produces": [
+      "artifact_plan.v1"
+    ],
+    "riskLevel": "write",
+    "dependsOn": [
+      "article_body"
+    ],
+    "status": "active",
+    "position": {
+      "x": 1120,
+      "y": 1500
+    },
+    "updatedAt": "2026-07-26T13:04:07.018Z",
+    "metadata": {
+      "approvalRequired": false,
+      "projectId": "pdf-tool",
+      "canonicalRules": [
+        "The client's contract declares the artifact protocol, id convention and media path rules",
+        "A pattern-valid key is never proof of materialization",
+        "Request ids must satisfy the client's convention before any artifact is written",
+        "No legacy artifact fallback systems"
+      ]
     }
   },
   {
     "id": "publish_payload",
     "name": "Publish Payload Builder",
     "kind": "adapter",
-    "description": "Create a dry-run adapter-only payload from article_body.v1 for future project publishing backends; preserve artifactReferences; Markdown is adapter/export only; do not publish.",
-    "prompt": "Objective: Create a dry-run adapter-only payload from article_body.v1 for future project publishing backends; preserve artifactReferences; Markdown is adapter/export only; do not publish.\nInputs expected: article_body.\nOutput required: produce dry_run_publish_payload.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "description": "Assemble a dry-run publish candidate in the client's own object shape, carrying verified artifact references and the client's own validation verdict. Never publish, release, or trigger builds.",
+    "prompt": "Objective: Assemble a DRY-RUN publish candidate for the target client from the client-shaped body produced by article_body. Do not publish, release, patch, or trigger builds.\nSource of truth: the client's fetched contract governs the candidate's shape, its id conventions, its media path rules, and its publish gates. Carry clientProjectId, clientObjectType and contractSource through from upstream. Never validate against a workspace-local content schema and never treat a workspace verdict as sufficient evidence.\nInputs expected: article_body (the client-shaped body plus its clientValidation result) and artifact_plan (media slots with verification evidence).\nOutput required: produce dry_run_publish_payload.v1 with clientObject set to the candidate in the client's own shape, dryRun true, the verified artifactReferences set, artifactProtocol named as the client's contract names it, artifactHandling.legacyFallbacksUsed false, the client's validation verdict, validation assumptions, and explicit blockers. Suggest a requested id only when the client's id convention lets you derive one safely; otherwise leave it out and say why.\nArtifact readiness policy: media may be treated as publish-ready ONLY when there is verification evidence that each reference was materialized by the client's artifact protocol for the CURRENT request. A pattern-valid key is not proof. If artifact_plan marks any slot as needing generation or blocked, or verification evidence is absent, keep the reference as untrusted metadata and raise a blocker. Never silently upgrade unverified media to trusted media, and never substitute a remote URL, repo path, data URI, hand-authored key, or a reference belonging to another request or slug.\nMedia form policy: place each reference in the form the contract demands for its field — public serving path for rendered fields, raw artifact key only in the client's designated reference fields. Deliver a document artifact as the contract's document media type or as an action CTA, never as an image; a hero or featured image must be an image. If the contract states that raw keys break rendering, treat a raw key in a rendered field as a blocker, not a warning.\nClient validation policy: obtain a validation verdict from the CLIENT's own validator through project.call_tool, read-only, and record it in clientValidation {tool, valid, issues}. If upstream already validated, re-confirm rather than inheriting the claim when the body changed. If the client is unreachable or its validator is denied, record clientValidation.attempted false and raise a blocker; do not assert validity.\nApproval/resume policy: if artifact generation or verification timed out upstream, preserve the blocker with requestId, media slot id, required capability, and the pending action. Do not replace it with a synthetic pointer.\nCompletion criteria: a publisher could create or update the client object from clientObject without guessing; every media reference is verified and correctly formed; the client's own validator has spoken; blockers are explicit.\nBlocker criteria: missing or unprovenanced contract; required contract fields unsatisfied; ids violating the client's convention; unverified, missing, or wrongly formed media; taxonomy that does not resolve where the contract blocks unknown terms; client unreachable; or any requested publishing side effect.\nTool policy: read-only client calls only, through project.call_tool. No publish, release, build, create, or patch calls. Do not create or upload artifacts from this node.\nMemory policy: save only this node's structured dry-run output; never persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
         "artifact",
-        "summary"
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "dryRun",
+        "clientObject"
       ],
       "additionalProperties": true,
       "properties": {
@@ -1416,6 +2089,75 @@ export const publishingConductorNodes = [
         "summary": {
           "type": "string",
           "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "dryRun": {
+          "const": true
+        },
+        "clientObject": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifactReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "artifactHandling": {
+          "type": "object",
+          "required": [
+            "legacyFallbacksUsed"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "legacyFallbacksUsed": {
+              "const": false
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "validationAssumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "notes": {
           "type": "array",
@@ -1444,7 +2186,12 @@ export const publishingConductorNodes = [
       "type": "object",
       "required": [
         "artifact",
-        "summary"
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "dryRun",
+        "clientObject"
       ],
       "additionalProperties": true,
       "properties": {
@@ -1454,6 +2201,75 @@ export const publishingConductorNodes = [
         "summary": {
           "type": "string",
           "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "dryRun": {
+          "const": true
+        },
+        "clientObject": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifactReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "artifactHandling": {
+          "type": "object",
+          "required": [
+            "legacyFallbacksUsed"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "legacyFallbacksUsed": {
+              "const": false
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "validationAssumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "notes": {
           "type": "array",
@@ -1466,33 +2282,37 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "stage.get_output",
       "stage.save_output",
-      "publish.build_payload",
-      "publish.validate_payload"
+      "project.call_tool"
+    ],
+    "assignedSkills": [
+      "dr_lurie_contract_intelligence"
     ],
     "requiredInputs": [
-      "article_body"
+      "article_body",
+      "artifact_plan"
     ],
     "produces": [
       "dry_run_publish_payload.v1"
     ],
     "riskLevel": "write",
     "dependsOn": [
-      "article_body"
+      "article_body",
+      "artifact_plan"
     ],
     "status": "active",
     "position": {
       "x": 0,
       "y": 540
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-26T13:02:58.661Z",
     "metadata": {
+      "approvalRequired": false,
       "canonicalRules": [
-        "Consumes article_body.v1",
-        "Produces dry-run adapter payload only",
-        "Must preserve artifactReferences",
-        "Markdown is adapter/export only"
-      ],
-      "approvalRequired": false
+        "Consumes the client-shaped body from article_body",
+        "Produces a dry-run candidate only, never a publish",
+        "Client validation evidence is required; a workspace verdict is not sufficient",
+        "Artifact references must be verified for the current request"
+      ]
     }
   },
   {
@@ -1500,7 +2320,7 @@ export const publishingConductorNodes = [
     "name": "Publication Controller",
     "kind": "controller",
     "description": "Prepare an auditable publication decision record for future explicit approval; do not publish yet; validate the target project's artifact policy before any future publishing; do not call publishing tools in this workspace.",
-    "prompt": "Objective: Prepare an auditable publication decision record for future explicit approval; do not publish yet; validate the target project's artifact policy before any future publishing; do not call publishing tools in this workspace.\nInputs expected: publish_payload.\nOutput required: produce publication_decision.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Prepare an auditable publication decision record for explicit approval. This node is a decision gate only; it must not publish, release, trigger builds, upload artifacts, or mutate external systems.\nSource of truth: the target client's fetched contract governs what a valid object, a valid artifact reference, and a valid publish action are. Read those rules from the contract carried through publish_payload rather than assuming any client's conventions. If the payload lacks contractSource provenance, treat the decision as no_go.\nInputs expected: publish_payload.\nOutput required: produce publication_decision.v1 with a go/no-go recommendation, the required approval facts, artifact readiness, blockers, and the exact next action a future publish executor would take.\nContent path policy: the only valid content is the client-shaped object the contract declares, carried as clientObject. Refuse any payload built from Markdown, legacy article bodies, prose blobs, repo files, or any representation the client's contract does not declare.\nArtifact protocol policy: the artifact protocol named by the client's contract is the only valid transfer path. Refuse legacy fallbacks: repo asset paths, remote URLs, data URIs, direct-save or import-from-URL fallbacks, references copied from another request or slug, and hand-authored keys.\nArtifact readiness policy: an artifact reference is trusted only when publish_payload or artifact_plan carries verification evidence that the artifact was materialized by the client's protocol for the SAME request id. A syntactically valid key is not enough. Confirm each reference sits in the form its target field requires — public serving path for rendered fields, raw reference only where the contract designates. If materialization was unverified, the request id was never confirmed against the client's convention, approval timed out, taxonomy is unresolved, or provenance is unclear, recommend no_go / blocked_for_publish_execution.\nClient verdict policy: require a validation verdict produced by the CLIENT's own validator, not by a workspace-local checker. A workspace verdict is not evidence. Absent or stale client validation is a blocker.\nApproval policy: require explicit approval before any publish executor may run. Approval must identify the exact object and request, the publication action, the artifact set with keys and digests, and the intended release/build behavior. Where the client's contract pins an approval to a specific action or revision, honor those pin rules — a mismatched or stale pin is a blocker, not a warning. Missing or partial approval is a blocker.\nCompletion criteria: the decision is auditable; the content path matches the client's contract; artifacts are either verified or explicitly blocked; taxonomy readiness is explicit; the client's own validator has spoken; and no publish, release, or build side effect was performed.\nBlocker criteria: missing publish_payload; missing contract provenance; content outside the client's declared shape; missing or unverified artifact references; a request id that does not satisfy the client's convention; unresolved taxonomy without explicit acceptance where the contract blocks unknown terms; disabled publish policy; unavailable publish executor; missing, stale, or mismatched approval; or any requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; never call publish, release, build, upload, import, or mutation tools.\nMemory policy: save only this node's structured decision output; never persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
@@ -1567,6 +2387,9 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.save_output",
       "stage.list_outputs"
+    ],
+    "assignedSkills": [
+      "dr_lurie_contract_intelligence"
     ],
     "requiredInputs": [
       "publish_payload"
@@ -1583,7 +2406,7 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 540
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-26T13:08:52.791Z",
     "metadata": {
       "approvalRequired": true,
       "projectPolicyNotes": [
@@ -1663,6 +2486,7 @@ export const publishingConductorNodes = [
       "stage.list_outputs",
       "learning.record_observation"
     ],
+    "assignedSkills": [],
     "requiredInputs": [
       "publication_controller"
     ],
@@ -1678,13 +2502,310 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 540
     },
-    "updatedAt": "2026-07-03T00:00:00.000Z",
+    "updatedAt": "2026-07-26T17:18:16.131Z",
     "metadata": {
       "approvalRequired": false,
       "recordFailureTypes": [
         "artifact_reference_missing",
         "raw_image_artifact_public_url",
         "image_rendering_placement_missing"
+      ]
+    }
+  },
+  {
+    "id": "publish_executor",
+    "name": "Publish Executor",
+    "kind": "publisher",
+    "description": "Draft execution node for approval-gated publishing to any client. Follows the publish sequence, lock discipline and pin rules the client's contract declares. Remains draft until the runner and project policy support safe live execution.",
+    "prompt": "Objective: Execute an approved publish against the target client, only after explicit approval and only when project policy enables live publish tools. This node stays DRAFT until the runner and project policy support safe live execution.\nSource of truth: the client's fetched contract declares the publish sequence, the lock and version discipline, the approval pin rules, the valid publication actions, the release/build behaviours, and the error codes. Read them from contractSource carried through publication_controller. Never execute a sequence remembered from another client or hardcoded here. Missing contract provenance is a hard block.\nInputs expected: publication_controller.\nOutput required when activated: publish_execution.v1 with the exact approved action, the client object and request id, the artifact set, the publish result, the release/build status, and the verification performed.\nContent path policy: the only valid content is the client-shaped object the contract declares. Refuse Markdown, prose blobs, repo files, or any representation the contract does not declare.\nArtifact policy: every media reference must be a verified current-request artifact under the protocol the contract names, with matching key, digest, content type, size and timestamp. A pattern-valid key is not proof. Refuse repo paths, remote URLs, data URIs, copied references, hand-authored keys, and any unverified reference that merely looks well-formed. If verification is absent, stale, partial, timed out, or belongs to another request, block.\nRendered vs raw policy: put the client's public serving path in rendered fields and the raw artifact key only in the fields the contract designates for references. Where the contract warns that a raw key in a rendered field breaks the build, treat that as a hard block, never a warning.\nApproval policy: execute only when the decision record carries explicit approval matching the exact object, request, artifact set, publication action and release behaviour. Honour the contract's pin rules literally — where an approval is pinned to a specific action or revision, a mismatch or a stale pin is a block. Absent, partial, or superseded approval is a block.\nSequence policy: follow the contract's declared workflow in order, including its checkout/validate/patch/publish/checkin discipline and its lock and expected-version rules. Dry-run validate before mutating. Surface the contract's own error codes rather than reinterpreting them: a lock conflict means re-acquire, a version conflict means re-read, never force.\nPublish vs release policy: treat publishing and going live as separate gates whenever the contract separates them. Where publish commits without deploying and a distinct release performs the build, do not trigger a release unless it was explicitly approved — a release may deploy every accumulated pending publish at once. After any release, confirm go-live is real: a production-confirmed deploy of the target commit, then page and media verification. A queued or ready-but-undeployed build is not live.\nCompletion criteria when active: the action exactly matches the approval; content and artifacts are verified; the sequence followed the contract; the release matches the approved behaviour; the result and go-live confirmation are recorded; no unapproved release or build was triggered.\nBlocker criteria: draft status; missing contract provenance; disabled project publishing policy; missing, stale, partial or mismatched approval; missing artifact verification; unresolved taxonomy where the contract blocks unknown terms; lock or version conflicts; runner idempotency doubt; unavailable publish or release tools; content outside the client's declared shape; or non-protocol artifact references.\nTool policy: while draft, do not call project tools at all. When activated, reach the client only through explicitly allowed publish, release and verification tools, and never bypass project policy.\nMemory policy: never expose or persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "status",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "approvalMatched",
+        "publishPolicyChecked",
+        "blockers"
+      ],
+      "properties": {
+        "artifact": {
+          "const": "publish_execution.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "blocked",
+            "skipped",
+            "executed"
+          ]
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approvalMatched": {
+          "type": "boolean"
+        },
+        "publishPolicyChecked": {
+          "type": "boolean"
+        },
+        "approvedAction": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "clientObjectId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "publicationAction": {
+              "type": "string",
+              "minLength": 1
+            },
+            "releaseBuildBehavior": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifactSet": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "deployAware": {
+              "type": "boolean"
+            },
+            "requiredChecks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "goLiveConfirmed": {
+              "type": "boolean"
+            }
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "stageOutputs": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "status",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "approvalMatched",
+        "publishPolicyChecked",
+        "blockers"
+      ],
+      "properties": {
+        "artifact": {
+          "const": "publish_execution.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "blocked",
+            "skipped",
+            "executed"
+          ]
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approvalMatched": {
+          "type": "boolean"
+        },
+        "publishPolicyChecked": {
+          "type": "boolean"
+        },
+        "approvedAction": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "clientObjectId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "publicationAction": {
+              "type": "string",
+              "minLength": 1
+            },
+            "releaseBuildBehavior": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifactSet": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "deployAware": {
+              "type": "boolean"
+            },
+            "requiredChecks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "goLiveConfirmed": {
+              "type": "boolean"
+            }
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs"
+    ],
+    "assignedSkills": [
+      "dr_lurie_contract_intelligence"
+    ],
+    "requiredInputs": [
+      "publication_controller"
+    ],
+    "produces": [
+      "publish_execution.v1"
+    ],
+    "riskLevel": "publish",
+    "dependsOn": [
+      "publication_controller"
+    ],
+    "status": "draft",
+    "position": {
+      "x": 560,
+      "y": 1600
+    },
+    "updatedAt": "2026-07-26T14:18:44.858Z",
+    "metadata": {
+      "activationRequired": true,
+      "approvalRequired": true,
+      "canonicalRules": [
+        "The client's contract declares the publish sequence, lock discipline and approval pin rules",
+        "Publish and release are separate gates",
+        "Only verified current-request artifacts may be published",
+        "No legacy fallback systems"
       ]
     }
   }
@@ -1709,23 +2830,32 @@ const effectivePosition = (node: SortableWorkspaceNode): { x: number; y: number 
 };
 
 // Returns nodes in canonical conductor order without mutating the input. Ordering keys, in priority:
-// grid position (top-to-bottom by y, then left-to-right by x), then canonical Publishing Conductor
-// index, then original insertion order (stable). Prompt/schema edits, storage insertion order, and
-// updatedAt never affect the result. Nodes with neither a position nor a canonical entry are kept in
-// their original relative order at the end.
+// canonical Publishing Conductor index, then grid position (top-to-bottom by y, then left-to-right by x)
+// for nodes that have no canonical index, then original insertion order (stable). Prompt/schema edits,
+// storage insertion order, updatedAt, and canvas drags never affect the result.
+//
+// R-22 — canonical index used to rank BELOW grid position, and the two only agreed because the canonical
+// positions in this file were a tidy generated grid whose reading order happened to match the dependency
+// order. Re-seeding from the live workspace imported the real canvas, where they do not agree at all:
+// input_triage has been dragged to {x:-391, y:148}, below and left of the top row, so a position-first sort
+// listed topic_opportunity — which DEPENDS on input_triage — ahead of it. Position is canvas cosmetics;
+// the conductor's order is its dependency order, and dragging a box must not be able to rewrite it.
 export function sortWorkspaceNodes<T extends SortableWorkspaceNode>(nodes: T[]): T[] {
   return nodes
-    .map((node, index) => ({ node, index, position: effectivePosition(node) }))
+    .map((node, index) => ({ node, index, position: effectivePosition(node), canonical: canonicalNodeById.get(node.id)?.index }))
     .sort((a, b) => {
-      if (a.position && b.position) {
+      if (a.canonical !== undefined && b.canonical !== undefined) {
+        if (a.canonical !== b.canonical) return a.canonical - b.canonical;
+      } else if (a.canonical !== undefined || b.canonical !== undefined) {
+        // A conductor node always precedes an authored one; the conductor is the spine of the graph.
+        return a.canonical !== undefined ? -1 : 1;
+      } else if (a.position && b.position) {
+        // Authored nodes have no canonical index, so their layout is the only order available.
         if (a.position.y !== b.position.y) return a.position.y - b.position.y;
         if (a.position.x !== b.position.x) return a.position.x - b.position.x;
       } else if (a.position || b.position) {
         return a.position ? -1 : 1;
       }
-      const aIndex = canonicalNodeById.get(a.node.id)?.index ?? Number.POSITIVE_INFINITY;
-      const bIndex = canonicalNodeById.get(b.node.id)?.index ?? Number.POSITIVE_INFINITY;
-      if (aIndex !== bIndex) return aIndex - bIndex;
       return a.index - b.index;
     })
     .map((entry) => entry.node);
@@ -1773,4 +2903,3 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
   if (publicationController && !publicationController.dependsOn.includes("publish_payload")) issues.push("publication_controller must depend on publish_payload");
   return issues.length ? { valid: false, issues } : { valid: true, issues: [] };
 }
-
