@@ -9,7 +9,8 @@
 // false), taxonomy resolution, a pinned approval, and a selected release/build behavior. A NO-GO is
 // an expected safety state (blocked_for_publish_execution), not a generic failure.
 
-import { articleBodySchema } from "../../mcp/workspace/store.js";
+import { validateOutput } from "../../execution/outputValidator.js";
+import { getWorkspaceNode } from "../../workspace/nodes.js";
 
 export const DR_LURIE_REQUIRED_CONTENT_PATH = "article_body.v1";
 export const DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL = "pdf_tool_dr_lurie_blob.v1";
@@ -43,8 +44,14 @@ export type PublishReadinessResult = {
   hardConstraints: { contentPath: string; artifactProtocol: string; legacyFallbacksUsed: false };
 };
 
-const mediaSrcsOf = (body: { nodes: Array<{ public: { media?: { src?: string } } }> }): string[] =>
-  body.nodes.map((node) => node.public.media?.src).filter((src): src is string => typeof src === "string");
+// The article_body node emits the CLIENT-shaped envelope; Dr. Lurie's own content_item — the thing
+// whose blocks carry media — sits one level down under `body`.
+type ClientObject = { nodes?: Array<{ public?: { media?: { src?: unknown } } }> };
+const clientObjectOf = (envelope: unknown): ClientObject =>
+  (envelope && typeof envelope === "object" ? ((envelope as Record<string, unknown>).body as ClientObject) : undefined) ?? {};
+
+const mediaSrcsOf = (body: ClientObject): string[] =>
+  (Array.isArray(body.nodes) ? body.nodes : []).map((node) => node?.public?.media?.src).filter((src): src is string => typeof src === "string");
 
 export function evaluateDrLuriePublishReadiness(input: PublishReadinessInput): PublishReadinessResult {
   const checklist: PublishReadinessCheck[] = [];
@@ -53,14 +60,19 @@ export function evaluateDrLuriePublishReadiness(input: PublishReadinessInput): P
   const acceptedEmpty = (key: string, label: string, detail?: string) => checklist.push({ key, label, status: "accepted_empty", detail });
   const fail = (key: string, label: string, detail: string) => { checklist.push({ key, label, status: "fail", detail }); blockers.push(key); };
 
-  // 1. article_body.v1 valid.
-  const body = articleBodySchema.safeParse(input.articleBody);
-  if (body.success) pass("article_body_valid", "article_body.v1 valid");
-  else fail("article_body_valid", "article_body.v1 valid", `invalid article body: ${body.error.issues.slice(0, 3).map((issue) => issue.message).join("; ")}`);
+  // 1. article_body.v1 valid — checked against the article_body node's OWN outputSchema, the same
+  // single authority the executor enforces at execution time, buildInitialRun enforces on a seeded
+  // late-stage entrypoint, and the publisher enforces before publishing. One definition of "what a body
+  // is", so the entrypoint, the publisher and this readiness gate cannot drift apart. This used to parse
+  // the workspace-local articleBodySchema ({schema_version, nodes}) — a shape the node never emits — so
+  // `article_body_valid` was unsatisfiable for real pipeline output and readiness could never say GO.
+  const body = validateOutput(input.articleBody, getWorkspaceNode("article_body")?.outputSchema);
+  if (body.ok) pass("article_body_valid", "article_body.v1 valid");
+  else fail("article_body_valid", "article_body.v1 valid", `invalid article body: ${body.errors.slice(0, 3).join("; ")}`);
 
   // 2. Blob artifacts verified — no Blob-shaped media trusted unless pdf-tool materialization confirmed.
   const verified = new Set((input.verifiedMediaRefs ?? []).map((ref) => String(ref)));
-  const mediaSrcs = body.success ? mediaSrcsOf(body.data) : [];
+  const mediaSrcs = body.ok ? mediaSrcsOf(clientObjectOf(input.articleBody)) : [];
   const unverified = mediaSrcs.filter((src) => blobShapedRef.test(src) && !verified.has(src));
   if (mediaSrcs.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", "no media artifacts");
   else if (unverified.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", `${mediaSrcs.length} media reference(s) confirmed`);
@@ -83,7 +95,7 @@ export function evaluateDrLuriePublishReadiness(input: PublishReadinessInput): P
   // 6. Hard constraints. contentPath defaults to the canonical path when the body validates; the
   // artifact protocol and legacy-fallback flag must be declared on the request and must match exactly.
   const declared = input.hardConstraints ?? {};
-  const contentPath = declared.contentPath ?? (body.success ? DR_LURIE_REQUIRED_CONTENT_PATH : undefined);
+  const contentPath = declared.contentPath ?? (body.ok ? DR_LURIE_REQUIRED_CONTENT_PATH : undefined);
   if (contentPath === DR_LURIE_REQUIRED_CONTENT_PATH) pass("hard_content_path", `contentPath = ${DR_LURIE_REQUIRED_CONTENT_PATH}`);
   else fail("hard_content_path", `contentPath = ${DR_LURIE_REQUIRED_CONTENT_PATH}`, `got ${contentPath ?? "(none)"}`);
   if (declared.artifactProtocol === DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL) pass("hard_artifact_protocol", `artifactProtocol = ${DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL}`);

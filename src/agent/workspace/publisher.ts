@@ -9,7 +9,8 @@
 // executable policy blocks). Image materialization is out of scope for this path (it needs the
 // artifact upload flow); a body carrying image/document media is rejected with a clear reason.
 
-import { articleBodySchema, type ArticleBody } from "../mcp/workspace/store.js";
+import { validateOutput } from "../execution/outputValidator.js";
+import { getWorkspaceNode } from "./nodes.js";
 import { redactSensitiveKeys } from "../observability/redaction.js";
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
@@ -88,13 +89,30 @@ const findLockToken = (value: unknown, depth = 0): string | undefined => {
 const findArticleBody = (run: WorkflowExecutionRecord): unknown =>
   run.stageOutputs?.article_body ?? run.nodes.find((node) => node.nodeId === "article_body")?.output ?? run.entrypoint?.output;
 
-const bodyHasMedia = (body: ArticleBody): boolean => body.nodes.some((node) => node.public.media !== undefined);
+// R-23 — the article_body node emits the CLIENT-shaped envelope
+// ({artifact, summary, clientProjectId, clientObjectType, contractSource, body}), and the client's own
+// object lives under `body`. This publisher used to validate the whole thing with articleBodySchema, the
+// workspace-local {schema_version, nodes} shape — so `article_body_valid` could never pass on a real
+// pipeline output, which is a T-3 blocker. Verified live: node.validate_output for article_body rejects
+// a {schema_version, nodes} body on all six required fields.
+//
+// The node's own outputSchema is now the single authority, and the client object is unwrapped from
+// `.body`. Node-walking below is tolerant: `nodes` is how Dr. Lurie's content_item carries blocks
+// (required: [slug, title, nodes]), but a client whose contract shapes media differently simply reports
+// no media rather than throwing — a wrong "no media" is caught downstream by the artifact-verification
+// gate, whereas a throw here would take out the whole publish path.
+type ClientObject = { nodes?: Array<{ id?: string; public?: { media?: { src?: unknown } } }> };
+const clientObjectOf = (envelope: unknown): ClientObject =>
+  (envelope && typeof envelope === "object" ? ((envelope as Record<string, unknown>).body as ClientObject) : undefined) ?? {};
+const blocksOf = (body: ClientObject) => Array.isArray(body.nodes) ? body.nodes : [];
+
+const bodyHasMedia = (body: ClientObject): boolean => blocksOf(body).some((node) => node?.public?.media !== undefined);
 
 // Identify the first media slot whose reference is not among the pdf-tool-verified refs, so a blocked
 // state can point at exactly which artifact slot needs materialization.
-const firstUnverifiedMediaSlot = (body: ArticleBody, verifiedRefs?: string[]): string | null => {
+const firstUnverifiedMediaSlot = (body: ClientObject, verifiedRefs?: string[]): string | null => {
   const verified = new Set((verifiedRefs ?? []).map((ref) => String(ref)));
-  const node = body.nodes.find((candidate) => typeof candidate.public.media?.src === "string" && !verified.has(candidate.public.media.src as string));
+  const node = blocksOf(body).find((candidate) => typeof candidate?.public?.media?.src === "string" && !verified.has(candidate.public!.media!.src as string));
   return node ? `node:${node.id}/public.media` : null;
 };
 
@@ -120,19 +138,33 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     return { published: false, mode: "error", gates, plan: null, steps: [], error: `invalid_request_id: must match req_<flow>_<topic>_<yyyymmdd>_<nn> (lowercase snake_case), got "${input.requestId}".` };
   }
 
-  const parsed = articleBodySchema.safeParse(findArticleBody(run));
-  if (!parsed.success) {
-    return { published: false, mode: "error", gates, plan: emptyPlan, steps: [], error: `no_valid_article_body: run ${input.runId} has no valid article_body.v1 to publish (${parsed.success ? "" : parsed.error.issues.map((issue) => issue.message).join("; ")}).` };
+  // Validated against the article_body node's OWN outputSchema — the same authority the executor
+  // enforces at execution time and buildInitialRun enforces on a seeded entrypoint. One definition of
+  // "what a body is", so R-23 renaming the contract moves all three together.
+  const envelope = findArticleBody(run);
+  const bodyValidation = validateOutput(envelope, getWorkspaceNode("article_body")?.outputSchema);
+  if (!bodyValidation.ok) {
+    return { published: false, mode: "error", gates, plan: emptyPlan, steps: [], error: `no_valid_article_body: run ${input.runId} has no article_body output satisfying that node's outputSchema (${bodyValidation.errors.join("; ")}).` };
   }
-  const body = parsed.data;
+  const body = clientObjectOf(envelope);
+  // ⚠ LEGACY DIALECT — see R-6/R-23. These are Dr. Lurie's save_json_blob_* tools. The object-native
+  // contract declares a different sequence entirely (object_create → object_checkout → object_validate →
+  // object_patch → object_publish → object_checkin, with release_to_production as a SEPARATE gate), and
+  // `platform` — client 0, the T-3 target — does not expose save_json_blob_* at all. A live publish to
+  // platform therefore fails at its first call. Left hardcoded deliberately rather than guessed at: the
+  // sequence belongs to the client's contract and should come from the project hook, which is a design
+  // change that wants verification against a live dry run, not a blind edit.
   const toolSequence = ["save_json_blob_create_article_draft", "save_json_blob_checkout_request", "save_json_blob_publish_by_time", "save_json_blob_checkin_request"];
-  const plan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: body.nodes.length, publishedTime: input.publishedTime ?? null, toolSequence };
+  const plan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: blocksOf(body).length, publishedTime: input.publishedTime ?? null, toolSequence };
 
   // Project publish-readiness policy (GO/NO-GO). Layered via the hook registry so other projects
   // hosted by this workspace are NOT subject to Dr. Lurie's readiness rules. A NO-GO is an expected
   // safety state (blocked_for_publish_execution), surfaced as a resumable blocked state — not a failure.
   const readinessHook = getProjectHooks(projectId)?.evaluatePublishReadiness;
-  const readiness = readinessHook ? readinessHook({ articleBody: body, ...input.readiness }) : undefined;
+  // The hook is handed the ENVELOPE, not the unwrapped client object: its `article_body_valid` check
+  // now validates against the article_body node's own outputSchema (the single authority), exactly as
+  // evaluatePublishReadiness below already does, and it unwraps `.body` itself for the media check.
+  const readiness = readinessHook ? readinessHook({ articleBody: envelope, ...input.readiness }) : undefined;
   if (readiness && readiness.status === "no_go") {
     const artifactSlot = readiness.blockers.includes("media_artifacts_verified") ? firstUnverifiedMediaSlot(body, input.readiness?.verifiedMediaRefs) : null;
     return {
@@ -197,7 +229,9 @@ export async function evaluatePublishReadiness(
     const run = await executionRepository.getRun(input.runId);
     articleBody = run ? findArticleBody(run) : undefined;
   }
-  const articleBodyValid = articleBodySchema.safeParse(articleBody).success;
+  // Same authority as publishRun above: the node's own outputSchema. These two disagreeing is what let
+  // publish_readiness report a checklist that a real pipeline output could never satisfy.
+  const articleBodyValid = validateOutput(articleBody, getWorkspaceNode("article_body")?.outputSchema).ok;
   const hook = getProjectHooks(input.projectId)?.evaluatePublishReadiness;
   if (!hook) return { available: false, articleBodyValid, readiness: null };
   return { available: true, articleBodyValid, readiness: hook({ articleBody, ...input.readiness }) };
