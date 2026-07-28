@@ -1,7 +1,28 @@
 # Builds the Cloud Run MCP Service image from Dockerfile.mcp (DIRECTION.md Phase 4a). `gcloud builds
 # submit --tag` only builds a file named `Dockerfile`, so this config selects Dockerfile.mcp
 # explicitly. Usage: gcloud builds submit --config cloudbuild.mcp.yaml --substitutions _IMAGE=<ref>
+#
+# THIS CONFIG ONLY BUILDS AND PUSHES AN IMAGE. It does not deploy. Releasing is scripts/deploy-mcp.sh,
+# which exists because the deploy flags are the dangerous part: --set-env-vars REPLACES the service's
+# whole environment and has silently deleted the six client-connection variables twice. Anything that
+# adds a deploy step here must use --update-env-vars / --update-secrets, or call deploy-mcp.sh, or the
+# next green build takes the connections — and now the *_PUBLISH_ENABLED flags — down with it.
 steps:
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-f", "Dockerfile.mcp", "-t", "${_IMAGE}", "."]
 images: ["${_IMAGE}"]
+
+# Required as soon as the build runs under a specified service account (a trigger-level setting).
+# Cloud Build refuses to start such a build unless logs have an unambiguous destination, because a
+# user-specified service account may not be able to write to the default Google-owned logs bucket:
+#
+#   "if 'build.service_account' is specified, the build must either (a) specify 'build.logs_bucket',
+#    (b) use the REGIONAL_USER_OWNED_BUCKET build.options.default_logs_bucket_behavior option, or
+#    (c) use either CLOUD_LOGGING_ONLY / NONE logging options: invalid argument"
+#
+# This takes option (c). CLOUD_LOGGING_ONLY sends build logs to Cloud Logging and provisions no
+# bucket, which is the least-setup choice and keeps logs readable in the Console. NONE would discard
+# them; a logs_bucket would need creating and granting. The failure is a *pre-start* config rejection,
+# which is why the build reports zero steps and no logs to read.
+options:
+  logging: CLOUD_LOGGING_ONLY
