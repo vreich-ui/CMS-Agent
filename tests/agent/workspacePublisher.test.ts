@@ -7,9 +7,23 @@ import type { CallToolResult } from "../../src/agent/projects/projectMcpAdapter.
 import { handler } from "../../netlify/functions/mcp.mjs";
 import { resetRepositoryManager } from "../../src/agent/runtime/repositories.js";
 
-const textBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." } }] };
-const imageBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "/media/req/x.png", alt: "x" } } }] };
-const blobMediaBody = { schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] };
+// R-23 — article_body emits the CLIENT-shaped envelope ({artifact, summary, clientProjectId,
+// clientObjectType, contractSource, body}), and the client's own object lives under `.body`. The
+// publisher validates the whole envelope against the article_body node's own outputSchema and reads
+// the content blocks (and their media) one level deeper, at `body.nodes[].public.media`.
+// Dr. Lurie's client object here is the {schema_version, nodes} content_item its readiness policy
+// parses, so these fixtures keep that shape INSIDE `body` rather than at the top level.
+const envelope = (body: unknown) => ({
+  artifact: "article_body.v1",
+  summary: "Reader-facing body assembled for the publish gate tests.",
+  clientProjectId: "dr-lurie",
+  clientObjectType: "content_item",
+  contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-16T00:00:00.000Z" },
+  body
+});
+const textBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." } }] });
+const imageBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "/media/req/x.png", alt: "x" } } }] });
+const blobMediaBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] });
 const REQUEST_ID = "req_publish_test_20260716_01";
 const ENABLED_ENV = { [publishEnabledEnvVar(drLurieProjectConfig)]: "true" } as NodeJS.ProcessEnv;
 // Satisfies Dr. Lurie's publish-readiness policy (GO) so the underlying gate logic can be exercised.
