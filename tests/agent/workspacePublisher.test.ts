@@ -364,3 +364,41 @@ describe("workflow.publish_run / publish_readiness MCP tools (gated end-to-end)"
     expect(readiness.articleBodyValid).toBe(true);
   });
 });
+
+// D7 (Wolf, alignment board 2026-07-28): all judgements stay workspace-side. The platform client's
+// schema declares scores/claims/sources/compliance/emotional_strategy/lineage as real body properties
+// and set_article_meta's fields map is open — so the generic key-copy in the platform hook is exactly
+// the door a judgement could leak through. This asserts the door is shut: a body carrying every
+// judgement-substrate key publishes cleanly, and NONE of those keys reaches the candidate patch.
+describe("D7 — the engine never writes judgements into a client object", () => {
+  it("strips all six judgement-substrate keys from set_article_meta while keeping real meta", async () => {
+    const judged = platformEnvelope({
+      slug: "judged-title",
+      title: "Judged Title",
+      deck: "A deck line.",
+      scores: [{ scored_by: "judge", score: 5 }],
+      claims: { c1: "claim" },
+      sources: { s1: "source" },
+      compliance: { ok: true },
+      emotional_strategy: { arc: "calm" },
+      lineage: { parent_content_id: "req_prior" },
+      nodes: [{ id: "n_1", kind: "content", visibility: "public", public: { title: "Judged Title", body: "Reader-facing body." } }]
+    });
+    const ctx = await seedRun(judged, "platform");
+    const adapter = fakePlatformCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.published).toBe(true);
+    const patchCall = adapter.calls.find((call) => call.tool === "object_patch")!;
+    const ops = patchCall.args.patch as Array<Record<string, unknown>>;
+    const meta = ops.find((op) => op.op === "set_article_meta")!.meta as Record<string, unknown>;
+    for (const key of ["scores", "claims", "sources", "compliance", "emotional_strategy", "lineage"]) {
+      expect(meta, `judgement key ${key} must never reach the client`).not.toHaveProperty(key);
+    }
+    // The exclusion is surgical: genuine meta still travels.
+    expect(meta).toHaveProperty("slug");
+    expect(meta).toHaveProperty("title");
+    // And nothing judgement-shaped hides anywhere else in the patch.
+    expect(JSON.stringify(ops)).not.toContain("scored_by");
+  });
+});
