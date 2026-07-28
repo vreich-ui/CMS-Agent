@@ -2,7 +2,9 @@ import type { RJSFSchema } from "@rjsf/utils";
 
 export type JsonValue = unknown;
 
-export type ExecutionStatus = "queued" | "running" | "completed" | "failed" | "blocked" | "cancelled";
+// Mirrors src/agent/workspace/executionTypes.ts. "paused" (R-18) is an operator pause, kept distinct from
+// the "blocked" that means a publish-approval hold or a budget hold.
+export type ExecutionStatus = "queued" | "running" | "paused" | "completed" | "failed" | "blocked" | "cancelled";
 
 export type NodeExecutionState = {
   nodeId: string;
@@ -21,6 +23,9 @@ export type ApprovalRequired = {
   nodeId: string;
   type: "approval_required";
   reason: string;
+  // R-18: true when the gate is one step ahead (nothing attempted, no publication_decision.v1 emitted);
+  // absent once an advance was actually refused at the publish-risk node.
+  pending?: boolean;
   requestedAt: string;
 };
 
