@@ -11,6 +11,7 @@
 import type { ArtifactPolicyWarning } from "./drLurie/artifactPolicy.js";
 import type { PublishReadinessInput, PublishReadinessResult } from "./drLurie/publishReadiness.js";
 import { drLurieProjectHooks } from "./drLurie/hooks.js";
+import { platformProjectHooks } from "./platform/hooks.js";
 
 export type ProjectPolicyFinding = ArtifactPolicyWarning;
 
@@ -37,7 +38,8 @@ export type ProjectHooks = {
 };
 
 const hooksByProjectId: Record<string, ProjectHooks> = {
-  "dr-lurie": drLurieProjectHooks
+  "dr-lurie": drLurieProjectHooks,
+  "platform": platformProjectHooks
 };
 
 export const getProjectHooks = (projectId: string): ProjectHooks | undefined => hooksByProjectId[projectId];

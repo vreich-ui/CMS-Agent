@@ -25,14 +25,15 @@ A rung on the risk ladder. A node's own risk level is the CEILING for the tools 
 
 ## What do the run states mean?
 
-Where a node or run currently stands. The distinction that matters is blocked versus failed: one is the safety design working, the other is something wrong.
+Where a node or run currently stands. The distinction that matters is blocked versus failed: one is the safety design working, the other is something wrong. Paused is a third thing again — a person pressed stop.
 
 | Code | Name | Meaning |
 |---|---|---|
 | `queued` | Queued | Waiting to start — either for its turn or for a dependency to finish. |
 | `running` | Running | Executing now — calling its model and any tools it is granted. |
 | `completed` | Completed | Finished and produced output that satisfied its schema. |
-| `blocked` | Blocked | Stopped on purpose, waiting on a human decision. This is a safety hold, not an error, and it is resumable.<br>**What to do:** Review what it is asking for and resume the run. |
+| `paused` | Paused | Stopped because someone pressed pause. Nothing is wrong and nothing is waiting on a decision — the run simply stays where it is until it is resumed.<br>**What to do:** Resume the run when you are ready; no node state was changed. |
+| `blocked` | Blocked | Stopped on purpose, waiting on a human decision — either an approval before a publish-risk node, or a run that reached its cost ceiling. This is a safety hold, not an error, and it is resumable.<br>**What to do:** Review what it is asking for — the approval list or the budget ceiling — and resume the run. |
 | `failed` | Failed | Stopped because something went wrong — a tool error, a schema violation, an unreachable client.<br>**What to do:** Read the node's error, fix the cause, then retry that node rather than the whole run. |
 | `cancelled` | Cancelled | Called off by a human or by the system before it finished. |
 
