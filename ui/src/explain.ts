@@ -70,12 +70,13 @@ const RISK: Vocabulary = {
 const EXECUTION: Vocabulary = {
   id: "execution",
   title: "What do the run states mean?",
-  blurb: "Where a node or run currently stands. The distinction that matters is blocked versus failed: one is the safety design working, the other is something wrong.",
+  blurb: "Where a node or run currently stands. The distinction that matters is blocked versus failed: one is the safety design working, the other is something wrong. Paused is a third thing again — a person pressed stop.",
   terms: [
     { term: "queued", label: "Queued", summary: "Waiting to start — either for its turn or for a dependency to finish." },
     { term: "running", label: "Running", summary: "Executing now — calling its model and any tools it is granted." },
     { term: "completed", label: "Completed", summary: "Finished and produced output that satisfied its schema." },
-    { term: "blocked", label: "Blocked", summary: "Stopped on purpose, waiting on a human decision. This is a safety hold, not an error, and it is resumable.", remedy: "Review what it is asking for and resume the run." },
+    { term: "paused", label: "Paused", summary: "Stopped because someone pressed pause. Nothing is wrong and nothing is waiting on a decision — the run simply stays where it is until it is resumed.", remedy: "Resume the run when you are ready; no node state was changed." },
+    { term: "blocked", label: "Blocked", summary: "Stopped on purpose, waiting on a human decision — either an approval before a publish-risk node, or a run that reached its cost ceiling. This is a safety hold, not an error, and it is resumable.", remedy: "Review what it is asking for — the approval list or the budget ceiling — and resume the run." },
     { term: "failed", label: "Failed", summary: "Stopped because something went wrong — a tool error, a schema violation, an unreachable client.", remedy: "Read the node's error, fix the cause, then retry that node rather than the whole run." },
     { term: "cancelled", label: "Cancelled", summary: "Called off by a human or by the system before it finished." }
   ]

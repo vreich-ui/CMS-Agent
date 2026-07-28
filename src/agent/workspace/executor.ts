@@ -15,7 +15,11 @@ import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 
 const WORKFLOW_ID = "publishing_conductor";
-const TERMINAL_STATUSES = new Set<ExecutionStatus>(["blocked", "cancelled", "completed", "failed"]);
+// Statuses from which advanceRun will not proceed. "paused" (R-18) joins them: an operator-paused run
+// must stay put for exactly the same reason a blocked one does. Before "paused" existed, pause_run wrote
+// "blocked" — which worked only because "blocked" was already in this set, and cost the ability to tell
+// an operator pause apart from a publish hold.
+const TERMINAL_STATUSES = new Set<ExecutionStatus>(["blocked", "cancelled", "completed", "failed", "paused"]);
 const MAX_SAVE_RETRIES = 5;
 const now = () => new Date().toISOString();
 const makeRunId = () => `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -173,6 +177,37 @@ const buildArtifact = (node: WorkspaceNode, output: unknown): ExecutionArtifact 
 const isPublishRisk = (node: WorkspaceNode): boolean => node.riskLevel === "publish" || node.riskLevel === "admin";
 const isConcurrencyConflict = (error: unknown): error is RunConcurrencyError => error instanceof RunConcurrencyError;
 
+// R-18 — look-ahead publish-gate visibility.
+//
+// The gate itself always worked: attempt a publish-risk node without approval and the run goes "blocked"
+// with an approvalsRequired entry. The defect was the moment BEFORE that attempt. Once the last
+// non-publish node finished, the run reported status "running" with approvalsRequired: [] and simply sat
+// there — reproduced live: publish_payload completed, currentNodeId became publication_controller,
+// approvalsRequired stayed []. A run that can never proceed on its own looked identical to a run still
+// working, so neither the UI nor an operator could see the hold.
+//
+// This records the pending approval WITHOUT changing execution semantics: no node is started, no
+// publication_decision.v1 is emitted, and run.status is deliberately left alone (see the note in the
+// handoff — whether "running" should instead become a distinct awaiting-approval status is a state-machine
+// decision, not a bug fix, and is left for an explicit call). Populating approvalsRequired is enough for
+// RunStatusPanel (which already ORs on approvalsRequired.length) and for the attention feed.
+const markPendingPublishApproval = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[], approved: boolean): void => {
+  // A stale look-ahead is dropped every advance and re-derived below, so it can never outlive the gate it
+  // described. An attempted (non-pending) entry is the authoritative audit record and is never touched.
+  run.approvalsRequired = run.approvalsRequired.filter((approval) => approval.pending !== true);
+  if (approved) return;
+  const upcoming = findNextRunnableNode(run, nodes);
+  if (!upcoming || !isPublishRisk(upcoming)) return;
+  if (run.approvalsRequired.some((approval) => approval.nodeId === upcoming.id)) return;
+  run.approvalsRequired = [...run.approvalsRequired, {
+    nodeId: upcoming.id,
+    type: "approval_required",
+    reason: `Next dependency-ready node ${upcoming.id} is publish-risk; the run cannot advance without explicit approval. Nothing has been attempted and no publication has been performed.`,
+    requestedAt: now(),
+    pending: true
+  }];
+};
+
 // Per-run in-process mutex. Every mutation of a given run is serialized through a promise chain
 // keyed by runId, so overlapping run_next_node / reset / status calls in one process can never
 // interleave their read-mutate-write cycles (which was re-running already-completed nodes). Across
@@ -306,6 +341,9 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // A run that clears the budget gate is no longer paused for budget: drop any stale marker so a
       // resumed-under-ceiling run doesn't keep reporting "paused for budget".
       if (prepared.run.budgetBlock) prepared.run.budgetBlock = undefined;
+      // R-18: record (or clear) a look-ahead publish-approval hold before the state is committed, so the
+      // hold is durable and visible on the very next read rather than only after another advance attempt.
+      markPendingPublishApproval(prepared.run, nodes, options.approved === true);
       const saved = await store.saveRun(prepared.run);
       // Side effects (usage telemetry, workspace stage-output mirror) run only after the state
       // transition is durably committed, so a discarded attempt on a CAS conflict leaves no phantom

@@ -16,21 +16,21 @@ const skill = (skillId: string, name: string, description: string, instructions:
   allowedTools, requiredArtifacts: [], producedArtifacts: [], examples: [baseExample], preconditions: ["A node has supplied task context."], completionCriteria: ["Return structured output matching the skill output schema."], blockerCriteria: ["Required context or authorized tools are unavailable."],
   memoryPolicy: { namespaces: [skillId], read: true, write: false }, toolPolicy: { requestedTools: allowedTools, mutatingToolsRequireApproval: true }, riskLevel, metadata: {}, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z"
 });
-export const initialSkillDefinitions: SkillDefinition[] = [
-  skill("web_research", "Web research", "Gather current background information with citations.", "Research the brief, prefer primary sources, capture concise findings with source URLs.", ["web.search", "web.fetch"]),
-  skill("source_verification", "Source verification", "Check source credibility and citation sufficiency.", "Verify claims against authoritative sources and flag weak, stale, or unsupported references.", ["web.fetch"]),
-  skill("article_structuring", "Article structuring", "Create a clear article outline and section flow.", "Transform the brief into a logical article structure with headings, key points, and artifacts."),
-  skill("editorial_review", "Editorial review", "Review tone, clarity, grammar, and audience fit.", "Edit for readability, consistency, style, and brand-neutral editorial quality."),
-  skill("factual_review", "Factual review", "Identify factual risks and unsupported claims.", "Check assertions, dates, names, and numbers; block when material claims lack support.", ["web.fetch"]),
-  skill("seo_review", "SEO review", "Review search intent, metadata, headings, and internal-link opportunities.", "Recommend SEO improvements without keyword stuffing or publication-specific assumptions."),
-  skill("artifact_handling", "Artifact handling", "Track required and produced workflow artifacts.", "Validate artifact references, naming, and handoff readiness."),
-  skill("article_body_builder", "Article body builder", "Build CMS article_body-compatible content blocks.", "Create article body nodes that satisfy the shared article_body.v1 contract."),
-  skill("publication_readiness", "Publication readiness", "Assess whether content is ready for dry-run handoff or publishing approval.", "Confirm criteria, risks, artifacts, and explicit dry-run/publish state before handoff.", [], "write"),
-  skill("learning_observation", "Learning observation", "Capture reusable lessons from workflow outcomes.", "Record non-sensitive observations suitable for future workspace learning loops.", ["learning.record_observation"], "write")
-];
+// R-22 — the seeded skill set is GENERATED from the live workspace by scripts/seedNodesFromWorkspace.ts,
+// for the same reason nodes.ts is. These definitions used to be hand-written here from the `skill()`
+// template above, and drifted: five of them had their output schemas relaxed in the live workspace on
+// 2026-07-26 — the R-2 fix — and that never reached code, while two skills the canonical nodes reference
+// (dr_lurie_contract_intelligence, dr_lurie_dtc_science_editorial) existed only in the workspace. A fresh
+// workspace therefore re-seeded thirteen blocker-severity conflicts that the live workspace did not have,
+// which is exactly the "workspace fix ≠ fixed" trap, three levels down.
+//
+// The `skill()` helper is kept because it is still the readable way to author a NEW skill before it exists
+// anywhere; run npm run nodes:update afterwards so the generated set carries it.
+export { seededSkillDefinitions as initialSkillDefinitions } from "./seededSkills.js";
+import { seededSkillDefinitions } from "./seededSkills.js";
 
 type SkillDocument = { schemaVersion: 1; skillVersion: number; updatedAt: string; skills: SkillDefinition[]; versions: SkillVersionSnapshot[]; events: SkillEvent[] };
-const createDocument = (): SkillDocument => ({ schemaVersion: 1, skillVersion: 0, updatedAt: now(), skills: initialSkillDefinitions.map(assertValidSkill), versions: [], events: [] });
+const createDocument = (): SkillDocument => ({ schemaVersion: 1, skillVersion: 0, updatedAt: now(), skills: seededSkillDefinitions.map(assertValidSkill), versions: [], events: [] });
 const assertVersion = (doc: SkillDocument, meta?: SkillMutationMeta) => { if (meta?.expectedWorkspaceVersion !== undefined && doc.skillVersion !== meta.expectedWorkspaceVersion) throw new Error(`skill_version_conflict: expected ${meta.expectedWorkspaceVersion}, current ${doc.skillVersion}`); };
 // Legacy skill events keep a string actor; structured workspace actors collapse to their label.
 const actorLabel = (meta?: SkillMutationMeta): string | undefined => meta?.actor === undefined ? undefined : typeof meta.actor === "string" ? meta.actor : meta.actor.label ?? meta.actor.id ?? meta.actor.kind;
