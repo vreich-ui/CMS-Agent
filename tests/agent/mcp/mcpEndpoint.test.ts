@@ -102,16 +102,24 @@ describe("mcp endpoint", () => {
     expect(budget.json.result.structuredContent.data.budgetStatus.status).toBe("ok");
   });
 
-  it("calls workspace.get_nodes without treating Markdown as canonical", async () => {
+  // This used to assert the PRE-alignment article_body contract — a prompt naming "article_body.v1" and
+  // "Markdown is not canonical", and a schema requiring {schema_version, nodes}. The contract-as-truth wave
+  // generalized the node to a client-shaped envelope, and R-22's re-seed brought that generalization into
+  // the canonical definitions. Asserting the old shape here would be a green test encoding the very defect
+  // F-1/T6.3 named: a workspace-local article schema treated as authoritative.
+  it("calls workspace.get_nodes and reports the client-shaped article_body contract", async () => {
     const response = await call({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "workspace.get_nodes", arguments: {} } });
     const articleBodyNode = response.json.result.structuredContent.data.nodes.find((node: { id: string }) => node.id === "article_body");
 
     expect(response.json.result.structuredContent.ok).toBe(true);
-    expect(response.json.result.structuredContent.data.nodes).toHaveLength(18);
-    expect(response.json.result.structuredContent.data.nodes.map((node: { id: string }) => node.id)).toEqual(expect.arrayContaining(["input_triage", "article_body", "publish_payload", "publication_controller"]));
-    expect(articleBodyNode.prompt).toContain("article_body.v1");
-    expect(articleBodyNode.prompt).toContain("Markdown is not canonical");
-    expect(articleBodyNode.schema.required).toEqual(["schema_version", "nodes"]);
+    expect(response.json.result.structuredContent.data.nodes).toHaveLength(21); // R-22: the re-seeded conductor graph
+    expect(response.json.result.structuredContent.data.nodes.map((node: { id: string }) => node.id)).toEqual(expect.arrayContaining(["input_triage", "contract_intelligence", "article_body", "artifact_plan", "publish_payload", "publication_controller", "publish_executor"]));
+    // The client's fetched contract is the authority, and the envelope carries the provenance that proves
+    // it was fetched rather than assumed.
+    expect(articleBodyNode.prompt).toContain("the client's fetched contract is the ONLY authoritative content schema");
+    expect(articleBodyNode.schema.required).toEqual(["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"]);
+    // No workspace-local article schema smuggled back in as a required field.
+    expect(articleBodyNode.schema.required).not.toContain("schema_version");
   });
 
   it("updates workspace node prompt", async () => {
