@@ -2,8 +2,30 @@ import { describe, expect, it } from "vitest";
 import { listWorkspaceNodes, validateWorkspaceGraph } from "../../src/agent/workspace/nodes.js";
 
 describe("Publishing Conductor workspace nodes", () => {
-  it("defines the full 18-node graph", () => {
-    expect(listWorkspaceNodes()).toHaveLength(18);
+  // R-22: 21, not 18. nodes.ts is now re-seeded from the live workspace by
+  // scripts/seedNodesFromWorkspace.ts, which brought in contract_intelligence, artifact_plan and
+  // publish_executor. Before the re-seed the conductor ran an 18-node graph that no longer existed
+  // anywhere but in this file — which is why T-2 certified an obsolete pipeline.
+  it("defines the full 21-node graph", () => {
+    expect(listWorkspaceNodes()).toHaveLength(21);
+  });
+
+  it("includes the three nodes store mode could never have delivered", () => {
+    const ids = listWorkspaceNodes().map((node) => node.id);
+    // resolveConductorNodes maps over the canonical list, so a store node with no canonical counterpart
+    // is ignored no matter what WORKSPACE_NODES_SOURCE says. These three had none.
+    expect(ids).toContain("contract_intelligence");
+    expect(ids).toContain("artifact_plan");
+    expect(ids).toContain("publish_executor");
+  });
+
+  it("routes the client contract into article_body and the artifact plan into publish_payload", () => {
+    const nodes = listWorkspaceNodes();
+    // The four edges overlayStoreNode pins to canonical, and therefore would also have discarded.
+    expect(nodes.find((node) => node.id === "article_body")?.dependsOn).toContain("contract_intelligence");
+    expect(nodes.find((node) => node.id === "publish_payload")?.dependsOn).toContain("artifact_plan");
+    expect(nodes.find((node) => node.id === "trust_factual")?.dependsOn).toContain("research");
+    expect(nodes.find((node) => node.id === "emotional_resonance")?.dependsOn).toContain("input_triage");
   });
 
   it("has no duplicate ids", () => {
@@ -27,18 +49,44 @@ describe("Publishing Conductor workspace nodes", () => {
     expect(listWorkspaceNodes().find((node) => node.id === "publication_controller")?.riskLevel).toBe("publish");
   });
 
-  it("mentions rendering placement in the article_body node policy", () => {
+  // These two assertions previously pinned WORKSPACE-LOCAL edicts — the literal string
+  // "rendering.placement" and "Markdown is adapter/export only". The alignment wave deliberately replaced
+  // both with contract-driven equivalents, because the client brings its own publishing rules and a
+  // workspace-local edict about a client's field names is exactly the assumption R-23 is about. The
+  // substance is asserted here in its new form rather than dropped: media placement must still be honored,
+  // and representation must still come from the contract instead of a workspace default.
+  it("keeps media placement a requirement in article_body, sourced from the contract", () => {
     const node = listWorkspaceNodes().find((workspaceNode) => workspaceNode.id === "article_body");
 
-    expect(node?.prompt).toContain("rendering.placement");
-    expect(node?.metadata?.canonicalRules).toEqual(expect.arrayContaining(["Reader-visible image nodes require rendering.placement"]));
+    expect(node?.prompt).toContain("placement or rendering metadata the contract requires");
+    expect(node?.prompt).toContain("silently drop the media");
+    expect(node?.metadata?.canonicalRules).toEqual(expect.arrayContaining([
+      "The client's fetched contract is the only authoritative content schema",
+      "Renderable media fields carry the client's public path; raw artifact keys only in the client's designated reference fields"
+    ]));
+    // The replacement must not have loosened into "any workspace schema will do".
+    expect(node?.metadata?.canonicalRules).toEqual(expect.arrayContaining(["Workspace-local article schemas are advisory and must never be used to validate"]));
   });
 
-  it("mentions artifactReferences and markdown adapter-only policy in publish_payload", () => {
+  it("keeps artifact verification and client-side validation binding on publish_payload", () => {
     const node = listWorkspaceNodes().find((workspaceNode) => workspaceNode.id === "publish_payload");
 
     expect(node?.prompt).toContain("artifactReferences");
-    expect(node?.prompt).toContain("Markdown is adapter/export only");
-    expect(node?.metadata?.canonicalRules).toEqual(expect.arrayContaining(["Must preserve artifactReferences", "Markdown is adapter/export only"]));
+    expect(node?.prompt).toContain("A pattern-valid key is not proof");
+    expect(node?.metadata?.canonicalRules).toEqual(expect.arrayContaining([
+      "Produces a dry-run candidate only, never a publish",
+      "Client validation evidence is required; a workspace verdict is not sufficient",
+      "Artifact references must be verified for the current request"
+    ]));
+  });
+
+  it("keeps publish_executor gated: publish risk, draft, and no client call_tool grant", () => {
+    const node = listWorkspaceNodes().find((workspaceNode) => workspaceNode.id === "publish_executor");
+
+    // The re-seed brought a second publish-risk node into the graph. These are the closed locks it must
+    // arrive with, and seedNodesFromWorkspace refuses a re-seed that would hand it project.call_tool.
+    expect(node?.riskLevel).toBe("publish");
+    expect(node?.status).toBe("draft");
+    expect(node?.allowedTools).not.toContain("project.call_tool");
   });
 });
