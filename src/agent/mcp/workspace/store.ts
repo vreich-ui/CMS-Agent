@@ -193,7 +193,20 @@ export const articleBodyJsonSchema = {
 
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes().map((node) => node.id === "article_body" ? { ...node, schema: articleBodyJsonSchema, outputSchema: articleBodyJsonSchema } : node);
+// R-22 — this used to overwrite article_body's own schema AND outputSchema with articleBodyJsonSchema, the
+// workspace-local {schema_version, nodes} monolith, on every fresh workspace. It is the third of the three
+// article_body schemas and the one that was installed by default, which is why a fresh workspace disagreed
+// with both the canonical node definition and the live workspace at the single most important node on the
+// publish path. It is also the mechanism behind F-1/T6.3: the node reported completed while its persisted
+// output failed all six required fields of the schema it was SUPPOSED to have, because the schema it
+// actually had was this one.
+//
+// The node's own schema now stands. The alignment wave's rule is the reason — "workspace-local article
+// schemas are advisory and must never be used to validate" — and a seed-time override is the strongest
+// possible form of treating one as authoritative. articleBodyJsonSchema is still exported and still used by
+// the article_body.* legacy tools and the publish payload schemas; retiring THOSE, and deciding what
+// article_body.v1 should be called once Dr-Lurié's contract has been read first-hand, is R-23 / R-6.
+const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes();
 export const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [], versions: [], events: [], relationships: [] });
 
 const workspaceNodeSchema = z.object({

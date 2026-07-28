@@ -97,8 +97,11 @@ export function aggregateAgentMetrics(inputs: ConstellationInputs): AgentMetrics
         byStatus[state.status] = (byStatus[state.status] ?? 0) + 1;
         if (run.workflowId === INDEPENDENT_WORKFLOW_ID) independent += 1; else workflow += 1;
         if (state.durationMs !== undefined) durations.push(state.durationMs);
-        approvalsRequested += run.approvalsRequired.filter((approval) => approval.nodeId === node.id).length;
-        if (run.status === "blocked" && run.approvalsRequired.some((approval) => approval.nodeId === node.id)) blockedRuns += 1;
+        // R-18: a look-ahead entry (pending) means the gate is one step away, not that an approval was
+        // requested at it. Counting it here would inflate approvalsRequested for every run that merely
+        // reached the stage before a publish node, so the per-node metrics stay on attempted gates only.
+        approvalsRequested += run.approvalsRequired.filter((approval) => approval.nodeId === node.id && approval.pending !== true).length;
+        if (run.status === "blocked" && run.approvalsRequired.some((approval) => approval.nodeId === node.id && approval.pending !== true)) blockedRuns += 1;
         outputValidationFailures += run.errors.filter((entry) => entry === `${node.id}:output_validation_failed`).length;
         if (state.status === "failed" && (state.errors ?? []).some((entry) => entry === "output_validation_failed" || /must be|is required|must equal|must be one of/.test(entry))) {
           // Independent runs persist raw validator strings instead of the coded run.errors entry.
@@ -225,14 +228,21 @@ export function buildAttentionItems(inputs: ConstellationInputs): ConstellationA
         evidence: { runIds: [run.runId], nodeIds: nodeIds.length ? nodeIds : undefined }
       });
     }
-    if (run.status === "blocked" && run.approvalsRequired.length > 0) {
+    // R-18: also surface a run held one step BEFORE the gate. Such a run reports status "running" with a
+    // pending look-ahead entry and will never advance on its own; gating this item on status === "blocked"
+    // is what made that state invisible to an operator. A finished run keeps no live hold.
+    const holds = run.approvalsRequired.filter(() => run.status !== "completed" && run.status !== "cancelled");
+    if (holds.length > 0 && (run.status === "blocked" || holds.some((approval) => approval.pending === true))) {
+      const attempted = holds.some((approval) => approval.pending !== true);
       items.push({
         id: `attn_approval_pending_${run.runId}`,
         severity: "action",
         title: `Run ${run.runId} is waiting for approval`,
-        detail: "The run is blocked before publish-risk execution. No publication has been performed.",
-        reasons: run.approvalsRequired.map((approval) => `${approval.nodeId}: ${approval.reason}`),
-        evidence: { runIds: [run.runId], nodeIds: [...new Set(run.approvalsRequired.map((approval) => approval.nodeId))] }
+        detail: attempted
+          ? "The run is blocked before publish-risk execution. No publication has been performed."
+          : "The run's next dependency-ready node is publish-risk, so it cannot advance without explicit approval. Nothing has been attempted and no publication has been performed.",
+        reasons: holds.map((approval) => `${approval.nodeId}: ${approval.reason}`),
+        evidence: { runIds: [run.runId], nodeIds: [...new Set(holds.map((approval) => approval.nodeId))] }
       });
     }
   }

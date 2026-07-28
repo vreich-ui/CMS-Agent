@@ -1,4 +1,9 @@
-export const executionStatuses = ["queued", "running", "completed", "failed", "blocked", "cancelled"] as const;
+// R-18 — "paused" exists because "blocked" had come to mean three unrelated things: a publish-approval
+// hold (approvalsRequired populated), a budget hold (budgetBlock populated), and an operator pressing
+// pause (neither populated). An operator-paused run was therefore only distinguishable from a
+// publish-held one by the ABSENCE of both markers, which is not a signal anyone should have to read.
+// workflow.pause_run now reports "paused"; resume_run returns the run to "queued" as before.
+export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled"] as const;
 export type ExecutionStatus = typeof executionStatuses[number];
 
 export type NodeExecutionState = {
@@ -14,11 +19,23 @@ export type NodeExecutionState = {
   produces?: string[];
 };
 
+// R-18 — `pending` distinguishes the two moments a publish gate is knowable:
+//   pending === true  — LOOK-AHEAD. The previous node just finished and the next dependency-ready node
+//                       is publish-risk. Nothing has been attempted, no publication_decision.v1 has
+//                       been emitted, and the run still reports status "running". Before this existed,
+//                       approvalsRequired was [] here, so a run parked one step before the publish gate
+//                       was indistinguishable from a run still working — invisible to the UI and to an
+//                       operator, which is exactly what R-18 recorded.
+//   pending absent    — ATTEMPTED. Someone called an advance on the publish-risk node without approval;
+//                       the gate refused, the run is "blocked", and the node carries its
+//                       publication_decision.v1 "blocked" output as the audit record.
+// A look-ahead entry is replaced (not duplicated) by the attempted entry for the same node.
 export type ApprovalRequired = {
   nodeId: string;
   type: "approval_required";
   reason: string;
   requestedAt: string;
+  pending?: boolean;
 };
 
 // Set when the conductor halts a run because its configured per-run cost ceiling (budgetUsd) has
