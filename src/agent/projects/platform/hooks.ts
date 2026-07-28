@@ -15,6 +15,10 @@ import type { PublishExecutionContext, PublishExecutionOutcome } from "../projec
 // release verb is a SEPARATE gate that must appear nowhere in this hook (board B2).
 const PLATFORM_PUBLISH_TOOL_SEQUENCE = ["object_create", "object_checkout", "object_validate", "object_patch", "object_publish", "object_checkin"];
 
+// D7 (Wolf): the client's judgement substrate. The engine must never write these into a client
+// object, even though set_article_meta's open fields map would accept every one of them.
+export const JUDGEMENT_SUBSTRATE_KEYS: ReadonlySet<string> = new Set(["scores", "claims", "sources", "compliance", "emotional_strategy", "lineage"]);
+
 // Tolerant extractors over the client's tool results (envelope shapes vary; see toolResultSearch).
 const findObjectId = (value: unknown): string | number | undefined =>
   findDeep(value, (key, child) => (key === "object_id" || key === "id") && ((typeof child === "string" && child !== "") || typeof child === "number")) as string | number | undefined;
@@ -39,10 +43,19 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   // c. Build the candidate patch from the client object: one set_article_meta op carrying every
   // non-`nodes` top-level body field (slug, title, deck, description, author, taxonomy, seo,
   // editorial, ...), then one upsert_node op per body node, in order.
+  //
+  // D7 (Wolf, alignment board, 2026-07-28): ALL judgements stay workspace-side. The client schema
+  // declares a judgement substrate (scores, claims, sources, compliance, emotional_strategy, lineage)
+  // and set_article_meta's open fields map WOULD accept it — which is precisely why the generic
+  // key-copy above must refuse those keys explicitly. Without this exclusion, an envelope whose body
+  // happened to carry judge output would write it into the client object through an op that never
+  // says "scores" anywhere — the open door the Platform session predicted would be walked through
+  // under deadline. The engine never writes judgements into a client object; revisitable post-launch
+  // with T1/T5 evidence, per the board record (decision taken on cost, not as a permanent boundary).
   // Arg shapes for these ops are the contract's declared op names with assumed payload keys; T1
   // (req_align_publishpath_20260728_50) is the live shakeout — adjust here, not in the generic
   // publisher, if the client rejects a shape.
-  const meta = Object.fromEntries(Object.entries(ctx.body).filter(([key]) => key !== "nodes"));
+  const meta = Object.fromEntries(Object.entries(ctx.body).filter(([key]) => key !== "nodes" && !JUDGEMENT_SUBSTRATE_KEYS.has(key)));
   const nodes = Array.isArray(ctx.body.nodes) ? (ctx.body.nodes as unknown[]) : [];
   const candidatePatch: Array<Record<string, unknown>> = [{ op: "set_article_meta", meta }, ...nodes.map((node) => ({ op: "upsert_node", node }))];
 
