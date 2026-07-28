@@ -28,11 +28,14 @@ describe("Publishing Conductor dry-run execution", () => {
     expect(run.dryRun).toBe(true);
   });
 
-  it("run has 18 conductor nodes", async () => {
+  // R-22: 21 since nodes.ts was re-seeded from the live workspace (contract_intelligence, artifact_plan,
+  // publish_executor joined the graph). A run seeding 18 nodes was the visible symptom that the conductor
+  // was executing a July 3 snapshot rather than the pipeline the alignment wave rebuilt.
+  it("run has 21 conductor nodes", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ projectId: "project-a", input: "Draft this" }, store);
 
-    expect(run.nodes).toHaveLength(18);
+    expect(run.nodes).toHaveLength(21);
   });
 
   it("run_next_node advances state", async () => {
