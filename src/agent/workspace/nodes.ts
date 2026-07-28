@@ -373,10 +373,15 @@ export const publishingConductorNodes = [
       "x": 840,
       "y": 0
     },
-    "updatedAt": "2026-07-27T07:30:34.813Z",
+    "updatedAt": "2026-07-28T10:53:21.386Z",
     "metadata": {
       "externalStageMapping": "research",
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "toolCallLimit": 12,
+      "timeout": 180000,
+      "retryCount": 1
     }
   },
   {
@@ -1040,9 +1045,14 @@ export const publishingConductorNodes = [
       "x": 0,
       "y": 360
     },
-    "updatedAt": "2026-07-27T07:31:01.239Z",
+    "updatedAt": "2026-07-28T10:53:35.717Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "toolCallLimit": 8,
+      "timeout": 120000,
+      "retryCount": 1
     }
   },
   {
@@ -1546,10 +1556,15 @@ export const publishingConductorNodes = [
       "x": 1420,
       "y": 700
     },
-    "updatedAt": "2026-07-26T13:01:25.205Z",
+    "updatedAt": "2026-07-28T10:53:37.897Z",
     "metadata": {
       "projectId": "dr-lurie",
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "toolCallLimit": 10,
+      "timeout": 120000,
+      "retryCount": 1
     }
   },
   {
@@ -2406,7 +2421,7 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 540
     },
-    "updatedAt": "2026-07-26T13:08:52.791Z",
+    "updatedAt": "2026-07-28T11:10:29.617Z",
     "metadata": {
       "approvalRequired": true,
       "projectPolicyNotes": [
@@ -2797,7 +2812,7 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 1600
     },
-    "updatedAt": "2026-07-26T14:18:44.858Z",
+    "updatedAt": "2026-07-28T11:10:30.477Z",
     "metadata": {
       "activationRequired": true,
       "approvalRequired": true,
