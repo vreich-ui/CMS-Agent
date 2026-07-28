@@ -268,8 +268,10 @@ describe("per-project publish execution hooks", () => {
     expect((adapter.calls.find((call) => call.tool === "object_checkout")!.args as any).object_id).toBe("obj_srv_991");
     const patch = adapter.calls.find((call) => call.tool === "object_patch")!.args as any;
     expect(patch).toMatchObject({ object_id: "obj_srv_991", lock_token: "lock_p1", expected_record_version: 3 });
-    expect(patch.patch[0]).toMatchObject({ op: "set_article_meta", meta: { slug: "live-title", title: "Live Title", deck: "A deck line." } });
-    expect(patch.patch[0].meta.nodes).toBeUndefined();
+    // `fields` is the contract-required key (live arg_schema via the alignment board, platform#014);
+    // `meta` would be refused as invalid_op with `fields` missing.
+    expect(patch.patch[0]).toMatchObject({ op: "set_article_meta", fields: { slug: "live-title", title: "Live Title", deck: "A deck line." } });
+    expect(patch.patch[0].fields.nodes).toBeUndefined();
     expect(patch.patch.slice(1).map((op: any) => op.op)).toEqual(["upsert_node", "upsert_node"]);
   });
 
@@ -391,7 +393,7 @@ describe("D7 — the engine never writes judgements into a client object", () =>
     expect(result.published).toBe(true);
     const patchCall = adapter.calls.find((call) => call.tool === "object_patch")!;
     const ops = patchCall.args.patch as Array<Record<string, unknown>>;
-    const meta = ops.find((op) => op.op === "set_article_meta")!.meta as Record<string, unknown>;
+    const meta = ops.find((op) => op.op === "set_article_meta")!.fields as Record<string, unknown>;
     for (const key of ["scores", "claims", "sources", "compliance", "emotional_strategy", "lineage"]) {
       expect(meta, `judgement key ${key} must never reach the client`).not.toHaveProperty(key);
     }

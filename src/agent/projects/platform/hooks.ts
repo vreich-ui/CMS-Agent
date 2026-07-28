@@ -55,9 +55,14 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   // Arg shapes for these ops are the contract's declared op names with assumed payload keys; T1
   // (req_align_publishpath_20260728_50) is the live shakeout — adjust here, not in the generic
   // publisher, if the client rejects a shape.
-  const meta = Object.fromEntries(Object.entries(ctx.body).filter(([key]) => key !== "nodes" && !JUDGEMENT_SUBSTRATE_KEYS.has(key)));
+  const fields = Object.fromEntries(Object.entries(ctx.body).filter(([key]) => key !== "nodes" && !JUDGEMENT_SUBSTRATE_KEYS.has(key)));
   const nodes = Array.isArray(ctx.body.nodes) ? (ctx.body.nodes as unknown[]) : [];
-  const candidatePatch: Array<Record<string, unknown>> = [{ op: "set_article_meta", meta }, ...nodes.map((node) => ({ op: "upsert_node", node }))];
+  // Op arg shapes corrected from the LIVE contract (board platform#014, verbatim arg_schema):
+  // set_article_meta is {op, fields, guard?} with `fields` REQUIRED — `meta` would be refused as
+  // invalid_op before anything interesting happened. upsert_node {op, node} confirmed as assumed.
+  // `guard` is deliberately omitted for now so a compare-and-set mismatch can never be confused
+  // with a shape problem during the T1 shakeout.
+  const candidatePatch: Array<Record<string, unknown>> = [{ op: "set_article_meta", fields }, ...nodes.map((node) => ({ op: "upsert_node", node }))];
 
   // d. Validate BEFORE any patch (board B1): the client's own validator is the authority on the
   // client shape, and its verdict is recorded as clientValidation evidence on the publish result.
