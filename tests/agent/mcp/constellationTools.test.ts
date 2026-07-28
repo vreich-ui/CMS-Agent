@@ -22,7 +22,7 @@ describe("constellation.* MCP tools", () => {
 
   it("returns structural data with derived execution edges matching the graph derivation", async () => {
     const structure = await data("constellation.get_structure");
-    expect(structure.agents).toHaveLength(18);
+    expect(structure.agents).toHaveLength(21); // R-22: the re-seeded conductor graph
     expect(structure.relationships).toEqual([]);
     const graph = await data("workspace.get_graph");
     expect(structure.derivedExecutionEdges).toHaveLength(graph.edges.length);
@@ -33,7 +33,7 @@ describe("constellation.* MCP tools", () => {
 
   it("returns honest empty-system shapes before any runs or usage exist", async () => {
     const metrics = await data("constellation.get_metrics");
-    expect(metrics.agents).toHaveLength(18);
+    expect(metrics.agents).toHaveLength(21); // R-22: the re-seeded conductor graph
     for (const agent of metrics.agents) {
       expect(agent.usage.estimated.recordCount).toBe(0);
       expect(agent.usage.actual.recordCount).toBe(0);
@@ -54,8 +54,17 @@ describe("constellation.* MCP tools", () => {
     expect(attention.map((item) => item.id).sort()).toEqual([
       "attn_project_unconfigured_dr-lurie",
       "attn_project_unconfigured_monetizer",
-      "attn_project_unconfigured_pdf-tool"
+      "attn_project_unconfigured_pdf-tool",
+      // R-22: after re-seeding nodes AND skills from the live workspace, a fresh workspace reproduces the
+      // live attention feed exactly — and these last two are the PUBLISH LOCKS HOLDING, not defects. Both
+      // publish-risk nodes are assigned a skill that requests project.call_tool while the node itself
+      // denies it. That denial is the lock. They are warning-severity and they are supposed to be here;
+      // they open deliberately at T-3/T-4.
+      "attn_skill_requests_denied_tool_publication_controller",
+      "attn_skill_requests_denied_tool_publish_executor"
     ]);
+    // Nothing blocker-severity. Before the skills were re-seeded alongside the nodes there were thirteen.
+    expect(attention.filter((item) => item.id.startsWith("attn_skill_blocker_"))).toEqual([]);
   });
 
   it("aggregates a real dry-run into metrics, summary, and evidence-cited attention", async () => {
