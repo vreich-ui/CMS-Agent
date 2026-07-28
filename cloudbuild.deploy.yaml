@@ -3,39 +3,45 @@
 #
 # WHY THIS IS A FILE AND NOT INLINE TRIGGER YAML
 #
-# A build config that lives in the Console cannot be reviewed, diffed, or reverted, and nobody can tell
-# from the repository what a push to main will do to production. That is how this trigger came to claim
-# it "builds and deploys" while the only committed config — cloudbuild.mcp.yaml — has no deploy step at
-# all. Point the trigger at THIS file (Trigger → Edit → Configuration → Cloud Build configuration file,
-# /cloudbuild.deploy.yaml) so the release path is version-controlled.
+# The trigger ran an inline build config for a week. Inline config cannot be reviewed, diffed, blamed or
+# reverted, and nothing in the repository told you what a push to main would do to production. It also
+# hid two defects for that whole week: a missing `options.logging` that made every build fail before its
+# first step, and a mutable `:latest` image tag. Point the trigger at this file — Trigger → Edit →
+# Configuration → Cloud Build configuration file → /cloudbuild.deploy.yaml — so the release path is
+# version-controlled like everything else.
 #
-# cloudbuild.mcp.yaml stays build-only: it is what scripts/deploy-mcp.sh submits before running its own
-# deploy. Two configs, two non-overlapping jobs — so a manual release never deploys twice.
+# This is a faithful drop-in for the inline config it replaces: same service, same runtime service
+# account, same CPU/memory/instance settings, and the same --update-env-vars / --update-secrets sets.
+# Two things are deliberately different, both fixes: the image is tagged with the commit instead of
+# `latest`, and the deploy is verified afterwards.
 #
-# THE DEPLOY STEP CHANGES THE IMAGE AND NOTHING ELSE. THIS IS DELIBERATE.
+# WHEN REPOINTING, DELETE THE TRIGGER'S `_IMAGE` SUBSTITUTION.
+# Trigger substitutions OVERRIDE the defaults below. Leaving `_IMAGE=...:latest` on the trigger silently
+# defeats the commit tagging — the build would still succeed, which is what makes it worth saying twice.
+# `_DEPLOY_REGION` and `_GCS_BUCKET` should stay; this file uses both.
 #
-# `gcloud run deploy` preserves any environment variable and secret binding you do not mention. Passing
-# --set-env-vars instead REPLACES the service's entire environment, and doing so has silently deleted the
-# six client-connection variables twice, taking every client down while repository.get_health stayed
-# green. The blast radius is now larger still: DR_LURIE_PUBLISH_ENABLED and PLATFORM_PUBLISH_ENABLED live
-# in that same environment. So this config names no environment variables whatsoever. It cannot wipe what
-# it never touches. Environment changes belong in scripts/deploy-mcp.sh (which uses --update-env-vars) or
-# a deliberate `gcloud run services update`.
-#
-# PREREQUISITE: the trigger's service account needs roles/run.admin on the service and
-# roles/iam.serviceAccountUser on the Cloud Run runtime service account, or the deploy step 403s.
+# MERGE FLAGS, NEVER --set-*.
+# --update-env-vars / --update-secrets change only the keys named and leave everything else untouched.
+# --set-env-vars REPLACES the service's entire environment, and has silently deleted the six
+# client-connection variables twice while repository.get_health stayed green — workspace state lives in
+# GCS and is independent of the revision, so health cannot see it. The blast radius is larger now:
+# DR_LURIE_PUBLISH_ENABLED and PLATFORM_PUBLISH_ENABLED live in that same environment and are NOT named
+# below precisely so that a deploy can never disturb them.
 
 substitutions:
   _SERVICE: cms-agent-mcp
-  _REGION: us-central1
+  _DEPLOY_REGION: us-central1
   _REPO: cms-agent
-  # An immutable, commit-identifying tag. Never "latest" — an image tag that does not name a commit is
-  # what makes "which commit is live?" unanswerable, which is the question that cost hours here.
-  _IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/mcp-service:${SHORT_SHA}'
+  _RUNTIME_SA: cms-agent-run@cms-agent-503015.iam.gserviceaccount.com
+  _GCS_BUCKET: cms-agent-503015-cms-agent-state
+  # Commit-identifying and immutable. The inline config used `:latest`, which is why "which commit is
+  # live?" had no answer and a stale revision could serve for hours unnoticed.
+  _IMAGE: '${_DEPLOY_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/mcp-service:${SHORT_SHA}'
 
-# Required once the build runs under a specified service account: Cloud Build refuses to start such a
-# build unless logs have an unambiguous destination, because that account may not be able to write the
-# default Google-owned logs bucket. CLOUD_LOGGING_ONLY needs no bucket provisioned or granted.
+# Required because the trigger specifies a service account. Cloud Build then refuses to start the build
+# until logs have an unambiguous destination, since that account may not be able to write the default
+# Google-owned logs bucket. CLOUD_LOGGING_ONLY needs no bucket provisioned or granted. Its absence is
+# what produced "Your build failed to run: ... invalid argument" with zero steps and no log to read.
 options:
   logging: CLOUD_LOGGING_ONLY
 
@@ -46,36 +52,42 @@ steps:
     name: gcr.io/cloud-builders/docker
     args: ["build", "-f", "Dockerfile.mcp", "-t", "${_IMAGE}", "."]
 
-  # Pushed explicitly rather than via the top-level `images:` key, because `images:` uploads only AFTER
-  # every step has finished — the deploy step below would then reference a tag that is not in the
-  # registry yet.
+  # Pushed explicitly rather than via the top-level `images:` key: `images:` uploads only AFTER every
+  # step finishes, so the deploy below would reference a tag not yet in the registry.
   - id: push
     name: gcr.io/cloud-builders/docker
     args: ["push", "${_IMAGE}"]
 
   - id: deploy
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: gcloud
     args:
       - run
       - deploy
       - ${_SERVICE}
-      - --image=${_IMAGE}
-      - --region=${_REGION}
+      - --region=${_DEPLOY_REGION}
       - --project=${PROJECT_ID}
+      - --image=${_IMAGE}
+      - --service-account=${_RUNTIME_SA}
+      - --cpu=1
+      - --memory=512Mi
+      - --min-instances=0
+      - --max-instances=4
+      - --allow-unauthenticated
       - --quiet
+      - --update-env-vars=WORKSPACE_STORE=gcs,MCP_STATE_STORE=blobs,GCS_BUCKET=${_GCS_BUCKET},DR_LURIE_MCP_ENDPOINT=https://drluriescience.netlify.app/mcp,PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp,PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp
+      - --update-secrets=MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,DR_LURIE_MCP_TOKEN=dr-lurie-mcp-token:latest,PDF_TOOL_MCP_TOKEN=pdf-tool-mcp-token:latest,PLATFORM_MCP_TOKEN=platform-mcp-token:latest
 
-  # "Deployed" and "serving" are different facts, and health checks cannot tell them apart: workspace
-  # state lives in GCS and stays healthy through a bad revision. This step asserts both things that have
-  # actually broken here.
+  # "Deployed" and "serving" are different facts, and health checks structurally cannot tell them apart.
+  # This asserts the two things that have actually broken on this service.
   - id: verify
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
       - -c
       - |
         set -euo pipefail
-        describe() { gcloud run services describe "${_SERVICE}" --region "${_REGION}" --project "${PROJECT_ID}" --format "$1"; }
+        describe() { gcloud run services describe "${_SERVICE}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" --format "$1"; }
 
         REVISION="$(describe 'value(status.latestReadyRevisionName)')"
         SERVING_IMAGE="$(describe 'value(spec.template.spec.containers[0].image)')"
@@ -84,14 +96,18 @@ steps:
         echo "image    : $${SERVING_IMAGE}"
         echo "url      : $${URL}"
 
-        # 1. Is the SERVED image the one this build produced? Catches a deploy that silently no-ops.
+        # 1. Is the SERVED image the one this build produced? Catches a deploy that silently no-ops and,
+        #    with a commit tag, makes "which commit is live?" answerable from the build log alone.
         if [ "$${SERVING_IMAGE}" != "${_IMAGE}" ]; then
           echo "FAIL: serving image is not the image this build pushed (${_IMAGE})." >&2
           exit 1
         fi
+        case "$${SERVING_IMAGE}" in
+          *:latest) echo "WARNING: serving a mutable ':latest' tag — the live commit is unidentifiable. Remove the trigger's _IMAGE substitution." >&2 ;;
+        esac
 
-        # 2. Did every client-connection variable survive the deploy? This is the check whose absence let
-        #    two releases take all clients down unnoticed. Loud failure beats a green build and a dead
+        # 2. Did every client-connection variable survive? This is the check whose absence let two
+        #    releases take all clients down unnoticed. A loud failure beats a green build and a dead
         #    connection.
         ENV_NAMES="$(describe 'value(spec.template.spec.containers[0].env[].name)' | tr ';,' '\n\n')"
         echo "environment on the serving revision:"
@@ -106,7 +122,8 @@ steps:
           exit 1
         fi
 
-        # Advisory only — publishing being off is a valid state, so it must not fail a build.
+        # Advisory only — publishing being off is a valid state and must never fail a build. These are
+        # never written by this config; they are reported so a change is visible.
         for VAR in DR_LURIE_PUBLISH_ENABLED PLATFORM_PUBLISH_ENABLED; do
           echo "$${ENV_NAMES}" | grep -qx "$${VAR}" || echo "note: $${VAR} is not set; publishing is disabled for that client."
         done
