@@ -4,6 +4,7 @@ import { startDryRun } from "../../src/agent/workspace/executor.js";
 import { publishRun, publishEnabledEnvVar, isProjectPublishEnabled, __test__ } from "../../src/agent/workspace/publisher.js";
 import { drLurieProjectConfig } from "../../src/agent/projects/drLurie/definition.js";
 import type { CallToolResult } from "../../src/agent/projects/projectMcpAdapter.js";
+import type { ProjectConnectionConfig } from "../../src/agent/projects/projectTypes.js";
 import { handler } from "../../netlify/functions/mcp.mjs";
 import { resetRepositoryManager } from "../../src/agent/runtime/repositories.js";
 
@@ -34,11 +35,29 @@ const READY = {
   hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
 };
 
-const seedRun = async (articleBody: unknown) => {
+// A minimal registration for the object-native `platform` client (client 0). It is not a seeded
+// default project, so the tests register it in the project repository themselves.
+const platformProjectConfig: ProjectConnectionConfig = {
+  projectId: "platform",
+  name: "Platform (client 0)",
+  mcpEndpointEnvVar: "PLATFORM_MCP_ENDPOINT",
+  authMode: "none",
+  allowedTools: [],
+  contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
+  publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "test registration" },
+  status: "active"
+};
+// A registered project with NO hooks at all (and therefore no executePublish) — the publisher must
+// refuse to publish for it rather than borrow another client's dialect.
+const hooklessProjectConfig: ProjectConnectionConfig = { ...platformProjectConfig, projectId: "acme-live", name: "Acme Live", mcpEndpointEnvVar: "ACME_LIVE_MCP_ENDPOINT" };
+
+const seedRun = async (articleBody: unknown, projectId = "dr-lurie") => {
   const manager = new RepositoryManager();
   const executionRepository = manager.getExecutionRepository();
   const projectRepository = manager.getProjectRepository();
-  const run = await startDryRun({ projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: articleBody } }, executionRepository);
+  if (projectId === "platform") await projectRepository.save(platformProjectConfig);
+  if (projectId === "acme-live") await projectRepository.save(hooklessProjectConfig);
+  const run = await startDryRun({ projectId, input: "publish", entrypoint: { nodeId: "article_body", output: articleBody } }, executionRepository);
   const learningRepository = manager.getLearningRepository();
   return { runId: run.runId, executionRepository, projectRepository, learningRepository };
 };
@@ -51,6 +70,47 @@ const fakeCallTool = (opts: { failOn?: string; noLock?: boolean } = {}) => {
     if (tool === "save_json_blob_checkout_request") return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: opts.noLock ? {} : { structuredContent: { lock_token: "lock_123" } } };
     if (tool === "save_json_blob_publish_by_time") return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: { ok: true, statusCode: 201, commit: "abc123def", path: "src/pages/post/live-title.md", warnings: [] } };
     return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: { ok: true } };
+  };
+  return { fn, calls };
+};
+
+// Object-native platform fixtures. The envelope shape is the same article_body.v1 contract; the
+// client object under `body` carries top-level meta fields plus `nodes` (the content blocks).
+const platformEnvelope = (body: unknown) => ({
+  artifact: "article_body.v1",
+  summary: "Reader-facing body assembled for the platform publish tests.",
+  clientProjectId: "platform",
+  clientObjectType: "content_item",
+  contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-28T00:00:00.000Z" },
+  body
+});
+const platformTextBody = platformEnvelope({
+  slug: "live-title",
+  title: "Live Title",
+  deck: "A deck line.",
+  nodes: [
+    { id: "n_1", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." } },
+    { id: "n_2", kind: "content", visibility: "public", public: { title: "Second", body: "More reader-facing body." } }
+  ]
+});
+const PLATFORM_ENABLED_ENV = { PLATFORM_PUBLISH_ENABLED: "true" } as NodeJS.ProcessEnv;
+// Satisfies platform's publish-readiness policy (GO).
+const PLATFORM_READY = {
+  taxonomy: { tags: ["science"] },
+  approval: { pinned: true, approvedBy: "editor@platform" },
+  releaseBehavior: "publish_only",
+  hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_platform_blob.v1", legacyFallbacksUsed: false }
+};
+
+const fakePlatformCallTool = (opts: { validate?: { valid: boolean; issues: unknown[] } } = {}) => {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const fn = async (tool: string, args: Record<string, unknown>): Promise<CallToolResult> => {
+    calls.push({ tool, args });
+    if (tool === "object_create") return { ok: true, projectId: "platform", connection: {} as any, tool, result: { structuredContent: { object_id: "obj_srv_991" } } };
+    if (tool === "object_checkout") return { ok: true, projectId: "platform", connection: {} as any, tool, result: { structuredContent: { lock_token: "lock_p1", record_version: 3 } } };
+    if (tool === "object_validate") return { ok: true, projectId: "platform", connection: {} as any, tool, result: { structuredContent: opts.validate ?? { valid: true, issues: [] } } };
+    if (tool === "object_publish") return { ok: true, projectId: "platform", connection: {} as any, tool, result: { ok: true, object_id: "obj_srv_991", published: true } };
+    return { ok: true, projectId: "platform", connection: {} as any, tool, result: { ok: true } };
   };
   return { fn, calls };
 };
@@ -171,6 +231,94 @@ describe("live publish gates", () => {
     expect(__test__.REQUEST_ID_PATTERN.test("req_publish_drlurie_20260702_01")).toBe(true);
     expect(__test__.REQUEST_ID_PATTERN.test("my-article-123")).toBe(false);
     expect(__test__.REQUEST_ID_PATTERN.test("req_publish_2026_01")).toBe(false);
+  });
+});
+
+// A-2 — publish execution is a per-project hook: platform publishes in its object-native dialect,
+// dr-lurie keeps its legacy save_json_blob_* dialect, and a project with no executor is refused.
+describe("per-project publish execution hooks", () => {
+  it("executes platform's object-native sequence in order when readiness is GO and every gate passes", async () => {
+    const ctx = await seedRun(platformTextBody, "platform");
+    const adapter = fakePlatformCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.published).toBe(true);
+    expect(result.mode).toBe("live");
+    expect(adapter.calls.map((call) => call.tool)).toEqual(["object_create", "object_checkout", "object_validate", "object_patch", "object_publish", "object_checkin"]);
+    if (result.mode === "live") {
+      expect(result.plan.toolSequence).toEqual(["object_create", "object_checkout", "object_validate", "object_patch", "object_publish", "object_checkin"]);
+      expect((result.result as any).published).toBe(true);
+      // The client validator's verdict travels as evidence on the publish result.
+      expect(result.clientValidation).toMatchObject({ tool: "object_validate", valid: true, issues: [] });
+      expect(result.clientValidation?.candidate_patch_summary).toBe("3 ops: 1 set_article_meta + 2 upsert_node");
+    }
+  });
+
+  it("validates BEFORE any patch (board B1) and never sends requested_id on create (board D2c)", async () => {
+    const ctx = await seedRun(platformTextBody, "platform");
+    const adapter = fakePlatformCallTool();
+    await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: adapter.fn });
+
+    const tools = adapter.calls.map((call) => call.tool);
+    expect(tools.indexOf("object_validate")).toBeGreaterThanOrEqual(0);
+    expect(tools.indexOf("object_validate")).toBeLessThan(tools.indexOf("object_patch"));
+    const create = adapter.calls.find((call) => call.tool === "object_create")!;
+    expect("requested_id" in create.args).toBe(false);
+    // The server-minted id (not the request id) drives every subsequent call.
+    expect((adapter.calls.find((call) => call.tool === "object_checkout")!.args as any).object_id).toBe("obj_srv_991");
+    const patch = adapter.calls.find((call) => call.tool === "object_patch")!.args as any;
+    expect(patch).toMatchObject({ object_id: "obj_srv_991", lock_token: "lock_p1", expected_record_version: 3 });
+    expect(patch.patch[0]).toMatchObject({ op: "set_article_meta", meta: { slug: "live-title", title: "Live Title", deck: "A deck line." } });
+    expect(patch.patch[0].meta.nodes).toBeUndefined();
+    expect(patch.patch.slice(1).map((op: any) => op.op)).toEqual(["upsert_node", "upsert_node"]);
+  });
+
+  it("passes clientObjectType through to object_create verbatim", async () => {
+    const ctx = await seedRun(platformTextBody, "platform");
+    const adapter = fakePlatformCallTool();
+    await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: adapter.fn });
+    expect((adapter.calls.find((call) => call.tool === "object_create")!.args as any).object_type).toBe("content_item");
+  });
+
+  it("never calls release_to_production in any path — publishRun never releases (board B2)", async () => {
+    const platformCtx = await seedRun(platformTextBody, "platform");
+    const platformAdapter = fakePlatformCallTool();
+    const platformResult = await publishRun({ runId: platformCtx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...platformCtx, env: PLATFORM_ENABLED_ENV, callTool: platformAdapter.fn });
+    expect(platformResult.published).toBe(true);
+    expect(platformAdapter.calls.map((call) => call.tool)).not.toContain("release_to_production");
+
+    const drLurieCtx = await seedRun(textBody);
+    const drLurieAdapter = fakeCallTool();
+    const drLurieResult = await publishRun({ runId: drLurieCtx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...drLurieCtx, env: ENABLED_ENV, callTool: drLurieAdapter.fn });
+    expect(drLurieResult.published).toBe(true);
+    expect(drLurieAdapter.calls.map((call) => call.tool)).not.toContain("release_to_production");
+  });
+
+  it("aborts before object_patch/object_publish when the client validator rejects the candidate patch", async () => {
+    const ctx = await seedRun(platformTextBody, "platform");
+    const adapter = fakePlatformCallTool({ validate: { valid: false, issues: ["nodes[1].public.title too long", "meta.deck missing"] } });
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") {
+      expect(result.error).toContain("object_validate_rejected");
+      expect(result.error).toContain("nodes[1].public.title too long");
+    }
+    const tools = adapter.calls.map((call) => call.tool);
+    expect(tools).toEqual(["object_create", "object_checkout", "object_validate"]);
+    expect(tools).not.toContain("object_patch");
+    expect(tools).not.toContain("object_publish");
+  });
+
+  it("refuses to publish for a project with no publish execution hook — zero external calls", async () => {
+    const ctx = await seedRun(platformEnvelope({ slug: "s", title: "T", nodes: [] }), "acme-live");
+    const adapter = fakePlatformCallTool();
+    // No hooks registered for acme-live at all: no readiness policy, so every generic gate passes.
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true }, { ...ctx, env: { ACME_LIVE_PUBLISH_ENABLED: "true" } as NodeJS.ProcessEnv, callTool: adapter.fn });
+
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") expect(result.error).toContain("no_publish_executor");
+    expect(adapter.calls).toHaveLength(0);
   });
 });
 

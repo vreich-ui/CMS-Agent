@@ -88,8 +88,11 @@ export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): 
   const contentPath = declared.contentPath ?? (body.ok ? PLATFORM_REQUIRED_CONTENT_PATH : undefined);
   if (contentPath === PLATFORM_REQUIRED_CONTENT_PATH) pass("hard_content_path", `contentPath = ${PLATFORM_REQUIRED_CONTENT_PATH}`);
   else fail("hard_content_path", `contentPath = ${PLATFORM_REQUIRED_CONTENT_PATH}`, `got ${contentPath ?? "(none)"}`);
-  if (declared.artifactProtocol === PLATFORM_REQUIRED_ARTIFACT_PROTOCOL) pass("hard_artifact_protocol", `artifactProtocol = ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL}`);
-  else fail("hard_artifact_protocol", `artifactProtocol = ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL}`, `got ${declared.artifactProtocol ?? "(none)"}`);
+  // Alignment board D3(ii): this check is a workspace-side DECLARATION, not client verification —
+  // the label and detail say so on both outcomes so no reviewer reads it as client-verified.
+  const artifactProtocolCaveat = "— declaration only: the platform contract publishes no artifact_protocol identifier to verify against (alignment D3; becomes client-verified when the contract carries one)";
+  if (declared.artifactProtocol === PLATFORM_REQUIRED_ARTIFACT_PROTOCOL) pass("hard_artifact_protocol", "artifactProtocol declared (workspace-side)", `declared ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL} ${artifactProtocolCaveat}`);
+  else fail("hard_artifact_protocol", "artifactProtocol declared (workspace-side)", `got ${declared.artifactProtocol ?? "(none)"}, expected ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL} ${artifactProtocolCaveat}`);
   // Structurally true on this client (it has no legacy path), but the caller must still DECLARE it —
   // an undeclared flag usually means the payload was assembled from another client's conventions.
   if (declared.legacyFallbacksUsed === false) pass("hard_legacy_fallbacks", "legacyFallbacksUsed = false");

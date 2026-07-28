@@ -4,10 +4,16 @@
 // when the operator has enabled publishing for the project AND the caller passes explicit approval
 // AND an explicit live flag. Missing any gate yields a dry-run PLAN that performs no external call.
 //
-// For Dr. Lurie the sanctioned sequence is create draft -> checkout (lock) -> publish_by_time ->
-// checkin, driven through the project's own MCP tools (never the legacy artifact fallback tools the
-// executable policy blocks). Image materialization is out of scope for this path (it needs the
-// artifact upload flow); a body carrying image/document media is rejected with a clear reason.
+// Publish EXECUTION is per-project: each client's dialect (its tool names, lock protocol, and call
+// shapes) lives in that project's executePublish hook (see ../projects/projectHooks.ts), driven
+// through the project's own MCP tools. This publisher owns everything dialect-independent — gates,
+// request-id contract, body validation, readiness, step recording, learning observations — and
+// REFUSES to publish for a project with no execution hook rather than guess another client's
+// dialect. Image materialization is out of scope for this path (it needs the artifact upload flow);
+// a body carrying image/document media is rejected with a clear reason.
+//
+// Board decision B2: publishRun never releases — releasing to production is a SEPARATE gate whose
+// verb must appear nowhere in this file or in any project's publish execution hook.
 
 import { validateOutput } from "../execution/outputValidator.js";
 import { getWorkspaceNode } from "./nodes.js";
@@ -15,7 +21,8 @@ import { redactSensitiveKeys } from "../observability/redaction.js";
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
-import { getProjectHooks, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
+import { getProjectHooks, type PublishExecutionOutcome, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
+import { findLockToken } from "../projects/toolResultSearch.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { LearningRepository } from "../repository/interfaces/LearningRepository.js";
@@ -36,7 +43,7 @@ export type PublishPlan = { projectId: string; requestId: string; nodeCount: num
 export type PublishBlockedState = { requestId: string; nodeAwaitingApproval: string; artifactSlot: string | null; requiredAction: string; resumable: true };
 export type PublishResult =
   | { published: false; mode: "dry_run"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; reason: string; readiness?: PublishReadinessResult }
-  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; readiness?: PublishReadinessResult }
+  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; clientValidation?: NonNullable<PublishExecutionOutcome["clientValidation"]>; readiness?: PublishReadinessResult }
   | { published: false; mode: "blocked_for_publish_execution"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; readiness: PublishReadinessResult; blocked: PublishBlockedState }
   | { published: false; mode: "error"; gates: PublishGates; plan: PublishPlan | null; steps: PublishStep[]; error: string };
 
@@ -72,18 +79,6 @@ const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, 
     { name: "explicit_live", passed: live, reason: live ? undefined : "live: true (dryRun false) is required for a live publish." }
   ];
   return { operatorEnabled, approved, live, allPassed: gates.every((gate) => gate.passed), gates };
-};
-
-// Deep-search a tool result for a lock_token string. Result envelope shapes vary across MCP servers
-// (raw result vs. { structuredContent } vs. nested data), so this is intentionally tolerant.
-const findLockToken = (value: unknown, depth = 0): string | undefined => {
-  if (depth > 6 || value === null || typeof value !== "object") return undefined;
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key === "lock_token" && typeof child === "string" && child) return child;
-    const found = findLockToken(child, depth + 1);
-    if (found) return found;
-  }
-  return undefined;
 };
 
 const findArticleBody = (run: WorkflowExecutionRecord): unknown =>
@@ -147,20 +142,16 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     return { published: false, mode: "error", gates, plan: emptyPlan, steps: [], error: `no_valid_article_body: run ${input.runId} has no article_body output satisfying that node's outputSchema (${bodyValidation.errors.join("; ")}).` };
   }
   const body = clientObjectOf(envelope);
-  // ⚠ LEGACY DIALECT — see R-6/R-23. These are Dr. Lurie's save_json_blob_* tools. The object-native
-  // contract declares a different sequence entirely (object_create → object_checkout → object_validate →
-  // object_patch → object_publish → object_checkin, with release_to_production as a SEPARATE gate), and
-  // `platform` — client 0, the T-3 target — does not expose save_json_blob_* at all. A live publish to
-  // platform therefore fails at its first call. Left hardcoded deliberately rather than guessed at: the
-  // sequence belongs to the client's contract and should come from the project hook, which is a design
-  // change that wants verification against a live dry run, not a blind edit.
-  const toolSequence = ["save_json_blob_create_article_draft", "save_json_blob_checkout_request", "save_json_blob_publish_by_time", "save_json_blob_checkin_request"];
-  const plan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: blocksOf(body).length, publishedTime: input.publishedTime ?? null, toolSequence };
+  // The publish dialect belongs to the client's contract, so both the displayed sequence and the
+  // execution below come from the project's hooks — never hardcoded here (a client whose tools this
+  // publisher guessed at would fail at its first call, or worse, half-publish).
+  const hooks = getProjectHooks(projectId);
+  const plan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: blocksOf(body).length, publishedTime: input.publishedTime ?? null, toolSequence: hooks?.publishToolSequence ?? [] };
 
   // Project publish-readiness policy (GO/NO-GO). Layered via the hook registry so other projects
   // hosted by this workspace are NOT subject to Dr. Lurie's readiness rules. A NO-GO is an expected
   // safety state (blocked_for_publish_execution), surfaced as a resumable blocked state — not a failure.
-  const readinessHook = getProjectHooks(projectId)?.evaluatePublishReadiness;
+  const readinessHook = hooks?.evaluatePublishReadiness;
   // The hook is handed the ENVELOPE, not the unwrapped client object: its `article_body_valid` check
   // now validates against the article_body node's own outputSchema (the single authority), exactly as
   // evaluatePublishReadiness below already does, and it unwraps `.body` itself for the media check.
@@ -188,7 +179,13 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     return { published: false, mode: "dry_run", gates, plan, steps: [], reason: reason || "One or more publish gates are not satisfied.", readiness };
   }
 
-  // All gates passed: drive the sanctioned publish sequence through the project's MCP tools.
+  // Every gate passed, but this project contributes no publish executor: refuse loudly. Falling back
+  // to another client's dialect would fire that client's tool names at this client's server.
+  if (!hooks?.executePublish) {
+    return { published: false, mode: "error", gates, plan, steps: [], error: `no_publish_executor: project ${projectId} has no publish execution hook; refusing to guess a dialect.` };
+  }
+
+  // All gates passed: drive the project's sanctioned publish sequence through its own MCP tools.
   const callTool = deps.callTool ?? ((tool, args) => new ProjectMcpAdapter(config).callTool(tool, args));
   const steps: PublishStep[] = [];
   const call = async (tool: string, args: Record<string, unknown>): Promise<unknown> => {
@@ -199,16 +196,19 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   };
 
   try {
-    await call("save_json_blob_create_article_draft", { request_id: input.requestId, input: { record_type: "content_source", schema_version: "content_source.v1", content: { article_body: body } } });
-    const checkout = await call("save_json_blob_checkout_request", { request_id: input.requestId, ...OWNER });
-    const lockToken = findLockToken(checkout);
-    if (!lockToken) throw new Error("checkout_missing_lock_token: could not resolve lock_token from checkout result.");
-    const publishResult = await call("save_json_blob_publish_by_time", { request_id: input.requestId, lock_token: lockToken, ...(input.publishedTime ? { published_time: input.publishedTime } : {}) });
-    // Best-effort lock release; a failure here only means the lease expires naturally.
-    try { await call("save_json_blob_checkin_request", { request_id: input.requestId, lock_token: lockToken }); } catch { /* lock expires on its own */ }
+    const outcome = await hooks.executePublish({
+      requestId: input.requestId,
+      envelope: envelope as Record<string, unknown>,
+      body: body as Record<string, unknown>,
+      // Passed through VERBATIM from the validated envelope (the outputSchema requires a string).
+      clientObjectType: (envelope as Record<string, unknown>).clientObjectType as string,
+      publishedTime: input.publishedTime ?? null,
+      owner: OWNER,
+      call
+    });
 
     await learningRepository.recordObservation(`Live publish executed for ${projectId} request ${input.requestId}.`, { type: "publish_executed", projectId, requestId: input.requestId, runId: input.runId });
-    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(publishResult), readiness };
+    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(outcome.result), ...(outcome.clientValidation ? { clientValidation: outcome.clientValidation } : {}), readiness };
   } catch (error) {
     const message = error instanceof Error ? error.message : "publish_failed";
     await learningRepository.recordObservation(`Live publish failed for ${projectId} request ${input.requestId}: ${message}`, { type: "publish_failed", projectId, requestId: input.requestId, runId: input.runId }).catch(() => undefined);

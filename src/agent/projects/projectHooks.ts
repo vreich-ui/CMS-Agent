@@ -22,6 +22,24 @@ export type ProjectCallToolRequest = { tool: string; arguments?: Record<string, 
 // Re-exported so the generic publisher can consume readiness types without importing a client folder.
 export type { PublishReadinessInput, PublishReadinessResult } from "./drLurie/publishReadiness.js";
 
+// Everything a project's publish executor may rely on: the generic publisher resolves and validates
+// the run, evaluates gates/readiness, and then hands EXECUTION to the project hook — each client
+// publishes in its own tool dialect, and the publisher never guesses one client's dialect for another.
+export type PublishExecutionContext = {
+  requestId: string;                      // run correlation ONLY — never used as an object id
+  envelope: Record<string, unknown>;      // the full article_body envelope
+  body: Record<string, unknown>;          // the client object (envelope.body)
+  clientObjectType: string;               // envelope.clientObjectType, passed through VERBATIM
+  publishedTime: string | null;
+  owner: { owner_id: string; owner_label: string };
+  call: (tool: string, args: Record<string, unknown>) => Promise<unknown>; // records a step; throws on tool failure
+};
+export type PublishExecutionOutcome = {
+  result: unknown;
+  objectId?: string;                      // server-minted id when the dialect mints one
+  clientValidation?: { tool: string; candidate_patch_summary: string; valid: boolean; issues: unknown[] };
+};
+
 export type ProjectHooks = {
   // Returns findings; severity "error" marks the handoff invalid, "warning" is advisory.
   validateHandoffPolicy?: (payload: ProjectHandoffPayload) => ProjectPolicyFinding[];
@@ -33,6 +51,13 @@ export type ProjectHooks = {
   // NO-GO (blocked_for_publish_execution) is an expected safety state, not a failure. Projects
   // without this hook are not subject to any extra publish-readiness constraints.
   evaluatePublishReadiness?: (input: PublishReadinessInput) => PublishReadinessResult;
+  // The tool names of the project's publish dialect, in order, for plan display (dry runs and the
+  // live plan). Purely descriptive — execution is executePublish below.
+  publishToolSequence?: string[];
+  // Execute a live publish in the CLIENT's own tool dialect. The generic publisher calls this only
+  // after every gate and the readiness policy pass; a project without this hook cannot publish
+  // (no_publish_executor) — the publisher never falls back to another client's dialect.
+  executePublish?: (ctx: PublishExecutionContext) => Promise<PublishExecutionOutcome>;
   // Safe, non-secret structured guidance for agents (rules, conventions, pitfalls).
   knowledge?: unknown;
 };
