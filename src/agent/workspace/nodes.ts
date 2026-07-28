@@ -2903,3 +2903,4 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
   if (publicationController && !publicationController.dependsOn.includes("publish_payload")) issues.push("publication_controller must depend on publish_payload");
   return issues.length ? { valid: false, issues } : { valid: true, issues: [] };
 }
+
