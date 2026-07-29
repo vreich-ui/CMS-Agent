@@ -429,6 +429,104 @@ step, same caveat as wave 11's.
 
 ---
 
+## 2m. Execution log — 2026-07-29, wave 13 (T-2 live shakeout: four defects, $4.37 in one node)
+
+Wave 12's follow-up got taken: `run_1785340011864_qpyjr0` (T-2) actually ran `project.call_read_tool`
+end to end. It resolved `allowed:true` with no denial reasons on all four content-building nodes — the
+split itself works — but the call kept failing with a bare `validation_error`, `contract_intelligence`
+retried it roughly 25 times across its whole 28-turn budget, and the node alone cost $4.37. The run's
+own budget gate (`budgetUsd: 5`) never caught it mid-flight either: the run finished at $5.26
+(`percentUsed 105.25`, `overBudget: true`, `blocked: false`).
+
+**B1 — `project.call_read_tool` (and `project.call_tool`) rejected a valid-looking `tool.test` call.**
+Reproduced live against the deployed MCP server with exactly the reported shape
+(`toolId project.call_read_tool`, `nodeId contract_intelligence`,
+`input {"projectId":"platform","tool":"object_contract","arguments":{"object_type":"content_item"}}`)
+and got the same `{ok:false, error:{code:"validation_error", message:"validation_error"}}`. Neither the
+read tool's own input schema nor the shared project-call schema is wrong — both parse the reported
+shape fine in isolation (confirmed directly). The bug is in forwarding: `tool.test`'s wire schema
+declares `input: {}` with no JSON-Schema `type`, so an MCP client has no signal to send a nested object
+and sends the JSON text instead; `tool.get_execution` on the failing record showed `inputSummary` as a
+*string* containing the JSON, not an object, proving the value reaching `executeTool` was still
+serialized. Calling the wire-level `project.call_read_tool` tool *directly* (typed `arguments: {type:
+"object"}` in its own schema) worked and returned real contract data — isolating the defect to the
+untyped forwarding path, not the read-tool split or the remote connection.
+Fix: `executeTool` (`src/agent/tools/toolExecutor.ts`) now coerces a JSON-stringified top-level input
+back into an object before any controlled tool's schema sees it (`coerceJsonObjectInput`, extracted to
+`src/agent/tools/jsonCoercion.ts` so both the MCP tool layer and the controlled-tool gateway share one
+implementation instead of two). Fixed at the single gateway, so `tool.test` and the live node runners
+are defended the same way. New wire-level regression test in `projectTools.test.ts` reproduces the
+exact reported call through `tool.test` end to end and asserts it now reaches the contract.
+
+**B2 — controlled-tool validation failures carried no diagnostic detail, which is what turned B1 into
+$4.37.** `error.code` and `error.message` were both the literal string `"validation_error"` — no field
+path, no expected/received shape — so the model had nothing to self-correct on and re-sent its whole
+accumulated context every retry turn. Zod already carries a path and a readable message per issue;
+`toolExecutor.ts` now builds one line per issue (`field.path: message`, with the actual received value
+attached and redacted through the existing secret filter) instead of discarding it, and
+`OpenAINodeRunner.ts`'s tool-execute wrapper forwards that detail in the thrown `Error` (the SDK's
+default tool-error handler passes a thrown error's message straight back to the model, so this is the
+one hop that needed the detail attached). Covered in `toolRuntime.test.ts`: the message names the
+specific field instead of repeating the bare code, and a secret-looking received value is still
+redacted in the enriched detail.
+
+**B3 — no in-node cost circuit breaker.** `budgetUsd` was checked exactly once, before a node's whole
+agent loop started; nothing looked again until the run's between-node gate noticed afterward that one
+node had spent the entire budget and overrun it. `OpenAINodeRunner.ts` now uses a `Runner` instance
+(instead of the bare `run()` function) *only* when a node carries `budgetUsd`, and listens for
+`agent_start` — which the SDK fires once per model turn with the run's cumulative token usage so far —
+to abort via signal before the next turn if the running total (prior nodes' spend plus this node's
+turns so far) would already clear the ceiling. Reports a distinct `budget_exceeded`, separate from
+`cancelled`/`model_error`, naming the node and the estimated spend. Behavior is unchanged for every node
+that does not configure `budgetUsd` — the bare `run()` path is untouched. Covered in a new
+`openaiNodeRunnerBudgetGuard.test.ts`: a fake `Runner` simulates a cheap turn, an expensive turn, then a
+third turn start, and the node is aborted with `budget_exceeded` at that third-turn boundary rather than
+only being discovered afterward; a second test confirms the `Runner` path is never touched when no
+budget is configured.
+
+**B4 — context economy.** `contract_intelligence` cost $0.54 in an earlier round without fetching and
+$4.37 once it started fetching — re-sending a large client contract across many turns compounds, and
+much of that specific jump was B1/B2's retry storm rather than a separate cost driver. What's fixed
+here: `contract_intelligence`'s prompt now mandates an actual *reduction* of the fetched body schema
+(required fields, id patterns, enums, strictness) rather than "a faithful reduction of it," which
+previously permitted passing the full raw contract through verbatim. Separately — and this is the
+sharper, confirmed defect — `article_body`, `artifact_plan`, and `publish_payload` were granted
+`project.call_read_tool` in wave 12 (#91) alongside `contract_intelligence`, but only
+`contract_intelligence`'s own prompt was updated to name it; the other three nodes' prompts still told
+the model to validate through `project.call_tool` — the approval-gated write variant — which would
+strand them on their own `object_validate` calls exactly as `project.call_tool` originally stranded
+`contract_intelligence`. All three now name `project.call_read_tool` for their read-only contract and
+validation calls, matching `contract_intelligence`.
+**Not done in this wave** (scope boundary, not an oversight): actually moving the contract fetch to the
+conductor level, ahead of any node's own agent loop, so it is fetched exactly once per run regardless of
+how many content-building nodes need it, and each node receives only its own slice (`article_body` the
+body schema and id rules, `artifact_plan` the media policy, `publish_payload` the workflow sequence and
+validation surface) as plain input rather than a tool call it makes itself. That is an architecture
+change to how `contract_intelligence` runs, not a bug fix, and deserves review on its own rather than
+being folded into a defect-fix wave.
+
+**Also confirmed, by tracing the actual code (not assumed): node definitions are re-resolved fresh on
+every node dispatch, not snapshotted once at run start.** `resolveConductorNodes()` — called inside
+`advanceRun`, i.e. once per `workflow.run_node` / `run_next_node` / `run_all` step — reads live from the
+workspace store every time in the default `store` mode (`WORKSPACE_NODES_SOURCE` unset or `!==
+"static"`), and the persisted run record (`NodeExecutionState`) never carries a node's prompt/tools/
+schema in the first place, only execution bookkeeping. A `workspace.update_node_prompt` edit made
+mid-run is picked up by that same run's next dispatch of that node. `article_body`'s round-2 output
+still quoting `project.call_tool` was not a staleness bug, then — it was PR91 (#91) itself only having
+updated `contract_intelligence`'s prompt text (in `nodes.ts`) while granting the tool to all four nodes;
+the diff literally shows one prompt string changed and three `allowedTools` arrays gaining the entry
+with no matching prompt change. Fixed above, as part of B4.
+
+Suite: **913 root** (was 907), typecheck clean (scoped to the modules this wave touched — `ui/`'s own
+missing `@rjsf/utils` type declarations are a pre-existing, unrelated gap in this sandbox, not something
+this wave introduced or could fix).
+
+**Follow-up not taken here:** the conductor-level fetch-once-and-slice redesign named under B4, and a
+fresh live re-run of T-2's scenario to confirm the actual dollar cost drops now that the validation loop
+and its silent failure mode are fixed.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -453,8 +551,12 @@ Say **go** (or mark exceptions by ID) and I execute in this order: **W-2, W-3** 
 
 **Wave 12 executed 2026-07-29** (R-25, found by actually running wave 11's recommended live end-to-end run) — see §2l.
 
+**Wave 13 executed 2026-07-29** (T-2's live shakeout: B1 validation-error input coercion, B2 diagnostic
+detail on tool errors, B3 in-loop budget circuit breaker, B4 read-tool prompt naming + reduction
+mandate; node-definition resolution timing confirmed by tracing the code) — see §2m.
+
 Next, in the order I would take them:
-1. **A live end-to-end run, again** — the specific defect `run_1785340011864_qpyjr0` hit is fixed and covered by unit/wire tests, but nothing has re-run that scenario live end-to-end since. Worth doing deliberately (it spends model budget) with `budgetUsd` set, reading `mode` to confirm live/store execution as before, and this time watching whether `contract_intelligence` actually produces a contract and the run reaches a publishable `article_body`.
+1. **A live end-to-end run, again** — wave 13 fixed the mechanism T-2 hit and covered it with unit/wire tests, but nothing has re-run that scenario live end-to-end since. Worth doing deliberately (it spends model budget) with `budgetUsd` set, reading `mode` to confirm live/store execution as before, and this time watching whether `contract_intelligence` actually produces a contract, at what cost, and whether the run reaches a publishable `article_body`.
 2. **R-8** — promoted by wave 4's findings 2–4: three separate allow-list/reporting defects surfaced the moment the connections came up (`platform`'s `allowedTools: []`, the vanished `requiredPdfToolCapabilities` source of truth, the missing `resume_agent_artifact_job` / `get_image_model_policy` grants). Two hand-kept lists with no declared requirement is the condition that caused the original pdf-tool regression.
 3. **The 7 flattened skill `outputSchema`s** — R-2 removed the false blocker that forced them to stay placeholders; writing their real contracts is now unblocked and is the next thing an operator editing schemas in S4 will walk into.
 4. **R-20** — mock runs still accrue estimated cost against `budgetUsd` despite making no model calls. Cheap, and it matters more now that mock is an explicit choice people make for cost reasons.

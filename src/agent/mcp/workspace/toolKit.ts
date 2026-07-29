@@ -3,6 +3,12 @@
 import { z, ZodError, type ZodTypeAny } from "zod";
 import { workspaceActorKinds, workspaceChangeSources } from "../../workspace/changeTypes.js";
 import { WorkspaceToolError } from "../../workspace/workspaceErrors.js";
+import { coerceJsonObjectInput } from "../../tools/jsonCoercion.js";
+
+// Re-exported so existing importers of this module (tools.ts, changesTools.ts, ...) keep resolving
+// it from here; the canonical implementation now lives in tools/jsonCoercion.ts so toolExecutor.ts
+// (the controlled-tool gateway) can share it without an mcp/workspace -> tools/ -> mcp/workspace cycle.
+export { coerceJsonObjectInput };
 
 // Re-exported so tool modules keep a single import site for raising and classifying failures.
 export { WorkspaceToolError, WorkspaceVersionConflictError, MissingPatchFieldError } from "../../workspace/workspaceErrors.js";
@@ -28,21 +34,6 @@ export const ok = (data: unknown) => ({ ok: true, data });
 export const ANTHROPIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 export const canonicalToolName = (name: string): string => name.replace(/\./g, "_");
 
-// Some MCP clients serialize object-typed arguments as JSON strings (observed live with Claude's
-// connector: the `node` arg of workspace.create_node and the payload args of
-// project.validate_handoff both arrived stringified). For parameters that are contractually
-// objects, parse a string that contains a JSON object/array; anything else passes through
-// unchanged so downstream schema validation reports the real shape error.
-export const coerceJsonObjectInput = (value: unknown): unknown => {
-  if (typeof value !== "string") return value;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return value;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
-};
 export const tool = (definition: WorkspaceTool) => definition;
 
 // Anything carrying a string `code` is treated as already-typed — this picks up ProjectAdminError

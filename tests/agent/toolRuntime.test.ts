@@ -77,4 +77,40 @@ describe("controlled tool runtime", () => {
     expect(JSON.stringify(record)).not.toContain("secret-token");
     expect(JSON.stringify(record)).not.toContain('"apiKey":"secret"');
   });
+
+  // B1 (T-2, run_1785340011864_qpyjr0): tool.test's untyped `input` field gives an MCP client no
+  // signal to send an object rather than JSON text, so a "valid-looking" call arrived as a
+  // stringified object and every controlled-tool call through it failed validation_error. Fixed at
+  // the single execution gateway (executeTool), so a JSON-stringified top-level input is coerced
+  // back into an object before the tool's own schema ever sees it — not just for tool.test.
+  it("coerces a JSON-stringified top-level input instead of rejecting it as validation_error", async () => {
+    const stringified = JSON.stringify({ id: "input_triage" });
+    const result = await executeTool("workspace.get_node", stringified, ctx);
+    expect(result.ok).toBe(true);
+    expect((result as any).output.data.node?.id).toBe("input_triage");
+  });
+
+  // B2 (T-2): a controlled-tool validation failure used to collapse to the bare string
+  // "validation_error" in both `code` and `message` — no field path, no expected/received shape —
+  // so the model that hit it had nothing to self-correct on. The message must now name the specific
+  // field and what was expected vs. received.
+  it("reports the specific field path and expected shape on validation failure, not the bare code", async () => {
+    const result = await executeTool("project.call_read_tool", { projectId: "dr-lurie", tool: "object_contract", arguments: "not-an-object" }, { ...ctx, nodeId: "external_test", runAuthorizedTools: ["project.call_read_tool"] });
+    expect(result.ok).toBe(false);
+    const error = (result as any).error;
+    expect(error.code).toBe("validation_error");
+    expect(error.message).not.toBe("validation_error");
+    expect(error.message).toContain("arguments");
+    expect(error.issues).toEqual([expect.objectContaining({ path: "arguments" })]);
+  });
+
+  // The enriched error surfaces the actual received value so the model can see what it sent, but
+  // that value must go through the same secret redaction as everything else this gateway returns.
+  it("redacts a secret-looking received value inside the validation error detail", async () => {
+    const result = await executeTool("learning.record_observation", { observation: { apiKey: "super-secret-token" } }, { runId: "run-tools", nodeId: "external_test", maxRiskLevel: "write", approvedToolIds: ["learning.record_observation"], runAuthorizedTools: ["learning.record_observation"] });
+    expect(result.ok).toBe(false);
+    const error = (result as any).error;
+    expect(error.code).toBe("validation_error");
+    expect(JSON.stringify(error)).not.toContain("super-secret-token");
+  });
 });
