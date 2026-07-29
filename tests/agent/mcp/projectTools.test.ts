@@ -153,6 +153,24 @@ describe("project.* MCP tools", () => {
     expect(JSON.stringify(response.json)).not.toContain(ENDPOINT);
   });
 
+  // B1 (T-2, run_1785340011864_qpyjr0): reproduced live via tool_test with EXACTLY this shape —
+  // toolId project.call_read_tool, a real-looking projectId/tool/arguments envelope — and it came
+  // back { ok:false, error:{ code:"validation_error", message:"validation_error" } }. tool.test's
+  // `input` field advertises no JSON-schema type, so an MCP client with no signal to send a nested
+  // object sends the JSON text instead; executeTool's own inputSchema.parse then saw a string where
+  // it expected {projectId, tool, arguments} and rejected it. The fix coerces a JSON-stringified
+  // input back into an object at the execution gateway, so the exact call that used to fail —
+  // routed through tool.test end to end, not called directly — now actually reaches the contract.
+  it("tool.test forwarding a JSON-stringified input still reaches the contract call, not a validation_error", async () => {
+    const response = await toolCall("tool.test", { toolId: "project.call_read_tool", nodeId: "external_test", input: JSON.stringify({ projectId: "dr-lurie", tool: "object_contract", arguments: { object_type: "content_item" } }) });
+    const { data } = structured(response);
+
+    expect(data.ok).toBe(true);
+    expect(data.error).toBeUndefined();
+    expect(data.output.data.call).toMatchObject({ ok: true, projectId: "dr-lurie", tool: "object_contract", result: { tool: "object_contract", received: { object_type: "content_item" } } });
+    expect(remoteMethods).toEqual(["tools/call"]);
+  });
+
   it("project.call_read_tool refuses an operation outside the fixed allowlist, before any transport, naming the attempted operation", async () => {
     for (const tool of ["object_create", "object_patch", "object_publish", "release_to_production"]) {
       const response = await toolCall("project.call_read_tool", { projectId: "dr-lurie", tool, arguments: {} });

@@ -1,4 +1,4 @@
-import { Agent, run, tool } from "@openai/agents";
+import { Agent, run, tool, Runner } from "@openai/agents";
 import { recordModelUsage, summarizeModelUsage, estimateModelCost } from "../../observability/modelUsage.js";
 import { buildAgentModel, resolveProvider } from "../providers/providerRegistry.js";
 import { renderPlaybookForPrompt } from "../../improvement/playbook.js";
@@ -83,10 +83,14 @@ export class OpenAINodeRunner implements NodeRunner {
     const provider = resolveProvider(c);
     if (!process.env[provider.apiKeyEnv]) return { ok: false, code: "invalid_node_configuration", message: `${provider.apiKeyEnv} is required for ${provider.label} execution.` };
     const budgetUsd = numberFrom(c.budgetUsd);
+    // Reused below by the in-loop circuit breaker (B3) so a configured budget is only ever queried
+    // once per node execution, not once here and again per turn.
+    let priorSpendUsd = 0;
     if (budgetUsd !== undefined) {
       const spent = await summarizeModelUsage({ runId: context.run.runId });
+      priorSpendUsd = spent.totalCostUsdEstimate;
       const reserve = estimateModelCost({ model: stringFrom(c.model) ?? process.env.OPENAI_AGENT_MODEL ?? "gpt-5.5", inputTokens: 1000, outputTokens: numberFrom(c.maxOutputTokens) ?? 1000 });
-      if (spent.totalCostUsdEstimate + reserve > budgetUsd) return { ok: false, code: "budget_exceeded", message: "Estimated node budget would be exceeded.", details: { spentUsdEstimate: spent.totalCostUsdEstimate, reserveUsdEstimate: reserve, budgetUsd } };
+      if (priorSpendUsd + reserve > budgetUsd) return { ok: false, code: "budget_exceeded", message: "Estimated node budget would be exceeded.", details: { spentUsdEstimate: priorSpendUsd, reserveUsdEstimate: reserve, budgetUsd } };
     }
     // Empty allowedTools short-circuits tool resolution: the policy layer denies every tool for
     // such nodes anyway (node_tool_not_allowed), and skipping the lookup lets synthetic,
@@ -106,7 +110,12 @@ export class OpenAINodeRunner implements NodeRunner {
       strict: false,
       execute: async (args: unknown) => {
         const result = await executeTool(t.toolId, redact(args), { runId: context.run.runId, nodeId: node.id, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun });
-        if (!result.ok) throw new Error(result.denied ? `tool_denied:${result.denied.code}` : `tool_failed:${result.error?.code ?? "tool_failed"}`);
+        // B2 (T-2): forward the actual violation, not just its code. A thrown "tool_failed:validation_error"
+        // with nothing else told the model what to change, so it burned its turn budget retrying blind;
+        // ToolExecutor now carries a field-path/expected/received message (or denial reasons) for exactly
+        // this, and the SDK's default tool-error handler passes a thrown Error's message straight to the
+        // model, so this is the one place that detail needs to be attached to reach it.
+        if (!result.ok) throw new Error(result.denied ? `tool_denied:${result.denied.code}: ${result.denied.reasons.join(", ")}` : `tool_failed:${result.error?.code ?? "tool_failed"}${result.error?.message ? `: ${result.error.message}` : ""}`);
         return redact(result.output);
       }
     }));
@@ -122,9 +131,41 @@ export class OpenAINodeRunner implements NodeRunner {
     const timeoutMs = numberFrom(c.timeout) ?? 60000;
     const maxRetries = Math.max(0, Math.floor(numberFrom(c.retryCount) ?? 0));
     const maxTurns = resolveMaxTurns(c, effective.length);
+    // B3 (T-2): budgetUsd was only ever checked ONCE, before this node's loop started — after that,
+    // nothing looked again until the run's between-node gate noticed afterwards that the ceiling was
+    // blown through (blocked, overBudget, one node having spent the whole thing). A budgeted node now
+    // gets a second gate INSIDE its own loop: a Runner (rather than the bare run() function) is needed
+    // to observe agent_start, which the SDK fires once per model turn with the run's cumulative token
+    // usage so far. If the running total (prior nodes + this node's turns so far) would already clear
+    // the ceiling, the node is aborted via signal before its next turn spends anything more, and
+    // reports a distinct budget_exceeded rather than surfacing as a generic abort or being discovered
+    // only when the run's overall budget gate runs between nodes. Behavior is byte-for-byte unchanged
+    // when no budgetUsd is configured — the plain run() function is still used, exactly as before.
+    let budgetExceededDetails: { spentUsdEstimate: number; budgetUsd: number; nodeId: string; turnUsage: { inputTokens: number; outputTokens: number } } | undefined;
+    let turnSignal = context.signal;
+    let runner: Runner | undefined;
+    if (budgetUsd !== undefined) {
+      const turnController = new AbortController();
+      if (context.signal) {
+        if (context.signal.aborted) turnController.abort();
+        else context.signal.addEventListener("abort", () => turnController.abort(), { once: true });
+      }
+      turnSignal = turnController.signal as any;
+      runner = new Runner();
+      runner.on("agent_start", (runContext: any) => {
+        if (turnController.signal.aborted) return;
+        const turnUsage = { inputTokens: runContext.usage?.inputTokens ?? 0, outputTokens: runContext.usage?.outputTokens ?? 0 };
+        const spentSoFar = priorSpendUsd + estimateModelCost({ model, inputTokens: turnUsage.inputTokens, outputTokens: turnUsage.outputTokens });
+        if (spentSoFar > budgetUsd) {
+          budgetExceededDetails = { spentUsdEstimate: Number(spentSoFar.toFixed(6)), budgetUsd, nodeId: node.id, turnUsage };
+          turnController.abort();
+        }
+      });
+    }
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const result: any = await Promise.race([run(agent, prompt, { maxTurns, signal: context.signal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any), new Promise((_, rej) => setTimeout(() => rej(new Error("model_timeout")), timeoutMs))]);
+        const runOnce = runner ? runner.run(agent, prompt, { maxTurns, signal: turnSignal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any) : run(agent, prompt, { maxTurns, signal: turnSignal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any);
+        const result: any = await Promise.race([runOnce, new Promise((_, rej) => setTimeout(() => rej(new Error("model_timeout")), timeoutMs))]);
         const validated = validateOutput(result.finalOutput, node.outputSchema);
         if (!validated.ok) {
           if (attempt < maxRetries) continue;
@@ -142,6 +183,17 @@ export class OpenAINodeRunner implements NodeRunner {
         return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length } };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
+        // Checked before the generic cancellation/abort branch below: the in-loop circuit breaker
+        // aborts via the same kind of signal a real cancellation would, so the flag it set is the
+        // only way to tell "budget tripped mid-turn" apart from "caller cancelled".
+        if (budgetExceededDetails) {
+          return {
+            ok: false,
+            code: "budget_exceeded",
+            message: `Node "${node.id}" was aborted mid-turn: estimated spend $${budgetExceededDetails.spentUsdEstimate} already meets or exceeds its $${budgetExceededDetails.budgetUsd} budget. Caught inside the agent loop before the next turn, rather than discovered only after the node finished.`,
+            details: { ...budgetExceededDetails, stage: "mid_turn" }
+          };
+        }
         if (msg === "model_timeout") return { ok: false, code: "model_timeout", message: "OpenAI node execution timed out." };
         // Distinct and actionable: an exhausted turn budget is a configuration problem with one
         // specific fix, not the "the model errored" bucket. Reported as such even on a non-final
