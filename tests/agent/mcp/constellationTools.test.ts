@@ -54,15 +54,18 @@ describe("constellation.* MCP tools", () => {
     expect(attention.map((item) => item.id).sort()).toEqual([
       "attn_project_unconfigured_dr-lurie",
       "attn_project_unconfigured_monetizer",
-      "attn_project_unconfigured_pdf-tool"
-      // The two "skill requests a denied tool" items that used to sit here are gone, because the thing
-      // they reported is fixed. Both publish-risk nodes were assigned a skill requesting
-      // project.call_tool while the node itself denied it — which was never a lock, it was a
-      // publisher that could not reach the client. Both nodes now carry the grant, so the only
-      // remaining denial is approval_required: the per-run approval gate doing its job, not a
-      // workspace misconfiguration, and not attention-worthy. The locks that DO hold a publish are
-      // the publish gates (publisher.ts) and that approval requirement, neither of which this feed
-      // was ever measuring.
+      "attn_project_unconfigured_pdf-tool",
+      // These two are back, but for a NEW and correct reason — not the old regression. dr_lurie_
+      // contract_intelligence now requests project.call_read_tool (the no-approval discovery split),
+      // and publication_controller / publish_executor deliberately do NOT grant it — they stay
+      // write-variant-only (project.call_tool), per the split's design: those two nodes never do
+      // discovery, only an approved write. The denial reason is node_tool_not_allowed, a genuine
+      // "the node doesn't grant what its skill asks for" signal, not approval_required (the gate
+      // working as designed, which R-5's isMisconfiguration filter still suppresses). Both items are
+      // warning-severity and expected; project.call_tool itself still resolves allowed pending
+      // approval on both nodes, unaffected by this split.
+      "attn_skill_requests_denied_tool_publication_controller",
+      "attn_skill_requests_denied_tool_publish_executor"
     ]);
     // Nothing blocker-severity. Before the skills were re-seeded alongside the nodes there were thirteen.
     expect(attention.filter((item) => item.id.startsWith("attn_skill_blocker_"))).toEqual([]);

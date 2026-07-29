@@ -116,6 +116,8 @@ Recommended: delete #2 (it silently overrides the seeded schema on every fresh w
 
 **R-24 ✅ Retire the legacy `save_json_blob_*` publish dialect for dr-lurie.** Landed 2026-07-29 (#89). Dr. Lurié is a tenant of the same object substrate as client 0, and the ratified alignment doc froze the legacy pipeline and directed that `save_json_blob_*` must not be allowlisted for the project — but the publish hook still spoke it, and under `defaultToolPolicy: "allowed"` the whole family plus the five-agent per-stage tools were callable by default. The hook now speaks the object dialect (`object_create → object_checkout → object_validate → object_patch → object_publish → object_checkin`, validating before any patch, never releasing); per-site parameters (owning site object id, taxonomy registry, request-id shape, who mints the object id) moved into an `objectDialect` block on the project config instead of literals in the hook; and the retired families are blocked in two layers — named in the seeded `toolPolicies`, and refused by shape in `executablePolicy.ts` so an unenumerated variant cannot slip through. `agent-publishing-instructions.md` deleted; the dr-lurie knowledge block rewritten for the object path. **One value to confirm at enablement:** `siteObjectId: "site_drlurie"` is inferred by symmetry with the documented `tax_drlurie` — the dr-lurie endpoint was unreachable from that session, so it was never read off the live server.
 
+**R-25 ✅ Split `project.call_tool` into a read-only variant so contract discovery stops being approval-gated.** Landed 2026-07-29 (#91). T-2 (`run_1785340011864_qpyjr0`) proved the engine works end-to-end in live mode — the first real run since E-1…E-4 — and immediately found the next defect: `contract_intelligence` could not fetch the platform `content_item` contract. `project.call_tool` covers BOTH read-only discovery AND external writes, and is approval-gated because of the write half — correctly — but that also blocked the read half every content-building node needs on every run: `requiresApproval: true` meant the node runner's effective-tools filter dropped it whenever a run carried no approved tool ids, and the node correctly refused to fabricate a contract rather than proceed on nothing. New controlled tool `project.call_read_tool` (riskLevel `read`, `requiresApproval: false`) is permitted only a fixed, server-side allowlist — `object_contract`, `registry_get`, `object_inventory`, `object_get`, `object_list`, `object_validate`, `ping` — enforced in `ProjectMcpAdapter.callReadTool` before any transport and never from caller input; anything else is refused with a distinct `read_tool_operation_not_permitted` code naming the attempted operation. Everything else `project.call_tool` honors still applies unchanged — per-project `toolPolicies`/`defaultToolPolicy`, the executable project policy's legacy-artifact-fallback blocks, and the connection/auth path — because `callReadTool` delegates straight into the existing, untouched `callTool` once the allowlist clears. Granted alongside the existing `project.call_tool` (which nodes keep, for a future write) on `contract_intelligence`, `article_body`, `artifact_plan` and `publish_payload`; `publication_controller` and `publish_executor` are unchanged — write-variant only, since neither ever does discovery. `project.call_tool` itself was not touched: still `write` / `external_write` / `requiresApproval: true`, the only path to an external write. A wire-level MCP tool `project.call_read_tool` mirrors the controlled-tool version for direct operator/script use (manifest 136 → 137).
+
 **E — live-mode readiness (2026-07-29).** Four independent defects that between them meant the pipeline could not run end-to-end in live model mode and reach the client. Detail in §2k.
 
 **E-1 ✅ `executionMode` no longer defaults silently.** Live (`openai`) is the default at every entry point and `mock` is the explicit opt-in for cheap CI runs; every run additionally reports what produced it (`workflow.get_run` / `workflow.list_runs` carry a top-level `mode` block: executionMode, `live`, node source, and a prose notice).
@@ -374,6 +376,59 @@ skills (unblocked by R-2, but a data change with its own review); and confirming
 
 ---
 
+## 2l. Execution log — 2026-07-29, wave 12 (R-25: the read-only tool split)
+
+**The live end-to-end run wave 11 recommended actually ran.** `run_1785340011864_qpyjr0` is the first
+real live-mode run through the engine — E-1…E-4 and the R-2/R-5 fixes held, the run reached
+`contract_intelligence`, and that node immediately hit the next defect rather than a repeat of the
+old one: `project.call_tool` dropped out of its effective tools with no approval context, so the node
+correctly blocked rather than fabricate a contract. No publishable article was produced, and none
+should have been — this is the node's own refusal working, not a crash.
+
+Root cause named precisely in the task: `project.call_tool` conflates two different questions —
+*can this node read the client's contract* and *can this node write to the client* — under one
+`requiresApproval: true` flag that is only correct for the second question. R-25 answers them
+separately: `project.call_read_tool` (new controlled tool, `requiresApproval: false`, fixed
+server-side allowlist) for the first; `project.call_tool` (unchanged) for the second.
+
+**What changed:**
+- `src/agent/projects/projectMcpAdapter.ts` — `READ_TOOL_ALLOWLIST` and `ProjectMcpAdapter.callReadTool`.
+  The allowlist check runs first, before any transport, against a *hardcoded* list (never the caller's
+  `tool` argument in any form); once cleared, execution is `callTool` itself, untouched — so every
+  existing guarantee (`toolPolicies`, `defaultToolPolicy`, connection/auth) applies identically.
+- `src/agent/tools/toolRegistry.ts` — new controlled tool `project.call_read_tool`
+  (`riskLevel: "read"`, `sideEffect: "external_read"`, `requiresApproval: false`), whose handler also
+  runs the project's `enforceCallToolPolicy` hook before delegating to `callReadTool` — the same
+  ordering `project.call_tool`'s own handler already used, so a name that is both outside the
+  allowlist and independently policy-blocked (a `save_json_blob_*` name, say) is caught by the policy
+  layer first, not silently re-labeled with the new code.
+- `src/agent/mcp/workspace/tools.ts` — wire-level `project.call_read_tool`, mirroring `project.call_tool`'s
+  existing wire tool, for direct operator/script use outside node execution.
+- `src/agent/workspace/nodes.ts` — `project.call_read_tool` granted to `contract_intelligence`,
+  `article_body`, `artifact_plan`, `publish_payload` (alongside the existing `project.call_tool`, kept
+  for a future write). `publication_controller` / `publish_executor` untouched.
+- `dr_lurie_contract_intelligence` skill (`seededSkills.ts`) and the `contract_intelligence` node prompt
+  now name `project.call_read_tool` as the discovery surface, so the node's own prompt text stops
+  pointing at the tool that was just proven to fail it.
+
+**A side effect worth naming rather than hiding:** granting the skill `project.call_read_tool`
+reintroduced two `attn_skill_requests_denied_tool_*` warnings for `publication_controller` /
+`publish_executor` — the SAME skill is assigned to all six contract-intelligence-family nodes, and
+those two correctly don't grant the new tool. This is real signal (the skill now formally requests
+something two of its six host nodes deny, by design), not the old R-5 regression it superficially
+resembles; `constellationTools.test.ts` documents the distinction inline. `project.call_tool` itself
+still resolves `approval_required` — unaffected — on every node that holds it.
+
+Suite: **907 root** (was 893), typecheck clean, all three locks green (manifest 136 → 137, surfaceHash
+`e020e80d…` → `61b0a12c…`), node/skill seed drift clean.
+
+**Follow-up not taken here:** re-running `run_1785340011864_qpyjr0`'s scenario live to confirm
+`contract_intelligence` now completes end-to-end — this wave fixes the mechanism and covers it with
+unit/wire tests, but a fresh live run against the real client is the next deliberate, budget-spending
+step, same caveat as wave 11's.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -396,8 +451,10 @@ Say **go** (or mark exceptions by ID) and I execute in this order: **W-2, W-3** 
 
 **Wave 11 executed 2026-07-29** (E-1…E-4, R-2, R-5; R-24 landed separately as #89) — see §2k.
 
+**Wave 12 executed 2026-07-29** (R-25, found by actually running wave 11's recommended live end-to-end run) — see §2l.
+
 Next, in the order I would take them:
-1. **A live end-to-end run** — the four defects wave 11 cleared were what stood between the pipeline and a real live-mode run reaching the client. Worth doing deliberately (it spends model budget) with `budgetUsd` set, and reading the `mode` block on the resulting run to confirm it executed live against store-resolved definitions.
+1. **A live end-to-end run, again** — the specific defect `run_1785340011864_qpyjr0` hit is fixed and covered by unit/wire tests, but nothing has re-run that scenario live end-to-end since. Worth doing deliberately (it spends model budget) with `budgetUsd` set, reading `mode` to confirm live/store execution as before, and this time watching whether `contract_intelligence` actually produces a contract and the run reaches a publishable `article_body`.
 2. **R-8** — promoted by wave 4's findings 2–4: three separate allow-list/reporting defects surfaced the moment the connections came up (`platform`'s `allowedTools: []`, the vanished `requiredPdfToolCapabilities` source of truth, the missing `resume_agent_artifact_job` / `get_image_model_policy` grants). Two hand-kept lists with no declared requirement is the condition that caused the original pdf-tool regression.
 3. **The 7 flattened skill `outputSchema`s** — R-2 removed the false blocker that forced them to stay placeholders; writing their real contracts is now unblocked and is the next thing an operator editing schemas in S4 will walk into.
 4. **R-20** — mock runs still accrue estimated cost against `budgetUsd` despite making no model calls. Cheap, and it matters more now that mock is an explicit choice people make for cost reasons.

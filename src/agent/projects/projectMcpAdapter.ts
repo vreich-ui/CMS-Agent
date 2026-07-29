@@ -35,6 +35,26 @@ export type ContractDiscoveryResult = { ok: boolean; available: boolean; schemaT
 export type DryValidateResult = { ok: boolean; available: boolean; toolName?: string; result?: unknown; error?: string };
 export type CallToolResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tool: string; permission?: ToolPermission; requiresApproval?: boolean; result?: unknown; error?: string };
 
+// project.call_tool covers BOTH read-only contract discovery (object_contract, registry_get, ...)
+// AND external writes (publishing), and is approval-gated because of the write half — correctly.
+// That also blocked the read half, which every content-building node needs on every run: T-2
+// (run_1785340011864_qpyjr0) proved the engine works end-to-end in live mode, but
+// contract_intelligence could not fetch the platform content_item contract, because
+// project.call_tool's requiresApproval:true meant the node runner's effective-tools filter dropped
+// it whenever a run carried no approved tool ids. The node correctly refused to fabricate a contract
+// rather than proceed on nothing.
+//
+// This is the fixed, server-side allowlist for the read-only split (project.call_read_tool) — never
+// caller-supplied, so a caller cannot widen it by asking for a different tool name. It mirrors the
+// boundary the clients already draw themselves: on both Dr. Lurie and Platform these operations are
+// "allowed" while every mutating verb is "needs_approval" (see object_contract's publish_policy /
+// creation_policy and the live toolPolicies on both project records).
+export const READ_TOOL_ALLOWLIST = ["object_contract", "registry_get", "object_inventory", "object_get", "object_list", "object_validate", "ping"] as const;
+export type ReadToolOperation = typeof READ_TOOL_ALLOWLIST[number];
+const isReadToolOperation = (name: string): name is ReadToolOperation => (READ_TOOL_ALLOWLIST as readonly string[]).includes(name);
+
+export type ReadToolCallResult = CallToolResult & { code?: "read_tool_operation_not_permitted" };
+
 // Adapter that performs primitive, guarded MCP calls against a project's external server. It never
 // executes publishing; it only initializes, lists tools, discovers contract/schema surfaces, and
 // performs dry validation when the remote exposes it.
@@ -109,6 +129,29 @@ export class ProjectMcpAdapter {
     } catch (error) {
       return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, error: sanitizeError(error) };
     }
+  }
+
+  // Read-only counterpart to callTool: no requiresApproval gate, because contract discovery is not a
+  // write. The boundary is enforced HERE, first, against the fixed allowlist above — before any
+  // transport and before the project's own permission model runs — so a caller cannot reach a
+  // mutating verb by calling this method with a different tool name. Once an operation clears the
+  // allowlist it goes through callTool completely UNCHANGED: per-project toolPolicies /
+  // defaultToolPolicy (a client can still block or hold a read op) and the connection/auth path are
+  // honored exactly as they are for a write call. project.call_tool itself is untouched by this
+  // method's existence — it stays riskLevel write / requiresApproval true, the only path to an
+  // external write.
+  async callReadTool(name: string, args: Record<string, unknown> = {}): Promise<ReadToolCallResult> {
+    if (!isReadToolOperation(name)) {
+      return {
+        ok: false,
+        projectId: this.config.projectId,
+        connection: this.connectionState(),
+        tool: name,
+        code: "read_tool_operation_not_permitted",
+        error: `"${name}" is not a permitted read-only operation; project.call_read_tool only allows: ${READ_TOOL_ALLOWLIST.join(", ")}. Use project.call_tool for writes.`
+      };
+    }
+    return this.callTool(name, args);
   }
 
   // Schema/contract discovery, if the remote exposes it: schema/contract-named tools and resources.
