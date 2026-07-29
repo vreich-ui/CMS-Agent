@@ -14,7 +14,11 @@ describe("runConductorJob (Cloud Run job entrypoint)", () => {
     expect(result.outcome).toBe("blocked");
     expect(result.run.status).toBe("blocked");
     expect(result.run.nodes.find((node) => node.nodeId === "publication_controller")?.status).toBe("blocked");
-    expect(result.run.nodes.find((node) => node.nodeId === "learning_recorder")?.status).toBe("queued");
+    // F4 (T-2, run_1785352838155_l544ye): learning_recorder fires on any run termination (completed,
+    // blocked, failed) rather than waiting on publication_controller specifically, which never
+    // reaches "completed" on an unapproved dry run — that dependency was permanently unsatisfiable.
+    expect(result.run.nodes.find((node) => node.nodeId === "learning_recorder")?.status).toBe("completed");
+    expect(result.run.status).toBe("blocked");
     expect(result.run.approvalsRequired.length).toBeGreaterThan(0);
     expect(result.run.nodes.filter((node) => node.status === "completed").length).toBeGreaterThanOrEqual(14);
     expect(exitCodeFor(result.outcome)).toBe(0);

@@ -9,8 +9,8 @@ const clone = <T>(value: T): T => structuredClone(value);
 export class BlobLearningRepository implements LearningRepository {
   constructor(private readonly workspaceRepository: WorkspaceRepository, private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
 
-  async recordObservation(observation: string, metadata?: Record<string, unknown>): Promise<LearningObservation> {
-    return this.workspaceRepository.recordObservation(observation, metadata);
+  async recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }): Promise<LearningObservation> {
+    return this.workspaceRepository.recordObservation(observation, metadata, provenance);
   }
 
   async listObservations(): Promise<LearningObservation[]> {

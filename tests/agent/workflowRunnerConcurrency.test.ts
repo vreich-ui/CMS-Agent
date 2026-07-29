@@ -68,7 +68,14 @@ describe("Publishing Conductor runner state advancement", () => {
     expect(final.status).toBe("blocked");
     expect(final.currentNodeId).toBe("publication_controller");
     expect(final.nodes.find((node) => node.nodeId === "publication_controller")!.status).toBe("blocked");
-    expect(final.nodes.find((node) => node.nodeId === "learning_recorder")!.status).toBe("queued");
+    // F4 (T-2, run_1785352838155_l544ye): learning_recorder no longer waits on publication_controller
+    // completing (which never happens on a dry run — every dry run blocks there by design, so the
+    // dependency was permanently unsatisfiable and zero observations were ever recorded). It now fires
+    // as a best-effort side effect the moment the run reaches ANY terminal outcome, including this
+    // blocked-for-approval one, without changing the run's own reported status/currentNodeId.
+    expect(final.nodes.find((node) => node.nodeId === "learning_recorder")!.status).toBe("completed");
+    expect(final.status).toBe("blocked");
+    expect(final.currentNodeId).toBe("publication_controller");
     expect(final.approvalsRequired).toEqual([
       expect.objectContaining({ nodeId: "publication_controller", type: "approval_required" })
     ]);

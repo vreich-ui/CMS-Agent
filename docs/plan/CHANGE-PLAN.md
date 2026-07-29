@@ -527,6 +527,114 @@ and its silent failure mode are fixed.
 
 ---
 
+## 2n. Execution log — 2026-07-29, wave 14 (T-2's follow-up: the blocker is cost, not capability)
+
+Wave 13's follow-up got taken: `run_1785352838155_l544ye` proved the contract fetch itself now works —
+`contract_intelligence` reached zero blockers and 13 constraints reduced from the live platform
+contract. The blocker moved from "the call fails" to "the call is expensive": $2.57 / 502,397 input
+tokens for `contract_intelligence` alone, and a run-level budget gate that let one node carry a $3
+ceiling to $4.17 (139% over) in a single dispatch. Five fixes.
+
+**F1 — moved the contract fetch out of the agent loop.** `contract_intelligence` was re-sending the
+raw fetched contract on every one of its (already-capped-at-8) turns — roughly 60K input tokens/turn.
+Fetched the real platform `object_contract(content_item)` response live to ground the fix in actual
+data rather than a guessed shape (a JSON-Schema `body_schema`, a `constraints[]` array, `publish_policy`
+/ `media_policy` / `creation_policy` objects, a `workflow` block, `patch_ops[]`, `auxiliary_inputs[]`):
+- `src/agent/workspace/contractReduction.ts` — `reduceContract(raw, source, objectType)`, a pure,
+  deterministic function. Keeps `body_schema` whole (structural, not prose — downstream nodes validate
+  against it), extracts id/slug conventions from the constraints array itself (there is no separate
+  key for them on the one real shape inspected), folds `media_policy` with the media-relevant
+  `auxiliary_inputs` notes, extracts the taxonomy source and its blocking constraint, keeps every
+  constraint with its severity/`enforced_live` (description bounded to ~160 chars, not the full
+  paragraph), drops `publish_policy.denial_codes` and `workflow.patch_error_codes` (literally the
+  "error catalogues" the task called out), keeps `workflow.sequence`, and reduces `patch_ops` to op
+  name + top-level required fields (dropping each op's recursive `arg_schema` `$defs`, the actual bulk
+  of `patch_ops`' size). Anything unrecognized is preserved under a bounded `unmapped`, never silently
+  dropped — matching contract_intelligence's own "say so as an assumption" policy for a silent
+  contract, and keeping the reducer honest for a client shaped differently than the one inspected.
+- `src/agent/workspace/contractPrefetch.ts` — `getReducedContract({runId, projectId}, deps)`: calls
+  `ProjectMcpAdapter.callReadTool("object_contract", ...)` directly (a plain function call, not a tool
+  the model invokes), still honoring the project's executable policy before any transport (mirrors
+  `project.call_read_tool`'s own handler ordering). Cached per (runId, projectId, objectType) through
+  the same `RunScopedCache` `getRunContext` already uses, so a run never re-fetches mid-run. Object type
+  resolves: an explicit override → the project's own `objectDialect.defaultObjectType` → the pipeline's
+  current single-client-family default (`"content_item"`) — see next paragraph for why the middle rung
+  exists.
+- `ProjectObjectDialect` (`projectTypes.ts`) gained `defaultObjectType`, alongside the existing
+  `siteObjectId`/`taxonomyRegistryObjectId` per-site parameters, set to `"content_item"` for `dr-lurie`
+  (`DR_LURIE_DEFINITION_VERSION` 5 → 6 so a persisted stale config re-seeds it). `platform` has no
+  static definition file in this repo (it is a live-only project record) — the `"content_item"` fallback
+  is what keeps the mechanism working for it today; an operator can set `objectDialect.defaultObjectType`
+  on the live record once a second client needs a different object type.
+- `executor.ts`'s `executeRunnableNode` calls the prefetch for any node whose `metadata.contractPrefetch`
+  is `true` (set on `contract_intelligence`), BEFORE dispatching it, and injects the result into the
+  node's own input as `prefetchedContract` (or `prefetchError`, best-effort — a fetch failure becomes
+  the node's own explicit blocker, never an executor crash).
+- `contract_intelligence`'s prompt rewritten: this is now a validation-and-pass-through step over
+  `prefetchedContract`, not a discovery one. It no longer re-fetches the primary contract itself;
+  `project.call_read_tool` stays granted only for something genuinely missing from the prefetch (a
+  registry/taxonomy lookup, or a different object type than what was prefetched).
+- **Not done here** (scope boundary): per-downstream-node slicing of `contract_intelligence`'s own
+  output (article_body/artifact_plan/publish_payload each reading only their relevant field) — lower
+  marginal value once the primary fetch is no longer the cost driver, and each already reads named
+  fields (`bodySchema`, `mediaConvention`, `publishPolicy`, ...) from a payload that is now reduced
+  rather than the raw multi-KB contract.
+
+**F2 — the per-turn budget check (wave 13's B3) watched the wrong ceiling.** It checked a node's own
+`modelConfig.budgetUsd` — a rare, node-specific knob — never the RUN's `budgetUsd` (the one
+`workflow.start_dry_run` actually sets and the between-node gate in `advanceRun` evaluates). A single
+node's turns could still carry the run straight through its real ceiling before the gate got another
+look — precisely what happened: $1.60 → $4.17 against a $3 ceiling in one `contract_intelligence`
+dispatch. `OpenAINodeRunner.ts` now resolves the tighter of the two (node config, run-level) as the
+effective ceiling the in-loop guard watches, reusing the exact `agent_start`-hook mechanism wave 13
+built — this is a one-line widening of what counts as "the budget," not new machinery.
+
+**F3 — `workflow.resume_run`'s own reported remedy was unreachable.** The budget gate's block reason
+says "Raise budgetUsd and resume," but `resume_run` took only `runId` — there was no tool call that
+could actually raise it. `resume_run` split out of the shared pause/cancel/resume tool map (the only
+one of the three that needed an extra field) with an optional `budgetUsd`; omitted, resume behaves
+exactly as before. `updateRunStatus` (`executor.ts`) gained an optional `patch` parameter carrying it
+through to the saved run — the run's own between-node gate re-evaluates the new ceiling against
+accrued spend on the very next advance and clears `budgetBlock` itself once it passes.
+
+**F4 — `learning_recorder` depended on `publication_controller` completing, which a dry run's own
+design never lets happen** (every dry run blocks at the publish-risk gate unless explicitly approved) —
+zero observations were ever recorded from any dry run. Generalized by `kind` (`node.kind === "learning"`,
+matching the `isPublishRisk` precedent of a semantic node property, not a hardcoded id): `advanceRun`
+now fires it as a best-effort side effect — `recordTerminationObservations` — the moment the run
+reaches ANY of completed/blocked/failed, restoring the run's own status/currentNodeId immediately after
+so this side observation can never override the run's real outcome. Separately, and load-bearing for
+the fix to mean anything in a real (non-mock) run: `learning.record_observation`'s controlled tool was
+`requiresApproval: true`, but `approvedToolIds` is never populated for normal node dispatch (only
+`tool.test`'s diagnostic path sets it) — identically to how `project.call_tool` stranded
+`contract_intelligence` before the read-tool split (#91). Recording an internal, workspace-local
+observation never touches a client or publishes anything, so it does not need human gating;
+`requiresApproval` is now `false`. Every new observation is stamped with `runId`/`nodeId` (both the
+controlled tool and the wire-level tool) — the existing 32 records predate this and carry neither field,
+unfixable retroactively.
+
+**F5 — timeout/cost audit.** `draft_writer` had no configured timeout (defaulted to 60s) and failed
+with `model_timeout` on a large brief; 300s was set live and it passed. Only 3 of 21 nodes had an
+explicit timeout at all (`research`, `trust_factual`, `contract_intelligence` — all tool-heavy), yet
+`draft_writer`'s failure had nothing to do with tool calls — a single large-output generation call can
+simply take longer than 60s. The global fallback (`OpenAINodeRunner.ts`/`AnthropicNodeRunner.ts`) is
+now 120s; `draft_writer` carries its own confirmed 300s override, and the other large-output assembly
+nodes (`human_texture`, `article_body`, `publish_payload`, `brief_architect`) carry 180s as a reasoned
+middle tier. `research`'s cost variance (5x: $0.76/145K tokens vs $0.14/21K tokens on an identical
+config) is capped with `modelConfig.budgetUsd: 1`, which the F2 fix above now actually enforces mid-turn
+rather than only after the fact.
+
+Suite: **935 root** (was 916 going in — wave 13 landed at 913, then two more tests were added for the
+prior wave's own coverage before this wave started), typecheck clean, node/skill seed drift clean,
+manifest lock clean (`workflow_resume_run`'s schema changed — regenerated deliberately).
+
+**Follow-up not taken here:** a fresh live end-to-end re-run of `run_1785352838155_l544ye`'s scenario to
+confirm `contract_intelligence`'s actual dollar cost lands under the $0.10 target now that the fetch is
+deterministic; setting `objectDialect.defaultObjectType` on platform's live (non-static) project record
+so F1's prefetch resolves it from project config rather than the pipeline-wide fallback.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -555,8 +663,13 @@ Say **go** (or mark exceptions by ID) and I execute in this order: **W-2, W-3** 
 detail on tool errors, B3 in-loop budget circuit breaker, B4 read-tool prompt naming + reduction
 mandate; node-definition resolution timing confirmed by tracing the code) — see §2m.
 
+**Wave 14 executed 2026-07-29** (T-2's follow-up, capability proven — the blocker was cost: F1
+conductor-level deterministic contract prefetch+reduction, F2 the in-loop budget guard watching the
+run's real ceiling, F3 `resume_run` can actually raise `budgetUsd`, F4 `learning_recorder` fires on any
+run termination and its tool is no longer unreachably approval-gated, F5 timeout/cost audit) — see §2n.
+
 Next, in the order I would take them:
-1. **A live end-to-end run, again** — wave 13 fixed the mechanism T-2 hit and covered it with unit/wire tests, but nothing has re-run that scenario live end-to-end since. Worth doing deliberately (it spends model budget) with `budgetUsd` set, reading `mode` to confirm live/store execution as before, and this time watching whether `contract_intelligence` actually produces a contract, at what cost, and whether the run reaches a publishable `article_body`.
+1. **A live end-to-end run, again** — wave 14 fixed every mechanism `run_1785352838155_l544ye` hit and covered each with unit/integration tests, but nothing has re-run that scenario live end-to-end since. Worth doing deliberately (it spends model budget) with `budgetUsd` set, reading `mode` to confirm live/store execution as before, and this time watching `contract_intelligence`'s actual dollar cost against the $0.10 target, whether `learning_recorder` actually records observations, and whether the run reaches a publishable `article_body`.
 2. **R-8** — promoted by wave 4's findings 2–4: three separate allow-list/reporting defects surfaced the moment the connections came up (`platform`'s `allowedTools: []`, the vanished `requiredPdfToolCapabilities` source of truth, the missing `resume_agent_artifact_job` / `get_image_model_policy` grants). Two hand-kept lists with no declared requirement is the condition that caused the original pdf-tool regression.
 3. **The 7 flattened skill `outputSchema`s** — R-2 removed the false blocker that forced them to stay placeholders; writing their real contracts is now unblocked and is the next thing an operator editing schemas in S4 will walk into.
 4. **R-20** — mock runs still accrue estimated cost against `budgetUsd` despite making no model calls. Cheap, and it matters more now that mock is an explicit choice people make for cost reasons.

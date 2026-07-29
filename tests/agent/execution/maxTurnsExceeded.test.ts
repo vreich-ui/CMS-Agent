@@ -1,21 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The SDK signals an exhausted agent loop by throwing MaxTurnsExceededError. Reproduced here exactly
-// as the SDK raises it — name plus message — so the runner's classification is exercised, not a
-// stand-in for it.
-class MaxTurnsExceededError extends Error {
-  constructor(turns: number) {
-    super(`Max turns (${turns}) exceeded`);
-    this.name = "MaxTurnsExceededError";
+// research now carries its own modelConfig.budgetUsd (F5, capping its cost variance), so the runner
+// always goes through the Runner-instance path here, not the bare run() function. Everything the mock
+// factory below needs (vitest hoists vi.mock above the rest of this module) is declared together in
+// one vi.hoisted block; Runner.run() delegates to the SAME runMock so every existing assertion (call
+// count, captured args) still holds regardless of which path OpenAINodeRunner takes.
+const { runMock, MockRunner } = vi.hoisted(() => {
+  // The SDK signals an exhausted agent loop by throwing MaxTurnsExceededError. Reproduced here
+  // exactly as the SDK raises it — name plus message — so the runner's classification is exercised,
+  // not a stand-in for it.
+  class MaxTurnsExceededError extends Error {
+    constructor(turns: number) {
+      super(`Max turns (${turns}) exceeded`);
+      this.name = "MaxTurnsExceededError";
+    }
   }
-}
-
-const runMock = vi.fn(async (_agent: unknown, _prompt: unknown, options: any) => {
-  throw new MaxTurnsExceededError(options?.maxTurns ?? 0);
+  const mock = vi.fn(async (_agent: unknown, _prompt: unknown, options: any) => {
+    throw new MaxTurnsExceededError(options?.maxTurns ?? 0);
+  });
+  return {
+    runMock: mock,
+    MockRunner: class { on() { return this; } run(...args: unknown[]) { return mock(...(args as [any, any, any])); } }
+  };
 });
 vi.mock("@openai/agents", () => ({
   Agent: class { constructor(_config: unknown) {} },
   run: (...args: unknown[]) => runMock(...(args as [any, any, any])),
+  Runner: MockRunner,
   tool: (definition: unknown) => definition,
   OpenAIChatCompletionsModel: class { constructor(_client: unknown, _model: string) {} }
 }));

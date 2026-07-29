@@ -43,6 +43,13 @@ export type ProjectObjectDialect = {
   // The client's request-id shape, as an anchored regular-expression source. Optional: the publisher
   // falls back to the shared contract default when a project declares none.
   requestIdPattern?: string;
+  // F1 (T-2, run_1785352838155_l544ye): the object_type argument object_contract needs (e.g.
+  // "content_item"). Lets the conductor prefetch and reduce a client's contract deterministically,
+  // in code, before dispatching contract_intelligence — instead of the node discovering it itself via
+  // a tool call inside its own (expensive, per-turn-compounding) agent loop. Absent for a project that
+  // has not declared one; contractPrefetch.ts falls back to a run-supplied clientObjectType, then to
+  // the pipeline's current single-client-family default ("content_item") — see that file for why.
+  defaultObjectType?: string;
 };
 
 export type ProjectPublishingPolicy = {

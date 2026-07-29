@@ -83,7 +83,10 @@ export class AnthropicNodeRunner implements NodeRunner {
       tools: [{ name: "emit_output", description: "Emit this node's structured output. Call exactly once with the full result matching the schema.", input_schema: node.outputSchema as Record<string, unknown> }],
       tool_choice: { type: "tool", name: "emit_output" }
     };
-    const timeoutMs = numberFrom(c.timeout) ?? 60000;
+    // F5 (T-2, run_1785352838155_l544ye): matches the OpenAI runner's default bump — 60s proved too
+    // tight for at least one real generation node (draft_writer, on the OpenAI path); raised here too
+    // for parity in case a node's provider is switched to anthropic.
+    const timeoutMs = numberFrom(c.timeout) ?? 120000;
     const maxRetries = Math.max(0, Math.floor(numberFrom(c.retryCount) ?? 0));
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {

@@ -13,6 +13,7 @@ import { postRunReflectionEnabled, reflectAfterRun } from "../improvement/reflec
 import { autoPromoteEnabled, autoPromoteProposals } from "../improvement/autoPromote.js";
 import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
+import { getReducedContract } from "./contractPrefetch.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -377,6 +378,42 @@ async function reflectOnCompletedRun(run: WorkflowExecutionRecord, store: Execut
   }
 }
 
+// F4 (T-2, run_1785352838155_l544ye): learning_recorder depended on publication_controller reaching
+// "completed" — but publication_controller is publish-risk (isPublishRisk above) and every dry run
+// blocks there by design unless explicitly approved, so that dependency was permanently unsatisfiable
+// on the overwhelmingly common path. Result: zero observations were ever recorded from any dry run.
+// Generalized by `kind` (matching the isPublishRisk precedent of a semantic node property, not a
+// hardcoded id) rather than gated by DAG dependency status: this fires whenever the run reaches ANY
+// terminal outcome that matters for learning — completed, blocked, or failed — not only the one DAG
+// path that almost never happens. executeRunnableNode itself never checks dependsOn (that happens in
+// findNextRunnableNode, before it is called), so the node can be dispatched directly here without its
+// declared dependency being satisfied; the run's own status/currentNodeId are restored immediately
+// after, so this best-effort side observation can never override the run's real outcome (a
+// budget-blocked run must stay "blocked" even if learning_recorder's own execution fails).
+const isLearningRecorder = (node: WorkspaceNode): boolean => node.kind === "learning";
+
+async function recordTerminationObservations(run: WorkflowExecutionRecord, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
+  const node = nodes.find(isLearningRecorder);
+  if (!node) return run;
+  const state = stateById(run).get(node.id);
+  // Fire at most once per run: either it already ran the ordinary way (an approved run reaching it
+  // through the DAG), or this hook already fired on an earlier terminal transition in this same run.
+  if (!state || state.status !== "queued") return run;
+  const status = run.status;
+  const currentNodeId = run.currentNodeId;
+  try {
+    const prepared = await executeRunnableNode(run, node, nodes, store, options);
+    prepared.run.status = status;
+    prepared.run.currentNodeId = currentNodeId;
+    const saved = await store.saveRun(prepared.run);
+    await prepared.commit?.().catch(() => undefined);
+    return saved;
+  } catch {
+    // Best-effort: recording observations must never fail the run or mask its real terminal status.
+    return run;
+  }
+}
+
 async function advanceRun(runId: string, store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
   let latest: WorkflowExecutionRecord | undefined;
   for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
@@ -396,7 +433,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
         // an operator opts in.
         const completed = await store.saveRun({ ...run, status: "completed", completedAt: now(), updatedAt: now(), currentNodeId: undefined });
         await reflectOnCompletedRun(completed, store, options);
-        return completed;
+        return await recordTerminationObservations(completed, nodes, store, options);
       }
       // Budget gate (F2): before dispatching the next node, halt the run if its accrued
       // (actual+estimated) model cost has reached the configured per-run ceiling. The pending node
@@ -407,7 +444,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
         const budget = evaluateRunBudget(run.budgetUsd, usage.totalCostUsdEstimate);
         if (budget?.overBudget) {
           const blockedAt = now();
-          return await store.saveRun({
+          const blocked = await store.saveRun({
             ...run,
             status: "blocked",
             currentNodeId: nextNode.id,
@@ -420,6 +457,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
               reason: `Run paused for budget: estimated spend $${budget.spentUsdEstimate} reached the configured ceiling $${budget.budgetUsd}; node ${nextNode.id} was not executed. Raise budgetUsd and resume to continue.`
             }
           });
+          return await recordTerminationObservations(blocked, nodes, store, options);
         }
       }
       const prepared = await executeRunnableNode(run, nextNode, nodes, store, options);
@@ -435,6 +473,12 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // usage behind. They are non-authoritative — the run record itself already holds the output —
       // so a failure here must not report an otherwise-successful advance as failed.
       await prepared.commit?.().catch(() => undefined);
+      // F4: the most common way a run reaches a learning-relevant terminal state — blocked (almost
+      // always the publish-risk-without-approval gate above) or failed — happens right here, not in
+      // the no-more-runnable-nodes branch reflection already covers.
+      if (saved.status === "blocked" || saved.status === "failed") {
+        return await recordTerminationObservations(saved, nodes, store, options);
+      }
       return saved;
     } catch (error) {
       if (isConcurrencyConflict(error)) continue;
@@ -455,6 +499,22 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
   run.status = "running";
   run.currentNodeId = nextNode.id;
   run.updatedAt = startedAt;
+
+  // F1 (T-2, run_1785352838155_l544ye): a node whose metadata declares contractPrefetch gets the
+  // client's contract fetched and reduced HERE — deterministic conductor code, before the node's own
+  // agent loop starts — instead of the node discovering it itself via a tool call that then re-sends
+  // the raw contract on every subsequent turn of its own loop (measured at ~60K input tokens/turn).
+  // Best-effort: a prefetch failure is handed to the node as `prefetchError` (matching its own
+  // "client unreachable" blocker language) rather than failing the dispatch outright, so a transient
+  // fetch problem surfaces as the node's own explicit blocker, not an executor crash.
+  if (nextNode.metadata?.contractPrefetch === true) {
+    try {
+      const prefetch = await getReducedContract({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository() });
+      state.input = { ...(state.input as Record<string, unknown>), ...(prefetch.ok ? { prefetchedContract: prefetch.reduced } : { prefetchError: prefetch.error }) };
+    } catch (error) {
+      state.input = { ...(state.input as Record<string, unknown>), prefetchError: error instanceof Error ? error.message : String(error) };
+    }
+  }
 
   if (isPublishRisk(nextNode) && options.approved !== true) {
     const completedAt = now();
@@ -558,13 +618,17 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
 // Update only the run-level status (pause/resume/cancel). Node completion state is never touched —
 // resume in particular must not resurrect node output — and the CAS retry keeps it from clobbering a
 // concurrent advance.
-export async function updateRunStatus(runId: string, status: ExecutionStatus, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord | undefined> {
+// F3 (T-2, run_1785352838155_l544ye): the budget gate's own remedy ("Raise budgetUsd and resume")
+// was unreachable — workflow.resume_run took only runId, with no way to raise the ceiling that
+// blocked the run in the first place. `patch` lets resume also carry a new budgetUsd; every other
+// caller (pause_run, cancel_run) passes none, so their behavior is unchanged.
+export async function updateRunStatus(runId: string, status: ExecutionStatus, store: ExecutionRepository = repositoryManager.getExecutionRepository(), patch: Partial<Pick<WorkflowExecutionRecord, "budgetUsd">> = {}): Promise<WorkflowExecutionRecord | undefined> {
   return withRunLock(runId, async () => {
     for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
       const run = await store.getRun(runId);
       if (!run) return undefined;
       try {
-        return await store.saveRun({ ...run, status, updatedAt: now() });
+        return await store.saveRun({ ...run, status, updatedAt: now(), ...patch });
       } catch (error) {
         if (isConcurrencyConflict(error)) continue;
         throw error;
