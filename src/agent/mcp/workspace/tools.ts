@@ -17,7 +17,7 @@ import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeMod
 import { toProjectSummary, validateHandoff } from "../../projects/projectRegistry.js";
 import { getProjectHooks } from "../../projects/projectHooks.js";
 import { createProject, deleteProject, projectCreateSchema, projectRegistrationContract, projectUpdateSchema, updateProject } from "../../projects/projectAdmin.js";
-import { ProjectMcpAdapter } from "../../projects/projectMcpAdapter.js";
+import { ProjectMcpAdapter, READ_TOOL_ALLOWLIST } from "../../projects/projectMcpAdapter.js";
 import { normalizeSkillInput, skillDefinitionSchema, validateSkillDefinition } from "../../skills/skillValidator.js";
 import { resolveSkillsForNode } from "../../skills/skillResolver.js";
 import { skillStatuses, type SkillDefinition } from "../../skills/skillTypes.js";
@@ -185,6 +185,10 @@ const budgetStatusJsonSchema = objectSchema({ projectId: { type: "string", minLe
 const projectIdJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 } }, ["projectId"]);
 const validateHandoffJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, contentSource: {}, articleBody: {} }, ["projectId"]);
 const projectCallToolJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, tool: { type: "string", minLength: 1 }, arguments: { type: "object", additionalProperties: true } }, ["projectId", "tool", "arguments"]);
+// Same shape as project.call_tool — the two differ in what the server permits and enforces
+// (READ_TOOL_ALLOWLIST, no approval concept at this wire layer either way), not in their input.
+const projectCallReadToolInput = projectCallToolInput;
+const projectCallReadToolJsonSchema = projectCallToolJsonSchema;
 const projectDefinitionJsonSchema = objectSchema({
   projectId: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{1,62}$", description: "Lowercase kebab-case id, e.g. acme-daily." },
   name: { type: "string", minLength: 1, maxLength: 120 },
@@ -413,6 +417,23 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       const blocking = policyFindings.filter((finding) => finding.severity === "error");
       if (blocking.length) return ok({ call: { ok: false, projectId: data.projectId, connection: adapter.connectionState(), tool: data.tool, permission: "blocked" as const, blockedByPolicy: true, policyFindings: blocking, error: `Blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}` } });
       return ok({ call: await adapter.callTool(data.tool, data.arguments) });
+    } }),
+    // Read-only split of project.call_tool. project.call_tool covers both read-only contract
+    // discovery and external writes, and is approval-gated (node-execution side) because of the
+    // write half — correctly. This wire tool gives an operator or script the same read-only
+    // affordance directly: permitted operations are the fixed, server-side READ_TOOL_ALLOWLIST
+    // (never caller-supplied), refused before any transport when out of bounds. Everything else
+    // project.call_tool honors — per-project toolPolicies/defaultToolPolicy, the executable project
+    // policy, the connection/auth path — still applies via ProjectMcpAdapter.callReadTool, which
+    // delegates straight into the unmodified callTool once the allowlist check passes.
+    tool({ name: "project.call_read_tool", description: `Call a read-only tool on a registered project MCP server, without approval. Permitted operations are a fixed, server-side allowlist (${READ_TOOL_ALLOWLIST.join(", ")}) — never caller-supplied; anything else is refused before any transport with code "read_tool_operation_not_permitted". Still honors the project's own toolPolicies/defaultToolPolicy and the executable project policy (legacy artifact fallback blocks) — a project can still block a read op. Use project.call_tool for writes.`, zodSchema: projectCallReadToolInput, inputSchema: projectCallReadToolJsonSchema, execute: async (input) => {
+      const data = projectCallReadToolInput.parse(input);
+      const config = await requireProject(data.projectId);
+      const adapter = new ProjectMcpAdapter(config);
+      const policyFindings = getProjectHooks(data.projectId)?.enforceCallToolPolicy?.({ tool: data.tool, arguments: data.arguments }) ?? [];
+      const blocking = policyFindings.filter((finding) => finding.severity === "error");
+      if (blocking.length) return ok({ call: { ok: false, projectId: data.projectId, connection: adapter.connectionState(), tool: data.tool, permission: "blocked" as const, blockedByPolicy: true, policyFindings: blocking, error: `Blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}` } });
+      return ok({ call: await adapter.callReadTool(data.tool, data.arguments) });
     } }),
     tool({ name: "project.validate_handoff", description: "Dry structural validation of a handoff against the project content_source.v1 / article_body.v1 contract. Read-only; no publishing.", zodSchema: validateHandoffInput, inputSchema: validateHandoffJsonSchema, execute: async (input) => { const data = validateHandoffInput.parse(input); const config = await requireProject(data.projectId); return ok({ validation: validateHandoff(config, { contentSource: coerceJsonObjectInput(data.contentSource), articleBody: coerceJsonObjectInput(data.articleBody) }) }); } }),
     tool({ name: "project.get_registration_contract", description: "Machine-readable contract for onboarding a new publishing client: field rules, env-var naming conventions, and the step-by-step registration flow.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ contract: projectRegistrationContract() }); } }),

@@ -132,6 +132,68 @@ describe("project.* MCP tools", () => {
     expect(response.json.error.data.error.message).toContain("does-not-exist");
   });
 
+  // project.call_read_tool — the read-only split of project.call_tool. T-2 proved contract_intelligence
+  // could not fetch a client contract because project.call_tool's requiresApproval:true dropped it
+  // from the node runner's effective tools whenever a run carried no approval context. This wire tool
+  // gives the same read-only affordance an operator/script can call directly, gated by a fixed,
+  // server-side allowlist rather than approval.
+  it("advertises project.call_read_tool", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    const names = response.json.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toContain("project_call_read_tool");
+  });
+
+  it("project.call_read_tool allows a permitted read op without approval and returns structured JSON without tokens", async () => {
+    const response = await toolCall("project.call_read_tool", { projectId: "dr-lurie", tool: "object_contract", arguments: { object_type: "content_item" } });
+    const { data } = structured(response);
+
+    expect(data.call).toMatchObject({ ok: true, projectId: "dr-lurie", tool: "object_contract", result: { tool: "object_contract", received: { object_type: "content_item" } } });
+    expect(remoteMethods).toEqual(["tools/call"]);
+    expect(JSON.stringify(response.json)).not.toContain(SECRET);
+    expect(JSON.stringify(response.json)).not.toContain(ENDPOINT);
+  });
+
+  it("project.call_read_tool refuses an operation outside the fixed allowlist, before any transport, naming the attempted operation", async () => {
+    for (const tool of ["object_create", "object_patch", "object_publish", "release_to_production"]) {
+      const response = await toolCall("project.call_read_tool", { projectId: "dr-lurie", tool, arguments: {} });
+      const { data } = structured(response);
+      expect(data.call).toMatchObject({ ok: false, tool, code: "read_tool_operation_not_permitted" });
+      expect(data.call.error).toContain(tool);
+    }
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
+  it("project.call_read_tool still honors the executable policy's fallback-source blocks on an allowlisted op", async () => {
+    // object_get is on the read allowlist; the remote-image-URL argument is what must be blocked.
+    const response = await toolCall("project.call_read_tool", { projectId: "dr-lurie", tool: "object_get", arguments: { src: "https://cdn.example.com/hero.png" } });
+    expect(structured(response).data.call).toMatchObject({ ok: false, tool: "object_get", permission: "blocked", blockedByPolicy: true });
+    expect(structured(response).data.call.policyFindings.map((finding: { code: string }) => finding.code)).toContain("blocked_remote_image_url");
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
+  it("project.call_read_tool still honors a project's own toolPolicies block on an allowlisted operation", async () => {
+    // A fresh project can still hold object_contract back even though it is on the fixed allowlist —
+    // the allowlist bounds what CAN be reached through this tool, never what a project must allow.
+    const created = await toolCall("project.create", { project: { projectId: "read-tool-block-test", name: "Read Tool Block Test", mcpEndpointEnvVar: "READ_TOOL_BLOCK_TEST_MCP_ENDPOINT", authMode: "none", defaultToolPolicy: "blocked", toolPolicies: { object_contract: "blocked" } } });
+    expect(structured(created).data.project.projectId).toBe("read-tool-block-test");
+
+    const response = await toolCall("project.call_read_tool", { projectId: "read-tool-block-test", tool: "object_contract", arguments: {} });
+    expect(structured(response).data.call).toMatchObject({ ok: false, tool: "object_contract", permission: "blocked" });
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
+  it("project.call_read_tool rejects an unknown project", async () => {
+    const response = await toolCall("project.call_read_tool", { projectId: "does-not-exist", tool: "object_contract", arguments: {} });
+    expect(response.json.error.code).toBe(-32603);
+    expect(response.json.error.data.error.message).toContain("does-not-exist");
+  });
+
+  it("project.call_tool remains exactly as it was — still write, still requiresApproval, unaffected by the read split", async () => {
+    const wipe = await toolCall("project.call_tool", { projectId: "dr-lurie", tool: "wipe_blob_stores", arguments: {} });
+    expect(structured(wipe).data.call).toMatchObject({ ok: false, tool: "wipe_blob_stores", permission: "needs_approval", requiresApproval: true });
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
   it("project.validate_handoff checks content_source.v1 / article_body.v1 structure locally", async () => {
     const valid = await toolCall("project.validate_handoff", { projectId: "dr-lurie", contentSource: { artifact: "content_source.v1", summary: "s" }, articleBody: validArticleBody });
     const invalid = await toolCall("project.validate_handoff", { projectId: "dr-lurie", articleBody: { schema_version: "article_body.v1", nodes: [] } });
