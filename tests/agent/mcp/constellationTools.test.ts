@@ -54,21 +54,22 @@ describe("constellation.* MCP tools", () => {
     expect(attention.map((item) => item.id).sort()).toEqual([
       "attn_project_unconfigured_dr-lurie",
       "attn_project_unconfigured_monetizer",
-      "attn_project_unconfigured_pdf-tool",
-      // R-22: after re-seeding nodes AND skills from the live workspace, a fresh workspace reproduces the
-      // live attention feed exactly — and these last two are the PUBLISH LOCKS HOLDING, not defects. Both
-      // publish-risk nodes are assigned a skill that requests project.call_tool while the node itself
-      // denies it. That denial is the lock. They are warning-severity and they are supposed to be here;
-      // they open deliberately at T-3/T-4.
-      "attn_skill_requests_denied_tool_publication_controller",
-      "attn_skill_requests_denied_tool_publish_executor"
+      "attn_project_unconfigured_pdf-tool"
+      // The two "skill requests a denied tool" items that used to sit here are gone, because the thing
+      // they reported is fixed. Both publish-risk nodes were assigned a skill requesting
+      // project.call_tool while the node itself denied it — which was never a lock, it was a
+      // publisher that could not reach the client. Both nodes now carry the grant, so the only
+      // remaining denial is approval_required: the per-run approval gate doing its job, not a
+      // workspace misconfiguration, and not attention-worthy. The locks that DO hold a publish are
+      // the publish gates (publisher.ts) and that approval requirement, neither of which this feed
+      // was ever measuring.
     ]);
     // Nothing blocker-severity. Before the skills were re-seeded alongside the nodes there were thirteen.
     expect(attention.filter((item) => item.id.startsWith("attn_skill_blocker_"))).toEqual([]);
   });
 
   it("aggregates a real dry-run into metrics, summary, and evidence-cited attention", async () => {
-    const started = await data("workflow.start_dry_run", { projectId: "project-a", input: "Constellation metrics test" });
+    const started = await data("workflow.start_dry_run", { executionMode: "mock", projectId: "project-a", input: "Constellation metrics test" });
     await data("workflow.run_all", { runId: started.run.runId });
 
     const metrics = await data("constellation.get_metrics", { runId: started.run.runId });

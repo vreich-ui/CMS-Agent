@@ -25,7 +25,7 @@ describe("Publishing Conductor runner state advancement", () => {
 
   it("never re-runs a completed node under overlapping run_next_node calls", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "concurrent" }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "concurrent" }, store);
 
     // Fire many advances concurrently on the same run. The reproduced bug re-ran already-completed
     // nodes (two artifacts for the same node); with per-run serialization each call must advance one
@@ -53,7 +53,7 @@ describe("Publishing Conductor runner state advancement", () => {
 
   it("advances deterministically through article_body -> publish_payload and stops before the publish-risk node", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "late path" }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "late path" }, store);
 
     const final = await drive(run.runId, store);
 
@@ -76,7 +76,7 @@ describe("Publishing Conductor runner state advancement", () => {
 
   it("runs the publish-risk node and completes when approval is supplied", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "approved" }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "approved" }, store);
 
     const final = await drive(run.runId, store, { approved: true });
 
@@ -88,7 +88,7 @@ describe("Publishing Conductor runner state advancement", () => {
 
   it("reset clears node state/artifacts/stageOutputs and resume does not restore pre-reset state", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "reset" }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "reset" }, store);
     await runNextNode(run.runId, { executionRepository: store });
     await runNextNode(run.runId, { executionRepository: store });
     const beforeReset = (await getRun(run.runId, store))!;
@@ -114,7 +114,7 @@ describe("Publishing Conductor runner state advancement", () => {
 
   it("rejects a save whose base revision is stale (compare-and-swap)", async () => {
     const repo = new MemoryExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "cas" }, repo);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "cas" }, repo);
 
     const readA = (await repo.getRun(run.runId))!;
     const readB = (await repo.getRun(run.runId))!;
@@ -127,7 +127,7 @@ describe("Publishing Conductor runner state advancement", () => {
 
   it("a reset invalidates an in-flight save so stale completed state cannot be restored", async () => {
     const repo = new MemoryExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "reset-race" }, repo);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "reset-race" }, repo);
     const inFlight = (await getRun(run.runId, repo))!; // captured before reset
 
     await resetRun(run.runId, repo);
@@ -141,7 +141,7 @@ describe("Publishing Conductor runner state advancement", () => {
 
   it("run_next_node on a terminal (blocked) run is an idempotent no-op", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "idempotent" }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "idempotent" }, store);
     const blocked = await drive(run.runId, store);
     expect(blocked.status).toBe("blocked");
     const artifactsBefore = blocked.artifacts.length;
@@ -163,7 +163,7 @@ describe("Publishing Conductor runner state advancement", () => {
 
   it("retry_node re-runs an already-completed node without leaving duplicate artifacts", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "retry" }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "retry" }, store);
     await runNextNode(run.runId, { executionRepository: store });
     expect((await getRun(run.runId, store))!.nodes.find((node) => node.nodeId === "input_triage")!.status).toBe("completed");
 

@@ -56,13 +56,13 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 **R-1 ✅ Data-loss fix: single-field `update_node_*` writers.** `update_node_tools/_skills/_dependencies/_metadata/_model_config` write `undefined` over the target field when the patch omits it — reproduced: `ok:true` while wiping `allowedTools`. Fix: reject a patch missing the target field. *Highest severity on the list.*
 
-**R-2 ☐ Skill-compatibility resolver fix.** Any skill `outputSchema` with `additionalProperties`/`properties`/`required` reports blocker-incompatible regardless of actual compatibility; only bare `{"type":"object"}` passes. Current skills work because we flattened them — the next properly-specified skill re-triggers it.
+**R-2 ✅ Skill-compatibility resolver fix.** Done 2026-07-29 — `skills/schemaCompatibility.ts` replaces the `JSON.stringify` equality test with a real structural walk: a blocker now means a genuine contradiction (declared types that cannot both hold, contradicting property types recursively, disjoint enums, or a skill-required property the node's `additionalProperties:false` schema forbids), and the conflict names the offending field instead of asserting that two schemas are not byte-identical. Original note: any skill `outputSchema` with `additionalProperties`/`properties`/`required` reported blocker-incompatible regardless of actual compatibility; only bare `{"type":"object"}` passed. **Still open, deliberately:** the 7 flattened skill `outputSchema`s are now unblocked but not yet restored — writing real contracts for them is a data change with its own review, not a side effect of this fix.
 
 **R-3 ✅ Coerce stringified JSON in `update_node_output_schema` / `_input_schema`.** Done 2026-07-27 via `store.coerceSchemaInput`, modelled on the `coerceNodeInput` that already defends `create_node` (the defense lives in the store, not in `coerceJsonObjectInput`). Both writers coerce before validating; `schema` is now advertised as `{type:["object","boolean"]}` instead of permit-anything `{}`, which reshaped two tools and required a deliberate manifest regeneration. **Correction to this item's premise:** R-3 was recorded as "the only reason the S4 Schemas tab is read-only", and that was wrong — S4 saves through `workspace.update_node`, which never touched the schema writers. The tab was never blocked by this; it is editable as of the same commit (see §2f). R-3's real beneficiaries are `ui/src/hooks/useWorkspace.ts` `updateOutputSchema` (the legacy textarea path) and any agent or script calling the dedicated writers.
 
 **R-4 ✅ Typed version-conflict envelope.** `{ok:false, code:"version_conflict", currentVersion, currentRevisionId}` instead of bare `-32603`. Precondition for multi-agent editing and for the S4 save path. Also surface `error.data` detail generally — it exists but clients only see "Tool execution failed".
 
-**R-5 ☐ Reconcile the two resolvers.** `skill_resolve_for_node` says `effectiveTools:["project.call_tool"]` where `node_get_effective_tools` says `allowed:false` for the same nodes. One semantics, one answer; the GUI can't render two truths.
+**R-5 ✅ Reconcile the two resolvers.** Done 2026-07-29 — `toolResolver.evaluateToolsForNode` is now the single authority and `resolveSkillsForNode` delegates to it, so a denial reason added to `toolPolicy.ts` reaches both surfaces at once. The skill resolver's private rule set (a plain set intersection plus a `publish.`-prefix risk check, blind to `tool.enabled`, the tool-vs-node risk ladder, and `requiresApproval`) is gone. `SkillResolvedPolicy` also gained `deniedToolReasons`, because a caller has to be able to tell a misconfiguration (`node_tool_not_allowed`) from a gate working as designed (`approval_required`) — `constellation.get_attention` now filters on exactly that and no longer reports the approval gate as a defect.
 
 **R-6 ☐ Retire `article_body_validate` / `article_body_get_schema`.** Drifted local copy; the client's `object_validate` is the authority. Either remove, or repoint as a thin proxy that calls the client contract — never a local schema again.
 
@@ -88,9 +88,9 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 
 **R-17 ✅ Refresh the mock runner against the current node schemas.** Done 2026-07-27 — `execution/mockOutputFromSchema.ts` derives fixtures FROM each node's schema, including `anyOf`/`oneOf`/`allOf`; a drift guard asserts every canonical node's mock validates, plus the strictest schema in the repo. Also removed a SECOND hand-written copy of the same fixtures from `executor.ts`. Original note: T-2 F-1: the mock output for `article_body` is the pre-contract-as-truth `{schema_version, nodes}` shape. Mock fixtures must be derived from each node's `outputSchema` rather than hand-written, or they will drift again the next time a node is generalized.
 
-**R-22 ☐ The conductor ignores the live workspace by default — decide the default.** Found while building R-17. `resolveConductorNodes()` returns the STATIC hardcoded definitions unless `WORKSPACE_NODES_SOURCE=store`, so a run executes `src/agent/workspace/nodes.ts` (last touched 2026-07-03), not the live workspace. The six nodes the contract-alignment wave rebuilt therefore do not participate in a run, and **`contract_intelligence` does not exist in the seeded set at all** — the real explanation of T-2's F-7 rather than a graph-validator gap. So **T-2 exercised an obsolete pipeline**. The gate is deliberate ("behavior is unchanged until an operator flips it after a side-by-side mock run confirms identical topology") — but the topology is no longer identical, so it now hides the alignment work rather than protecting it. **Wolf's call:** flip the default to `store`, or re-seed `nodes.ts` from live.
+**R-22 ✅ The conductor ignores the live workspace by default — decide the default.** Settled in two halves: `nodes.ts` was re-seeded from live 2026-07-28 (#79, via `scripts/seedNodesFromWorkspace.ts`), and the default was flipped to `store` on 2026-07-29 — **both were needed**, because store mode provably cannot carry topology (`resolveConductorNodes` maps over the canonical list, so a store node with no canonical counterpart is ignored, and `overlayStoreNode` pins `dependsOn`/`produces`/`riskLevel`/`position`/`status`). Store mode carries authoring edits — prompt, schemas, tools, skills, model config — with no deploy; edges, risk levels and new nodes still require a deliberate re-seed plus redeploy, which is now a documented required step in `docs/platform/PHASE1_RUNBOOK.md`. Every run reports which source it used. Original note: Found while building R-17. `resolveConductorNodes()` returns the STATIC hardcoded definitions unless `WORKSPACE_NODES_SOURCE=store`, so a run executes `src/agent/workspace/nodes.ts` (last touched 2026-07-03), not the live workspace. The six nodes the contract-alignment wave rebuilt therefore do not participate in a run, and **`contract_intelligence` does not exist in the seeded set at all** — the real explanation of T-2's F-7 rather than a graph-validator gap. So **T-2 exercised an obsolete pipeline**. The gate is deliberate ("behavior is unchanged until an operator flips it after a side-by-side mock run confirms identical topology") — but the topology is no longer identical, so it now hides the alignment work rather than protecting it. **Wolf's call:** flip the default to `store`, or re-seed `nodes.ts` from live.
 
-**R-23 ☐ THREE competing `article_body` schemas, and a name that no longer describes anything.** Found by Wolf challenging the "legacy" claim — and it sharpens R-22.
+**R-23 ✅ THREE competing `article_body` schemas, and a name that no longer describes anything.** Landed 2026-07-28 (#85) — the node's own `outputSchema` is the single authority. Found by Wolf challenging the "legacy" claim — and it sharpens R-22.
 
 | # | Where | Shape | Strict |
 |---|---|---|---|
@@ -106,13 +106,23 @@ Recommended: delete #2 (it silently overrides the seeded schema on every fresh w
 
 ⚠️ *Not verified today.* The object-type list is from a live `object_contract` read recorded in `docs/plan/findings/`, not a fresh read — the client connections were down and the session's MCP link dropped. **Dr-Lurié is the authority to re-check**: the client brings its own publishing rules, so the client's contract decides this, not the workspace's vocabulary.
 
-**R-18 ☐ Report why a run stopped.** T-2 F-2: `run_all` halts before publish-risk nodes with `status: "running"` and `approvalsRequired: []`, so the gate is invisible to the UI and to an operator. Record the hold. Also F-3: add a distinct `paused` state — `pause_run` currently reports `blocked`, which already means publish-gate hold and budget hold.
+**R-18 ✅ Report why a run stopped.** Landed 2026-07-28 (#79). T-2 F-2: `run_all` halts before publish-risk nodes with `status: "running"` and `approvalsRequired: []`, so the gate is invisible to the UI and to an operator. Record the hold. Also F-3: add a distinct `paused` state — `pause_run` currently reports `blocked`, which already means publish-gate hold and budget hold.
 
-**R-19 ☐ Fix the advertised input schemas on `workflow.run_all` / `workflow.retry_node`.** T-2 F-4: both serve the generic mutation schema, omitting the required `runId` while `additionalProperties: false` forbids it. A strict client cannot call them. Same class as R-3.
+**R-19 ✅ Fix the advertised input schemas on `workflow.run_all` / `workflow.retry_node`.** Landed 2026-07-28 (#79). T-2 F-4: both serve the generic mutation schema, omitting the required `runId` while `additionalProperties: false` forbids it. A strict client cannot call them. Same class as R-3.
 
 **R-20 ☐ Mock runs should not accrue cost against `budgetUsd`.** T-2 F-5: a mock run recorded $0.029 estimated against the ceiling despite making no model calls.
 
 **R-21 ☐ Graph validation misses a dependency that is not a node.** T-2 F-7: `article_body` declares `contract_intelligence` in `dependsOn` and `requiredInputs`, it is absent from the conductor sequence, and `validate_graph` still returns valid.
+
+**R-24 ✅ Retire the legacy `save_json_blob_*` publish dialect for dr-lurie.** Landed 2026-07-29 (#89). Dr. Lurié is a tenant of the same object substrate as client 0, and the ratified alignment doc froze the legacy pipeline and directed that `save_json_blob_*` must not be allowlisted for the project — but the publish hook still spoke it, and under `defaultToolPolicy: "allowed"` the whole family plus the five-agent per-stage tools were callable by default. The hook now speaks the object dialect (`object_create → object_checkout → object_validate → object_patch → object_publish → object_checkin`, validating before any patch, never releasing); per-site parameters (owning site object id, taxonomy registry, request-id shape, who mints the object id) moved into an `objectDialect` block on the project config instead of literals in the hook; and the retired families are blocked in two layers — named in the seeded `toolPolicies`, and refused by shape in `executablePolicy.ts` so an unenumerated variant cannot slip through. `agent-publishing-instructions.md` deleted; the dr-lurie knowledge block rewritten for the object path. **One value to confirm at enablement:** `siteObjectId: "site_drlurie"` is inferred by symmetry with the documented `tax_drlurie` — the dr-lurie endpoint was unreachable from that session, so it was never read off the live server.
+
+**E — live-mode readiness (2026-07-29).** Four independent defects that between them meant the pipeline could not run end-to-end in live model mode and reach the client. Detail in §2k.
+
+**E-1 ✅ `executionMode` no longer defaults silently.** Live (`openai`) is the default at every entry point and `mock` is the explicit opt-in for cheap CI runs; every run additionally reports what produced it (`workflow.get_run` / `workflow.list_runs` carry a top-level `mode` block: executionMode, `live`, node source, and a prose notice).
+
+**E-2 ✅ Tool-using nodes get a workable agent-loop turn budget.** `maxTurns` was read straight off `toolCallLimit`, conflating tool calls with model round-trips; `research` — the first node holding `web.search` + `web.fetch` — exhausted it before emitting output. Now per-node (`modelConfig.maxTurns`, else `toolCallLimit + headroom` for a tool-using node), and exhaustion reports as `max_turns_exceeded` naming the node, the budget and the knob, instead of a generic `model_error`.
+
+**E-3 ✅ The publish nodes can reach the client.** `publish_executor` and `publication_controller` carry `project.call_tool`; both previously resolved `allowed:false` with `["node_tool_not_allowed","approval_required"]`, so activating `publish_executor` would have produced a publisher that could not reach the client at all. Paired with a closed-set assertion in `publishRun` that the gates are unchanged, and tests that a node holding the grant still cannot publish without them. **This does not open a publish gate** — see §2k.
 
 ### P — platform repo (their side; for the record, so dependencies are visible)
 
@@ -331,6 +341,39 @@ Suite: **827 root** (was 806), 88 ui, both typechecks, both builds, all three lo
 
 ---
 
+## 2k. Execution log — 2026-07-29, wave 11 (live-mode readiness: E-1…E-4, R-2, R-5, R-24)
+
+**Publish gates stayed closed throughout, and this wave opened none of them.** `publishingPolicy.publishEnabled`
+is still `false`, the per-project `*_PUBLISH_ENABLED` flags are untouched, `approved`/`live` still have to be
+passed explicitly, the readiness policy still has to return GO, and `release_to_production` still appears in no
+execution path. E-3 grants a *capability* to two publish-risk nodes; it satisfies no gate.
+
+| id | outcome |
+|---|---|
+| E-1 ✅ | **Live model execution is the default.** `executionMode` defaulted to `"mock"` at every entry point — `workflow.start_dry_run`, `node.execute`, `buildInitialRun`, `advanceRun`, `nodeRuntime`, and the Cloud Run job — so the pipeline's default behavior was to emit deterministic placeholder artifacts that are structurally indistinguishable from real model output, with nothing saying so. Both halves of the recorded choice were taken: the default is now `openai`, **and** every run states what produced it. The failure mode this trades into is loud rather than silent — without the provider key the first node fails `invalid_node_configuration` naming the missing variable, and the job refuses to mint a run at all. Blast radius was real and is the point: ~30 tests across 18 files relied on the implicit default and now declare `executionMode: "mock"` explicitly. |
+| E-2 ✅ | **Turn budget is per node and its exhaustion is actionable.** `run_1785235767862_uvjm83` died with `["model_error", "Max turns (4) exceeded"]`. `maxTurns` came straight from `toolCallLimit`, but with `parallelToolCalls` disabled every tool call costs its own turn and the node still needs a final turn to emit structured output — so a node holding two web tools ran out mid-search. Resolution is now explicit `modelConfig.maxTurns` → `toolCallLimit + headroom` for a tool-using node → small default for a tool-free one, and a new `max_turns_exceeded` code names the node, the resolved budget, the tool count and the knob that raises it. Retries are not spent re-exhausting the same cap. Tool-using nodes stay on the OpenAI runner; `AnthropicNodeRunner` still has no tool loop. |
+| E-3 ✅ | **`publish_executor` / `publication_controller` can reach the client.** Both assign `dr_lurie_contract_intelligence`, which requests `project.call_tool`, while neither node granted it — so both resolved `allowed:false` with `["node_tool_not_allowed","approval_required"]`, and this is what `constellation_get_attention` had been warning about. Both now carry the grant. Because it is a capability increase on publish-risk nodes it ships with the locks asserted beside it: `PUBLISH_GATE_NAMES` is a closed set that `evaluateGates` verifies structurally, nothing in that function reads a node's tool list, and tests cover a node holding the grant with the gates closed (dry-run plan, zero external calls) plus each gate closed independently. `project.call_tool` is `requiresApproval: true`, so the grant still needs per-run approval before the tool executes — a second, independent lock. |
+| E-4 ✅ | **`WORKSPACE_NODES_SOURCE` decided and documented** — see R-22. Default flipped to `store`; the re-seed is now a required, documented deploy step for anything store mode cannot carry. |
+| R-2 ✅ | Structural schema compatibility replaces `JSON.stringify` equality. |
+| R-5 ✅ | One tool authority; the skill resolver delegates. `constellation.get_attention` stops reporting the approval gate as a defect, which removed two permanent items from the board. |
+| R-24 ✅ | Legacy `save_json_blob_*` dialect retired (#89). |
+
+**What the two resolvers agreeing actually changed.** Before, `skill.resolve_for_node` reported
+`project.call_tool` as granted on `article_body`, `contract_intelligence`, `publish_payload` and
+`artifact_plan` while `node.get_effective_tools` reported `allowed:false` for the same nodes — the
+disagreement T-1 Tier 2 found four times and §2i reproduced inside a single `node.prepare_execution`
+payload. With one authority the four now report denied-pending-approval on both surfaces, which is the
+truthful answer; and because the denial reason travels, the attention feed can tell that apart from a
+node that genuinely lacks a grant.
+
+Suite: **882 root** (was 861), both typechecks, both builds, all three locks green.
+
+**Follow-ups this wave deliberately did not take:** restoring real `outputSchema`s to the 7 flattened
+skills (unblocked by R-2, but a data change with its own review); and confirming
+`objectDialect.siteObjectId` for dr-lurie against its live server (R-24).
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -351,8 +394,10 @@ Say **go** (or mark exceptions by ID) and I execute in this order: **W-2, W-3** 
 
 **Wave 5 executed 2026-07-27** (R-3 + the S4 Schemas tab) — see §2f.
 
+**Wave 11 executed 2026-07-29** (E-1…E-4, R-2, R-5; R-24 landed separately as #89) — see §2k.
+
 Next, in the order I would take them:
-1. **T-2** — full dry-run pipeline vs client 0. Unblocked by T-1, and now that ENV-1/2 are live it can exercise the real client path rather than a stubbed one. It executes nodes (model spend), so it is a deliberate step rather than a sweep.
+1. **A live end-to-end run** — the four defects wave 11 cleared were what stood between the pipeline and a real live-mode run reaching the client. Worth doing deliberately (it spends model budget) with `budgetUsd` set, and reading the `mode` block on the resulting run to confirm it executed live against store-resolved definitions.
 2. **R-8** — promoted by wave 4's findings 2–4: three separate allow-list/reporting defects surfaced the moment the connections came up (`platform`'s `allowedTools: []`, the vanished `requiredPdfToolCapabilities` source of truth, the missing `resume_agent_artifact_job` / `get_image_model_policy` grants). Two hand-kept lists with no declared requirement is the condition that caused the original pdf-tool regression.
-3. **R-2** (skill-schema resolver) — no longer blocking anything, but it is what forces the 7 placeholder skill `outputSchema`s to stay flattened. Now that schemas are editable in S4, this is the next thing an operator will walk into.
-4. **R-5** (reconcile the two resolvers) — the inspector currently renders the disagreement rather than resolving it, which is honest but not a fix.
+3. **The 7 flattened skill `outputSchema`s** — R-2 removed the false blocker that forced them to stay placeholders; writing their real contracts is now unblocked and is the next thing an operator editing schemas in S4 will walk into.
+4. **R-20** — mock runs still accrue estimated cost against `budgetUsd` despite making no model calls. Cheap, and it matters more now that mock is an explicit choice people make for cost reasons.

@@ -17,21 +17,25 @@ const stubRepo = (getNodes: () => Promise<WorkspaceNode[]>): WorkspaceRepository
 describe("WORKSPACE_NODES_SOURCE flag (nodeSource)", () => {
   afterEach(() => { delete process.env.WORKSPACE_NODES_SOURCE; });
 
-  it("defaults to static and treats only 'store' (case/space-insensitive) as store", () => {
+  // Store is the default: a deployment that says nothing gets the live workspace definitions, so an
+  // authoring edit made over MCP is in the next run. Pinning to the compiled definitions is the
+  // explicit act, and only the exact word "static" performs it — a typo must not silently pin a
+  // deployment to stale nodes.
+  it("defaults to store and treats only 'static' (case/space-insensitive) as static", () => {
     delete process.env.WORKSPACE_NODES_SOURCE;
-    expect(__test__.nodeSource()).toBe("static");
-    process.env.WORKSPACE_NODES_SOURCE = "store"; expect(__test__.nodeSource()).toBe("store");
-    process.env.WORKSPACE_NODES_SOURCE = "  STORE  "; expect(__test__.nodeSource()).toBe("store");
+    expect(__test__.nodeSource()).toBe("store");
     process.env.WORKSPACE_NODES_SOURCE = "static"; expect(__test__.nodeSource()).toBe("static");
-    process.env.WORKSPACE_NODES_SOURCE = "anything-else"; expect(__test__.nodeSource()).toBe("static");
+    process.env.WORKSPACE_NODES_SOURCE = "  STATIC  "; expect(__test__.nodeSource()).toBe("static");
+    process.env.WORKSPACE_NODES_SOURCE = "store"; expect(__test__.nodeSource()).toBe("store");
+    process.env.WORKSPACE_NODES_SOURCE = "anything-else"; expect(__test__.nodeSource()).toBe("store");
   });
 });
 
 describe("resolveConductorNodes", () => {
   afterEach(() => { delete process.env.WORKSPACE_NODES_SOURCE; });
 
-  it("returns the static definitions unchanged in the default (static) mode and never reads the store", async () => {
-    delete process.env.WORKSPACE_NODES_SOURCE;
+  it("returns the static definitions unchanged in static mode and never reads the store", async () => {
+    process.env.WORKSPACE_NODES_SOURCE = "static";
     let read = false;
     const resolved = await resolveConductorNodes(stubRepo(async () => { read = true; throw new Error("store must not be read in static mode"); }));
     expect(read).toBe(false);
@@ -96,16 +100,17 @@ describe("promoted prompts reach full conductor runs (store mode, integration)",
     await ws.updateNodePrompt("input_triage", longPrompt, { actor: "optimizer", reason: "phase5 promotion test" });
 
     // Static mode: the store promotion is NOT consulted, so the canonical (short) prompt runs.
-    delete process.env.WORKSPACE_NODES_SOURCE;
+    // Explicit now that store is the default — pinning to the compiled definitions is the opt-in.
+    process.env.WORKSPACE_NODES_SOURCE = "static";
     const staticStore = rm.getExecutionRepository();
-    const staticRun = await startDryRun({ projectId: "dr-lurie", input: "x" }, staticStore, ws);
+    const staticRun = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "x" }, staticStore, ws);
     await runNextNode(staticRun.runId, { executionRepository: staticStore, workspaceRepository: ws });
     const staticTokens = await triageInputTokens(staticRun.runId);
 
-    // Store mode: the promoted prompt reaches the conductor's node execution.
-    process.env.WORKSPACE_NODES_SOURCE = "store";
+    // Store mode (the default): the promoted prompt reaches the conductor's node execution.
+    delete process.env.WORKSPACE_NODES_SOURCE;
     const storeStore = rm.getExecutionRepository();
-    const storeRun = await startDryRun({ projectId: "dr-lurie", input: "x" }, storeStore, ws);
+    const storeRun = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "x" }, storeStore, ws);
     await runNextNode(storeRun.runId, { executionRepository: storeStore, workspaceRepository: ws });
     const storeTokens = await triageInputTokens(storeRun.runId);
 
@@ -118,7 +123,7 @@ describe("promoted prompts reach full conductor runs (store mode, integration)",
     const ws = rm.getWorkspaceRepository();
     process.env.WORKSPACE_NODES_SOURCE = "store";
     const store = rm.getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "x" }, store, ws);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "x" }, store, ws);
     const storeNodeIds = run.nodes.map((n) => n.nodeId);
     expect(storeNodeIds).toEqual(listWorkspaceNodes().map((n) => n.id));
     expect(run.currentNodeId).toBe("input_triage");

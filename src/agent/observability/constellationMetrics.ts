@@ -32,8 +32,19 @@ export type NodeSkillPolicySnapshot = {
   conflicts: { severity: "warning" | "blocker"; source: string; message: string }[];
   requestedTools: string[];
   deniedTools: string[];
+  // Why each denial happened. Optional so an older caller still works; without it every denial is
+  // treated as a configuration problem, which is the pre-R-5 behavior.
+  deniedToolReasons?: Record<string, string[]>;
   effectiveTools: string[];
 };
+
+// A denial that is the system working as designed, not a workspace defect. project.call_tool is
+// requiresApproval:true, so a node holding it legitimately resolves denied until a run approves it —
+// reporting that as attention would put six permanent warnings on the board and bury the real ones.
+// Any OTHER reason (or a mixture) still means the node cannot exercise the capability at all.
+const EXPECTED_DENIAL_REASONS = new Set(["approval_required"]);
+const isMisconfiguration = (reasons: string[] | undefined): boolean =>
+  reasons === undefined || reasons.length === 0 || reasons.some((reason) => !EXPECTED_DENIAL_REASONS.has(reason));
 
 // Just enough of project.list to judge whether a connection can actually be used.
 export type ProjectConnectionSnapshot = {
@@ -403,6 +414,7 @@ export function configurationAttentionItems(inputs: ConstellationInputs): Conste
     const node = inputs.nodes.find((candidate) => candidate.id === policy.nodeId);
     const deniedButRequested = policy.requestedTools
       .filter((toolId) => policy.deniedTools.includes(toolId) || !(node?.allowedTools ?? []).includes(toolId))
+      .filter((toolId) => !(node?.allowedTools ?? []).includes(toolId) || isMisconfiguration(policy.deniedToolReasons?.[toolId]))
       .sort();
     if (deniedButRequested.length) {
       items.push({

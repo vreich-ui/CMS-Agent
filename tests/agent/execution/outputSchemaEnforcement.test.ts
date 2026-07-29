@@ -121,7 +121,7 @@ describe("the executor enforces the schema (R-16)", () => {
 
     try {
       const store = new RepositoryManager().getExecutionRepository();
-      const started = await startDryRun({ projectId: "project-a", input: "x" }, store);
+      const started = await startDryRun({ executionMode: "mock", projectId: "project-a", input: "x" }, store);
       const advanced = await runNextNode(started.runId, { executionRepository: store });
       const node = advanced.nodes.find((candidate) => candidate.nodeId === "input_triage")!;
 

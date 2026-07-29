@@ -7,6 +7,7 @@ import { validateOutput } from "../execution/outputValidator.js";
 import { recordModelUsage } from "../observability/modelUsage.js";
 import { resolveSkillsForNode } from "../skills/skillResolver.js";
 import { resolveEffectiveToolsForNode } from "../tools/toolResolver.js";
+import { DEFAULT_EXECUTION_MODE } from "./executor.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 import type { ExecutionArtifact, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
 
@@ -91,9 +92,12 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   const executionId = makeExecutionId();
   const startedAt = now();
   const state: NodeExecutionState = { nodeId: node.id, status: "running", startedAt, input: { input: data.input, dependencies: prep.dependencyOutputs }, produces: node.produces };
-  const run: WorkflowExecutionRecord = { runId, workflowId: "independent_node", projectId: "workspace", status: "running", currentNodeId: node.id, startedAt, updatedAt: startedAt, nodes: [state], artifacts: [], errors: [], approvalsRequired: [], stageOutputs: prep.dependencyOutputs as Record<string, unknown>, dryRun: true, executionMode: data.executionMode ?? "mock" };
+  const run: WorkflowExecutionRecord = { runId, workflowId: "independent_node", projectId: "workspace", status: "running", currentNodeId: node.id, startedAt, updatedAt: startedAt, nodes: [state], artifacts: [], errors: [], approvalsRequired: [], stageOutputs: prep.dependencyOutputs as Record<string, unknown>, dryRun: true, executionMode: data.executionMode ?? DEFAULT_EXECUTION_MODE };
   await repos.executionRepository.createRun(run);
-  const runner = getNodeRunner(data.executionMode ?? "mock");
+  // Live by default, mock only when a caller asks for it — the same deliberate choice the workflow
+  // entry points make (see DEFAULT_EXECUTION_MODE), so node.execute cannot quietly hand back a
+  // schema-shaped placeholder to someone who believed they were exercising the real node.
+  const runner = getNodeRunner(data.executionMode ?? DEFAULT_EXECUTION_MODE);
   // promptOverride is an internal replay lever (improvement trials run prompt variants against
   // frozen inputs); it is deliberately NOT exposed on the public node.execute MCP tool — the
   // sanctioned public mutation path stays workspace.update_node_prompt.

@@ -34,7 +34,7 @@ describe("conductor budget gate", () => {
   it("halts before the node that would cross the ceiling; earlier nodes ran, later did not", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     // Measure the deterministic accrued mock cost after two nodes with an un-gated run.
-    const measure = await startDryRun({ projectId: "budget-proj", input: "Draft this" }, store);
+    const measure = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this" }, store);
     await runNextNode(measure.runId, { executionRepository: store });
     await runNextNode(measure.runId, { executionRepository: store });
     const twoNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
@@ -42,7 +42,7 @@ describe("conductor budget gate", () => {
 
     // Ceiling == cost-after-two-nodes: nodes 1 and 2 run (accrued < ceiling before each), and the
     // gate halts before node 3 the instant accrued reaches the ceiling.
-    const gated = await startDryRun({ projectId: "budget-proj", input: "Draft this", budgetUsd: twoNodeCost }, store);
+    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this", budgetUsd: twoNodeCost }, store);
     const run = await drive(gated.runId, store);
 
     expect(run.status).toBe("blocked");
@@ -69,7 +69,7 @@ describe("conductor budget gate", () => {
 
   it("no ceiling configured → unchanged behavior (regression guard): stops at the approval gate, not a budget gate", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const started = await startDryRun({ projectId: "budget-proj", input: "Draft this" }, store);
+    const started = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this" }, store);
     const run = await drive(started.runId, store);
 
     expect(run.status).toBe("blocked");

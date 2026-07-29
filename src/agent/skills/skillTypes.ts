@@ -47,6 +47,11 @@ export type SkillResolvedPolicy = {
   effectiveTools: string[];
   requestedTools: string[];
   deniedTools: string[];
+  // Why each denied tool was denied, keyed by toolId, straight from the single tool authority
+  // (toolResolver.evaluateToolsForNode). A caller has to be able to tell a MISCONFIGURATION
+  // ("node_tool_not_allowed") from a gate working as designed ("approval_required") — treating them
+  // alike is how the approval gate ends up reported as a defect.
+  deniedToolReasons: Record<string, string[]>;
   riskLevel: WorkspaceRiskLevel;
   conflicts: SkillConflict[];
   memoryPolicies: SkillMemoryPolicy[];

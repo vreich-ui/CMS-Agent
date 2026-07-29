@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
 import { startDryRun } from "../../src/agent/workspace/executor.js";
+import { listWorkspaceNodes } from "../../src/agent/workspace/nodes.js";
 import { publishRun, publishEnabledEnvVar, isProjectPublishEnabled, __test__ } from "../../src/agent/workspace/publisher.js";
 import { drLurieProjectConfig } from "../../src/agent/projects/drLurie/definition.js";
 import type { CallToolResult } from "../../src/agent/projects/projectMcpAdapter.js";
@@ -57,7 +58,7 @@ const seedRun = async (articleBody: unknown, projectId = "dr-lurie") => {
   const projectRepository = manager.getProjectRepository();
   if (projectId === "platform") await projectRepository.save(platformProjectConfig);
   if (projectId === "acme-live") await projectRepository.save(hooklessProjectConfig);
-  const run = await startDryRun({ projectId, input: "publish", entrypoint: { nodeId: "article_body", output: articleBody } }, executionRepository);
+  const run = await startDryRun({ executionMode: "mock", projectId, input: "publish", entrypoint: { nodeId: "article_body", output: articleBody } }, executionRepository);
   const learningRepository = manager.getLearningRepository();
   return { runId: run.runId, executionRepository, projectRepository, learningRepository };
 };
@@ -202,7 +203,7 @@ describe("live publish gates", () => {
     await projectRepository.save({ ...withoutDialect, definitionVersion: drLurieProjectConfig.definitionVersion });
     const executionRepository = manager.getExecutionRepository();
     const learningRepository = manager.getLearningRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
     const adapter = fakeCallTool();
     const result = await publishRun({ runId: run.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository, learningRepository, env: ENABLED_ENV, callTool: adapter.fn });
 
@@ -264,7 +265,7 @@ describe("live publish gates", () => {
     const executionRepository = manager.getExecutionRepository();
     const projectRepository = manager.getProjectRepository();
     const learningRepository = manager.getLearningRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "no-body" }, executionRepository);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "no-body" }, executionRepository);
     const adapter = fakeCallTool();
     const result = await publishRun({ runId: run.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository, learningRepository, env: ENABLED_ENV, callTool: adapter.fn });
     expect(result.mode).toBe("error");
@@ -285,6 +286,56 @@ describe("live publish gates", () => {
     const missing = await publishRun({ runId: ctx2.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx2, env: ENABLED_ENV, callTool: noLock.fn });
     expect(missing.mode).toBe("error");
     if (missing.mode === "error") expect(missing.error).toContain("lock_token");
+  });
+
+  // The grant paired with the capability increase on the publish-risk nodes. publish_executor and
+  // publication_controller now hold project.call_tool — without it a publisher cannot reach the
+  // client at all — and this asserts that the grant buys exactly nothing at the publish gate: the
+  // node can hold the tool and the run still refuses to publish, with zero external calls, because
+  // the gates are inputs to publishRun and have nothing to do with a node's tool list.
+  it("a node holding the client call_tool grant still cannot publish without the gates — dry-run plan, zero external calls", async () => {
+    const executor = listWorkspaceNodes().find((node) => node.id === "publish_executor");
+    const controller = listWorkspaceNodes().find((node) => node.id === "publication_controller");
+    expect(executor?.allowedTools).toContain("project.call_tool");
+    expect(controller?.allowedTools).toContain("project.call_tool");
+
+    const ctx = await seedRun(textBody);
+    const adapter = fakeCallTool();
+    // Readiness GO, grant in place, and every publish gate closed.
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, readiness: READY }, { ...ctx, env: {} as NodeJS.ProcessEnv, callTool: adapter.fn });
+
+    expect(result.published).toBe(false);
+    expect(result.mode).toBe("dry_run");
+    expect(adapter.calls).toHaveLength(0);
+    if (result.mode === "dry_run") {
+      expect(result.gates.allPassed).toBe(false);
+      expect(result.gates.gates.filter((gate) => !gate.passed).map((gate) => gate.name)).toEqual(["operator_enabled", "explicit_approval", "explicit_live"]);
+      expect(result.readiness?.status).toBe("go");
+    }
+  });
+
+  // Each gate is closed on its own account. Opening two of three still publishes nothing, so no
+  // single flag — and certainly no tool grant — is load-bearing by itself.
+  it("keeps each publish gate independent: any one closed gate is enough to refuse", async () => {
+    const combinations = [
+      { name: "operator_enabled", input: { approved: true, live: true }, env: {} as NodeJS.ProcessEnv },
+      { name: "explicit_approval", input: { live: true }, env: ENABLED_ENV },
+      { name: "explicit_live", input: { approved: true }, env: ENABLED_ENV }
+    ];
+    for (const combination of combinations) {
+      const ctx = await seedRun(textBody);
+      const adapter = fakeCallTool();
+      const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, readiness: READY, ...combination.input }, { ...ctx, env: combination.env, callTool: adapter.fn });
+      expect(result.mode, `${combination.name} closed must refuse`).toBe("dry_run");
+      expect(adapter.calls, `${combination.name} closed must make no external call`).toHaveLength(0);
+    }
+  });
+
+  it("keeps the publish gate set closed and named — nothing else may satisfy a gate", () => {
+    expect(__test__.PUBLISH_GATE_NAMES).toEqual(["operator_enabled", "explicit_approval", "explicit_live"]);
+    const gates = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, {} as NodeJS.ProcessEnv);
+    expect(gates.allPassed).toBe(false);
+    expect(gates.operatorEnabled).toBe(false);
   });
 
   it("exposes a request_id validator that matches the Dr. Lurie contract", () => {
@@ -418,7 +469,7 @@ describe("workflow.publish_run / publish_readiness MCP tools (gated end-to-end)"
     const names = JSON.parse(listed.body ?? "{}").result.tools.map((tool: { name: string }) => tool.name);
     expect(names).toEqual(expect.arrayContaining(["workflow_publish_run", "workflow_publish_readiness"]));
 
-    const runId = (await data("workflow.start_dry_run", { projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
+    const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
     const publish = (await data("workflow.publish_run", { runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY })).publish;
     expect(publish.mode).toBe("dry_run");
     expect(publish.readiness.status).toBe("go");
@@ -426,7 +477,7 @@ describe("workflow.publish_run / publish_readiness MCP tools (gated end-to-end)"
   });
 
   it("publish_readiness returns the GO/NO-GO checklist without publishing", async () => {
-    const runId = (await data("workflow.start_dry_run", { projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
+    const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
 
     const go = (await data("workflow.publish_readiness", { projectId: "dr-lurie", runId, readiness: READY })).readiness;
     expect(go).toMatchObject({ available: true, articleBodyValid: true });

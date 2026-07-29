@@ -37,7 +37,7 @@ describe("workflow runner MCP tools (end-to-end)", () => {
   });
 
   it("advances to article_body -> publish_payload then stops before the publish-risk node", async () => {
-    const started = await call("workflow.start_dry_run", { projectId: "dr-lurie", input: { instructions: "e2e" } });
+    const started = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: { instructions: "e2e" } });
     const runId = started.data.run.runId as string;
 
     let run = started.data.run;
@@ -59,7 +59,7 @@ describe("workflow runner MCP tools (end-to-end)", () => {
   });
 
   it("does not re-run completed nodes when run_next_node calls are batched concurrently", async () => {
-    const started = await call("workflow.start_dry_run", { projectId: "dr-lurie", input: { instructions: "concurrent" } });
+    const started = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: { instructions: "concurrent" } });
     const runId = started.data.run.runId as string;
 
     // A JSON-RPC batch dispatches every element through Promise.all — genuinely overlapping
@@ -79,7 +79,7 @@ describe("workflow runner MCP tools (end-to-end)", () => {
   });
 
   it("reset then resume does not restore any pre-reset completed node state", async () => {
-    const started = await call("workflow.start_dry_run", { projectId: "dr-lurie", input: { instructions: "reset" } });
+    const started = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: { instructions: "reset" } });
     const runId = started.data.run.runId as string;
     await call("workflow.run_next_node", { runId });
     await call("workflow.run_next_node", { runId });

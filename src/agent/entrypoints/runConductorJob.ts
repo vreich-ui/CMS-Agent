@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { planRun, summarizeRunCost, type RunCostLedger, type RunPlan } from "../workspace/conductor.js";
 import { summarizeModelUsage } from "../observability/modelUsage.js";
-import { getRun, retryNode, runNextNode, startDryRun } from "../workspace/executor.js";
+import { DEFAULT_EXECUTION_MODE, getRun, retryNode, runNextNode, startDryRun } from "../workspace/executor.js";
 import { registerCmsAgentStoreFactory, type BlobStoreClient } from "../repository/blobs/blobClient.js";
 import { createGcsStoreClient } from "../repository/gcs/gcsStoreClient.js";
 import { repositoryManager } from "../runtime/repositories.js";
@@ -81,7 +81,7 @@ export function bootstrapWorkspaceStore(): void {
 
 export async function runConductorJob(options: ConductorJobOptions): Promise<ConductorJobResult> {
   const log = options.log ?? (() => undefined);
-  const mode: ExecutionMode = options.executionMode ?? "mock";
+  const mode: ExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   const maxSteps = Math.max(1, Math.floor(options.maxSteps ?? DEFAULT_MAX_STEPS));
   // Fail fast on configuration the first node would otherwise fail on, before minting a run record.
   if (mode === "openai" && !process.env.OPENAI_API_KEY) {
@@ -170,7 +170,7 @@ const parseJsonInput = (raw: string, source: string): unknown => {
 // job's env vars carry the defaults. Env: PROJECT_ID, EXECUTION_MODE, RUN_INPUT_JSON,
 // RUN_INPUT_FILE, RESUME_RUN_ID, RUN_APPROVED, MAX_STEPS.
 export async function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv): Promise<ConductorJobOptions> {
-  const mode = flagValue(argv, "mode") ?? env.EXECUTION_MODE ?? "mock";
+  const mode = flagValue(argv, "mode") ?? env.EXECUTION_MODE ?? DEFAULT_EXECUTION_MODE;
   if (mode !== "mock" && mode !== "openai") throw new Error(`Unsupported --mode "${mode}" (expected mock or openai).`);
   const inputFile = flagValue(argv, "input-file") ?? env.RUN_INPUT_FILE;
   const inlineInput = flagValue(argv, "input") ?? env.RUN_INPUT_JSON;

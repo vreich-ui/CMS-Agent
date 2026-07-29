@@ -35,7 +35,7 @@ describe("runConductorJob (Cloud Run job entrypoint)", () => {
     const first = await runConductorJob({ projectId: "dr-lurie", executionMode: "mock", input: "Draft this" });
     expect(first.outcome).toBe("blocked");
 
-    const resumed = await runConductorJob({ projectId: "dr-lurie", resumeRunId: first.run.runId, approved: true });
+    const resumed = await runConductorJob({ projectId: "dr-lurie", executionMode: "mock", resumeRunId: first.run.runId, approved: true });
     expect(resumed.run.runId).toBe(first.run.runId);
     expect(resumed.outcome).toBe("completed");
     expect(resumed.run.nodes.every((node) => node.status === "completed")).toBe(true);
@@ -43,7 +43,7 @@ describe("runConductorJob (Cloud Run job entrypoint)", () => {
 
   it("leaves a blocked run untouched when resumed without approval", async () => {
     const first = await runConductorJob({ projectId: "dr-lurie", executionMode: "mock", input: "Draft this" });
-    const resumed = await runConductorJob({ projectId: "dr-lurie", resumeRunId: first.run.runId });
+    const resumed = await runConductorJob({ projectId: "dr-lurie", executionMode: "mock", resumeRunId: first.run.runId });
 
     expect(resumed.outcome).toBe("blocked");
     expect(resumed.steps).toBe(0);
@@ -58,13 +58,13 @@ describe("runConductorJob (Cloud Run job entrypoint)", () => {
     process.env.WORKSPACE_STORE = "blobs";
     delete process.env.NETLIFY_BLOBS_SITE_ID;
     delete process.env.NETLIFY_BLOBS_TOKEN;
-    await expect(runConductorJob({ projectId: "dr-lurie" })).rejects.toThrow(/NETLIFY_BLOBS_SITE_ID/);
+    await expect(runConductorJob({ projectId: "dr-lurie", executionMode: "mock" })).rejects.toThrow(/NETLIFY_BLOBS_SITE_ID/);
   });
 
   it("refuses the gcs backend without a bucket", async () => {
     process.env.WORKSPACE_STORE = "gcs";
     delete process.env.GCS_BUCKET;
-    await expect(runConductorJob({ projectId: "dr-lurie" })).rejects.toThrow(/GCS_BUCKET/);
+    await expect(runConductorJob({ projectId: "dr-lurie", executionMode: "mock" })).rejects.toThrow(/GCS_BUCKET/);
   });
 
   it("stops between nodes when the abort signal fires, leaving the run resumable", async () => {
@@ -80,9 +80,13 @@ describe("runConductorJob (Cloud Run job entrypoint)", () => {
 });
 
 describe("parseCliOptions", () => {
-  it("applies defaults (dr-lurie project, mock mode, no approval)", async () => {
+  // Live execution is the default here too (DEFAULT_EXECUTION_MODE): a job invoked with no --mode
+  // runs the real pipeline rather than quietly producing placeholder artifacts. `--mode mock` is the
+  // explicit opt-in, and the OPENAI_API_KEY pre-flight in runConductorJob refuses a live run that
+  // could not have worked before any run record is minted.
+  it("applies defaults (dr-lurie project, live model mode, no approval)", async () => {
     const options = await parseCliOptions([], {});
-    expect(options).toMatchObject({ projectId: "dr-lurie", executionMode: "mock", approved: undefined, resumeRunId: undefined });
+    expect(options).toMatchObject({ projectId: "dr-lurie", executionMode: "openai", approved: undefined, resumeRunId: undefined });
   });
 
   it("lets flags override environment values", async () => {

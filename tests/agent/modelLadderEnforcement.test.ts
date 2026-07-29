@@ -90,7 +90,7 @@ describe("conductor honors model-ladder enforcement at dispatch (integration)", 
   };
   const runFirstNode = async () => {
     const store = repositoryManager.getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "x" }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "x" }, store);
     await runNextNode(run.runId, { executionRepository: store });
     return (await getRun(run.runId, store))!.nodes.find((n) => n.nodeId === "input_triage")!;
   };
