@@ -169,13 +169,25 @@ const refuseUnsafe = (incoming: WorkspaceNode[]): void => {
     if (after < before) problems.push(`${existing.id}: riskLevel would drop ${existing.riskLevel} -> ${replacement.riskLevel}. A re-seed may add a gate, never remove one.`);
   }
 
-  // The publish locks are partly expressed as tool grants: publish_executor is denied project.call_tool.
-  // Re-seeding must not be the way that grant appears.
+  // project.call_tool on a publish-risk node is a deliberate decision in BOTH directions, so a re-seed
+  // may not make it by accident either way.
+  //
+  //   Gaining it: opening a capability on a publish-risk node is a reviewed act, not a side effect of
+  //   syncing from a store someone edited.
+  //
+  //   Losing it: publish_executor and publication_controller hold it canonically as of 2026-07-29,
+  //   because without it a publisher cannot reach the client at all — both nodes resolved allowed:false
+  //   with ["node_tool_not_allowed","approval_required"]. A re-seed from a store that predates that
+  //   change would silently take it back, which is precisely the "workspace fix ≠ fixed" drift this
+  //   script exists to catch, running in the other direction.
   for (const node of incoming) {
     if (node.riskLevel !== "publish" && node.riskLevel !== "admin") continue;
-    if (!node.allowedTools.includes("project.call_tool")) continue;
-    if (listWorkspaceNodes().find((existing) => existing.id === node.id)?.allowedTools.includes("project.call_tool")) continue;
-    problems.push(`${node.id}: publish-risk node would gain project.call_tool, which is one of the closed publish locks. Open that lock deliberately, not through a re-seed.`);
+    const canonicalGrant = listWorkspaceNodes().find((existing) => existing.id === node.id)?.allowedTools.includes("project.call_tool") ?? false;
+    const incomingGrant = node.allowedTools.includes("project.call_tool");
+    if (incomingGrant === canonicalGrant) continue;
+    problems.push(incomingGrant
+      ? `${node.id}: publish-risk node would GAIN project.call_tool, which canonical does not grant. Open that capability deliberately, not through a re-seed.`
+      : `${node.id}: publish-risk node would LOSE project.call_tool, which canonical grants deliberately — without it this node cannot reach the client at all. Grant the tool in the live workspace first (workspace.update_node_tools), then re-seed.`);
   }
 
   const validation = validateWorkspaceGraph(incoming);

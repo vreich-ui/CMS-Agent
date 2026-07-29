@@ -2401,7 +2401,8 @@ export const publishingConductorNodes = [
       "workspace.get_node",
       "stage.get_output",
       "stage.save_output",
-      "stage.list_outputs"
+      "stage.list_outputs",
+      "project.call_tool"
     ],
     "assignedSkills": [
       "dr_lurie_contract_intelligence"
@@ -2792,7 +2793,8 @@ export const publishingConductorNodes = [
       "workspace.get_node",
       "stage.get_output",
       "stage.save_output",
-      "stage.list_outputs"
+      "stage.list_outputs",
+      "project.call_tool"
     ],
     "assignedSkills": [
       "dr_lurie_contract_intelligence"

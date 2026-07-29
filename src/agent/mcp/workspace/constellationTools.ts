@@ -78,7 +78,7 @@ export function createConstellationTools({ workspaceRepository, executionReposit
     const skillPolicies = skillRepository
       ? await Promise.all(base.nodes.map(async (node) => {
           const policy = await resolveSkillsForNode(node, skillRepository);
-          return { nodeId: node.id, conflicts: policy.conflicts, requestedTools: policy.requestedTools, deniedTools: policy.deniedTools, effectiveTools: policy.effectiveTools };
+          return { nodeId: node.id, conflicts: policy.conflicts, requestedTools: policy.requestedTools, deniedTools: policy.deniedTools, deniedToolReasons: policy.deniedToolReasons, effectiveTools: policy.effectiveTools };
         }))
       : undefined;
 

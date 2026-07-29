@@ -31,7 +31,7 @@ describe("conductor cost-control MCP tools", () => {
   });
 
   it("caches the reusable run context bundle per run", async () => {
-    const runId = (await data("workflow.start_dry_run", { projectId: "dr-lurie", input: {} })).run.runId;
+    const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {} })).run.runId;
 
     const first = await data("workflow.get_run_context", { runId, projectId: "dr-lurie" });
     expect(first.cacheHit).toBe(false);
@@ -44,7 +44,7 @@ describe("conductor cost-control MCP tools", () => {
   });
 
   it("reports a per-node cost ledger and a reuse plan", async () => {
-    const runId = (await data("workflow.start_dry_run", { projectId: "dr-lurie", input: {} })).run.runId;
+    const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {} })).run.runId;
     await data("workflow.run_next_node", { runId });
     await data("workflow.run_next_node", { runId });
 
@@ -58,7 +58,7 @@ describe("conductor cost-control MCP tools", () => {
   });
 
   it("recommends a narrow late-stage re-run once article_body is complete", async () => {
-    const runId = (await data("workflow.start_dry_run", { projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: validArticleBody })).run.runId;
+    const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: validArticleBody })).run.runId;
 
     const { ledger, plan } = await data("workflow.get_run_cost", { runId });
     expect(ledger.reusableNodeIds).toContain("article_body");

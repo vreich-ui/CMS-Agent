@@ -25,6 +25,39 @@ function modelSettings(node: WorkspaceNode) {
   return { model, settings };
 }
 
+// Agent-loop turn budget. A "turn" in the Agents SDK is one model request plus the tool calls it
+// issues; with parallelToolCalls disabled every tool call costs its own turn, and the node still
+// needs a final turn to emit its structured output. maxTurns was previously read straight off
+// `toolCallLimit`, conflating "how many tools may I call" with "how many model round-trips do I
+// get" — which is what killed the research node in live mode: it is the first node holding
+// web.search + web.fetch, and the cap was exhausted searching before it ever reached the turn that
+// emits its output. A tool-free node never needed more than a couple of turns and was unaffected,
+// which is why this only ever bit the tool-using nodes.
+//
+// Resolution order:
+//   1. modelConfig/executionConfig.maxTurns — explicit per-node override, always wins.
+//   2. a node holding tools — toolCallLimit + TURN_HEADROOM (the output turn, plus one spare so a
+//      single malformed tool call does not cost the node its result).
+//   3. a node holding no tools — DEFAULT_MAX_TURNS.
+// Per node, never one global constant: research legitimately needs an order of magnitude more turns
+// than a node that only reshapes its dependencies' output.
+export const DEFAULT_MAX_TURNS = 4;
+export const TURN_HEADROOM = 3;
+
+export function resolveMaxTurns(config: Record<string, unknown>, toolCount: number): number {
+  const explicit = numberFrom(config.maxTurns);
+  if (explicit !== undefined) return Math.max(1, Math.floor(explicit));
+  if (toolCount === 0) return DEFAULT_MAX_TURNS;
+  const toolCallLimit = numberFrom(config.toolCallLimit) ?? DEFAULT_MAX_TURNS;
+  return Math.max(DEFAULT_MAX_TURNS, Math.floor(toolCallLimit) + TURN_HEADROOM);
+}
+
+// The SDK signals an exhausted loop by throwing MaxTurnsExceededError ("Max turns (N) exceeded").
+// Matched on shape rather than by importing the class so an SDK refactor degrades to the generic
+// model_error path instead of breaking the build.
+const isMaxTurnsExceeded = (error: unknown, message: string): boolean =>
+  (error as { name?: string })?.name === "MaxTurnsExceededError" || /max turns?\b.*exceeded/i.test(message);
+
 function instructions(node: WorkspaceNode, deps: unknown, observations: unknown) {
   return [
     "You are the CMS-Agent node runner. Return only structured JSON matching the output schema.",
@@ -88,9 +121,10 @@ export class OpenAINodeRunner implements NodeRunner {
     const prompt = JSON.stringify(redact({ input, dependencyOutputs: Object.fromEntries(node.dependsOn.map((d) => [d, context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d]])), ...(playbookText ? { playbook: playbookText } : {}), outputSchema: node.outputSchema }));
     const timeoutMs = numberFrom(c.timeout) ?? 60000;
     const maxRetries = Math.max(0, Math.floor(numberFrom(c.retryCount) ?? 0));
+    const maxTurns = resolveMaxTurns(c, effective.length);
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const result: any = await Promise.race([run(agent, prompt, { maxTurns: Math.max(1, Math.floor(numberFrom(c.toolCallLimit) ?? 4)), signal: context.signal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any), new Promise((_, rej) => setTimeout(() => rej(new Error("model_timeout")), timeoutMs))]);
+        const result: any = await Promise.race([run(agent, prompt, { maxTurns, signal: context.signal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any), new Promise((_, rej) => setTimeout(() => rej(new Error("model_timeout")), timeoutMs))]);
         const validated = validateOutput(result.finalOutput, node.outputSchema);
         if (!validated.ok) {
           if (attempt < maxRetries) continue;
@@ -109,6 +143,17 @@ export class OpenAINodeRunner implements NodeRunner {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (msg === "model_timeout") return { ok: false, code: "model_timeout", message: "OpenAI node execution timed out." };
+        // Distinct and actionable: an exhausted turn budget is a configuration problem with one
+        // specific fix, not the "the model errored" bucket. Reported as such even on a non-final
+        // attempt, because retrying with the same cap can only exhaust it again.
+        if (isMaxTurnsExceeded(error, msg)) {
+          return {
+            ok: false,
+            code: "max_turns_exceeded",
+            message: `Node "${node.id}" exhausted its agent-loop turn budget (maxTurns ${maxTurns}) with ${effective.length} tool(s) available, before it could emit its structured output. Raise the budget for this node: set modelConfig.maxTurns explicitly, or raise modelConfig.toolCallLimit (turns default to toolCallLimit + ${TURN_HEADROOM} for a tool-using node).`,
+            details: { nodeId: node.id, maxTurns, toolCount: effective.length, toolCallLimit: numberFrom(c.toolCallLimit), configuredMaxTurns: numberFrom(c.maxTurns) }
+          };
+        }
         if (/aborted|cancel/i.test(msg)) return { ok: false, code: "cancelled", message: "OpenAI node execution was cancelled." };
         if (/tool_denied/.test(msg)) return { ok: false, code: "tool_denied", message: msg };
         if (/tool_failed/.test(msg)) return { ok: false, code: "tool_failed", message: msg };

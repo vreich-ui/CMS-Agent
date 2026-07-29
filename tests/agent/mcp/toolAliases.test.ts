@@ -54,7 +54,7 @@ describe("workflow.run_node nodeId targeting", () => {
   beforeEach(() => resetRepositoryManager());
 
   it("advances the run until the named node completes instead of ignoring nodeId", async () => {
-    const started = await rpc("tools/call", { name: "workflow.start_dry_run", arguments: { projectId: "project-a", input: { topic: "t" } } });
+    const started = await rpc("tools/call", { name: "workflow.start_dry_run", arguments: { executionMode: "mock", projectId: "project-a", input: { topic: "t" } } });
     const runId = started.result.structuredContent.data.run.runId;
 
     const result = await rpc("tools/call", { name: "workflow.run_node", arguments: { runId, nodeId: "reader_insight" } });
@@ -66,7 +66,7 @@ describe("workflow.run_node nodeId targeting", () => {
   });
 
   it("still runs exactly the next ready node when nodeId is omitted", async () => {
-    const started = await rpc("tools/call", { name: "workflow.start_dry_run", arguments: { projectId: "project-a", input: { topic: "t" } } });
+    const started = await rpc("tools/call", { name: "workflow.start_dry_run", arguments: { executionMode: "mock", projectId: "project-a", input: { topic: "t" } } });
     const runId = started.result.structuredContent.data.run.runId;
     const result = await rpc("tools/call", { name: "workflow.run_node", arguments: { runId } });
     const completed = result.result.structuredContent.data.run.nodes.filter((node: { status: string }) => node.status === "completed");

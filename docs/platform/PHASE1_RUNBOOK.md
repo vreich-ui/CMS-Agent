@@ -28,15 +28,63 @@ means "no publishing side effects", not "no real model calls".
 | Env var (job) | Flag override | Meaning |
 |---|---|---|
 | `PROJECT_ID` (default `dr-lurie`) | `--project` | Project the run is scoped to |
-| `EXECUTION_MODE` (`mock`\|`openai`, default `mock`) | `--mode` | `openai` = live model execution (requires `OPENAI_API_KEY`) |
+| `EXECUTION_MODE` (`mock`\|`openai`, **default `openai`**) | `--mode` | `openai` = live model execution (requires `OPENAI_API_KEY`; the job refuses to mint a run without it). `mock` is the explicit opt-in for cheap CI/smoke runs and emits deterministic placeholder output from each node's schema — structurally valid, content-free, never publishable. |
 | `RUN_INPUT_JSON` / `RUN_INPUT_FILE` | `--input` / `--input-file` | Initial workflow input (JSON) |
 | `RESUME_RUN_ID` | `--run` | Resume an existing run; with approval, re-queues the blocked node via the sanctioned retry path |
 | `RUN_APPROVED=true` | `--approved` | Lets publish-risk nodes execute (downstream publish gates still apply) |
 | `MAX_STEPS` (default 100) | `--max-steps` | Advance bound, mirrors `workflow.run_all` |
+| `WORKSPACE_NODES_SOURCE` (`store`\|`static`, **default `store`**) | — | Where node definitions come from. See "Node definitions and the required re-seed" below — this one has a deploy step attached. |
 | `WORKSPACE_STORE=blobs` | — | Use the production Netlify Blobs store |
 | `NETLIFY_BLOBS_SITE_ID` / `NETLIFY_BLOBS_TOKEN` | — | Required with `blobs` outside Netlify (see below) |
 | `NETLIFY_BLOBS_STORE_NAME` (default `cms-agent`) | — | Store name |
 | `OPENAI_API_KEY`, `OPENAI_AGENT_MODEL` | — | Model execution (openai mode) |
+
+## Node definitions and the required re-seed
+
+`WORKSPACE_NODES_SOURCE` decides which node definitions a conductor run executes, and the
+split has a deploy step attached that is easy to miss.
+
+**`store` (the default).** `resolveConductorNodes` overlays each canonical node with its
+stored counterpart, so authoring edits made over MCP — **prompt, input/output schemas,
+allowedTools, assignedSkills, modelConfig, executionConfig** — are in the next run with no
+deploy. This is the default because the alternative was worse in a specific way: with
+`static`, an operator could edit a node over MCP, start a run, and watch the *old*
+definition execute, with nothing anywhere saying so.
+
+**`static`.** Pins the deployment to the compiled `nodes.ts`. Only the exact word `static`
+selects it; anything else resolves to `store`, so a typo cannot silently pin a deployment to
+stale definitions.
+
+**What store mode CANNOT carry — the re-seed step.** `overlayStoreNode` deliberately pins
+the fields that define the conductor (`dependsOn`, `produces`, `riskLevel`, `position`,
+`status`) to the canonical definition, and `resolveConductorNodes` maps over the canonical
+list so a store node with **no** canonical counterpart is ignored entirely. That pinning is
+what stops a promoted prompt from quietly rewiring a publish gate, and it is worth keeping.
+It also means these changes reach a run **only** through a deliberate re-seed:
+
+| Changed in the workspace | Reaches a run how |
+|---|---|
+| Prompt, schemas, allowedTools, assignedSkills, model/execution config | Store overlay — next run, no deploy |
+| Graph edges (`dependsOn`, `produces`) | **Re-seed + redeploy** |
+| `riskLevel`, node `status`, grid `position` | **Re-seed + redeploy** |
+| A node that exists live but not in `nodes.ts` | **Re-seed + redeploy** |
+
+**Required step when topology changed:**
+
+```bash
+npm run nodes:check     # exit 1 if nodes.ts has drifted from the live workspace
+npm run nodes:update    # regenerate nodes.ts (+ seededSkills.ts) from the live store
+# review the diff, commit, then build and deploy the new image
+```
+
+`scripts/seedNodesFromWorkspace.ts` refuses rather than writes when a re-seed would weaken
+the conductor: a canonical node disappearing, a `riskLevel` stepping down, a publish-risk
+node newly acquiring `project.call_tool`, a graph that fails `validateWorkspaceGraph`, or a
+node missing a field the runtime spreads. A re-seed may add a gate; it may not remove one.
+
+Which source a given run actually used is reported on that run — `workflow.get_run` returns
+a `mode` block naming both the execution mode and the node source, so this is never
+something anyone has to infer after the fact.
 
 `NETLIFY_BLOBS_TOKEN` is a Netlify personal access token with access to the site;
 `NETLIFY_BLOBS_SITE_ID` is the site's API ID (Site configuration → Site details).

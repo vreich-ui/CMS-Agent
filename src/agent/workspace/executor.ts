@@ -15,6 +15,49 @@ import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 
 const WORKFLOW_ID = "publishing_conductor";
+
+// The execution mode a run gets when a caller names none.
+//
+// This used to be "mock" at every entry point, which meant the pipeline's DEFAULT behavior was to
+// emit deterministic placeholder artifacts that are structurally indistinguishable from real model
+// output — a run could look complete, produce an article body, and reach the publish gate without a
+// model ever having been called. A caller who did not know the flag existed had no way to tell.
+//
+// Live execution is now the default and "mock" is the explicit opt-in for cheap CI//test runs. The
+// failure mode this trades into is loud rather than silent: without the provider API key the first
+// node fails with invalid_node_configuration naming the missing variable (OpenAINodeRunner), and the
+// per-run budgetUsd ceiling still applies. Publish gates are untouched — a live-model run is still a
+// dry run that stops before every publish-risk node without explicit approval.
+export const DEFAULT_EXECUTION_MODE: ExecutionMode = "openai";
+
+// Unmissable, machine-readable statement of what a run actually executed, surfaced on
+// workflow.get_run and workflow.list_runs. `live` is the field to branch on: a mock run must never be
+// mistaken for a real one, and `notice` carries the same fact in prose for a human reading a
+// transcript. `declared` is false only for a legacy record persisted before the mode was stamped on
+// every run.
+export type RunModeSummary = { executionMode: ExecutionMode; live: boolean; declared: boolean; nodeSource: "static" | "store"; notice: string };
+
+export const runModeSummary = (run: Pick<WorkflowExecutionRecord, "executionMode">): RunModeSummary => {
+  const declared = run.executionMode !== undefined;
+  const executionMode = (run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode;
+  const live = executionMode === "openai";
+  const source = nodeSource();
+  return {
+    executionMode,
+    live,
+    declared,
+    nodeSource: source,
+    notice: [
+      live
+        ? "LIVE MODEL RUN: node outputs came from the configured model provider."
+        : "MOCK RUN: every node output is a deterministic placeholder generated from the node's outputSchema. No model was called and these artifacts must not be treated as real content.",
+      declared ? undefined : "This run record predates execution-mode stamping; the mode shown is the current default, not what the run recorded.",
+      source === "store"
+        ? "Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in this run. Topology — edges, riskLevel, new nodes — is pinned to the canonical definitions and still requires a deliberate re-seed (npm run nodes:update) plus redeploy."
+        : "WORKSPACE_NODES_SOURCE=static: node definitions came from the compiled definitions, so workspace edits made over MCP are NOT in this run until nodes.ts is re-seeded and redeployed."
+    ].filter(Boolean).join(" ")
+  };
+};
 // Statuses from which advanceRun will not proceed. "paused" (R-18) joins them: an operator-paused run
 // must stay put for exactly the same reason a blocked one does. Before "paused" existed, pause_run wrote
 // "blocked" — which worked only because "blocked" was already in this set, and cost the ability to tell
@@ -54,12 +97,31 @@ const ancestorsOf = (nodes: WorkspaceNode[], targetId: string): Set<string> => {
   return seen;
 };
 
-// Phase 5 (docs/platform/DIRECTION.md §5): the conductor can resolve node definitions from the
-// workspace store so optimizer-promoted prompts — and authoring edits to schemas, tools, skills, and
-// model config — reach FULL conductor runs, not just independent node execution and replay. Gated by
-// WORKSPACE_NODES_SOURCE and defaulting to the static definitions, so behavior is unchanged until an
-// operator flips it after a side-by-side mock run confirms identical topology.
-const nodeSource = (): "static" | "store" => (process.env.WORKSPACE_NODES_SOURCE?.trim().toLowerCase() === "store" ? "store" : "static");
+// Phase 5 (docs/platform/DIRECTION.md §5): the conductor resolves node definitions from the workspace
+// store so optimizer-promoted prompts — and authoring edits to schemas, tools, skills, and model
+// config — reach FULL conductor runs, not just independent node execution and replay.
+//
+// STORE IS NOW THE DEFAULT. It used to be "static", which meant the conductor ran the compiled
+// nodes.ts and ignored the live workspace outright: every prompt, schema, tool or skill edit made
+// over MCP was invisible to a run until someone re-seeded nodes.ts and redeployed. Nothing said so at
+// runtime, so an operator could edit a node, start a run, and watch the old definition execute.
+//
+// Flipping is safe by construction rather than by hope: overlayStoreNode pins the fields that define
+// the conductor — dependsOn, produces, riskLevel, position, status — to the canonical definition, so
+// store mode can change how a node runs but can never rewire the graph or downgrade a publish-risk
+// gate; a canonical node missing from the store falls back to its static definition, and a store read
+// that fails falls back wholesale. The topology a run executes is therefore identical either way.
+//
+// What store mode CANNOT deliver, and what the deploy runbook must still require: topology itself.
+// resolveConductorNodes maps over the canonical list, so a store node with no canonical counterpart
+// is ignored, and the pinned fields above are discarded by design. Changed edges, a changed
+// riskLevel, or an entirely new node reach a run only through a deliberate re-seed
+// (`npm run nodes:update`, scripts/seedNodesFromWorkspace.ts) followed by a redeploy. Set
+// WORKSPACE_NODES_SOURCE=static to pin a deployment to the compiled definitions.
+//
+// Either way the resolved source is reported on every run (runModeSummary), so which definitions a
+// run executed is never a thing anyone has to infer.
+const nodeSource = (): "static" | "store" => (process.env.WORKSPACE_NODES_SOURCE?.trim().toLowerCase() === "static" ? "static" : "store");
 
 // Canonical-node guard. Fields the store OWNS (how a node runs) are overlaid from the promoted/edited
 // store node; everything that defines the shape of the conductor — the DAG topology (id, dependsOn,
@@ -168,7 +230,7 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
     initialInput: data.input,
     stageOutputs,
     dryRun: true,
-    executionMode: data.executionMode ?? "mock",
+    executionMode: data.executionMode ?? DEFAULT_EXECUTION_MODE,
     ...(entrypoint ? { entrypoint } : {}),
     ...(data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {})
   } as WorkflowExecutionRecord;
@@ -409,7 +471,10 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
     return { run, commit: async () => { await recordDryRunNodeUsage(run, nextNode, state.input, state.output); } };
   }
 
-  const mode = (run.executionMode ?? "mock") as ExecutionMode;
+  // buildInitialRun stamps every new run, so this fallback only covers a legacy record persisted
+  // before that — runModeSummary reports such a record as declared:false rather than passing it off
+  // as a deliberate choice.
+  const mode = (run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode;
   // Phase 7 (DIRECTION §7): model-ladder enforcement. When IMPROVEMENT_MODEL_LADDER_ENFORCE is on,
   // the cheapest eval-qualified model for this node is applied for THIS run only (a per-run override,
   // never a workspace mutation — see modelLadder.ts). Best-effort: any enforcement error leaves the

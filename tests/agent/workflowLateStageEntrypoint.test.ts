@@ -40,7 +40,7 @@ describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payloa
 
   it("seeds the entry node and its ancestors as completed and starts at artifact_plan", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "late", entrypoint }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "late", entrypoint }, store);
 
     expect(run.status).toBe("queued");
     expect(run.currentNodeId).toBe("artifact_plan");
@@ -58,7 +58,7 @@ describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payloa
 
   it("runs only the publish stages: consumes the seeded body and stops before the publish-risk node", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "late", entrypoint }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "late", entrypoint }, store);
 
     const final = await drive(run.runId, store);
 
@@ -78,7 +78,7 @@ describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payloa
 
   it("completes the publish stages when approval is supplied", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "late", entrypoint }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "late", entrypoint }, store);
 
     const final = await drive(run.runId, store, { approved: true });
 
@@ -90,7 +90,7 @@ describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payloa
 
   it("never replays the seeded nodes under overlapping run_next_node calls", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "late", entrypoint }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "late", entrypoint }, store);
 
     await Promise.all(Array.from({ length: 6 }, () => runNextNode(run.runId, { executionRepository: store })));
     const final = (await getRun(run.runId, store))!;
@@ -107,7 +107,7 @@ describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payloa
 
   it("reset restores the seeded late-stage state, not a full run", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ projectId: "dr-lurie", input: "late", entrypoint }, store);
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "late", entrypoint }, store);
     await drive(run.runId, store); // advance to the blocked publish-risk node
 
     const afterReset = await resetRun(run.runId, store);
@@ -130,7 +130,7 @@ describe("late-stage entrypoint via the MCP endpoint", () => {
   afterEach(() => { delete process.env.MCP_API_TOKEN; resetRepositoryManager(); });
 
   it("accepts a supplied article_body.v1 and starts the run at artifact_plan", async () => {
-    const res = await call("workflow.start_dry_run", { projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: validArticleBody });
+    const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: validArticleBody });
     const run = res.result.structuredContent.data.run;
     expect(run.currentNodeId).toBe("artifact_plan");
     expect(run.nodes.find((node: any) => node.nodeId === "article_body").status).toBe("completed");
@@ -138,7 +138,7 @@ describe("late-stage entrypoint via the MCP endpoint", () => {
   });
 
   it("rejects an invalid supplied article body before creating a run", async () => {
-    const res = await call("workflow.start_dry_run", { projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [] } });
+    const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [] } });
     // The superseded workspace-local shape is now precisely what gets refused, and the error names the
     // fields the node actually requires rather than a generic "invalid article body".
     expect(JSON.stringify(res.error ?? {})).toContain("invalid_entrypoint_output");
@@ -160,7 +160,7 @@ describe("R-16 — a seeded entrypoint output cannot bypass output validation", 
   afterEach(() => { delete process.env.MCP_API_TOKEN; resetRepositoryManager(); });
 
   it("refuses the superseded workspace-local shape, naming every field the node requires", async () => {
-    const res = await call("workflow.start_dry_run", { projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B" } }] } });
+    const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B" } }] } });
     const error = JSON.stringify(res.error ?? {});
     expect(error).toContain("invalid_entrypoint_output");
     for (const field of ["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"]) {
@@ -170,14 +170,14 @@ describe("R-16 — a seeded entrypoint output cannot bypass output validation", 
 
   it("creates no run at all when the seeded output is invalid", async () => {
     const before = (await call("workflow.list_runs", {})).result.structuredContent.data.runs.length;
-    await call("workflow.start_dry_run", { projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [] } });
+    await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [] } });
     const after = (await call("workflow.list_runs", {})).result.structuredContent.data.runs.length;
     // Refused BEFORE creation — no half-seeded run, and nothing for a later step to pick up and trust.
     expect(after).toBe(before);
   });
 
   it("accepts a body that satisfies the node's own outputSchema", async () => {
-    const res = await call("workflow.start_dry_run", { projectId: "platform", input: {}, entrypoint: "article_body", articleBody: validArticleBody });
+    const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", input: {}, entrypoint: "article_body", articleBody: validArticleBody });
     expect(res.error).toBeUndefined();
     const run = res.result.structuredContent.data.run;
     expect(run.stageOutputs.article_body).toMatchObject({ artifact: "article_body.v1", clientObjectType: "content_item" });

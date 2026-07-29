@@ -36,11 +36,36 @@ describe("versioned skill registry", () => {
     expect(resolved.deniedTools).toContain("publish.post");
   });
 
-  it("blocks incompatible output schema composition", async () => {
+  // R-2. Compatibility is a STRUCTURAL question, not string equality of two JSON blobs. A blocker
+  // means a genuine contradiction: no output could satisfy both schemas at once.
+  it("blocks output schemas that genuinely contradict", async () => {
     const repo = new MemorySkillRepository("json");
     await repo.create({ ...customSkill("custom_schema_test"), outputSchema: { type: "object", required: ["skillOnly"], properties: { skillOnly: { type: "string" } } }, examples: [{ name: "ok", input: { brief: "x" }, output: { skillOnly: "y" } }] });
-    const resolved = await resolveSkillsForNode(node({ outputSchema: { type: "object", required: ["nodeOnly"], properties: { nodeOnly: { type: "string" } } }, assignedSkills: ["custom_schema_test"] }), repo);
+    // additionalProperties:false is what makes this a contradiction: the node can never emit
+    // `skillOnly`, so the skill's requirement is unsatisfiable.
+    const resolved = await resolveSkillsForNode(node({ outputSchema: { type: "object", additionalProperties: false, required: ["nodeOnly"], properties: { nodeOnly: { type: "string" } } }, assignedSkills: ["custom_schema_test"] }), repo);
+    const blocker = resolved.conflicts.find((conflict) => conflict.severity === "blocker");
+    expect(blocker).toBeDefined();
+    // The conflict names the field that contradicts, instead of asserting the two schemas differ.
+    expect(blocker?.message).toContain("skillOnly");
+  });
+
+  it("blocks a schema pair whose declared types cannot both hold", async () => {
+    const repo = new MemorySkillRepository("json");
+    await repo.create({ ...customSkill("custom_type_clash"), outputSchema: { type: "object", properties: { summary: { type: "number" } } }, examples: [{ name: "ok", input: { brief: "x" }, output: { summary: 1 } }] });
+    const resolved = await resolveSkillsForNode(node({ outputSchema: { type: "object", properties: { summary: { type: "string" } } }, assignedSkills: ["custom_type_clash"] }), repo);
     expect(resolved.conflicts.some((conflict) => conflict.severity === "blocker")).toBe(true);
+  });
+
+  // The regression R-2 is actually about: a skill schema RICHER than the node's used to be reported
+  // blocker-incompatible purely because the two did not stringify identically. That false blocker is
+  // why 7 of the 12 seeded skills — every one that is assigned to a node — carry a bare
+  // {"type":"object"} placeholder outputSchema to get past it.
+  it("does not report a blocker for a richer-but-compatible skill schema", async () => {
+    const repo = new MemorySkillRepository("json");
+    await repo.create({ ...customSkill("custom_richer_schema"), outputSchema: { type: "object", required: ["summary"], properties: { summary: { type: "string" }, confidence: { type: "number" } } }, examples: [{ name: "ok", input: { brief: "x" }, output: { summary: "y" } }] });
+    const resolved = await resolveSkillsForNode(node({ outputSchema: { type: "object", required: ["summary"], properties: { summary: { type: "string", minLength: 1 } } }, assignedSkills: ["custom_richer_schema"] }), repo);
+    expect(resolved.conflicts.filter((conflict) => conflict.severity === "blocker")).toEqual([]);
   });
 });
 

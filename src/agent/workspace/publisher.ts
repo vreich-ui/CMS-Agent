@@ -78,6 +78,20 @@ export const publishEnabledEnvVar = (config: ProjectConnectionConfig): string =>
 export const isProjectPublishEnabled = (config: ProjectConnectionConfig, env: NodeJS.ProcessEnv = process.env): boolean =>
   (env[publishEnabledEnvVar(config)] ?? "").trim().toLowerCase() === "true";
 
+// The publish gates, and the ONLY three inputs that open them. This list is deliberately closed and
+// deliberately independent of any node's tool grant.
+//
+// publish_executor and publication_controller now carry project.call_tool in allowedTools, because a
+// publisher that cannot reach the client is not a publisher — without it both nodes resolved
+// allowed:false and activating publish_executor would have produced exactly that. That grant is a
+// CAPABILITY, not a permission: it says which tool the node may reach for, and answers none of the
+// questions below. Nothing in this function reads a node's allowedTools, an effective-tool
+// resolution, or a skill policy, and it must stay that way — the day a tool grant can satisfy a
+// publish gate is the day the gates stop meaning anything. The controlled-tool layer holds a further
+// independent lock of its own: project.call_tool is requiresApproval:true, so even a granted node
+// needs per-run approval before the tool executes (toolPolicy.approval_required).
+const PUBLISH_GATE_NAMES = ["operator_enabled", "explicit_approval", "explicit_live"] as const;
+
 const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, env: NodeJS.ProcessEnv): PublishGates => {
   const operatorEnabled = isProjectPublishEnabled(config, env);
   const approved = input.approved === true;
@@ -87,7 +101,16 @@ const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, 
     { name: "explicit_approval", passed: approved, reason: approved ? undefined : "approved: true is required for a live publish." },
     { name: "explicit_live", passed: live, reason: live ? undefined : "live: true (dryRun false) is required for a live publish." }
   ];
-  return { operatorEnabled, approved, live, allPassed: gates.every((gate) => gate.passed), gates };
+  // Structural assertion, not decoration: an unreachable state here means a gate was renamed, dropped,
+  // or made to pass on something other than its own input. Cheap, and it fails loudly at the one place
+  // that would otherwise publish.
+  const names = gates.map((gate) => gate.name);
+  if (names.length !== PUBLISH_GATE_NAMES.length || !PUBLISH_GATE_NAMES.every((name, index) => names[index] === name)) {
+    throw new Error(`publish_gate_set_changed: expected exactly [${PUBLISH_GATE_NAMES.join(", ")}], got [${names.join(", ")}]. The publish gates are a closed set; adding or removing one is a deliberate act, not a refactor.`);
+  }
+  const allPassed = operatorEnabled && approved && live;
+  if (allPassed !== gates.every((gate) => gate.passed)) throw new Error("publish_gate_evaluation_inconsistent: a gate's passed flag disagrees with its own input.");
+  return { operatorEnabled, approved, live, allPassed, gates };
 };
 
 const findArticleBody = (run: WorkflowExecutionRecord): unknown =>
@@ -250,4 +273,4 @@ export async function evaluatePublishReadiness(
   return { available: true, articleBodyValid, readiness: hook({ articleBody, ...input.readiness }) };
 }
 
-export const __test__ = { evaluateGates, findLockToken, firstUnverifiedMediaSlot, REQUEST_ID_PATTERN, compileRequestIdPattern };
+export const __test__ = { evaluateGates, findLockToken, firstUnverifiedMediaSlot, REQUEST_ID_PATTERN, compileRequestIdPattern, PUBLISH_GATE_NAMES };

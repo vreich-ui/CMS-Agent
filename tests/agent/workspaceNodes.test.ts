@@ -80,13 +80,20 @@ describe("Publishing Conductor workspace nodes", () => {
     ]));
   });
 
-  it("keeps publish_executor gated: publish risk, draft, and no client call_tool grant", () => {
-    const node = listWorkspaceNodes().find((workspaceNode) => workspaceNode.id === "publish_executor");
-
-    // The re-seed brought a second publish-risk node into the graph. These are the closed locks it must
-    // arrive with, and seedNodesFromWorkspace refuses a re-seed that would hand it project.call_tool.
-    expect(node?.riskLevel).toBe("publish");
-    expect(node?.status).toBe("draft");
-    expect(node?.allowedTools).not.toContain("project.call_tool");
+  // The two publish-risk nodes now CARRY project.call_tool. Both assign the dr_lurie_contract_intelligence
+  // skill, which requests that tool, and without the grant both resolved allowed:false with
+  // ["node_tool_not_allowed", "approval_required"] — activating publish_executor would have produced a
+  // publisher that could not reach the client at all. The grant is a capability, not a permission: the
+  // locks that actually stop a publish are unchanged and asserted here beside it.
+  it("grants the publish-risk nodes the client call_tool capability while keeping every publish lock closed", () => {
+    for (const nodeId of ["publish_executor", "publication_controller"]) {
+      const node = listWorkspaceNodes().find((workspaceNode) => workspaceNode.id === nodeId);
+      expect(node?.riskLevel, `${nodeId} stays publish-risk`).toBe("publish");
+      expect(node?.allowedTools, `${nodeId} can reach the client`).toContain("project.call_tool");
+      // project.call_tool is requiresApproval:true in the controlled-tool registry, so the grant alone
+      // never executes anything — the tool still needs per-run approval.
+      expect(node?.assignedSkills).toContain("dr_lurie_contract_intelligence");
+    }
+    expect(listWorkspaceNodes().find((node) => node.id === "publish_executor")?.status).toBe("draft");
   });
 });
