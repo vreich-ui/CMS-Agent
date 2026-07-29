@@ -1,49 +1,69 @@
+// Safe, non-secret structured guidance for agents working against the Dr. Lurie client. Surfaced on
+// project.get so an agent can learn this client's rules without reading its codebase.
+//
+// Dr. Lurie is a tenant of the same object substrate as platform (client 0): articles are governed
+// content_item objects, and the pre-object-model save_json_blob_*/markdown pipeline is frozen. Every
+// line here must be true of the OBJECT path — the legacy-path rules this block used to carry
+// (top-level output.artifactReferences, "never rewrite blobKey into a public URL", the
+// rendering.placement render gate, "future CMS object model") were inverted or retired by it.
+//
+// Per-site identifiers are read from the connection config rather than restated as prose, so the
+// registry ids an agent is told about cannot drift from the ones the publish hook actually uses.
+
+import { DR_LURIE_OBJECT_DIALECT } from "./definition.js";
+
 export const drLurieProjectKnowledge = {
   projectId: "dr-lurie",
   sources: [
-    "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/diagnostics/",
-    "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/cms-architecture/"
+    "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/agents/publishing-policy.md",
+    "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/cms-architecture/",
+    "CMS-Agent/docs/projects/dr-lurie-agent-publishing-policy.md"
   ],
+  site: {
+    siteObjectId: DR_LURIE_OBJECT_DIALECT.siteObjectId,
+    taxonomyRegistryObjectId: DR_LURIE_OBJECT_DIALECT.taxonomyRegistryObjectId,
+    requestIdPattern: DR_LURIE_OBJECT_DIALECT.requestIdPattern
+  },
   rules: {
-    articleBodyV1: [
-      "article_body.v1 is the canonical structured article body for Dr. Lurie content.",
-      "Markdown is an adapter/export format only and must not become the canonical editing shape.",
-      "Reader-visible image nodes must declare rendering.placement, usually inline, so preview and live rendering agree."
+    objectSubstrate: [
+      "Every content surface is a governed object; articles are content_item objects, not markdown files.",
+      "The live object_contract for a type is the only source of truth for its body shape, patch ops, and lifecycle verbs — fetch it at runtime rather than assuming.",
+      "Look answers up (object_contract, object_inventory, object_validate) instead of probing the write path."
     ],
-    contentSourceV1: [
-      "content_source.v1 remains the working source envelope for intake and workflow context.",
-      "Project adapters may map content_source.v1 into Dr. Lurie records, but must not bypass Dr. Lurie validation or review gates."
+    noLegacyPath: [
+      "The save_json_blob_* article pipeline and the five-agent per-stage output tools are FROZEN legacy: zero new writes, and they are blocked for this project at both the config and call_tool layers.",
+      "Publishing goes through the object lifecycle: object_create -> object_checkout -> object_validate -> object_patch -> object_publish -> object_checkin.",
+      "Reader URLs come from the publish response, never hand-constructed; the legacy /post/<slug> markdown route is dead."
     ],
-    artifactReferences: [
-      "Image artifacts must be preserved as top-level output.artifactReferences arrays when handed to Dr. Lurie publishing flows.",
-      "Nested artifactReferences are unsafe because Dr. Lurie publishing historically ignored misplaced references.",
-      "Do not rewrite ArtifactReference blobKey values into reader-facing public URLs."
+    identityAndIds: [
+      "The request id is the spine: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, caller-supplied and NEVER auto-generated.",
+      "A content_item keeps that request-id shape as its object id, so the request id is sent as requested_id on create — get it right before doing anything else.",
+      "Node ids are opaque n_* ids and must never carry strategy or commercial vocabulary; omit node.id on upsert_node to have one minted."
     ],
-    imageMaterialization: [
-      "Images are artifacts first; they become reader-visible only after Dr. Lurie materializes them into committed assets or another explicit image serving route.",
-      "Accepted image materialization behavior is owned by the Dr. Lurie repo/MCP, not by the CMS-Agent workspace MCP."
+    bodyMapping: [
+      "article_body.v1 is what the workspace authors; content_item.v1 is what the client stores. Map between them — do not send one as the other.",
+      "Drop schema_version at the mapping step: the content_item body has no such field and its schema is strict, so an unknown key is rejected at write.",
+      "Root slug, title, deck, description, taxonomy, seo, image, and editorial at the body; they are not node fields.",
+      "An article is a sequence of functional blocks, each annotated with private.strategy and private.intent — one giant text node is a policy violation even when it validates."
     ],
-    pdfFallbackBehavior: [
-      "PDF/document artifacts may route through Dr. Lurie's /pdf/* fallback.",
-      "Do not infer an equivalent /image/* public fallback for image artifacts unless Dr. Lurie adds one."
+    judgementsStayWorkspaceSide: [
+      "The engine never writes the judgement substrate (scores, claims, sources, compliance, emotional_strategy, lineage) into a client object, even though set_article_meta's open fields map would accept it."
     ],
-    inlineImagePlacement: [
-      "Inline reader-visible images must use image nodes with rendering.placement: 'inline'.",
-      "A node missing inline placement can disappear from the published body even if it appears in admin preview."
+    artifacts: [
+      "Images and PDFs are produced by PDF-Tool under a brokered storage grant (get_pdf_tool_storage_grant); never mint a storage key, repo path, or URL by hand.",
+      "Renderable fields carry the PUBLIC path (/img/{req}/{sha}.ext, /pdf/{req}/{sha}.pdf); a raw blobKey in a renderable field is a write blocker and breaks the build. Raw refs belong only in *AssetRef / artifact_ref carrier fields.",
+      "Artifact trust is scoped per request id — cross-request reuse is rejected by design; verify materialization before any object write, and a pattern-valid key is not proof of materialization.",
+      "A PDF can never be the hero image."
     ],
-    heroVsInlineImagePaths: [
-      "Hero/featured image selection and inline body rendering are separate paths.",
-      "Do not assume a hero-designated image will render inline; avoid hero/inline collisions and preserve explicit placement metadata."
+    validationAndTaxonomy: [
+      "object_validate is the client's own validator and the only verdict that counts as evidence; dry-run the exact candidate patch before patching.",
+      `Taxonomy category and tags must resolve to ACTIVE terms in the ${DR_LURIE_OBJECT_DIALECT.taxonomyRegistryObjectId} registry; unknown terms block the write.`,
+      "That registry is a curated, agent-editable vocabulary: prefer an existing term, otherwise extend it (add_term) — never delete terms to clean up, deprecate with a merge target."
     ],
-    publishVerificationTiming: [
-      "Image verification immediately after publish can hit a pre-deploy page and produce false negatives.",
-      "Verification should be deploy-aware and distinguish timing from true missing-image defects."
-    ],
-    futureCmsObjectModel: [
-      "Future Dr. Lurie CMS architecture generalizes articles into ObjectRecord envelopes stored in site-objects.",
-      "Object types include site, page, template, section, navigation, taxonomy, and content_item.",
-      "Pages use Sections rendered by a Component Registry; articles keep article_body.v1 as a sibling grammar.",
-      "Publishing should pass through review/publish gates and derived export materialization."
+    publishVsRelease: [
+      "object_publish commits the export as a dark commit and does NOT deploy; release_to_production is the separate, explicit, paid gate that ships everything accumulated.",
+      "Publishing is never a release: this workspace's publish path must not call release_to_production, and whether a run releases at all is decided upstream, never by the agent.",
+      "Verify go-live deploy-aware: a verification run immediately after publish can hit a pre-deploy page and produce a false negative."
     ]
   }
 } as const;

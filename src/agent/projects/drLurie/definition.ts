@@ -1,4 +1,4 @@
-import { effectiveToolPermission, type ProjectConnectionConfig, type ToolPermission } from "../projectTypes.js";
+import { effectiveToolPermission, type ProjectConnectionConfig, type ProjectObjectDialect, type ToolPermission } from "../projectTypes.js";
 
 // Dr. Lurie external project MCP connection. The endpoint and token are provided via environment
 // variables (DR_LURIE_MCP_ENDPOINT, DR_LURIE_MCP_TOKEN) and are never persisted.
@@ -31,17 +31,75 @@ export const DR_LURIE_ARTIFACT_TOOLS = [
 
 export const DR_LURIE_ALLOWED_TOOLS = [...DR_LURIE_SAFE_READ_ONLY_TOOLS, ...DR_LURIE_ARTIFACT_TOOLS] as const;
 
-// Full access, with one safety valve: wipe_blob_stores irreversibly destroys ALL blob stores and is
-// not a publishing operation, so it defaults to "needs approval" rather than auto-running. An
-// operator can flip it to "allowed" (or tighten anything else) from the Access page.
+// The RETIRED legacy dialect. Dr. Lurie's pre-object-model pipeline — the save_json_blob_* article
+// verbs and the five-agent per-stage output tools — is frozen: zero new writes, its markdown post
+// collection was wiped, and the ratified alignment doc (vreich-ui/platform,
+// docs/agents/cms-agent-contract-alignment.md) states plainly that save_json_blob_* is NOT to be
+// allowlisted for the dr-lurie project.
+//
+// This client runs with defaultToolPolicy "allowed", so silence would mean ALLOWED: removing these
+// names from the config is expressed as an explicit "blocked" entry, the highest-precedence rule in
+// effectiveToolPermission. executablePolicy.ts blocks the same families by pattern at call_tool
+// time, so a legacy verb this list does not happen to name is still refused.
+export const DR_LURIE_RETIRED_PUBLISH_DIALECT_TOOLS = [
+  "save_json_blob_create_request",
+  "save_json_blob_create_article_draft",
+  "save_json_blob_checkout_request",
+  "save_json_blob_patch_canonical_input",
+  "save_json_blob_publish_by_time",
+  "save_json_blob_checkin_request"
+] as const;
+
+// The five-agent pipeline's per-stage output tools, whose markdown terminus is a dead end.
+export const DR_LURIE_RETIRED_STAGE_TOOLS = [
+  "reader_insight_update_output",
+  "reader_insight_mark_complete",
+  "research_update_output",
+  "research_mark_complete",
+  "angle_update_output",
+  "angle_mark_complete",
+  "draft_update_output",
+  "draft_mark_complete",
+  "final_article_update_output",
+  "final_article_mark_complete"
+] as const;
+
+export const DR_LURIE_RETIRED_LEGACY_TOOLS = [...DR_LURIE_RETIRED_PUBLISH_DIALECT_TOOLS, ...DR_LURIE_RETIRED_STAGE_TOOLS] as const;
+
+// Full access, with two carve-outs:
+//   - wipe_blob_stores irreversibly destroys ALL blob stores and is not a publishing operation, so
+//     it defaults to "needs approval" rather than auto-running;
+//   - every retired legacy-dialect tool is hard-blocked (above).
+// An operator can tighten anything else from the Access page.
 export const DR_LURIE_DEFAULT_TOOL_POLICY: ToolPermission = "allowed";
 export const DR_LURIE_TOOL_POLICIES: Record<string, ToolPermission> = {
-  wipe_blob_stores: "needs_approval"
+  wipe_blob_stores: "needs_approval",
+  ...Object.fromEntries(DR_LURIE_RETIRED_LEGACY_TOOLS.map((tool) => [tool, "blocked" as ToolPermission]))
 };
 
-// Bumped 3 -> 4 when Dr. Lurie moved to full access (defaultToolPolicy "allowed"), so persisted stale
-// configs re-seed from this definition (see defaultMigration.ts).
-export const DR_LURIE_DEFINITION_VERSION = 4;
+// Per-site parameters of the object-native publish dialect (see ProjectObjectDialect). These are
+// configuration precisely so the publish hook carries no site-specific literals.
+export const DR_LURIE_OBJECT_DIALECT: ProjectObjectDialect = {
+  // The owning site object id, passed as `site` on object_create — object_contract(content_item)
+  // lists it under auxiliary_inputs. Confirm against object_list {object_type:"site"} on this
+  // client's server during enablement; publishing is gated off until an operator does.
+  siteObjectId: "site_drlurie",
+  // Taxonomy category/tags resolve against this registry; unknown terms are write blockers. The
+  // registry is a curated, agent-editable vocabulary — extend it rather than dropping a term.
+  taxonomyRegistryObjectId: "tax_drlurie",
+  // Unlike platform (server-minted ids), this client's content_item KEEPS the article request-id
+  // shape as its object id, so the caller-supplied request id is sent as requested_id on create.
+  objectIdSource: "request_id",
+  // req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, caller-supplied and never generated.
+  // A malformed id is accepted at create but hard-400s every later artifact operation with no
+  // recovery, which is why the publisher rejects it before the first call.
+  requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$"
+};
+
+// Bumped 3 -> 4 when Dr. Lurie moved to full access (defaultToolPolicy "allowed"), and 4 -> 5 when
+// the legacy save_json_blob_*/per-stage dialect was retired and the object-dialect parameters were
+// added, so persisted stale configs re-seed from this definition (see defaultMigration.ts).
+export const DR_LURIE_DEFINITION_VERSION = 5;
 
 export const drLurieProjectConfig: ProjectConnectionConfig = {
   projectId: "dr-lurie",
@@ -57,6 +115,7 @@ export const drLurieProjectConfig: ProjectConnectionConfig = {
     contentContract: "content_source.v1",
     canonicalArticleBody: "article_body.v1"
   },
+  objectDialect: { ...DR_LURIE_OBJECT_DIALECT },
   publishingPolicy: {
     publishEnabled: false,
     requiresExplicitPublish: true,

@@ -222,7 +222,12 @@ Artifact references are trusted **per request id** only (`artifact-trust.ts:78`)
 Four independent gates stand between an agent and a live page. **Granting one never implies another**:
 
 ### 8.1 Access: tool allowlist (CMS-Agent project config)
-The `dr-lurie` project connection currently exposes a **read-only + artifact** allowlist (`CMS-Agent/src/agent/projects/drLurie/definition.ts`) — **no object verbs, no release, no deploy_status**. Enabling the object path means a human expands the allowlist per `cms-agent-enablement-runbook.md`, which also names the **deliberate exclusions**: all `save_json_blob_*`, `trigger_netlify_build`, `save_artifact`, `create_artifact_upload_intent`, `create_artifact_from_url`, `object_review_decide`, `wipe_blob_stores` (stays needs-approval).
+The `dr-lurie` project connection (`CMS-Agent/src/agent/projects/drLurie/definition.ts`) names a read-only + artifact allowlist and runs with `defaultToolPolicy: "allowed"`, so anything not explicitly held back is callable. Two carve-outs are explicit, because under an "allowed" default silence means *allowed*:
+
+- **`blocked`** — every retired legacy tool: the `save_json_blob_*` publish dialect (`create_request`, `create_article_draft`, `checkout_request`, `patch_canonical_input`, `publish_by_time`, `checkin_request`) and the five-agent per-stage tools (`{reader_insight,research,angle,draft,final_article}_{update_output,mark_complete}`). `executablePolicy.ts` refuses the same two families **by shape** at `call_tool` time, so a variant the enumeration does not name is still blocked before any transport.
+- **`needs_approval`** — `wipe_blob_stores` (irreversible, not a publishing operation).
+
+The enablement runbook's other deliberate exclusions (`trigger_netlify_build`, `save_artifact`, `create_artifact_upload_intent`, `create_artifact_from_url`, `object_review_decide`) are net-blocked by `executablePolicy.ts` for the artifact family; aligning the allowlist itself with the runbook remains open (§12).
 
 ### 8.2 Policy: publish enablement (CMS-Agent side)
 `publishingPolicy.publishEnabled` is server-enforced `false` and not patchable; the operator override is the env flag `DR_LURIE_PUBLISH_ENABLED=true` in the deployment (`CMS-Agent/src/agent/workspace/publisher.ts:56–62`). Even then, every `workflow_publish_run` needs `approved:true` **and** `live:true` **and** a GO from the readiness hook (verified media refs, taxonomy, pinned approval, hard constraints — `publishReadiness.ts`). The flag alone publishes nothing.
@@ -337,11 +342,15 @@ The blog's post collection was wiped (83 markdown posts deleted; `src/data/post/
 | `save_artifact`, `create_artifact_upload_intent`, `create_artifact_from_url` | Legacy transports (grant-only posture; CMS-Agent's executable policy already blocks them at call time) | PDF-Tool grant flow (§6.1) |
 | Standalone `mcp/save-json-blob-mcp` mirror (auto-generates `req_<uuid>` ids!) | Legacy mirror of a frozen pipeline; its auto-ids violate the id contract | main MCP object verbs |
 
-**Stale items inside CMS-Agent itself** (flagged for cleanup; this policy supersedes them):
-- `agent-publishing-instructions.md` (repo root, 2026-07-03): documents the frozen `save_json_blob_*`/markdown pipeline as current, including raw-blobKey `media.src` and `featuredImage`. Superseded by this policy.
-- `src/agent/workspace/publisher.ts` tool sequence (`save_json_blob_create_article_draft → checkout → publish_by_time → checkin`): drives the frozen pipeline. The gate logic around it (§8.2) is current; the tool sequence needs repointing at the object verbs before enablement.
-- `src/agent/projects/drLurie/knowledge.ts` artifact rules: "Do not rewrite ArtifactReference blobKey values into reader-facing public URLs" and "top-level `output.artifactReferences[]`" are legacy-path rules — on the object path the public path **is** the renderable reference (§6.3). The "future CMS object model" framing is stale: the object model is live.
-- `docs/projects/dr-lurie-integration-notes.md`: same "future architecture" framing; media/verification cautions remain valid.
+**Stale items inside CMS-Agent itself:**
+
+*Resolved* (the legacy dialect was retired workspace-side; this policy is now what the code does):
+- `agent-publishing-instructions.md` (repo root, 2026-07-03): documented the frozen `save_json_blob_*`/markdown pipeline as current, including raw-blobKey `media.src` and `featuredImage`. **Deleted** — superseded by this policy.
+- Dr. Lurie's publish execution hook (`src/agent/projects/drLurie/hooks.ts`, which owns the sequence `src/agent/workspace/publisher.ts` used to inline): **repointed at the object verbs** — `object_create → object_checkout → object_validate → object_patch → object_publish → object_checkin`, validating before any patch and never releasing (§7). Per-site parameters (owning site object id, taxonomy registry, request-id shape, who mints the object id) come from `objectDialect` in the project config, not from literals in the hook.
+- `src/agent/projects/drLurie/knowledge.ts`: **rewritten** for the object path. The legacy-path rules it carried ("do not rewrite blobKey values into reader-facing public URLs", top-level `output.artifactReferences[]`, `rendering.placement` as the render gate, the "future CMS object model" framing) were inverted or retired by the object model and are gone.
+
+*Still open:*
+- `docs/projects/dr-lurie-integration-notes.md`: "future architecture" framing; media/verification cautions remain valid.
 - `DR_LURIE_ALLOWED_TOOLS` (`drLurie/definition.ts`) allowlists `save_artifact`/`create_artifact_upload_intent`/`create_artifact_from_url`, which `executablePolicy.ts` then blocks at call time — net-blocked but self-contradictory; align the allowlist with the enablement runbook's exclusions.
 - `articleBodySchema` (`store.ts`): plain-string-only `public.body` (no `rich_text.v1`), and its rendered-src pattern accepts **both** raw `image/…` and `/img/…` forms — the mapping layer must convert explicitly (§5.6), and the authored grammar should gain rich-text support to stop flattening block content.
 

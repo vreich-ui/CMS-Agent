@@ -6,7 +6,16 @@
 
 import { evaluatePlatformPublishReadiness } from "./publishReadiness.js";
 import { platformProjectKnowledge } from "./knowledge.js";
-import { findDeep, findLockToken } from "../toolResultSearch.js";
+import {
+  JUDGEMENT_SUBSTRATE_KEYS,
+  buildArticleCandidatePatch,
+  describeCandidatePatch,
+  findObjectId,
+  findRecordVersion,
+  formatValidationIssues,
+  parseValidateResult
+} from "../objectDialect.js";
+import { findLockToken } from "../toolResultSearch.js";
 import type { PublishExecutionContext, PublishExecutionOutcome } from "../projectHooks.js";
 
 // The object-native publish dialect agreed on the alignment board:
@@ -15,15 +24,10 @@ import type { PublishExecutionContext, PublishExecutionOutcome } from "../projec
 // release verb is a SEPARATE gate that must appear nowhere in this hook (board B2).
 const PLATFORM_PUBLISH_TOOL_SEQUENCE = ["object_create", "object_checkout", "object_validate", "object_patch", "object_publish", "object_checkin"];
 
-// D7 (Wolf): the client's judgement substrate. The engine must never write these into a client
-// object, even though set_article_meta's open fields map would accept every one of them.
-export const JUDGEMENT_SUBSTRATE_KEYS: ReadonlySet<string> = new Set(["scores", "claims", "sources", "compliance", "emotional_strategy", "lineage"]);
-
-// Tolerant extractors over the client's tool results (envelope shapes vary; see toolResultSearch).
-const findObjectId = (value: unknown): string | number | undefined =>
-  findDeep(value, (key, child) => (key === "object_id" || key === "id") && ((typeof child === "string" && child !== "") || typeof child === "number")) as string | number | undefined;
-const findRecordVersion = (value: unknown): string | number | undefined =>
-  findDeep(value, (key, child) => key === "record_version" && (typeof child === "number" || (typeof child === "string" && child !== ""))) as string | number | undefined;
+// D7 (Wolf): the client's judgement substrate now lives in ../objectDialect.ts — the rule is a
+// property of the shared object contract, not of one tenant. Re-exported so existing importers of
+// this module keep resolving it.
+export { JUDGEMENT_SUBSTRATE_KEYS };
 
 const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExecutionOutcome> => {
   // a. Create the object. D2c: the server mints the id — NEVER send requested_id. The request id
@@ -55,29 +59,20 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   // Arg shapes for these ops are the contract's declared op names with assumed payload keys; T1
   // (req_align_publishpath_20260728_50) is the live shakeout — adjust here, not in the generic
   // publisher, if the client rejects a shape.
-  const fields = Object.fromEntries(Object.entries(ctx.body).filter(([key]) => key !== "nodes" && !JUDGEMENT_SUBSTRATE_KEYS.has(key)));
-  const nodes = Array.isArray(ctx.body.nodes) ? (ctx.body.nodes as unknown[]) : [];
+  //
   // Op arg shapes corrected from the LIVE contract (board platform#014, verbatim arg_schema):
   // set_article_meta is {op, fields, guard?} with `fields` REQUIRED — `meta` would be refused as
   // invalid_op before anything interesting happened. upsert_node {op, node} confirmed as assumed.
   // `guard` is deliberately omitted for now so a compare-and-set mismatch can never be confused
-  // with a shape problem during the T1 shakeout.
-  const candidatePatch: Array<Record<string, unknown>> = [{ op: "set_article_meta", fields }, ...nodes.map((node) => ({ op: "upsert_node", node }))];
+  // with a shape problem during the T1 shakeout. The builder is shared with the other tenants of
+  // this substrate (../objectDialect.ts) because the contract it encodes is the same one.
+  const { patch: candidatePatch, nodeCount } = buildArticleCandidatePatch(ctx.body, JUDGEMENT_SUBSTRATE_KEYS);
 
   // d. Validate BEFORE any patch (board B1): the client's own validator is the authority on the
   // client shape, and its verdict is recorded as clientValidation evidence on the publish result.
   const validated = await ctx.call("object_validate", { object_id: objectId, candidate_patch: candidatePatch });
-  const parsedValid = findDeep(validated, (key, child) => key === "valid" && typeof child === "boolean");
-  const parsedIssues = findDeep(validated, (key, child) => key === "issues" && Array.isArray(child));
-  const valid = typeof parsedValid === "boolean" ? parsedValid : false;
-  const issues: unknown[] = Array.isArray(parsedIssues) ? parsedIssues : typeof parsedValid === "boolean" ? [] : ["unparseable_validate_result"];
-  const clientValidation = {
-    tool: "object_validate",
-    candidate_patch_summary: `${candidatePatch.length} ops: 1 set_article_meta + ${nodes.length} upsert_node`,
-    valid,
-    issues
-  };
-  if (!valid) throw new Error(`object_validate_rejected: ${issues.slice(0, 5).map((issue) => (typeof issue === "string" ? issue : JSON.stringify(issue))).join("; ")}`);
+  const clientValidation = parseValidateResult(validated, describeCandidatePatch(candidatePatch, nodeCount));
+  if (!clientValidation.valid) throw new Error(`object_validate_rejected: ${formatValidationIssues(clientValidation.issues)}`);
 
   // e. Patch under the lock, pinned to the checked-out record version.
   await ctx.call("object_patch", { object_id: objectId, lock_token: lockToken, expected_record_version: recordVersion, patch: candidatePatch });

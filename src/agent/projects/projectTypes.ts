@@ -23,6 +23,28 @@ export type ProjectContentContract = {
   canonicalArticleBody: string;
 };
 
+// Per-SITE parameters of the object-native publish dialect. These are the values that differ from
+// tenant to tenant on the same object substrate (Dr. Lurie and platform/client 0 both live there),
+// and they belong in the project's configuration — never as string literals inside a publish hook,
+// which is how one client's identifiers end up fired at another client's server.
+//
+// Sourced from the client's own object_contract(content_item): `auxiliary_inputs` names `site`
+// ("the owning site object id") as a create-time input and the taxonomy registry as the authority
+// `taxonomy.category`/`taxonomy.tags` resolve against; the `id_object` constraint states that a
+// content_item keeps the article request-id shape.
+export type ProjectObjectDialect = {
+  // Owning site object id, passed as `site` on object_create (e.g. "site_platform").
+  siteObjectId: string;
+  // The site's taxonomy registry object id (e.g. "tax_platform"); unresolved terms block the write.
+  taxonomyRegistryObjectId: string;
+  // Who mints the object id: "server_minted" means NEVER send requested_id and read the id back off
+  // the create result; "request_id" means the caller-supplied request id IS the object id.
+  objectIdSource: "server_minted" | "request_id";
+  // The client's request-id shape, as an anchored regular-expression source. Optional: the publisher
+  // falls back to the shared contract default when a project declares none.
+  requestIdPattern?: string;
+};
+
 export type ProjectPublishingPolicy = {
   // Publishing execution is intentionally disabled. It may only be enabled by a future explicit
   // PUBLISH approval gate; this registry never performs publish side effects.
@@ -50,6 +72,10 @@ export type ProjectConnectionConfig = {
   // Explicit per-tool overrides. Highest precedence — wins over allowedTools and defaultToolPolicy.
   toolPolicies?: Record<string, ToolPermission>;
   contentContract: ProjectContentContract;
+  // Per-site parameters of the object-native publish dialect. Absent for clients that do not publish
+  // through the object substrate — a publish hook that needs one and finds none must refuse rather
+  // than substitute a default.
+  objectDialect?: ProjectObjectDialect;
   publishingPolicy: ProjectPublishingPolicy;
   status: ProjectStatus;
 };
