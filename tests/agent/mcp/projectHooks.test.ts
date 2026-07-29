@@ -71,7 +71,12 @@ describe("per-project hooks: validate_handoff policy + knowledge", () => {
   it("surfaces Dr. Lurie knowledge rules on project.get and null for hookless projects", async () => {
     const drLurie = await call("project.get", { projectId: "dr-lurie" });
     expect(drLurie.data.knowledge.projectId).toBe("dr-lurie");
-    expect(drLurie.data.knowledge.rules.artifactReferences.length).toBeGreaterThan(0);
+    expect(drLurie.data.knowledge.rules.artifacts.length).toBeGreaterThan(0);
+    // The knowledge block describes the OBJECT path and names the retired one as retired, so an
+    // agent reading it can never be led back into the frozen pipeline.
+    expect(drLurie.data.knowledge.rules.noLegacyPath.join(" ")).toContain("object_create -> object_checkout -> object_validate -> object_patch -> object_publish -> object_checkin");
+    // Per-site identifiers come from the connection config, so prose and publish hook cannot drift.
+    expect(drLurie.data.knowledge.site).toMatchObject({ siteObjectId: "site_drlurie", taxonomyRegistryObjectId: "tax_drlurie" });
 
     await call("project.create", { project: { projectId: "acme-know", name: "Acme", mcpEndpointEnvVar: "ACME_KNOW_MCP_ENDPOINT", authMode: "none" } });
     const acme = await call("project.get", { projectId: "acme-know" });

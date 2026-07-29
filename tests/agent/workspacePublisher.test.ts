@@ -62,13 +62,18 @@ const seedRun = async (articleBody: unknown, projectId = "dr-lurie") => {
   return { runId: run.runId, executionRepository, projectRepository, learningRepository };
 };
 
-const fakeCallTool = (opts: { failOn?: string; noLock?: boolean } = {}) => {
+// Dr. Lurie speaks the OBJECT-NATIVE dialect (the legacy save_json_blob_* pipeline is retired), so
+// this fake answers the object verbs. Its content_item keeps the request-id shape as its object id.
+const DR_LURIE_PUBLISH_SEQUENCE = ["object_create", "object_checkout", "object_validate", "object_patch", "object_publish", "object_checkin"];
+const fakeCallTool = (opts: { failOn?: string; noLock?: boolean; validate?: { valid: boolean; issues: unknown[] } } = {}) => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const fn = async (tool: string, args: Record<string, unknown>): Promise<CallToolResult> => {
     calls.push({ tool, args });
     if (opts.failOn === tool) return { ok: false, projectId: "dr-lurie", connection: {} as any, tool, error: `${tool} boom` };
-    if (tool === "save_json_blob_checkout_request") return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: opts.noLock ? {} : { structuredContent: { lock_token: "lock_123" } } };
-    if (tool === "save_json_blob_publish_by_time") return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: { ok: true, statusCode: 201, commit: "abc123def", path: "src/pages/post/live-title.md", warnings: [] } };
+    if (tool === "object_create") return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: { structuredContent: { object_id: REQUEST_ID } } };
+    if (tool === "object_checkout") return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: opts.noLock ? { structuredContent: { record_version: 2 } } : { structuredContent: { lock_token: "lock_123", record_version: 2 } } };
+    if (tool === "object_validate") return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: { structuredContent: opts.validate ?? { valid: true, issues: [] } } };
+    if (tool === "object_publish") return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: { ok: true, statusCode: 201, commit: "abc123def", path: "src/data/site/articles/live-title.json", warnings: [] } };
     return { ok: true, projectId: "dr-lurie", connection: {} as any, tool, result: { ok: true } };
   };
   return { fn, calls };
@@ -131,7 +136,7 @@ describe("live publish gates", () => {
     expect(result.mode).toBe("dry_run");
     expect(adapter.calls).toHaveLength(0);
     if (result.mode === "dry_run") {
-      expect(result.plan.toolSequence).toEqual(["save_json_blob_create_article_draft", "save_json_blob_checkout_request", "save_json_blob_publish_by_time", "save_json_blob_checkin_request"]);
+      expect(result.plan.toolSequence).toEqual(DR_LURIE_PUBLISH_SEQUENCE);
       expect(result.readiness?.status).toBe("go");
       expect(result.gates.gates.find((gate) => gate.name === "operator_enabled")?.passed).toBe(false);
     }
@@ -144,11 +149,66 @@ describe("live publish gates", () => {
 
     expect(result.published).toBe(true);
     expect(result.mode).toBe("live");
-    expect(adapter.calls.map((call) => call.tool)).toEqual(["save_json_blob_create_article_draft", "save_json_blob_checkout_request", "save_json_blob_publish_by_time", "save_json_blob_checkin_request"]);
-    const draft = adapter.calls[0].args as any;
-    expect(draft.input.record_type).toBe("content_source");
-    expect((adapter.calls[2].args as any).lock_token).toBe("lock_123");
-    if (result.mode === "live") expect((result.result as any).statusCode).toBe(201);
+    expect(adapter.calls.map((call) => call.tool)).toEqual(DR_LURIE_PUBLISH_SEQUENCE);
+    // Per-site parameters come from the project config's objectDialect, never from literals in the
+    // hook: the owning site object id travels on create, and this client's content_item keeps the
+    // caller-supplied request id as its object id (unlike platform, which mints server-side).
+    const create = adapter.calls[0].args as any;
+    expect(create.object_type).toBe("content_item");
+    expect(create.site).toBe(drLurieProjectConfig.objectDialect?.siteObjectId);
+    expect(create.requested_id).toBe(REQUEST_ID);
+    // Validation runs BEFORE any patch (board B1), and every write is pinned to the checked-out lock
+    // and record version.
+    const patch = adapter.calls.find((call) => call.tool === "object_patch")!.args as any;
+    expect(patch).toMatchObject({ object_id: REQUEST_ID, lock_token: "lock_123", expected_record_version: 2 });
+    expect(patch.patch[0]).toMatchObject({ op: "set_article_meta" });
+    expect(patch.patch.slice(1).every((op: any) => op.op === "upsert_node")).toBe(true);
+    if (result.mode === "live") {
+      expect((result.result as any).statusCode).toBe(201);
+      expect(result.clientValidation).toMatchObject({ tool: "object_validate", valid: true, issues: [] });
+    }
+  });
+
+  it("drops article_body.v1's schema_version so the client's strict content_item body accepts the patch", async () => {
+    const ctx = await seedRun(textBody);
+    const adapter = fakeCallTool();
+    await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    const patch = adapter.calls.find((call) => call.tool === "object_patch")!.args as any;
+    const meta = patch.patch[0].fields as Record<string, unknown>;
+    expect(meta).not.toHaveProperty("schema_version");
+    expect(meta).not.toHaveProperty("nodes");
+    expect(JSON.stringify(patch.patch[0])).not.toContain("article_body.v1");
+  });
+
+  it("aborts before object_patch/object_publish when the client validator rejects, and names the taxonomy registry on a taxonomy blocker", async () => {
+    const ctx = await seedRun(textBody);
+    const adapter = fakeCallTool({ validate: { valid: false, issues: ["taxonomy.tags[0] 'longevity' is not an active term"] } });
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") {
+      expect(result.error).toContain("object_validate_rejected");
+      expect(result.error).toContain(drLurieProjectConfig.objectDialect!.taxonomyRegistryObjectId);
+    }
+    expect(adapter.calls.map((call) => call.tool)).toEqual(["object_create", "object_checkout", "object_validate"]);
+  });
+
+  it("refuses to publish when the project declares no per-site object dialect — no literals stand in", async () => {
+    const manager = new RepositoryManager();
+    const projectRepository = manager.getProjectRepository();
+    // Same client, same hooks, but a persisted config whose objectDialect has been stripped.
+    const { objectDialect, ...withoutDialect } = drLurieProjectConfig;
+    await projectRepository.save({ ...withoutDialect, definitionVersion: drLurieProjectConfig.definitionVersion });
+    const executionRepository = manager.getExecutionRepository();
+    const learningRepository = manager.getLearningRepository();
+    const run = await startDryRun({ projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: run.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository, learningRepository, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") expect(result.error).toContain("missing_object_dialect");
+    expect(adapter.calls).toHaveLength(0);
   });
 
   it("blocks with a resumable state when the readiness policy is NO-GO (no readiness inputs)", async () => {
@@ -214,11 +274,11 @@ describe("live publish gates", () => {
 
   it("aborts and reports the failing step when a publish call fails, and when the lock token is missing", async () => {
     const ctx = await seedRun(textBody);
-    const failing = fakeCallTool({ failOn: "save_json_blob_publish_by_time" });
+    const failing = fakeCallTool({ failOn: "object_publish" });
     const failed = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: failing.fn });
     expect(failed.mode).toBe("error");
-    if (failed.mode === "error") expect(failed.error).toContain("save_json_blob_publish_by_time");
-    expect(failing.calls.map((call) => call.tool)).toEqual(["save_json_blob_create_article_draft", "save_json_blob_checkout_request", "save_json_blob_publish_by_time"]);
+    if (failed.mode === "error") expect(failed.error).toContain("object_publish");
+    expect(failing.calls.map((call) => call.tool)).toEqual(["object_create", "object_checkout", "object_validate", "object_patch", "object_publish"]);
 
     const ctx2 = await seedRun(textBody);
     const noLock = fakeCallTool({ noLock: true });
@@ -234,8 +294,9 @@ describe("live publish gates", () => {
   });
 });
 
-// A-2 — publish execution is a per-project hook: platform publishes in its object-native dialect,
-// dr-lurie keeps its legacy save_json_blob_* dialect, and a project with no executor is refused.
+// A-2 — publish execution is a per-project hook. Both tenants of the object substrate now publish in
+// the object-native dialect (dr-lurie's legacy save_json_blob_* pipeline is retired), each with its
+// OWN per-site parameters, and a project with no executor is refused rather than borrowed for.
 describe("per-project publish execution hooks", () => {
   it("executes platform's object-native sequence in order when readiness is GO and every gate passes", async () => {
     const ctx = await seedRun(platformTextBody, "platform");
@@ -294,6 +355,25 @@ describe("per-project publish execution hooks", () => {
     const drLurieResult = await publishRun({ runId: drLurieCtx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...drLurieCtx, env: ENABLED_ENV, callTool: drLurieAdapter.fn });
     expect(drLurieResult.published).toBe(true);
     expect(drLurieAdapter.calls.map((call) => call.tool)).not.toContain("release_to_production");
+  });
+
+  it("keeps the two tenants' per-site parameters apart — neither hook carries the other's identifiers", async () => {
+    const drLurieCtx = await seedRun(textBody);
+    const drLurieAdapter = fakeCallTool();
+    await publishRun({ runId: drLurieCtx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...drLurieCtx, env: ENABLED_ENV, callTool: drLurieAdapter.fn });
+
+    const platformCtx = await seedRun(platformTextBody, "platform");
+    const platformAdapter = fakePlatformCallTool();
+    await publishRun({ runId: platformCtx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...platformCtx, env: PLATFORM_ENABLED_ENV, callTool: platformAdapter.fn });
+
+    // dr-lurie: caller-supplied object id under its own site. platform: server-minted, no site
+    // configured in its test registration, and never a requested_id (board D2c).
+    const drLurieCreate = drLurieAdapter.calls.find((call) => call.tool === "object_create")!.args as any;
+    const platformCreate = platformAdapter.calls.find((call) => call.tool === "object_create")!.args as any;
+    expect(drLurieCreate.site).toBe("site_drlurie");
+    expect(platformCreate.site).toBeUndefined();
+    expect("requested_id" in platformCreate).toBe(false);
+    expect(JSON.stringify(platformAdapter.calls)).not.toContain("drlurie");
   });
 
   it("aborts before object_patch/object_publish when the client validator rejects the candidate patch", async () => {

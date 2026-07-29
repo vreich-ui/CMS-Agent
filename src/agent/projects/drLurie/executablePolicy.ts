@@ -8,6 +8,11 @@
 // what the config marks "allowed":
 //   - legacy artifact fallback tools by name: save_artifact, create_artifact_from_url, and direct
 //     upload intents (create_artifact_upload_intent);
+//   - the RETIRED publish dialect: the frozen save_json_blob_* article verbs and the five-agent
+//     per-stage output tools, which the ratified alignment doc froze and directed must not be
+//     allowlisted for this project. The seeded config blocks each by name, but this client's
+//     defaultToolPolicy is "allowed" — so a legacy verb the enumeration does not happen to cover
+//     would otherwise be permitted. Matching by shape closes that gap;
 //   - fallback artifact SOURCE arguments on any tool: public remote image URLs, copied raw artifact
 //     references, repo/source paths, and hand-authored blob-store keys.
 
@@ -24,6 +29,17 @@ export const LEGACY_ARTIFACT_FALLBACK_TOOLS = new Set(["save_artifact", "create_
 const legacyToolNamePatterns = [/save_.*artifact/i, /artifact.*from_url/i, /(create|make|new)_.*upload_intent/i, /upload_intent/i];
 
 const isLegacyArtifactTool = (tool: string): boolean => LEGACY_ARTIFACT_FALLBACK_TOOLS.has(tool) || legacyToolNamePatterns.some((pattern) => pattern.test(tool));
+
+// The retired publish dialect, matched by SHAPE so a variant the seeded blocklist does not name is
+// still refused: the whole save_json_blob_* family, and the five-agent pipeline's per-stage
+// update_output / mark_complete verbs. The sanctioned object verbs (object_create, object_checkout,
+// object_validate, object_patch, object_publish, object_checkin) match none of these.
+const retiredDialectToolPatterns = [
+  /^save_json_blob(_|$)/i,
+  /^(reader_insight|research|angle|draft|final_article)_(update_output|mark_complete)$/i
+];
+
+const isRetiredDialectTool = (tool: string): boolean => retiredDialectToolPatterns.some((pattern) => pattern.test(tool));
 
 const IMAGE_EXTENSION = "(?:png|jpe?g|webp|gif|svg|avif|bmp|tiff?)";
 // A remote/data image URL: an absolute http(s) URL, a protocol-relative //host URL, or a data: URI
@@ -95,6 +111,14 @@ export function evaluateDrLurieCallToolPolicy(call: { tool: string; arguments?: 
       severity: "error",
       path: "tool",
       message: `Legacy artifact fallback tool "${call.tool}" is blocked; materialize artifacts through the sanctioned PDF-Tool grant flow and reference them by artifactReference.`
+    });
+  }
+  if (isRetiredDialectTool(call.tool)) {
+    findings.push({
+      code: "blocked_retired_publish_dialect",
+      severity: "error",
+      path: "tool",
+      message: `Retired legacy publish-dialect tool "${call.tool}" is blocked; the frozen save_json_blob_*/per-stage pipeline takes zero new writes. Publish through the object verbs: object_create -> object_checkout -> object_validate -> object_patch -> object_publish -> object_checkin.`
     });
   }
   findings.push(...scanArguments(call.arguments ?? {}));

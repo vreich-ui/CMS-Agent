@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
-import { DR_LURIE_ALLOWED_TOOLS, DR_LURIE_ARTIFACT_TOOLS, DR_LURIE_SAFE_READ_ONLY_TOOLS, drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
+import { DR_LURIE_ALLOWED_TOOLS, DR_LURIE_ARTIFACT_TOOLS, DR_LURIE_RETIRED_LEGACY_TOOLS, DR_LURIE_SAFE_READ_ONLY_TOOLS, drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
+import { evaluateDrLurieCallToolPolicy } from "../../../src/agent/projects/drLurie/executablePolicy.js";
 import { ProjectMcpAdapter, resolveProjectConnection } from "../../../src/agent/projects/projectMcpAdapter.js";
 import { toProjectSummary, validateHandoff } from "../../../src/agent/projects/projectRegistry.js";
 import type { McpTransport } from "../../../src/agent/projects/mcpClient.js";
@@ -50,17 +51,56 @@ describe("project registry + Dr. Lurie definition", () => {
     expect(drLurieProjectConfig.allowedTools).toContain("create_artifact_from_url");
   });
 
-  it("dr-lurie runs with full access: every tool is allowed by default", () => {
+  it("dr-lurie runs with full access: every non-retired tool is allowed by default", () => {
     expect(drLurieProjectConfig.defaultToolPolicy).toBe("allowed");
     // Publishing and commerce tools — not in allowedTools, but allowed via the default policy.
-    for (const tool of ["object_publish", "release_to_production", "save_json_blob_publish_by_time", "trigger_netlify_build", "site_apply_theme", "product_set_price", "commerce_orders", "order_reissue"]) {
+    for (const tool of ["object_create", "object_checkout", "object_validate", "object_patch", "object_publish", "object_checkin", "release_to_production", "trigger_netlify_build", "site_apply_theme", "product_set_price", "commerce_orders", "order_reissue"]) {
       expect(effectiveToolPermission(drLurieProjectConfig, tool)).toBe("allowed");
+    }
+  });
+
+  // The ratified alignment doc froze the legacy pipeline and directed that save_json_blob_* is not to
+  // be allowlisted for dr-lurie. Because this client's default policy is "allowed", "not allowlisted"
+  // has to be spelled out as an explicit block — silence would mean allowed.
+  it("dr-lurie blocks the retired legacy publish dialect and per-stage tools", () => {
+    for (const tool of DR_LURIE_RETIRED_LEGACY_TOOLS) {
+      expect(effectiveToolPermission(drLurieProjectConfig, tool), `${tool} must be blocked`).toBe("blocked");
+    }
+    expect(DR_LURIE_RETIRED_LEGACY_TOOLS).toEqual(expect.arrayContaining([
+      "save_json_blob_create_article_draft", "save_json_blob_checkout_request", "save_json_blob_publish_by_time", "save_json_blob_checkin_request",
+      "reader_insight_update_output", "research_update_output", "angle_update_output", "draft_update_output", "final_article_update_output"
+    ]));
+    // And none of them may be reachable through the legacy allow-list either.
+    for (const tool of DR_LURIE_RETIRED_LEGACY_TOOLS) expect(drLurieProjectConfig.allowedTools).not.toContain(tool);
+  });
+
+  // Defense in depth: even if a retired verb the blocklist does not name reached call_tool, the
+  // executable policy refuses it by shape before any transport.
+  it("the executable policy refuses retired-dialect tools by shape, including unenumerated variants", () => {
+    for (const tool of ["save_json_blob_publish_by_time", "save_json_blob_some_new_verb", "final_article_mark_complete"]) {
+      const findings = evaluateDrLurieCallToolPolicy({ tool, arguments: {} });
+      expect(findings.some((finding) => finding.code === "blocked_retired_publish_dialect" && finding.severity === "error"), `${tool} must be refused`).toBe(true);
+    }
+    // The sanctioned object verbs are untouched.
+    for (const tool of ["object_create", "object_checkout", "object_validate", "object_patch", "object_publish", "object_checkin"]) {
+      expect(evaluateDrLurieCallToolPolicy({ tool, arguments: {} })).toEqual([]);
     }
   });
 
   it("dr-lurie holds only wipe_blob_stores for approval as a safety valve", () => {
     expect(effectiveToolPermission(drLurieProjectConfig, "wipe_blob_stores")).toBe("needs_approval");
     expect(drLurieProjectConfig.toolPolicies).toMatchObject({ wipe_blob_stores: "needs_approval" });
+    const heldForApproval = Object.entries(drLurieProjectConfig.toolPolicies ?? {}).filter(([, permission]) => permission === "needs_approval");
+    expect(heldForApproval).toEqual([["wipe_blob_stores", "needs_approval"]]);
+  });
+
+  it("dr-lurie carries its per-site object-dialect parameters in config, not in the publish hook", () => {
+    expect(drLurieProjectConfig.objectDialect).toEqual({
+      siteObjectId: "site_drlurie",
+      taxonomyRegistryObjectId: "tax_drlurie",
+      objectIdSource: "request_id",
+      requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$"
+    });
   });
 
   it("upgrades a persisted stale dr-lurie project config safely", async () => {

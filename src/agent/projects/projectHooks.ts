@@ -12,6 +12,7 @@ import type { ArtifactPolicyWarning } from "./drLurie/artifactPolicy.js";
 import type { PublishReadinessInput, PublishReadinessResult } from "./drLurie/publishReadiness.js";
 import { drLurieProjectHooks } from "./drLurie/hooks.js";
 import { platformProjectHooks } from "./platform/hooks.js";
+import type { ProjectObjectDialect } from "./projectTypes.js";
 
 export type ProjectPolicyFinding = ArtifactPolicyWarning;
 
@@ -32,6 +33,10 @@ export type PublishExecutionContext = {
   clientObjectType: string;               // envelope.clientObjectType, passed through VERBATIM
   publishedTime: string | null;
   owner: { owner_id: string; owner_label: string };
+  // The project's per-site object-dialect parameters (owning site object id, taxonomy registry,
+  // who mints the object id). Undefined for a project whose config declares none — a hook that
+  // needs them must refuse rather than fall back to another site's identifiers.
+  objectDialect?: ProjectObjectDialect;
   call: (tool: string, args: Record<string, unknown>) => Promise<unknown>; // records a step; throws on tool failure
 };
 export type PublishExecutionOutcome = {

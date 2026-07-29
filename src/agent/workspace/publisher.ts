@@ -31,7 +31,16 @@ import type { WorkflowExecutionRecord } from "./executionTypes.js";
 
 // request_id contract: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, supplied by the
 // caller (never auto-generated). A malformed id is accepted at create but breaks every later step.
+// This is the shared default; a project may declare its own shape in objectDialect.requestIdPattern.
 const REQUEST_ID_PATTERN = /^req_[a-z0-9_]+_\d{8}_\d{2}$/;
+
+// Compile a project's declared request-id shape. Project config is operator-writable, so a declared
+// pattern is not compiled blindly: it must be anchored and short, and anything else falls back to
+// the shared contract default rather than becoming a regex-injection or backtracking seam.
+const compileRequestIdPattern = (declared: string | undefined): RegExp => {
+  if (!declared || declared.length > 200 || !declared.startsWith("^") || !declared.endsWith("$")) return REQUEST_ID_PATTERN;
+  try { return new RegExp(declared); } catch { return REQUEST_ID_PATTERN; }
+};
 
 const OWNER = { owner_id: "cms-agent", owner_label: "CMS-Agent Publishing Conductor" };
 
@@ -129,8 +138,9 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   const gates = evaluateGates(config, input, env);
   const emptyPlan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: 0, publishedTime: input.publishedTime ?? null, toolSequence: [] };
 
-  if (!REQUEST_ID_PATTERN.test(input.requestId)) {
-    return { published: false, mode: "error", gates, plan: null, steps: [], error: `invalid_request_id: must match req_<flow>_<topic>_<yyyymmdd>_<nn> (lowercase snake_case), got "${input.requestId}".` };
+  const requestIdPattern = compileRequestIdPattern(config.objectDialect?.requestIdPattern);
+  if (!requestIdPattern.test(input.requestId)) {
+    return { published: false, mode: "error", gates, plan: null, steps: [], error: `invalid_request_id: must match ${requestIdPattern.source} (req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case), got "${input.requestId}".` };
   }
 
   // Validated against the article_body node's OWN outputSchema — the same authority the executor
@@ -204,6 +214,9 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
       clientObjectType: (envelope as Record<string, unknown>).clientObjectType as string,
       publishedTime: input.publishedTime ?? null,
       owner: OWNER,
+      // Per-site parameters (owning site object id, taxonomy registry, who mints the object id) come
+      // from the project's own config — the hook never carries another site's identifiers.
+      ...(config.objectDialect ? { objectDialect: config.objectDialect } : {}),
       call
     });
 
@@ -237,4 +250,4 @@ export async function evaluatePublishReadiness(
   return { available: true, articleBodyValid, readiness: hook({ articleBody, ...input.readiness }) };
 }
 
-export const __test__ = { evaluateGates, findLockToken, firstUnverifiedMediaSlot, REQUEST_ID_PATTERN };
+export const __test__ = { evaluateGates, findLockToken, firstUnverifiedMediaSlot, REQUEST_ID_PATTERN, compileRequestIdPattern };
