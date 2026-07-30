@@ -101,18 +101,11 @@ describe("Publishing Conductor workspace nodes", () => {
   // exercised, but learning_recorder depended on publication_controller completing — which a dry run's
   // own design never lets happen — so it had never actually run and F5 had no observed profile to size
   // it from. It kept the 120s global default and timed out the moment F4 made it fire for the first
-  // time ever, on a node whose input is an entire run's worth of stage outputs. PR #94 (2026-07-30)
-  // gave it the same 300s override draft_writer's own large single-output case needed — by
-  // hand-editing nodes.ts directly, the same pattern PR #91 used for the dr_lurie_contract_intelligence
-  // skill grant (see constellationTools.test.ts). Neither commit pushed the matching live update
-  // (workspace.update_node_model_config here), and a 2026-07-30 re-seed against the live workspace
-  // (v226) confirms it: the live learning_recorder node still has no modelConfig.timeout override, so
-  // it is still exposed to the exact 120s-default timeout this fix was written to close. This
-  // assertion is loosened to match today's honest live state rather than deleted; restore the
-  // >=180000 lower bound once an operator pushes the missing live update and a fresh re-seed picks it
-  // up.
-  it("gives learning_recorder an explicit timeout override once the live node carries one", () => {
+  // time ever, on a node whose input is an entire run's worth of stage outputs. It now carries the
+  // same explicit override draft_writer's own large single-output case needed.
+  it("gives learning_recorder an explicit timeout sized for its large (whole-run) input", () => {
     const node = listWorkspaceNodes().find((candidate) => candidate.id === "learning_recorder");
-    if (node?.modelConfig?.timeout !== undefined) expect(node.modelConfig.timeout as number).toBeGreaterThanOrEqual(180000);
+    expect(node?.modelConfig?.timeout).toBeTypeOf("number");
+    expect(node!.modelConfig!.timeout as number).toBeGreaterThanOrEqual(180000);
   });
 });

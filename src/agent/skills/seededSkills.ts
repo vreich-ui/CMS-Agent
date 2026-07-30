@@ -237,7 +237,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "description": "Treat the target client's live object contract as the only source of truth for content shape, ids, media paths, taxonomy and publish gates. Works for any client a workflow encounters.",
     "version": "1.0.0",
     "status": "active",
-    "instructions": "Never shape client content from memory, from a workspace-local schema, or from another client's conventions. Fetch the target client's contract for the requested object type at runtime and obey what it returns.\n\nDiscovery: use the client's own contract tool for the object type, its registry tool for component/page-type/taxonomy options, and its inventory tool for reusable recipes and existing patterns. Record which tool you called and when, so downstream steps can prove the contract was fetched rather than assumed.\n\nObey whatever the fetched contract declares, including: the exact body schema and its strictness (a strict schema rejects any field it does not declare, including workspace-only markers such as a schema-version field); the object id convention and the child/node id pattern; which fields carry a RAW artifact reference versus which are RENDERED and require the client's public serving path; the taxonomy source and whether unknown terms block; the placement or rendering metadata reader-visible media requires; and the publish/approval gates.\n\nHard rules that hold for every client: internal strategy, intent, prompts, scoring and agent notes belong only in the fields the contract designates as private, and must never appear in reader-visible strings or in ids. A key that merely matches a pattern is never proof an artifact exists — require materialization evidence for the current request. Publish and release remain separate explicit gates, never a side effect of building content.\n\nWhere the contract is silent, say so as an explicit assumption rather than filling the gap from another client's conventions. Where the contract declares something this workspace cannot satisfy, raise it as a blocker rather than approximating.",
+    "instructions": "Never shape client content from memory, from a workspace-local schema, or from another client's conventions. Fetch the target client's contract for the requested object type at runtime and obey what it returns.\n\nDiscovery: reach the client through project.call_read_tool — it needs no run approval and only permits read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping). Use the client's own contract tool for the object type, its registry tool for component/page-type/taxonomy options, and its inventory tool for reusable recipes and existing patterns. Record which tool you called and when, so downstream steps can prove the contract was fetched rather than assumed. project.call_tool remains granted for a genuine future write; this skill's discovery work never needs it.\n\nObey whatever the fetched contract declares, including: the exact body schema and its strictness (a strict schema rejects any field it does not declare, including workspace-only markers such as a schema-version field); the object id convention and the child/node id pattern; which fields carry a RAW artifact reference versus which are RENDERED and require the client's public serving path; the taxonomy source and whether unknown terms block; the placement or rendering metadata reader-visible media requires; and the publish/approval gates.\n\nHard rules that hold for every client: internal strategy, intent, prompts, scoring and agent notes belong only in the fields the contract designates as private, and must never appear in reader-visible strings or in ids. A key that merely matches a pattern is never proof an artifact exists — require materialization evidence for the current request. Publish and release remain separate explicit gates, never a side effect of building content.\n\nWhere the contract is silent, say so as an explicit assumption rather than filling the gap from another client's conventions. Where the contract declares something this workspace cannot satisfy, raise it as a blocker rather than approximating.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": true,
@@ -260,6 +260,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
       "type": "object"
     },
     "allowedTools": [
+      "project.call_read_tool",
       "project.call_tool"
     ],
     "requiredArtifacts": [],
@@ -315,7 +316,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
       "supersedes": "dr_lurie_contract_intelligence v1.0.0 (Dr. Lurie-specific)"
     },
     "createdAt": "2026-07-21T12:53:58.917Z",
-    "updatedAt": "2026-07-26T13:07:53.137Z"
+    "updatedAt": "2026-07-30T16:52:39.262Z"
   },
   {
     "skillId": "dr_lurie_dtc_science_editorial",
@@ -894,6 +895,6 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "riskLevel": "read",
     "metadata": {},
     "createdAt": "2026-01-01T00:00:00.000Z",
-    "updatedAt": "2026-07-26T13:08:17.891Z"
+    "updatedAt": "2026-07-26T13:08:13.314Z"
   }
 ];
