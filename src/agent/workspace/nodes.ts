@@ -2547,6 +2547,9 @@ export const publishingConductorNodes = [
         "raw_image_artifact_public_url",
         "image_rendering_placement_missing"
       ]
+    },
+    "modelConfig": {
+      "timeout": 300000
     }
   },
   {
