@@ -47,8 +47,8 @@ Verify each with `project.test_connection` — currently fail-closed, which is c
 | W-1 ✅ | **Register `platform` as client 0** — `project.create` per the registration contract: `projectId: platform`, `mcpEndpointEnvVar: PLATFORM_MCP_ENDPOINT`, `tokenEnvVar: PLATFORM_MCP_TOKEN` | ENV-3 | then `test_connection` → `list_tools` → allow-list read-only contract tools first (`object_contract`, `registry_get`, `object_inventory`, `object_validate`, `ping`), widen later behind the same gate as dr-lurie |
 | W-2 ✅ | **Retire `snoocle`; keep `monetizer`** — `project.delete snoocle` succeeded 2026-07-27 once the deploy carried the de-seeded defaults; registry is now dr-lurie / monetizer / pdf-tool / platform | none | Both records **disabled** via `project.update` (ledgered, reversible) — `project.delete` refuses a code-defined default ("re-seeded on read"). Repo commit removes snoocle from `defaultProjectConnections`, so `project.delete snoocle` works once it lands. **monetizer is NOT a fake registration**: `improvement/monetizerIngest.ts` imports `monetizerProjectConfig` to power the `feedback.ingest_monetizer` tool, so deleting it drops a live tool from the wire surface. Retiring it is a decision about the Phase 7 outer loop, not registry hygiene. pdf-tool untouched — Ring 0 |
 | W-3 ✅ | **Generalize `learning_recorder` prompt** — last mechanical "Dr. Lurie" in contract-logic context | none | Done, workspace v69→v70. Now "project artifact/rendering failures", matching the node's own description. Full-node patch used deliberately (R-1) |
-| W-4 ⧗ | **Generalize the five editorial-voice nodes** (`topic_opportunity`, `research`, `brief_architect`, `draft_writer`, `trust_factual`) to fetch voice from the client | **P-2 (voice object)** | do NOT do earlier — there is nowhere to fetch voice from; premature generalization degrades writing quality |
-| W-5 ⧗ | **Split `dr_lurie_dtc_science_editorial`** into a client-neutral craft skill + per-publication voice record | P-2, W-4 | the skill's content seeds the first `vox_drlurie_default` record |
+| W-4 ✅ | **Generalize the five editorial-voice nodes** (`topic_opportunity`, `research`, `brief_architect`, `draft_writer`, `trust_factual`) to fetch voice from the client | ~~P-2 (voice object)~~ | **Done 2026-07-30 (#99), scope re-cut by Wolf after run_1785405350649_9u5mjz proved the harm live** — see §2q. The original "wait for P-2" reasoning assumed generalizing meant substituting a fetched voice; the executed fix strips the brand without substituting anything (neutral craft + explicit blocker on missing client identity), so P-2 stops being a prerequisite and becomes the quality follow-up |
+| W-5 ◑ | **Split `dr_lurie_dtc_science_editorial`** into a client-neutral craft skill + per-publication voice record | P-2 | craft half done 2026-07-30 (#99): the skill is client-neutral "Editorial craft", branded voice preserved in skill version history (v13→v14). The voice-record half still needs P-2 (`vox_drlurie_default` seeds from that history) |
 
 ### R — CMS-Agent repo changes (need CI first; ordered)
 
@@ -754,6 +754,71 @@ confirm `contract_intelligence`'s cost actually drops now that its prefetch enga
 
 ---
 
+## 2q. Execution log — 2026-07-30, wave 17 (W-4 + W-5: the hardcoded client, and the discarded reasoning)
+
+Wave 16's follow-up got taken, and its two named defects got fixed rather than re-evidenced. Both were
+proven by the same run: `run_1785405350649_9u5mjz`, a **platform** run whose `review_aggregator`
+emitted "Priority 10 — Clarify CTA: … soften and specify the Dr. Lurie CTA" (W-4) and whose 12-block
+`content_item` carried no `private` key on any block (W-5).
+
+**W-4 — Dr. Lurie was hardcoded, not defaulted.** Three parts, per the task's own decomposition:
+
+1. *Delivery.* `executeRunnableNode` built node input as `{initialInput, dependencies}` and omitted the
+   one fact every editorial node needed: whose content this is. Every node's input now carries
+   `clientProjectId: run.projectId`. All 21 live input schemas verified open before adding the key.
+2. *Neutral craft, no substitution.* The five branded prompts (`topic_opportunity`, `research`,
+   `brief_architect`, `draft_writer`, `trust_factual`) and the `dr_lurie_dtc_science_editorial` skill
+   (now "Editorial craft") are client-neutral: the craft stayed (calm authority, evidence discipline,
+   low-pressure next steps, reader-safety), the brand went, and voice is explicitly declared to live in
+   the client's own record (P-2), not in prompts. Platform was NOT written in as the new client — a
+   hardcoded client is the defect regardless of which client it is. The skill kept its id (the
+   `dr_lurie_contract_intelligence` precedent: `clientAgnostic` + `supersedes` metadata), so Dr. Lurie's
+   runs keep working; the branded voice text is preserved verbatim in skill version history (v13→v14)
+   for the future `vox_drlurie_default` seed. Also de-branded while in there: `brief_architect`'s
+   hardcoded `content_item` became "the client's default object type", and `draft_writer`'s
+   "science-led" became "evidence-led".
+3. *Fail by name, never guess.* A run whose `projectId` cannot resolve fails the node with
+   `client_project_unresolved` — code plus prose naming the run, node and remedy, the exact shape of
+   #95 H2's `prefetch_object_type_unresolved`. `contract_intelligence.metadata.projectId: "dr-lurie"`
+   removed after verifying nothing reads node `metadata.projectId` (the executor's only metadata read
+   is `contractPrefetch`; the prefetch resolves from `run.projectId`) — the v228 ledger entry had
+   already marked it inert and queued for exactly this removal.
+
+**W-5 — the reasoning existed and was discarded.** `article_body` could not honestly annotate blocks:
+its inputs were `review_aggregator` (prose priorities, no per-block reasoning) and
+`contract_intelligence`. It now also depends on `narrative_movement` + `angle_strategy` (~$0.03 of
+already-spent upstream work), `requiredInputs` in lockstep, so the reasoning arrives deterministically
+in its input at zero extra model cost — the dependency change was chosen over a `stage.get_output`
+prompt instruction for the same reason F1 moved the contract fetch into the conductor: deterministic
+input beats hoping the model makes the right tool call. Its prompt gained a Private annotation policy:
+populate contract-declared private fields on EVERY emitted node, enum values only from the contract's
+own enums, reasoning in the contract's free-text private notes field, and a derive-plus-record-assumption
+fallback for late-stage entry runs where the reasoning nodes are skip-seeded. The enums were confirmed
+against the live platform contract via `project.call_read_tool` rather than assumed
+(`private.strategy`: hook, agitation, context, explanation, proof, example, comparison, myth, step,
+recommendation, resolution, summary; `private.intent`: educate, persuade, reassure, convert, navigate;
+plus free-text `agentNotes`; `additionalProperties: false`) — and deliberately NOT hardcoded into any
+prompt or schema; the prompt says "the contract's own declared enums" and stays correct when a client's
+contract differs.
+
+**Both planes, no hand edits.** Live workspace v229→v238 (each write reasoned +
+`expectedWorkspaceVersion`-guarded), then `npm run nodes:update --from` a live snapshot whose
+transcription was verified byte-for-byte (unchanged skills against the committed seed; the changed
+skill against a fresh `skill_get`). Graph valid, attention unchanged, publish locks closed throughout.
+**Deploy required**: the executor change and the `article_body` topology re-seed reach conductor runs
+only through a deploy (store mode pins `dependsOn` to canonical by design).
+
+Suite: **932 root** (+2: clientProjectId delivery, named failure) + 88 ui, both builds, all three locks
+green, `nodes:check` clean against the snapshot.
+
+**Follow-up not taken here:** a fresh live platform run to verify both fixes end-to-end (every block
+carries contract-valid `private.strategy`/`private.intent`; no foreign-client CTA), which also finally
+measures #95's prefetch effect; and P-2 (`vox_` object + `vox_drlurie_default` from the skill's version
+history), which turns the neutral-craft fallback voice back into Dr. Lurie's actual voice for Dr. Lurie
+runs.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -790,6 +855,13 @@ run termination and its tool is no longer unreachably approval-gated, F5 timeout
 **Wave 15 executed 2026-07-30** (T-2 re-run PASSED; G1 `learning_recorder`'s own missed timeout — F5 had
 no execution to size it from — given the same 300s override `draft_writer` needed; G2 `run.errors`
 superseded on completion so a retried-and-resolved failure stops looking like a live one) — see §2o.
+
+**Wave 17 executed 2026-07-30** (W-4 + W-5, re-scoped by Wolf after run_1785405350649_9u5mjz evidenced
+both live: clientProjectId delivered in every node input with a named `client_project_unresolved`
+failure when unresolvable; five editorial prompts + the editorial skill made client-neutral craft with
+no substitute client; contract_intelligence's inert metadata.projectId removed; article_body wired to
+narrative_movement + angle_strategy with a contract-first private-annotation mandate, enums confirmed
+live) — see §2q.
 
 **Wave 16 executed 2026-07-30** (T-2 re-run #2 against platform: F1 regressed cost UP instead of down;
 H1 platform's `ProjectObjectDialect` populated — the one active project no live MCP path could ever set

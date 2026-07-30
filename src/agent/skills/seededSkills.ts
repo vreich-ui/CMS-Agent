@@ -320,11 +320,11 @@ export const seededSkillDefinitions: SkillDefinition[] = [
   },
   {
     "skillId": "dr_lurie_dtc_science_editorial",
-    "name": "Dr. Lurie DTC science editorial",
-    "description": "Editorial direction for Dr. Lurie skincare/science content: evidence-aware, warm, direct-to-consumer, conversion-aware without hype.",
+    "name": "Editorial craft",
+    "description": "Client-neutral editorial craft for evidence-aware, reader-first, conversion-aware content: calm authority, practical specificity, low-pressure next steps, no hype. Voice and brand direction come from the target client's own record, never from this skill.",
     "version": "1.0.0",
     "status": "active",
-    "instructions": "Write for a smart skincare reader who wants calm authority, not a lecture. The voice is precise, warm, practical, and commercially aware. Favor concrete routines, decision points, tradeoffs, and reassurance. Do not overclaim medical outcomes, imply diagnosis, or turn uncertainty into certainty. For DTC direction, connect education to reader action: newsletter signup, related reading, product/resource consideration, or a low-pressure next step. Avoid hype, fear tactics, fake urgency, and generic wellness language. Preserve Dr. Lurie's styling direction: science-led, elegant, clean, reader-first, and specific to skin health. Reader-visible copy must never expose internal strategy labels, prompts, scoring, private notes, or workflow language.",
+    "instructions": "Write for a smart reader who wants calm authority, not a lecture. The register is precise, warm, practical, and commercially aware. Favor concrete decisions, tradeoffs, and reassurance. Do not overclaim outcomes, imply diagnosis or professional advice, or turn uncertainty into certainty. Connect education to reader action: related reading, newsletter signup, a routine decision, product/resource consideration, or another low-pressure next step. Avoid hype, fear tactics, fake urgency, and generic filler language. This skill is client-neutral craft: the target client's voice, styling, audience, and commercial direction come from the client's own record and the run's inputs — clientProjectId in the node input names the client. Never assume a client, and never import one client's conventions into another client's content; treat a missing client identity as a blocker rather than guessing. Reader-visible copy must never expose internal strategy labels, prompts, scoring, private notes, or workflow language.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
@@ -350,14 +350,14 @@ export const seededSkillDefinitions: SkillDefinition[] = [
       {
         "name": "voice pass",
         "input": {
-          "brief": "Explain skin barrier basics"
+          "brief": "Explain the basics of a technical topic for the client's readers"
         },
         "output": {
           "editorial_notes": [
             "Avoid fear-based claims.",
-            "Use everyday routine decisions."
+            "Use everyday decisions the reader actually faces."
           ],
-          "result": "Use calm practical language, explain tradeoffs, and route the reader to a simple next step."
+          "result": "Use calm practical language, explain tradeoffs, and route the reader to a simple low-pressure next step."
         }
       }
     ],
@@ -365,12 +365,12 @@ export const seededSkillDefinitions: SkillDefinition[] = [
       "A content brief or draft exists."
     ],
     "completionCriteria": [
-      "Copy is reader-safe, science-aware, specific, and aligned to the DTC direction.",
+      "Copy is reader-safe, evidence-aware, specific, and aligned to the target client's declared direction.",
       "Commercial next steps are present only when useful and low-pressure."
     ],
     "blockerCriteria": [
-      "The requested claim would require medical advice or unsupported certainty.",
-      "The target audience or offer is too unclear to choose a next step."
+      "The requested claim would require professional advice or unsupported certainty.",
+      "The target client, audience, or offer is too unclear to choose a next step."
     ],
     "memoryPolicy": {
       "namespaces": [
@@ -385,10 +385,11 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     },
     "riskLevel": "read",
     "metadata": {
-      "projectId": "dr-lurie"
+      "clientAgnostic": true,
+      "supersedes": "dr_lurie_dtc_science_editorial v1.0.0 (Dr. Lurie-specific)"
     },
     "createdAt": "2026-07-21T12:53:44.642Z",
-    "updatedAt": "2026-07-21T12:53:44.643Z"
+    "updatedAt": "2026-07-30T17:31:34.858Z"
   },
   {
     "skillId": "editorial_review",
