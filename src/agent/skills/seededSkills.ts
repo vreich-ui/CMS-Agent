@@ -316,7 +316,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
       "supersedes": "dr_lurie_contract_intelligence v1.0.0 (Dr. Lurie-specific)"
     },
     "createdAt": "2026-07-21T12:53:58.917Z",
-    "updatedAt": "2026-07-26T13:07:53.137Z"
+    "updatedAt": "2026-07-30T16:52:39.262Z"
   },
   {
     "skillId": "dr_lurie_dtc_science_editorial",

@@ -381,8 +381,7 @@ export const publishingConductorNodes = [
     "modelConfig": {
       "toolCallLimit": 12,
       "timeout": 180000,
-      "retryCount": 1,
-      "budgetUsd": 1
+      "retryCount": 1
     }
   },
   {
@@ -759,9 +758,6 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-27T07:30:53.811Z",
     "metadata": {
       "approvalRequired": false
-    },
-    "modelConfig": {
-      "timeout": 180000
     }
   },
   {
@@ -854,13 +850,14 @@ export const publishingConductorNodes = [
       "x": 840,
       "y": 180
     },
-    "updatedAt": "2026-07-27T07:30:56.191Z",
+    "updatedAt": "2026-07-29T19:28:23.590Z",
     "metadata": {
       "externalStageMapping": "draft",
       "approvalRequired": false
     },
     "modelConfig": {
-      "timeout": 300000
+      "timeout": 300000,
+      "retryCount": 1
     }
   },
   {
@@ -956,9 +953,6 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-27T07:30:58.359Z",
     "metadata": {
       "approvalRequired": false
-    },
-    "modelConfig": {
-      "timeout": 180000
     }
   },
   {
@@ -1052,10 +1046,10 @@ export const publishingConductorNodes = [
     ],
     "status": "active",
     "position": {
-      "x": 0,
-      "y": 360
+      "x": -57,
+      "y": 386
     },
-    "updatedAt": "2026-07-28T10:53:35.717Z",
+    "updatedAt": "2026-07-28T18:48:12.553Z",
     "metadata": {
       "approvalRequired": false
     },
@@ -1546,8 +1540,8 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.save_output",
       "stage.list_outputs",
-      "project.call_read_tool",
-      "project.call_tool"
+      "project.call_tool",
+      "project.call_read_tool"
     ],
     "assignedSkills": [
       "dr_lurie_contract_intelligence"
@@ -1567,15 +1561,16 @@ export const publishingConductorNodes = [
       "x": 1420,
       "y": 700
     },
-    "updatedAt": "2026-07-28T10:53:37.897Z",
+    "updatedAt": "2026-07-30T16:52:08.920Z",
     "metadata": {
       "projectId": "dr-lurie",
       "approvalRequired": false,
       "contractPrefetch": true
     },
     "modelConfig": {
-      "toolCallLimit": 10,
-      "timeout": 120000,
+      "maxTurns": 8,
+      "toolCallLimit": 5,
+      "timeout": 180000,
       "retryCount": 1
     }
   },
@@ -1584,7 +1579,7 @@ export const publishingConductorNodes = [
     "name": "Article Body Builder",
     "kind": "builder",
     "description": "Build the client's content object in the client's own shape, using the contract fetched at runtime by contract_intelligence. The client contract is the only source of truth; no workspace-local content schema is authoritative.",
-    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content) and contract_intelligence (the client contract). Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_read_tool — object_validate is a permitted read-only operation and needs no approval; project.call_tool is reserved for a genuine write, which this node does not perform — and record the outcome in clientValidation {tool, valid, issues}. If the client's validator requires an existing draft object, follow the contract's stated workflow to obtain one without publishing. If the client cannot be reached or its validator is denied by policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; every media reference is verified and in the correct form for its field; clientValidation records a real result from the client; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client only through project.call_read_tool and only with its permitted read-only contract and validation operations (object_contract, object_validate, and the rest of its fixed allowlist); project.call_tool is also granted for a future write but this node must never create, patch, publish, or otherwise mutate the client.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content) and contract_intelligence (the client contract). Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_read_tool, read-only, and record the outcome in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable — that tool is deliberately approval-gated for writes only. If the client's validator requires an existing object record that does not yet exist, do NOT attempt to create one — this node is write-prohibited. Record clientValidation {attempted: true, tool, valid: false, deferred: \"requires_existing_object\"} quoting the client's own refusal in issues, and treat that as a NORMAL outcome, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch. Do not claim validity, and do not spend further calls re-attempting once the client has reported the object does not exist. If the client cannot be reached or its read-only validator is denied by the project's own policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; every media reference is verified and in the correct form for its field; clientValidation records a real result from the client, or a deferral because the validator requires an object that does not yet exist; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client through project.call_read_tool for every read-only contract and validation operation; project.call_tool is approval-gated and reserved for writes — never create, patch, publish, or release from this node.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
@@ -1745,8 +1740,8 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.save_output",
       "stage.list_outputs",
-      "project.call_read_tool",
-      "project.call_tool"
+      "project.call_tool",
+      "project.call_read_tool"
     ],
     "assignedSkills": [
       "dr_lurie_contract_intelligence"
@@ -1768,7 +1763,7 @@ export const publishingConductorNodes = [
       "x": 1120,
       "y": 360
     },
-    "updatedAt": "2026-07-27T11:53:09.386Z",
+    "updatedAt": "2026-07-30T12:53:52.018Z",
     "metadata": {
       "approvalRequired": false,
       "externalStageMapping": "final_article",
@@ -1778,9 +1773,6 @@ export const publishingConductorNodes = [
         "Renderable media fields carry the client's public path; raw artifact keys only in the client's designated reference fields",
         "Workspace-local article schemas are advisory and must never be used to validate"
       ]
-    },
-    "modelConfig": {
-      "timeout": 180000
     }
   },
   {
@@ -1788,7 +1780,7 @@ export const publishingConductorNodes = [
     "name": "Artifact Planning Agent",
     "kind": "adapter",
     "description": "Plan and verify media/artifact requirements against the client's declared artifact protocol and id conventions. No legacy fallbacks, no unverified media.",
-    "prompt": "Objective: Plan and verify every media/artifact need for the client-shaped body produced by article_body, using only the artifact protocol the client's contract declares.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: article_body (client-shaped body plus its artifact references).\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy: never mark a slot has_trusted_artifact because a key merely matches a pattern. Trust requires verification evidence from the artifact service that the reference was materialized for this request, with matching key, digest, content type, size and timestamp — record it in the slot's verification field. Where the artifact service offers an explicit verification tool, use it and keep its proof. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both — the raw reference for the client's reference fields and publicPath for its rendered fields. Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream.\nBlocker criteria: missing body; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Reach the client only through project.call_read_tool for any read-only policy, contract, or status lookup — it needs no approval and only reaches read operations; project.call_tool is also granted for a future write but this node must never publish, release, or otherwise mutate the client.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Plan and verify every media/artifact need for the client-shaped body produced by article_body, using only the artifact protocol the client's contract declares.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: article_body (client-shaped body plus its artifact references).\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy: never mark a slot has_trusted_artifact because a key merely matches a pattern. Trust requires verification evidence from the artifact service that the reference was materialized for this request, with matching key, digest, content type, size and timestamp — record it in the slot's verification field. Where the artifact service offers an explicit verification tool, use it and keep its proof. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both — the raw reference for the client's reference fields and publicPath for its rendered fields. Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream.\nBlocker criteria: missing body; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Reach external services only through project.call_tool. Read-only policy and status lookups are allowed; do not publish, release, or mutate the client from this node.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "additionalProperties": true,
@@ -2063,8 +2055,8 @@ export const publishingConductorNodes = [
       "stage.get_output",
       "stage.save_output",
       "stage.list_outputs",
-      "project.call_read_tool",
-      "project.call_tool"
+      "project.call_tool",
+      "project.call_read_tool"
     ],
     "assignedSkills": [
       "dr_lurie_contract_intelligence"
@@ -2084,7 +2076,7 @@ export const publishingConductorNodes = [
       "x": 1120,
       "y": 1500
     },
-    "updatedAt": "2026-07-26T13:04:07.018Z",
+    "updatedAt": "2026-07-29T17:16:31.618Z",
     "metadata": {
       "approvalRequired": false,
       "projectId": "pdf-tool",
@@ -2101,7 +2093,7 @@ export const publishingConductorNodes = [
     "name": "Publish Payload Builder",
     "kind": "adapter",
     "description": "Assemble a dry-run publish candidate in the client's own object shape, carrying verified artifact references and the client's own validation verdict. Never publish, release, or trigger builds.",
-    "prompt": "Objective: Assemble a DRY-RUN publish candidate for the target client from the client-shaped body produced by article_body. Do not publish, release, patch, or trigger builds.\nSource of truth: the client's fetched contract governs the candidate's shape, its id conventions, its media path rules, and its publish gates. Carry clientProjectId, clientObjectType and contractSource through from upstream. Never validate against a workspace-local content schema and never treat a workspace verdict as sufficient evidence.\nInputs expected: article_body (the client-shaped body plus its clientValidation result) and artifact_plan (media slots with verification evidence).\nOutput required: produce dry_run_publish_payload.v1 with clientObject set to the candidate in the client's own shape, dryRun true, the verified artifactReferences set, artifactProtocol named as the client's contract names it, artifactHandling.legacyFallbacksUsed false, the client's validation verdict, validation assumptions, and explicit blockers. Suggest a requested id only when the client's id convention lets you derive one safely; otherwise leave it out and say why.\nArtifact readiness policy: media may be treated as publish-ready ONLY when there is verification evidence that each reference was materialized by the client's artifact protocol for the CURRENT request. A pattern-valid key is not proof. If artifact_plan marks any slot as needing generation or blocked, or verification evidence is absent, keep the reference as untrusted metadata and raise a blocker. Never silently upgrade unverified media to trusted media, and never substitute a remote URL, repo path, data URI, hand-authored key, or a reference belonging to another request or slug.\nMedia form policy: place each reference in the form the contract demands for its field — public serving path for rendered fields, raw artifact key only in the client's designated reference fields. Deliver a document artifact as the contract's document media type or as an action CTA, never as an image; a hero or featured image must be an image. If the contract states that raw keys break rendering, treat a raw key in a rendered field as a blocker, not a warning.\nClient validation policy: obtain a validation verdict from the CLIENT's own validator through project.call_read_tool — object_validate is a permitted read-only operation and needs no approval; project.call_tool is reserved for a genuine write, which this node does not perform — and record it in clientValidation {tool, valid, issues}. If upstream already validated, re-confirm rather than inheriting the claim when the body changed. If the client is unreachable or its validator is denied, record clientValidation.attempted false and raise a blocker; do not assert validity.\nApproval/resume policy: if artifact generation or verification timed out upstream, preserve the blocker with requestId, media slot id, required capability, and the pending action. Do not replace it with a synthetic pointer.\nCompletion criteria: a publisher could create or update the client object from clientObject without guessing; every media reference is verified and correctly formed; the client's own validator has spoken; blockers are explicit.\nBlocker criteria: missing or unprovenanced contract; required contract fields unsatisfied; ids violating the client's convention; unverified, missing, or wrongly formed media; taxonomy that does not resolve where the contract blocks unknown terms; client unreachable; or any requested publishing side effect.\nTool policy: read-only client calls only, through project.call_read_tool — it needs no approval and only reaches read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping); project.call_tool is also granted for a future write but this node must never publish, release, build, create, patch, or otherwise mutate the client, and must not create or upload artifacts.\nMemory policy: save only this node's structured dry-run output; never persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Assemble a DRY-RUN publish candidate for the target client from the client-shaped body produced by article_body. Do not publish, release, patch, or trigger builds.\nSource of truth: the client's fetched contract governs the candidate's shape, its id conventions, its media path rules, and its publish gates. Carry clientProjectId, clientObjectType and contractSource through from upstream. Never validate against a workspace-local content schema and never treat a workspace verdict as sufficient evidence.\nInputs expected: article_body (the client-shaped body plus its clientValidation result) and artifact_plan (media slots with verification evidence).\nOutput required: produce dry_run_publish_payload.v1 with clientObject set to the candidate in the client's own shape, dryRun true, the verified artifactReferences set, artifactProtocol named as the client's contract names it, artifactHandling.legacyFallbacksUsed false, the client's validation verdict, validation assumptions, and explicit blockers. Suggest a requested id only when the client's id convention lets you derive one safely; otherwise leave it out and say why.\nArtifact readiness policy: media may be treated as publish-ready ONLY when there is verification evidence that each reference was materialized by the client's artifact protocol for the CURRENT request. A pattern-valid key is not proof. If artifact_plan marks any slot as needing generation or blocked, or verification evidence is absent, keep the reference as untrusted metadata and raise a blocker. Never silently upgrade unverified media to trusted media, and never substitute a remote URL, repo path, data URI, hand-authored key, or a reference belonging to another request or slug.\nMedia form policy: place each reference in the form the contract demands for its field — public serving path for rendered fields, raw artifact key only in the client's designated reference fields. Deliver a document artifact as the contract's document media type or as an action CTA, never as an image; a hero or featured image must be an image. If the contract states that raw keys break rendering, treat a raw key in a rendered field as a blocker, not a warning.\nClient validation policy: obtain a validation verdict from the CLIENT's own validator through project.call_read_tool, read-only, and record it in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable — that tool is deliberately approval-gated for writes only. If upstream already validated, re-confirm rather than inheriting the claim when the body changed. If the client is unreachable or its read-only validator is denied by the project's own policy, record clientValidation.attempted false and raise a blocker; do not assert validity.\nApproval/resume policy: if artifact generation or verification timed out upstream, preserve the blocker with requestId, media slot id, required capability, and the pending action. Do not replace it with a synthetic pointer.\nCompletion criteria: a publisher could create or update the client object from clientObject without guessing; every media reference is verified and correctly formed; the client's own validator has spoken; blockers are explicit.\nBlocker criteria: missing or unprovenanced contract; required contract fields unsatisfied; ids violating the client's convention; unverified, missing, or wrongly formed media; taxonomy that does not resolve where the contract blocks unknown terms; client unreachable; or any requested publishing side effect.\nTool policy: read-only client calls only, through project.call_read_tool. project.call_tool is approval-gated and reserved for writes — no publish, release, build, create, or patch calls from this node. Do not create or upload artifacts from this node.\nMemory policy: save only this node's structured dry-run output; never persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
@@ -2314,8 +2306,8 @@ export const publishingConductorNodes = [
     "allowedTools": [
       "stage.get_output",
       "stage.save_output",
-      "project.call_read_tool",
-      "project.call_tool"
+      "project.call_tool",
+      "project.call_read_tool"
     ],
     "assignedSkills": [
       "dr_lurie_contract_intelligence"
@@ -2337,7 +2329,7 @@ export const publishingConductorNodes = [
       "x": 0,
       "y": 540
     },
-    "updatedAt": "2026-07-26T13:02:58.661Z",
+    "updatedAt": "2026-07-29T17:18:17.046Z",
     "metadata": {
       "approvalRequired": false,
       "canonicalRules": [
@@ -2346,9 +2338,6 @@ export const publishingConductorNodes = [
         "Client validation evidence is required; a workspace verdict is not sufficient",
         "Artifact references must be verified for the current request"
       ]
-    },
-    "modelConfig": {
-      "timeout": 180000
     }
   },
   {
@@ -2443,7 +2432,7 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 540
     },
-    "updatedAt": "2026-07-28T11:10:29.617Z",
+    "updatedAt": "2026-07-29T14:38:32.892Z",
     "metadata": {
       "approvalRequired": true,
       "projectPolicyNotes": [
@@ -2539,7 +2528,7 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 540
     },
-    "updatedAt": "2026-07-26T17:18:16.131Z",
+    "updatedAt": "2026-07-30T16:52:20.699Z",
     "metadata": {
       "approvalRequired": false,
       "recordFailureTypes": [
@@ -2838,7 +2827,7 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 1600
     },
-    "updatedAt": "2026-07-28T11:10:30.477Z",
+    "updatedAt": "2026-07-29T14:38:32.053Z",
     "metadata": {
       "activationRequired": true,
       "approvalRequired": true,
