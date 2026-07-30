@@ -45,9 +45,28 @@ vi.mock("@openai/agents", () => ({
 }));
 
 import { executeNode } from "../../../src/agent/workspace/nodeRuntime.js";
-import { resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { resetRepositoryManager, repositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { OpenAINodeRunner } from "../../../src/agent/execution/runners/OpenAINodeRunner.js";
+import type { WorkspaceNode } from "../../../src/agent/workspace/nodeTypes.js";
+import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
 const RESEARCH_DEPENDENCIES = { reader_insight: { artifact: "reader_insight.v1", summary: "Upstream reader insight." } };
+
+// allowedTools:[] short-circuits tool resolution (OpenAINodeRunner.ts), so a synthetic node id not
+// present in the workspace repository can still run through the runner directly.
+const PROBE_NODE: WorkspaceNode = {
+  id: "budget_probe", name: "Budget Probe", kind: "test", description: "unit-test-only node",
+  prompt: "probe", inputSchema: {}, requiredInputs: [], allowedTools: [], produces: ["probe.v1"],
+  riskLevel: "read", dependsOn: [], status: "active", position: { x: 0, y: 0 }, updatedAt: "2026-01-01T00:00:00.000Z",
+  outputSchema: { type: "object", required: ["artifact", "summary"], properties: { artifact: { const: "probe.v1" }, summary: { type: "string" } } },
+  modelConfig: {}
+};
+
+const makeRun = (overrides: Partial<WorkflowExecutionRecord> = {}): WorkflowExecutionRecord => ({
+  runId: "run-budget-probe", workflowId: "independent_node", projectId: "workspace", status: "running",
+  startedAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", nodes: [], artifacts: [],
+  errors: [], approvalsRequired: [], stageOutputs: {}, dryRun: true, executionMode: "openai", ...overrides
+});
 
 describe("in-loop budget circuit breaker (B3)", () => {
   beforeEach(() => { resetRepositoryManager(); process.env.OPENAI_API_KEY = "test-key"; runMock.mockClear(); fakeRunnerInstances.length = 0; });
@@ -70,10 +89,33 @@ describe("in-loop budget circuit breaker (B3)", () => {
 
   it("does not touch the Runner path at all when no budgetUsd is configured (byte-for-byte unchanged)", async () => {
     runMock.mockResolvedValueOnce({ finalOutput: { artifact: "research_brief.v1", summary: "ok" }, rawResponses: [{ usage: { inputTokens: 10, outputTokens: 10 } }], lastResponseId: "resp_ok" });
-    const result: any = await executeNode({ nodeId: "research", input: {}, dependencyOutputs: RESEARCH_DEPENDENCIES, executionMode: "openai" });
+    // research now carries its own modelConfig.budgetUsd by default (F5); explicitly clear it here so
+    // this test still exercises the genuinely-no-budget code path it's named for.
+    const result: any = await executeNode({ nodeId: "research", input: {}, dependencyOutputs: RESEARCH_DEPENDENCIES, executionMode: "openai", modelConfig: { budgetUsd: undefined } });
 
     expect(result.execution.status).toBe("completed");
     expect(runMock).toHaveBeenCalledTimes(1);
     expect(fakeRunnerInstances).toHaveLength(0);
+  });
+
+  // F2b (T-2, run_1785352838155_l544ye): the run's OWN budgetUsd — the ceiling advanceRun's
+  // between-node gate reads via summarizeModelUsage(runId) — was never watched INSIDE a node's own
+  // loop, only the node's rare, separate modelConfig.budgetUsd was. contract_intelligence carried a
+  // $3 run ceiling from $1.60 to $4.17 in one dispatch because of exactly this gap. Calls the runner
+  // directly (bypassing executeNode's narrower fixture, which has no way to set run.budgetUsd) with a
+  // node that has NO modelConfig.budgetUsd of its own, only a run carrying one, to isolate that the
+  // run-level ceiling alone is what the guard now watches.
+  it("aborts mid-node on the RUN's budgetUsd even when the node has no budgetUsd of its own", async () => {
+    const run = makeRun({ budgetUsd: 0.05 });
+    const result = await new OpenAINodeRunner().run({ node: PROBE_NODE, input: {} }, { run, executionRepository: repositoryManager.getExecutionRepository() });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("budget_exceeded");
+      expect(result.message).toContain("budget_probe");
+      expect(result.message).toContain("0.05");
+    }
+    expect(fakeRunnerInstances).toHaveLength(1);
+    expect(runMock).not.toHaveBeenCalled();
   });
 });

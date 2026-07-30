@@ -81,7 +81,10 @@ export const articleBodySchema = z.object({
 
 export type ArticleBody = z.infer<typeof articleBodySchema>;
 export type StageOutput = { id: string; stage: string; value?: unknown; createdAt: string };
-export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; createdAt: string };
+// F4 (T-2, run_1785352838155_l544ye): runId/nodeId are optional so existing observations (recorded
+// before this field existed) still parse — but every new one is stamped, so it can finally be joined
+// back to the run/node that produced it. Previously only {id, observation, metadata, createdAt}.
+export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; runId?: string; nodeId?: string; createdAt: string };
 export type PublishPayload = { articleBody: ArticleBody; dryRun: true; target: "preview" | "cms"; builtAt: string };
 export type WorkspaceMutationMeta = {
   expectedWorkspaceVersion?: number;
@@ -126,7 +129,7 @@ export interface WorkspaceStore {
   saveStageOutput(stage: string, value: unknown, id?: string): Promise<StageOutput>;
   getStageOutput(id: string): Promise<StageOutput | undefined>;
   listStageOutputs(stage?: string): Promise<StageOutput[]>;
-  recordObservation(observation: string, metadata?: Record<string, unknown>): Promise<LearningObservation>;
+  recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }): Promise<LearningObservation>;
   listObservations(): Promise<LearningObservation[]>;
 }
 
@@ -232,7 +235,7 @@ const workspaceNodeSchema = z.object({
   executionConfig: z.record(z.string(), z.unknown()).optional()
 }).passthrough().transform((node) => ({ ...node, outputSchema: node.outputSchema ?? node.schema ?? { type: "object" } }));
 const stageOutputSchema: z.ZodType<StageOutput> = z.object({ id: z.string().min(1), stage: z.string().min(1), value: z.unknown().optional(), createdAt: z.string().datetime() }).strict();
-const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), createdAt: z.string().datetime() }).strict();
+const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), createdAt: z.string().datetime() }).strict();
 const workspaceEventSchema: z.ZodType<WorkspaceEvent> = z.object({ id: z.string(), type: z.string(), nodeId: z.string().optional(), actor: z.string().optional(), summary: z.string().optional(), workspaceVersion: z.number().int().nonnegative(), beforeHash: z.string().optional(), afterHash: z.string().optional(), createdAt: z.string().datetime() }).strict();
 const workspaceVersionSnapshotSchema: z.ZodType<WorkspaceVersionSnapshot> = z.object({ workspaceVersion: z.number().int().nonnegative(), createdAt: z.string().datetime(), summary: z.string().optional(), nodes: z.array(workspaceNodeSchema as z.ZodType<WorkspaceNode>) }).strict();
 const workspaceRelationshipSchema = z.object({
@@ -582,8 +585,8 @@ export class WorkspaceStateStore implements WorkspaceStore {
   }
   async getStageOutput(id: string) { return (await this.load()).stageOutputs.find((output) => output.id === id); }
   async listStageOutputs(stage?: string) { return (await this.load()).stageOutputs.filter((output) => !stage || output.stage === stage); }
-  async recordObservation(observation: string, metadata?: Record<string, unknown>) {
-    const record = { id: makeId("learning"), observation, metadata, createdAt: now() };
+  async recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }) {
+    const record: LearningObservation = { id: makeId("learning"), observation, metadata, ...(provenance?.runId ? { runId: provenance.runId } : {}), ...(provenance?.nodeId ? { nodeId: provenance.nodeId } : {}), createdAt: now() };
     await this.mutate((document) => { document.learningObservations = [...document.learningObservations, record]; }, undefined, "learning.observation_recorded");
     return record;
   }

@@ -99,7 +99,10 @@ describe("project registry + Dr. Lurie definition", () => {
       siteObjectId: "site_drlurie",
       taxonomyRegistryObjectId: "tax_drlurie",
       objectIdSource: "request_id",
-      requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$"
+      requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$",
+      // F1 (T-2, run_1785352838155_l544ye): object_contract's object_type argument, so the conductor
+      // can prefetch and reduce the contract deterministically instead of the node discovering it.
+      defaultObjectType: "content_item"
     });
   });
 

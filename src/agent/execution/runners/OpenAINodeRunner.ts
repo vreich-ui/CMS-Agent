@@ -82,7 +82,16 @@ export class OpenAINodeRunner implements NodeRunner {
     const c = cfg(node);
     const provider = resolveProvider(c);
     if (!process.env[provider.apiKeyEnv]) return { ok: false, code: "invalid_node_configuration", message: `${provider.apiKeyEnv} is required for ${provider.label} execution.` };
-    const budgetUsd = numberFrom(c.budgetUsd);
+    // F2b (T-2, run_1785352838155_l544ye): the run's OWN budgetUsd ceiling was only ever evaluated
+    // BETWEEN nodes (advanceRun's budget gate, before dispatch) — nothing inside a node's own turn
+    // loop watched it, so a single node's turns could carry the run straight through the ceiling
+    // before the gate got another look. contract_intelligence took the run from $1.60 to $4.17
+    // against a $3 ceiling in one dispatch (139% over). The in-loop guard below now watches
+    // whichever ceiling is tighter — the node's own modelConfig.budgetUsd (rare, node-specific) or
+    // the run's budgetUsd (the common case, set on workflow.start_dry_run) — not just the former.
+    const nodeBudgetUsd = numberFrom(c.budgetUsd);
+    const runBudgetUsd = numberFrom(context.run.budgetUsd);
+    const budgetUsd = nodeBudgetUsd !== undefined && runBudgetUsd !== undefined ? Math.min(nodeBudgetUsd, runBudgetUsd) : nodeBudgetUsd ?? runBudgetUsd;
     // Reused below by the in-loop circuit breaker (B3) so a configured budget is only ever queried
     // once per node execution, not once here and again per turn.
     let priorSpendUsd = 0;
@@ -128,7 +137,12 @@ export class OpenAINodeRunner implements NodeRunner {
     const outputType = { type: "json_schema" as const, name: `${node.id}_output`, strict: false, schema: node.outputSchema as any };
     const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, playbookText), model: buildAgentModel(provider, model), modelSettings: settings, tools: sdkTools, outputType });
     const prompt = JSON.stringify(redact({ input, dependencyOutputs: Object.fromEntries(node.dependsOn.map((d) => [d, context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d]])), ...(playbookText ? { playbook: playbookText } : {}), outputSchema: node.outputSchema }));
-    const timeoutMs = numberFrom(c.timeout) ?? 60000;
+    // F5 (T-2, run_1785352838155_l544ye): draft_writer had NO explicit timeout, defaulted to 60s, and
+    // failed with model_timeout on a large brief (300s configured live and it passed). 60s is too
+    // tight a default for a single large-output generation call even with zero tool calls — the
+    // default is now 120s; nodes with a proven need for more (draft_writer) carry their own explicit
+    // override in nodes.ts on top of this.
+    const timeoutMs = numberFrom(c.timeout) ?? 120000;
     const maxRetries = Math.max(0, Math.floor(numberFrom(c.retryCount) ?? 0));
     const maxTurns = resolveMaxTurns(c, effective.length);
     // B3 (T-2): budgetUsd was only ever checked ONCE, before this node's loop started — after that,

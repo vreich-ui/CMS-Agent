@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
-import { getRun, runNextNode, startDryRun } from "../../../src/agent/workspace/executor.js";
+import { getRun, runNextNode, startDryRun, updateRunStatus } from "../../../src/agent/workspace/executor.js";
 import { summarizeRunCost } from "../../../src/agent/workspace/conductor.js";
 import { evaluateRunBudget, summarizeModelUsage } from "../../../src/agent/observability/modelUsage.js";
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
@@ -56,15 +56,51 @@ describe("conductor budget gate", () => {
     expect(run.nodes.find((node) => node.nodeId === "reader_insight")!.status).toBe("queued");
     // A budget pause is NOT an approval pause: no ApprovalRequired entry is minted.
     expect(run.approvalsRequired).toEqual([]);
-    // Never partially charged the un-run node: only the two executed nodes recorded usage.
+    // Never partially charged the un-run node (reader_insight, the boundary the gate stopped before).
+    // learning_recorder also recorded usage: F4 fires it as a best-effort side effect the moment the
+    // run reaches ANY terminal outcome, including this budget block, rather than waiting on
+    // publication_controller (which this run never even reaches).
     const records = await repositoryManager.getUsageRepository().list({ runId: gated.runId });
-    expect(records.map((record) => record.nodeId).sort()).toEqual(["input_triage", "topic_opportunity"]);
+    expect(records.map((record) => record.nodeId).sort()).toEqual(["input_triage", "learning_recorder", "topic_opportunity"]);
 
     // The ledger surfaces the budget view, reusing the same accrued cost figure (no second path).
     const usage = await summarizeModelUsage({ runId: gated.runId });
     const ledger = summarizeRunCost(run, usage);
     expect(ledger.budget).toMatchObject({ blocked: true, overBudget: true, budgetUsd: twoNodeCost });
     expect(ledger.budget!.spentUsdEstimate).toBe(usage.totalCostUsdEstimate);
+  });
+
+  // F3 (T-2, run_1785352838155_l544ye): the budget gate's own reported remedy — "Raise budgetUsd and
+  // resume" — was unreachable: workflow.resume_run took only runId, with no way to actually raise the
+  // ceiling that blocked the run. updateRunStatus now accepts an optional patch (wired to
+  // workflow.resume_run's optional budgetUsd field); resuming with a higher ceiling lets a
+  // budget-blocked run actually continue instead of immediately re-blocking on the same ceiling.
+  it("resuming with a higher budgetUsd lets a budget-blocked run actually continue", async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    const measure = await startDryRun({ executionMode: "mock", projectId: "budget-proj-2", input: "Draft this" }, store);
+    await runNextNode(measure.runId, { executionRepository: store });
+    await runNextNode(measure.runId, { executionRepository: store });
+    const twoNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
+
+    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj-2", input: "Draft this", budgetUsd: twoNodeCost }, store);
+    const blocked = await drive(gated.runId, store);
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.budgetBlock).toBeDefined();
+    expect(blocked.nodes.find((node) => node.nodeId === "reader_insight")!.status).toBe("queued");
+
+    // Raised well beyond anything the whole mock graph could cost, so the run runs to its natural
+    // terminal (the approval gate) instead of immediately re-blocking on a still-too-low ceiling.
+    const resumed = await updateRunStatus(gated.runId, "queued", store, { budgetUsd: 1000 });
+    expect(resumed!.status).toBe("queued");
+    expect(resumed!.budgetUsd).toBe(1000);
+
+    const advanced = await drive(gated.runId, store);
+    // Cleared the moment the run advances past the (now much higher) ceiling — not still reporting
+    // "paused for budget" against a run that has since moved on.
+    expect(advanced.budgetBlock).toBeUndefined();
+    expect(advanced.nodes.find((node) => node.nodeId === "reader_insight")!.status).not.toBe("queued");
+    expect(advanced.status).toBe("blocked");
+    expect(advanced.currentNodeId).toBe("publication_controller");
   });
 
   it("no ceiling configured → unchanged behavior (regression guard): stops at the approval gate, not a budget gate", async () => {

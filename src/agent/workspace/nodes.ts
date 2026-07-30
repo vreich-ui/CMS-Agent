@@ -381,7 +381,8 @@ export const publishingConductorNodes = [
     "modelConfig": {
       "toolCallLimit": 12,
       "timeout": 180000,
-      "retryCount": 1
+      "retryCount": 1,
+      "budgetUsd": 1
     }
   },
   {
@@ -758,6 +759,9 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-27T07:30:53.811Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "timeout": 180000
     }
   },
   {
@@ -854,6 +858,9 @@ export const publishingConductorNodes = [
     "metadata": {
       "externalStageMapping": "draft",
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "timeout": 300000
     }
   },
   {
@@ -949,6 +956,9 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-27T07:30:58.359Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "timeout": 180000
     }
   },
   {
@@ -1349,7 +1359,7 @@ export const publishingConductorNodes = [
     "name": "Contract Intelligence Agent",
     "kind": "research",
     "description": "Fetch the target client's live object contract at runtime and reduce it to the rules downstream nodes must obey. The client contract is the single source of truth; never author content rules from memory or from a workspace-local copy.",
-    "prompt": "Objective: Fetch the target client's LIVE object contract and reduce it to the rules every downstream node must obey. The client's contract is the single source of truth for content shape, ids, media paths, taxonomy, and publishing gates. Never author these rules from memory, from a workspace-local schema, or from another client's contract.\nInputs expected: article_brief, plus the target client projectId and object type from the run context.\nContract discovery policy: resolve the client project first, then call its contract surface read-only through project.call_read_tool — it needs no approval and only reaches read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping); reserve project.call_tool for a genuine write, which this node does not perform. Prefer, in order: (1) the client's own contract tool for the target object type (e.g. object_contract), (2) its registry/component tool for component, page-type and taxonomy options, (3) its inventory tool for reusable recipes and existing patterns. Record the exact tool name and fetch timestamp you used, so downstream nodes can prove the contract was fetched rather than assumed. If the client exposes a contract for a different object type than requested, report that rather than substituting one.\nOutput required: produce contract_intelligence.v1 carrying, at minimum: clientProjectId, clientObjectType, a REDUCTION of the fetched body schema to the rules downstream nodes actually need (required fields, id patterns, enums, strictness) — never the full raw contract document verbatim, so the large fetched payload does not compound across this node's own turns nor get carried whole into every downstream node's input, the id conventions (object id and node/child id patterns), the media/artifact path convention (raw artifact reference field vs public serving path, and which fields accept which), the taxonomy source and whether unknown terms block, the enumerated structural constraints with their severity and whether each is enforced live, the publish policy including whether approval is required and any pinning rules, and contractSource {tool, fetchedAtISO}.\nGeneralization policy: this node must work for ANY client the workflow encounters, not one named client. Do not hardcode a client's field names, path prefixes, or object types into your reasoning; read them from the contract you fetched and pass them forward as data. Where a client's contract is silent, say so explicitly as an assumption rather than filling the gap from another client's conventions.\nCompletion criteria: a downstream node can construct and validate a client object using only your output plus the client's own validator, without guessing and without consulting any workspace-local schema.\nBlocker criteria: the client project is unreachable or unconfigured, its contract tools are unavailable or denied by policy, the requested object type is unsupported, the contract cannot be fetched read-only, or the contract declares constraints this workspace cannot satisfy.\nTool policy: use only allowedTools; reach the client only through project.call_read_tool and only with its permitted read-only contract, registry, inventory, and validation operations; project.call_tool is also granted for a future write but this node must never publish, create, patch, or otherwise mutate the client.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Turn the target client's ALREADY-FETCHED, ALREADY-REDUCED object contract into contract_intelligence.v1, the rules every downstream node must obey. The client's contract is the single source of truth for content shape, ids, media paths, taxonomy, and publishing gates. Never author these rules from memory, from a workspace-local schema, or from another client's contract.\nInputs expected: article_brief, plus `prefetchedContract` supplied directly in your input — the conductor calls the client's contract surface deterministically, in code, BEFORE you run, and reduces it (dropping prose, examples, and error catalogues) precisely so you never have to fetch or carry the raw multi-KB contract yourself across your own turns. `prefetchedContract` carries: clientObjectType, bodySchema (the real JSON Schema, kept whole — it is structural, not prose), idConventions, mediaConvention, taxonomy, constraints (with severity and enforcedLive), publishPolicy, workflowSequence, validationSurface (patch/write operations with their required fields), contractSource {tool, fetchedAtISO}, and an `unmapped` bucket for anything the deterministic reduction did not recognize but preserved anyway.\nIf `prefetchedContract` is present: this is a validation and pass-through step, not a discovery one. Sanity-check it, write a concise summary, carry its fields into your own output verbatim (mapping field names as needed — see Output required), and surface anything in `unmapped` worth downstream attention. Do not call project.call_read_tool to re-fetch the primary contract — it has already been fetched this run. Reach for project.call_read_tool ONLY for something genuinely missing from the prefetch (e.g. a registry/taxonomy lookup the client's contract pointed at but did not inline, or the client's own contract tool for a DIFFERENT object type than what was prefetched) — it needs no approval and only reaches read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping); reserve project.call_tool for a genuine write, which this node does not perform.\nIf `prefetchError` is present instead (the deterministic fetch failed — unreachable client, policy block, unsupported object type): treat it exactly as the unreachable-client blocker criterion below; do not attempt to fetch the contract yourself as a substitute unless prefetchedContract is entirely absent from your input (an older run/deployment that never wired the prefetch), in which case fall back to the discovery policy your allowedTools describe.\nOutput required: produce contract_intelligence.v1 carrying, at minimum: clientProjectId, clientObjectType, bodySchema (from prefetchedContract.bodySchema, or your own reduction of a fetched contract, verbatim — never the full raw contract re-derived, so the large fetched payload does not compound across turns nor get carried whole into every downstream node's input), the id conventions (object id and node/child id patterns, from prefetchedContract.idConventions), the media/artifact path convention (raw artifact reference field vs public serving path, and which fields accept which, from prefetchedContract.mediaConvention), the taxonomy source and whether unknown terms block (from prefetchedContract.taxonomy), the enumerated structural constraints with their severity and whether each is enforced live (from prefetchedContract.constraints), the publish policy including whether approval is required and any pinning rules (from prefetchedContract.publishPolicy), and contractSource {tool, fetchedAtISO} (from prefetchedContract.contractSource, or your own fetch's).\nGeneralization policy: this node must work for ANY client the workflow encounters, not one named client. Do not hardcode a client's field names, path prefixes, or object types into your reasoning; read them from prefetchedContract (or the contract you fetched) and pass them forward as data. Where a client's contract is silent, say so explicitly as an assumption rather than filling the gap from another client's conventions.\nCompletion criteria: a downstream node can construct and validate a client object using only your output plus the client's own validator, without guessing and without consulting any workspace-local schema.\nBlocker criteria: the client project is unreachable or unconfigured, its contract tools are unavailable or denied by policy, the requested object type is unsupported, the contract cannot be fetched read-only, or the contract declares constraints this workspace cannot satisfy.\nTool policy: use only allowedTools; reach the client only through project.call_read_tool and only with its permitted read-only contract, registry, inventory, and validation operations, and only for what prefetchedContract does not already supply; project.call_tool is also granted for a future write but this node must never publish, create, patch, or otherwise mutate the client.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
@@ -1560,7 +1570,8 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-28T10:53:37.897Z",
     "metadata": {
       "projectId": "dr-lurie",
-      "approvalRequired": false
+      "approvalRequired": false,
+      "contractPrefetch": true
     },
     "modelConfig": {
       "toolCallLimit": 10,
@@ -1767,6 +1778,9 @@ export const publishingConductorNodes = [
         "Renderable media fields carry the client's public path; raw artifact keys only in the client's designated reference fields",
         "Workspace-local article schemas are advisory and must never be used to validate"
       ]
+    },
+    "modelConfig": {
+      "timeout": 180000
     }
   },
   {
@@ -2332,6 +2346,9 @@ export const publishingConductorNodes = [
         "Client validation evidence is required; a workspace verdict is not sufficient",
         "Artifact references must be verified for the current request"
       ]
+    },
+    "modelConfig": {
+      "timeout": 180000
     }
   },
   {

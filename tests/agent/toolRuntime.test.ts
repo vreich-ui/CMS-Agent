@@ -113,4 +113,20 @@ describe("controlled tool runtime", () => {
     expect(error.code).toBe("validation_error");
     expect(JSON.stringify(error)).not.toContain("super-secret-token");
   });
+
+  // F4 (T-2, run_1785352838155_l544ye): learning.record_observation was requiresApproval:true, but
+  // approvedToolIds is never populated for real node execution (only tool.test's diagnostic path
+  // sets it) — so learning_recorder's grant of this tool was denied approval_required on every real
+  // run, identically to how project.call_tool stranded contract_intelligence before the read-tool
+  // split. No approvedToolIds are supplied below, proving requiresApproval:false actually took
+  // effect; the recorded observation must also carry the runId/nodeId it came from (previously only
+  // {id, observation, metadata, createdAt} — unjoinable to the run that produced it).
+  it("records an observation without approval and stamps it with the recording run/node", async () => {
+    const result = await executeTool("learning.record_observation", { observation: "T-2 follow-up: contract fetch now deterministic." }, { runId: "run-f4-test", nodeId: "learning_recorder", maxRiskLevel: "write", runAuthorizedTools: ["learning.record_observation"] });
+    expect(result.ok).toBe(true);
+    const observation = (result as any).output.data.observation;
+    expect(observation.runId).toBe("run-f4-test");
+    expect(observation.nodeId).toBe("learning_recorder");
+    expect(observation.observation).toContain("contract fetch");
+  });
 });

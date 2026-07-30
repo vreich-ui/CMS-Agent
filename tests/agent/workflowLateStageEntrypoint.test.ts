@@ -67,7 +67,9 @@ describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payloa
     expect((state(final, "publish_payload").output as { articleBody: unknown }).articleBody).toEqual(validArticleBody);
     expect(final.status).toBe("blocked");
     expect(final.currentNodeId).toBe("publication_controller");
-    expect(state(final, "learning_recorder").status).toBe("queued");
+    // F4 (T-2, run_1785352838155_l544ye): fires on any run termination, not just publication_controller
+    // reaching "completed" (which an unapproved dry run's design never lets happen).
+    expect(state(final, "learning_recorder").status).toBe("completed");
 
     // Earlier ideation/research/draft nodes never executed, so they incur no cost — a late-stage run
     // is a fraction of a full run's cost. Only the publish stages that ran are billed.

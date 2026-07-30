@@ -50,7 +50,9 @@ describe("workflow runner MCP tools (end-to-end)", () => {
     expect(run.status).toBe("blocked");
     expect(run.currentNodeId).toBe("publication_controller");
     expect(nodeStatus(run, "publication_controller")).toBe("blocked");
-    expect(nodeStatus(run, "learning_recorder")).toBe("queued");
+    // F4 (T-2, run_1785352838155_l544ye): fires on any run termination, not just publication_controller
+    // reaching "completed" (which an unapproved dry run's design never lets happen).
+    expect(nodeStatus(run, "learning_recorder")).toBe("completed");
 
     // get_run and run_next_node agree on the effective next node.
     const fetched = (await call("workflow.get_run", { runId })).data.run;

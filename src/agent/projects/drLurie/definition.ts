@@ -93,13 +93,16 @@ export const DR_LURIE_OBJECT_DIALECT: ProjectObjectDialect = {
   // req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, caller-supplied and never generated.
   // A malformed id is accepted at create but hard-400s every later artifact operation with no
   // recovery, which is why the publisher rejects it before the first call.
-  requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$"
+  requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$",
+  // F1: object_contract's object_type argument for this client's governed article type.
+  defaultObjectType: "content_item"
 };
 
-// Bumped 3 -> 4 when Dr. Lurie moved to full access (defaultToolPolicy "allowed"), and 4 -> 5 when
-// the legacy save_json_blob_*/per-stage dialect was retired and the object-dialect parameters were
-// added, so persisted stale configs re-seed from this definition (see defaultMigration.ts).
-export const DR_LURIE_DEFINITION_VERSION = 5;
+// Bumped 3 -> 4 when Dr. Lurie moved to full access (defaultToolPolicy "allowed"), 4 -> 5 when the
+// legacy save_json_blob_*/per-stage dialect was retired and the object-dialect parameters were added,
+// and 5 -> 6 when defaultObjectType was added (F1, T-2 run_1785352838155_l544ye) so persisted stale
+// configs re-seed from this definition (see defaultMigration.ts).
+export const DR_LURIE_DEFINITION_VERSION = 6;
 
 export const drLurieProjectConfig: ProjectConnectionConfig = {
   projectId: "dr-lurie",
