@@ -9,7 +9,7 @@ import type { ProjectRepository } from "../repository/interfaces/ProjectReposito
 import { conductorCache, type RunScopedCache } from "./conductor.js";
 import { reduceContract, type ReducedContract } from "./contractReduction.js";
 
-export type ContractPrefetchResult = { ok: true; reduced: ReducedContract } | { ok: false; error: string };
+export type ContractPrefetchResult = { ok: true; reduced: ReducedContract } | { ok: false; error: string; code?: "prefetch_object_type_unresolved" };
 export type ContractPrefetchParams = { runId: string; projectId: string; requestedObjectType?: string };
 export type ContractPrefetchDeps = { projectRepository: ProjectRepository; cache?: RunScopedCache };
 
@@ -41,9 +41,22 @@ export async function getReducedContract(params: ContractPrefetchParams, deps: C
     const config = await deps.projectRepository.get(params.projectId);
     if (!config) return { ok: false, error: `Unknown projectId: ${params.projectId}` };
     // Resolution order: an explicit per-call override, then the project's own configured convention
-    // (ProjectObjectDialect.defaultObjectType), then the pipeline's current single-client-family
-    // default. See projectTypes.ts's defaultObjectType doc comment for why the last fallback exists.
-    const objectType = params.requestedObjectType ?? config.objectDialect?.defaultObjectType ?? "content_item";
+    // (ProjectObjectDialect.defaultObjectType). There is deliberately NO further fallback to a guessed
+    // literal (T-2 re-run, run_1785405350649_9u5mjz): platform had no defaultObjectType configured, so
+    // an earlier version of this function silently guessed "content_item" — which happened to be
+    // correct for platform, but a cost optimization that quietly degrades when its assumption is wrong
+    // is worse than no optimization at all, and there is no way to tell "guessed right" from "guessed
+    // wrong" from outside this function. Fail loudly and by name instead, so a project onboarded
+    // without its dialect configured is a visible defect, not a silent cost regression discovered only
+    // by a full live run.
+    const objectType = params.requestedObjectType ?? config.objectDialect?.defaultObjectType;
+    if (!objectType) {
+      return {
+        ok: false,
+        code: "prefetch_object_type_unresolved",
+        error: `Cannot resolve an object type for project "${params.projectId}": no requestedObjectType was given and its ProjectObjectDialect declares no defaultObjectType. Configure objectDialect.defaultObjectType for this project (see projectTypes.ts) rather than relying on a guess.`
+      };
+    }
     const arguments_ = { object_type: objectType };
     // Mirrors project.call_read_tool's own handler ordering (toolRegistry.ts): the project's
     // executable policy runs before any transport, so a client-specific block still applies even

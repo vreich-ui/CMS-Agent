@@ -678,6 +678,82 @@ module-resolution error, present before this wave too).
 
 ---
 
+## 2p. Execution log — 2026-07-30, wave 16 (T-2 re-run #2: F1 regressed cost UP, not down)
+
+`run_1785405350649_9u5mjz` re-ran T-2 against `platform` specifically to measure F1's contract-prefetch
+win. It didn't land: `contract_intelligence`'s own cost went **UP** ($2.57 → $3.79), and the run's
+between-node budget gate blocked at 118% of a $4 ceiling. Four fixes:
+
+**H1 — platform's `ProjectObjectDialect` was entirely absent, which is what made F1 no-op for it.**
+`project_get(dr-lurie).knowledge.site` carries `siteObjectId`/`taxonomyRegistryObjectId`/
+`requestIdPattern`; `project_get(platform).knowledge` had no `site` block at all — confirmed live.
+Worse: `project.update`'s patchable fields (`name`, `mcpEndpointEnvVar`, `authMode`, `tokenEnvVar`,
+`allowedTools`, `defaultToolPolicy`, `toolPolicies`, `contentContract`, `status`) do not include
+`objectDialect` — there is **no live MCP path that can ever set it**. The only mechanism that writes
+`objectDialect` onto a persisted record is `migrateDefaultProjectConfig` re-seeding from a code-defined
+default, which requires the project to be IN `defaultProjectConnections` in the first place (see H3).
+`src/agent/projects/platform/definition.ts` is new: a faithful mirror of platform's live record
+(captured via `project.get` 2026-07-30 — same `toolPolicies`, `defaultToolPolicy: "allowed"`,
+`contentContract`, `status`), so the first migration is additive-only, plus the new `objectDialect`:
+`siteObjectId: "site_platform"`, `taxonomyRegistryObjectId: "tax_platform"`,
+`objectIdSource: "server_minted"` (unlike dr-lurie's caller-supplied request id), `requestIdPattern`
+matching the live-observed `req_article_kugel_lifecycle_20260730_01`, and
+`defaultObjectType: "content_item"`.
+
+**H2 — the prefetch's object-type resolution had a silent literal fallback.** `contractPrefetch.ts`
+resolved `objectType` as `requestedObjectType ?? config.objectDialect?.defaultObjectType ?? "content_item"`
+— a hardcoded guess when NEITHER of the first two resolved. The guess happened to be right for both
+known clients today, but there was no way to tell "guessed right" from "guessed wrong" from outside the
+function, and it is exactly the kind of self-disabling optimization the request called out: it cost a
+full live run to detect. The literal fallback is gone; an unresolvable object type now returns a NAMED
+failure (`code: "prefetch_object_type_unresolved"`) naming the project. `executor.ts`'s prefetch
+dispatch also now stamps a run-visible `state.warnings` entry (`contract_prefetch_failed:<code>`) on any
+prefetch failure — previously visible ONLY inside the affected node's own input, which is precisely why
+nobody noticed until the cost regression.
+
+**H3 — platform was live-registered via `project.create` (W-1) but absent from
+`defaultProjectConnections`, so it never once passed through `migrateDefaultProjectConfig`** (a project
+not in that list is a guaranteed no-op for that function) — the one active project a code-defined config
+bump could never reach. `defaultProjects.ts` now includes `platformProjectConfig` (H1), which also means
+`project.delete("platform")` is now protected (`default_project_protected`), same as the other three
+default projects. Added `src/agent/projects/projectDialectAudit.ts`: a pure audit over active,
+publish-hook-bearing projects (`getProjectHooks(id)?.executePublish !== undefined` — pdf-tool/monetizer
+have no publish hook and are correctly never flagged) missing required `objectDialect` fields, wired into
+`BlobProjectRepository.health()` / `MemoryProjectRepository.health()` (`details.objectDialectFindings`
+when non-empty). Separately, and load-bearing for that health check to mean anything:
+`RepositoryManager.getRepositoryHealth()` never once called `projectRepository.health()` — the project
+registry had no representation in the aggregate health summary at all. `project` is now a member of
+`RepositoryHealthSummary`, surfaced through the existing `repository.get_health` tool.
+
+**H4 — F2b's in-loop guard (wave 14) was fully engaged for `contract_intelligence` and still didn't stop
+it.** Confirmed the "whichever ceiling is tighter" resolution is algebraically correct with no
+node-level `budgetUsd` (`nodeBudgetUsd ?? runBudgetUsd`); the real gap is that the guard's `agent_start`
+check only ever sees CUMULATIVE usage from turns already completed — it fires before a turn's own usage
+is known, so it can only ever abort the turn AFTER the one whose own cost is what crosses the ceiling.
+With F1 silently no-op'd (H1/H2), `contract_intelligence` fell back to raw self-discovery, and each
+subsequent turn re-sent the whole growing conversation — whichever turn's own cost tipped it past the
+ceiling had already run by the time the next turn's check could react, landing at 118% over. The guard
+now also reserves against the UPCOMING turn's own prospective size, estimated from the exact input the
+SDK is about to send it (`agent_start`'s third argument, `turnInput` — previously unread), the same
+estimate-then-gate shape the existing pre-dispatch check already uses, just applied at every turn instead
+of only once. Verified the new regression test actually fails without the fix (reverted the runner change
+and re-ran it) before confirming it passes with the fix.
+
+Scope held deliberately narrow per the request: the editorial nodes (F5) are untouched and working
+(`research` $0.76→$0.38, `brief_architect` $0.26→$0.04, no timeouts).
+
+Suite: **952** (was 938), typecheck clean (same pre-existing unrelated `ui/src/types/workspace.ts`
+`@rjsf/utils` module-resolution error).
+
+**Follow-up not taken here (next PR, per explicit instruction):** `article_body` produces nodes with
+empty `private.strategy`/`private.intent` on every block despite the `content_item` contract declaring
+both — `narrative_movement`/`angle_strategy` already produce exactly this editorial reasoning upstream;
+`article_body` needs to carry it through per node, strictly in `private` (reader-visible strings stay
+clean, which they currently are). Also not done here: a fresh live re-run of platform's scenario to
+confirm `contract_intelligence`'s cost actually drops now that its prefetch engages.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -714,6 +790,15 @@ run termination and its tool is no longer unreachably approval-gated, F5 timeout
 **Wave 15 executed 2026-07-30** (T-2 re-run PASSED; G1 `learning_recorder`'s own missed timeout — F5 had
 no execution to size it from — given the same 300s override `draft_writer` needed; G2 `run.errors`
 superseded on completion so a retried-and-resolved failure stops looking like a live one) — see §2o.
+
+**Wave 16 executed 2026-07-30** (T-2 re-run #2 against platform: F1 regressed cost UP instead of down;
+H1 platform's `ProjectObjectDialect` populated — the one active project no live MCP path could ever set
+it on; H2 the prefetch's silent `"content_item"` guess replaced with a named
+`prefetch_object_type_unresolved` failure plus a run-visible warning; H3 platform joined
+`defaultProjectConnections` so it self-heals like the other three defaults, and a new project-dialect
+audit is wired into the (previously entirely absent from the aggregate) project repository health check;
+H4 the in-loop budget guard now reserves against the UPCOMING turn's own prospective size, not just
+cumulative usage from turns already completed) — see §2p.
 
 Next, in the order I would take them:
 1. **A live end-to-end run, again** — wave 14 fixed every mechanism `run_1785352838155_l544ye` hit and covered each with unit/integration tests, but nothing has re-run that scenario live end-to-end since. Worth doing deliberately (it spends model budget) with `budgetUsd` set, reading `mode` to confirm live/store execution as before, and this time watching `contract_intelligence`'s actual dollar cost against the $0.10 target, whether `learning_recorder` actually records observations, and whether the run reaches a publishable `article_body`.

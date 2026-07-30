@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
 import { DR_LURIE_ALLOWED_TOOLS, DR_LURIE_ARTIFACT_TOOLS, DR_LURIE_RETIRED_LEGACY_TOOLS, DR_LURIE_SAFE_READ_ONLY_TOOLS, drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
+import { platformProjectConfig } from "../../../src/agent/projects/platform/definition.js";
+import { defaultProjectConnections } from "../../../src/agent/projects/defaultProjects.js";
 import { evaluateDrLurieCallToolPolicy } from "../../../src/agent/projects/drLurie/executablePolicy.js";
 import { ProjectMcpAdapter, resolveProjectConnection } from "../../../src/agent/projects/projectMcpAdapter.js";
 import { toProjectSummary, validateHandoff } from "../../../src/agent/projects/projectRegistry.js";
@@ -138,6 +140,64 @@ describe("project registry + Dr. Lurie definition", () => {
   it("resolves connection config from env and reports configured booleans", () => {
     expect(resolveProjectConnection(drLurieProjectConfig, env)).toMatchObject({ endpointConfigured: true, tokenConfigured: true });
     expect(resolveProjectConnection(drLurieProjectConfig, {} as NodeJS.ProcessEnv)).toMatchObject({ endpointConfigured: false, tokenConfigured: false, endpoint: undefined, token: undefined });
+  });
+});
+
+// T-2 re-run (run_1785405350649_9u5mjz): platform was registered live via project.create (W-1) but,
+// unlike dr-lurie/pdf-tool/monetizer, was never in defaultProjectConnections — a project not in that
+// list is a guaranteed no-op for migrateDefaultProjectConfig, so it never once picked up the F1
+// object-dialect parameters dr-lurie got in wave 14. contract_intelligence's conductor prefetch
+// silently fell back to its own discovery for platform as a result, and cost went UP ($2.57 -> $3.79)
+// instead of down.
+describe("platform project definition", () => {
+  it("memory project registry lists platform by default", async () => {
+    const repository = new MemoryProjectRepository();
+    const projects = await repository.list();
+
+    expect(projects.map((project) => project.projectId)).toContain("platform");
+    const platform = await repository.get("platform");
+    expect(platform?.contentContract).toEqual({ contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" });
+    expect(platform?.status).toBe("active");
+  });
+
+  it("carries its per-site object-dialect parameters in config, not in the publish hook", () => {
+    expect(platformProjectConfig.objectDialect).toEqual({
+      siteObjectId: "site_platform",
+      taxonomyRegistryObjectId: "tax_platform",
+      objectIdSource: "server_minted",
+      requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$",
+      defaultObjectType: "content_item"
+    });
+  });
+
+  it("mirrors the live-tuned tool policy (full access, with the same approval carve-outs)", () => {
+    expect(platformProjectConfig.defaultToolPolicy).toBe("allowed");
+    for (const tool of ["object_contract", "registry_get", "object_create", "object_checkout", "object_validate", "object_patch", "object_publish", "object_checkin", "release_to_production", "deploy_status"]) {
+      expect(effectiveToolPermission(platformProjectConfig, tool)).toBe("allowed");
+    }
+    for (const tool of ["object_retire", "object_review_decide", "site_apply_theme", "wipe_blob_stores"]) {
+      expect(effectiveToolPermission(platformProjectConfig, tool)).toBe("needs_approval");
+    }
+  });
+
+  it("upgrades a persisted live-only platform record (no definitionVersion) safely", async () => {
+    const repository = new MemoryProjectRepository();
+    // The live record predates this file: no definitionVersion, no objectDialect — exactly what
+    // project.get(platform) showed before this fix.
+    const { objectDialect: _drop, definitionVersion: _dropVersion, ...liveOnlyRecord } = structuredClone(platformProjectConfig);
+    await repository.save(liveOnlyRecord as ProjectConnectionConfig);
+
+    const upgraded = await repository.get("platform");
+
+    expect(upgraded?.definitionVersion).toBe(platformProjectConfig.definitionVersion);
+    expect(upgraded?.objectDialect).toEqual(platformProjectConfig.objectDialect);
+  });
+
+  // CHANGE-PLAN W-2 precedent: membership in defaultProjectConnections is what makes
+  // project.delete refuse an id ("default_project_protected", because a seeded project is
+  // re-created on the next read) — see projectAdminTools.test.ts for the guard itself.
+  it("is now a code-defined default, and therefore protected from deletion", () => {
+    expect(defaultProjectConnections.map((project) => project.projectId)).toContain("platform");
   });
 });
 

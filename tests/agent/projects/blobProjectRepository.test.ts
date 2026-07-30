@@ -86,4 +86,22 @@ describe("Blob project repository", () => {
     expect(drLurie?.allowedTools).toEqual(drLurieProjectConfig.allowedTools);
     expect(custom?.allowedTools).toEqual(["custom_read"]);
   });
+
+  // G3 (T-2 re-run, run_1785405350649_9u5mjz): platform's live record had no objectDialect at all
+  // and nothing reported it. A custom, non-default project (never migrated) is the stand-in here for
+  // exactly that window between "registered live" and "picked up by a default-project re-seed".
+  it("reports a missing objectDialect through health() for a publish-capable project that lacks one", async () => {
+    const { platformProjectConfig } = await import("../../../src/agent/projects/platform/definition.js");
+    // definitionVersion MUST match the current default's, or ensureSeeded's own migration would
+    // overwrite this deliberately-incomplete record with the correct one before health() ever reads
+    // it — this is standing in for the live window before a version bump ever reaches a project.
+    blobData.set("projects/platform.json", { ...structuredClone(platformProjectConfig), objectDialect: undefined });
+    const repository = new RepositoryManager({ backend: "blobs" }).getProjectRepository();
+
+    const health = await repository.health();
+
+    expect(health.readable).toBe(true);
+    expect(health.writable).toBe(true);
+    expect(health.details).toEqual({ objectDialectFindings: ["platform: missing objectDialect.siteObjectId, objectDialect.taxonomyRegistryObjectId, objectDialect.objectIdSource, objectDialect.defaultObjectType"] });
+  });
 });

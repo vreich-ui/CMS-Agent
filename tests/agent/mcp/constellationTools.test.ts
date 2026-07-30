@@ -55,6 +55,11 @@ describe("constellation.* MCP tools", () => {
       "attn_project_unconfigured_dr-lurie",
       "attn_project_unconfigured_monetizer",
       "attn_project_unconfigured_pdf-tool",
+      // T-2 re-run (run_1785405350649_9u5mjz): platform was live-registered via project.create but
+      // absent from defaultProjectConnections, so it never once passed through
+      // migrateDefaultProjectConfig — it now joins the other three default projects here, and in a
+      // test environment (no PLATFORM_MCP_ENDPOINT/TOKEN) is honestly reported unconfigured too.
+      "attn_project_unconfigured_platform",
       // These two are back, but for a NEW and correct reason — not the old regression. dr_lurie_
       // contract_intelligence now requests project.call_read_tool (the no-approval discovery split),
       // and publication_controller / publish_executor deliberately do NOT grant it — they stay

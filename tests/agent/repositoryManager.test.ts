@@ -57,6 +57,9 @@ describe("RepositoryManager", () => {
       artifact: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       learning: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       usage: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      // dr-lurie and platform both carry a complete objectDialect, so the audit (G3) reports no
+      // findings and this looks exactly like every other clean repository health entry.
+      project: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       skill: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       change: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       evaluation: { backend: "memory", readable: true, writable: true, version: "memory.v1" },

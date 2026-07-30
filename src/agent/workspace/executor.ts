@@ -507,12 +507,23 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
   // Best-effort: a prefetch failure is handed to the node as `prefetchError` (matching its own
   // "client unreachable" blocker language) rather than failing the dispatch outright, so a transient
   // fetch problem surfaces as the node's own explicit blocker, not an executor crash.
+  //
+  // G2 (T-2 re-run, run_1785405350649_9u5mjz): a failure here used to be visible ONLY inside the
+  // node's own input (prefetchError), which nobody reads unless they already suspect this node —
+  // exactly why platform's missing objectDialect went undetected for a full live run's worth of
+  // spend. A failed prefetch now also stamps a run-visible warning (workflow.get_run,
+  // constellation.get_attention's node-level surface both read state.warnings), named after the
+  // failure's own code so "the cost optimization silently degraded" is a run-level fact, not
+  // something inferable only after specifically reading this one node's input.
   if (nextNode.metadata?.contractPrefetch === true) {
     try {
       const prefetch = await getReducedContract({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository() });
       state.input = { ...(state.input as Record<string, unknown>), ...(prefetch.ok ? { prefetchedContract: prefetch.reduced } : { prefetchError: prefetch.error }) };
+      if (!prefetch.ok) state.warnings = [...(state.warnings ?? []), `contract_prefetch_failed:${prefetch.code ?? "unknown"}`];
     } catch (error) {
-      state.input = { ...(state.input as Record<string, unknown>), prefetchError: error instanceof Error ? error.message : String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      state.input = { ...(state.input as Record<string, unknown>), prefetchError: message };
+      state.warnings = [...(state.warnings ?? []), "contract_prefetch_failed:threw"];
     }
   }
 

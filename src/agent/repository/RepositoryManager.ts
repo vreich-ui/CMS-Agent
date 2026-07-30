@@ -50,6 +50,7 @@ export type RepositoryHealthSummary = {
   artifact: RepositoryHealth;
   learning: RepositoryHealth;
   usage: RepositoryHealth;
+  project: RepositoryHealth;
   skill: RepositoryHealth;
   change: RepositoryHealth;
   evaluation: RepositoryHealth;
@@ -117,19 +118,26 @@ export class RepositoryManager {
   getEvaluationRepository(): EvaluationRepository { return this.evaluationRepository; }
   getImprovementRepository(): ImprovementRepository { return this.improvementRepository; }
 
+  // G3 (T-2 re-run, run_1785405350649_9u5mjz): the project repository's own health() has always
+  // existed, but this summary never once called it — the project registry had NO representation in
+  // the workspace-wide health check at all. It now does, which is what actually surfaces
+  // ProjectRepository.health()'s objectDialect findings (see BlobProjectRepository.health()) to an
+  // operator or startup check reading repository.get_health instead of leaving them reachable only by
+  // calling project repo health directly.
   async getRepositoryHealth(): Promise<RepositoryHealthSummary> {
-    const [workspace, execution, artifact, learning, usage, skill, change, evaluation, improvement] = await Promise.all([
+    const [workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement] = await Promise.all([
       this.workspaceRepository.health(),
       this.executionRepository.health(),
       this.artifactRepository.health(),
       this.learningRepository.health(),
       this.usageRepository.health(),
+      this.projectRepository.health(),
       this.skillRepository.health(),
       this.changeRepository.health(),
       this.evaluationRepository.health(),
       this.improvementRepository.health()
     ]);
-    const storageHealth = [workspace, execution, artifact, learning, usage, skill, change, evaluation, improvement].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
-    return { backend: this.context.backend, storageHealth, workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, skill, change, evaluation, improvement };
+    const storageHealth = [workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
+    return { backend: this.context.backend, storageHealth, workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement };
   }
 }

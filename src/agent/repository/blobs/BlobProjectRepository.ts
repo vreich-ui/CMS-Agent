@@ -1,5 +1,6 @@
 import { defaultProjectConfigs, migrateDefaultProjectConfig } from "../../projects/defaultMigration.js";
 import type { ProjectConnectionConfig } from "../../projects/projectTypes.js";
+import { auditProjectObjectDialects, formatProjectDialectFindings } from "../../projects/projectDialectAudit.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { ProjectRepository } from "../interfaces/ProjectRepository.js";
 import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
@@ -54,7 +55,12 @@ export class BlobProjectRepository implements ProjectRepository {
     return existed;
   }
 
+  // G3 (T-2 re-run, run_1785405350649_9u5mjz): platform silently drifted a full definitionVersion
+  // behind dr-lurie on the object-dialect parameters with no health surface reporting it. `details`
+  // only ever carries the finding when one exists — a clean registry reports exactly like it always
+  // has, so this is additive, not a new failure mode for `writable`/`readable`.
   async health(): Promise<RepositoryHealth> {
-    return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" };
+    const findings = formatProjectDialectFindings(auditProjectObjectDialects(await this.list()));
+    return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1", ...(findings.length ? { details: { objectDialectFindings: findings } } : {}) };
   }
 }

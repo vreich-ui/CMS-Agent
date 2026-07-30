@@ -72,5 +72,9 @@ describe("contract prefetch wired into node dispatch (F1, end to end through the
     const input = state.input as { prefetchedContract?: unknown; prefetchError?: string };
     expect(input.prefetchedContract).toBeUndefined();
     expect(input.prefetchError).toBeTruthy();
+    // G2 (T-2 re-run, run_1785405350649_9u5mjz): a prefetch failure used to be visible ONLY inside
+    // this one node's own input — a run-level warning is what would have made platform's missing
+    // dialect a visible defect instead of a silent cost regression.
+    expect(state.warnings).toContain("contract_prefetch_failed:unknown");
   });
 });
