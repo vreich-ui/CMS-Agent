@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { articleBodySchema } from "../mcp/workspace/store.js";
+import { validateOutput } from "../execution/outputValidator.js";
+import { getWorkspaceNode } from "../workspace/nodes.js";
 import { toConnectionState } from "./projectMcpAdapter.js";
 import { getProjectHooks, type ProjectPolicyFinding } from "./projectHooks.js";
 import { toToolPolicyMap, type ProjectConnectionConfig, type ProjectSummary } from "./projectTypes.js";
@@ -37,6 +38,19 @@ const checkStructure = (present: boolean, contract: string, schema: z.ZodTypeAny
   return { present: true, valid: parsed.success, contract, issues: parsed.success ? [] : parsed.error.issues };
 };
 
+// The article_body node's OWN outputSchema is the authority on an article_body.v1 handoff — the same
+// single authority the executor enforces at execution time, buildInitialRun enforces on a seeded
+// entrypoint, and the publisher enforces before publishing. This used to parse the workspace-local
+// {schema_version, nodes} Zod schema (deleted by R-6 / R-23's delete half), which validated a shape
+// the node never emits — so a real pipeline envelope failed here while a legacy body passed. Beyond
+// this envelope, the client's own validator (object_validate) is the authority on the body.
+const checkArticleBodyStructure = (present: boolean, contract: string, value: unknown): StructureCheck => {
+  if (!present) return { present: false, valid: false, contract, issues: [] };
+  if (contract !== "article_body.v1") return { present: true, valid: false, contract, issues: [{ code: "custom", path: [], message: `Unsupported contract: ${contract}` } as z.ZodIssue] };
+  const result = validateOutput(value, getWorkspaceNode("article_body")?.outputSchema);
+  return { present: true, valid: result.ok, contract, issues: result.ok ? [] : result.errors.map((message) => ({ code: "custom", path: [], message }) as z.ZodIssue) };
+};
+
 export type HandoffProjectPolicy = { applied: boolean; findings: ProjectPolicyFinding[] };
 
 export type HandoffValidation = {
@@ -51,19 +65,18 @@ export type HandoffValidation = {
 };
 
 // Validate a handoff payload's structure against the project's declared content contract
-// (content_source.v1) and canonical article body (article_body.v1), then layer the project's own
-// policy hook when one is registered. This is a local, read-only, dry check — it performs no
-// network calls and no publishing side effects.
+// (content_source.v1) and canonical article body (article_body.v1 — the article_body node's own
+// output envelope), then layer the project's own policy hook when one is registered. This is a
+// local, read-only, dry check — it performs no network calls and no publishing side effects.
 export function validateHandoff(config: ProjectConnectionConfig, payload: { contentSource?: unknown; articleBody?: unknown }): HandoffValidation {
   const { contentContract, canonicalArticleBody } = config.contentContract;
   const contentSourceSchema = contentContract === "content_source.v1" ? contentSourceV1Schema : null;
-  const articleBodyContractSchema = canonicalArticleBody === "article_body.v1" ? (articleBodySchema as unknown as z.ZodTypeAny) : null;
 
   const contentSourcePresent = payload.contentSource !== undefined;
   const articleBodyPresent = payload.articleBody !== undefined;
 
   const contentSource = checkStructure(contentSourcePresent, contentContract, contentSourceSchema, payload.contentSource);
-  const articleBody = checkStructure(articleBodyPresent, canonicalArticleBody, articleBodyContractSchema, payload.articleBody);
+  const articleBody = checkArticleBodyStructure(articleBodyPresent, canonicalArticleBody, payload.articleBody);
 
   const issues: string[] = [];
   if (!contentSourcePresent && !articleBodyPresent) issues.push("Provide contentSource and/or articleBody to validate a handoff.");

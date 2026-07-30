@@ -20,7 +20,7 @@ const makeClient = (nodes: WorkspaceNode[], gate?: Promise<void>): McpClient => 
   call: async <T,>(name: string): Promise<T> => {
     if (gate) await gate;
     if (name === "workspace.get_nodes") return { nodes } as T;
-    if (name === "article_body.get_schema") return { schema: { type: "object" } } as T;
+    // article_body.get_schema is retired (R-6) — a call to it lands in the throw below.
     if (name === "workspace.export_workspace") return { workspaceVersion: 1 } as T;
     throw new Error(`unexpected tool call: ${name}`);
   }

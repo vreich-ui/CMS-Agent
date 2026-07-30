@@ -9,13 +9,12 @@
 //      one, re-enter at the late-stage entrypoint reusing a finished article_body, or run in full —
 //      so a full rerun is only chosen when nothing cheaper applies.
 
-import { articleBodyJsonSchema } from "../mcp/workspace/store.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { toProjectSummary } from "../projects/projectRegistry.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { ModelUsageSummary } from "../observability/modelUsageTypes.js";
 import { evaluateRunBudget, type RunBudgetEvaluation } from "../observability/modelUsage.js";
-import { listWorkspaceNodes } from "./nodes.js";
+import { getWorkspaceNode, listWorkspaceNodes } from "./nodes.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "./executionTypes.js";
 
 // Per-run memoization keyed by (runId, resourceKey). A loader runs at most once per key per run; the
@@ -52,6 +51,10 @@ export const RUN_CONTEXT_KEY = "run_context";
 export type RunContext = {
   projectId: string;
   projectContract: { contentContract: string; canonicalArticleBody: string; publishingPolicy: unknown };
+  // The article_body node's OWN outputSchema — the same single authority the executor, buildInitialRun,
+  // and the publisher enforce. Never a workspace-local article schema (R-6/R-23 deleted the last one);
+  // the client's fetched contract (via contract_intelligence / objectContracts) governs the body within
+  // this envelope.
   articleBodySchema: unknown;
   projectToolPolicy: { defaultToolPolicy: string; allowedTools: string[]; toolPolicies: Record<string, string> };
   objectContracts: unknown;
@@ -69,7 +72,7 @@ export async function getRunContext(params: { runId: string; projectId: string; 
     return {
       projectId: params.projectId,
       projectContract: { ...summary.contentContract, publishingPolicy: summary.publishingPolicy },
-      articleBodySchema: articleBodyJsonSchema,
+      articleBodySchema: getWorkspaceNode("article_body")?.outputSchema ?? null,
       projectToolPolicy: { defaultToolPolicy: summary.defaultToolPolicy, allowedTools: summary.allowedTools, toolPolicies: summary.toolPolicies },
       objectContracts: getProjectHooks(params.projectId)?.knowledge ?? null,
       registry: listWorkspaceNodes().map((node) => ({ id: node.id, produces: [...node.produces], riskLevel: node.riskLevel, dependsOn: [...node.dependsOn] }))

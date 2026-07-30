@@ -7,16 +7,25 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
   return JSON.parse(response.body ?? "{}").result.structuredContent;
 };
 
-const validArticleBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", public: { title: "T", body: "Reader-facing body." } }] };
+// The client-shaped envelope the article_body node emits — validate_handoff checks it against the
+// node's OWN outputSchema (R-6/R-23 deleted the workspace-local {schema_version, nodes} monolith).
+// The Dr. Lurie artifact-policy walker is shape-agnostic (it recurses the whole payload), so policy
+// findings still fire on refs nested under `body`.
+const envelope = (body: Record<string, unknown>) => ({
+  artifact: "article_body.v1",
+  summary: "Reader-facing body.",
+  clientProjectId: "dr-lurie",
+  clientObjectType: "content_item",
+  contractSource: { tool: "object_contract", fetchedAt: "2026-07-16T00:00:00.000Z" },
+  body
+});
+const validArticleBody = envelope({ slug: "example", title: "T", nodes: [{ id: "n_x", kind: "content", public: { title: "T", body: "Reader-facing body." } }] });
 
 describe("per-project hooks: validate_handoff policy + knowledge", () => {
   beforeEach(() => { process.env.MCP_API_TOKEN = "test-token"; resetRepositoryManager(); });
 
   it("applies Dr. Lurie artifact policy: raw image artifact URLs are blocking errors", async () => {
-    const articleBody = {
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_img", kind: "content", public: { title: "T", body: "Body.", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }]
-    };
+    const articleBody = envelope({ slug: "img", title: "T", nodes: [{ id: "n_img", kind: "content", public: { title: "T", body: "Body.", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] });
     const { data } = await call("project.validate_handoff", { projectId: "dr-lurie", articleBody });
     const validation = data.validation;
 
@@ -29,10 +38,7 @@ describe("per-project hooks: validate_handoff policy + knowledge", () => {
   });
 
   it("keeps warning-severity findings advisory (PDF fallback advisory does not flip valid)", async () => {
-    const articleBody = {
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_doc", kind: "content", public: { title: "T", body: "Full methodology in pdf/req_1/abc123.pdf for reviewers." } }]
-    };
+    const articleBody = envelope({ slug: "doc", title: "T", nodes: [{ id: "n_doc", kind: "content", public: { title: "T", body: "Full methodology in pdf/req_1/abc123.pdf for reviewers." } }] });
     const { data } = await call("project.validate_handoff", { projectId: "dr-lurie", articleBody });
     const validation = data.validation;
 
@@ -56,10 +62,7 @@ describe("per-project hooks: validate_handoff policy + knowledge", () => {
   it("coerces a stringified articleBody payload (MCP client serialization) before validation", async () => {
     // Observed live: the connector delivered articleBody as a JSON string. The hook must still run
     // over the parsed object and report policy findings.
-    const articleBody = JSON.stringify({
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_img", kind: "content", public: { title: "T", body: "Body.", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }]
-    });
+    const articleBody = JSON.stringify(envelope({ slug: "img", title: "T", nodes: [{ id: "n_img", kind: "content", public: { title: "T", body: "Body.", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] }));
     const { data } = await call("project.validate_handoff", { projectId: "dr-lurie", articleBody });
     const validation = data.validation;
 

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { listWorkspaceNodes } from "../../../src/agent/workspace/nodes.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
-import { articleBodyJsonSchema } from "../../../src/agent/mcp/workspace/store.js";
 import { mockValueFromSchema } from "../../../src/agent/execution/mockOutputFromSchema.js";
 import { MockNodeRunner, mockOutputForNode } from "../../../src/agent/execution/runners/MockNodeRunner.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
@@ -77,20 +76,48 @@ describe("mock fixtures are derived from each node's own schema (R-17)", () => {
     expect(validateOutput(generated, liveEnvelopeSchema).ok).toBe(true);
   });
 
-  // The strictest schema in the repo, and the one the first version of this generator failed on.
-  // `store.ts` installs it as article_body's outputSchema in every FRESH workspace, so a run against a
-  // new workspace meets it — which is why the seeded-node guard above is not sufficient on its own.
-  // It exercises everything the generator has to handle at once: additionalProperties:false, a pattern,
-  // an enum, minItems, nested objects, `anyOf` branches, and `dependentRequired`.
-  it("satisfies the legacy monolith schema that store.ts installs into a fresh workspace", () => {
-    const generated = mockValueFromSchema(articleBodyJsonSchema, { dryRun: true, nodeId: "article_body" });
-    const validation = validateOutput(generated, articleBodyJsonSchema);
+  // A deliberately strict composite schema — the class the first version of this generator failed on.
+  // (It used to be the workspace-local {schema_version, nodes} article monolith; R-6/R-23 deleted that
+  // schema, so the stress-test keeps its shape-class without resurrecting the contract.) It exercises
+  // everything the generator has to handle at once: additionalProperties:false, a pattern, an enum,
+  // minItems, nested objects, `anyOf` branches, and `dependentRequired`.
+  it("satisfies a strict deeply-nested composite schema (pattern + enum + minItems + anyOf + dependentRequired)", () => {
+    const strictCompositeSchema = {
+      type: "object",
+      required: ["marker", "entries"],
+      additionalProperties: false,
+      properties: {
+        marker: { const: "strict_composite.v1" },
+        entries: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            required: ["id", "kind", "fields"],
+            additionalProperties: false,
+            properties: {
+              id: { type: "string", pattern: "^n_[A-Za-z0-9]+$" },
+              kind: { type: "string", enum: ["content", "action"] },
+              fields: {
+                type: "object",
+                additionalProperties: false,
+                anyOf: [{ required: ["title"] }, { required: ["ctaText"] }],
+                dependentRequired: { ctaText: ["ctaLink"], ctaLink: ["ctaText"] },
+                properties: { title: { type: "string", minLength: 1 }, ctaText: { type: "string", minLength: 1 }, ctaLink: { type: "string", minLength: 1 } }
+              }
+            }
+          }
+        }
+      }
+    };
+    const generated = mockValueFromSchema(strictCompositeSchema, { dryRun: true, nodeId: "article_body" });
+    const validation = validateOutput(generated, strictCompositeSchema);
     expect(validation.ok, !validation.ok ? validation.errors.join("; ") : "").toBe(true);
     // Proof the anyOf branch was actually resolved rather than left as an empty object.
-    expect(generated).toMatchObject({ schema_version: "article_body.v1" });
-    const first = (generated as { nodes: Array<{ id: string; public: Record<string, unknown> }> }).nodes[0];
+    expect(generated).toMatchObject({ marker: "strict_composite.v1" });
+    const first = (generated as { entries: Array<{ id: string; fields: Record<string, unknown> }> }).entries[0];
     expect(first.id).toMatch(/^n_[A-Za-z0-9]+$/);
-    expect(Object.keys(first.public).length).toBeGreaterThan(0);
+    expect(Object.keys(first.fields).length).toBeGreaterThan(0);
   });
 
   it("covers publish_payload, whose fixture omitted the required summary", () => {

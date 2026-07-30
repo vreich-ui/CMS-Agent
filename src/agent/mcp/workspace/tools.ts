@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { articleBodyJsonSchema, articleBodySchema, coerceSchemaInput, validateJsonSchema, type WorkspaceMutationMeta } from "./store.js";
+import { coerceSchemaInput, validateJsonSchema, type WorkspaceMutationMeta } from "./store.js";
 import { workspaceRiskLevels, type WorkspaceNode } from "../../workspace/nodeTypes.js";
 import { type WorkspaceActor, type WorkspaceChangeSource } from "../../workspace/changeTypes.js";
 import { coerceJsonObjectInput, metaJson, mutationMeta, objectSchema, ok, tool, toolError, type JsonSchema, type WorkspaceTool, MissingPatchFieldError } from "./toolKit.js";
@@ -11,6 +11,8 @@ import { createImprovementTools } from "./improvementTools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { DEFAULT_EXECUTION_MODE, getRun, listRuns, resetRun, retryNode, runModeSummary, runNextNode, startDryRun, updateRunStatus } from "../../workspace/executor.js";
 import { conductorCache, getRunContext, planRun, summarizeRunCost, RUN_CONTEXT_KEY } from "../../workspace/conductor.js";
+import { getWorkspaceNode } from "../../workspace/nodes.js";
+import { validateOutput } from "../../execution/outputValidator.js";
 import { evaluatePublishReadiness, publishRun } from "../../workspace/publisher.js";
 import { executeNode, getEffectivePrompt, getNodeDetails, listNodeExecutions, listNodeOutputs, prepareNodeExecution, validateAgainstNodeSchema } from "../../workspace/nodeRuntime.js";
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
@@ -50,8 +52,13 @@ const learningObservationImport = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   createdAt: z.string().datetime()
 }).strict();
+// R-6 / R-23 (delete half): the payload's articleBody is no longer typed by a workspace-local
+// {schema_version, nodes} schema — that monolith is deleted. The wire accepts an opaque object here
+// and the execute paths validate it against the article_body node's OWN outputSchema (the same single
+// authority the executor, buildInitialRun, and the publisher enforce). Beyond the node's envelope,
+// the client's fetched contract governs the body — never a workspace-local copy.
 const publishPayloadSchema = z.object({
-  articleBody: articleBodySchema,
+  articleBody: z.unknown(),
   target: z.enum(["preview", "cms"]),
   dryRun: z.literal(true),
   builtAt: z.string().datetime()
@@ -82,9 +89,14 @@ const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(
 const saveOutput = z.object({ id: z.string().min(1).optional(), stage: z.string().min(1), value: z.unknown() }).strict();
 const listOutputs = z.object({ stage: z.string().min(1).optional() }).strict();
 const recordObservation = z.object({ observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional() }).strict();
-const validateArticle = z.object({ articleBody: z.unknown() }).strict();
-const publishBuild = z.object({ articleBody: articleBodySchema, target: z.enum(["preview", "cms"]).default("preview") }).strict();
+const publishBuild = z.object({ articleBody: z.unknown(), target: z.enum(["preview", "cms"]).default("preview") }).strict();
 const publishValidate = z.object({ payload: publishPayloadSchema }).strict();
+// The one remaining definition of "what an article body is": the article_body node's own outputSchema.
+// Returns the error list (empty = valid) so wire tools can refuse or report without re-encoding the shape.
+const validateAgainstArticleBodyNode = (articleBody: unknown): string[] => {
+  const result = validateOutput(articleBody, getWorkspaceNode("article_body")?.outputSchema);
+  return result.ok ? [] : result.errors;
+};
 // Live execution is the DEFAULT (see DEFAULT_EXECUTION_MODE); "mock" is the explicit opt-in for
 // cheap CI/test runs. Stated on the wire so a caller reading only the tool schema knows which of the
 // two they are about to get, and what a mock artifact is worth.
@@ -152,9 +164,12 @@ const importWorkspaceJsonSchema = objectSchema({ nodes: { type: "array", items: 
 const saveOutputJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, stage: { type: "string", minLength: 1 }, value: {} }, ["stage", "value"]);
 const listOutputsJsonSchema = objectSchema({ stage: { type: "string", minLength: 1 } });
 const recordObservationJsonSchema = objectSchema({ observation: { type: "string", minLength: 1 }, metadata: { type: "object" }, runId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the run that produced it, so it can be joined back later." }, nodeId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the node that produced it." } }, ["observation"]);
-const validateArticleJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema }, ["articleBody"]);
-const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, ["articleBody"]);
-const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
+// Advertised as an opaque object: the authority on the body's shape is the article_body node's OWN
+// outputSchema (fetch it via node.get_output_schema) and, beyond that envelope, the client's fetched
+// contract — never a workspace-local article schema baked into a tool's input schema.
+const articleBodyArgJsonSchema = { type: "object", description: "Client-shaped article_body.v1 envelope produced by the article_body node. Validated against that node's own outputSchema (see node.get_output_schema), never a workspace-local article schema." };
+const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, ["articleBody"]);
+const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
 const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." } }, ["projectId", "input"]);
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
@@ -181,7 +196,7 @@ const readinessJsonSchema = objectSchema({
   hardConstraints: objectSchema({ contentPath: { type: "string" }, artifactProtocol: { type: "string" }, legacyFallbacksUsed: { type: "boolean" } })
 });
 const publishRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 }, requestId: { type: "string", minLength: 1, description: "req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case; you supply it." }, approved: { type: "boolean", description: "Explicit human approval; required (with live) for a real publish." }, live: { type: "boolean", description: "Must be true — with approved:true and operator-enabled publishing — for a real publish; otherwise a dry-run plan is returned and nothing external is called." }, publishedTime: { type: "string", description: "Optional ISO timestamp: omit/past publishes now, future schedules." }, readiness: readinessJsonSchema }, ["runId", "requestId"]);
-const publishReadinessJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 }, articleBody: { ...articleBodyJsonSchema, description: "Article body to evaluate; omit to resolve it from the run." }, readiness: readinessJsonSchema }, ["projectId"]);
+const publishReadinessJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 }, articleBody: { ...articleBodyArgJsonSchema, description: "Article body to evaluate; omit to resolve it from the run. Judged by the project's readiness policy against the article_body node's own outputSchema, never a workspace-local article schema." }, readiness: readinessJsonSchema }, ["projectId"]);
 const listRunsJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 } });
 const usageFiltersJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" } });
 const usageRecordJsonSchema = objectSchema({ usageId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, agentId: { type: "string", minLength: 1 }, model: { type: "string", minLength: 1 }, provider: { type: "string", minLength: 1 }, inputTokens: { type: "integer", minimum: 0 }, outputTokens: { type: "integer", minimum: 0 }, totalTokens: { type: "integer", minimum: 0 }, reasoningTokens: { type: "integer", minimum: 0 }, cachedInputTokens: { type: "integer", minimum: 0 }, costUsdEstimate: { type: "number", minimum: 0 }, currency: { const: "USD" }, status: { type: "string", enum: ["estimated", "actual"] }, recordedAt: { type: "string", format: "date-time" }, metadata: { type: "object" } }, ["model", "provider", "inputTokens", "outputTokens", "status"]);
@@ -346,15 +361,17 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "workspace.get_node_effective_config", description: "Get safe resolved node execution config without secrets.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeId.parse(input).id); return ok({ config: node ? { prompt: node.prompt, inputSchema: node.inputSchema, outputSchema: node.outputSchema, modelConfig: node.modelConfig ?? {}, assignedSkills: node.assignedSkills ?? [], effectiveTools: node.allowedTools, riskLevel: node.riskLevel, approvalRequirements: node.riskLevel === "publish" || node.riskLevel === "admin" ? ["explicit_approval"] : [] } : null }); } }),
     tool({ name: "workspace.export_workspace", description: "Export workspace data.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok(await workspaceRepository.exportWorkspace()); } }),
     tool({ name: "workspace.import_workspace", description: "Import workspace data.", zodSchema: importWorkspace, inputSchema: importWorkspaceJsonSchema, execute: async (input) => { const data = importWorkspace.parse(input); return ok(await workspaceRepository.importWorkspace({ ...data, nodes: data.nodes as WorkspaceNode[] | undefined })); } }),
-    tool({ name: "article_body.get_schema", description: "Get article body schema.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ schema: articleBodyJsonSchema }); } }),
-    tool({ name: "article_body.validate", description: "Validate article body data.", zodSchema: validateArticle, inputSchema: validateArticleJsonSchema, execute: async (input) => { const articleBody = coerceJsonObjectInput(validateArticle.parse(input).articleBody); const parsed = articleBodySchema.safeParse(articleBody); return ok({ valid: parsed.success, articleBody: parsed.success ? parsed.data : undefined, issues: parsed.success ? [] : parsed.error.issues }); } }),
+    // R-6: article_body.get_schema / article_body.validate are retired. They served the workspace-local
+    // {schema_version, nodes} monolith — a drifted local copy the article_body node itself rejects. The
+    // node's own outputSchema is served by node.get_output_schema and enforced by node.validate_output;
+    // the client's own validator (object_validate via project.call_read_tool) is the authority beyond it.
     tool({ name: "stage.save_output", description: "Save stage output.", zodSchema: saveOutput, inputSchema: saveOutputJsonSchema, execute: async (input) => { const data = saveOutput.parse(input); const output = await workspaceRepository.saveStageOutput(data.stage, data.value, data.id); return ok({ output, workspaceVersion: await workspaceRepository.getWorkspaceVersion() }); } }),
     tool({ name: "stage.get_output", description: "Get stage output.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => ok({ output: await workspaceRepository.getStageOutput(nodeId.parse(input).id) ?? null }) }),
     tool({ name: "stage.list_outputs", description: "List stage outputs.", zodSchema: listOutputs, inputSchema: listOutputsJsonSchema, execute: async (input) => ok({ outputs: await workspaceRepository.listStageOutputs(listOutputs.parse(input).stage) }) }),
     tool({ name: "learning.record_observation", description: "Record a learning observation, optionally stamped with the runId/nodeId it came from.", zodSchema: recordObservation, inputSchema: recordObservationJsonSchema, execute: async (input) => { const data = recordObservation.parse(input); const observation = await learningRepository.recordObservation(data.observation, data.metadata, { runId: data.runId, nodeId: data.nodeId }); return ok({ observation, workspaceVersion: await workspaceRepository.getWorkspaceVersion() }); } }),
     tool({ name: "learning.list_observations", description: "List learning observations.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ observations: await learningRepository.listObservations() }); } }),
-    tool({ name: "publish.build_payload", description: "Build a dry-run publish payload without side effects.", zodSchema: publishBuild, inputSchema: publishBuildJsonSchema, execute: async (input) => { const data = publishBuild.parse(input); return ok({ payload: { articleBody: data.articleBody, target: data.target, dryRun: true, builtAt: new Date().toISOString() } }); } }),
-    tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); return ok({ valid: parsed.success, issues: parsed.success ? [] : parsed.error.issues }); } }),
+    tool({ name: "publish.build_payload", description: "Build a dry-run publish payload without side effects. The articleBody must satisfy the article_body node's own outputSchema (see node.get_output_schema) — an invalid body is refused with the failing fields named.", zodSchema: publishBuild, inputSchema: publishBuildJsonSchema, execute: async (input) => { const data = publishBuild.parse(input); const articleBody = coerceJsonObjectInput(data.articleBody); const errors = validateAgainstArticleBodyNode(articleBody); if (errors.length) throw new Error(`invalid_article_body: does not satisfy the article_body node's outputSchema (${errors.slice(0, 6).join("; ")})`); return ok({ payload: { articleBody, target: data.target, dryRun: true, builtAt: new Date().toISOString() } }); } }),
+    tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload: envelope fields (target, dryRun, builtAt) plus the articleBody against the article_body node's own outputSchema.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); const bodyErrors = parsed.success ? validateAgainstArticleBodyNode(coerceJsonObjectInput(parsed.data.payload.articleBody)) : []; const issues = [...(parsed.success ? [] : parsed.error.issues), ...bodyErrors.map((message) => ({ code: "custom", path: ["payload", "articleBody"], message }))]; return ok({ valid: issues.length === 0, issues }); } }),
     tool({ name: "repository.get_health", description: "Return safe repository health metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ health: await repositoryManager.getRepositoryHealth() }); } }),
     tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects. Supply entrypoint 'article_body' with a valid article_body.v1 to enter the run at the publish stages without re-running ideation/research/draft nodes.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => {
       const data = startDryRunInput.parse(input);
