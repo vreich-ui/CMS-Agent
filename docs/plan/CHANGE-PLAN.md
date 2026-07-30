@@ -635,6 +635,49 @@ so F1's prefetch resolves it from project config rather than the pipeline-wide f
 
 ---
 
+## 2o. Execution log — 2026-07-30, wave 15 (T-2 re-run: two defects, PASS otherwise)
+
+That live end-to-end re-run wave 14 recommended actually happened
+(`run_1785352838155_l544ye`'s scenario): `article_body` produced a contract-correct `content_item` — 8
+nodes all matching `^n_[a-z0-9]+$`, no `schema_version` under the strict schema, taxonomy correctly
+omitted because `tax_platform` is empty, `requestId` matching the contract pattern, `legacyFallbacksUsed`
+false — and the run halted at `publication_controller` with `approval_required`, exactly as designed. T-2
+**PASSED**. Two defects surfaced anyway:
+
+**G1 — `learning_recorder` timed out (`model_timeout`), because F5's audit had nothing to size it from.**
+F5 (wave 14) sized every node the T-2 run actually exercised. `learning_recorder` depended on
+`publication_controller` completing, which a dry run's own design never allows, so before F4 it had
+never run once — zero observed profile, not merely an unmeasured one. F4 made it fire for the first time
+ever on THIS run, straight into the 120s global default, on a node whose input is an entire run's worth
+of stage outputs (potentially every one of the other 18 executed nodes) — a larger input than the single
+large brief that earned `draft_writer` its own 300s override. It now carries that same 300s override
+(`nodes.ts`). Re-checked every other node F5 sized: all of them (`research`, `trust_factual`,
+`contract_intelligence`, `brief_architect`, `draft_writer`, `human_texture`, `article_body`,
+`publish_payload`) sit on the main DAG before `publication_controller` and so actually ran and completed
+in the live T-2 pass — `learning_recorder` was the only node whose timeout was never actually informed by
+a real execution.
+
+**G2 — a run's top-level `errors` array kept resolved failures forever.** This run ended with
+`errors: ["draft_writer:model_timeout", "learning_recorder:model_timeout"]` even though `draft_writer`
+had, in between, been retried (`workflow.retry_node`) and completed successfully. `retryNode` resets the
+node's OWN state — status, output, `node.errors` — back to queued, but never touched the run-level
+`errors` array those failures were appended to, so a resolved failure stayed there permanently,
+indistinguishable from a live one. `executeRunnableNode` (`executor.ts`) now supersedes a node's prior
+`run.errors` entries the moment that node completes — retried or not — so the array reflects current
+status rather than accumulating every historical attempt. `learning_recorder`'s own (genuine, current)
+`model_timeout` entry is untouched by this run, exactly as it should be until G1's timeout fix is proven
+live.
+
+Scope held deliberately narrow per the request: nothing else touched, publish gates stay closed.
+
+Suite: **938** (was 935), typecheck clean (pre-existing unrelated `ui/src/types/workspace.ts` `@rjsf/utils`
+module-resolution error, present before this wave too).
+
+**Follow-up not taken here:** a fresh live re-run to confirm `learning_recorder` now completes within
+300s and actually records its first-ever observation.
+
+---
+
 ## 3. What was already completed this session (for the ledger)
 
 ✅ pdf-tool capability restored (14 tools, `article_body.v1` contract, deny-by-default kept) · ✅ `verify_agent_artifact` granted · ✅ image loop proven live end-to-end · ✅ 6 nodes + 6 skills aligned to contract-as-truth (workspace v56→v69) · ✅ `trust_factual` regression fixed · ✅ `contract_intelligence` unblocked (risk level) · ✅ graph valid, attention clean, 11/13 skill-bearing nodes conflict-free (2 remaining warnings are the publish gate working as designed).
@@ -667,6 +710,10 @@ mandate; node-definition resolution timing confirmed by tracing the code) — se
 conductor-level deterministic contract prefetch+reduction, F2 the in-loop budget guard watching the
 run's real ceiling, F3 `resume_run` can actually raise `budgetUsd`, F4 `learning_recorder` fires on any
 run termination and its tool is no longer unreachably approval-gated, F5 timeout/cost audit) — see §2n.
+
+**Wave 15 executed 2026-07-30** (T-2 re-run PASSED; G1 `learning_recorder`'s own missed timeout — F5 had
+no execution to size it from — given the same 300s override `draft_writer` needed; G2 `run.errors`
+superseded on completion so a retried-and-resolved failure stops looking like a live one) — see §2o.
 
 Next, in the order I would take them:
 1. **A live end-to-end run, again** — wave 14 fixed every mechanism `run_1785352838155_l544ye` hit and covered each with unit/integration tests, but nothing has re-run that scenario live end-to-end since. Worth doing deliberately (it spends model budget) with `budgetUsd` set, reading `mode` to confirm live/store execution as before, and this time watching `contract_intelligence`'s actual dollar cost against the $0.10 target, whether `learning_recorder` actually records observations, and whether the run reaches a publishable `article_body`.

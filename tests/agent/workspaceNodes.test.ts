@@ -96,4 +96,16 @@ describe("Publishing Conductor workspace nodes", () => {
     }
     expect(listWorkspaceNodes().find((node) => node.id === "publish_executor")?.status).toBe("draft");
   });
+
+  // Defect (T-2, run_1785352838155_l544ye): F5's timeout audit sized every node the T-2 run actually
+  // exercised, but learning_recorder depended on publication_controller completing — which a dry run's
+  // own design never lets happen — so it had never actually run and F5 had no observed profile to size
+  // it from. It kept the 120s global default and timed out the moment F4 made it fire for the first
+  // time ever, on a node whose input is an entire run's worth of stage outputs. It now carries the
+  // same explicit override draft_writer's own large single-output case needed.
+  it("gives learning_recorder an explicit timeout sized for its large (whole-run) input", () => {
+    const node = listWorkspaceNodes().find((candidate) => candidate.id === "learning_recorder");
+    expect(node?.modelConfig?.timeout).toBeTypeOf("number");
+    expect(node!.modelConfig!.timeout as number).toBeGreaterThanOrEqual(180000);
+  });
 });

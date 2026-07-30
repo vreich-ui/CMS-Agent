@@ -604,6 +604,13 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
   state.output = output;
   run.stageOutputs[nextNode.id] = output;
   run.artifacts.push(buildArtifact(nextNode, output));
+  // Defect (T-2, run_1785352838155_l544ye): retryNode resets a node's OWN state (node.errors, output,
+  // ...) on retry, but never touched the run-level errors array those failures were appended to (line
+  // ~565/598 below), so a node that failed and was later retried successfully left its resolved
+  // failure permanently in run.errors — this run ended with ["draft_writer:model_timeout", ...] even
+  // though draft_writer had since completed. A completion supersedes every earlier entry for THIS
+  // node, retried or not, so triage reflects current status rather than accumulating every attempt.
+  run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
   run.updatedAt = completedAt;
   run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
   return {
