@@ -166,11 +166,22 @@ export class OpenAINodeRunner implements NodeRunner {
       }
       turnSignal = turnController.signal as any;
       runner = new Runner();
-      runner.on("agent_start", (runContext: any) => {
+      runner.on("agent_start", (runContext: any, _agent: unknown, turnInput?: unknown[]) => {
         if (turnController.signal.aborted) return;
         const turnUsage = { inputTokens: runContext.usage?.inputTokens ?? 0, outputTokens: runContext.usage?.outputTokens ?? 0 };
         const spentSoFar = priorSpendUsd + estimateModelCost({ model, inputTokens: turnUsage.inputTokens, outputTokens: turnUsage.outputTokens });
-        if (spentSoFar > budgetUsd) {
+        // G4 (T-2 re-run, run_1785405350649_9u5mjz): spentSoFar alone only accounts for turns ALREADY
+        // completed — this event fires BEFORE a turn's own usage is known, so on its own this guard
+        // can only ever stop the turn AFTER the one that actually crosses the ceiling. That is exactly
+        // what let contract_intelligence blow through a $4 ceiling by 118%: fallen back to full
+        // self-discovery (F1's platform prefetch gap), each turn re-sent the whole growing
+        // conversation, and whichever turn's own cost tipped it over had already run by the time the
+        // NEXT turn's check could react. Reserve for the turn about to run too, estimated from the
+        // exact input the SDK is about to send it (turnInput) — the same estimate-then-gate shape the
+        // pre-dispatch check above already uses, just applied at every turn instead of only once.
+        const prospectiveInputTokens = Math.ceil(JSON.stringify(turnInput ?? "").length / 4);
+        const prospectiveReserve = estimateModelCost({ model, inputTokens: prospectiveInputTokens, outputTokens: numberFrom(c.maxOutputTokens) ?? 1000 });
+        if (spentSoFar + prospectiveReserve > budgetUsd) {
           budgetExceededDetails = { spentUsdEstimate: Number(spentSoFar.toFixed(6)), budgetUsd, nodeId: node.id, turnUsage };
           turnController.abort();
         }

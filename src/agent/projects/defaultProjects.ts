@@ -17,13 +17,21 @@
 // to power the feedback.ingest_monetizer MCP tool (the Phase 7 outer loop), so deleting the
 // definition would remove a live tool from the wire surface. Retiring it is a decision about that
 // loop, not registry hygiene — its workspace record is disabled in the meantime.
+//
+// platform ADDED (T-2 re-run, run_1785405350649_9u5mjz): registered live via project.create (W-1),
+// platform was the one active project this list never covered, so migrateDefaultProjectConfig was a
+// guaranteed no-op for it regardless of how far its persisted record drifted from a current
+// definition — it silently missed the F1 object-dialect parameters dr-lurie got in wave 14. See
+// platform/definition.ts for why this first migration is additive-only.
 import type { ProjectConnectionConfig } from "./projectTypes.js";
 import { drLurieProjectConfig } from "./drLurie/definition.js";
 import { pdfToolProjectConfig } from "./pdfTool/definition.js";
 import { monetizerProjectConfig } from "./monetizer/definition.js";
+import { platformProjectConfig } from "./platform/definition.js";
 
 export const defaultProjectConnections: ProjectConnectionConfig[] = [
   drLurieProjectConfig,
   pdfToolProjectConfig,
-  monetizerProjectConfig
+  monetizerProjectConfig,
+  platformProjectConfig
 ];

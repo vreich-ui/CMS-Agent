@@ -73,6 +73,26 @@ describe("getReducedContract (F1 deterministic contract prefetch)", () => {
     expect(remoteFetch).not.toHaveBeenCalled();
   });
 
+  // T-2 re-run (run_1785405350649_9u5mjz): platform had no objectDialect.defaultObjectType
+  // configured, so an earlier version of this function silently guessed a hardcoded "content_item"
+  // literal — which happened to be right for platform, but there was no way to tell "guessed right"
+  // from "guessed wrong" from outside the function, and the guess masked the real defect (platform's
+  // missing dialect) for a full live run's worth of cost. It must now fail loudly and by name.
+  it("fails loudly and by name when a project has no configured default object type", async () => {
+    const projectRepository = new MemoryProjectRepository();
+    const drLurie = await projectRepository.get("dr-lurie");
+    await projectRepository.save({ ...drLurie!, projectId: "no-dialect-project", objectDialect: undefined });
+
+    const result = await getReducedContract({ runId: "run-prefetch-7", projectId: "no-dialect-project" }, { projectRepository, cache: new RunScopedCache() });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("prefetch_object_type_unresolved");
+      expect(result.error).toContain("no-dialect-project");
+    }
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
   it("honors an explicit requestedObjectType over the project's configured default", async () => {
     const projectRepository = new MemoryProjectRepository();
     const result = await getReducedContract({ runId: "run-prefetch-5", projectId: "dr-lurie", requestedObjectType: "page" }, { projectRepository, cache: new RunScopedCache() });

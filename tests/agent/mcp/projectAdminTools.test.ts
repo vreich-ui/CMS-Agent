@@ -149,6 +149,9 @@ describe("agentic project registration tools", () => {
     expect(listed).not.toContain("acme-daily");
 
     expect(toolErrorMessage(await toolCall("project.delete", { projectId: "dr-lurie" }))).toContain("default_project_protected");
+    // T-2 re-run (run_1785405350649_9u5mjz): platform joined defaultProjectConnections so it is no
+    // longer the one active project a re-seed could never reach — it is now protected too.
+    expect(toolErrorMessage(await toolCall("project.delete", { projectId: "platform" }))).toContain("default_project_protected");
     expect(toolErrorMessage(await toolCall("project.delete", { projectId: "never-existed" }))).toContain("unknown_project");
   });
 });
