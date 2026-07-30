@@ -1,14 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RJSFSchema } from "@rjsf/utils";
 import type { McpClient } from "../mcp/client";
-import type { ArticleBodySchema, ArticleValidationResult, RepositoryHealthSummary, SkillDefinition, SkillResolvedPolicy, WorkspaceDocument, WorkspaceNode } from "../types/workspace";
+import type { RepositoryHealthSummary, SkillDefinition, SkillResolvedPolicy, WorkspaceDocument, WorkspaceNode } from "../types/workspace";
 
-const sampleArticleBody = {
-  schema_version: "article_body.v1",
-  nodes: [{ id: "n_intro", kind: "content", visibility: "public", public: { title: "Sample title", body: "Sample body" } }]
-};
-
-const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const asSchema = (schema: unknown): RJSFSchema | undefined => schema && typeof schema === "object" ? schema as RJSFSchema : undefined;
 
 export function useWorkspace(client: McpClient) {
@@ -16,10 +10,6 @@ export function useWorkspace(client: McpClient) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [promptDraft, setPromptDraft] = useState("");
   const [workspaceVersion, setWorkspaceVersion] = useState<number | undefined>();
-  const [articleSchema, setArticleSchema] = useState<ArticleBodySchema | undefined>();
-  const [articleJson, setArticleJson] = useState(pretty(sampleArticleBody));
-  const [articleFormData, setArticleFormData] = useState<unknown>(sampleArticleBody);
-  const [validation, setValidation] = useState<ArticleValidationResult | null>(null);
   const [exportedWorkspace, setExportedWorkspace] = useState<WorkspaceDocument | null>(null);
   const [repositoryHealth, setRepositoryHealth] = useState<RepositoryHealthSummary | null>(null);
   const [skills, setSkills] = useState<SkillDefinition[]>([]);
@@ -43,7 +33,6 @@ export function useWorkspace(client: McpClient) {
     setSelectedId(null);
     setPromptDraft("");
     setWorkspaceVersion(undefined);
-    setArticleSchema(undefined);
     setSkills([]);
     setSelectedSkillId(null);
     setResolvedSkillPolicy(null);
@@ -75,13 +64,9 @@ export function useWorkspace(client: McpClient) {
     setLoading(true);
     setLoadError(null);
     try {
-      const [{ nodes: nextNodes }, { schema }] = await Promise.all([
-        client.call<{ nodes: WorkspaceNode[] }>("workspace.get_nodes"),
-        client.call<{ schema: ArticleBodySchema }>("article_body.get_schema")
-      ]);
+      const { nodes: nextNodes } = await client.call<{ nodes: WorkspaceNode[] }>("workspace.get_nodes");
       if (activeClientRef.current !== forClient) return; // superseded — a newer client already owns this state
       setNodes(nextNodes);
-      setArticleSchema(schema);
       const { workspaceVersion: nextVersion } = await client.call<WorkspaceDocument>("workspace.export_workspace");
       if (activeClientRef.current !== forClient) return;
       setWorkspaceVersion(nextVersion);
@@ -147,12 +132,6 @@ export function useWorkspace(client: McpClient) {
     return document;
   };
 
-  const validateArticleBody = async (articleBody: unknown) => {
-    const result = await client.call<ArticleValidationResult>("article_body.validate", { articleBody });
-    setValidation(result);
-    return result;
-  };
-
   const loadRepositoryHealth = async () => {
     const result = await client.call<{ health: RepositoryHealthSummary }>("repository.get_health");
     setRepositoryHealth(result.health);
@@ -166,10 +145,6 @@ export function useWorkspace(client: McpClient) {
     selectedSchema,
     promptDraft,
     workspaceVersion,
-    articleSchema,
-    articleJson,
-    articleFormData,
-    validation,
     exportedWorkspace,
     repositoryHealth,
     skills,
@@ -180,8 +155,6 @@ export function useWorkspace(client: McpClient) {
     setSelectedId,
     setPromptDraft,
     setSelectedSkillId,
-    setArticleJson,
-    setArticleFormData,
     loadWorkspace,
     savePrompt,
     createNode,
@@ -197,7 +170,6 @@ export function useWorkspace(client: McpClient) {
     unassignSkill,
     resolveSkillPolicy,
     exportWorkspace,
-    validateArticleBody,
     loadRepositoryHealth
   };
 }

@@ -305,9 +305,7 @@ The UI can:
 * Render workspace nodes from `workspace.get_nodes` as a React Flow graph.
 * Inspect a selected node, including id, name, prompt, schema preview, and workspace version when returned by MCP.
 * Save prompt edits through `workspace.update_node_prompt`.
-* Render selected node schemas with react-jsonschema-form.
-* Fetch and display the canonical `article_body.v1` schema from `article_body.get_schema`.
-* Validate pasted JSON or RJSF-created article bodies with `article_body.validate`.
+* Render selected node schemas with react-jsonschema-form. The `article_body.v1` contract is the article_body node's own `outputSchema` (`node.get_output_schema`); the retired `article_body.get_schema` / `article_body.validate` tools and their workspace-local schema were removed (R-6/R-23).
 * Export the current workspace document with `workspace.export_workspace`.
 
 The UI cannot:

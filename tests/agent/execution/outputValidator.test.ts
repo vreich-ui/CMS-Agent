@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
-import { articleBodyJsonSchema } from "../../../src/agent/mcp/workspace/store.js";
+import { getWorkspaceNode } from "../../../src/agent/workspace/nodes.js";
 
 describe("validateOutput", () => {
   const schema = { type: "object", required: ["title"], properties: { title: { type: "string" }, count: { type: "integer" } } };
@@ -76,36 +76,36 @@ describe("validateOutput full JSON Schema keyword enforcement", () => {
   });
 });
 
-// The article_body node output schema is the canonical article_body.v1 JSON Schema; the generic
-// validator must now enforce every one of its constraints (previously only const fields were honored).
-describe("validateOutput against the canonical article_body.v1 schema", () => {
-  const node = (media?: unknown) => ({ id: "n_A", kind: "content", visibility: "public", public: { title: "Title", ...(media ? { media } : {}) } });
+// R-6 / R-23 regression lock: the article_body node's OWN outputSchema (the client-shaped envelope)
+// is the single remaining definition of "what a body is". The workspace-local {schema_version, nodes}
+// monolith is deleted — this asserts the node's schema accepts a real envelope and refuses the legacy
+// shape, so the monolith cannot quietly come back as "valid" anywhere the node's schema is enforced.
+describe("validateOutput against the article_body node's own outputSchema", () => {
+  const articleBodyNodeSchema = getWorkspaceNode("article_body")!.outputSchema;
+  const envelope = {
+    artifact: "article_body.v1",
+    summary: "Client-shaped body.",
+    clientProjectId: "dr-lurie",
+    clientObjectType: "content_item",
+    contractSource: { tool: "object_contract", fetchedAt: "2026-07-16T00:00:00.000Z" },
+    body: { slug: "example", title: "T", nodes: [{ id: "n_x", kind: "content", public: { title: "T", body: "Reader body." } }] }
+  };
 
-  it("accepts a well-formed body", () => {
-    expect(validateOutput({ schema_version: "article_body.v1", nodes: [node()] }, articleBodyJsonSchema).ok).toBe(true);
+  it("accepts the client-shaped envelope the node actually emits", () => {
+    expect(validateOutput(envelope, articleBodyNodeSchema).ok).toBe(true);
   });
 
-  it("rejects an empty nodes array (minItems)", () => {
-    expect(validateOutput({ schema_version: "article_body.v1", nodes: [] }, articleBodyJsonSchema).ok).toBe(false);
-  });
-
-  it("rejects a remote image url in public.media.src (nested if/then pattern)", () => {
-    const remote = validateOutput({ schema_version: "article_body.v1", nodes: [node({ type: "image", src: "https://example.com/x.png" })] }, articleBodyJsonSchema);
-    expect(remote.ok).toBe(false);
-    const materialized = validateOutput({ schema_version: "article_body.v1", nodes: [node({ type: "image", src: "/media/x.png" })] }, articleBodyJsonSchema);
-    expect(materialized.ok).toBe(true);
-  });
-
-  it("rejects remote image src case-insensitively (schemes are case-insensitive)", () => {
-    // The generic output validator compiles the JSON-schema pattern without the /i flag, so the
-    // pattern itself must be case-insensitive to match the Zod path. Uppercase schemes must not slip.
-    for (const src of ["HTTPS://example.com/x.png", "Http://example.com/x.png", "DATA:image/png;base64,AAAA", "BLOB:https://example.com/id"]) {
-      expect(validateOutput({ schema_version: "article_body.v1", nodes: [node({ type: "image", src })] }, articleBodyJsonSchema).ok).toBe(false);
+  it("rejects the deleted workspace-local {schema_version, nodes} monolith on every required field", () => {
+    const legacy = { schema_version: "article_body.v1", nodes: [{ id: "n_A", kind: "content", visibility: "public", public: { title: "Title" } }] };
+    const result = validateOutput(legacy, articleBodyNodeSchema);
+    expect(result.ok).toBe(false);
+    const errors = !result.ok ? result.errors.join("; ") : "";
+    for (const field of ["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"]) {
+      expect(errors).toContain(`$.${field} is required`);
     }
   });
 
-  it("rejects a bad node id pattern and an unknown public field", () => {
-    expect(validateOutput({ schema_version: "article_body.v1", nodes: [{ ...node(), id: "bad" }] }, articleBodyJsonSchema).ok).toBe(false);
-    expect(validateOutput({ schema_version: "article_body.v1", nodes: [{ id: "n_A", kind: "content", public: { title: "t", bogus: "x" } }] }, articleBodyJsonSchema).ok).toBe(false);
+  it("rejects an envelope whose body is empty (minProperties)", () => {
+    expect(validateOutput({ ...envelope, body: {} }, articleBodyNodeSchema).ok).toBe(false);
   });
 });

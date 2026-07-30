@@ -49,7 +49,7 @@ const collect = (value: unknown, schema: unknown, path: string): string[] => {
 
 // Recursive JSON Schema (draft 2020-12 subset) validator. Supports the keywords the workspace node
 // output schemas actually use: type/enum/const, object (required, properties, patternProperties,
-// additionalProperties, dependentRequired), array (items, prefixItems, minItems, maxItems,
+// additionalProperties, dependentRequired, minProperties, maxProperties), array (items, prefixItems, minItems, maxItems,
 // uniqueItems), string (minLength, maxLength, pattern), number (minimum/maximum/exclusive*,
 // multipleOf), and the applicators allOf/anyOf/oneOf/not and if/then/else. Enforcement is consistent
 // at every nesting depth, so a constraint on article_body.nodes[].public.media.src is checked exactly
@@ -104,6 +104,12 @@ function validateNode(value: unknown, schema: unknown, path: string, errors: str
 
   if (typeOf(value) === "object") {
     const object = value as Record<string, unknown>;
+    // minProperties/maxProperties were silently ignored until R-6/R-23's cleanup: the article_body
+    // node's outputSchema declares `body: { minProperties: 1 }` (an empty body object is not an
+    // article) and the mock generator already satisfies it, but nothing enforced it — so an envelope
+    // with `body: {}` validated everywhere the node's schema is the authority.
+    if (typeof node.minProperties === "number" && Object.keys(object).length < node.minProperties) errors.push(`${path} must have at least ${node.minProperties} propert${node.minProperties === 1 ? "y" : "ies"}`);
+    if (typeof node.maxProperties === "number" && Object.keys(object).length > node.maxProperties) errors.push(`${path} must have at most ${node.maxProperties} propert${node.maxProperties === 1 ? "y" : "ies"}`);
     for (const key of node.required ?? []) if (!(key in object)) errors.push(`${path}.${key} is required`);
     const properties: Record<string, unknown> = node.properties ?? {};
     for (const [key, child] of Object.entries(properties)) if (key in object) validateNode(object[key], child, `${path}.${key}`, errors);

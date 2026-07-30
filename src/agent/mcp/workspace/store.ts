@@ -16,76 +16,11 @@ export const upsertWorkspaceNode = (nodes: WorkspaceNode[], node: WorkspaceNode)
     ? nodes.map((existing) => existing.id === node.id ? node : existing)
     : [...nodes, node];
 
-const visibleString = z.string().min(1);
-// Reader-facing images must be materialized by the Dr. Lurie publishing backend, never hotlinked
-// from a remote origin (a remote/data/blob URL cannot be guaranteed to render at read time). These
-// two forms are kept in lock-step: the RegExp drives the Zod path (article_body.validate,
-// validate_handoff) and the negative-lookahead JSON Schema pattern drives the generic node output
-// validator (node.validate_output / node.execute), so both reject the same media.src values.
-// URL schemes are case-insensitive, so both forms match case-insensitively: the RegExp via the /i
-// flag, and the JSON Schema string — compiled by the generic validator as `new RegExp(pattern)` with
-// no flags — by baking case-insensitivity into its character classes and literals (HTTPS://, DATA:,
-// BLOB: must be rejected identically to their lowercase spellings).
-const REMOTE_MEDIA_URL_PATTERN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/|^data:|^blob:/i;
-const MATERIALIZED_IMAGE_SRC_PATTERN = "^(?!(?:[A-Za-z][A-Za-z0-9+.-]*:)?//)(?![Dd][Aa][Tt][Aa]:)(?![Bb][Ll][Oo][Bb]:).+$";
-const publicMediaSchema = z.object({
-  type: z.enum(["image", "video", "audio", "embed"]),
-  src: z.string().min(1).optional(),
-  artifactReference: z.string().min(1).optional(),
-  embed: z.string().min(1).optional(),
-  alt: z.string().min(1).optional(),
-  caption: z.string().min(1).optional()
-}).strict().refine(
-  (media) => media.src !== undefined || media.artifactReference !== undefined || media.embed !== undefined,
-  { message: "Media requires at least one of src, artifactReference, or embed." }
-).refine(
-  (media) => !(media.type === "image" && typeof media.src === "string" && REMOTE_MEDIA_URL_PATTERN.test(media.src)),
-  { message: "Image media.src must be a materialized reference, not a remote, data, or blob URL.", path: ["src"] }
-);
-
-const publicNodeFieldsSchema = z.object({
-  eyebrow: visibleString.optional(),
-  title: visibleString.optional(),
-  body: visibleString.optional(),
-  items: z.array(visibleString).min(1).optional(),
-  ctaText: visibleString.optional(),
-  ctaLink: visibleString.optional(),
-  label: visibleString.optional(),
-  media: publicMediaSchema.optional()
-}).strict().refine(
-  (publicFields) => Object.keys(publicFields).length > 0,
-  { message: "Public node content requires at least one meaningful field." }
-).refine(
-  (publicFields) => (publicFields.ctaText === undefined) === (publicFields.ctaLink === undefined),
-  { message: "CTA fields must include both ctaText and ctaLink." }
-);
-
-const nodeVisibilitySchema = z.enum(["public", "internal", "hidden"]).optional();
-const articleBodyNodeSchema = z.object({
-  id: z.string().regex(/^n_[A-Za-z0-9]+$/),
-  kind: z.enum(["content", "action", "placement", "interactive"]),
-  visibility: nodeVisibilitySchema,
-  public: publicNodeFieldsSchema
-}).strict();
-
-const visiblePublicFields = ["eyebrow", "title", "body", "items", "ctaText", "ctaLink", "label", "media"] as const;
-const hasVisiblePublicField = (publicFields: z.infer<typeof publicNodeFieldsSchema>) => visiblePublicFields.some((field) => publicFields[field] !== undefined);
-
-export const articleBodySchema = z.object({
-  schema_version: z.literal("article_body.v1"),
-  nodes: z.array(articleBodyNodeSchema).min(1)
-}).strict().refine(
-  (articleBody) => articleBody.nodes.some((node) => (node.visibility === undefined || node.visibility === "public") && hasVisiblePublicField(node.public)),
-  { message: "At least one node must be reader-visible with at least one public field.", path: ["nodes"] }
-);
-
-export type ArticleBody = z.infer<typeof articleBodySchema>;
 export type StageOutput = { id: string; stage: string; value?: unknown; createdAt: string };
 // F4 (T-2, run_1785352838155_l544ye): runId/nodeId are optional so existing observations (recorded
 // before this field existed) still parse — but every new one is stamped, so it can finally be joined
 // back to the run/node that produced it. Previously only {id, observation, metadata, createdAt}.
 export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; runId?: string; nodeId?: string; createdAt: string };
-export type PublishPayload = { articleBody: ArticleBody; dryRun: true; target: "preview" | "cms"; builtAt: string };
 export type WorkspaceMutationMeta = {
   expectedWorkspaceVersion?: number;
   // Optimistic concurrency against the change-history revision chain; stale values throw
@@ -133,67 +68,6 @@ export interface WorkspaceStore {
   listObservations(): Promise<LearningObservation[]>;
 }
 
-export const articleBodyJsonSchema = {
-  type: "object",
-  required: ["schema_version", "nodes"],
-  additionalProperties: false,
-  properties: {
-    schema_version: { const: "article_body.v1" },
-    nodes: {
-      type: "array",
-      minItems: 1,
-      items: {
-        type: "object",
-        required: ["id", "kind", "public"],
-        additionalProperties: false,
-        properties: {
-          id: { type: "string", pattern: "^n_[A-Za-z0-9]+$" },
-          kind: { type: "string", enum: ["content", "action", "placement", "interactive"] },
-          visibility: { type: "string", enum: ["public", "internal", "hidden"] },
-          public: {
-            type: "object",
-            additionalProperties: false,
-            anyOf: [{ required: ["eyebrow"] }, { required: ["title"] }, { required: ["body"] }, { required: ["items"] }, { required: ["label"] }, { required: ["media"] }, { required: ["ctaText"] }, { required: ["ctaLink"] }],
-            dependentRequired: { ctaText: ["ctaLink"], ctaLink: ["ctaText"] },
-            properties: {
-              eyebrow: { type: "string", minLength: 1 },
-              title: { type: "string", minLength: 1 },
-              body: { type: "string", minLength: 1 },
-              items: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-              ctaText: { type: "string", minLength: 1 },
-              ctaLink: { type: "string", minLength: 1 },
-              label: { type: "string", minLength: 1 },
-              media: {
-                type: "object",
-                required: ["type"],
-                additionalProperties: false,
-                anyOf: [{ required: ["src"] }, { required: ["artifactReference"] }, { required: ["embed"] }],
-                // Image media.src may not be a remote/data/blob URL: images must be materialized by
-                // the Dr. Lurie backend. Expressed as if/then + a nested src pattern so the generic
-                // output validator enforces it exactly like the Zod publicMediaSchema does.
-                allOf: [
-                  {
-                    if: { properties: { type: { const: "image" } }, required: ["type"] },
-                    then: { properties: { src: { type: "string", minLength: 1, pattern: MATERIALIZED_IMAGE_SRC_PATTERN } } }
-                  }
-                ],
-                properties: {
-                  type: { type: "string", enum: ["image", "video", "audio", "embed"] },
-                  src: { type: "string", minLength: 1 },
-                  artifactReference: { type: "string", minLength: 1 },
-                  embed: { type: "string", minLength: 1 },
-                  alt: { type: "string", minLength: 1 },
-                  caption: { type: "string", minLength: 1 }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-};
-
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 // R-22 — this used to overwrite article_body's own schema AND outputSchema with articleBodyJsonSchema, the
@@ -206,9 +80,10 @@ const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toSt
 //
 // The node's own schema now stands. The alignment wave's rule is the reason — "workspace-local article
 // schemas are advisory and must never be used to validate" — and a seed-time override is the strongest
-// possible form of treating one as authoritative. articleBodyJsonSchema is still exported and still used by
-// the article_body.* legacy tools and the publish payload schemas; retiring THOSE, and deciding what
-// article_body.v1 should be called once Dr-Lurié's contract has been read first-hand, is R-23 / R-6.
+// possible form of treating one as authoritative. R-6 and R-23's delete half then removed the
+// {schema_version, nodes} monolith (both its Zod and JSON Schema forms) from this module entirely, along
+// with the article_body.* wire tools that served it; the article_body node's own outputSchema — and,
+// beyond it, the client's fetched contract — is the only remaining definition of "what a body is".
 const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes();
 export const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [], versions: [], events: [], relationships: [] });
 

@@ -31,7 +31,16 @@ const staleDrLurieConfig = (): ProjectConnectionConfig => ({
   allowedTools: ["ping"]
 });
 
-const validArticleBody = { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", public: { title: "Title", body: "Reader-facing body." } }] };
+// The client-shaped envelope the article_body node emits — validateHandoff now checks it against the
+// node's OWN outputSchema (R-6/R-23 deleted the workspace-local {schema_version, nodes} monolith).
+const validArticleBody = {
+  artifact: "article_body.v1",
+  summary: "Reader-facing body.",
+  clientProjectId: "dr-lurie",
+  clientObjectType: "content_item",
+  contractSource: { tool: "object_contract", fetchedAt: "2026-07-16T00:00:00.000Z" },
+  body: { slug: "example", title: "Title", nodes: [{ id: "n_x", kind: "content", public: { title: "Title", body: "Reader-facing body." } }] }
+};
 
 describe("project registry + Dr. Lurie definition", () => {
   it("memory project registry lists dr-lurie by default", async () => {

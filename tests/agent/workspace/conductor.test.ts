@@ -58,7 +58,11 @@ describe("getRunContext", () => {
 
     const context = await getRunContext({ runId: "run_ctx", projectId: "dr-lurie", projectRepository, cache });
     expect(context.projectContract.canonicalArticleBody).toBe("article_body.v1");
-    expect((context.articleBodySchema as { properties: { nodes: unknown } }).properties.nodes).toBeDefined();
+    // The bundle carries the article_body node's OWN outputSchema (the client-shaped envelope) —
+    // never the deleted workspace-local {schema_version, nodes} monolith.
+    const articleBodySchema = context.articleBodySchema as { required: string[]; properties: Record<string, unknown> };
+    expect(articleBodySchema.required).toEqual(["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"]);
+    expect(articleBodySchema.properties).not.toHaveProperty("schema_version");
     expect(context.projectToolPolicy.defaultToolPolicy).toBe("allowed");
     expect(context.objectContracts).not.toBeNull();
     expect(context.registry.map((entry) => entry.id)).toContain("article_body");

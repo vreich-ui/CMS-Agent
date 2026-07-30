@@ -89,7 +89,6 @@ export type WorkspaceExport = {
 };
 
 export type WorkspaceDocument = WorkspaceExport;
-export type ArticleBodySchema = RJSFSchema;
 
 // UI mirrors of the S1 relationship model (src/agent/workspace/relationshipTypes.ts). Execution
 // edges are never stored — they are derived from node.dependsOn server-side.
@@ -163,19 +162,6 @@ export type ToolEnvelope<T> = {
   ok: boolean;
   data?: T;
   error?: unknown;
-};
-
-export type ValidationIssue = {
-  path?: Array<string | number>;
-  message?: string;
-  code?: string;
-  [key: string]: unknown;
-};
-
-export type ArticleValidationResult = {
-  valid: boolean;
-  issues: ValidationIssue[];
-  articleBody?: unknown;
 };
 
 export type ConnectionStatusTone = "idle" | "success" | "error";

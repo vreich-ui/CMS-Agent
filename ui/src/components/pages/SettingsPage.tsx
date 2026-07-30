@@ -1,7 +1,5 @@
 import { ConnectionPanel } from "../ConnectionPanel";
 import { AppearanceSettings } from "../AppearanceSettings";
-import { SchemaViewer } from "../SchemaViewer";
-import { Validator } from "../Validator";
 import { UsagePanel } from "../UsagePanel";
 import type { ConnectionMode, ControlPlane, McpConnection } from "../../connection";
 import type { McpClient } from "../../mcp/client";
@@ -65,15 +63,6 @@ export function SettingsPage({ connection, client, token, controlPlane, cloudRun
       onError(error);
     }
   };
-  const validateArticleBody = async (articleBody: unknown) => {
-    try {
-      const result = await workspace.validateArticleBody(articleBody);
-      onStatus({ tone: result.valid ? "success" : "error", message: result.valid ? "Article body is valid." : "Article body has validation issues." });
-    } catch (error) {
-      onError(error);
-    }
-  };
-
   return <section className="tab-panel" aria-label="Settings">
     <section className="panel settings-connection" aria-label="Connection settings">
       <div className="panel-heading"><div><h2>Connection</h2><p className="muted">Choose how the workspace talks to the MCP server. Tokens are redacted from errors and never rendered.</p></div>{isDeployedMode && session?.email && <div className="session-card"><span>Signed in as <strong>{session.email}</strong></span><button onClick={onLogout}>Log out</button></div>}</div>
@@ -85,9 +74,7 @@ export function SettingsPage({ connection, client, token, controlPlane, cloudRun
     <section className="support-grid">
       <section className="panel"><div className="panel-heading"><div><h2>Workspace exchange</h2><p className="muted">Export the current MCP workspace document for review or handoff.</p></div><button onClick={exportWorkspace}>Export</button></div><pre>{workspace.exportedWorkspace ? pretty(workspace.exportedWorkspace) : "Export the workspace to view the current MCP document."}</pre></section>
       <RepositoryDiagnostics health={workspace.repositoryHealth} onRefresh={refreshRepositoryHealth} />
-      <section className="panel"><h2>article_body schema</h2><p className="muted">Reference schema used by validation and article body checks.</p><SchemaViewer schema={workspace.articleSchema} emptyMessage="Load the workspace to fetch article_body.get_schema." /></section>
     </section>
-    <Validator articleSchema={workspace.articleSchema} articleJson={workspace.articleJson} articleFormData={workspace.articleFormData} validation={workspace.validation} onArticleJsonChange={workspace.setArticleJson} onArticleFormDataChange={workspace.setArticleFormData} onValidateArticleBody={validateArticleBody} onJsonParseError={() => onStatus({ tone: "error", message: "JSON input is not valid JSON." })} />
     <UsagePanel summary={modelUsage.summary} budgetStatus={modelUsage.budgetStatus} budgetUsd={modelUsage.budgetUsd} recordCount={modelUsage.records.length} loading={modelUsage.loading} activeRunId={activeRunId} onBudgetUsdChange={modelUsage.setBudgetUsd} onRefresh={() => void modelUsage.refreshUsage().catch(onError)} />
   </section>;
 }

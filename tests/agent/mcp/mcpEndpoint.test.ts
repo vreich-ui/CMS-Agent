@@ -14,26 +14,22 @@ const call = async (body: unknown, token = "test-token") => {
   return { ...response, json: response.body ? JSON.parse(response.body) : undefined };
 };
 
+// The client-shaped envelope the article_body node actually emits — its own outputSchema is the one
+// remaining definition of "what a body is" (R-6 / R-23 deleted the workspace-local monolith).
 const validArticleBody = {
-  schema_version: "article_body.v1",
-  nodes: [
-    {
-      id: "n_Example",
-      kind: "content",
-      public: {
-        title: "Example title",
-        body: "Visible reader-facing body copy."
-      }
-    }
-  ]
+  artifact: "article_body.v1",
+  summary: "Reader-facing example body.",
+  clientProjectId: "dr-lurie",
+  clientObjectType: "content_item",
+  contractSource: { tool: "object_contract", fetchedAt: "2026-07-16T00:00:00.000Z" },
+  body: { slug: "example", title: "Example title", nodes: [{ id: "n_Example", kind: "content", public: { title: "Example title", body: "Visible reader-facing body copy." } }] }
 };
 
-const validateArticleBody = (articleBody: unknown, id = 50) => call({
-  jsonrpc: "2.0",
-  id,
-  method: "tools/call",
-  params: { name: "article_body.validate", arguments: { articleBody } }
-});
+// The deleted workspace-local monolith shape, kept only to assert it is refused everywhere.
+const legacyArticleBody = {
+  schema_version: "article_body.v1",
+  nodes: [{ id: "n_Example", kind: "content", public: { title: "Example title", body: "Visible reader-facing body copy." } }]
+};
 
 describe("mcp endpoint", () => {
   beforeEach(() => {
@@ -127,207 +123,48 @@ describe("mcp endpoint", () => {
     expect(response.json.result.structuredContent.data.node.prompt).toBe("New prompt");
   });
 
-  it("validates canonical article_body.v1 bodies", async () => {
-    const response = await call({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "article_body.validate", arguments: { articleBody: validArticleBody } } });
-    expect(response.json.result.structuredContent.data.valid).toBe(true);
+  // R-6: the article_body.* wire tools served the deleted workspace-local {schema_version, nodes}
+  // monolith — a drifted local copy the article_body node itself rejects. They are retired outright,
+  // not aliased: the node's own outputSchema is served by node.get_output_schema and enforced by
+  // node.validate_output, and the client's own validator is the authority beyond it.
+  it("no longer advertises or resolves the retired article_body.* tools", async () => {
+    const listed = await call({ jsonrpc: "2.0", id: 50, method: "tools/list" });
+    const names = listed.json.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).not.toContain("article_body_validate");
+    expect(names).not.toContain("article_body_get_schema");
+
+    for (const name of ["article_body.validate", "article_body_validate", "article_body.get_schema", "article_body_get_schema"]) {
+      const response = await call({ jsonrpc: "2.0", id: 51, method: "tools/call", params: { name, arguments: {} } });
+      expect(response.json.error?.message ?? "").toMatch(/Unknown tool/);
+    }
   });
 
-  it.each(["n_A1b2C3", "n_test123"])("accepts valid node id %s", async (nodeId) => {
-    const response = await validateArticleBody({
-      schema_version: "article_body.v1",
-      nodes: [{ id: nodeId, kind: "content", public: { title: "Valid node" } }]
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(true);
-  });
-
-  it.each(["abc123", ""])("rejects invalid node id %s", async (nodeId) => {
-    const response = await validateArticleBody({
-      schema_version: "article_body.v1",
-      nodes: [{ id: nodeId, kind: "content", public: { title: "Invalid node" } }]
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it("rejects article_body.v1 bodies with empty nodes", async () => {
-    const response = await call({ jsonrpc: "2.0", id: 51, method: "tools/call", params: { name: "article_body.validate", arguments: { articleBody: { schema_version: "article_body.v1", nodes: [] } } } });
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it("rejects invalid node kind", async () => {
-    const response = await validateArticleBody({
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_InvalidKind", kind: "section", public: { title: "Invalid kind" } }]
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it("rejects empty public node content", async () => {
-    const response = await validateArticleBody({
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_EmptyPublic", kind: "content", public: {} }]
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it.each([
-    { ctaText: "Read more" },
-    { ctaLink: "https://example.com/read-more" }
-  ])("rejects incomplete CTA fields %#", async (publicFields) => {
-    const response = await validateArticleBody({
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_Cta", kind: "action", public: publicFields }]
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it("rejects empty media objects", async () => {
-    const response = await validateArticleBody({
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_EmptyMedia", kind: "content", public: { media: {} } }]
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it.each(["internal", "hidden"])("rejects article bodies with only %s visibility nodes", async (visibility) => {
-    const response = await validateArticleBody({
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_NotVisible", kind: "content", visibility, public: { title: "Not reader visible" } }]
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it("rejects private node visibility", async () => {
-    const response = await call({
-      jsonrpc: "2.0",
-      id: 53,
-      method: "tools/call",
-      params: {
-        name: "article_body.validate",
-        arguments: {
-          articleBody: {
-            schema_version: "article_body.v1",
-            nodes: [{ id: "n_Private", kind: "content", visibility: "private", public: { title: "Private title" } }]
-          }
-        }
-      }
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it("accepts internal visibility when another node is reader-visible", async () => {
-    const response = await call({
-      jsonrpc: "2.0",
-      id: 54,
-      method: "tools/call",
-      params: {
-        name: "article_body.validate",
-        arguments: {
-          articleBody: {
-            schema_version: "article_body.v1",
-            nodes: [
-              { id: "n_Internal", kind: "content", visibility: "internal", public: { title: "Internal planning title" } },
-              { id: "n_Public", kind: "content", visibility: "public", public: { body: "Reader-facing body." } }
-            ]
-          }
-        }
-      }
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(true);
-  });
-
-  it("accepts supported public media with a materialized image src", async () => {
-    const response = await call({
-      jsonrpc: "2.0",
-      id: 55,
-      method: "tools/call",
-      params: {
-        name: "article_body.validate",
-        arguments: {
-          articleBody: {
-            schema_version: "article_body.v1",
-            nodes: [{ id: "n_Media", kind: "content", public: { media: { type: "image", src: "/media/req_demo/image.jpg", alt: "Example image" } } }]
-          }
-        }
-      }
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(true);
-  });
-
-  it.each([
-    "https://example.com/image.jpg",
-    "http://example.com/image.jpg",
-    "//cdn.example.com/image.jpg",
-    "data:image/png;base64,iVBORw0KGgo="
-  ])("rejects a remote/data image src (%s) that is not materialized by the backend", async (src) => {
-    const response = await validateArticleBody({
-      schema_version: "article_body.v1",
-      nodes: [{ id: "n_Remote", kind: "content", public: { media: { type: "image", src, alt: "Remote image" } } }]
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it("rejects unsupported public media types", async () => {
-    const response = await call({
-      jsonrpc: "2.0",
-      id: 56,
-      method: "tools/call",
-      params: {
-        name: "article_body.validate",
-        arguments: {
-          articleBody: {
-            schema_version: "article_body.v1",
-            nodes: [{ id: "n_Media", kind: "content", public: { media: { type: "document", src: "https://example.com/file.pdf", alt: "Example document" } } }]
-          }
-        }
-      }
-    });
-
-    expect(response.json.result.structuredContent.data.valid).toBe(false);
-  });
-
-  it("exposes JSON Schema constraints matching runtime article_body.v1 validation", async () => {
-    const response = await call({ jsonrpc: "2.0", id: 57, method: "tools/call", params: { name: "article_body.get_schema", arguments: {} } });
+  it("serves the article_body node's own outputSchema via node.get_output_schema, not a workspace-local article schema", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 57, method: "tools/call", params: { name: "node.get_output_schema", arguments: { nodeId: "article_body" } } });
     const schema = response.json.result.structuredContent.data.schema;
-    const nodeSchema = schema.properties.nodes.items;
-    const publicSchema = nodeSchema.properties.public;
-    const mediaSchema = publicSchema.properties.media;
-
-    expect(schema.properties.schema_version.const).toBe("article_body.v1");
-    expect(nodeSchema.properties.id.pattern).toBe("^n_[A-Za-z0-9]+$");
-    expect(nodeSchema.properties.visibility.enum).toEqual(["public", "internal", "hidden"]);
-    expect(nodeSchema.properties.kind.enum).toEqual(["content", "action", "placement", "interactive"]);
-    expect(publicSchema.anyOf).toEqual(expect.arrayContaining([{ required: ["title"] }, { required: ["body"] }, { required: ["media"] }]));
-    expect(publicSchema.dependentRequired).toEqual({ ctaText: ["ctaLink"], ctaLink: ["ctaText"] });
-    expect(mediaSchema.required).toEqual(["type"]);
-    expect(mediaSchema.anyOf).toEqual([{ required: ["src"] }, { required: ["artifactReference"] }, { required: ["embed"] }]);
-    expect(mediaSchema.properties.type.enum).toEqual(["image", "video", "audio", "embed"]);
+    expect(schema.required).toEqual(["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"]);
+    expect(schema.properties.artifact.const).toBe("article_body.v1");
+    // The deleted monolith's discriminator must not resurface.
+    expect(schema.properties).not.toHaveProperty("schema_version");
   });
 
-  it("rejects markdown-first article objects", async () => {
-    const response = await call({ jsonrpc: "2.0", id: 52, method: "tools/call", params: { name: "article_body.validate", arguments: { article: { title: "T", bodyMarkdown: "Body", slug: "valid-slug" } } } });
-    expect(response.json.error.code).toBe(-32603);
-    expect(response.json.error.data.error.code).toBe("validation_error");
-  });
-
-  it("validates publish payloads against the full dry-run canonical article body payload schema", async () => {
+  it("validates publish payloads against the article_body node's own outputSchema", async () => {
     const built = await call({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "publish.build_payload", arguments: { articleBody: validArticleBody, target: "preview" } } });
     const valid = await call({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: built.json.result.structuredContent.data.payload } } });
-    const invalid = await call({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: { article: { title: "T", bodyMarkdown: "Body", slug: "valid-slug" }, target: "preview", dryRun: true, builtAt: new Date().toISOString() } } } });
+    const invalid = await call({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "publish.validate_payload", arguments: { payload: { articleBody: legacyArticleBody, target: "preview", dryRun: true, builtAt: new Date().toISOString() } } } });
 
     expect(built.json.result.structuredContent.data.payload.articleBody).toEqual(validArticleBody);
     expect(valid.json.result.structuredContent.data.valid).toBe(true);
+    // The deleted workspace-local monolith is exactly what no longer validates.
     expect(invalid.json.result.structuredContent.data.valid).toBe(false);
+    expect(JSON.stringify(invalid.json.result.structuredContent.data.issues)).toContain("$.artifact is required");
+  });
+
+  it("refuses to build a publish payload from the deleted legacy body shape, naming the missing fields", async () => {
+    const response = await call({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "publish.build_payload", arguments: { articleBody: legacyArticleBody, target: "preview" } } });
+    expect(response.json.error.code).toBe(-32603);
+    expect(JSON.stringify(response.json.error.data)).toContain("invalid_article_body");
+    expect(JSON.stringify(response.json.error.data)).toContain("$.artifact is required");
   });
 
   it("rejects invalid workspace imports before mutating the store", async () => {
