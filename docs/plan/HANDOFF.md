@@ -7,7 +7,7 @@ the next session must know goes here.
 **Rule: a gate check is a command with an expected result. Prose is not a gate check.** If you cannot
 write the call and what it should return, it is context, not a gate — put it under "State".
 
-_Last updated 2026-07-30 after PR #96 (R-6 + R-23 delete half)._
+_Last updated 2026-07-30 after PR #99 (W-4 + W-5)._
 
 ---
 
@@ -130,16 +130,23 @@ its provenance, and `client_object.v1` describes it.
 
 ### Blocking T-3
 
-1. **Client-0 content advertises another client.** `review_aggregator` instructed a Dr. Lurie CTA on a
-   `platform` article and `article_body` correctly copied it. Root cause: `clientProjectId` first
-   appears at `contract_intelligence`, *after* the entire editorial chain, so every editorial node
-   writes blind and defaults to Dr. Lurie. This is W-4, now evidenced rather than theorised. Fixing it
-   in `article_body` would mask an upstream defect.
-2. **`private.strategy` / `private.intent` absent from every block** — not empty, absent.
-   `article_body` cannot carry them through: its `dependsOn` is only `review_aggregator` +
-   `contract_intelligence`, and `review_aggregator` emits prose priorities with no per-block
-   reasoning. The reasoning exists upstream in `narrative_movement` / `angle_strategy` and is
-   discarded. This is W-5.
+1. **W-4 fixed in PR #99 (2026-07-30), unverified live.** The conductor now delivers
+   `clientProjectId` (from `run.projectId`) in EVERY node's input (`executor.ts`); an unresolvable
+   client fails the node with the named `client_project_unresolved` (same contract as
+   `prefetch_object_type_unresolved`); the five branded editorial prompts and the
+   `dr_lurie_dtc_science_editorial` skill (now "Editorial craft") are client-neutral craft in both
+   planes (live v229→v238, skill store v13→v14, then `nodes:update` re-seed); and
+   `contract_intelligence.metadata.projectId` is gone (verified unread — the prefetch uses
+   `run.projectId`). No client was substituted; the Dr. Lurie voice text sits in skill version
+   history awaiting `vox_drlurie_default` (P-2). **The executor half needs a deploy to take effect.**
+2. **W-5 fixed in PR #99 (2026-07-30), unverified live.** `article_body` now depends on
+   `narrative_movement` + `angle_strategy` (requiredInputs in lockstep), so the per-block reasoning
+   arrives in its input instead of being discarded, and its prompt mandates populating
+   contract-declared private annotation fields on every emitted node, enum values strictly from the
+   contract's own enums (confirmed first-hand: `private.strategy` 12 values, `private.intent` 5,
+   `additionalProperties: false`). **The dependency change is topology — it reaches conductor runs
+   only through #99's `nodes.ts` re-seed plus a deploy.** Verification is a fresh platform run
+   checking every block carries `private.strategy`/`private.intent` and no foreign-client CTA.
 
 ### Unmeasured
 
@@ -152,10 +159,11 @@ prefetch is applied in the workflow executor (`executeRunnableNode` gates on
 ### Owed
 
 - **Deploy.** PR #96 is merged but not serving; until it is, agents can still call the two retired
-  validators and the conductor still hands out the old bundle.
-- **`npm run nodes:update`.** `nodes.ts` drifted from live before 2026-07-30 (live prompts edited via
-  MCP 07-29 17:17; last re-seed #80 on 07-28). The re-seed also carries the v226 `article_body` prompt
-  fix, so no hand-edit is needed or wanted.
+  validators and the conductor still hands out the old bundle. #99 raises the stakes: its executor
+  change (clientProjectId delivery + named failure) and the `article_body` topology re-seed reach
+  conductor runs only through a deploy.
+- ~~**`npm run nodes:update`.**~~ Done in #99 (2026-07-30): re-seeded from live v238 via the
+  generator (`--from` a verified live snapshot), `nodes:check` clean against that snapshot.
 - **R-23 rename half** — `article_body.v1` → `client_object.v1`, plus deleting the now-dead
   `canonicalArticleBody` field.
 - **Real pricing in `modelPricingCatalog`** before any further cost-driven decision.
