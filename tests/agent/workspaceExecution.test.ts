@@ -109,6 +109,39 @@ describe("Publishing Conductor dry-run execution", () => {
     expect(records[0].totalTokens).toBe(records[0].inputTokens + records[0].outputTokens);
   });
 
+  // W-4 (run_1785405350649_9u5mjz): client identity is run state the conductor delivers to every
+  // node, not something a prompt may assume. That run — a platform run — produced a Dr. Lurie CTA
+  // because the editorial chain executed with no client identity in its input at all.
+  it("every executed node's input carries the run's clientProjectId", async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    const run = await startDryRun({ executionMode: "mock", projectId: "project-a", input: "Draft this" }, store);
+    const advanced = await completeUntil(run.runId, "article_body", store);
+
+    const executed = advanced.nodes.filter((node) => node.status === "completed" && node.input !== undefined);
+    expect(executed.length).toBeGreaterThan(0);
+    for (const node of executed) {
+      expect(node.input, `node ${node.nodeId} input should carry clientProjectId`).toMatchObject({ clientProjectId: "project-a" });
+    }
+  });
+
+  // W-4: where the client cannot be resolved, the node fails by NAME rather than guessing — the same
+  // contract as prefetch_object_type_unresolved (H2, #95). A blank projectId can only reach this code
+  // through a legacy record or a direct caller (the wire schema requires minLength 1), which is
+  // exactly why the guard lives at dispatch: it protects every node regardless of how the run was minted.
+  it("a run without a resolvable client fails the node with client_project_unresolved", async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    const run = await startDryRun({ executionMode: "mock", projectId: "  ", input: "Draft this" }, store);
+    const advanced = await runNextNode(run.runId, { executionRepository: store });
+
+    expect(advanced.status).toBe("failed");
+    expect(advanced.errors).toContain("input_triage:client_project_unresolved");
+    const node = advanced.nodes.find((candidate) => candidate.nodeId === "input_triage");
+    expect(node?.status).toBe("failed");
+    expect(node?.errors?.[0]).toBe("client_project_unresolved");
+    expect(node?.output).toMatchObject({ error: { code: "client_project_unresolved" } });
+    expect(advanced.stageOutputs.input_triage).toBeUndefined();
+  });
+
   it("no external MCP calls occur", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ executionMode: "mock", projectId: "project-a", input: "Draft this" }, store);

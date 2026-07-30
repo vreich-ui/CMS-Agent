@@ -493,9 +493,33 @@ type PreparedNode = { run: WorkflowExecutionRecord; commit?: () => Promise<void>
 async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: WorkspaceNode, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<PreparedNode> {
   const state = stateById(run).get(nextNode.id) as NodeExecutionState;
   const startedAt = now();
+  // W-4 (run_1785405350649_9u5mjz): a node that cannot resolve its client must fail by name, never
+  // guess. That run — a platform run — had review_aggregator instruct a Dr. Lurie CTA because client
+  // identity reached nodes only via contract_intelligence's output, far downstream of the editorial
+  // chain, and prompts filled the gap with a remembered client. Same contract as
+  // prefetch_object_type_unresolved (contractPrefetch.ts): a distinct code plus prose naming the
+  // remedy, instead of a silently wrong default.
+  const clientProjectId = typeof run.projectId === "string" ? run.projectId.trim() : "";
+  if (!clientProjectId) {
+    const completedAt = now();
+    const message = `Cannot resolve a client for run ${run.runId}: run.projectId is empty, so node ${nextNode.id} would have to guess which client it is building for. Start runs with an explicit projectId (workflow.start_dry_run requires one) rather than relying on a guess.`;
+    state.status = "failed";
+    state.startedAt = startedAt;
+    state.completedAt = completedAt;
+    state.durationMs = duration(startedAt, completedAt);
+    state.errors = ["client_project_unresolved", message];
+    state.output = { error: { code: "client_project_unresolved", message } };
+    run.status = "failed";
+    run.currentNodeId = nextNode.id;
+    run.errors = [...run.errors, `${nextNode.id}:client_project_unresolved`];
+    run.updatedAt = completedAt;
+    return { run };
+  }
   state.status = "running";
   state.startedAt = startedAt;
-  state.input = { initialInput: nextNode.dependsOn.length ? undefined : run.initialInput, dependencies: Object.fromEntries(nextNode.dependsOn.map((dependency) => [dependency, run.stageOutputs[dependency]])) };
+  // W-4: clientProjectId travels in EVERY node's input — client identity is run state, delivered by
+  // the conductor, not something an editorial prompt may assume or a downstream node must reconstruct.
+  state.input = { initialInput: nextNode.dependsOn.length ? undefined : run.initialInput, dependencies: Object.fromEntries(nextNode.dependsOn.map((dependency) => [dependency, run.stageOutputs[dependency]])), clientProjectId };
   run.status = "running";
   run.currentNodeId = nextNode.id;
   run.updatedAt = startedAt;
