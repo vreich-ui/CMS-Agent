@@ -7,7 +7,9 @@
 //   "merged"   — a commit is on main.
 //   "deployed" — the revision serving traffic contains that commit.
 //
-// There is no CI/CD for the MCP image, so those diverge by default. On 2026-07-27 a revision serving
+// Since 2026-07-31 the `cms-agent-mcp-deploy` trigger closes that gap on every push to main
+// (cloudbuild.deploy.yaml verifies the serving image itself); this script remains the manual,
+// endpoint-level check — build-log-independent proof. Historically: on 2026-07-27 a revision serving
 // PRE-R-3 code was mistaken for the merged one for hours, while `repository.get_health` stayed green
 // the whole time — because workspace state lives in GCS and is INDEPENDENT of the revision. Health
 // checks cannot detect a stale deploy, and nothing else was looking.

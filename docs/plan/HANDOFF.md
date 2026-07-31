@@ -25,10 +25,13 @@ PASS: served tool surface hashes equal to `docs/mcp-tool-manifest.json`, endpoin
 every project. As of PR #96 the manifest is **135 tools**; a live count of 137 means the pre-#96
 revision is still serving.
 
-FAIL: a stale revision is serving. **Merging is not deploying** — there is no CI/CD for the MCP image.
-Deploy with `scripts/deploy-mcp.sh` and re-run. Never `--set-env-vars`: it replaces the whole
-environment and has silently deleted the six client-connection variables twice while health stayed
-green.
+FAIL: a stale revision is serving. **Main deploys itself**: every push to main runs the
+`cms-agent-mcp-deploy` trigger (`cloudbuild.deploy.yaml` — build → push → deploy → verify), so read
+that build's log first; its verify step fails unless the serving image is the build's own, and
+concurrent builds resolve by commit ancestry (the newest commit's build redeploys itself if an older
+build raced past it — first hit 2026-07-31). Manual fallback remains `scripts/deploy-mcp.sh`. Never
+`--set-env-vars`: it replaces the whole environment and has silently deleted the six
+client-connection variables twice while health stayed green.
 
 ### G2 — Does every publish-capable project have its object dialect?
 
@@ -102,7 +105,10 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
 2. **A blocker recorded once and then cited by later documents acquires the appearance of having been
    verified.** Taught three times: R-3 and the S4 Schemas tab, F-1's "stale fixture" diagnosis, and
    the G2 gate above. Re-derive a claimed dependency from the code before building on it.
-3. **Merging is not deploying.** Confirm the serving revision before concluding a fix shipped.
+3. **Main is live; the build log is the receipt.** Every merge to main deploys via the
+   `cms-agent-mcp-deploy` trigger, whose verify step proves the serving revision. A green merge with
+   a red build means the fix did NOT ship — read the build log, not the merge, to know what is
+   serving.
 4. **Every dollar figure in these docs is an estimate, not a bill.** Every entry in
    `modelPricingCatalog` is `placeholder: true, "not billing-grade."`
 
@@ -168,17 +174,15 @@ prefetch is applied in the workflow executor (`executeRunnableNode` gates on
 
 ### Owed
 
-- **Deploy — now urgent, not just owed.** #96/#99 remain unserved, and the overhaul raises the
-  stakes twice over. First, the live limit-writes **armed a latent bug in the DEPLOYED budget
-  guard**: the old code compares `min(nodeBudgetUsd, runBudgetUsd)` against run-wide accrued spend,
-  so now that every node carries a small `budgetUsd`, any live run under the old deploy starts
-  failing pre-checks the moment cumulative run spend passes a node's own ceiling (~$0.10–0.75).
-  PR #100 fixes the conflation; until it serves, expensive multi-node runs on the live plane will
-  false-trip. Second, none of the new semantics (pre-send gating, heartbeat, bounded tool results,
-  enforced toolCallLimit) exist on the serving revision.
-- **Post-deploy live write** — `article_body`'s live `produces`/`outputSchema` still say
-  `article_body.v1`: the *deployed* graph validator hardcodes that string and refused the rename
-  (chicken-and-egg). The mechanical PR updates the validator; once it serves, write
+- ~~**Deploy.**~~ Automated: pushes to main deploy via the `cms-agent-mcp-deploy` trigger
+  (`cloudbuild.deploy.yaml`). The first day exposed the pipeline's race: #100 (95e2821) and #101
+  (970c414) merged minutes apart, their builds ran concurrently, and the OLDER commit's deploy
+  landed last — the newer build's verify failed loudly, exactly as designed. The release step now
+  resolves concurrent deploys by commit ancestry (newest commit wins; older builds yield). #96/#99/
+  #100/#101 all reach the serving revision with the first green main build after this commit.
+- **Live write, due as soon as the tip's build is green** — `article_body`'s live
+  `produces`/`outputSchema` still say `article_body.v1`: the pre-#101 graph validator hardcoded that
+  string and refused the rename (chicken-and-egg). #101's validator accepts it; once serving, write
   `client_object.v1` to the live node (produces + outputSchema `artifact` const) so the store
   overlay agrees with the seeds. Until that write, the store's `outputSchema` overlay keeps the old
   artifact name authoritative at run time.
