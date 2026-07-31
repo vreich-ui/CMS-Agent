@@ -122,16 +122,22 @@ const fakePlatformCallTool = (opts: { validate?: { valid: boolean; issues: unkno
 };
 
 describe("live publish gates", () => {
-  it("derives the per-project operator env flag name and reads it", () => {
+  it("derives the per-project operator env flag name; policy-enabled by default with an env kill-switch", () => {
     expect(publishEnabledEnvVar(drLurieProjectConfig)).toBe("DR_LURIE_PUBLISH_ENABLED");
-    expect(isProjectPublishEnabled(drLurieProjectConfig, {} as NodeJS.ProcessEnv)).toBe(false);
+    // Go-live 2026-07-31: publishingPolicy.publishEnabled is true by default, so no env flag is needed.
+    expect(isProjectPublishEnabled(drLurieProjectConfig, {} as NodeJS.ProcessEnv)).toBe(true);
     expect(isProjectPublishEnabled(drLurieProjectConfig, { DR_LURIE_PUBLISH_ENABLED: "true" } as NodeJS.ProcessEnv)).toBe(true);
+    // The env flag is now a kill-switch: an explicit "false" forces the project off.
+    expect(isProjectPublishEnabled(drLurieProjectConfig, { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv)).toBe(false);
+    // A policy-disabled config with no env flag stays off.
+    expect(isProjectPublishEnabled({ ...drLurieProjectConfig, publishingPolicy: { ...drLurieProjectConfig.publishingPolicy, publishEnabled: false } }, {} as NodeJS.ProcessEnv)).toBe(false);
   });
 
   it("returns a dry-run plan and performs NO external calls when readiness is GO but gates are unmet", async () => {
     const ctx = await seedRun(textBody);
     const adapter = fakeCallTool();
-    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, readiness: READY }, { ...ctx, env: {} as NodeJS.ProcessEnv, callTool: adapter.fn });
+    // Gates default open at go-live; the env kill-switch is now the way a gate is unmet.
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, readiness: READY }, { ...ctx, env: { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv, callTool: adapter.fn });
 
     expect(result.published).toBe(false);
     expect(result.mode).toBe("dry_run");
@@ -212,17 +218,18 @@ describe("live publish gates", () => {
     expect(adapter.calls).toHaveLength(0);
   });
 
-  it("blocks with a resumable state when the readiness policy is NO-GO (no readiness inputs)", async () => {
+  it("blocks with a resumable state when the readiness policy is NO-GO (approval explicitly withheld)", async () => {
     const ctx = await seedRun(textBody);
     const adapter = fakeCallTool();
-    // Every gate is set, but no readiness inputs were supplied → Dr. Lurie readiness is NO-GO.
-    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+    // Go-live: missing readiness inputs auto-default, so a NO-GO now takes an explicit contradiction —
+    // here the caller explicitly withholds approval.
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: { approval: { pinned: false } } }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
 
     expect(result.mode).toBe("blocked_for_publish_execution");
     expect(adapter.calls).toHaveLength(0);
     if (result.mode === "blocked_for_publish_execution") {
       expect(result.readiness.status).toBe("no_go");
-      expect(result.readiness.blockers).toEqual(expect.arrayContaining(["taxonomy", "pinned_approval", "release_behavior", "hard_artifact_protocol", "hard_legacy_fallbacks"]));
+      expect(result.readiness.blockers).toEqual(["pinned_approval"]);
       expect(result.blocked).toMatchObject({ requestId: REQUEST_ID, nodeAwaitingApproval: "publication_controller", resumable: true });
       expect(typeof result.blocked.requiredAction).toBe("string");
     }
@@ -301,8 +308,9 @@ describe("live publish gates", () => {
 
     const ctx = await seedRun(textBody);
     const adapter = fakeCallTool();
-    // Readiness GO, grant in place, and every publish gate closed.
-    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, readiness: READY }, { ...ctx, env: {} as NodeJS.ProcessEnv, callTool: adapter.fn });
+    // Readiness GO, grant in place, and every publish gate explicitly closed (kill-switch + explicit
+    // approved:false / live:false — the go-live defaults must be actively overridden to close a gate).
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: false, live: false, readiness: READY }, { ...ctx, env: { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv, callTool: adapter.fn });
 
     expect(result.published).toBe(false);
     expect(result.mode).toBe("dry_run");
@@ -318,9 +326,9 @@ describe("live publish gates", () => {
   // single flag — and certainly no tool grant — is load-bearing by itself.
   it("keeps each publish gate independent: any one closed gate is enough to refuse", async () => {
     const combinations = [
-      { name: "operator_enabled", input: { approved: true, live: true }, env: {} as NodeJS.ProcessEnv },
-      { name: "explicit_approval", input: { live: true }, env: ENABLED_ENV },
-      { name: "explicit_live", input: { approved: true }, env: ENABLED_ENV }
+      { name: "operator_enabled", input: { approved: true, live: true }, env: { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv },
+      { name: "explicit_approval", input: { approved: false, live: true }, env: ENABLED_ENV },
+      { name: "explicit_live", input: { approved: true, live: false }, env: ENABLED_ENV }
     ];
     for (const combination of combinations) {
       const ctx = await seedRun(textBody);
@@ -333,7 +341,11 @@ describe("live publish gates", () => {
 
   it("keeps the publish gate set closed and named — nothing else may satisfy a gate", () => {
     expect(__test__.PUBLISH_GATE_NAMES).toEqual(["operator_enabled", "explicit_approval", "explicit_live"]);
-    const gates = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, {} as NodeJS.ProcessEnv);
+    // Go-live: every gate defaults open…
+    const open = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID }, {} as NodeJS.ProcessEnv);
+    expect(open.allPassed).toBe(true);
+    // …and each still closes on its own explicit input, nothing else.
+    const gates = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv);
     expect(gates.allPassed).toBe(false);
     expect(gates.operatorEnabled).toBe(false);
   });
@@ -464,12 +476,14 @@ describe("workflow.publish_run / publish_readiness MCP tools (gated end-to-end)"
   beforeEach(() => { process.env.MCP_API_TOKEN = "test-token"; delete process.env.WORKSPACE_STORE; delete process.env.DR_LURIE_PUBLISH_ENABLED; resetRepositoryManager(); });
   afterEach(() => { delete process.env.MCP_API_TOKEN; delete process.env.DR_LURIE_PUBLISH_ENABLED; resetRepositoryManager(); });
 
-  it("advertises both tools; a GO readiness with no operator flag yields a dry-run plan", async () => {
+  it("advertises both tools; a GO readiness with the operator kill-switch set yields a dry-run plan", async () => {
     const listed = await handler({ httpMethod: "POST", headers: { authorization: "Bearer test-token" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     const names = JSON.parse(listed.body ?? "{}").result.tools.map((tool: { name: string }) => tool.name);
     expect(names).toEqual(expect.arrayContaining(["workflow_publish_run", "workflow_publish_readiness"]));
 
     const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
+    // Go-live: publishing defaults on, so the dry-run posture takes the env kill-switch.
+    process.env.DR_LURIE_PUBLISH_ENABLED = "false";
     const publish = (await data("workflow.publish_run", { runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY })).publish;
     expect(publish.mode).toBe("dry_run");
     expect(publish.readiness.status).toBe("go");
@@ -483,7 +497,8 @@ describe("workflow.publish_run / publish_readiness MCP tools (gated end-to-end)"
     expect(go).toMatchObject({ available: true, articleBodyValid: true });
     expect(go.readiness.status).toBe("go");
 
-    const noGo = (await data("workflow.publish_readiness", { projectId: "dr-lurie", runId })).readiness;
+    // Go-live: absent inputs auto-default, so NO-GO takes an explicit contradiction.
+    const noGo = (await data("workflow.publish_readiness", { projectId: "dr-lurie", runId, readiness: { approval: { pinned: false } } })).readiness;
     expect(noGo.readiness.status).toBe("no_go");
     expect(noGo.readiness.state).toBe("blocked_for_publish_execution");
     expect(noGo.readiness.checklist.map((check: { key: string }) => check.key)).toContain("article_body_valid");
