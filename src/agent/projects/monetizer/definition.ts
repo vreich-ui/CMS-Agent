@@ -16,7 +16,7 @@ export const MONETIZER_SAFE_READ_ONLY_TOOLS = [
 // Bumped 1 -> 2 when R-23 removed contentContract.canonicalArticleBody (every definition declared
 // the identical value; the article_body node's own produces const is the single source) so persisted
 // stale configs re-seed without it.
-export const MONETIZER_DEFINITION_VERSION = 2;
+export const MONETIZER_DEFINITION_VERSION = 3;
 
 export const monetizerProjectConfig: ProjectConnectionConfig = {
   projectId: "monetizer",
@@ -30,9 +30,9 @@ export const monetizerProjectConfig: ProjectConnectionConfig = {
     contentContract: "content_source.v1"
   },
   publishingPolicy: {
-    publishEnabled: false,
-    requiresExplicitPublish: true,
-    description: "Publishing is disabled. Enable only behind a future explicit PUBLISH approval gate."
+    publishEnabled: true,
+    requiresExplicitPublish: false,
+    description: "Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off."
   },
   status: "active"
 };
