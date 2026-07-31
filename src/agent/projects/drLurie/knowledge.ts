@@ -11,9 +11,14 @@
 // registry ids an agent is told about cannot drift from the ones the publish hook actually uses.
 
 import { DR_LURIE_OBJECT_DIALECT } from "./definition.js";
+import { DR_LURIE_DOMAIN_CAUTION, DR_LURIE_VOICE_SOURCE } from "./editorialVoice.js";
 
 export const drLurieProjectKnowledge = {
   projectId: "dr-lurie",
+  // Client-owned editorial direction (the node-system overhaul moved this out of the shared node
+  // prompts): Dr. Lurie's voice and health-domain caution live with Dr. Lurie, surfaced on
+  // project.get like every other client rule, and seed the future vox_drlurie_default record (P-2).
+  editorial: { voiceSource: DR_LURIE_VOICE_SOURCE, domainCaution: DR_LURIE_DOMAIN_CAUTION },
   sources: [
     "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/agents/publishing-policy.md",
     "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/cms-architecture/",

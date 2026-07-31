@@ -359,7 +359,9 @@ describe("Dr. Lurie MCP adapter primitives", () => {
     const result = await new ProjectMcpAdapter(drLurieProjectConfig, { env, transport }).testConnection();
 
     expect(result.ok).toBe(false);
-    expect(result.error).toBe("Failed to reach the project MCP endpoint.");
+    // #95 H2 fail-by-name, without leaking: the error carries the failure CLASS name (never a URL
+    // or token) so DNS/TLS/timeout stop being one indistinguishable string.
+    expect(result.error).toMatch(/^client_unreachable \(\w+\): failed to reach the project MCP endpoint/);
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 });

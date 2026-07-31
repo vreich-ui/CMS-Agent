@@ -104,6 +104,7 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   const result = await runner.run({ node: { ...node, prompt: data.promptOverride ?? node.prompt, modelConfig: { ...node.modelConfig, ...data.modelConfig } }, input: state.input }, { run, executionRepository: repos.executionRepository, workspaceRepository: repos.workspaceRepository, suppliedDependencies: data.dependencyOutputs });
   const endedAt = now();
   state.completedAt = endedAt; state.durationMs = duration(startedAt, endedAt);
+  if (result.toolCalls?.length) state.toolCalls = result.toolCalls;
   if (!result.ok) { state.status = "failed"; state.errors = [result.code, result.message]; run.status = "failed"; run.errors = state.errors; }
   else {
     const outputValidation = validateAgainstNodeSchema(result.output, node.outputSchema);

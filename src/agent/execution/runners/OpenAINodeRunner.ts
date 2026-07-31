@@ -1,4 +1,4 @@
-import { Agent, run, tool, Runner } from "@openai/agents";
+import { Agent, run, tool, OpenAIProvider } from "@openai/agents";
 import { recordModelUsage, summarizeModelUsage, estimateModelCost } from "../../observability/modelUsage.js";
 import { buildAgentModel, resolveProvider } from "../providers/providerRegistry.js";
 import { renderPlaybookForPrompt } from "../../improvement/playbook.js";
@@ -8,13 +8,41 @@ import { executeTool } from "../../tools/toolExecutor.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
-import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner.js";
+import type { NodeRunner, NodeRunnerInput, NodeRunnerResult, NodeToolCallRecord } from "./NodeRunner.js";
+import { NodeBudgetExceededError, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
 
 const forbidden = /api[_-]?key|authorization|bearer|jwt|cookie|token|secret|blob.*credential/i;
 const redact = (v: unknown): unknown => typeof v === "string" ? v.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]") : Array.isArray(v) ? v.map(redact) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k,val]) => [k, forbidden.test(k) ? "[REDACTED]" : redact(val)])) : v;
 const numberFrom = (v: unknown) => typeof v === "number" && Number.isFinite(v) ? v : undefined;
 const stringFrom = (v: unknown) => typeof v === "string" && v.trim() ? v.trim() : undefined;
 const cfg = (node: WorkspaceNode) => ({ ...(node.modelConfig ?? {}), ...(node.executionConfig ?? {}) });
+
+// Worst-case output reserved per model turn when a node declares no maxOutputTokens. Every canonical
+// node now declares one (the node-limits audit); this covers ad-hoc/synthetic nodes only.
+const DEFAULT_OUTPUT_TOKEN_RESERVE = 2000;
+
+// Upper bound, in serialized characters, on a single controlled-tool result entering the model
+// conversation. The conversation is re-sent on EVERY subsequent turn, so an unbounded tool result is
+// paid once per remaining turn, not once: run_1785435947311_jl8hl4's artifact_plan reached 386K input
+// tokens for a 3K-char output exactly this way (uncapped stage reads compounding across turns).
+// web.fetch had a byte cap from day one; every other tool result had none. Override with
+// TOOL_RESULT_MAX_CHARS; the truncation is explicit in the payload, never silent.
+export const DEFAULT_TOOL_RESULT_MAX_CHARS = 32000;
+const toolResultMaxChars = () => {
+  const configured = Number(process.env.TOOL_RESULT_MAX_CHARS);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_TOOL_RESULT_MAX_CHARS;
+};
+
+export const boundToolResult = (value: unknown, maxChars: number): unknown => {
+  const serialized = JSON.stringify(value ?? null);
+  if (serialized.length <= maxChars) return value;
+  return {
+    truncated: true,
+    originalChars: serialized.length,
+    note: `Tool result exceeded the ${maxChars}-character bound on what may enter the model conversation. Request something narrower (a specific stage id, a specific object) instead of retrying the same call; rely on inputs already delivered to you where possible.`,
+    preview: serialized.slice(0, maxChars)
+  };
+};
 
 function modelSettings(node: WorkspaceNode) {
   const c = cfg(node); const settings: Record<string, unknown> = { parallelToolCalls: false };
@@ -85,20 +113,19 @@ export class OpenAINodeRunner implements NodeRunner {
     // F2b (T-2, run_1785352838155_l544ye): the run's OWN budgetUsd ceiling was only ever evaluated
     // BETWEEN nodes (advanceRun's budget gate, before dispatch) — nothing inside a node's own turn
     // loop watched it, so a single node's turns could carry the run straight through the ceiling
-    // before the gate got another look. contract_intelligence took the run from $1.60 to $4.17
-    // against a $3 ceiling in one dispatch (139% over). The in-loop guard below now watches
-    // whichever ceiling is tighter — the node's own modelConfig.budgetUsd (rare, node-specific) or
-    // the run's budgetUsd (the common case, set on workflow.start_dry_run) — not just the former.
+    // before the gate got another look. The in-loop guard watches whichever ceiling is tighter — the
+    // node's own modelConfig.budgetUsd (now set on every canonical node) or the run's budgetUsd (set
+    // on workflow.start_dry_run).
     const nodeBudgetUsd = numberFrom(c.budgetUsd);
     const runBudgetUsd = numberFrom(context.run.budgetUsd);
     const budgetUsd = nodeBudgetUsd !== undefined && runBudgetUsd !== undefined ? Math.min(nodeBudgetUsd, runBudgetUsd) : nodeBudgetUsd ?? runBudgetUsd;
-    // Reused below by the in-loop circuit breaker (B3) so a configured budget is only ever queried
-    // once per node execution, not once here and again per turn.
+    const { model, settings } = modelSettings(node);
+    const maxOutputTokens = numberFrom(c.maxOutputTokens) ?? DEFAULT_OUTPUT_TOKEN_RESERVE;
     let priorSpendUsd = 0;
     if (budgetUsd !== undefined) {
       const spent = await summarizeModelUsage({ runId: context.run.runId });
       priorSpendUsd = spent.totalCostUsdEstimate;
-      const reserve = estimateModelCost({ model: stringFrom(c.model) ?? process.env.OPENAI_AGENT_MODEL ?? "gpt-5.5", inputTokens: 1000, outputTokens: numberFrom(c.maxOutputTokens) ?? 1000 });
+      const reserve = estimateModelCost({ model, inputTokens: 1000, outputTokens: maxOutputTokens });
       if (priorSpendUsd + reserve > budgetUsd) return { ok: false, code: "budget_exceeded", message: "Estimated node budget would be exceeded.", details: { spentUsdEstimate: priorSpendUsd, reserveUsdEstimate: reserve, budgetUsd } };
     }
     // Empty allowedTools short-circuits tool resolution: the policy layer denies every tool for
@@ -106,6 +133,14 @@ export class OpenAINodeRunner implements NodeRunner {
     // non-persisted nodes (the improvement judge/reflector) run through this runner without
     // tripping the resolver's unknown-node guard. Behavior for real nodes is unchanged.
     const effective = node.allowedTools.length === 0 ? [] : (await resolveEffectiveToolsForNode(node.id, { runId: context.run.runId, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun })).filter((t) => t.allowed);
+    // toolCallLimit is now enforced as an actual per-execution tool-call cap, not just an input to the
+    // turn budget: nothing previously counted invocations against it, so "toolCallLimit: 5" bounded
+    // nothing. Calls beyond the limit are refused with a named denial the model can read; maxTurns
+    // still bounds how long it can keep trying.
+    const toolCallLimit = numberFrom(c.toolCallLimit);
+    const resultMaxChars = toolResultMaxChars();
+    const toolCalls: NodeToolCallRecord[] = [];
+    let toolCallCount = 0;
     const sdkTools = effective.map((t) => tool({
       name: t.name.replace(/[^A-Za-z0-9_-]/g, "_"),
       description: `${getTool(t.toolId)?.description ?? `Controlled CMS-Agent tool ${t.name}`} All calls are audited through ToolExecutor.`,
@@ -118,14 +153,21 @@ export class OpenAINodeRunner implements NodeRunner {
       parameters: { type: "object", properties: {}, required: [], additionalProperties: true } as any,
       strict: false,
       execute: async (args: unknown) => {
+        toolCallCount += 1;
+        if (toolCallLimit !== undefined && toolCallCount > toolCallLimit) {
+          toolCalls.push({ toolId: t.toolId, status: "denied", errorCode: "tool_call_limit_exceeded" });
+          throw new Error(`tool_denied:tool_call_limit_exceeded: node "${node.id}" has used all ${toolCallLimit} of its allowed tool calls. Emit your structured output now from the inputs and results you already have; further tool calls will also be refused.`);
+        }
+        const startedAt = Date.now();
         const result = await executeTool(t.toolId, redact(args), { runId: context.run.runId, nodeId: node.id, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun });
+        toolCalls.push({ toolId: t.toolId, toolExecutionId: result.toolExecutionId, status: result.ok ? "success" : result.denied ? "denied" : "error", errorCode: result.ok ? undefined : result.denied?.code ?? result.error?.code, durationMs: Date.now() - startedAt });
         // B2 (T-2): forward the actual violation, not just its code. A thrown "tool_failed:validation_error"
         // with nothing else told the model what to change, so it burned its turn budget retrying blind;
         // ToolExecutor now carries a field-path/expected/received message (or denial reasons) for exactly
         // this, and the SDK's default tool-error handler passes a thrown Error's message straight to the
         // model, so this is the one place that detail needs to be attached to reach it.
         if (!result.ok) throw new Error(result.denied ? `tool_denied:${result.denied.code}: ${result.denied.reasons.join(", ")}` : `tool_failed:${result.error?.code ?? "tool_failed"}${result.error?.message ? `: ${result.error.message}` : ""}`);
-        return redact(result.output);
+        return boundToolResult(redact(result.output), resultMaxChars);
       }
     }));
     // Node-scoped ACE playbook replaces the old inject-every-global-observation behavior
@@ -133,10 +175,29 @@ export class OpenAINodeRunner implements NodeRunner {
     // Synthetic improvement nodes have no playbook, so judge prompts stay uncontaminated.
     const playbook = await repositoryManager.getImprovementRepository().getPlaybook(node.id).catch(() => undefined);
     const playbookText = playbook ? renderPlaybookForPrompt(playbook) : "";
-    const { model, settings } = modelSettings(node);
     const outputType = { type: "json_schema" as const, name: `${node.id}_output`, strict: false, schema: node.outputSchema as any };
-    const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, playbookText), model: buildAgentModel(provider, model), modelSettings: settings, tools: sdkTools, outputType });
-    const prompt = JSON.stringify(redact({ input, dependencyOutputs: Object.fromEntries(node.dependsOn.map((d) => [d, context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d]])), ...(playbookText ? { playbook: playbookText } : {}), outputSchema: node.outputSchema }));
+    // Per-model-request budget guard (see budgetGuard.ts). The previous agent_start-hook guard read a
+    // usage object that stays empty during the loop, so its accrued-spend term never grew and
+    // artifact_plan carried a $3 ceiling to 138% in one dispatch. Wrapping the Model itself gates
+    // BEFORE every request with real accumulated usage. The default provider path resolves the model
+    // through the SDK's own OpenAIProvider (same Responses API the bare model-name string uses).
+    const guardState: BudgetGuardState = { accrued: { inputTokens: 0, outputTokens: 0 } };
+    let agentModel = buildAgentModel(provider, model);
+    if (budgetUsd !== undefined) {
+      const innerModel = typeof agentModel === "string" ? await new OpenAIProvider().getModel(agentModel) : agentModel;
+      agentModel = wrapModelWithBudgetGuard(innerModel, { nodeId: node.id, model, budgetUsd, priorSpendUsd, maxOutputTokens }, guardState);
+    }
+    const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, playbookText), model: agentModel, modelSettings: settings, tools: sdkTools, outputType });
+    // Dependency outputs used to be serialized TWICE into every prompt: once inside `input` (the
+    // executor delivers them as input.dependencies) and again as a sibling `dependencyOutputs` key.
+    // For a node like article_body that duplication alone doubled an 18K-char payload on every turn.
+    // The prompt now carries them once, under `dependencyOutputs`, resolved from the delivered input
+    // first and the run's stage outputs otherwise (the single-node path supplies its own).
+    const inputRecord = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
+    const deliveredDependencies = inputRecord?.dependencies && typeof inputRecord.dependencies === "object" ? (inputRecord.dependencies as Record<string, unknown>) : undefined;
+    const { dependencies: _delivered, ...inputSansDependencies } = inputRecord ?? {};
+    const dependencyOutputs = Object.fromEntries(node.dependsOn.map((d) => [d, deliveredDependencies?.[d] ?? context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d]]));
+    const prompt = JSON.stringify(redact({ input: inputRecord ? inputSansDependencies : input, dependencyOutputs, ...(playbookText ? { playbook: playbookText } : {}), outputSchema: node.outputSchema }));
     // F5 (T-2, run_1785352838155_l544ye): draft_writer had NO explicit timeout, defaulted to 60s, and
     // failed with model_timeout on a large brief (300s configured live and it passed). 60s is too
     // tight a default for a single large-output generation call even with zero tool calls — the
@@ -145,56 +206,25 @@ export class OpenAINodeRunner implements NodeRunner {
     const timeoutMs = numberFrom(c.timeout) ?? 120000;
     const maxRetries = Math.max(0, Math.floor(numberFrom(c.retryCount) ?? 0));
     const maxTurns = resolveMaxTurns(c, effective.length);
-    // B3 (T-2): budgetUsd was only ever checked ONCE, before this node's loop started — after that,
-    // nothing looked again until the run's between-node gate noticed afterwards that the ceiling was
-    // blown through (blocked, overBudget, one node having spent the whole thing). A budgeted node now
-    // gets a second gate INSIDE its own loop: a Runner (rather than the bare run() function) is needed
-    // to observe agent_start, which the SDK fires once per model turn with the run's cumulative token
-    // usage so far. If the running total (prior nodes + this node's turns so far) would already clear
-    // the ceiling, the node is aborted via signal before its next turn spends anything more, and
-    // reports a distinct budget_exceeded rather than surfacing as a generic abort or being discovered
-    // only when the run's overall budget gate runs between nodes. Behavior is byte-for-byte unchanged
-    // when no budgetUsd is configured — the plain run() function is still used, exactly as before.
-    let budgetExceededDetails: { spentUsdEstimate: number; budgetUsd: number; nodeId: string; turnUsage: { inputTokens: number; outputTokens: number } } | undefined;
-    let turnSignal = context.signal;
-    let runner: Runner | undefined;
-    if (budgetUsd !== undefined) {
-      const turnController = new AbortController();
-      if (context.signal) {
-        if (context.signal.aborted) turnController.abort();
-        else context.signal.addEventListener("abort", () => turnController.abort(), { once: true });
-      }
-      turnSignal = turnController.signal as any;
-      runner = new Runner();
-      runner.on("agent_start", (runContext: any, _agent: unknown, turnInput?: unknown[]) => {
-        if (turnController.signal.aborted) return;
-        const turnUsage = { inputTokens: runContext.usage?.inputTokens ?? 0, outputTokens: runContext.usage?.outputTokens ?? 0 };
-        const spentSoFar = priorSpendUsd + estimateModelCost({ model, inputTokens: turnUsage.inputTokens, outputTokens: turnUsage.outputTokens });
-        // G4 (T-2 re-run, run_1785405350649_9u5mjz): spentSoFar alone only accounts for turns ALREADY
-        // completed — this event fires BEFORE a turn's own usage is known, so on its own this guard
-        // can only ever stop the turn AFTER the one that actually crosses the ceiling. That is exactly
-        // what let contract_intelligence blow through a $4 ceiling by 118%: fallen back to full
-        // self-discovery (F1's platform prefetch gap), each turn re-sent the whole growing
-        // conversation, and whichever turn's own cost tipped it over had already run by the time the
-        // NEXT turn's check could react. Reserve for the turn about to run too, estimated from the
-        // exact input the SDK is about to send it (turnInput) — the same estimate-then-gate shape the
-        // pre-dispatch check above already uses, just applied at every turn instead of only once.
-        const prospectiveInputTokens = Math.ceil(JSON.stringify(turnInput ?? "").length / 4);
-        const prospectiveReserve = estimateModelCost({ model, inputTokens: prospectiveInputTokens, outputTokens: numberFrom(c.maxOutputTokens) ?? 1000 });
-        if (spentSoFar + prospectiveReserve > budgetUsd) {
-          budgetExceededDetails = { spentUsdEstimate: Number(spentSoFar.toFixed(6)), budgetUsd, nodeId: node.id, turnUsage };
-          turnController.abort();
-        }
-      });
-    }
+    // A failed node's real spend used to vanish: usage was recorded only on the success path, so an
+    // aborted or timed-out node contributed $0 to the run ledger the budget gate reads — hiding
+    // exactly the overshoot it was supposed to stop. The guard accumulates actual usage per model
+    // response; any exit that leaves accrued usage behind records it (best-effort, like the success
+    // path's own telemetry).
+    const recordAccruedUsage = async (failureCode: string): Promise<void> => {
+      const { inputTokens, outputTokens } = guardState.accrued;
+      if (inputTokens === 0 && outputTokens === 0) return;
+      await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, status: "actual", metadata: { executionMode: "openai", partial: true, failureCode } }).catch(() => undefined);
+    };
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const runOnce = runner ? runner.run(agent, prompt, { maxTurns, signal: turnSignal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any) : run(agent, prompt, { maxTurns, signal: turnSignal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any);
+        const runOnce = run(agent, prompt, { maxTurns, signal: context.signal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any);
         const result: any = await Promise.race([runOnce, new Promise((_, rej) => setTimeout(() => rej(new Error("model_timeout")), timeoutMs))]);
         const validated = validateOutput(result.finalOutput, node.outputSchema);
         if (!validated.ok) {
           if (attempt < maxRetries) continue;
-          return { ok: false, code: "output_validation_failed", message: "OpenAI output did not match node.outputSchema.", details: validated.errors };
+          await recordAccruedUsage("output_validation_failed");
+          return { ok: false, code: "output_validation_failed", message: "OpenAI output did not match node.outputSchema.", details: validated.errors, toolCalls };
         }
         const usage = result.rawResponses?.reduce((a: any, r: any) => ({ inputTokens: a.inputTokens + (r.usage?.inputTokens ?? r.usage?.input_tokens ?? 0), outputTokens: a.outputTokens + (r.usage?.outputTokens ?? r.usage?.output_tokens ?? 0), reasoningTokens: a.reasoningTokens + (r.usage?.reasoningTokens ?? r.usage?.output_tokens_details?.reasoning_tokens ?? 0) }), { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
         // Usage token fields only. `actual` marks the NodeRunnerResult.usage (estimated vs actual);
@@ -205,38 +235,44 @@ export class OpenAINodeRunner implements NodeRunner {
         // Telemetry is non-authoritative: the validated output is the deliverable, so a usage-record
         // write failure must never discard a successful node (matches the workflow executor's pattern).
         await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId } }).catch(() => undefined);
-        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length } };
+        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length }, toolCalls };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        // Checked before the generic cancellation/abort branch below: the in-loop circuit breaker
-        // aborts via the same kind of signal a real cancellation would, so the flag it set is the
-        // only way to tell "budget tripped mid-turn" apart from "caller cancelled".
-        if (budgetExceededDetails) {
+        // Checked before the generic cancellation/abort branch below: the guard throws from inside the
+        // model call, and the flag it sets is how "budget tripped mid-loop" stays distinguishable from
+        // "caller cancelled" no matter how the SDK re-wraps the thrown error.
+        if (guardState.exceeded || error instanceof NodeBudgetExceededError) {
+          const details = guardState.exceeded ?? (error as NodeBudgetExceededError).details;
+          await recordAccruedUsage("budget_exceeded");
           return {
             ok: false,
             code: "budget_exceeded",
-            message: `Node "${node.id}" was aborted mid-turn: estimated spend $${budgetExceededDetails.spentUsdEstimate} already meets or exceeds its $${budgetExceededDetails.budgetUsd} budget. Caught inside the agent loop before the next turn, rather than discovered only after the node finished.`,
-            details: { ...budgetExceededDetails, stage: "mid_turn" }
+            message: `Node "${node.id}" stopped before the model turn that would cross its budget: estimated spend $${details.spentUsdEstimate} plus ~$${details.prospectiveTurnUsd} for the upcoming turn exceeds the $${details.budgetUsd} ceiling. Caught inside the agent loop before the turn ran, not after.`,
+            details: { ...details, stage: "mid_loop" },
+            toolCalls
           };
         }
-        if (msg === "model_timeout") return { ok: false, code: "model_timeout", message: "OpenAI node execution timed out." };
+        if (msg === "model_timeout") { await recordAccruedUsage("model_timeout"); return { ok: false, code: "model_timeout", message: "OpenAI node execution timed out.", toolCalls }; }
         // Distinct and actionable: an exhausted turn budget is a configuration problem with one
         // specific fix, not the "the model errored" bucket. Reported as such even on a non-final
         // attempt, because retrying with the same cap can only exhaust it again.
         if (isMaxTurnsExceeded(error, msg)) {
+          await recordAccruedUsage("max_turns_exceeded");
           return {
             ok: false,
             code: "max_turns_exceeded",
             message: `Node "${node.id}" exhausted its agent-loop turn budget (maxTurns ${maxTurns}) with ${effective.length} tool(s) available, before it could emit its structured output. Raise the budget for this node: set modelConfig.maxTurns explicitly, or raise modelConfig.toolCallLimit (turns default to toolCallLimit + ${TURN_HEADROOM} for a tool-using node).`,
-            details: { nodeId: node.id, maxTurns, toolCount: effective.length, toolCallLimit: numberFrom(c.toolCallLimit), configuredMaxTurns: numberFrom(c.maxTurns) }
+            details: { nodeId: node.id, maxTurns, toolCount: effective.length, toolCallLimit: numberFrom(c.toolCallLimit), configuredMaxTurns: numberFrom(c.maxTurns) },
+            toolCalls
           };
         }
-        if (/aborted|cancel/i.test(msg)) return { ok: false, code: "cancelled", message: "OpenAI node execution was cancelled." };
-        if (/tool_denied/.test(msg)) return { ok: false, code: "tool_denied", message: msg };
-        if (/tool_failed/.test(msg)) return { ok: false, code: "tool_failed", message: msg };
-        if (attempt >= maxRetries) return { ok: false, code: "model_error", message: msg };
+        if (/aborted|cancel/i.test(msg)) { await recordAccruedUsage("cancelled"); return { ok: false, code: "cancelled", message: "OpenAI node execution was cancelled.", toolCalls }; }
+        if (/tool_denied/.test(msg)) { await recordAccruedUsage("tool_denied"); return { ok: false, code: "tool_denied", message: msg, toolCalls }; }
+        if (/tool_failed/.test(msg)) { await recordAccruedUsage("tool_failed"); return { ok: false, code: "tool_failed", message: msg, toolCalls }; }
+        if (attempt >= maxRetries) { await recordAccruedUsage("model_error"); return { ok: false, code: "model_error", message: msg, toolCalls }; }
       }
     }
-    return { ok: false, code: "model_error", message: "OpenAI node execution failed." };
+    await recordAccruedUsage("model_error");
+    return { ok: false, code: "model_error", message: "OpenAI node execution failed.", toolCalls };
   }
 }

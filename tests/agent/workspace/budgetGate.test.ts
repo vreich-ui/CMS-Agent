@@ -33,22 +33,31 @@ describe("conductor budget gate", () => {
 
   it("halts before the node that would cross the ceiling; earlier nodes ran, later did not", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    // Measure the deterministic accrued mock cost after two nodes with an un-gated run.
+    // Measure the deterministic accrued mock cost after one and after two nodes with an un-gated run.
     const measure = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this" }, store);
     await runNextNode(measure.runId, { executionRepository: store });
+    const oneNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
     await runNextNode(measure.runId, { executionRepository: store });
     const twoNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
-    expect(twoNodeCost).toBeGreaterThan(0);
+    expect(oneNodeCost).toBeGreaterThan(0);
+    expect(twoNodeCost).toBeGreaterThan(oneNodeCost);
 
-    // Ceiling == cost-after-two-nodes: nodes 1 and 2 run (accrued < ceiling before each), and the
-    // gate halts before node 3 the instant accrued reaches the ceiling.
-    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this", budgetUsd: twoNodeCost }, store);
+    // Every canonical node now declares its own budgetUsd (0.1 for the early intake/strategy nodes),
+    // and the gate RESERVES the next node's declared budget before dispatching it — a run must stop
+    // before the dispatch that would cross the ceiling, not discover the crossing afterwards
+    // (run_1785435947311_jl8hl4 landed at 138% without this). A ceiling strictly between
+    // (oneNodeCost + reserve) and (twoNodeCost + reserve) lets nodes 1 and 2 dispatch and blocks
+    // node 3 on its reservation.
+    const reserve = 0.1;
+    const ceiling = (oneNodeCost + twoNodeCost) / 2 + reserve;
+    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this", budgetUsd: ceiling }, store);
     const run = await drive(gated.runId, store);
 
     expect(run.status).toBe("blocked");
     expect(run.budgetBlock).toBeDefined();
     expect(run.budgetBlock!.nextNodeId).toBe("reader_insight");
     expect(run.budgetBlock!.reason).toMatch(/paused for budget/i);
+    expect(run.budgetBlock!.reason).toMatch(/would cross/i);
     expect(run.currentNodeId).toBe("reader_insight");
     // Earlier nodes ran; the boundary node and everything after it did not.
     expect(run.nodes.find((node) => node.nodeId === "input_triage")!.status).toBe("completed");
@@ -64,10 +73,25 @@ describe("conductor budget gate", () => {
     expect(records.map((record) => record.nodeId).sort()).toEqual(["input_triage", "learning_recorder", "topic_opportunity"]);
 
     // The ledger surfaces the budget view, reusing the same accrued cost figure (no second path).
+    // overBudget is false — the RESERVATION blocked the run before accrued spend ever reached the
+    // ceiling, which is exactly the point — while blocked reports the budget pause.
     const usage = await summarizeModelUsage({ runId: gated.runId });
     const ledger = summarizeRunCost(run, usage);
-    expect(ledger.budget).toMatchObject({ blocked: true, overBudget: true, budgetUsd: twoNodeCost });
+    expect(ledger.budget).toMatchObject({ blocked: true, overBudget: false, budgetUsd: ceiling });
     expect(ledger.budget!.spentUsdEstimate).toBe(usage.totalCostUsdEstimate);
+  });
+
+  it("blocks the very first dispatch when the ceiling cannot even cover that node's declared budget", async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    // input_triage declares budgetUsd 0.1; a $0.05 run ceiling cannot cover it, so nothing runs and
+    // nothing is charged — the honest outcome for a ceiling below the pipeline's smallest reserve.
+    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this", budgetUsd: 0.05 }, store);
+    const run = await drive(gated.runId, store);
+
+    expect(run.status).toBe("blocked");
+    expect(run.budgetBlock!.nextNodeId).toBe("input_triage");
+    expect(run.budgetBlock!.reason).toMatch(/would cross/i);
+    expect(run.nodes.find((node) => node.nodeId === "input_triage")!.status).toBe("queued");
   });
 
   // F3 (T-2, run_1785352838155_l544ye): the budget gate's own reported remedy — "Raise budgetUsd and
@@ -79,10 +103,13 @@ describe("conductor budget gate", () => {
     const store = new RepositoryManager().getExecutionRepository();
     const measure = await startDryRun({ executionMode: "mock", projectId: "budget-proj-2", input: "Draft this" }, store);
     await runNextNode(measure.runId, { executionRepository: store });
+    const oneNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
     await runNextNode(measure.runId, { executionRepository: store });
     const twoNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
 
-    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj-2", input: "Draft this", budgetUsd: twoNodeCost }, store);
+    // Between (oneNodeCost + reserve) and (twoNodeCost + reserve): two nodes dispatch, the third's
+    // reservation blocks (see the halt test above for the arithmetic).
+    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj-2", input: "Draft this", budgetUsd: (oneNodeCost + twoNodeCost) / 2 + 0.1 }, store);
     const blocked = await drive(gated.runId, store);
     expect(blocked.status).toBe("blocked");
     expect(blocked.budgetBlock).toBeDefined();

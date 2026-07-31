@@ -59,18 +59,12 @@ describe("constellation.* MCP tools", () => {
       // absent from defaultProjectConnections, so it never once passed through
       // migrateDefaultProjectConfig — it now joins the other three default projects here, and in a
       // test environment (no PLATFORM_MCP_ENDPOINT/TOKEN) is honestly reported unconfigured too.
-      "attn_project_unconfigured_platform",
-      // These two are back, but for a NEW and correct reason — not the old regression. dr_lurie_
-      // contract_intelligence now requests project.call_read_tool (the no-approval discovery split),
-      // and publication_controller / publish_executor deliberately do NOT grant it — they stay
-      // write-variant-only (project.call_tool), per the split's design: those two nodes never do
-      // discovery, only an approved write. The denial reason is node_tool_not_allowed, a genuine
-      // "the node doesn't grant what its skill asks for" signal, not approval_required (the gate
-      // working as designed, which R-5's isMisconfiguration filter still suppresses). Both items are
-      // warning-severity and expected; project.call_tool itself still resolves allowed pending
-      // approval on both nodes, unaffected by this split.
-      "attn_skill_requests_denied_tool_publication_controller",
-      "attn_skill_requests_denied_tool_publish_executor"
+      "attn_project_unconfigured_platform"
+      // The two attn_skill_requests_denied_tool_* items for publication_controller /
+      // publish_executor are GONE, deliberately (node-system overhaul): the contract skill whose
+      // instructions request project.call_read_tool is no longer assigned to the publish-risk
+      // nodes at all — the mismatch was the assignment, not the lock. The nodes keep their
+      // approval-gated project.call_tool grant unchanged and still deny project.call_read_tool.
     ]);
     // Nothing blocker-severity. Before the skills were re-seeded alongside the nodes there were thirteen.
     expect(attention.filter((item) => item.id.startsWith("attn_skill_blocker_"))).toEqual([]);

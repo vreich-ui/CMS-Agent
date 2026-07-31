@@ -6,6 +6,20 @@
 export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled"] as const;
 export type ExecutionStatus = typeof executionStatuses[number];
 
+// Per-call audit stub for the controlled-tool calls a node execution made. ToolExecutor's full audit
+// records live in process memory and die with the serverless invocation (why tool.list_executions
+// returned [] for every past conductor run); these stubs are persisted with the node state so a run's
+// tool activity is diagnosable after the fact — metadata only, never payloads.
+export type NodeToolCallRecord = { toolId: string; toolExecutionId?: string; status: "success" | "denied" | "error"; errorCode?: string; durationMs?: number };
+
+// Stamped by the executor's claim-save at the moment a node is handed to a runner, BEFORE the model
+// loop starts. This is the run record's heartbeat: while a node is genuinely in flight the persisted
+// record shows it "running" with this marker, and once now() has passed dispatchedAt + timeoutMs +
+// margin the driver provably died mid-node (the runner's own timeout would have finished it first) —
+// which is how an operator tells "stalled" from "working" instead of watching status:"running"
+// forever. A stale dispatch is reclaimed to queued on the next advance, so the run stays resumable.
+export type NodeDispatchClaim = { dispatchedAt: string; timeoutMs: number };
+
 export type NodeExecutionState = {
   nodeId: string;
   status: ExecutionStatus;
@@ -17,6 +31,8 @@ export type NodeExecutionState = {
   errors?: string[];
   warnings?: string[];
   produces?: string[];
+  toolCalls?: NodeToolCallRecord[];
+  dispatch?: NodeDispatchClaim;
 };
 
 // R-18 — `pending` distinguishes the two moments a publish gate is knowable:

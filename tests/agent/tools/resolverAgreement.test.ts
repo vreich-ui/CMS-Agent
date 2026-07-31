@@ -9,8 +9,12 @@ import { resetRepositoryManager } from "../../../src/agent/runtime/repositories.
 // ladder, and requiresApproval) and said approval_required. Both were "the answer" depending on
 // which tool you asked. There is now one implementation and the other delegates to it.
 const NODES_THAT_DISAGREED = ["article_body", "contract_intelligence", "publish_payload", "artifact_plan"];
-// Both publish-risk nodes now hold the grant too, so they belong in the same agreement check.
-const ALL_CALL_TOOL_NODES = [...NODES_THAT_DISAGREED, "publication_controller", "publish_executor"];
+// The two publish-risk nodes hold the project.call_tool GRANT but no longer carry the contract
+// skill (node-system overhaul): the skill's instructions center on project.call_read_tool
+// discovery, which those nodes rightly deny — the standing "skill requests a tool the node denies"
+// warnings were resolved by unassigning the mismatched skill, not by widening the nodes' grants.
+const SKILL_BEARING_CALL_TOOL_NODES = NODES_THAT_DISAGREED;
+const PUBLISH_RISK_GRANT_ONLY_NODES = ["publication_controller", "publish_executor"];
 
 describe("one authority for whether a node may reach a tool", () => {
   const call = async (name: string, args: Record<string, unknown> = {}) => {
@@ -22,7 +26,7 @@ describe("one authority for whether a node may reach a tool", () => {
   afterEach(() => { delete process.env.MCP_API_TOKEN; resetRepositoryManager(); });
 
   it("skill.resolve_for_node and node.get_effective_tools agree on project.call_tool for every node that requests it", async () => {
-    for (const nodeId of ALL_CALL_TOOL_NODES) {
+    for (const nodeId of SKILL_BEARING_CALL_TOOL_NODES) {
       const policy = (await data("skill.resolve_for_node", { nodeId })).policy as { effectiveTools: string[]; requestedTools: string[]; deniedTools: string[] };
       const tools = (await data("node.get_effective_tools", { nodeId })).tools as { toolId: string; allowed: boolean }[];
       const toolVerdict = tools.find((tool) => tool.toolId === "project.call_tool")?.allowed;
@@ -33,10 +37,23 @@ describe("one authority for whether a node may reach a tool", () => {
     }
   });
 
+  it("publish-risk nodes keep the call_tool grant with NO skill assuming capabilities they deny", async () => {
+    for (const nodeId of PUBLISH_RISK_GRANT_ONLY_NODES) {
+      const policy = (await data("skill.resolve_for_node", { nodeId })).policy as { requestedTools: string[] };
+      const tools = (await data("node.get_effective_tools", { nodeId })).tools as { toolId: string; allowed: boolean }[];
+      // No assigned skill means no skill-requested tools — the "skill requests a tool the node
+      // denies" warning class cannot occur on the publish gate anymore.
+      expect(policy.requestedTools, `${nodeId} must carry no skill-requested tools`).toEqual([]);
+      // The node's own grant is unchanged and still behind the per-run approval gate.
+      expect(tools.find((tool) => tool.toolId === "project.call_tool")?.allowed, `${nodeId} keeps the approval-gated grant`).toBe(false);
+    }
+  });
+
   it("names WHY a tool was denied, so an approval gate is not mistaken for a misconfiguration", async () => {
-    const policy = (await data("skill.resolve_for_node", { nodeId: "publish_executor" })).policy as { deniedTools: string[]; deniedToolReasons: Record<string, string[]> };
-    // publish_executor now carries the grant, so node_tool_not_allowed is gone; what remains is the
-    // per-run approval requirement, which is the gate working, not a workspace defect.
+    // publish_payload carries both the grant and the contract skill that requests project.call_tool,
+    // so it is where the approval denial must be named (the publish-risk nodes no longer carry the
+    // skill at all — see the previous test).
+    const policy = (await data("skill.resolve_for_node", { nodeId: "publish_payload" })).policy as { deniedTools: string[]; deniedToolReasons: Record<string, string[]> };
     expect(policy.deniedTools).toContain("project.call_tool");
     expect(policy.deniedToolReasons["project.call_tool"]).toEqual(["approval_required"]);
     expect(policy.deniedToolReasons["project.call_tool"]).not.toContain("node_tool_not_allowed");

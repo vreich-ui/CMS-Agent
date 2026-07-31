@@ -23,9 +23,15 @@ export function toConnectionState(config: ProjectConnectionConfig, env: NodeJS.P
 }
 
 // McpClientError messages are our own safe constants; any other error (network/DNS/URL) is collapsed
-// to a generic message so an endpoint that embeds credentials can never leak through an error string.
-const sanitizeError = (error: unknown): string =>
-  error instanceof McpClientError ? error.message : "Failed to reach the project MCP endpoint.";
+// so an endpoint that embeds credentials can never leak through an error string. The collapse keeps
+// the error's NAME (#95 H2's fail-by-name standard — an error class name never contains a URL or
+// token): "client_unreachable (TypeError)" tells a caller it was transport, not policy, and what kind,
+// where the old single generic string made DNS failure, TLS failure, and timeout indistinguishable.
+const sanitizeError = (error: unknown): string => {
+  if (error instanceof McpClientError) return error.message;
+  const name = error instanceof Error ? error.name : typeof error;
+  return `client_unreachable (${name}): failed to reach the project MCP endpoint. The endpoint/token environment variables may be unset in this deployment, the client server may be down, or the network path blocked — project.test_connection isolates which.`;
+};
 
 export type ProjectAdapterDeps = { env?: NodeJS.ProcessEnv; transport?: McpTransport };
 export type SafeToolInfo = { name: string; description?: string };

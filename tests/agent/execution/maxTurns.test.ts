@@ -46,6 +46,11 @@ describe("agent-loop turn budget (resolveMaxTurns)", () => {
     const research = listWorkspaceNodes().find((node) => node.id === "research")!;
     const config = { ...(research.modelConfig ?? {}) } as Record<string, unknown>;
     expect(research.allowedTools).toEqual(expect.arrayContaining(["web.search", "web.fetch"]));
-    expect(resolveMaxTurns(config, research.allowedTools.length)).toBeGreaterThan(12);
+    // The node-limits audit made research's turn budget explicit (maxTurns 12 over toolCallLimit 8):
+    // the invariant is unchanged — the turn budget must clear the tool-call allowance with room for
+    // the output turn — the numbers are just declared now instead of derived.
+    expect(typeof config.maxTurns).toBe("number");
+    expect(typeof config.toolCallLimit).toBe("number");
+    expect(resolveMaxTurns(config, research.allowedTools.length)).toBeGreaterThan(config.toolCallLimit as number);
   });
 });

@@ -65,6 +65,11 @@ export const runModeSummary = (run: Pick<WorkflowExecutionRecord, "executionMode
 // an operator pause apart from a publish hold.
 const TERMINAL_STATUSES = new Set<ExecutionStatus>(["blocked", "cancelled", "completed", "failed", "paused"]);
 const MAX_SAVE_RETRIES = 5;
+// Grace period past a dispatched node's own timeout before the dispatch is considered dead. The
+// runner's Promise.race timeout ends a live node at timeoutMs, so a "running" claim older than
+// timeoutMs + this margin means the driver process was killed mid-node (the ~300s serverless
+// ceiling), not that work is still happening.
+export const STALL_MARGIN_MS = 90_000;
 const now = () => new Date().toISOString();
 const makeRunId = () => `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const duration = (startedAt?: string, endedAt = now()) => startedAt ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt)) : undefined;
@@ -311,6 +316,62 @@ function withRunLock<T>(runId: string, task: () => Promise<T>): Promise<T> {
 
 export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean };
 
+// The dispatched node's effective execution timeout — the same resolution the runner applies
+// (modelConfig/executionConfig.timeout, else the 120s default) — so the dispatch claim written to the
+// run record describes exactly how long a live execution could possibly take.
+const nodeTimeoutMs = (node: WorkspaceNode): number => {
+  const merged = { ...(node.modelConfig ?? {}), ...(node.executionConfig ?? {}) } as Record<string, unknown>;
+  const timeout = merged.timeout;
+  return typeof timeout === "number" && Number.isFinite(timeout) ? timeout : 120_000;
+};
+
+const nodeBudgetUsdOf = (node: WorkspaceNode): number | undefined => {
+  const merged = { ...(node.modelConfig ?? {}), ...(node.executionConfig ?? {}) } as Record<string, unknown>;
+  return typeof merged.budgetUsd === "number" && Number.isFinite(merged.budgetUsd) ? merged.budgetUsd : undefined;
+};
+
+// Operator-facing liveness verdict for a run, computed purely from the persisted record. Two stall
+// shapes exist and both used to be invisible (status "running" forever, nothing in flight):
+//   1. mid-node death — a node carries a dispatch claim, status "running", and the claim is older
+//      than its own timeout + margin: the driver was killed while the node executed;
+//   2. between-node death — status "running", no node in flight, and updatedAt is old: the driver was
+//      killed after a node's save but before the next dispatch.
+// Both are resumable: the next advance (workflow.run_next_node / run_until / run_all, or the
+// conductor job with --run) reclaims a stale dispatch and continues from persisted state.
+export type RunStallInfo = {
+  inFlightNodeId?: string;
+  dispatchedAt?: string;
+  timeoutMs?: number;
+  stalledSuspected: boolean;
+  advice?: string;
+};
+
+export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date()): RunStallInfo | undefined {
+  if (run.status !== "running") return undefined;
+  const inFlight = run.nodes.find((node) => node.status === "running" && node.dispatch);
+  if (inFlight) {
+    const deadline = Date.parse(inFlight.dispatch!.dispatchedAt) + inFlight.dispatch!.timeoutMs + STALL_MARGIN_MS;
+    const stalled = at.getTime() > deadline;
+    return {
+      inFlightNodeId: inFlight.nodeId,
+      dispatchedAt: inFlight.dispatch!.dispatchedAt,
+      timeoutMs: inFlight.dispatch!.timeoutMs,
+      stalledSuspected: stalled,
+      advice: stalled
+        ? `Node ${inFlight.nodeId} was dispatched at ${inFlight.dispatch!.dispatchedAt} with a ${inFlight.dispatch!.timeoutMs}ms timeout and never reported back — the driver process died mid-node. Nothing is in flight. Advance the run (workflow.run_until / run_next_node, or the conductor job with --run) to reclaim the stale dispatch and continue.`
+        : `Node ${inFlight.nodeId} is in flight within its timeout window; no action needed yet.`
+    };
+  }
+  const idleMs = at.getTime() - Date.parse(run.updatedAt);
+  const stalled = idleMs > STALL_MARGIN_MS;
+  return {
+    stalledSuspected: stalled,
+    advice: stalled
+      ? `Run status is "running" but no node is in flight and the record has not been touched for ${Math.round(idleMs / 1000)}s — the driver died between nodes. State is persisted and resumable: advance the run to continue.`
+      : undefined
+  };
+}
+
 export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository): Promise<WorkflowExecutionRecord> {
   return store.createRun(buildInitialRun(data, await resolveConductorNodes(workspaceRepository)));
 }
@@ -423,6 +484,24 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     if (TERMINAL_STATUSES.has(run.status)) return run;
 
     const nodes = await resolveConductorNodes(options.workspaceRepository);
+    // Dispatch-claim bookkeeping (the ~300s silent-death fix). A node persisted as "running" either
+    // IS running somewhere (another driver, within its claim window) — in which case advancing here
+    // would double-dispatch it — or its driver died mid-node and the claim has expired, in which case
+    // the node is reclaimed to queued so the run is resumable instead of stuck "running" forever.
+    const inFlight = run.nodes.find((node) => node.status === "running" && node.dispatch);
+    if (inFlight) {
+      const deadline = Date.parse(inFlight.dispatch!.dispatchedAt) + inFlight.dispatch!.timeoutMs + STALL_MARGIN_MS;
+      if (Date.now() <= deadline) return run;
+      inFlight.status = "queued";
+      delete inFlight.startedAt;
+      delete inFlight.completedAt;
+      delete inFlight.durationMs;
+      delete inFlight.output;
+      delete inFlight.errors;
+      delete inFlight.dispatch;
+      inFlight.warnings = [...(inFlight.warnings ?? []), "stale_dispatch_reclaimed"];
+      run.updatedAt = now();
+    }
     const nextNode = findNextRunnableNode(run, nodes);
     try {
       if (!nextNode) {
@@ -435,14 +514,20 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
         await reflectOnCompletedRun(completed, store, options);
         return await recordTerminationObservations(completed, nodes, store, options);
       }
-      // Budget gate (F2): before dispatching the next node, halt the run if its accrued
-      // (actual+estimated) model cost has reached the configured per-run ceiling. The pending node
-      // stays queued — never partially charged — so raising budgetUsd and resuming continues here.
-      // Default OFF: with no budgetUsd configured the gate is skipped entirely (no extra read).
+      // Budget gate (F2, hardened after run_1785435947311_jl8hl4 landed at 138%): before dispatching
+      // the next node, halt the run when accrued (actual+estimated) model cost has reached the
+      // ceiling — OR when accrued cost plus the next node's own declared budgetUsd would cross it.
+      // The reservation is what makes "a run must stop before the dispatch that would cross the
+      // ceiling" true: previously a run at $2.2 of a $3 ceiling could legally dispatch a node whose
+      // own budget allowed another $0.75, and the ceiling could only be defended mid-node. The
+      // pending node stays queued — never partially charged — so raising budgetUsd and resuming
+      // continues here. Default OFF: with no run budgetUsd configured the gate is skipped entirely.
       if (run.budgetUsd !== undefined) {
         const usage = await summarizeModelUsage({ runId });
         const budget = evaluateRunBudget(run.budgetUsd, usage.totalCostUsdEstimate);
-        if (budget?.overBudget) {
+        const nodeReserveUsd = nodeBudgetUsdOf(nextNode) ?? 0;
+        const reservationExceeded = budget !== undefined && !budget.overBudget && budget.spentUsdEstimate + nodeReserveUsd > budget.budgetUsd;
+        if (budget?.overBudget || reservationExceeded) {
           const blockedAt = now();
           const blocked = await store.saveRun({
             ...run,
@@ -451,16 +536,18 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
             updatedAt: blockedAt,
             budgetBlock: {
               blockedAt,
-              budgetUsd: budget.budgetUsd,
-              spentUsdEstimate: budget.spentUsdEstimate,
+              budgetUsd: budget!.budgetUsd,
+              spentUsdEstimate: budget!.spentUsdEstimate,
               nextNodeId: nextNode.id,
-              reason: `Run paused for budget: estimated spend $${budget.spentUsdEstimate} reached the configured ceiling $${budget.budgetUsd}; node ${nextNode.id} was not executed. Raise budgetUsd and resume to continue.`
+              reason: budget!.overBudget
+                ? `Run paused for budget: estimated spend $${budget!.spentUsdEstimate} reached the configured ceiling $${budget!.budgetUsd}; node ${nextNode.id} was not executed. Raise budgetUsd and resume to continue.`
+                : `Run paused for budget: estimated spend $${budget!.spentUsdEstimate} plus node ${nextNode.id}'s own $${nodeReserveUsd} budget reservation would cross the $${budget!.budgetUsd} ceiling, so the node was not dispatched. Raise budgetUsd and resume to continue.`
             }
           });
           return await recordTerminationObservations(blocked, nodes, store, options);
         }
       }
-      const prepared = await executeRunnableNode(run, nextNode, nodes, store, options);
+      const prepared = await executeRunnableNode(run, nextNode, nodes, store, options, true);
       // A run that clears the budget gate is no longer paused for budget: drop any stale marker so a
       // resumed-under-ceiling run doesn't keep reporting "paused for budget".
       if (prepared.run.budgetBlock) prepared.run.budgetBlock = undefined;
@@ -490,8 +577,9 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
 
 type PreparedNode = { run: WorkflowExecutionRecord; commit?: () => Promise<void> };
 
-async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: WorkspaceNode, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<PreparedNode> {
-  const state = stateById(run).get(nextNode.id) as NodeExecutionState;
+async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode: WorkspaceNode, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions, claim = false): Promise<PreparedNode> {
+  let run = initialRun;
+  let state = stateById(run).get(nextNode.id) as NodeExecutionState;
   const startedAt = now();
   // W-4 (run_1785405350649_9u5mjz): a node that cannot resolve its client must fail by name, never
   // guess. That run — a platform run — had review_aggregator instruct a Dr. Lurie CTA because client
@@ -566,6 +654,18 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
     return { run, commit: async () => { await recordDryRunNodeUsage(run, nextNode, state.input, state.output); } };
   }
 
+  // Dispatch claim (the ~300s silent-death fix): persist "this node is in flight, with this timeout"
+  // BEFORE the model loop starts, so the run record can distinguish a live execution from a dead
+  // driver at any moment (assessRunStall) and a successor advance can reclaim a stale claim instead
+  // of the run sticking at status "running" forever. Skipped for the best-effort termination
+  // observation path (claim=false), which restores run status itself and must not publish interim
+  // state. A CAS conflict here propagates to advanceRun's retry loop like any other save conflict.
+  if (claim) {
+    state.dispatch = { dispatchedAt: startedAt, timeoutMs: nodeTimeoutMs(nextNode) };
+    run = await store.saveRun(run);
+    state = stateById(run).get(nextNode.id) as NodeExecutionState;
+  }
+
   // buildInitialRun stamps every new run, so this fallback only covers a legacy record persisted
   // before that — runModeSummary reports such a record as declared:false rather than passing it off
   // as a deliberate choice.
@@ -590,6 +690,8 @@ async function executeRunnableNode(run: WorkflowExecutionRecord, nextNode: Works
   const runner = getNodeRunner(mode, effectiveNode.modelConfig as Record<string, unknown> | undefined);
   const result = await runner.run({ node: effectiveNode, input: state.input }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
   const completedAt = now();
+  delete state.dispatch;
+  if (result.toolCalls?.length) state.toolCalls = result.toolCalls;
   state.completedAt = completedAt;
   state.durationMs = duration(startedAt, completedAt);
   if (!result.ok) {

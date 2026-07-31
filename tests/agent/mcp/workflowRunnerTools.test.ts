@@ -74,10 +74,11 @@ describe("workflow runner MCP tools (end-to-end)", () => {
 
     const run = (await call("workflow.get_run", { runId })).data.run;
     const artifactNodeIds = run.artifacts.map((artifact: any) => artifact.nodeId);
-    // One artifact per completed node, and six atomic commits — no replays.
+    // One artifact per completed node — no replays. Twelve atomic commits: each advance persists a
+    // dispatch claim (the ~300s silent-death heartbeat) plus the completion save.
     expect(new Set(artifactNodeIds).size).toBe(artifactNodeIds.length);
     expect(run.nodes.filter((node: any) => node.status === "completed")).toHaveLength(6);
-    expect(run.rev).toBe(6);
+    expect(run.rev).toBe(12);
   });
 
   it("reset then resume does not restore any pre-reset completed node state", async () => {

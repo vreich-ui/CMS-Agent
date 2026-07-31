@@ -6,7 +6,7 @@ export const publishingConductorNodes = [
     "name": "CMS Input Triage",
     "kind": "intake",
     "description": "Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.",
-    "prompt": "Objective: Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.\nInputs expected: user request and any supplied content_source.v1 envelope.\nOutput required: produce content_source.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.\nInputs expected: user request and any supplied content_source.v1 envelope.\nOutput required: produce content_source.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -87,9 +87,16 @@ export const publishingConductorNodes = [
       "x": -391,
       "y": 148
     },
-    "updatedAt": "2026-07-27T07:30:39.528Z",
+    "updatedAt": "2026-07-31T09:33:42.728Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.1,
+      "maxOutputTokens": 2000
     }
   },
   {
@@ -97,7 +104,7 @@ export const publishingConductorNodes = [
     "name": "Topic Opportunity Agent",
     "kind": "strategy",
     "description": "Assess topic viability, audience value, search/editorial opportunity, and recommended positioning.",
-    "prompt": "Objective: Decide whether the request should become an article, page section, content update, product/resource support asset, or no-build recommendation for the target client.\nInputs expected: input_triage, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce topic_opportunity.v1 with recommended content route, reader value, business value, SEO/search intent notes when relevant, evidence depth needed, and cost path.\nCost policy: choose the smallest workflow that can satisfy the request safely. Recommend deep research only for scientific, medical-adjacent, current, comparative, regulatory, or claim-heavy work. Recommend skipping redundant strategy passes when the request is simple.\nNext-step policy: prefer content that moves a reader toward a useful next step: related reading, newsletter, routine decision, product/resource consideration, or trust-building.\nClient policy: this node serves any registered client. clientProjectId names the target; the client's voice, audience, and commercial direction come from the client's own record and the run's inputs, never from this prompt. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nCompletion criteria: the route, audience value, evidence need, and blockers are explicit.\nBlocker criteria: unclear target, missing or unresolvable target client, unsafe request, no viable reader value, missing critical input, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Decide whether the request should become an article, page section, content update, product/resource support asset, or no-build recommendation for the target client.\nInputs expected: input_triage, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce topic_opportunity.v1 with recommended content route, reader value, business value, SEO/search intent notes when relevant, evidence depth needed, and cost path.\nCost policy: choose the smallest workflow that can satisfy the request safely. Recommend deep research only for current, comparative, regulatory, source-sensitive, or claim-heavy work; a client whose domain needs a stricter evidence bar (health, finance, legal) declares it in its own record. Recommend skipping redundant strategy passes when the request is simple.\nNext-step policy: prefer content that moves a reader toward a useful next step: related reading, newsletter, routine decision, product/resource consideration, or trust-building.\nClient policy: this node serves any registered client. clientProjectId names the target; the client's voice, audience, and commercial direction come from the client's own record and the run's inputs, never from this prompt. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nCompletion criteria: the route, audience value, evidence need, and blockers are explicit.\nBlocker criteria: unclear target, missing or unresolvable target client, unsafe request, no viable reader value, missing critical input, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -182,9 +189,16 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 0
     },
-    "updatedAt": "2026-07-30T17:29:47.040Z",
+    "updatedAt": "2026-07-31T09:33:42.729Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.1,
+      "maxOutputTokens": 2500
     }
   },
   {
@@ -192,7 +206,7 @@ export const publishingConductorNodes = [
     "name": "Reader Insight Agent",
     "kind": "strategy",
     "description": "Define reader needs, motivations, sophistication, pains, desired outcomes, and decision context.",
-    "prompt": "Objective: Define reader needs, motivations, sophistication, pains, desired outcomes, and decision context.\nInputs expected: topic_opportunity.\nOutput required: produce reader_insight.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Define reader needs, motivations, sophistication, pains, desired outcomes, and decision context.\nInputs expected: topic_opportunity.\nOutput required: produce reader_insight.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -275,10 +289,17 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 0
     },
-    "updatedAt": "2026-07-27T07:30:31.995Z",
+    "updatedAt": "2026-07-31T09:33:42.729Z",
     "metadata": {
       "externalStageMapping": "reader_insight",
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.1,
+      "maxOutputTokens": 2500
     }
   },
   {
@@ -286,7 +307,7 @@ export const publishingConductorNodes = [
     "name": "Research Agent",
     "kind": "research",
     "description": "Gather source-backed claims, evidence, examples, constraints, and open questions for the article.",
-    "prompt": "Objective: Gather only the evidence needed to support the article's material claims, reader decisions, and the trust standard the target client's content must meet.\nInputs expected: reader_insight, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce research_brief.v1 with sourced facts, practical implications, claim risk notes, open questions, and source references.\nCost policy: do not browse by default. Use web.search/web.fetch only for claims that are scientific, medical-adjacent, current, comparative, regulatory, or otherwise source-sensitive. Prefer primary scientific, clinical, regulatory, or manufacturer/source-owner pages when available. Stop once reliable evidence covers the decision the article must help the reader make.\nEvidence policy: separate sourced facts, interpretation, uncertainty, and unsupported claims. Flag claims that should be softened or removed.\nCompletion criteria: required inputs are addressed, sources are concise and relevant, output matches schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unavailable evidence for important claims, unsafe medical certainty, contradictory instructions, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Gather only the evidence needed to support the article's material claims, reader decisions, and the trust standard the target client's content must meet.\nInputs expected: reader_insight, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce research_brief.v1 with sourced facts, practical implications, claim risk notes, open questions, and source references.\nCost policy: do not browse by default. Use web.search/web.fetch only for claims that are current, comparative, regulatory, or otherwise source-sensitive; a client whose domain needs a stricter evidence bar declares it in its own record. Prefer primary, authoritative, or source-owner pages when available. Stop once reliable evidence covers the decision the article must help the reader make. Extract what you need from each fetched page as soon as you read it — quote the finding with its source — instead of re-fetching or carrying whole pages forward; every retained page is re-sent on each of your subsequent turns.\nEvidence policy: separate sourced facts, interpretation, uncertainty, and unsupported claims. Flag claims that should be softened or removed.\nCompletion criteria: required inputs are addressed, sources are concise and relevant, output matches schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unavailable evidence for important claims, unsupported certainty on high-stakes claims, contradictory instructions, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -373,14 +394,17 @@ export const publishingConductorNodes = [
       "x": 840,
       "y": 0
     },
-    "updatedAt": "2026-07-30T17:29:57.342Z",
+    "updatedAt": "2026-07-31T09:33:42.729Z",
     "metadata": {
       "externalStageMapping": "research",
       "approvalRequired": false
     },
     "modelConfig": {
-      "toolCallLimit": 12,
-      "timeout": 180000,
+      "maxTurns": 12,
+      "toolCallLimit": 8,
+      "timeout": 240000,
+      "budgetUsd": 0.75,
+      "maxOutputTokens": 4000,
       "retryCount": 1
     }
   },
@@ -389,7 +413,7 @@ export const publishingConductorNodes = [
     "name": "Objection Mapping Agent",
     "kind": "strategy",
     "description": "Map reader objections, skepticism, points of confusion, and trust gaps to address in the narrative.",
-    "prompt": "Objective: Map reader objections, skepticism, points of confusion, and trust gaps to address in the narrative.\nInputs expected: research.\nOutput required: produce objection_map.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Map reader objections, skepticism, points of confusion, and trust gaps to address in the narrative.\nInputs expected: research.\nOutput required: produce objection_map.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -472,9 +496,16 @@ export const publishingConductorNodes = [
       "x": 1120,
       "y": 0
     },
-    "updatedAt": "2026-07-27T07:30:37.183Z",
+    "updatedAt": "2026-07-31T09:33:42.729Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.15,
+      "maxOutputTokens": 3000
     }
   },
   {
@@ -482,7 +513,7 @@ export const publishingConductorNodes = [
     "name": "Narrative Movement Agent",
     "kind": "strategy",
     "description": "Design the article's reader journey, section movement, stakes, transitions, and resolution arc.",
-    "prompt": "Objective: Design the article's reader journey, section movement, stakes, transitions, and resolution arc.\nInputs expected: objection_mapping.\nOutput required: produce narrative_movement.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Design the article's reader journey, section movement, stakes, transitions, and resolution arc.\nInputs expected: objection_mapping.\nOutput required: produce narrative_movement.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -565,9 +596,16 @@ export const publishingConductorNodes = [
       "x": 0,
       "y": 180
     },
-    "updatedAt": "2026-07-27T07:30:41.916Z",
+    "updatedAt": "2026-07-31T09:35:11.082Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.15,
+      "maxOutputTokens": 3500
     }
   },
   {
@@ -575,7 +613,7 @@ export const publishingConductorNodes = [
     "name": "Angle Strategist",
     "kind": "strategy",
     "description": "Select the strongest angle, promise, tension, differentiation, and external five-stage angle mapping.",
-    "prompt": "Objective: Select the strongest angle, promise, tension, differentiation, and external five-stage angle mapping.\nInputs expected: narrative_movement.\nOutput required: produce angle_strategy.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Select the strongest angle, promise, tension, differentiation, and external five-stage angle mapping.\nInputs expected: narrative_movement.\nOutput required: produce angle_strategy.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -658,10 +696,17 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 180
     },
-    "updatedAt": "2026-07-27T07:30:44.162Z",
+    "updatedAt": "2026-07-31T09:35:11.082Z",
     "metadata": {
       "externalStageMapping": "angle",
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.15,
+      "maxOutputTokens": 3000
     }
   },
   {
@@ -669,7 +714,7 @@ export const publishingConductorNodes = [
     "name": "Brief Architect",
     "kind": "planning",
     "description": "Convert strategy into an executable article brief with structure, claims, proof points, and acceptance criteria.",
-    "prompt": "Objective: Convert upstream strategy and evidence into one executable article/content brief for the target client.\nInputs expected: angle_strategy, plus prior topic, reader, research, objection, and narrative outputs through stageOutputs, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce article_brief.v1 with title/slug direction, reader promise, article structure, claim/proof map, reader next step, SEO/meta notes, tone guardrails, acceptance criteria, and what to skip.\nCost policy: collapse duplicate strategy into this brief. Do not ask downstream agents to rediscover the angle. Include only sections, claims, and review needs that materially improve the article.\nNext-step policy: make the content useful first and commercially aware second. Add a low-pressure next step only where it fits the reader journey.\nClient policy: clientProjectId names the target client. Voice, styling, and audience direction belong to the client's own record and the run's inputs, never to this prompt; the brief's tone guardrails must come from those sources. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nContract policy: note likely target object type, expected content-object fields, taxonomy needs, and whether contract_intelligence must inspect anything beyond the client's default object type.\nCompletion criteria: the draft writer can write without guessing; research and factual risks are visible; blockers are explicit.\nBlocker criteria: missing strategy, missing or unresolvable target client, missing evidence for required claims, unsafe medical certainty, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Convert upstream strategy and evidence into one executable article/content brief for the target client.\nInputs expected: topic_opportunity, reader_insight, research, objection_mapping, narrative_movement, and angle_strategy — all delivered directly in this node's input as dependency outputs — plus clientProjectId (the run's registered client). Everything this brief needs is already in your input; do not fetch stage outputs or hunt for additional context.\nOutput required: produce article_brief.v1 with title/slug direction, reader promise, article structure, claim/proof map, reader next step, SEO/meta notes, tone guardrails, acceptance criteria, and what to skip.\nCost policy: collapse duplicate strategy into this brief. Do not ask downstream agents to rediscover the angle. Include only sections, claims, and review needs that materially improve the article.\nNext-step policy: make the content useful first and commercially aware second. Add a low-pressure next step only where it fits the reader journey.\nClient policy: clientProjectId names the target client. Voice, styling, and audience direction belong to the client's own record, never to this prompt. Take tone guardrails ONLY from what is present in this node's input (the run's initial instructions and the delivered upstream outputs); when a client voice record exists the conductor delivers it in your input. If no voice direction is present, record that gap as an assumption, set neutral reader-first guardrails, and continue — do not spend tool calls searching other stages for a voice record that was not delivered. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nContract policy: note likely target object type, expected content-object fields, taxonomy needs, and whether contract_intelligence must inspect anything beyond the client's default object type.\nCompletion criteria: the draft writer can write without guessing; research and factual risks are visible; blockers are explicit.\nBlocker criteria: missing strategy, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -738,9 +783,14 @@ export const publishingConductorNodes = [
     ],
     "assignedSkills": [
       "article_structuring",
-      "dr_lurie_dtc_science_editorial"
+      "editorial_craft"
     ],
     "requiredInputs": [
+      "topic_opportunity",
+      "reader_insight",
+      "research",
+      "objection_mapping",
+      "narrative_movement",
       "angle_strategy"
     ],
     "produces": [
@@ -748,6 +798,11 @@ export const publishingConductorNodes = [
     ],
     "riskLevel": "read",
     "dependsOn": [
+      "topic_opportunity",
+      "reader_insight",
+      "research",
+      "objection_mapping",
+      "narrative_movement",
       "angle_strategy"
     ],
     "status": "active",
@@ -755,9 +810,16 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 180
     },
-    "updatedAt": "2026-07-30T17:30:08.679Z",
+    "updatedAt": "2026-07-31T09:35:11.082Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 4,
+      "toolCallLimit": 2,
+      "timeout": 180000,
+      "budgetUsd": 0.4,
+      "maxOutputTokens": 5000
     }
   },
   {
@@ -765,7 +827,7 @@ export const publishingConductorNodes = [
     "name": "Full Draft Writer",
     "kind": "drafting",
     "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
-    "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, diagnosis, fake urgency, and unsupported medical certainty. Use concrete routine decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; blockers are explicit.\nBlocker criteria: missing brief, missing or unresolvable target client, missing evidence for required claims, unsafe medical certainty, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give — a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; blockers are explicit.\nBlocker criteria: missing brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -833,7 +895,7 @@ export const publishingConductorNodes = [
       "stage.list_outputs"
     ],
     "assignedSkills": [
-      "dr_lurie_dtc_science_editorial"
+      "editorial_craft"
     ],
     "requiredInputs": [
       "brief_architect"
@@ -850,13 +912,17 @@ export const publishingConductorNodes = [
       "x": 840,
       "y": 180
     },
-    "updatedAt": "2026-07-30T17:30:20.538Z",
+    "updatedAt": "2026-07-31T09:35:11.082Z",
     "metadata": {
       "externalStageMapping": "draft",
       "approvalRequired": false
     },
     "modelConfig": {
+      "maxTurns": 4,
+      "toolCallLimit": 2,
       "timeout": 300000,
+      "budgetUsd": 0.5,
+      "maxOutputTokens": 8000,
       "retryCount": 1
     }
   },
@@ -865,7 +931,7 @@ export const publishingConductorNodes = [
     "name": "Human Texture Editor",
     "kind": "review",
     "description": "Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.",
-    "prompt": "Objective: Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.\nInputs expected: draft_writer.\nOutput required: produce human_texture_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.\nInputs expected: draft_writer.\nOutput required: produce human_texture_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -933,7 +999,7 @@ export const publishingConductorNodes = [
       "stage.list_outputs"
     ],
     "assignedSkills": [
-      "dr_lurie_dtc_science_editorial"
+      "editorial_craft"
     ],
     "requiredInputs": [
       "draft_writer"
@@ -950,9 +1016,16 @@ export const publishingConductorNodes = [
       "x": 1120,
       "y": 180
     },
-    "updatedAt": "2026-07-27T07:30:58.359Z",
+    "updatedAt": "2026-07-31T09:35:11.082Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 180000,
+      "budgetUsd": 0.25,
+      "maxOutputTokens": 4000
     }
   },
   {
@@ -960,7 +1033,7 @@ export const publishingConductorNodes = [
     "name": "Trust / Factual Editor",
     "kind": "review",
     "description": "Check claims, citations, hedging, trust signals, factual risk, and unsupported assertions.",
-    "prompt": "Objective: Check the draft for claim safety, citation sufficiency, hedging, reader trust, and the evidence standards the target client's content must meet.\nInputs expected: draft_writer and research.\nOutput required: produce trust_factual_review.v1 with claims to keep, soften, support, remove, or re-source; citation gaps; medical/compliance risk; and concise revision instructions.\nCost policy: use existing research first. Fetch only source URLs already cited or clearly necessary to resolve a material uncertainty. Do not run broad new research unless the draft contains an important unsupported claim.\nEvidence policy: distinguish sourced facts, interpretation, and uncertainty. Flag unsupported claims and overconfident medical language. Prefer softer practical phrasing when evidence is limited.\nCompletion criteria: factual risks are prioritized, actionable, and tied to the draft; blockers are explicit.\nBlocker criteria: missing draft, missing research for material claims, unavailable source evidence, unsafe medical certainty, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Check the draft for claim safety, citation sufficiency, hedging, reader trust, and the evidence standards the target client's content must meet.\nInputs expected: draft_writer and research.\nOutput required: produce trust_factual_review.v1 with claims to keep, soften, support, remove, or re-source; citation gaps; compliance risk; and concise revision instructions.\nCost policy: use existing research first. Fetch only source URLs already cited or clearly necessary to resolve a material uncertainty. Do not run broad new research unless the draft contains an important unsupported claim.\nEvidence policy: distinguish sourced facts, interpretation, and uncertainty. Flag unsupported claims and overconfident language on high-stakes points; a client whose domain needs a stricter evidence bar declares it in its own record. Prefer softer practical phrasing when evidence is limited.\nCompletion criteria: factual risks are prioritized, actionable, and tied to the draft; blockers are explicit.\nBlocker criteria: missing draft, missing research for material claims, unavailable source evidence, unsupported certainty on high-stakes claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1049,13 +1122,16 @@ export const publishingConductorNodes = [
       "x": -57,
       "y": 386
     },
-    "updatedAt": "2026-07-30T17:30:32.380Z",
+    "updatedAt": "2026-07-31T09:36:03.991Z",
     "metadata": {
       "approvalRequired": false
     },
     "modelConfig": {
-      "toolCallLimit": 8,
-      "timeout": 120000,
+      "maxTurns": 8,
+      "toolCallLimit": 5,
+      "timeout": 180000,
+      "budgetUsd": 0.4,
+      "maxOutputTokens": 3000,
       "retryCount": 1
     }
   },
@@ -1064,7 +1140,7 @@ export const publishingConductorNodes = [
     "name": "Emotional Resonance Evaluator",
     "kind": "review",
     "description": "Evaluate emotional clarity, stakes, empathy, reader momentum, and resonance with the intended audience.",
-    "prompt": "Objective: Evaluate emotional clarity, stakes, empathy, reader momentum, and resonance with the intended audience.\nInputs expected: draft_writer.\nOutput required: produce emotional_resonance_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Evaluate emotional clarity, stakes, empathy, reader momentum, and resonance with the intended audience.\nInputs expected: draft_writer and input_triage (the original request envelope, for audience and intent).\nOutput required: produce emotional_resonance_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1132,7 +1208,7 @@ export const publishingConductorNodes = [
       "stage.list_outputs"
     ],
     "assignedSkills": [
-      "dr_lurie_dtc_science_editorial"
+      "editorial_craft"
     ],
     "requiredInputs": [
       "draft_writer",
@@ -1151,9 +1227,16 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 360
     },
-    "updatedAt": "2026-07-27T07:31:03.530Z",
+    "updatedAt": "2026-07-31T09:36:03.991Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.2,
+      "maxOutputTokens": 2500
     }
   },
   {
@@ -1161,7 +1244,7 @@ export const publishingConductorNodes = [
     "name": "Reader Simulation",
     "kind": "review",
     "description": "Simulate likely reader reactions, drop-off points, questions, objections, and conversion readiness.",
-    "prompt": "Objective: Simulate likely reader reactions, drop-off points, questions, objections, and conversion readiness.\nInputs expected: draft_writer.\nOutput required: produce reader_simulation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Simulate likely reader reactions, drop-off points, questions, objections, and conversion readiness.\nInputs expected: draft_writer.\nOutput required: produce reader_simulation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1244,9 +1327,16 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 360
     },
-    "updatedAt": "2026-07-27T07:31:05.878Z",
+    "updatedAt": "2026-07-31T09:36:03.991Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.2,
+      "maxOutputTokens": 2500
     }
   },
   {
@@ -1254,7 +1344,7 @@ export const publishingConductorNodes = [
     "name": "Review Aggregator",
     "kind": "review",
     "description": "Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.",
-    "prompt": "Objective: Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.\nInputs expected: human_texture, trust_factual, emotional_resonance, reader_simulation.\nOutput required: produce review_aggregation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.\nInputs expected: human_texture, trust_factual, emotional_resonance, reader_simulation.\nOutput required: produce review_aggregation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1343,9 +1433,16 @@ export const publishingConductorNodes = [
       "x": 840,
       "y": 360
     },
-    "updatedAt": "2026-07-27T07:31:08.168Z",
+    "updatedAt": "2026-07-31T09:36:03.991Z",
     "metadata": {
       "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.25,
+      "maxOutputTokens": 3500
     }
   },
   {
@@ -1353,7 +1450,7 @@ export const publishingConductorNodes = [
     "name": "Contract Intelligence Agent",
     "kind": "research",
     "description": "Fetch the target client's live object contract at runtime and reduce it to the rules downstream nodes must obey. The client contract is the single source of truth; never author content rules from memory or from a workspace-local copy.",
-    "prompt": "Objective: Turn the target client's ALREADY-FETCHED, ALREADY-REDUCED object contract into contract_intelligence.v1, the rules every downstream node must obey. The client's contract is the single source of truth for content shape, ids, media paths, taxonomy, and publishing gates. Never author these rules from memory, from a workspace-local schema, or from another client's contract.\nInputs expected: article_brief, plus clientProjectId (the run's registered client — the conductor delivers it in every node's input; never guess it and never substitute a remembered client) and `prefetchedContract` supplied directly in your input — the conductor calls the client's contract surface deterministically, in code, BEFORE you run, and reduces it (dropping prose, examples, and error catalogues) precisely so you never have to fetch or carry the raw multi-KB contract yourself across your own turns. `prefetchedContract` carries: clientObjectType, bodySchema (the real JSON Schema, kept whole — it is structural, not prose), idConventions, mediaConvention, taxonomy, constraints (with severity and enforcedLive), publishPolicy, workflowSequence, validationSurface (patch/write operations with their required fields), contractSource {tool, fetchedAtISO}, and an `unmapped` bucket for anything the deterministic reduction did not recognize but preserved anyway.\nIf `prefetchedContract` is present: this is a validation and pass-through step, not a discovery one. Sanity-check it, write a concise summary, carry its fields into your own output verbatim (mapping field names as needed — see Output required), and surface anything in `unmapped` worth downstream attention. Do not call project.call_read_tool to re-fetch the primary contract — it has already been fetched this run. Reach for project.call_read_tool ONLY for something genuinely missing from the prefetch (e.g. a registry/taxonomy lookup the client's contract pointed at but did not inline, or the client's own contract tool for a DIFFERENT object type than what was prefetched) — it needs no approval and only reaches read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping); reserve project.call_tool for a genuine write, which this node does not perform.\nIf `prefetchError` is present instead (the deterministic fetch failed — unreachable client, policy block, unsupported object type): treat it exactly as the unreachable-client blocker criterion below; do not attempt to fetch the contract yourself as a substitute unless prefetchedContract is entirely absent from your input (an older run/deployment that never wired the prefetch), in which case fall back to the discovery policy your allowedTools describe.\nOutput required: produce contract_intelligence.v1 carrying, at minimum: clientProjectId (from your own input's clientProjectId — the run's registered client), clientObjectType, bodySchema (from prefetchedContract.bodySchema, or your own reduction of a fetched contract, verbatim — never the full raw contract re-derived, so the large fetched payload does not compound across turns nor get carried whole into every downstream node's input), the id conventions (object id and node/child id patterns, from prefetchedContract.idConventions), the media/artifact path convention (raw artifact reference field vs public serving path, and which fields accept which, from prefetchedContract.mediaConvention), the taxonomy source and whether unknown terms block (from prefetchedContract.taxonomy), the enumerated structural constraints with their severity and whether each is enforced live (from prefetchedContract.constraints), the publish policy including whether approval is required and any pinning rules (from prefetchedContract.publishPolicy), and contractSource {tool, fetchedAtISO} (from prefetchedContract.contractSource, or your own fetch's).\nGeneralization policy: this node must work for ANY client the workflow encounters, not one named client. Do not hardcode a client's field names, path prefixes, or object types into your reasoning; read them from prefetchedContract (or the contract you fetched) and pass them forward as data. Where a client's contract is silent, say so explicitly as an assumption rather than filling the gap from another client's conventions.\nCompletion criteria: a downstream node can construct and validate a client object using only your output plus the client's own validator, without guessing and without consulting any workspace-local schema.\nBlocker criteria: the client project is unreachable or unconfigured, clientProjectId is missing from your input, its contract tools are unavailable or denied by policy, the requested object type is unsupported, the contract cannot be fetched read-only, or the contract declares constraints this workspace cannot satisfy.\nTool policy: use only allowedTools; reach the client only through project.call_read_tool and only with its permitted read-only contract, registry, inventory, and validation operations, and only for what prefetchedContract does not already supply; project.call_tool is also granted for a future write but this node must never publish, create, patch, or otherwise mutate the client.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Turn the target client's ALREADY-FETCHED, ALREADY-REDUCED object contract into contract_intelligence.v1, the rules every downstream node must obey. The client's contract is the single source of truth for content shape, ids, media paths, taxonomy, and publishing gates. Never author these rules from memory, from a workspace-local schema, or from another client's contract.\nInputs expected: article_brief, plus clientProjectId (the run's registered client — the conductor delivers it in every node's input; never guess it and never substitute a remembered client) and `prefetchedContract` supplied directly in your input — the conductor calls the client's contract surface deterministically, in code, BEFORE you run, and reduces it (dropping prose, examples, and error catalogues) precisely so you never have to fetch or carry the raw multi-KB contract yourself across your own turns. `prefetchedContract` carries: clientObjectType, bodySchema (the real JSON Schema, kept whole — it is structural, not prose), idConventions, mediaConvention, taxonomy, constraints (with severity and enforcedLive), publishPolicy, workflowSequence, validationSurface (patch/write operations with their required fields), contractSource {tool, fetchedAtISO}, and an `unmapped` bucket for anything the deterministic reduction did not recognize but preserved anyway.\nIf `prefetchedContract` is present: this is a validation and pass-through step, not a discovery one. Sanity-check it, write a concise summary, carry its fields into your own output verbatim (mapping field names as needed — see Output required), and surface anything in `unmapped` worth downstream attention. Do not call project.call_read_tool to re-fetch the primary contract — it has already been fetched this run. Reach for project.call_read_tool ONLY for something genuinely missing from the prefetch (e.g. a registry/taxonomy lookup the client's contract pointed at but did not inline, or the client's own contract tool for a DIFFERENT object type than what was prefetched) — it needs no approval and only reaches read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping); reserve project.call_tool for a genuine write, which this node does not perform.\nIf `prefetchError` is present instead (the deterministic fetch failed — unreachable client, policy block, unsupported object type): treat it exactly as the unreachable-client blocker criterion below; do not attempt to fetch the contract yourself as a substitute unless prefetchedContract is entirely absent from your input (an older run/deployment that never wired the prefetch), in which case fall back to the discovery policy your allowedTools describe.\nOutput required: produce contract_intelligence.v1 carrying, at minimum: clientProjectId (from your own input's clientProjectId — the run's registered client), clientObjectType, bodySchema (from prefetchedContract.bodySchema, or your own reduction of a fetched contract, verbatim — never the full raw contract re-derived, so the large fetched payload does not compound across turns nor get carried whole into every downstream node's input), the id conventions (object id and node/child id patterns, from prefetchedContract.idConventions), the media/artifact path convention (raw artifact reference field vs public serving path, and which fields accept which, from prefetchedContract.mediaConvention), the taxonomy source and whether unknown terms block (from prefetchedContract.taxonomy), the enumerated structural constraints with their severity and whether each is enforced live (from prefetchedContract.constraints), the publish policy including whether approval is required and any pinning rules (from prefetchedContract.publishPolicy), and contractSource {tool, fetchedAtISO} (from prefetchedContract.contractSource, or your own fetch's).\nGeneralization policy: this node must work for ANY client the workflow encounters, not one named client. Do not hardcode a client's field names, path prefixes, or object types into your reasoning; read them from prefetchedContract (or the contract you fetched) and pass them forward as data. Where a client's contract is silent, say so explicitly as an assumption rather than filling the gap from another client's conventions.\nCompletion criteria: a downstream node can construct and validate a client object using only your output plus the client's own validator, without guessing and without consulting any workspace-local schema.\nBlocker criteria: the client project is unreachable or unconfigured, clientProjectId is missing from your input, its contract tools are unavailable or denied by policy, the requested object type is unsupported, the contract cannot be fetched read-only, or the contract declares constraints this workspace cannot satisfy.\nTool policy: use only allowedTools; reach the client only through project.call_read_tool and only with its permitted read-only contract, registry, inventory, and validation operations, and only for what prefetchedContract does not already supply; project.call_tool is also granted for a future write but this node must never publish, create, patch, or otherwise mutate the client.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
@@ -1544,7 +1641,7 @@ export const publishingConductorNodes = [
       "project.call_read_tool"
     ],
     "assignedSkills": [
-      "dr_lurie_contract_intelligence"
+      "contract_intelligence"
     ],
     "requiredInputs": [
       "brief_architect"
@@ -1561,15 +1658,17 @@ export const publishingConductorNodes = [
       "x": 1420,
       "y": 700
     },
-    "updatedAt": "2026-07-30T17:31:05.118Z",
+    "updatedAt": "2026-07-31T09:36:03.991Z",
     "metadata": {
       "approvalRequired": false,
       "contractPrefetch": true
     },
     "modelConfig": {
-      "maxTurns": 8,
-      "toolCallLimit": 5,
+      "maxTurns": 6,
+      "toolCallLimit": 3,
       "timeout": 180000,
+      "budgetUsd": 0.35,
+      "maxOutputTokens": 6000,
       "retryCount": 1
     }
   },
@@ -1578,7 +1677,7 @@ export const publishingConductorNodes = [
     "name": "Article Body Builder",
     "kind": "builder",
     "description": "Build the client's content object in the client's own shape, using the contract fetched at runtime by contract_intelligence. The client contract is the only source of truth; no workspace-local content schema is authoritative.",
-    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content), contract_intelligence (the client contract), narrative_movement (the reader-journey arc: section movement, stakes, transitions, resolution) and angle_strategy (the chosen angle, promise, and tension) — the upstream editorial reasoning your per-node private annotations are built from. clientProjectId also arrives directly in this node's input from the conductor and must agree with contract_intelligence's clientProjectId; if they disagree, that is a blocker. Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nPrivate annotation policy: where the contract's body schema declares per-node private annotation fields (for example a private block with closed strategy/intent enums and a free-text notes field), populate them on EVERY node you emit — an absent private annotation is a defect, not a default. Choose each enum value ONLY from the enum the contract itself declares — never invent, pluralize, or approximate a value — mapping each node's role in the piece from narrative_movement's arc and angle_strategy's angle/promise plus review_aggregator's build instructions, and put the one-sentence reasoning for the choice in the contract's free-text private notes field. If narrative_movement or angle_strategy outputs are absent or skipped (for example a late-stage entry run), derive the annotation from the approved content itself and record that as an assumption. Private annotation is never reader-visible — the contract's renderer emits public fields only — so annotate every node rather than leaving private fields absent. If the contract declares no private annotation fields for this object type, note that instead; never add undeclared fields.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_read_tool, read-only, and record the outcome in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable — that tool is deliberately approval-gated for writes only. If the client's validator requires an existing object record that does not yet exist, do NOT attempt to create one — this node is write-prohibited. Record clientValidation {attempted: true, tool, valid: false, deferred: \"requires_existing_object\"} quoting the client's own refusal in issues, and treat that as a NORMAL outcome, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch. Do not claim validity, and do not spend further calls re-attempting once the client has reported the object does not exist. If the client cannot be reached or its read-only validator is denied by the project's own policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; contract-declared private annotation fields are populated on every emitted node (or the contract's silence on them is noted); every media reference is verified and in the correct form for its field; clientValidation records a real result from the client, or a deferral because the validator requires an object that does not yet exist; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; clientProjectId is missing from this node's input or disagrees with contract_intelligence's; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client through project.call_read_tool for every read-only contract and validation operation; project.call_tool is approval-gated and reserved for writes — never create, patch, publish, or release from this node.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content), contract_intelligence (the client contract), narrative_movement (the reader-journey arc: section movement, stakes, transitions, resolution) and angle_strategy (the chosen angle, promise, and tension) — the upstream editorial reasoning your per-node private annotations are built from. clientProjectId also arrives directly in this node's input from the conductor and must agree with contract_intelligence's clientProjectId; if they disagree, that is a blocker. Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nPrivate annotation policy: where the contract's body schema declares per-node private annotation fields (for example a private block with closed strategy/intent enums and a free-text notes field), populate them on EVERY node you emit — an absent private annotation is a defect, not a default. Choose each enum value ONLY from the enum the contract itself declares — never invent, pluralize, or approximate a value — mapping each node's role in the piece from narrative_movement's arc and angle_strategy's angle/promise plus review_aggregator's build instructions, and put the one-sentence reasoning for the choice in the contract's free-text private notes field. If narrative_movement or angle_strategy outputs are absent or skipped (for example a late-stage entry run), derive the annotation from the approved content itself and record that as an assumption. Private annotation is never reader-visible — the contract's renderer emits public fields only — so annotate every node rather than leaving private fields absent. If the contract declares no private annotation fields for this object type, note that instead; never add undeclared fields.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_read_tool, read-only, and record the outcome in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable — that tool is deliberately approval-gated for writes only. If the client's validator requires an existing object record that does not yet exist, do NOT attempt to create one — this node is write-prohibited. Record clientValidation {attempted: true, tool, valid: false, deferred: \"requires_existing_object\"} quoting the client's own refusal in issues, and treat that as a NORMAL outcome, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch. Do not claim validity, and do not spend further calls re-attempting once the client has reported the object does not exist. If the client cannot be reached or its read-only validator is denied by the project's own policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; contract-declared private annotation fields are populated on every emitted node (or the contract's silence on them is noted); every media reference is verified and in the correct form for its field; clientValidation records a real result from the client, or a deferral because the validator requires an object that does not yet exist; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; clientProjectId is missing from this node's input or disagrees with contract_intelligence's; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client through project.call_read_tool for every read-only contract and validation operation; project.call_tool is approval-gated and reserved for writes — never create, patch, publish, or release from this node.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
@@ -1743,7 +1842,7 @@ export const publishingConductorNodes = [
       "project.call_read_tool"
     ],
     "assignedSkills": [
-      "dr_lurie_contract_intelligence"
+      "contract_intelligence"
     ],
     "requiredInputs": [
       "review_aggregator",
@@ -1766,7 +1865,7 @@ export const publishingConductorNodes = [
       "x": 1120,
       "y": 360
     },
-    "updatedAt": "2026-07-30T17:32:19.737Z",
+    "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
       "approvalRequired": false,
       "externalStageMapping": "final_article",
@@ -1776,6 +1875,13 @@ export const publishingConductorNodes = [
         "Renderable media fields carry the client's public path; raw artifact keys only in the client's designated reference fields",
         "Workspace-local article schemas are advisory and must never be used to validate"
       ]
+    },
+    "modelConfig": {
+      "maxTurns": 6,
+      "toolCallLimit": 3,
+      "timeout": 300000,
+      "budgetUsd": 0.75,
+      "maxOutputTokens": 10000
     }
   },
   {
@@ -1783,7 +1889,7 @@ export const publishingConductorNodes = [
     "name": "Artifact Planning Agent",
     "kind": "adapter",
     "description": "Plan and verify media/artifact requirements against the client's declared artifact protocol and id conventions. No legacy fallbacks, no unverified media.",
-    "prompt": "Objective: Plan and verify every media/artifact need for the client-shaped body produced by article_body, using only the artifact protocol the client's contract declares.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: article_body (client-shaped body plus its artifact references).\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy: never mark a slot has_trusted_artifact because a key merely matches a pattern. Trust requires verification evidence from the artifact service that the reference was materialized for this request, with matching key, digest, content type, size and timestamp — record it in the slot's verification field. Where the artifact service offers an explicit verification tool, use it and keep its proof. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both — the raw reference for the client's reference fields and publicPath for its rendered fields. Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream.\nBlocker criteria: missing body; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Reach external services only through project.call_tool. Read-only policy and status lookups are allowed; do not publish, release, or mutate the client from this node.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Plan and verify every media/artifact need for the client-shaped body produced by article_body, using only the artifact protocol the client's contract declares.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: article_body (client-shaped body plus its artifact references), delivered in this node's input.\nZero-media shortcut: when the delivered body declares no media slots and carries no artifact references — a text-only object — emit the plan immediately from your input with an empty slot list and zero tool calls. There is nothing to verify; spending turns proving the absence of media is the failure mode this node's budget exists to prevent.\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy: never mark a slot has_trusted_artifact because a key merely matches a pattern. Trust requires verification evidence from the artifact service that the reference was materialized for this request, with matching key, digest, content type, size and timestamp — record it in the slot's verification field. Where the artifact service offers an explicit verification tool, use it and keep its proof. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both — the raw reference for the client's reference fields and publicPath for its rendered fields. Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream.\nBlocker criteria: missing body; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Reach external services only through project.call_tool. Read-only policy and status lookups are allowed; do not publish, release, or mutate the client from this node.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "additionalProperties": true,
@@ -2062,7 +2168,7 @@ export const publishingConductorNodes = [
       "project.call_read_tool"
     ],
     "assignedSkills": [
-      "dr_lurie_contract_intelligence"
+      "contract_intelligence"
     ],
     "requiredInputs": [
       "article_body"
@@ -2079,7 +2185,7 @@ export const publishingConductorNodes = [
       "x": 1120,
       "y": 1500
     },
-    "updatedAt": "2026-07-29T17:16:31.618Z",
+    "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
       "approvalRequired": false,
       "projectId": "pdf-tool",
@@ -2089,6 +2195,13 @@ export const publishingConductorNodes = [
         "Request ids must satisfy the client's convention before any artifact is written",
         "No legacy artifact fallback systems"
       ]
+    },
+    "modelConfig": {
+      "maxTurns": 5,
+      "toolCallLimit": 3,
+      "timeout": 180000,
+      "budgetUsd": 0.5,
+      "maxOutputTokens": 3000
     }
   },
   {
@@ -2313,7 +2426,7 @@ export const publishingConductorNodes = [
       "project.call_read_tool"
     ],
     "assignedSkills": [
-      "dr_lurie_contract_intelligence"
+      "contract_intelligence"
     ],
     "requiredInputs": [
       "article_body",
@@ -2332,7 +2445,7 @@ export const publishingConductorNodes = [
       "x": 0,
       "y": 540
     },
-    "updatedAt": "2026-07-29T17:18:17.046Z",
+    "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
       "approvalRequired": false,
       "canonicalRules": [
@@ -2341,6 +2454,13 @@ export const publishingConductorNodes = [
         "Client validation evidence is required; a workspace verdict is not sufficient",
         "Artifact references must be verified for the current request"
       ]
+    },
+    "modelConfig": {
+      "maxTurns": 5,
+      "toolCallLimit": 3,
+      "timeout": 180000,
+      "budgetUsd": 0.5,
+      "maxOutputTokens": 10000
     }
   },
   {
@@ -2417,9 +2537,7 @@ export const publishingConductorNodes = [
       "stage.list_outputs",
       "project.call_tool"
     ],
-    "assignedSkills": [
-      "dr_lurie_contract_intelligence"
-    ],
+    "assignedSkills": [],
     "requiredInputs": [
       "publish_payload"
     ],
@@ -2435,13 +2553,20 @@ export const publishingConductorNodes = [
       "x": 280,
       "y": 540
     },
-    "updatedAt": "2026-07-29T14:38:32.892Z",
+    "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
       "approvalRequired": true,
       "projectPolicyNotes": [
         "Do not publish yet",
         "Validate the target project's artifact-reference and raw-image-URL rules before future publishing"
       ]
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.25,
+      "maxOutputTokens": 3000
     }
   },
   {
@@ -2449,7 +2574,7 @@ export const publishingConductorNodes = [
     "name": "Learning Recorder",
     "kind": "learning",
     "description": "Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.",
-    "prompt": "Objective: Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: read relevant stage outputs and learning observations when useful; save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller when the run reached it; on early termination (blocked or failed) this node fires directly with the run's terminal state.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; stage.list_outputs returns bounded summaries (id, stage, size, preview) — record observations from those summaries and the run's terminal state, and do not try to read every stage in full. Do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -2531,7 +2656,7 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 540
     },
-    "updatedAt": "2026-07-30T16:52:20.699Z",
+    "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
       "approvalRequired": false,
       "recordFailureTypes": [
@@ -2541,7 +2666,11 @@ export const publishingConductorNodes = [
       ]
     },
     "modelConfig": {
-      "timeout": 300000
+      "maxTurns": 5,
+      "toolCallLimit": 4,
+      "timeout": 300000,
+      "budgetUsd": 0.3,
+      "maxOutputTokens": 3000
     }
   },
   {
@@ -2812,9 +2941,7 @@ export const publishingConductorNodes = [
       "stage.list_outputs",
       "project.call_tool"
     ],
-    "assignedSkills": [
-      "dr_lurie_contract_intelligence"
-    ],
+    "assignedSkills": [],
     "requiredInputs": [
       "publication_controller"
     ],
@@ -2830,7 +2957,7 @@ export const publishingConductorNodes = [
       "x": 560,
       "y": 1600
     },
-    "updatedAt": "2026-07-29T14:38:32.053Z",
+    "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
       "activationRequired": true,
       "approvalRequired": true,
@@ -2840,6 +2967,13 @@ export const publishingConductorNodes = [
         "Only verified current-request artifacts may be published",
         "No legacy fallback systems"
       ]
+    },
+    "modelConfig": {
+      "maxTurns": 4,
+      "toolCallLimit": 3,
+      "timeout": 180000,
+      "budgetUsd": 0.5,
+      "maxOutputTokens": 4000
     }
   }
 ] satisfies WorkspaceNode[];
