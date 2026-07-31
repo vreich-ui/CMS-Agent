@@ -30,7 +30,7 @@ Fixed by changing the thing people actually copy, not just adding a warning:
 - Runbook commands corrected in PHASE4 (service) and PHASE2 (conductor job). PHASE1's `--set-*` is left as-is because it *creates* the job, with a note not to copy it into an update.
 - To drop one variable later: `--remove-env-vars KEY`. Never re-list everything with `--set-*`.
 
-**Merging is not deploying.** There is no CI/CD for the MCP image; `cloudbuild.mcp.yaml` only builds it. Confirm the live revision before concluding a fix shipped.
+**Main deploys itself.** The `cms-agent-mcp-deploy` trigger runs `cloudbuild.deploy.yaml` on every push to main — build → push → deploy → verify — and the verify step fails unless the serving revision matches the build's own image. `cloudbuild.mcp.yaml` remains the build-only config for manual use. The build log, not the merge, is the receipt that a fix is serving.
 
 With ENV-3 in, client 0 is registered and **T-1 passed GO** (TEST-PROTOCOL Appendix C): the mcp.ts move is verified in both directions and nothing on the client side blocks anything.
 

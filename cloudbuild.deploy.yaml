@@ -58,36 +58,43 @@ steps:
     name: gcr.io/cloud-builders/docker
     args: ["push", "${_IMAGE}"]
 
-  - id: deploy
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - ${_SERVICE}
-      - --region=${_DEPLOY_REGION}
-      - --project=${PROJECT_ID}
-      - --image=${_IMAGE}
-      - --service-account=${_RUNTIME_SA}
-      - --cpu=1
-      - --memory=512Mi
-      - --min-instances=0
-      - --max-instances=4
-      - --allow-unauthenticated
-      - --quiet
-      - --update-env-vars=WORKSPACE_STORE=gcs,MCP_STATE_STORE=blobs,GCS_BUCKET=${_GCS_BUCKET},DR_LURIE_MCP_ENDPOINT=https://drluriescience.netlify.app/mcp,PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp,PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp
-      - --update-secrets=MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,DR_LURIE_MCP_TOKEN=dr-lurie-mcp-token:latest,PDF_TOOL_MCP_TOKEN=pdf-tool-mcp-token:latest,PLATFORM_MCP_TOKEN=platform-mcp-token:latest
-
-  # "Deployed" and "serving" are different facts, and health checks structurally cannot tell them apart.
-  # This asserts the two things that have actually broken on this service.
-  - id: verify
+  # Deploy and verify are ONE step so the corrective redeploy below reuses the same deploy() with the
+  # same flags — a second copy of the env-var/secret lists is exactly the drift hazard the header
+  # warns about.
+  #
+  # THE RACE THIS STEP SURVIVES (first hit 2026-07-31, builds for 95e2821 and 970c414): two commits
+  # merged minutes apart trigger two concurrent builds, and Cloud Build does not serialize them — the
+  # OLDER commit's deploy can land AFTER the newer one's, leaving a stale image serving while both
+  # builds' own deploys "succeeded". Resolution is by commit ancestry, so the newest commit always
+  # wins: if the serving image's tag is an ANCESTOR of this build's commit, an older build outraced
+  # us and we redeploy; if this build's commit is an ancestor of the SERVING tag, a newer build
+  # already deployed and we yield green (its own build verifies it); if ancestry cannot be
+  # established, fail loudly — that is either a rogue image or a git state this step cannot judge.
+  - id: deploy-and-verify
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
       - -c
       - |
         set -euo pipefail
+        deploy() {
+          gcloud run deploy "${_SERVICE}" \
+            --region=${_DEPLOY_REGION} \
+            --project=${PROJECT_ID} \
+            --image=${_IMAGE} \
+            --service-account=${_RUNTIME_SA} \
+            --cpu=1 \
+            --memory=512Mi \
+            --min-instances=0 \
+            --max-instances=4 \
+            --allow-unauthenticated \
+            --quiet \
+            --update-env-vars=WORKSPACE_STORE=gcs,MCP_STATE_STORE=blobs,GCS_BUCKET=${_GCS_BUCKET},DR_LURIE_MCP_ENDPOINT=https://drluriescience.netlify.app/mcp,PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp,PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp \
+            --update-secrets=MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,DR_LURIE_MCP_TOKEN=dr-lurie-mcp-token:latest,PDF_TOOL_MCP_TOKEN=pdf-tool-mcp-token:latest,PLATFORM_MCP_TOKEN=platform-mcp-token:latest
+        }
         describe() { gcloud run services describe "${_SERVICE}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" --format "$1"; }
+
+        deploy
 
         REVISION="$(describe 'value(status.latestReadyRevisionName)')"
         SERVING_IMAGE="$(describe 'value(spec.template.spec.containers[0].image)')"
@@ -96,11 +103,30 @@ steps:
         echo "image    : $${SERVING_IMAGE}"
         echo "url      : $${URL}"
 
-        # 1. Is the SERVED image the one this build produced? Catches a deploy that silently no-ops and,
-        #    with a commit tag, makes "which commit is live?" answerable from the build log alone.
+        # 1. Is the SERVED image the one this build produced? "Deployed" and "serving" are different
+        #    facts, and health checks structurally cannot tell them apart. A mismatch here is almost
+        #    always the concurrent-build race described above; resolve it by ancestry.
         if [ "$${SERVING_IMAGE}" != "${_IMAGE}" ]; then
-          echo "FAIL: serving image is not the image this build pushed (${_IMAGE})." >&2
-          exit 1
+          SERVING_TAG="$${SERVING_IMAGE##*:}"
+          # Best effort: make the serving commit's history resolvable even on a narrow trigger fetch.
+          git -C /workspace fetch --quiet origin "$${SERVING_TAG}" 2>/dev/null || true
+          if git -C /workspace merge-base --is-ancestor "$${SERVING_TAG}" "${COMMIT_SHA}" 2>/dev/null; then
+            echo "RACE: serving commit $${SERVING_TAG} is an ancestor of ${SHORT_SHA} — an older build deployed after this one. Redeploying so the newest commit serves."
+            deploy
+            SERVING_IMAGE="$(describe 'value(spec.template.spec.containers[0].image)')"
+            REVISION="$(describe 'value(status.latestReadyRevisionName)')"
+            echo "revision : $${REVISION} (after corrective redeploy)"
+            if [ "$${SERVING_IMAGE}" != "${_IMAGE}" ]; then
+              echo "FAIL: still not serving ${_IMAGE} after the corrective redeploy — inspect the service's revision history." >&2
+              exit 1
+            fi
+          elif git -C /workspace merge-base --is-ancestor "${COMMIT_SHA}" "$${SERVING_TAG}" 2>/dev/null; then
+            echo "NOTE: serving commit $${SERVING_TAG} is a DESCENDANT of ${SHORT_SHA} — a newer build already deployed. Newest wins; leaving it in place (its own build's verify covers it)."
+            exit 0
+          else
+            echo "FAIL: serving image is not the image this build pushed (${_IMAGE}), and no ancestry could be established with its tag '$${SERVING_TAG}' — rogue image or unresolvable git state." >&2
+            exit 1
+          fi
         fi
         case "$${SERVING_IMAGE}" in
           *:latest) echo "WARNING: serving a mutable ':latest' tag — the live commit is unidentifiable. Remove the trigger's _IMAGE substitution." >&2 ;;

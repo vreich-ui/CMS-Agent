@@ -133,10 +133,12 @@ credentials problem and is not one.
 A rollback to an earlier revision has the identical symptom, for the same reason: revisions predating
 ENV-1/2/3 never had those variables.
 
-### Verify the deploy — "merged" and "deployed" are different facts
+### Verify the deploy
 
-There is no CI/CD for this image, and health checks cannot detect a stale revision. One command checks
-both things that have actually gone wrong:
+Pushes to main deploy automatically via the `cms-agent-mcp-deploy` trigger (`cloudbuild.deploy.yaml`),
+whose verify step asserts the serving image is the build's own. Health checks still cannot detect a
+stale revision, so for a manual, build-log-independent check, one command covers both things that
+have actually gone wrong:
 
 ```bash
 MCP_URL=<url>/mcp MCP_API_TOKEN=<bearer> npm run verify:deploy
@@ -152,9 +154,9 @@ MCP_URL=<url>/mcp MCP_API_TOKEN=<bearer> npm run verify:deploy
 If all three connections drop at once while `repository.get_health` is green, suspect the revision, not
 the tokens.
 
-Merging a PR does not deploy this service — there is no CI/CD for the MCP image. Any
-change under `src/agent/` reaches Cloud Run only after steps 1–2 are re-run, so confirm
-the live revision's image tag before concluding a fix is deployed:
+Merging to main deploys this service through the `cms-agent-mcp-deploy` trigger; the build log is
+the receipt (a red build means the commit is NOT serving). Steps 1–2 remain the manual path. To
+confirm the live revision's image tag directly:
 
 ```bash
 gcloud run services describe cms-agent-mcp --project "$PROJECT" --region "$REGION" \
