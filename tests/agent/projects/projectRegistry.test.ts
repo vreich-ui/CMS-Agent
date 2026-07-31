@@ -34,7 +34,7 @@ const staleDrLurieConfig = (): ProjectConnectionConfig => ({
 // The client-shaped envelope the article_body node emits — validateHandoff now checks it against the
 // node's OWN outputSchema (R-6/R-23 deleted the workspace-local {schema_version, nodes} monolith).
 const validArticleBody = {
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader-facing body.",
   clientProjectId: "dr-lurie",
   clientObjectType: "content_item",
@@ -49,7 +49,7 @@ describe("project registry + Dr. Lurie definition", () => {
 
     expect(projects.map((project) => project.projectId)).toContain("dr-lurie");
     const drLurie = await repository.get("dr-lurie");
-    expect(drLurie?.contentContract).toEqual({ contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" });
+    expect(drLurie?.contentContract).toEqual({ contentContract: "content_source.v1" });
     expect(drLurie?.publishingPolicy).toMatchObject({ publishEnabled: false, requiresExplicitPublish: true });
   });
 
@@ -165,7 +165,7 @@ describe("platform project definition", () => {
 
     expect(projects.map((project) => project.projectId)).toContain("platform");
     const platform = await repository.get("platform");
-    expect(platform?.contentContract).toEqual({ contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" });
+    expect(platform?.contentContract).toEqual({ contentContract: "content_source.v1" });
     expect(platform?.status).toBe("active");
   });
 
@@ -367,21 +367,23 @@ describe("Dr. Lurie MCP adapter primitives", () => {
 });
 
 describe("project.validate_handoff structural checks", () => {
-  it("accepts a well-formed content_source.v1 + article_body.v1 handoff", () => {
+  it("accepts a well-formed content_source.v1 + client_object.v1 handoff", () => {
     const result = validateHandoff(drLurieProjectConfig, { contentSource: { artifact: "content_source.v1", summary: "Source summary." }, articleBody: validArticleBody });
 
     expect(result.valid).toBe(true);
-    expect(result.contract).toEqual({ contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" });
+    // canonicalBodyContract is derived from the article_body node's own produces const, never from
+    // project config (the canonicalArticleBody field was removed by R-23).
+    expect(result.contract).toEqual({ contentContract: "content_source.v1", canonicalBodyContract: "client_object.v1" });
     expect(result.checks.contentSource).toMatchObject({ present: true, valid: true });
     expect(result.checks.articleBody).toMatchObject({ present: true, valid: true });
   });
 
   it("rejects a malformed article_body handoff", () => {
-    const result = validateHandoff(drLurieProjectConfig, { articleBody: { schema_version: "article_body.v1", nodes: [] } });
+    const result = validateHandoff(drLurieProjectConfig, { articleBody: { schema_version: "client_object.v1", nodes: [] } });
 
     expect(result.valid).toBe(false);
     expect(result.checks.articleBody.valid).toBe(false);
-    expect(result.issues).toEqual(expect.arrayContaining([expect.stringContaining("article_body.v1")]));
+    expect(result.issues).toEqual(expect.arrayContaining([expect.stringContaining("client_object.v1")]));
   });
 
   it("rejects a content_source without the required artifact tag", () => {

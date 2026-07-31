@@ -42,7 +42,7 @@ const project = (overrides: Partial<ProjectSummary["connection"]> = {}, rest: Pa
     allowedTools: [],
     defaultToolPolicy: "blocked",
     toolPolicies: {},
-    contentContract: { contentContract: "article_body.v1", canonicalArticleBody: "article_body.v1" },
+    contentContract: { contentContract: "client_object.v1" },
     publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "" },
     status: "active",
     connection: { endpointConfigured: true, tokenConfigured: true, mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT", tokenEnvVar: "DR_LURIE_MCP_TOKEN", ...overrides },

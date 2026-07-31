@@ -12,11 +12,11 @@ import type { SkillDefinition } from "./skillTypes.js";
 export const seededSkillDefinitions: SkillDefinition[] = [
   {
     "skillId": "article_body_builder",
-    "name": "Article body builder",
-    "description": "Build CMS article_body-compatible content blocks.",
+    "name": "Client object builder",
+    "description": "Build content blocks for the client_object.v1 envelope.",
     "version": "1.0.0",
     "status": "active",
-    "instructions": "Create article body nodes that satisfy the shared article_body.v1 contract.",
+    "instructions": "Create content nodes that satisfy the shared client_object.v1 contract (one client object plus its provenance; the body inside it is governed by the client's own fetched contract).",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -87,7 +87,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "riskLevel": "read",
     "metadata": {},
     "createdAt": "2026-01-01T00:00:00.000Z",
-    "updatedAt": "2026-01-01T00:00:00.000Z"
+    "updatedAt": "2026-07-31T10:14:27.329Z"
   },
   {
     "skillId": "article_structuring",

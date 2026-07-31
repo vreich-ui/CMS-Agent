@@ -13,7 +13,10 @@ export const MONETIZER_SAFE_READ_ONLY_TOOLS = [
   "demand_signals",
   "explain_decision"
 ] as const;
-export const MONETIZER_DEFINITION_VERSION = 1;
+// Bumped 1 -> 2 when R-23 removed contentContract.canonicalArticleBody (every definition declared
+// the identical value; the article_body node's own produces const is the single source) so persisted
+// stale configs re-seed without it.
+export const MONETIZER_DEFINITION_VERSION = 2;
 
 export const monetizerProjectConfig: ProjectConnectionConfig = {
   projectId: "monetizer",
@@ -24,8 +27,7 @@ export const monetizerProjectConfig: ProjectConnectionConfig = {
   tokenEnvVar: "MONETIZER_MCP_TOKEN",
   allowedTools: [...MONETIZER_SAFE_READ_ONLY_TOOLS],
   contentContract: {
-    contentContract: "content_source.v1",
-    canonicalArticleBody: "article_body.v1"
+    contentContract: "content_source.v1"
   },
   publishingPolicy: {
     publishEnabled: false,

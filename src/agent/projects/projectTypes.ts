@@ -19,8 +19,10 @@ export type ToolPermission = typeof toolPermissions[number];
 export type ProjectContentContract = {
   // Structured envelope the project hands work off with, e.g. "content_source.v1".
   contentContract: string;
-  // Canonical article body artifact the project consumes/produces, e.g. "article_body.v1".
-  canonicalArticleBody: string;
+  // The canonical body artifact (client_object.v1 — one client object plus its provenance) is NOT
+  // configured here: every project declared the identical value, so the field could only ever
+  // misconfigure. The article_body node's own `produces` const is the single source (see
+  // projectRegistry.ts validate_handoff).
 };
 
 // Per-SITE parameters of the object-native publish dialect. These are the values that differ from

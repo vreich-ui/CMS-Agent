@@ -43,7 +43,7 @@ const DR_LURIE_PUBLISH_TOOL_SEQUENCE = ["object_create", "object_checkout", "obj
 // Keys the engine must never write into the client object:
 //   - the judgement substrate (D7) — all judgements stay workspace-side, and set_article_meta's open
 //     `fields` map would otherwise accept every one of them;
-//   - `schema_version` — article_body.v1's own label. The content_item body has NO schema_version and
+//   - `schema_version` — client_object.v1's own label. The content_item body has NO schema_version and
 //     is zod .strict(), so carrying it through would be rejected at write (mapping rule: drop it).
 const EXCLUDED_META_KEYS: ReadonlySet<string> = new Set([...JUDGEMENT_SUBSTRATE_KEYS, "schema_version"]);
 

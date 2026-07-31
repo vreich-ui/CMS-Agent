@@ -46,7 +46,7 @@ export const drLurieProjectKnowledge = {
       "Node ids are opaque n_* ids and must never carry strategy or commercial vocabulary; omit node.id on upsert_node to have one minted."
     ],
     bodyMapping: [
-      "article_body.v1 is what the workspace authors; content_item.v1 is what the client stores. Map between them — do not send one as the other.",
+      "client_object.v1 is what the workspace authors; content_item.v1 is what the client stores. Map between them — do not send one as the other.",
       "Drop schema_version at the mapping step: the content_item body has no such field and its schema is strict, so an unknown key is rejected at write.",
       "Root slug, title, deck, description, taxonomy, seo, image, and editorial at the body; they are not node fields.",
       "An article is a sequence of functional blocks, each annotated with private.strategy and private.intent — one giant text node is a policy violation even when it validates."

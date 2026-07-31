@@ -6,12 +6,22 @@ import type { BudgetStatus, EstimateModelCostInput, ModelUsageFilters, ModelUsag
 const now = () => new Date().toISOString();
 const makeUsageId = () => `usage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-// Placeholder estimates only. Update this catalog before production billing decisions.
+// Hand-maintained list prices, refreshed 2026-07-31. These figures gate real money (the budget guard
+// and run ceilings price every turn through estimateModelCost), so every entry stays flagged
+// placeholder: there is no billing-grade reconciliation behind this catalog and it goes stale
+// silently — re-check published rates before any production billing decision.
 export const modelPricingCatalog: Record<string, { inputUsdPerMillion: number; outputUsdPerMillion: number; cachedInputUsdPerMillion?: number; placeholder: true; note: string }> = {
-  "gpt-5.5": { inputUsdPerMillion: 5, outputUsdPerMillion: 15, cachedInputUsdPerMillion: 1.25, placeholder: true, note: "Placeholder estimate; not billing-grade." },
-  "gpt-5.5-mini": { inputUsdPerMillion: 0.6, outputUsdPerMillion: 2.4, cachedInputUsdPerMillion: 0.15, placeholder: true, note: "Placeholder estimate; not billing-grade." },
-  "gpt-4.1": { inputUsdPerMillion: 2, outputUsdPerMillion: 8, cachedInputUsdPerMillion: 0.5, placeholder: true, note: "Placeholder estimate; not billing-grade." },
-  "gpt-4.1-mini": { inputUsdPerMillion: 0.4, outputUsdPerMillion: 1.6, cachedInputUsdPerMillion: 0.1, placeholder: true, note: "Placeholder estimate; not billing-grade." },
+  "gpt-5.5": { inputUsdPerMillion: 5, outputUsdPerMillion: 30, cachedInputUsdPerMillion: 0.5, placeholder: true, note: "OpenAI published list price as of 2026-07-31; not billing-grade." },
+  "gpt-5.5-mini": { inputUsdPerMillion: 0.75, outputUsdPerMillion: 4.5, cachedInputUsdPerMillion: 0.075, placeholder: true, note: "No published OpenAI listing for this id as of 2026-07-31 (the current mini tier is gpt-5.4-mini); priced at that tier's list rate as a proxy. Not billing-grade." },
+  "gpt-4.1": { inputUsdPerMillion: 2, outputUsdPerMillion: 8, cachedInputUsdPerMillion: 0.5, placeholder: true, note: "OpenAI published list price as of 2026-07-31 (legacy tier); not billing-grade." },
+  "gpt-4.1-mini": { inputUsdPerMillion: 0.4, outputUsdPerMillion: 1.6, cachedInputUsdPerMillion: 0.1, placeholder: true, note: "OpenAI published list price as of 2026-07-31 (legacy tier); not billing-grade." },
+  // Anthropic entries for the native runner (AnthropicNodeRunner records provider "anthropic";
+  // its DEFAULT_MODEL is claude-opus-4-8). Cached rate is Anthropic's 0.1x cache-read multiplier.
+  "claude-opus-4-8": { inputUsdPerMillion: 5, outputUsdPerMillion: 25, cachedInputUsdPerMillion: 0.5, placeholder: true, note: "Anthropic published list price as of 2026-07-31; not billing-grade." },
+  "claude-opus-5": { inputUsdPerMillion: 5, outputUsdPerMillion: 25, cachedInputUsdPerMillion: 0.5, placeholder: true, note: "Anthropic published list price as of 2026-07-31; not billing-grade." },
+  "claude-sonnet-5": { inputUsdPerMillion: 3, outputUsdPerMillion: 15, cachedInputUsdPerMillion: 0.3, placeholder: true, note: "Anthropic standard list price as of 2026-07-31; intro pricing ($2/$10) runs through 2026-08-31 — the standard rate is used so estimates stay conservative. Not billing-grade." },
+  "claude-haiku-4-5": { inputUsdPerMillion: 1, outputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.1, placeholder: true, note: "Anthropic published list price as of 2026-07-31; not billing-grade." },
+  "claude-fable-5": { inputUsdPerMillion: 10, outputUsdPerMillion: 50, cachedInputUsdPerMillion: 1, placeholder: true, note: "Anthropic published list price as of 2026-07-31; not billing-grade." },
   // Model-tiering candidates (docs/improvement/STRATEGY.md §4) reachable via the provider registry.
   "gemini-3.1-flash-lite": { inputUsdPerMillion: 0.25, outputUsdPerMillion: 1.5, placeholder: true, note: "Placeholder estimate; not billing-grade." },
   "gemini-3.5-flash": { inputUsdPerMillion: 0.75, outputUsdPerMillion: 4.5, placeholder: true, note: "Placeholder estimate; not billing-grade." },

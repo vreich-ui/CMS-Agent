@@ -6,7 +6,7 @@ import type { PublishReadinessResponse, PublishResult } from "../src/types/works
 
 const makeClient = (call: McpClient["call"]): McpClient => ({ method: async () => { throw new Error("unused"); }, call });
 
-const goReadiness: PublishReadinessResponse = { available: true, articleBodyValid: true, readiness: { status: "go", state: "ready_for_publish_execution", checklist: [], blockers: [], hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false } } };
+const goReadiness: PublishReadinessResponse = { available: true, articleBodyValid: true, readiness: { status: "go", state: "ready_for_publish_execution", checklist: [], blockers: [], hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false } } };
 
 const blockedResult: PublishResult = {
   published: false,
@@ -14,7 +14,7 @@ const blockedResult: PublishResult = {
   gates: { operatorEnabled: false, approved: false, live: false, allPassed: false, gates: [] },
   plan: { projectId: "dr-lurie", requestId: "req_x", nodeCount: 1, publishedTime: null, toolSequence: [] },
   steps: [],
-  readiness: { status: "no_go", state: "blocked_for_publish_execution", checklist: [], blockers: ["pinned_approval"], requiredAction: "Resolve: pinned_approval.", hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false } },
+  readiness: { status: "no_go", state: "blocked_for_publish_execution", checklist: [], blockers: ["pinned_approval"], requiredAction: "Resolve: pinned_approval.", hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false } },
   blocked: { requestId: "req_x", nodeAwaitingApproval: "publication_controller", artifactSlot: null, requiredAction: "Resolve: pinned_approval.", resumable: true }
 };
 

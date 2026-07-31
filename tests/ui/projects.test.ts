@@ -9,7 +9,7 @@ const project = (projectId: string, name: string): ProjectSummary => ({
   allowedTools: [],
   defaultToolPolicy: "blocked",
   toolPolicies: {},
-  contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
+  contentContract: { contentContract: "content_source.v1" },
   publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "" },
   status: "active",
   connection: { endpointConfigured: false, tokenConfigured: false, mcpEndpointEnvVar: "X" }

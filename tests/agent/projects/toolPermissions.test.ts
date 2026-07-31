@@ -10,7 +10,7 @@ const baseConfig = (overrides: Partial<ProjectConnectionConfig> = {}): ProjectCo
   authMode: "bearer_env",
   tokenEnvVar: "ACME_MCP_TOKEN",
   allowedTools: ["read_thing"],
-  contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
+  contentContract: { contentContract: "content_source.v1" },
   publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "" },
   status: "active",
   ...overrides
@@ -57,7 +57,7 @@ describe("project.update round-trips the three-state policy", () => {
       allowedTools: [],
       defaultToolPolicy: "allowed",
       toolPolicies: { risky: "needs_approval" },
-      contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
+      contentContract: { contentContract: "content_source.v1" },
       status: "active"
     });
 

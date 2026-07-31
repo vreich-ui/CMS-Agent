@@ -14,7 +14,7 @@ import { validateOutput } from "../../execution/outputValidator.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
 import type { PublishReadinessCheck, PublishReadinessInput, PublishReadinessResult } from "../drLurie/publishReadiness.js";
 
-export const PLATFORM_REQUIRED_CONTENT_PATH = "article_body.v1";
+export const PLATFORM_REQUIRED_CONTENT_PATH = "client_object.v1";
 // The per-site pdf-tool tenancy (get_pdf_tool_storage_grant) is the only sanctioned artifact path
 // fleet-wide; platform's protocol id follows the same naming convention as Dr. Lurie's.
 export const PLATFORM_REQUIRED_ARTIFACT_PROTOCOL = "pdf_tool_platform_blob.v1";
@@ -44,7 +44,8 @@ export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): 
   const acceptedEmpty = (key: string, label: string, detail?: string) => checklist.push({ key, label, status: "accepted_empty", detail });
   const fail = (key: string, label: string, detail: string) => { checklist.push({ key, label, status: "fail", detail }); blockers.push(key); };
 
-  // 1. article_body.v1 valid — checked against the article_body node's OWN outputSchema, which is the
+  // 1. client_object.v1 valid — the surviving envelope is not an "article body", it is one client
+  // object plus its provenance; checked against the article_body node's OWN outputSchema, which is the
   // single authority for "is this a valid body": the same schema the executor enforces at execution
   // time, buildInitialRun enforces on a seeded late-stage entrypoint, and the publisher enforces before
   // publishing, so the entrypoint, the publisher and this readiness gate cannot drift apart. This used
@@ -54,8 +55,8 @@ export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): 
   // (object_validate), which the publication controller requires as separate evidence; this check gates
   // only the workspace-side contract.
   const body = validateOutput(input.articleBody, getWorkspaceNode("article_body")?.outputSchema);
-  if (body.ok) pass("article_body_valid", "article_body.v1 valid");
-  else fail("article_body_valid", "article_body.v1 valid", `invalid article body: ${body.errors.slice(0, 3).join("; ")}`);
+  if (body.ok) pass("article_body_valid", "client_object.v1 valid");
+  else fail("article_body_valid", "client_object.v1 valid", `invalid article body: ${body.errors.slice(0, 3).join("; ")}`);
 
   // 2. Blob artifacts verified — no Blob-shaped media trusted unless pdf-tool materialization for
   // THIS request is confirmed by the caller.

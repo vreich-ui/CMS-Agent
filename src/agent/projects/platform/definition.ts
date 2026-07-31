@@ -79,10 +79,13 @@ export const PLATFORM_OBJECT_DIALECT: ProjectObjectDialect = {
   defaultObjectType: "content_item"
 };
 
-// This is platform's FIRST definitionVersion, not a bump — the project has never been seeded here
-// before. Any live record with no definitionVersion (undefined) re-seeds once this ships, which is
-// safe because the rest of this config is a faithful mirror of that same live record (see header).
-export const PLATFORM_DEFINITION_VERSION = 1;
+// Version 1 was platform's FIRST definitionVersion, not a bump — the project had never been seeded
+// here before; any live record with no definitionVersion (undefined) re-seeded once that shipped,
+// which was safe because the rest of this config is a faithful mirror of that same live record (see
+// header). Bumped 1 -> 2 when R-23 removed contentContract.canonicalArticleBody (every definition
+// declared the identical value; the article_body node's own produces const is the single source) so
+// persisted stale configs re-seed without it.
+export const PLATFORM_DEFINITION_VERSION = 2;
 
 export const platformProjectConfig: ProjectConnectionConfig = {
   projectId: "platform",
@@ -95,8 +98,7 @@ export const platformProjectConfig: ProjectConnectionConfig = {
   defaultToolPolicy: PLATFORM_DEFAULT_TOOL_POLICY,
   toolPolicies: { ...PLATFORM_TOOL_POLICIES },
   contentContract: {
-    contentContract: "content_source.v1",
-    canonicalArticleBody: "article_body.v1"
+    contentContract: "content_source.v1"
   },
   objectDialect: { ...PLATFORM_OBJECT_DIALECT },
   publishingPolicy: {

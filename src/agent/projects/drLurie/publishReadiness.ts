@@ -5,14 +5,14 @@
 //
 // It refuses to treat a Blob-shaped media reference as trusted unless pdf-tool materialization is
 // verified (the caller supplies the confirmed refs), and it enforces Dr. Lurie's hard constraints
-// (contentPath article_body.v1, artifactProtocol pdf_tool_dr_lurie_blob.v1, legacyFallbacksUsed
+// (contentPath client_object.v1, artifactProtocol pdf_tool_dr_lurie_blob.v1, legacyFallbacksUsed
 // false), taxonomy resolution, a pinned approval, and a selected release/build behavior. A NO-GO is
 // an expected safety state (blocked_for_publish_execution), not a generic failure.
 
 import { validateOutput } from "../../execution/outputValidator.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
 
-export const DR_LURIE_REQUIRED_CONTENT_PATH = "article_body.v1";
+export const DR_LURIE_REQUIRED_CONTENT_PATH = "client_object.v1";
 export const DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL = "pdf_tool_dr_lurie_blob.v1";
 export const DR_LURIE_RELEASE_BEHAVIORS = ["publish_now", "schedule", "build_only", "unpublish"] as const;
 
@@ -60,15 +60,16 @@ export function evaluateDrLuriePublishReadiness(input: PublishReadinessInput): P
   const acceptedEmpty = (key: string, label: string, detail?: string) => checklist.push({ key, label, status: "accepted_empty", detail });
   const fail = (key: string, label: string, detail: string) => { checklist.push({ key, label, status: "fail", detail }); blockers.push(key); };
 
-  // 1. article_body.v1 valid — checked against the article_body node's OWN outputSchema, the same
+  // 1. client_object.v1 valid — the surviving envelope is not an "article body", it is one client
+  // object plus its provenance; checked against the article_body node's OWN outputSchema, the same
   // single authority the executor enforces at execution time, buildInitialRun enforces on a seeded
   // late-stage entrypoint, and the publisher enforces before publishing. One definition of "what a body
   // is", so the entrypoint, the publisher and this readiness gate cannot drift apart. This used to parse
   // the workspace-local articleBodySchema ({schema_version, nodes}) — a shape the node never emits — so
   // `article_body_valid` was unsatisfiable for real pipeline output and readiness could never say GO.
   const body = validateOutput(input.articleBody, getWorkspaceNode("article_body")?.outputSchema);
-  if (body.ok) pass("article_body_valid", "article_body.v1 valid");
-  else fail("article_body_valid", "article_body.v1 valid", `invalid article body: ${body.errors.slice(0, 3).join("; ")}`);
+  if (body.ok) pass("article_body_valid", "client_object.v1 valid");
+  else fail("article_body_valid", "client_object.v1 valid", `invalid article body: ${body.errors.slice(0, 3).join("; ")}`);
 
   // 2. Blob artifacts verified — no Blob-shaped media trusted unless pdf-tool materialization confirmed.
   const verified = new Set((input.verifiedMediaRefs ?? []).map((ref) => String(ref)));

@@ -50,7 +50,10 @@ export const RUN_CONTEXT_KEY = "run_context";
 
 export type RunContext = {
   projectId: string;
-  projectContract: { contentContract: string; canonicalArticleBody: string; publishingPolicy: unknown };
+  // canonicalArticleBody is gone (R-23): every project declared the identical value, making it
+  // configuration that could only ever misconfigure; the article_body node's own produces const is
+  // the single source of the envelope contract now.
+  projectContract: { contentContract: string; publishingPolicy: unknown };
   // The article_body node's OWN outputSchema — the same single authority the executor, buildInitialRun,
   // and the publisher enforce. Never a workspace-local article schema (R-6/R-23 deleted the last one);
   // the client's fetched contract (via contract_intelligence / objectContracts) governs the body within
@@ -145,7 +148,7 @@ export function summarizeRunCost(run: WorkflowExecutionRecord, usage: ModelUsage
   };
 }
 
-export type RunPlanStrategy = "poll" | "resume" | "late_stage_rerun" | "full_run";
+export type RunPlanStrategy = "poll" | "resume" | "retry_node" | "late_stage_rerun" | "full_run";
 export type RunPlan = {
   runId: string;
   strategy: RunPlanStrategy;
@@ -153,21 +156,40 @@ export type RunPlan = {
   reusableStages: string[];
   remainingStages: string[];
   recommendedEntrypoint?: "article_body";
+  // Set with strategy "retry_node": the failed node workflow.retry_node should target.
+  retryNodeId?: string;
   // True when the recommended strategy does less work than re-running the whole workflow.
   narrowerThanFullRun: boolean;
 };
 
-const TERMINAL_NON_BLOCKED = new Set<ExecutionStatus>(["completed", "failed", "cancelled"]);
+const TERMINAL_NON_RETRYABLE = new Set<ExecutionStatus>(["completed", "cancelled"]);
 
-// Recommend the cheapest way to make progress on a run. Prefers polling/resuming/late-stage reuse
-// over a full rerun; a full run is recommended only when no reusable late-stage artifact exists yet.
+// Recommend the cheapest way to make progress on a run. Prefers polling/resuming/retrying/late-stage
+// reuse over a full rerun; a full run is recommended only when no reusable late-stage artifact
+// exists yet.
 export function planRun(run: WorkflowExecutionRecord): RunPlan {
   const reusableStages = run.nodes.filter((node) => node.status === "completed").map((node) => node.nodeId);
   const remainingStages = run.nodes.filter((node) => node.status === "queued").map((node) => node.nodeId);
   const articleBodyReady = run.nodes.find((node) => node.nodeId === "article_body")?.status === "completed";
   const base = { runId: run.runId, reusableStages, remainingStages } as const;
 
-  if (TERMINAL_NON_BLOCKED.has(run.status)) {
+  // Terminal ≠ nothing-to-do. A run that FAILED on one node while carrying completed, reusable
+  // stages has one obvious cheapest next step — retry that node — and this tool used to answer
+  // "poll" for it, which reads as "the run is finished, watch it", exactly wrong for a failure an
+  // operator can clear (a timeout, a since-raised budget, a transient client error).
+  if (run.status === "failed") {
+    const failedNode = run.nodes.find((node) => node.status === "failed");
+    if (failedNode) {
+      return {
+        ...base,
+        strategy: "retry_node",
+        retryNodeId: failedNode.nodeId,
+        reason: `Run failed at ${failedNode.nodeId} (${failedNode.errors?.[0] ?? "unnamed error"}) with ${reusableStages.length} completed stage(s) intact. workflow.retry_node with nodeId "${failedNode.nodeId}" re-runs just that node and continues; nothing completed is recomputed.`,
+        narrowerThanFullRun: true
+      };
+    }
+  }
+  if (TERMINAL_NON_RETRYABLE.has(run.status) || run.status === "failed") {
     return { ...base, strategy: "poll", reason: "Run is terminal; poll status and artifacts instead of rerunning.", narrowerThanFullRun: true };
   }
   if (run.status === "blocked") {

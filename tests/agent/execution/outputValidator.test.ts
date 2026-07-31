@@ -83,7 +83,7 @@ describe("validateOutput full JSON Schema keyword enforcement", () => {
 describe("validateOutput against the article_body node's own outputSchema", () => {
   const articleBodyNodeSchema = getWorkspaceNode("article_body")!.outputSchema;
   const envelope = {
-    artifact: "article_body.v1",
+    artifact: "client_object.v1",
     summary: "Client-shaped body.",
     clientProjectId: "dr-lurie",
     clientObjectType: "content_item",
@@ -96,7 +96,7 @@ describe("validateOutput against the article_body node's own outputSchema", () =
   });
 
   it("rejects the deleted workspace-local {schema_version, nodes} monolith on every required field", () => {
-    const legacy = { schema_version: "article_body.v1", nodes: [{ id: "n_A", kind: "content", visibility: "public", public: { title: "Title" } }] };
+    const legacy = { schema_version: "client_object.v1", nodes: [{ id: "n_A", kind: "content", visibility: "public", public: { title: "Title" } }] };
     const result = validateOutput(legacy, articleBodyNodeSchema);
     expect(result.ok).toBe(false);
     const errors = !result.ok ? result.errors.join("; ") : "";

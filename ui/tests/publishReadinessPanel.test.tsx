@@ -13,11 +13,11 @@ const goReadiness: PublishReadinessResponse = {
     status: "go",
     state: "ready_for_publish_execution",
     checklist: [
-      { key: "article_body_valid", label: "article_body.v1 valid", status: "pass" },
+      { key: "article_body_valid", label: "client_object.v1 valid", status: "pass" },
       { key: "taxonomy", label: "Taxonomy resolved", status: "accepted_empty", detail: "explicitly accepted empty" }
     ],
     blockers: [],
-    hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
+    hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
   }
 };
 
@@ -32,7 +32,7 @@ const noGoReadiness: PublishReadinessResponse = {
     ],
     blockers: ["pinned_approval"],
     requiredAction: "Resolve: pinned_approval.",
-    hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
+    hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
   }
 };
 
@@ -57,7 +57,7 @@ describe("PublishReadinessPanel", () => {
   it("renders a GO readiness checklist with the canonical hard constraints", () => {
     render(<PublishReadinessPanel run={run} readiness={goReadiness} publishResult={null} loading={false} error={null} onCheckReadiness={noop} onPublish={noop} />);
     expect(screen.getByText(/GO — ready for publish execution/i)).toBeInTheDocument();
-    expect(screen.getByText("article_body.v1 valid")).toBeInTheDocument();
+    expect(screen.getByText("client_object.v1 valid")).toBeInTheDocument();
     // Hard-constraints block renders (dt labels are unique to the readiness result).
     expect(screen.getByText("artifactProtocol")).toBeInTheDocument();
     expect(screen.getByText("legacyFallbacksUsed")).toBeInTheDocument();
@@ -104,7 +104,7 @@ describe("PublishReadinessPanel", () => {
       releaseBehavior: "publish_now",
       taxonomy: { acceptedEmpty: true },
       approval: { pinned: true, approvedBy: "editor" },
-      hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
+      hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
     });
   });
 

@@ -14,7 +14,10 @@ export const PDF_TOOL_SAFE_READ_ONLY_TOOLS = [
   "get_image_search_bank",
   "get_image_search_job_status"
 ] as const;
-export const PDF_TOOL_DEFINITION_VERSION = 1;
+// Bumped 1 -> 2 when R-23 removed contentContract.canonicalArticleBody (every definition declared
+// the identical value; the article_body node's own produces const is the single source) so persisted
+// stale configs re-seed without it.
+export const PDF_TOOL_DEFINITION_VERSION = 2;
 
 export const pdfToolProjectConfig: ProjectConnectionConfig = {
   projectId: "pdf-tool",
@@ -25,8 +28,7 @@ export const pdfToolProjectConfig: ProjectConnectionConfig = {
   tokenEnvVar: "PDF_TOOL_MCP_TOKEN",
   allowedTools: [...PDF_TOOL_SAFE_READ_ONLY_TOOLS],
   contentContract: {
-    contentContract: "content_source.v1",
-    canonicalArticleBody: "article_body.v1"
+    contentContract: "content_source.v1"
   },
   publishingPolicy: {
     publishEnabled: false,

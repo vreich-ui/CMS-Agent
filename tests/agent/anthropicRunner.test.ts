@@ -72,6 +72,17 @@ describe("AnthropicNodeRunner.validateConfiguration", () => {
     expect((noSchema as { errors: string[] }).errors.join(" ")).toContain("outputSchema");
     expect(new AnthropicNodeRunner().validateConfiguration(node()).ok).toBe(true);
   });
+
+  it("refuses a tool-using node by name (no Messages-API tool loop yet)", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    // A provider switch on a tool-granted node (article_body, artifact_plan, publish_payload) must
+    // fail at configuration time — running it here would silently strip the granted tools.
+    const result = new AnthropicNodeRunner().validateConfiguration(node({ allowedTools: ["project.call_read_tool", "stage.get_output"] } as Partial<WorkspaceNode>));
+    expect(result.ok).toBe(false);
+    const joined = (result as { errors: string[] }).errors.join(" ");
+    expect(joined).toContain("cannot execute tool-using nodes");
+    expect(joined).toContain("project.call_read_tool");
+  });
 });
 
 describe("AnthropicNodeRunner.run (injected fetch)", () => {

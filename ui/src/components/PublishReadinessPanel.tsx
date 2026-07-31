@@ -49,7 +49,7 @@ export function PublishReadinessPanel({ run, readiness, publishResult, loading, 
       ...(releaseBehavior ? { releaseBehavior } : {}),
       taxonomy: { ...(tags.length ? { tags } : {}), ...(acceptEmptyTaxonomy ? { acceptedEmpty: true } : {}) },
       approval: { pinned: pinApproval, ...(approver.trim() ? { approvedBy: approver.trim() } : {}) },
-      ...(affirmHardConstraints ? { hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false } } : {}),
+      ...(affirmHardConstraints ? { hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false } } : {}),
       ...(verifiedMediaRefs.length ? { verifiedMediaRefs } : {})
     };
   };

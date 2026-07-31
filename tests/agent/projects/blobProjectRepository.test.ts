@@ -39,7 +39,7 @@ describe("Blob project repository", () => {
       expect(persisted).toContain("DR_LURIE_MCP_TOKEN");
 
       const reread = await new RepositoryManager({ backend: "blobs" }).getProjectRepository().get("dr-lurie");
-      expect(reread?.contentContract.canonicalArticleBody).toBe("article_body.v1");
+      expect(reread?.contentContract).toEqual({ contentContract: "content_source.v1" });
     } finally {
       delete process.env.DR_LURIE_MCP_ENDPOINT;
       delete process.env.DR_LURIE_MCP_TOKEN;

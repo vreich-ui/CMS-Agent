@@ -17,7 +17,7 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
 // Client-shaped envelope: the article_body node's own outputSchema is the authority, and a seeded
 // entrypoint output is now validated against it before the run is created.
 const articleBody = {
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Publish gate visibility fixture.",
   clientProjectId: "platform",
   clientObjectType: "content_item",

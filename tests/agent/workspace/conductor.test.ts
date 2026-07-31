@@ -57,7 +57,10 @@ describe("getRunContext", () => {
     const projectRepository = projectRepositoryStub(get);
 
     const context = await getRunContext({ runId: "run_ctx", projectId: "dr-lurie", projectRepository, cache });
-    expect(context.projectContract.canonicalArticleBody).toBe("article_body.v1");
+    // canonicalArticleBody is gone (R-23): the envelope contract comes from the article_body node's
+    // own produces/outputSchema, never from per-project configuration.
+    expect(context.projectContract).not.toHaveProperty("canonicalArticleBody");
+    expect(context.projectContract.contentContract).toBeDefined();
     // The bundle carries the article_body node's OWN outputSchema (the client-shaped envelope) —
     // never the deleted workspace-local {schema_version, nodes} monolith.
     const articleBodySchema = context.articleBodySchema as { required: string[]; properties: Record<string, unknown> };

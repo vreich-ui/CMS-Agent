@@ -1,5 +1,5 @@
 // Explicit PUBLISH gate for the Publishing Conductor. This is the deliberate, auditable step that
-// turns a reviewed article_body.v1 into a real publication on a project's live site. Publishing is
+// turns a reviewed client_object.v1 into a real publication on a project's live site. Publishing is
 // irreversible and outward-facing, so it is protected by defense-in-depth: a live publish runs ONLY
 // when the operator has enabled publishing for the project AND the caller passes explicit approval
 // AND an explicit live flag. Missing any gate yields a dry-run PLAN that performs no external call.
