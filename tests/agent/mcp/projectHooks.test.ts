@@ -12,7 +12,7 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
 // The Dr. Lurie artifact-policy walker is shape-agnostic (it recurses the whole payload), so policy
 // findings still fire on refs nested under `body`.
 const envelope = (body: Record<string, unknown>) => ({
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader-facing body.",
   clientProjectId: "dr-lurie",
   clientObjectType: "content_item",

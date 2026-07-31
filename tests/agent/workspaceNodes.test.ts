@@ -37,8 +37,8 @@ describe("Publishing Conductor workspace nodes", () => {
     expect(validateWorkspaceGraph()).toEqual({ valid: true, issues: [] });
   });
 
-  it("marks article_body as the canonical article_body.v1 producer", () => {
-    expect(listWorkspaceNodes().find((node) => node.id === "article_body")?.produces).toContain("article_body.v1");
+  it("marks article_body as the canonical client_object.v1 producer", () => {
+    expect(listWorkspaceNodes().find((node) => node.id === "article_body")?.produces).toContain("client_object.v1");
   });
 
   it("connects publish_payload after article_body", () => {

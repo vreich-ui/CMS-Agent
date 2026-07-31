@@ -267,7 +267,9 @@ export type ProjectSummary = {
   // (project.list_tools) these give every tool's effective permission on the Access page.
   defaultToolPolicy: ToolPermission;
   toolPolicies: Record<string, ToolPermission>;
-  contentContract: { contentContract: string; canonicalArticleBody: string };
+  // canonicalArticleBody was removed (R-23): the canonical body contract (client_object.v1) is the
+  // article_body node's own produces const, not per-project configuration.
+  contentContract: { contentContract: string };
   publishingPolicy: { publishEnabled: boolean; requiresExplicitPublish: boolean; description: string };
   status: "active" | "disabled";
   connection: ProjectConnectionState;

@@ -6,20 +6,20 @@ import { getProjectHooks } from "../../../src/agent/projects/projectHooks.js";
 // node's own outputSchema, so the fixtures carry the envelope with the client's object under `body` —
 // the shape a real pipeline output has.
 const envelope = (body: unknown) => ({
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader-facing body assembled for the readiness tests.",
   clientProjectId: "platform",
   clientObjectType: "content_item",
   contractSource: { tool: "contract_get", fetchedAt: "2026-07-16T00:00:00.000Z" },
   body
 });
-const validBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] });
+const validBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] });
 const ready = {
   articleBody: validBody,
   taxonomy: { tags: ["engine"] },
   approval: { pinned: true, approvedBy: "editor" },
   releaseBehavior: "publish_now",
-  hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_platform_blob.v1", legacyFallbacksUsed: false }
+  hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_platform_blob.v1", legacyFallbacksUsed: false }
 };
 
 describe("Platform publish readiness", () => {
@@ -45,7 +45,7 @@ describe("Platform publish readiness", () => {
   });
 
   it("does not trust Blob-shaped media unless pdf-tool materialization is verified", () => {
-    const body = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] });
+    const body = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] });
     expect(evaluatePlatformPublishReadiness({ ...ready, articleBody: body }).blockers).toContain("media_artifacts_verified");
     expect(evaluatePlatformPublishReadiness({ ...ready, articleBody: body, verifiedMediaRefs: ["image/req_x/abc.png"] }).status).toBe("go");
   });
@@ -67,7 +67,7 @@ describe("Platform publish readiness", () => {
   it("enforces platform's hard constraints exactly, including its own artifact protocol", () => {
     expect(evaluatePlatformPublishReadiness({ ...ready, hardConstraints: { ...ready.hardConstraints, artifactProtocol: "pdf_tool_dr_lurie_blob.v1" } }).blockers).toContain("hard_artifact_protocol");
     expect(evaluatePlatformPublishReadiness({ ...ready, hardConstraints: { ...ready.hardConstraints, legacyFallbacksUsed: true } }).blockers).toContain("hard_legacy_fallbacks");
-    expect(evaluatePlatformPublishReadiness(ready).hardConstraints).toEqual({ contentPath: "article_body.v1", artifactProtocol: "pdf_tool_platform_blob.v1", legacyFallbacksUsed: false });
+    expect(evaluatePlatformPublishReadiness(ready).hardConstraints).toEqual({ contentPath: "client_object.v1", artifactProtocol: "pdf_tool_platform_blob.v1", legacyFallbacksUsed: false });
   });
 
   it("leaves Dr. Lurie's registration untouched", () => {

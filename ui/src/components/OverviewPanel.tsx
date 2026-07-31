@@ -35,7 +35,7 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
       <strong>{project.name}</strong>
       <span className={`execution-pill ${project.status === "active" ? "execution-completed" : "execution-cancelled"}`}>{project.status}</span>
     </div>
-    <p className="muted">Contract {project.contentContract.contentContract} · body {project.contentContract.canonicalArticleBody} · publishing {project.publishingPolicy.publishEnabled ? "enabled" : "disabled"}</p>
+    <p className="muted">Contract {project.contentContract.contentContract} · publishing {project.publishingPolicy.publishEnabled ? "enabled" : "disabled"}</p>
     <p className="muted">Endpoint {project.connection.endpointConfigured ? "configured" : "not configured"} ({project.connection.mcpEndpointEnvVar}){project.connection.tokenEnvVar ? ` · token ${project.connection.tokenConfigured ? "configured" : "not configured"}` : ""}</p>
   </li>;
 }

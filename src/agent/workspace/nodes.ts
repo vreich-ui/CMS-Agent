@@ -1691,7 +1691,7 @@ export const publishingConductorNodes = [
       "additionalProperties": true,
       "properties": {
         "artifact": {
-          "const": "article_body.v1"
+          "const": "client_object.v1"
         },
         "summary": {
           "type": "string",
@@ -1776,7 +1776,7 @@ export const publishingConductorNodes = [
       "additionalProperties": true,
       "properties": {
         "artifact": {
-          "const": "article_body.v1"
+          "const": "client_object.v1"
         },
         "summary": {
           "type": "string",
@@ -1851,7 +1851,7 @@ export const publishingConductorNodes = [
       "angle_strategy"
     ],
     "produces": [
-      "article_body.v1"
+      "client_object.v1"
     ],
     "riskLevel": "write",
     "dependsOn": [
@@ -3063,7 +3063,7 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
   nodes.forEach((node) => visit(node.id, []));
   const articleBody = nodes.find((node) => node.id === "article_body");
   if (!articleBody) issues.push("Missing article_body node");
-  if (articleBody && !articleBody.produces.includes("article_body.v1")) issues.push("article_body must produce article_body.v1");
+  if (articleBody && !articleBody.produces.includes("client_object.v1")) issues.push("article_body must produce client_object.v1");
   const publishPayload = nodes.find((node) => node.id === "publish_payload");
   if (publishPayload && !publishPayload.dependsOn.includes("article_body")) issues.push("publish_payload must depend on article_body");
   const publicationController = nodes.find((node) => node.id === "publication_controller");

@@ -33,9 +33,11 @@ const ENV_VAR_NAME_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
 export const projectIdSchema = z.string().regex(PROJECT_ID_PATTERN, "projectId must be lowercase kebab-case (e.g. \"acme-daily\").");
 export const envVarNameSchema = z.string().regex(ENV_VAR_NAME_PATTERN, "Expected an environment variable NAME like ACME_MCP_ENDPOINT (never a URL or secret value).");
 
+// canonicalArticleBody was removed (R-23): every definition declared the identical value, making it
+// configuration that could only ever misconfigure. The canonical body contract (client_object.v1) is
+// derived from the article_body node's own produces const (see projectRegistry.ts validate_handoff).
 const contentContractSchema = z.object({
-  contentContract: z.string().min(1).default("content_source.v1"),
-  canonicalArticleBody: z.string().min(1).default("article_body.v1")
+  contentContract: z.string().min(1).default("content_source.v1")
 }).strict();
 
 const toolPermissionSchema = z.enum(toolPermissions);
@@ -56,7 +58,7 @@ export const projectCreateSchema = z.object({
   allowedTools: z.array(z.string().min(1).max(128)).max(64).default([]),
   defaultToolPolicy: toolPermissionSchema.optional(),
   toolPolicies: toolPoliciesSchema.optional(),
-  contentContract: contentContractSchema.default({ contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" }),
+  contentContract: contentContractSchema.default({ contentContract: "content_source.v1" }),
   status: z.enum(projectStatuses).default("active")
 }).strict();
 
@@ -70,7 +72,7 @@ export const projectUpdateSchema = z.object({
   // defaultToolPolicy sets the client-wide fallback. Both are safe metadata (tool names, not secrets).
   defaultToolPolicy: toolPermissionSchema.optional(),
   toolPolicies: toolPoliciesSchema.optional(),
-  contentContract: z.object({ contentContract: z.string().min(1), canonicalArticleBody: z.string().min(1) }).strict().optional(),
+  contentContract: z.object({ contentContract: z.string().min(1) }).strict().optional(),
   status: z.enum(projectStatuses).optional()
 }).strict();
 
@@ -171,7 +173,7 @@ export function projectRegistrationContract() {
       authMode: { required: false, default: "bearer_env", enum: [...projectAuthModes] },
       tokenEnvVar: { required: "when authMode is bearer_env", example: "ACME_DAILY_MCP_TOKEN" },
       allowedTools: { required: false, default: [], note: "Deny-all until remote tool names are explicitly allow-listed; project.call_tool refuses anything else." },
-      contentContract: { required: false, default: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" } },
+      contentContract: { required: false, default: { contentContract: "content_source.v1" } },
       status: { required: false, default: "active", enum: [...projectStatuses] }
     },
     publishingPolicy: "Server-enforced: publishEnabled=false, requiresExplicitPublish=true. Not patchable; a future explicit PUBLISH gate is the only path to enabling it.",
@@ -181,7 +183,7 @@ export function projectRegistrationContract() {
       "3. project.get — connection.endpointConfigured/tokenConfigured turn true once the deploy sees the env vars.",
       "4. project.test_connection — primitive MCP initialize against the client's server.",
       "5. project.list_tools, then project.update to allow-list the safe read-only tool names.",
-      "6. project.validate_handoff — dry structural validation of content_source.v1 / article_body.v1 payloads."
+      "6. project.validate_handoff — dry structural validation of content_source.v1 / client_object.v1 payloads."
     ]
   };
 }

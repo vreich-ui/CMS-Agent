@@ -72,14 +72,14 @@ describe("Publishing Conductor dry-run execution", () => {
     expect(blocked.approvalsRequired).toEqual([expect.objectContaining({ nodeId: "publication_controller", type: "approval_required" })]);
   });
 
-  it("article_body node produces article_body.v1", async () => {
+  it("article_body node produces client_object.v1", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ executionMode: "mock", projectId: "project-a", input: "Draft this" }, store);
     const advanced = await completeUntil(run.runId, "article_body", store);
 
-    expect(advanced.nodes.find((node) => node.nodeId === "article_body")?.produces).toContain("article_body.v1");
+    expect(advanced.nodes.find((node) => node.nodeId === "article_body")?.produces).toContain("client_object.v1");
 
-    // This assertion used to read `toMatchObject({ schema_version: "article_body.v1" })`, which
+    // This assertion used to read `toMatchObject({ schema_version: "client_object.v1" })`, which
     // codified the defect T-2 found: `schema_version` is the pre-contract-as-truth shape, and the
     // node's own outputSchema requires `artifact` and `summary` instead. The old assertion therefore
     // passed only because nothing validated the output (R-16) and the fixture was hand-written (R-17).
@@ -87,7 +87,7 @@ describe("Publishing Conductor dry-run execution", () => {
     const node = listWorkspaceNodes().find((candidate) => candidate.id === "article_body")!;
     const validation = validateOutput(advanced.stageOutputs.article_body, node.outputSchema);
     expect(validation.ok, !validation.ok ? validation.errors.join("; ") : "").toBe(true);
-    expect(advanced.stageOutputs.article_body).toMatchObject({ artifact: "article_body.v1" });
+    expect(advanced.stageOutputs.article_body).toMatchObject({ artifact: "client_object.v1" });
   });
 
   it("publish_payload remains dry-run", async () => {

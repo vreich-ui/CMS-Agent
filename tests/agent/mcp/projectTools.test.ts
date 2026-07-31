@@ -14,7 +14,7 @@ const structured = (response: Awaited<ReturnType<typeof call>>) => response.json
 // The client-shaped envelope the article_body node emits — validate_handoff checks it against the
 // node's OWN outputSchema (R-6/R-23 deleted the workspace-local {schema_version, nodes} monolith).
 const validArticleBody = {
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader-facing body.",
   clientProjectId: "dr-lurie",
   clientObjectType: "content_item",
@@ -221,9 +221,9 @@ describe("project.* MCP tools", () => {
     expect(remoteFetch).not.toHaveBeenCalled();
   });
 
-  it("project.validate_handoff checks content_source.v1 / article_body.v1 structure locally", async () => {
+  it("project.validate_handoff checks content_source.v1 / client_object.v1 structure locally", async () => {
     const valid = await toolCall("project.validate_handoff", { projectId: "dr-lurie", contentSource: { artifact: "content_source.v1", summary: "s" }, articleBody: validArticleBody });
-    const invalid = await toolCall("project.validate_handoff", { projectId: "dr-lurie", articleBody: { schema_version: "article_body.v1", nodes: [] } });
+    const invalid = await toolCall("project.validate_handoff", { projectId: "dr-lurie", articleBody: { schema_version: "client_object.v1", nodes: [] } });
 
     expect(structured(valid).data.validation.valid).toBe(true);
     expect(structured(invalid).data.validation.valid).toBe(false);

@@ -13,12 +13,12 @@ const data = async (name: string, args: Record<string, unknown> = {}) => (await 
 // entrypoint is validated against the article_body node's own outputSchema, so the seed must be the
 // full envelope, not the bare client object.
 const validArticleBody = {
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader body for the late-stage re-run plan.",
   clientProjectId: "dr-lurie",
   clientObjectType: "content_item",
   contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-16T00:00:00.000Z" },
-  body: { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] }
+  body: { schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] }
 };
 
 describe("conductor cost-control MCP tools", () => {
@@ -35,7 +35,10 @@ describe("conductor cost-control MCP tools", () => {
 
     const first = await data("workflow.get_run_context", { runId, projectId: "dr-lurie" });
     expect(first.cacheHit).toBe(false);
-    expect(first.context.projectContract.canonicalArticleBody).toBe("article_body.v1");
+    expect(first.context.projectContract.contentContract).toBe("content_source.v1");
+    // canonicalArticleBody was removed from the bundle (R-23): the article_body node's own produces
+    // const is the single source of the envelope contract, so nothing per-project travels here.
+    expect("canonicalArticleBody" in first.context.projectContract).toBe(false);
     expect(first.context.projectToolPolicy.defaultToolPolicy).toBe("allowed");
     expect(first.context.registry.map((entry: { id: string }) => entry.id)).toEqual(expect.arrayContaining(["article_body", "publish_payload"]));
 

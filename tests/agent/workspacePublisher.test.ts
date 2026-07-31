@@ -16,16 +16,16 @@ import { resetRepositoryManager } from "../../src/agent/runtime/repositories.js"
 // Dr. Lurie's client object here is the {schema_version, nodes} content_item its readiness policy
 // parses, so these fixtures keep that shape INSIDE `body` rather than at the top level.
 const envelope = (body: unknown) => ({
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader-facing body assembled for the publish gate tests.",
   clientProjectId: "dr-lurie",
   clientObjectType: "content_item",
   contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-16T00:00:00.000Z" },
   body
 });
-const textBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." } }] });
-const imageBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "/media/req/x.png", alt: "x" } } }] });
-const blobMediaBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] });
+const textBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." } }] });
+const imageBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "/media/req/x.png", alt: "x" } } }] });
+const blobMediaBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] });
 const REQUEST_ID = "req_publish_test_20260716_01";
 const ENABLED_ENV = { [publishEnabledEnvVar(drLurieProjectConfig)]: "true" } as NodeJS.ProcessEnv;
 // Satisfies Dr. Lurie's publish-readiness policy (GO) so the underlying gate logic can be exercised.
@@ -33,7 +33,7 @@ const READY = {
   taxonomy: { tags: ["science", "longevity"] },
   approval: { pinned: true, approvedBy: "editor@dr-lurie" },
   releaseBehavior: "publish_now",
-  hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
+  hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
 };
 
 // A minimal registration for the object-native `platform` client (client 0). It is not a seeded
@@ -44,7 +44,7 @@ const platformProjectConfig: ProjectConnectionConfig = {
   mcpEndpointEnvVar: "PLATFORM_MCP_ENDPOINT",
   authMode: "none",
   allowedTools: [],
-  contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
+  contentContract: { contentContract: "content_source.v1" },
   publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "test registration" },
   status: "active"
 };
@@ -80,10 +80,10 @@ const fakeCallTool = (opts: { failOn?: string; noLock?: boolean; validate?: { va
   return { fn, calls };
 };
 
-// Object-native platform fixtures. The envelope shape is the same article_body.v1 contract; the
+// Object-native platform fixtures. The envelope shape is the same client_object.v1 contract; the
 // client object under `body` carries top-level meta fields plus `nodes` (the content blocks).
 const platformEnvelope = (body: unknown) => ({
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader-facing body assembled for the platform publish tests.",
   clientProjectId: "platform",
   clientObjectType: "content_item",
@@ -105,7 +105,7 @@ const PLATFORM_READY = {
   taxonomy: { tags: ["science"] },
   approval: { pinned: true, approvedBy: "editor@platform" },
   releaseBehavior: "publish_only",
-  hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_platform_blob.v1", legacyFallbacksUsed: false }
+  hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_platform_blob.v1", legacyFallbacksUsed: false }
 };
 
 const fakePlatformCallTool = (opts: { validate?: { valid: boolean; issues: unknown[] } } = {}) => {
@@ -170,7 +170,7 @@ describe("live publish gates", () => {
     }
   });
 
-  it("drops article_body.v1's schema_version so the client's strict content_item body accepts the patch", async () => {
+  it("drops client_object.v1's schema_version so the client's strict content_item body accepts the patch", async () => {
     const ctx = await seedRun(textBody);
     const adapter = fakeCallTool();
     await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
@@ -179,7 +179,7 @@ describe("live publish gates", () => {
     const meta = patch.patch[0].fields as Record<string, unknown>;
     expect(meta).not.toHaveProperty("schema_version");
     expect(meta).not.toHaveProperty("nodes");
-    expect(JSON.stringify(patch.patch[0])).not.toContain("article_body.v1");
+    expect(JSON.stringify(patch.patch[0])).not.toContain("client_object.v1");
   });
 
   it("aborts before object_patch/object_publish when the client validator rejects, and names the taxonomy registry on a taxonomy blocker", async () => {

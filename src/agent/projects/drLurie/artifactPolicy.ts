@@ -21,16 +21,25 @@ const looksLikeImageArtifactRef = (value: string): boolean => imageArtifactRefPa
 const looksLikePdfArtifactRef = (value: string): boolean => pdfArtifactRefPattern.test(`${value} `) || value.startsWith("/pdf/");
 
 export function validateArticleBodyImagePlacement(articleBody: unknown): ArtifactPolicyWarning[] {
-  if (!isRecord(articleBody) || !Array.isArray(articleBody.nodes)) return [];
+  // Two shape bugs made this validator dead code on the envelope the pipeline actually hands it
+  // (HANDOFF known defect, resolved against Dr. Lurie's LIVE content_item contract 2026-07-31):
+  //   1. the pipeline passes the client_object envelope, whose content sits under `.body` — the
+  //      nodes array is body.nodes, not a top-level nodes;
+  //   2. the contract roots media at nodes[].public.media (publisher.ts had this right); a flat
+  //      nodes[].media does not exist in the contract and never matched anything.
+  if (!isRecord(articleBody)) return [];
+  const content = isRecord(articleBody.body) ? articleBody.body : articleBody;
+  if (!isRecord(content) || !Array.isArray(content.nodes)) return [];
   const warnings: ArtifactPolicyWarning[] = [];
 
-  articleBody.nodes.forEach((node, index) => {
+  content.nodes.forEach((node, index) => {
     if (!isRecord(node)) return;
-    const media = isRecord(node.media) ? node.media : undefined;
+    const publicBlock = isRecord(node.public) ? node.public : undefined;
+    const media = isRecord(publicBlock?.media) ? (publicBlock!.media as JsonRecord) : undefined;
     const rendering = isRecord(node.rendering) ? node.rendering : undefined;
     const kind = typeof node.kind === "string" ? node.kind : undefined;
     const mediaType = typeof media?.type === "string" ? media.type : undefined;
-    const isImageNode = kind === "image" || mediaType === "image" || (typeof media?.src === "string" && looksLikeImageArtifactRef(media.src));
+    const isImageNode = kind === "image" || mediaType === "image" || (typeof media?.src === "string" && looksLikeImageArtifactRef(media.src as string));
     if (!isImageNode) return;
 
     if (rendering?.placement !== "inline") {

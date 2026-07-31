@@ -5,20 +5,20 @@ import { evaluateDrLuriePublishReadiness } from "../../../src/agent/projects/drL
 // node's own outputSchema, so the fixtures carry the envelope with Dr. Lurie's content_item under
 // `body` — the shape a real pipeline output has.
 const envelope = (body: unknown) => ({
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader-facing body assembled for the readiness tests.",
   clientProjectId: "dr-lurie",
   clientObjectType: "content_item",
   contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-16T00:00:00.000Z" },
   body
 });
-const validBody = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] });
+const validBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] });
 const ready = {
   articleBody: validBody,
   taxonomy: { tags: ["science"] },
   approval: { pinned: true, approvedBy: "editor" },
   releaseBehavior: "publish_now",
-  hardConstraints: { contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
+  hardConstraints: { contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false }
 };
 const keys = (r: ReturnType<typeof evaluateDrLuriePublishReadiness>) => r.checklist.map((c) => c.key);
 
@@ -40,7 +40,7 @@ describe("Dr. Lurie publish readiness", () => {
   });
 
   it("does not trust Blob-shaped media unless pdf-tool materialization is verified", () => {
-    const body = envelope({ schema_version: "article_body.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] });
+    const body = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] });
     const unverified = evaluateDrLuriePublishReadiness({ ...ready, articleBody: body });
     expect(unverified.blockers).toContain("media_artifacts_verified");
     // Confirming the ref as materialized clears the blocker.
@@ -63,6 +63,6 @@ describe("Dr. Lurie publish readiness", () => {
     expect(evaluateDrLuriePublishReadiness({ ...ready, hardConstraints: { ...ready.hardConstraints, legacyFallbacksUsed: true } }).blockers).toContain("hard_legacy_fallbacks");
     expect(evaluateDrLuriePublishReadiness({ ...ready, hardConstraints: { ...ready.hardConstraints, artifactProtocol: "legacy_blob" } }).blockers).toContain("hard_artifact_protocol");
     // The GO result always reports the canonical hard constraints.
-    expect(evaluateDrLuriePublishReadiness(ready).hardConstraints).toEqual({ contentPath: "article_body.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false });
+    expect(evaluateDrLuriePublishReadiness(ready).hardConstraints).toEqual({ contentPath: "client_object.v1", artifactProtocol: "pdf_tool_dr_lurie_blob.v1", legacyFallbacksUsed: false });
   });
 });

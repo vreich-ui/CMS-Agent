@@ -108,10 +108,20 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
 
 ---
 
-## State — 2026-07-30
+## State — 2026-07-31
 
-Workspace **v226**, backend `gcs`, graph valid. Registry: `dr-lurie`, `monetizer` (disabled),
-`pdf-tool` (Ring 0 service), `platform` (client 0). All publish locks closed.
+Workspace **v259**, backend `gcs`, graph valid, skill store **v21**. Registry: `dr-lurie`,
+`monetizer` (disabled), `pdf-tool` (Ring 0 service), `platform` (client 0). All publish locks closed.
+
+**Node-system overhaul (2026-07-31): PR #100 (behavioural) + the mechanical follow-up PR.** All 21
+nodes carry all five limits live (maxTurns / toolCallLimit / timeout / budgetUsd / maxOutputTokens —
+sizing and the three cost diagnoses in `docs/plan/findings/node-limits-audit.md`). The budget guard
+now gates each model request *before* it is sent, holding node and run ceilings separately; runs
+carry a dispatch-claim heartbeat so a dead driver is detected and reclaimed instead of hanging
+silently; tool results are bounded (32k chars) and `toolCallLimit` is enforced with per-call audit
+records persisted on node state. The shared prompt/skill layer is client-neutral — Dr. Lurie's voice
+and domain caution live in `src/agent/projects/drLurie/`, awaiting `vox_drlurie_default` (P-2). The
+R-23 rename is done in the code plane (`client_object.v1`, `canonicalArticleBody` deleted).
 
 **The engine works end to end in live mode against client 0.** `run_1785405350649_9u5mjz` produced a
 schema-valid 12-block `content_item` — strict root fields, opaque `n_*` ids, no undeclared keys,
@@ -158,15 +168,26 @@ prefetch is applied in the workflow executor (`executeRunnableNode` gates on
 
 ### Owed
 
-- **Deploy.** PR #96 is merged but not serving; until it is, agents can still call the two retired
-  validators and the conductor still hands out the old bundle. #99 raises the stakes: its executor
-  change (clientProjectId delivery + named failure) and the `article_body` topology re-seed reach
-  conductor runs only through a deploy.
-- ~~**`npm run nodes:update`.**~~ Done in #99 (2026-07-30): re-seeded from live v238 via the
-  generator (`--from` a verified live snapshot), `nodes:check` clean against that snapshot.
-- **R-23 rename half** — `article_body.v1` → `client_object.v1`, plus deleting the now-dead
-  `canonicalArticleBody` field.
-- **Real pricing in `modelPricingCatalog`** before any further cost-driven decision.
+- **Deploy — now urgent, not just owed.** #96/#99 remain unserved, and the overhaul raises the
+  stakes twice over. First, the live limit-writes **armed a latent bug in the DEPLOYED budget
+  guard**: the old code compares `min(nodeBudgetUsd, runBudgetUsd)` against run-wide accrued spend,
+  so now that every node carries a small `budgetUsd`, any live run under the old deploy starts
+  failing pre-checks the moment cumulative run spend passes a node's own ceiling (~$0.10–0.75).
+  PR #100 fixes the conflation; until it serves, expensive multi-node runs on the live plane will
+  false-trip. Second, none of the new semantics (pre-send gating, heartbeat, bounded tool results,
+  enforced toolCallLimit) exist on the serving revision.
+- **Post-deploy live write** — `article_body`'s live `produces`/`outputSchema` still say
+  `article_body.v1`: the *deployed* graph validator hardcodes that string and refused the rename
+  (chicken-and-egg). The mechanical PR updates the validator; once it serves, write
+  `client_object.v1` to the live node (produces + outputSchema `artifact` const) so the store
+  overlay agrees with the seeds. Until that write, the store's `outputSchema` overlay keeps the old
+  artifact name authoritative at run time.
+- ~~**`npm run nodes:update`.**~~ Re-done 2026-07-31: re-seeded from live v259 (limits + purge +
+  rename patch) via the generator.
+- ~~**R-23 rename half.**~~ Done in the code plane (mechanical PR); live-plane write owed above.
+- ~~**Real pricing in `modelPricingCatalog`.**~~ Done 2026-07-31: OpenAI/Anthropic published list
+  rates as of that date, entries still honestly flagged `placeholder` (hand-maintained, not
+  billing-grade).
 
 ### Known defects, unfixed
 
@@ -174,21 +195,19 @@ prefetch is applied in the workflow executor (`executeRunnableNode` gates on
   seven call sites take `article_body.outputSchema` from it — the conductor run bundle, both
   `publishReadiness` hooks, `project.validate_handoff`, `publisher` twice, and the publish-payload
   tool. The executor instead validates against `resolveConductorNodes()`, which overlays the live
-  store (`outputSchema: stored.outputSchema ?? canonical.outputSchema`, default source `store`). They
-  are byte-identical today, so nothing is broken — but the invariant is not guaranteed by
-  construction, and `nodes:check` needs live access so CI cannot enforce it. `getRunContext` is
-  already `async` and already receives a repository.
-- `workflow.get_run_cost` returns `strategy: "poll"` for a run that is `failed` on one retryable node
-  with reusable stages; the correct advice is `retry_node`.
-- `tool.get_execution` advertises `runId`/`nodeId`/`toolId` as optional but rejects any call without
-  `toolExecutionId`. Same advertised-vs-actual class as R-3 and R-19.
-- Dr. Lurie's `validateArticleBodyImagePlacement` reads top-level `nodes[]` (the legacy shape), so it
-  never fires on the envelope the pipeline actually hands it. Also `drLurie/artifactPolicy.ts` assumes
-  flat `nodes[].media` while `publisher.ts` assumes `nodes[].public.media` — one of the two is wrong.
-- `AnthropicNodeRunner` has no tool loop and `validateConfiguration()` does not refuse a tool-using
-  node, so setting `modelConfig.provider: "anthropic"` on `article_body`, `artifact_plan` or
-  `publish_payload` would silently strip the client-validation grant. `modelPricingCatalog` also has
-  no Anthropic entries, so those nodes would be priced as `gpt-5.5`.
+  store (`outputSchema: stored.outputSchema ?? canonical.outputSchema`, default source `store`).
+  Re-verified byte-identical 2026-07-31 (against v259) — but the invariant is still not guaranteed
+  by construction, and `nodes:check` needs live access so CI cannot enforce it. Note the rename
+  makes this bite until the post-deploy live write lands: seeds say `client_object.v1`, the store
+  overlay still says `article_body.v1`. `getRunContext` is already `async` and already receives a
+  repository.
+
+Fixed 2026-07-31 (mechanical PR, deploy-gated like everything else): `get_run_cost` now answers
+`retry_node` for a failed-node run; `tool.get_execution` requires `toolExecutionId` in its
+advertised schema and `tool.list_executions` lists by run from persisted per-node records; the
+Dr. Lurie image-placement validator reads the real contract shape (envelope `.body`,
+`nodes[].public.media` — publisher.ts had it right); `AnthropicNodeRunner.validateConfiguration`
+refuses tool-using nodes by name and `modelPricingCatalog` has Anthropic entries.
 
 ---
 

@@ -10,8 +10,12 @@ describe("model usage observability", () => {
 
   beforeEach(() => { store = new RepositoryManager().getUsageRepository(); });
 
-  it("estimates cost from the placeholder catalog", () => {
-    expect(estimateModelCost({ model: "gpt-5.5", inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBe(20);
+  it("estimates cost from the pricing catalog (gpt-5.5 list rate: $5 in + $30 out)", () => {
+    expect(estimateModelCost({ model: "gpt-5.5", inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBe(35);
+  });
+
+  it("prices the Anthropic runner's default model from the catalog", () => {
+    expect(estimateModelCost({ model: "claude-opus-4-8", inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBe(30);
   });
 
   it("stores usage records", async () => {

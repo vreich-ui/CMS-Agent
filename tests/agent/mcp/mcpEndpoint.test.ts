@@ -17,7 +17,7 @@ const call = async (body: unknown, token = "test-token") => {
 // The client-shaped envelope the article_body node actually emits — its own outputSchema is the one
 // remaining definition of "what a body is" (R-6 / R-23 deleted the workspace-local monolith).
 const validArticleBody = {
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Reader-facing example body.",
   clientProjectId: "dr-lurie",
   clientObjectType: "content_item",
@@ -27,7 +27,7 @@ const validArticleBody = {
 
 // The deleted workspace-local monolith shape, kept only to assert it is refused everywhere.
 const legacyArticleBody = {
-  schema_version: "article_body.v1",
+  schema_version: "client_object.v1",
   nodes: [{ id: "n_Example", kind: "content", public: { title: "Example title", body: "Visible reader-facing body copy." } }]
 };
 
@@ -98,7 +98,7 @@ describe("mcp endpoint", () => {
     expect(budget.json.result.structuredContent.data.budgetStatus.status).toBe("ok");
   });
 
-  // This used to assert the PRE-alignment article_body contract — a prompt naming "article_body.v1" and
+  // This used to assert the PRE-alignment article_body contract — a prompt naming "client_object.v1" and
   // "Markdown is not canonical", and a schema requiring {schema_version, nodes}. The contract-as-truth wave
   // generalized the node to a client-shaped envelope, and R-22's re-seed brought that generalization into
   // the canonical definitions. Asserting the old shape here would be a green test encoding the very defect
@@ -143,7 +143,7 @@ describe("mcp endpoint", () => {
     const response = await call({ jsonrpc: "2.0", id: 57, method: "tools/call", params: { name: "node.get_output_schema", arguments: { nodeId: "article_body" } } });
     const schema = response.json.result.structuredContent.data.schema;
     expect(schema.required).toEqual(["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"]);
-    expect(schema.properties.artifact.const).toBe("article_body.v1");
+    expect(schema.properties.artifact.const).toBe("client_object.v1");
     // The deleted monolith's discriminator must not resurface.
     expect(schema.properties).not.toHaveProperty("schema_version");
   });

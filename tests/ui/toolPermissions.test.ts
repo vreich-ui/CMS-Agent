@@ -11,7 +11,7 @@ const summary = (defaultToolPolicy: ToolPermission, toolPolicies: Record<string,
   allowedTools,
   defaultToolPolicy,
   toolPolicies: { ...Object.fromEntries(allowedTools.map((tool) => [tool, "allowed" as ToolPermission])), ...toolPolicies },
-  contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
+  contentContract: { contentContract: "content_source.v1" },
   publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "" },
   status: "active",
   connection: { endpointConfigured: true, tokenConfigured: true, mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT", tokenEnvVar: "DR_LURIE_MCP_TOKEN" }

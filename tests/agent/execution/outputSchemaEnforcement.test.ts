@@ -40,7 +40,7 @@ describe("mock fixtures are derived from each node's own schema (R-17)", () => {
     // The old literal, verbatim. It satisfied neither the seeded schema (which requires artifact and
     // summary) nor the live contract-driven one (which requires four more) — yet the node reported
     // completed and persisted it. This is the regression, and it must stay failing.
-    const oldLiteral = { schema_version: "article_body.v1", nodes: [{ id: "n_dryRunIntro", kind: "content", visibility: "public", public: { title: "Dry-run article", body: "…" } }] };
+    const oldLiteral = { schema_version: "client_object.v1", nodes: [{ id: "n_dryRunIntro", kind: "content", visibility: "public", public: { title: "Dry-run article", body: "…" } }] };
     const seeded = validateOutput(oldLiteral, node.outputSchema);
     expect(seeded.ok).toBe(false);
     expect(!seeded.ok && seeded.errors.join("; ")).toMatch(/artifact|summary/);
@@ -59,7 +59,7 @@ describe("mock fixtures are derived from each node's own schema (R-17)", () => {
       required: ["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"],
       additionalProperties: true,
       properties: {
-        artifact: { const: "article_body.v1" },
+        artifact: { const: "client_object.v1" },
         summary: { type: "string", minLength: 1 },
         clientProjectId: { type: "string", minLength: 1 },
         clientObjectType: { type: "string", minLength: 1 },
@@ -67,7 +67,7 @@ describe("mock fixtures are derived from each node's own schema (R-17)", () => {
         body: { type: "object", minProperties: 1, additionalProperties: true }
       }
     };
-    const oldLiteral = { schema_version: "article_body.v1", nodes: [{ id: "n_dryRunIntro" }] };
+    const oldLiteral = { schema_version: "client_object.v1", nodes: [{ id: "n_dryRunIntro" }] };
     expect(validateOutput(oldLiteral, liveEnvelopeSchema).ok).toBe(false);
 
     // And the generator satisfies the live envelope, so flipping to store-sourced nodes will not need a
@@ -143,7 +143,7 @@ describe("the executor enforces the schema (R-16)", () => {
     const spy = vi.spyOn(registry, "getNodeRunner").mockReturnValue({
       supports: () => true,
       validateConfiguration: () => ({ ok: true as const }),
-      run: async () => ({ ok: true as const, output: { schema_version: "article_body.v1", nodes: [] } })
+      run: async () => ({ ok: true as const, output: { schema_version: "client_object.v1", nodes: [] } })
     } as never);
 
     try {

@@ -56,6 +56,14 @@ export class AnthropicNodeRunner implements NodeRunner {
     const errors: string[] = [];
     if (!node.outputSchema) errors.push("outputSchema is required.");
     if (!process.env[apiKeyEnv(node)]) errors.push(`${apiKeyEnv(node)} is required for anthropic execution.`);
+    // This runner has no tool loop (see the header): a tool-using node would run WITHOUT its granted
+    // tools — for article_body/artifact_plan/publish_payload that silently strips the client
+    // validation their prompts mandate. A provider switch on such a node must fail by name at
+    // configuration time, not degrade at run time.
+    const grantedTools = node.allowedTools ?? [];
+    if (grantedTools.length > 0) {
+      errors.push(`provider=anthropic cannot execute tool-using nodes yet: the Messages-API tool loop is not implemented, and node "${node.id}" grants ${grantedTools.length} tool(s) (${grantedTools.join(", ")}) that would be silently stripped. Keep tool-using nodes on the OpenAI runner until the Anthropic tool loop lands.`);
+    }
     return errors.length ? { ok: false as const, errors } : { ok: true as const };
   }
 

@@ -59,7 +59,7 @@ describe("agentic project registration tools", () => {
       authMode: "bearer_env",
       allowedTools: ["ping"],
       status: "active",
-      contentContract: { contentContract: "content_source.v1", canonicalArticleBody: "article_body.v1" },
+      contentContract: { contentContract: "content_source.v1" },
       publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true },
       connection: { endpointConfigured: false, tokenConfigured: false, mcpEndpointEnvVar: "ACME_DAILY_MCP_ENDPOINT", tokenEnvVar: "ACME_DAILY_MCP_TOKEN" }
     });

@@ -13,7 +13,7 @@ const TERMINAL = ["completed", "failed", "blocked", "cancelled"];
 // fixture used to carry. That old fixture is exactly what the node rejects (all six required fields),
 // so a test built on it was asserting the defect could reach the publish path.
 const validArticleBody = {
-  artifact: "article_body.v1",
+  artifact: "client_object.v1",
   summary: "Supplied client-shaped body for a late-stage entrypoint run.",
   clientProjectId: "dr-lurie",
   clientObjectType: "content_item",
@@ -131,7 +131,7 @@ describe("late-stage entrypoint via the MCP endpoint", () => {
   beforeEach(() => { process.env.MCP_API_TOKEN = "test-token"; delete process.env.WORKSPACE_STORE; resetRepositoryManager(); });
   afterEach(() => { delete process.env.MCP_API_TOKEN; resetRepositoryManager(); });
 
-  it("accepts a supplied article_body.v1 and starts the run at artifact_plan", async () => {
+  it("accepts a supplied client_object.v1 and starts the run at artifact_plan", async () => {
     const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: validArticleBody });
     const run = res.result.structuredContent.data.run;
     expect(run.currentNodeId).toBe("artifact_plan");
@@ -140,7 +140,7 @@ describe("late-stage entrypoint via the MCP endpoint", () => {
   });
 
   it("rejects an invalid supplied article body before creating a run", async () => {
-    const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [] } });
+    const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: { schema_version: "client_object.v1", nodes: [] } });
     // The superseded workspace-local shape is now precisely what gets refused, and the error names the
     // fields the node actually requires rather than a generic "invalid article body".
     expect(JSON.stringify(res.error ?? {})).toContain("invalid_entrypoint_output");
@@ -162,7 +162,7 @@ describe("R-16 — a seeded entrypoint output cannot bypass output validation", 
   afterEach(() => { delete process.env.MCP_API_TOKEN; resetRepositoryManager(); });
 
   it("refuses the superseded workspace-local shape, naming every field the node requires", async () => {
-    const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B" } }] } });
+    const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B" } }] } });
     const error = JSON.stringify(res.error ?? {});
     expect(error).toContain("invalid_entrypoint_output");
     for (const field of ["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"]) {
@@ -172,7 +172,7 @@ describe("R-16 — a seeded entrypoint output cannot bypass output validation", 
 
   it("creates no run at all when the seeded output is invalid", async () => {
     const before = (await call("workflow.list_runs", {})).result.structuredContent.data.runs.length;
-    await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "article_body.v1", nodes: [] } });
+    await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", input: {}, entrypoint: "article_body", articleBody: { schema_version: "client_object.v1", nodes: [] } });
     const after = (await call("workflow.list_runs", {})).result.structuredContent.data.runs.length;
     // Refused BEFORE creation — no half-seeded run, and nothing for a later step to pick up and trust.
     expect(after).toBe(before);
@@ -182,7 +182,7 @@ describe("R-16 — a seeded entrypoint output cannot bypass output validation", 
     const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", input: {}, entrypoint: "article_body", articleBody: validArticleBody });
     expect(res.error).toBeUndefined();
     const run = res.result.structuredContent.data.run;
-    expect(run.stageOutputs.article_body).toMatchObject({ artifact: "article_body.v1", clientObjectType: "content_item" });
+    expect(run.stageOutputs.article_body).toMatchObject({ artifact: "client_object.v1", clientObjectType: "content_item" });
   });
 
   it("holds the seeded output to the SAME schema the executor enforces on a real execution", async () => {

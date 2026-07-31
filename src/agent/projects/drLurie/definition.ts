@@ -100,9 +100,11 @@ export const DR_LURIE_OBJECT_DIALECT: ProjectObjectDialect = {
 
 // Bumped 3 -> 4 when Dr. Lurie moved to full access (defaultToolPolicy "allowed"), 4 -> 5 when the
 // legacy save_json_blob_*/per-stage dialect was retired and the object-dialect parameters were added,
-// and 5 -> 6 when defaultObjectType was added (F1, T-2 run_1785352838155_l544ye) so persisted stale
-// configs re-seed from this definition (see defaultMigration.ts).
-export const DR_LURIE_DEFINITION_VERSION = 6;
+// 5 -> 6 when defaultObjectType was added (F1, T-2 run_1785352838155_l544ye) so persisted stale
+// configs re-seed from this definition (see defaultMigration.ts), and 6 -> 7 when R-23 removed
+// contentContract.canonicalArticleBody (every definition declared the identical value; the
+// article_body node's own produces const is the single source) so persisted configs re-seed without it.
+export const DR_LURIE_DEFINITION_VERSION = 7;
 
 export const drLurieProjectConfig: ProjectConnectionConfig = {
   projectId: "dr-lurie",
@@ -115,8 +117,7 @@ export const drLurieProjectConfig: ProjectConnectionConfig = {
   defaultToolPolicy: DR_LURIE_DEFAULT_TOOL_POLICY,
   toolPolicies: { ...DR_LURIE_TOOL_POLICIES },
   contentContract: {
-    contentContract: "content_source.v1",
-    canonicalArticleBody: "article_body.v1"
+    contentContract: "content_source.v1"
   },
   objectDialect: { ...DR_LURIE_OBJECT_DIALECT },
   publishingPolicy: {
