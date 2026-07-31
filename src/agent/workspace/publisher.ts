@@ -72,11 +72,15 @@ export type PublisherDeps = {
 // value in the deployment, exactly like the connection endpoint/token.
 export const publishEnabledEnvVar = (config: ProjectConnectionConfig): string => `${config.mcpEndpointEnvVar.replace(/_MCP_ENDPOINT$/, "")}_PUBLISH_ENABLED`;
 
-// Publishing is enabled for a project only when the operator sets the per-project env flag in the
-// deployment. The code-level publishingPolicy.publishEnabled stays false as a default-off marker; the
-// operator override lives in the environment (never persisted), mirroring the connection endpoint/token.
-export const isProjectPublishEnabled = (config: ProjectConnectionConfig, env: NodeJS.ProcessEnv = process.env): boolean =>
-  (env[publishEnabledEnvVar(config)] ?? "").trim().toLowerCase() === "true";
+// Go-live 2026-07-31 (operator decision, Wolf): publishing is enabled when the project's
+// publishingPolicy says so (now true by default) OR the per-project env flag is set. The env flag
+// doubles as a kill-switch: an explicit "false" in the deployment forces the project off regardless
+// of policy, preserving an operator override that never has to pass through MCP.
+export const isProjectPublishEnabled = (config: ProjectConnectionConfig, env: NodeJS.ProcessEnv = process.env): boolean => {
+  const flag = (env[publishEnabledEnvVar(config)] ?? "").trim().toLowerCase();
+  if (flag === "false") return false;
+  return flag === "true" || config.publishingPolicy.publishEnabled === true;
+};
 
 // The publish gates, and the ONLY three inputs that open them. This list is deliberately closed and
 // deliberately independent of any node's tool grant.
@@ -87,15 +91,18 @@ export const isProjectPublishEnabled = (config: ProjectConnectionConfig, env: No
 // CAPABILITY, not a permission: it says which tool the node may reach for, and answers none of the
 // questions below. Nothing in this function reads a node's allowedTools, an effective-tool
 // resolution, or a skill policy, and it must stay that way — the day a tool grant can satisfy a
-// publish gate is the day the gates stop meaning anything. The controlled-tool layer holds a further
-// independent lock of its own: project.call_tool is requiresApproval:true, so even a granted node
-// needs per-run approval before the tool executes (toolPolicy.approval_required).
+// publish gate is the day the gates stop meaning anything. (Go-live 2026-07-31: the controlled-tool
+// layer's former per-run approval lock on project.call_tool was removed — requiresApproval is now
+// false — so granted nodes reach client tools without a per-run approval ceremony.)
 const PUBLISH_GATE_NAMES = ["operator_enabled", "explicit_approval", "explicit_live"] as const;
 
 const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, env: NodeJS.ProcessEnv): PublishGates => {
   const operatorEnabled = isProjectPublishEnabled(config, env);
-  const approved = input.approved === true;
-  const live = input.live === true;
+  // Go-live 2026-07-31: approval and live default to TRUE — a publish request is taken at its word.
+  // Passing approved:false or live:false still forces a dry-run plan, so a deliberate rehearsal
+  // remains one explicit flag away; it is simply no longer the default posture.
+  const approved = input.approved !== false;
+  const live = input.live !== false;
   const gates: PublishGate[] = [
     { name: "operator_enabled", passed: operatorEnabled, reason: operatorEnabled ? undefined : `Publishing is not enabled for ${config.projectId}; set ${publishEnabledEnvVar(config)}=true in the deployment.` },
     { name: "explicit_approval", passed: approved, reason: approved ? undefined : "approved: true is required for a live publish." },
