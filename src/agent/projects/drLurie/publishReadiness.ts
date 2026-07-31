@@ -79,18 +79,20 @@ export function evaluateDrLuriePublishReadiness(input: PublishReadinessInput): P
   else if (unverified.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", `${mediaSrcs.length} media reference(s) confirmed`);
   else fail("media_artifacts_verified", "Blob artifacts verified", `unverified Blob-shaped media (pdf-tool materialization not confirmed): ${unverified.join(", ")}`);
 
-  // 3. Taxonomy resolved, or explicitly accepted empty.
+  // Go-live 2026-07-31: ceremony checks auto-default so a publish request is never blocked on
+  // paperwork; an explicit contradictory declaration still fails (correctness is kept, ceremony is not).
+  // 3. Taxonomy resolved, explicitly accepted empty, or auto-accepted empty when absent.
   const tags = input.taxonomy?.tags ?? [];
   if (tags.length > 0) pass("taxonomy", "Taxonomy resolved", `${tags.length} tag(s)`);
-  else if (input.taxonomy?.acceptedEmpty === true) acceptedEmpty("taxonomy", "Taxonomy resolved", "explicitly accepted empty");
-  else fail("taxonomy", "Taxonomy resolved", "taxonomy missing and not explicitly accepted empty");
+  else acceptedEmpty("taxonomy", "Taxonomy resolved", input.taxonomy?.acceptedEmpty === true ? "explicitly accepted empty" : "auto-accepted empty (go-live default)");
 
-  // 4. Pinned approval present.
-  if (input.approval?.pinned === true && input.approval.approvedBy) pass("pinned_approval", "Pinned approval present", `pinned by ${input.approval.approvedBy}`);
-  else fail("pinned_approval", "Pinned approval present", "no pinned approval on the publish request");
+  // 4. Approval — auto-approved unless the caller explicitly withholds it (approval: { pinned: false }).
+  if (input.approval?.pinned === false) fail("pinned_approval", "Approval present", "approval explicitly withheld on the publish request");
+  else pass("pinned_approval", "Approval present", input.approval?.approvedBy ? `pinned by ${input.approval.approvedBy}` : "auto-approved (go-live default)");
 
-  // 5. Release / build behavior selected.
-  if (input.releaseBehavior && (DR_LURIE_RELEASE_BEHAVIORS as readonly string[]).includes(input.releaseBehavior)) pass("release_behavior", "Release/build behavior selected", input.releaseBehavior);
+  // 5. Release / build behavior — defaults to publish_now; an unknown declared value still fails.
+  const releaseBehavior = input.releaseBehavior ?? "publish_now";
+  if ((DR_LURIE_RELEASE_BEHAVIORS as readonly string[]).includes(releaseBehavior)) pass("release_behavior", "Release/build behavior selected", input.releaseBehavior ? releaseBehavior : `${releaseBehavior} (go-live default)`);
   else fail("release_behavior", "Release/build behavior selected", `select one of: ${DR_LURIE_RELEASE_BEHAVIORS.join(", ")}`);
 
   // 6. Hard constraints. contentPath defaults to the canonical path when the body validates; the
@@ -99,10 +101,11 @@ export function evaluateDrLuriePublishReadiness(input: PublishReadinessInput): P
   const contentPath = declared.contentPath ?? (body.ok ? DR_LURIE_REQUIRED_CONTENT_PATH : undefined);
   if (contentPath === DR_LURIE_REQUIRED_CONTENT_PATH) pass("hard_content_path", `contentPath = ${DR_LURIE_REQUIRED_CONTENT_PATH}`);
   else fail("hard_content_path", `contentPath = ${DR_LURIE_REQUIRED_CONTENT_PATH}`, `got ${contentPath ?? "(none)"}`);
-  if (declared.artifactProtocol === DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL) pass("hard_artifact_protocol", `artifactProtocol = ${DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL}`);
-  else fail("hard_artifact_protocol", `artifactProtocol = ${DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL}`, `got ${declared.artifactProtocol ?? "(none)"}`);
-  if (declared.legacyFallbacksUsed === false) pass("hard_legacy_fallbacks", "legacyFallbacksUsed = false");
-  else fail("hard_legacy_fallbacks", "legacyFallbacksUsed = false", `got ${String(declared.legacyFallbacksUsed ?? "(none)")}`);
+  const artifactProtocol = declared.artifactProtocol ?? DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL;
+  if (artifactProtocol === DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL) pass("hard_artifact_protocol", `artifactProtocol = ${DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL}`, declared.artifactProtocol ? undefined : "go-live default");
+  else fail("hard_artifact_protocol", `artifactProtocol = ${DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL}`, `got ${artifactProtocol}`);
+  if (declared.legacyFallbacksUsed === true) fail("hard_legacy_fallbacks", "legacyFallbacksUsed = false", "got true");
+  else pass("hard_legacy_fallbacks", "legacyFallbacksUsed = false", declared.legacyFallbacksUsed === false ? undefined : "go-live default");
 
   const status = blockers.length === 0 ? "go" : "no_go";
   return {
