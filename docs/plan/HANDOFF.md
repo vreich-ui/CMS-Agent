@@ -180,12 +180,11 @@ prefetch is applied in the workflow executor (`executeRunnableNode` gates on
   landed last — the newer build's verify failed loudly, exactly as designed. The release step now
   resolves concurrent deploys by commit ancestry (newest commit wins; older builds yield). #96/#99/
   #100/#101 all reach the serving revision with the first green main build after this commit.
-- **Live write, due as soon as the tip's build is green** — `article_body`'s live
-  `produces`/`outputSchema` still say `article_body.v1`: the pre-#101 graph validator hardcoded that
-  string and refused the rename (chicken-and-egg). #101's validator accepts it; once serving, write
-  `client_object.v1` to the live node (produces + outputSchema `artifact` const) so the store
-  overlay agrees with the seeds. Until that write, the store's `outputSchema` overlay keeps the old
-  artifact name authoritative at run time.
+- ~~**Live write.**~~ Done 2026-07-31, workspace **v260**: `article_body`'s live `produces` and
+  both schema mirrors now say `client_object.v1` (the pre-#101 validator had refused the rename —
+  chicken-and-egg — so the write waited for #101's validator to serve; `workspace_validate_graph`
+  confirmed the plane was flagging the old name right up until the write, and is clean after it).
+  The store overlay and the seeds agree again; R-23 is closed in both planes.
 - ~~**`npm run nodes:update`.**~~ Re-done 2026-07-31: re-seeded from live v259 (limits + purge +
   rename patch) via the generator.
 - ~~**R-23 rename half.**~~ Done in the code plane (mechanical PR); live-plane write owed above.
