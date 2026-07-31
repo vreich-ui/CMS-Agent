@@ -50,7 +50,7 @@ describe("project registry + Dr. Lurie definition", () => {
     expect(projects.map((project) => project.projectId)).toContain("dr-lurie");
     const drLurie = await repository.get("dr-lurie");
     expect(drLurie?.contentContract).toEqual({ contentContract: "content_source.v1" });
-    expect(drLurie?.publishingPolicy).toMatchObject({ publishEnabled: false, requiresExplicitPublish: true });
+    expect(drLurie?.publishingPolicy).toMatchObject({ publishEnabled: true, requiresExplicitPublish: false });
   });
 
   it("dr-lurie allowedTools is the safe read-only tools plus the artifact/PDF capability", () => {
@@ -143,7 +143,7 @@ describe("project registry + Dr. Lurie definition", () => {
     expect(serialized).not.toContain(SECRET);
     expect(serialized).not.toContain("https://dr-lurie.example/mcp");
     expect(summary.connection).toEqual({ endpointConfigured: true, tokenConfigured: true, mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT", tokenEnvVar: "DR_LURIE_MCP_TOKEN" });
-    expect(summary.publishingPolicy.publishEnabled).toBe(false);
+    expect(summary.publishingPolicy.publishEnabled).toBe(true);
   });
 
   it("resolves connection config from env and reports configured booleans", () => {

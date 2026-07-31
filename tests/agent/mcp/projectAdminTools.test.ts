@@ -48,7 +48,7 @@ describe("agentic project registration tools", () => {
     expect(data.contract.version).toBe("project_registration.v1");
     expect(data.contract.fields.projectId.pattern).toBeTruthy();
     expect(data.contract.onboardingSteps.length).toBeGreaterThanOrEqual(5);
-    expect(data.contract.publishingPolicy).toContain("publishEnabled=false");
+    expect(data.contract.publishingPolicy).toContain("publishEnabled=true");
   });
 
   it("creates a new publishing client and lists it alongside dr-lurie", async () => {
@@ -60,7 +60,7 @@ describe("agentic project registration tools", () => {
       allowedTools: ["ping"],
       status: "active",
       contentContract: { contentContract: "content_source.v1" },
-      publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true },
+      publishingPolicy: { publishEnabled: true, requiresExplicitPublish: false },
       connection: { endpointConfigured: false, tokenConfigured: false, mcpEndpointEnvVar: "ACME_DAILY_MCP_ENDPOINT", tokenEnvVar: "ACME_DAILY_MCP_TOKEN" }
     });
 
@@ -130,7 +130,7 @@ describe("agentic project registration tools", () => {
 
     const updated = structured(await toolCall("project.update", { projectId: "acme-daily", patch: { allowedTools: ["ping", "registry_get"], status: "disabled", name: "Acme Daily (paused)" } })).data.project;
     expect(updated).toMatchObject({ name: "Acme Daily (paused)", status: "disabled", allowedTools: ["ping", "registry_get"] });
-    expect(updated.publishingPolicy.publishEnabled).toBe(false);
+    expect(updated.publishingPolicy.publishEnabled).toBe(true);
 
     // Removing the token while staying on bearer_env is inconsistent and refused.
     expect(toolErrorMessage(await toolCall("project.update", { projectId: "acme-daily", patch: { tokenEnvVar: null } }))).toContain("token_env_var_required");

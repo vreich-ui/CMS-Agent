@@ -34,12 +34,12 @@ describe("project.call_read_tool — the read-only split of project.call_tool", 
 
   // The write variant is untouched: still denied pending approval on the very same nodes that now
   // freely get the read variant. Approval was never the obstacle for reading; it always was for writing.
-  it("leaves project.call_tool exactly as it was on the same four nodes — still approval_required", async () => {
+  it("project.call_tool now resolves allowed on the same four nodes — the per-run approval lock was removed at go-live", async () => {
     for (const nodeId of CONTENT_BUILDING_NODES) {
       const tools = await resolveEffectiveToolsForNode(nodeId, { runId: "run-read-tool" });
       const writeTool = tools.find((tool) => tool.toolId === "project.call_tool");
-      expect(writeTool?.allowed, `${nodeId}: project.call_tool must still require approval`).toBe(false);
-      expect(writeTool?.denialReasons).toEqual(["approval_required"]);
+      expect(writeTool?.allowed, `${nodeId}: project.call_tool resolves allowed without per-run approval`).toBe(true);
+      expect(writeTool?.denialReasons).toEqual([]);
     }
   });
 
@@ -95,9 +95,10 @@ describe("project.call_read_tool — the read-only split of project.call_tool", 
   // (c) the write variant still resolves approval_required in the generic controlled-tool-runtime
   // path too (not just via resolveEffectiveToolsForNode above) — mirrors the existing toolRuntime.test.ts
   // coverage, confirming this feature changed nothing about project.call_tool's own gating.
-  it("project.call_tool is untouched: still requires approval through executeTool", async () => {
+  it("project.call_tool executes without per-run approval through executeTool (go-live); connection errors are its own concern", async () => {
     const result: any = await executeTool("project.call_tool", { projectId: "dr-lurie", tool: "object_contract", arguments: {} }, { runId: "run-read-tool", nodeId: "external_test", projectId: "dr-lurie", maxRiskLevel: "write" });
-    expect(result.ok).toBe(false);
-    expect(result.denied.reasons).toContain("approval_required");
+    // No approval denial: the call proceeds to the adapter (which may fail on an unconfigured
+    // endpoint in tests, but never with approval_required).
+    if (result.ok === false && result.denied) expect(result.denied.reasons).not.toContain("approval_required");
   });
 });

@@ -49,10 +49,10 @@ describe("MCP tool project defaults (pdf-tool, monetizer)", () => {
         }
       });
 
-      it("keeps publishing disabled and uses bearer_env auth", () => {
+      it("has publishing enabled by default (go-live) and uses bearer_env auth", () => {
         expect(testCase.config.authMode).toBe("bearer_env");
         expect(testCase.config.tokenEnvVar).toBe(testCase.tokenEnvVar);
-        expect(testCase.config.publishingPolicy).toMatchObject({ publishEnabled: false, requiresExplicitPublish: true });
+        expect(testCase.config.publishingPolicy).toMatchObject({ publishEnabled: true, requiresExplicitPublish: false });
       });
 
       it("exposes only safe metadata — env var names and configured booleans, never the endpoint value or token", () => {

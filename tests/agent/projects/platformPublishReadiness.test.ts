@@ -36,11 +36,13 @@ describe("Platform publish readiness", () => {
     expect(r.checklist.map((c) => c.key)).toEqual(expect.arrayContaining(["article_body_valid", "media_artifacts_verified", "taxonomy", "pinned_approval", "release_behavior", "hard_content_path", "hard_artifact_protocol", "hard_legacy_fallbacks"]));
   });
 
-  it("is NO-GO listing every blocker for an empty request", () => {
+  it("is NO-GO only on the correctness blocker for an empty request — ceremony checks auto-default (go-live)", () => {
     const r = evaluatePlatformPublishReadiness({});
     expect(r.status).toBe("no_go");
     expect(r.state).toBe("blocked_for_publish_execution");
-    expect(r.blockers).toEqual(expect.arrayContaining(["article_body_valid", "taxonomy", "pinned_approval", "release_behavior", "hard_artifact_protocol", "hard_legacy_fallbacks"]));
+    // Go-live 2026-07-31: taxonomy/approval/release/hard-constraint declarations auto-default; the
+    // only blocker left on an empty request is the missing article body itself.
+    expect(r.blockers).toEqual(["article_body_valid", "hard_content_path"]);
     expect(r.requiredAction).toContain("Resolve:");
   });
 
@@ -50,9 +52,9 @@ describe("Platform publish readiness", () => {
     expect(evaluatePlatformPublishReadiness({ ...ready, articleBody: body, verifiedMediaRefs: ["image/req_x/abc.png"] }).status).toBe("go");
   });
 
-  it("accepts an explicitly-empty taxonomy but blocks a silently-missing one", () => {
+  it("accepts an explicitly-empty taxonomy and auto-accepts a missing one (go-live)", () => {
     expect(evaluatePlatformPublishReadiness({ ...ready, taxonomy: { acceptedEmpty: true } }).status).toBe("go");
-    expect(evaluatePlatformPublishReadiness({ ...ready, taxonomy: {} }).blockers).toContain("taxonomy");
+    expect(evaluatePlatformPublishReadiness({ ...ready, taxonomy: {} }).status).toBe("go");
   });
 
   it("accepts only object-substrate release behaviors — no schedule, no unpublish", () => {

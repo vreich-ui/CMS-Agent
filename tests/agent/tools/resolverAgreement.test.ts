@@ -44,19 +44,17 @@ describe("one authority for whether a node may reach a tool", () => {
       // No assigned skill means no skill-requested tools — the "skill requests a tool the node
       // denies" warning class cannot occur on the publish gate anymore.
       expect(policy.requestedTools, `${nodeId} must carry no skill-requested tools`).toEqual([]);
-      // The node's own grant is unchanged and still behind the per-run approval gate.
-      expect(tools.find((tool) => tool.toolId === "project.call_tool")?.allowed, `${nodeId} keeps the approval-gated grant`).toBe(false);
+      // Go-live: the per-run approval lock on project.call_tool was removed, so the grant resolves allowed.
+      expect(tools.find((tool) => tool.toolId === "project.call_tool")?.allowed, `${nodeId} grant resolves allowed at go-live`).toBe(true);
     }
   });
 
-  it("names WHY a tool was denied, so an approval gate is not mistaken for a misconfiguration", async () => {
-    // publish_payload carries both the grant and the contract skill that requests project.call_tool,
-    // so it is where the approval denial must be named (the publish-risk nodes no longer carry the
-    // skill at all — see the previous test).
+  it("no longer denies project.call_tool for approval — the go-live posture grants it outright", async () => {
+    // publish_payload carries both the grant and the contract skill that requests project.call_tool.
+    // Since go-live removed the per-run approval lock, the resolver must NOT report it denied.
     const policy = (await data("skill.resolve_for_node", { nodeId: "publish_payload" })).policy as { deniedTools: string[]; deniedToolReasons: Record<string, string[]> };
-    expect(policy.deniedTools).toContain("project.call_tool");
-    expect(policy.deniedToolReasons["project.call_tool"]).toEqual(["approval_required"]);
-    expect(policy.deniedToolReasons["project.call_tool"]).not.toContain("node_tool_not_allowed");
+    expect(policy.deniedTools).not.toContain("project.call_tool");
+    expect(policy.deniedToolReasons["project.call_tool"] ?? []).toEqual([]);
   });
 
   it("agrees across the whole registry, not just the tool that exposed the split", async () => {

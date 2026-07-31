@@ -31,11 +31,13 @@ describe("Dr. Lurie publish readiness", () => {
     expect(keys(r)).toEqual(expect.arrayContaining(["article_body_valid", "media_artifacts_verified", "taxonomy", "pinned_approval", "release_behavior", "hard_content_path", "hard_artifact_protocol", "hard_legacy_fallbacks"]));
   });
 
-  it("is NO-GO listing every blocker for an empty request", () => {
+  it("is NO-GO only on the correctness blocker for an empty request — ceremony checks auto-default (go-live)", () => {
     const r = evaluateDrLuriePublishReadiness({});
     expect(r.status).toBe("no_go");
     expect(r.state).toBe("blocked_for_publish_execution");
-    expect(r.blockers).toEqual(expect.arrayContaining(["article_body_valid", "taxonomy", "pinned_approval", "release_behavior", "hard_artifact_protocol", "hard_legacy_fallbacks"]));
+    // Go-live 2026-07-31: taxonomy/approval/release/hard-constraint declarations auto-default; the
+    // only blocker left on an empty request is the missing article body itself.
+    expect(r.blockers).toEqual(["article_body_valid", "hard_content_path"]);
     expect(r.requiredAction).toContain("Resolve:");
   });
 
@@ -48,14 +50,15 @@ describe("Dr. Lurie publish readiness", () => {
     expect(verified.status).toBe("go");
   });
 
-  it("accepts an explicitly-empty taxonomy but blocks a silently-missing one", () => {
+  it("accepts an explicitly-empty taxonomy and auto-accepts a missing one (go-live)", () => {
     expect(evaluateDrLuriePublishReadiness({ ...ready, taxonomy: { acceptedEmpty: true } }).status).toBe("go");
-    expect(evaluateDrLuriePublishReadiness({ ...ready, taxonomy: {} }).blockers).toContain("taxonomy");
+    expect(evaluateDrLuriePublishReadiness({ ...ready, taxonomy: {} }).status).toBe("go");
   });
 
-  it("blocks a missing pinned approval and an unselected release behavior", () => {
+  it("auto-approves absent approval, blocks only an explicitly-withheld one; release behavior defaults but an unknown value still fails", () => {
     expect(evaluateDrLuriePublishReadiness({ ...ready, approval: { pinned: false } }).blockers).toContain("pinned_approval");
-    expect(evaluateDrLuriePublishReadiness({ ...ready, releaseBehavior: undefined }).blockers).toContain("release_behavior");
+    expect(evaluateDrLuriePublishReadiness({ ...ready, approval: undefined }).status).toBe("go");
+    expect(evaluateDrLuriePublishReadiness({ ...ready, releaseBehavior: undefined }).status).toBe("go");
     expect(evaluateDrLuriePublishReadiness({ ...ready, releaseBehavior: "yolo" }).blockers).toContain("release_behavior");
   });
 
