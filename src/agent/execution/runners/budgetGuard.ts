@@ -26,15 +26,16 @@ export class NodeBudgetExceededError extends Error {
     readonly details: {
       nodeId: string;
       budgetUsd: number;
+      ceiling: "node" | "run";
       spentUsdEstimate: number;
       prospectiveTurnUsd: number;
       accruedNodeUsage: { inputTokens: number; outputTokens: number };
     }
   ) {
     super(
-      `budget_exceeded: node "${details.nodeId}" stopped before the model turn that would cross its ceiling: ` +
-        `$${details.spentUsdEstimate.toFixed(4)} already spent (run-wide, actual) + ~$${details.prospectiveTurnUsd.toFixed(4)} for the upcoming turn ` +
-        `exceeds the $${details.budgetUsd} budget. Caught before the turn ran, not after.`
+      `budget_exceeded: node "${details.nodeId}" stopped before the model turn that would cross the ${details.ceiling} ceiling: ` +
+        `$${details.spentUsdEstimate.toFixed(4)} already spent (actual, ${details.ceiling === "node" ? "this node" : "run-wide"}) + ~$${details.prospectiveTurnUsd.toFixed(4)} for the upcoming turn ` +
+        `exceeds the $${details.budgetUsd} ${details.ceiling} budget. Caught before the turn ran, not after.`
     );
     this.name = "NodeBudgetExceededError";
   }
@@ -56,7 +57,13 @@ export type BudgetGuardState = {
 export type BudgetGuardConfig = {
   nodeId: string;
   model: string;
-  budgetUsd: number;
+  // TWO ceilings, deliberately separate. The node's own budgetUsd bounds THIS NODE's spend; the
+  // run's budgetUsd bounds the whole run's. The previous guard collapsed them to
+  // min(nodeBudget, runBudget) and compared RUN-WIDE prior spend against it — harmless while no
+  // node declared a budget, but the moment every node carries one (the node-limits audit), any node
+  // dispatched after cumulative run spend passed its own small ceiling would refuse to run at all.
+  nodeBudgetUsd?: number;
+  runBudgetUsd?: number;
   // Spend accrued by the whole run BEFORE this node started (summarizeModelUsage, queried once).
   priorSpendUsd: number;
   // The node's configured output cap — the worst-case output cost reserved for each upcoming turn.
@@ -70,12 +77,17 @@ export function wrapModelWithBudgetGuard(inner: Model, config: BudgetGuardConfig
   const gate = (request: ModelRequest): void => {
     const accruedNodeUsd = estimateModelCost({ model: config.model, inputTokens: state.accrued.inputTokens, outputTokens: state.accrued.outputTokens });
     const prospectiveTurnUsd = estimateModelCost({ model: config.model, inputTokens: estimateRequestTokens(request), outputTokens: config.maxOutputTokens });
-    const spentUsdEstimate = config.priorSpendUsd + accruedNodeUsd;
-    if (spentUsdEstimate + prospectiveTurnUsd > config.budgetUsd) {
+    // Node ceiling: this node's own accrued spend + the upcoming turn. Run ceiling: everything the
+    // run has spent (prior nodes + this node) + the upcoming turn. Whichever trips first stops the
+    // turn; the details name the ceiling that tripped so the remedy is unambiguous.
+    const nodeCeilingTripped = config.nodeBudgetUsd !== undefined && accruedNodeUsd + prospectiveTurnUsd > config.nodeBudgetUsd;
+    const runCeilingTripped = config.runBudgetUsd !== undefined && config.priorSpendUsd + accruedNodeUsd + prospectiveTurnUsd > config.runBudgetUsd;
+    if (nodeCeilingTripped || runCeilingTripped) {
       const details = {
         nodeId: config.nodeId,
-        budgetUsd: config.budgetUsd,
-        spentUsdEstimate: Number(spentUsdEstimate.toFixed(6)),
+        budgetUsd: (nodeCeilingTripped ? config.nodeBudgetUsd : config.runBudgetUsd)!,
+        ceiling: nodeCeilingTripped ? ("node" as const) : ("run" as const),
+        spentUsdEstimate: Number((nodeCeilingTripped ? accruedNodeUsd : config.priorSpendUsd + accruedNodeUsd).toFixed(6)),
         prospectiveTurnUsd: Number(prospectiveTurnUsd.toFixed(6)),
         accruedNodeUsage: { ...state.accrued }
       };

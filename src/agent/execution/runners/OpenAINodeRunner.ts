@@ -113,20 +113,28 @@ export class OpenAINodeRunner implements NodeRunner {
     // F2b (T-2, run_1785352838155_l544ye): the run's OWN budgetUsd ceiling was only ever evaluated
     // BETWEEN nodes (advanceRun's budget gate, before dispatch) — nothing inside a node's own turn
     // loop watched it, so a single node's turns could carry the run straight through the ceiling
-    // before the gate got another look. The in-loop guard watches whichever ceiling is tighter — the
-    // node's own modelConfig.budgetUsd (now set on every canonical node) or the run's budgetUsd (set
-    // on workflow.start_dry_run).
+    // before the gate got another look. The guard watches BOTH ceilings, separately: the node's own
+    // modelConfig.budgetUsd bounds THIS NODE's spend, the run's budgetUsd (workflow.start_dry_run)
+    // bounds the whole run's. They were previously collapsed to min(node, run) and compared against
+    // run-wide prior spend — harmless while no node declared a budget, but with every canonical node
+    // now carrying one, that conflation would refuse to run any node dispatched after cumulative run
+    // spend passed its own small per-node ceiling.
     const nodeBudgetUsd = numberFrom(c.budgetUsd);
     const runBudgetUsd = numberFrom(context.run.budgetUsd);
-    const budgetUsd = nodeBudgetUsd !== undefined && runBudgetUsd !== undefined ? Math.min(nodeBudgetUsd, runBudgetUsd) : nodeBudgetUsd ?? runBudgetUsd;
+    const budgetGuardEngaged = nodeBudgetUsd !== undefined || runBudgetUsd !== undefined;
     const { model, settings } = modelSettings(node);
     const maxOutputTokens = numberFrom(c.maxOutputTokens) ?? DEFAULT_OUTPUT_TOKEN_RESERVE;
     let priorSpendUsd = 0;
-    if (budgetUsd !== undefined) {
+    if (budgetGuardEngaged) {
       const spent = await summarizeModelUsage({ runId: context.run.runId });
       priorSpendUsd = spent.totalCostUsdEstimate;
       const reserve = estimateModelCost({ model, inputTokens: 1000, outputTokens: maxOutputTokens });
-      if (priorSpendUsd + reserve > budgetUsd) return { ok: false, code: "budget_exceeded", message: "Estimated node budget would be exceeded.", details: { spentUsdEstimate: priorSpendUsd, reserveUsdEstimate: reserve, budgetUsd } };
+      if (nodeBudgetUsd !== undefined && reserve > nodeBudgetUsd) {
+        return { ok: false, code: "budget_exceeded", message: `Node "${node.id}"'s own budgetUsd ($${nodeBudgetUsd}) cannot cover even one model turn's reserve (~$${reserve}); raise modelConfig.budgetUsd or lower maxOutputTokens.`, details: { reserveUsdEstimate: reserve, nodeBudgetUsd, ceiling: "node" } };
+      }
+      if (runBudgetUsd !== undefined && priorSpendUsd + reserve > runBudgetUsd) {
+        return { ok: false, code: "budget_exceeded", message: "Estimated node budget would be exceeded.", details: { spentUsdEstimate: priorSpendUsd, reserveUsdEstimate: reserve, budgetUsd: runBudgetUsd, ceiling: "run" } };
+      }
     }
     // Empty allowedTools short-circuits tool resolution: the policy layer denies every tool for
     // such nodes anyway (node_tool_not_allowed), and skipping the lookup lets synthetic,
@@ -183,9 +191,9 @@ export class OpenAINodeRunner implements NodeRunner {
     // through the SDK's own OpenAIProvider (same Responses API the bare model-name string uses).
     const guardState: BudgetGuardState = { accrued: { inputTokens: 0, outputTokens: 0 } };
     let agentModel = buildAgentModel(provider, model);
-    if (budgetUsd !== undefined) {
+    if (budgetGuardEngaged) {
       const innerModel = typeof agentModel === "string" ? await new OpenAIProvider().getModel(agentModel) : agentModel;
-      agentModel = wrapModelWithBudgetGuard(innerModel, { nodeId: node.id, model, budgetUsd, priorSpendUsd, maxOutputTokens }, guardState);
+      agentModel = wrapModelWithBudgetGuard(innerModel, { nodeId: node.id, model, nodeBudgetUsd, runBudgetUsd, priorSpendUsd, maxOutputTokens }, guardState);
     }
     const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, playbookText), model: agentModel, modelSettings: settings, tools: sdkTools, outputType });
     // Dependency outputs used to be serialized TWICE into every prompt: once inside `input` (the
@@ -247,7 +255,7 @@ export class OpenAINodeRunner implements NodeRunner {
           return {
             ok: false,
             code: "budget_exceeded",
-            message: `Node "${node.id}" stopped before the model turn that would cross its budget: estimated spend $${details.spentUsdEstimate} plus ~$${details.prospectiveTurnUsd} for the upcoming turn exceeds the $${details.budgetUsd} ceiling. Caught inside the agent loop before the turn ran, not after.`,
+            message: `Node "${node.id}" stopped before the model turn that would cross the ${details.ceiling} budget: estimated spend $${details.spentUsdEstimate} plus ~$${details.prospectiveTurnUsd} for the upcoming turn exceeds the $${details.budgetUsd} ceiling. Caught inside the agent loop before the turn ran, not after.`,
             details: { ...details, stage: "mid_loop" },
             toolCalls
           };
