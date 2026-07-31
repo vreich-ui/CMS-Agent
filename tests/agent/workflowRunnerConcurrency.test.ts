@@ -41,8 +41,9 @@ describe("Publishing Conductor runner state advancement", () => {
     // One artifact per completed node — no duplicates from a replayed node.
     expect(artifactNodeIds(final)).toEqual(completedNodeIds(final));
     expect(new Set(artifactNodeIds(final)).size).toBe(artifactNodeIds(final).length);
-    // Eight atomic commits over the seeded rev 0.
-    expect(final.rev).toBe(8);
+    // Sixteen atomic commits over the seeded rev 0: each advance now persists a dispatch CLAIM
+    // before executing the node (the ~300s silent-death heartbeat) plus the completion save.
+    expect(final.rev).toBe(16);
     expect(final.currentNodeId).toBe("draft_writer");
 
     // Usage is recorded once per completed node, not once per (possibly replayed) execution.

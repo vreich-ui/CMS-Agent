@@ -10,6 +10,9 @@ const captured = vi.hoisted(() => ({
   queue: [] as any[]
 }));
 vi.mock("@openai/agents", () => ({
+  // The runner resolves the default provider's Model object to wrap it with the budget guard; the
+  // fake run() below never invokes it, so tests exercise the same control flow without a network.
+  OpenAIProvider: class { async getModel(name?: string) { return { name, async getResponse() { return { usage: { inputTokens: 0, outputTokens: 0 }, output: [] }; }, async *getStreamedResponse() {} } as any; } },
   Agent: class { constructor(config: unknown) { captured.agentConfigs.push(config); } },
   run: vi.fn(async (_agent: unknown, prompt: string) => {
     captured.runPrompts.push(prompt);

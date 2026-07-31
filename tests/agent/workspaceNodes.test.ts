@@ -91,8 +91,11 @@ describe("Publishing Conductor workspace nodes", () => {
       expect(node?.riskLevel, `${nodeId} stays publish-risk`).toBe("publish");
       expect(node?.allowedTools, `${nodeId} can reach the client`).toContain("project.call_tool");
       // project.call_tool is requiresApproval:true in the controlled-tool registry, so the grant alone
-      // never executes anything — the tool still needs per-run approval.
-      expect(node?.assignedSkills).toContain("dr_lurie_contract_intelligence");
+      // never executes anything — the tool still needs per-run approval. The contract skill is
+      // deliberately NOT assigned here (node-system overhaul): its instructions request
+      // project.call_read_tool, which these nodes rightly deny, and that mismatch was the standing
+      // attention warning. The grant stays; the skill went.
+      expect(node?.assignedSkills).toEqual([]);
     }
     expect(listWorkspaceNodes().find((node) => node.id === "publish_executor")?.status).toBe("draft");
   });

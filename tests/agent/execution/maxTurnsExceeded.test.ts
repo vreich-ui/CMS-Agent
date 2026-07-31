@@ -24,6 +24,9 @@ const { runMock, MockRunner } = vi.hoisted(() => {
   };
 });
 vi.mock("@openai/agents", () => ({
+  // The runner resolves the default provider's Model object to wrap it with the budget guard; the
+  // fake run() below never invokes it, so tests exercise the same control flow without a network.
+  OpenAIProvider: class { async getModel(name?: string) { return { name, async getResponse() { return { usage: { inputTokens: 0, outputTokens: 0 }, output: [] }; }, async *getStreamedResponse() {} } as any; } },
   Agent: class { constructor(_config: unknown) {} },
   run: (...args: unknown[]) => runMock(...(args as [any, any, any])),
   Runner: MockRunner,
@@ -68,6 +71,9 @@ describe("turn-cap exhaustion is a distinct, actionable failure", () => {
   it("passes the resolved per-node budget to the SDK — above the node's tool-call allowance", async () => {
     await executeNode({ nodeId: "research", input: {}, dependencyOutputs: RESEARCH_DEPENDENCIES, executionMode: "openai" });
     const options = runMock.mock.calls[0]?.[2] as { maxTurns: number };
-    expect(options.maxTurns).toBeGreaterThan(12);
+    // The node-limits audit made research's turn budget explicit: maxTurns 12 over toolCallLimit 8.
+    // The invariant stays "above the tool-call allowance"; the number is now declared, not derived.
+    expect(options.maxTurns).toBe(12);
+    expect(options.maxTurns).toBeGreaterThan(8);
   });
 });

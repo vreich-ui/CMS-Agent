@@ -232,7 +232,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "updatedAt": "2026-01-01T00:00:00.000Z"
   },
   {
-    "skillId": "dr_lurie_contract_intelligence",
+    "skillId": "contract_intelligence",
     "name": "Client contract intelligence",
     "description": "Treat the target client's live object contract as the only source of truth for content shape, ids, media paths, taxonomy and publish gates. Works for any client a workflow encounters.",
     "version": "1.0.0",
@@ -299,7 +299,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     ],
     "memoryPolicy": {
       "namespaces": [
-        "dr_lurie_contract_intelligence"
+        "contract_intelligence"
       ],
       "read": true,
       "write": false
@@ -313,18 +313,18 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "riskLevel": "read",
     "metadata": {
       "clientAgnostic": true,
-      "supersedes": "dr_lurie_contract_intelligence v1.0.0 (Dr. Lurie-specific)"
+      "supersedes": "dr_lurie_contract_intelligence (renamed 2026-07-31, node-system overhaul: the id itself was the last branded trace; instructions client-neutral since its v14). Dr. Lurie-specific history stays on the retired id's version snapshots and in src/agent/projects/drLurie/editorialVoice.ts."
     },
-    "createdAt": "2026-07-21T12:53:58.917Z",
-    "updatedAt": "2026-07-30T16:52:39.262Z"
+    "createdAt": "2026-07-31T09:32:07.889Z",
+    "updatedAt": "2026-07-31T09:32:17.793Z"
   },
   {
-    "skillId": "dr_lurie_dtc_science_editorial",
+    "skillId": "editorial_craft",
     "name": "Editorial craft",
     "description": "Client-neutral editorial craft for evidence-aware, reader-first, conversion-aware content: calm authority, practical specificity, low-pressure next steps, no hype. Voice and brand direction come from the target client's own record, never from this skill.",
     "version": "1.0.0",
     "status": "active",
-    "instructions": "Write for a smart reader who wants calm authority, not a lecture. The register is precise, warm, practical, and commercially aware. Favor concrete decisions, tradeoffs, and reassurance. Do not overclaim outcomes, imply diagnosis or professional advice, or turn uncertainty into certainty. Connect education to reader action: related reading, newsletter signup, a routine decision, product/resource consideration, or another low-pressure next step. Avoid hype, fear tactics, fake urgency, and generic filler language. This skill is client-neutral craft: the target client's voice, styling, audience, and commercial direction come from the client's own record and the run's inputs — clientProjectId in the node input names the client. Never assume a client, and never import one client's conventions into another client's content; treat a missing client identity as a blocker rather than guessing. Reader-visible copy must never expose internal strategy labels, prompts, scoring, private notes, or workflow language.",
+    "instructions": "Write for a smart reader who wants calm authority, not a lecture. The register is precise, warm, practical, and commercially aware. Favor concrete decisions, tradeoffs, and reassurance. Do not overclaim outcomes, imply professional advice (medical, legal, financial), or turn uncertainty into certainty. Connect education to reader action: related reading, newsletter signup, a routine decision, product/resource consideration, or another low-pressure next step. Avoid hype, fear tactics, fake urgency, invented sources, and generic filler language. This skill is client-neutral craft: the target client's voice, styling, audience, domain caution, and commercial direction come from the client's own record and the run's inputs — clientProjectId in the node input names the client. Never assume a client, and never import one client's conventions into another client's content; treat a missing client identity as a blocker rather than guessing. Reader-visible copy must never expose internal strategy labels, prompts, scoring, private notes, or workflow language.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
@@ -374,7 +374,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     ],
     "memoryPolicy": {
       "namespaces": [
-        "dr_lurie_dtc_science_editorial"
+        "editorial_craft"
       ],
       "read": true,
       "write": false
@@ -386,10 +386,10 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "riskLevel": "read",
     "metadata": {
       "clientAgnostic": true,
-      "supersedes": "dr_lurie_dtc_science_editorial v1.0.0 (Dr. Lurie-specific)"
+      "supersedes": "dr_lurie_dtc_science_editorial (renamed 2026-07-31, node-system overhaul: the id itself was the last branded trace; instructions client-neutral since its v14). The branded Dr. Lurie voice text (its v2) is preserved verbatim in src/agent/projects/drLurie/editorialVoice.ts as the vox_drlurie_default seed."
     },
-    "createdAt": "2026-07-21T12:53:44.642Z",
-    "updatedAt": "2026-07-30T17:31:34.858Z"
+    "createdAt": "2026-07-31T09:32:24.171Z",
+    "updatedAt": "2026-07-31T09:32:37.416Z"
   },
   {
     "skillId": "editorial_review",

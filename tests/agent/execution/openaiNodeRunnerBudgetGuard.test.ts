@@ -1,47 +1,58 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// B3 (T-2, run_1785340011864_qpyjr0): budgetUsd was only ever checked ONCE, before a node's agent
-// loop started. The run set budgetUsd: 5 and finished at $5.26 (105.25% of budget, blocked: false)
-// because nothing looked again until the run's between-node gate noticed afterward — one node had
-// already spent the whole budget and overrun it by then. A Runner instance's `agent_start` hook
-// fires once per model turn with the run's cumulative token usage so far, which is what lets the
-// runner check the ceiling INSIDE the loop instead of only between nodes. This fake models exactly
-// that: usage accrues across three simulated turns, cheap for the first two turns and then a large
-// jump, so the circuit breaker can only ever trip at a turn BOUNDARY (it cannot preempt an in-flight
-// turn) — at the start of turn 3, after turn 2's expensive usage has already accumulated.
-const { fakeRunnerInstances, FakeRunnerClass, runMock } = vi.hoisted(() => {
-  const instances: any[] = [];
-  class FakeRunner {
-    listeners: Record<string, Array<(...args: any[]) => void>> = {};
-    on(event: string, cb: (...args: any[]) => void) { (this.listeners[event] ??= []).push(cb); return this; }
-    async run(_agent: unknown, _prompt: unknown, options: any) {
-      const usage = { inputTokens: 0, outputTokens: 0 };
-      const emitStart = () => this.listeners.agent_start?.forEach((cb) => cb({ usage: { ...usage } }));
-      const checkAborted = () => { if (options?.signal?.aborted) { const e = new Error("This operation was aborted."); e.name = "AbortError"; throw e; } };
-
-      emitStart(); checkAborted();
-      usage.inputTokens += 100; usage.outputTokens += 50; // turn 1: cheap
-
-      emitStart(); checkAborted();
-      usage.inputTokens += 100_000; usage.outputTokens += 50_000; // turn 2: the expensive one
-
-      emitStart(); checkAborted(); // turn 3 start: cumulative usage now blows the budget — aborts here
-
-      return { finalOutput: { artifact: "reader_insight.v1", summary: "should never be reached" }, rawResponses: [{ usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens } }], lastResponseId: "resp_never" };
-    }
-  }
+// The in-loop budget guard, third generation. B3 checked the budget once before the loop; #95 H4
+// listened to the SDK's agent_start hook — whose usage object stays empty while a node's own loop is
+// running, so the accrued-spend term never grew and artifact_plan carried a $3 run ceiling to 138%
+// in one dispatch (run_1785435947311_jl8hl4, $1.95 / 386K input tokens for one node). The guard now
+// wraps the Model itself: every model request is gated BEFORE it is sent, using the request's own
+// prospective size plus ACTUAL usage accumulated from prior responses, and a failed node's real
+// spend is recorded instead of vanishing from the ledger.
+//
+// The fake run() below simulates the SDK's loop faithfully at the only layer that matters to the
+// guard: it calls agent.model.getResponse(...) once per turn with a growing conversation, exactly
+// where the wrapper intercepts. Turn 1 is cheap; turn 2 returns expensive actual usage; turn 3's
+// gate must then refuse before the request is sent.
+const { runMock, innerModelCalls } = vi.hoisted(() => {
+  const innerCalls: Array<{ inputChars: number }> = [];
   return {
-    fakeRunnerInstances: instances,
-    FakeRunnerClass: FakeRunner,
-    runMock: vi.fn(async (): Promise<any> => { throw new Error("plain run() should not be called when budgetUsd is configured"); })
+    innerModelCalls: innerCalls,
+    runMock: vi.fn(async (agent: any, prompt: string) => {
+      const model = agent.config.model;
+      // No budget => the runner leaves the default provider's plain model-name STRING in place and
+      // the SDK would resolve it internally; this fake only walks the turn loop through a wrapped
+      // Model object.
+      if (typeof model !== "string") {
+        // Turn 1: the initial prompt.
+        await model.getResponse({ input: prompt });
+        // Turn 2: conversation grew (a big tool result entered it).
+        await model.getResponse({ input: prompt + "x".repeat(20_000) });
+        // Turn 3: the guard should refuse this request before it spends anything.
+        await model.getResponse({ input: prompt + "x".repeat(40_000) });
+      }
+      return { finalOutput: { artifact: "probe.v1", summary: "reached only without a budget ceiling" }, rawResponses: [{ usage: { inputTokens: 100, outputTokens: 50 } }], lastResponseId: "resp_final" };
+    })
   };
 });
 vi.mock("@openai/agents", () => ({
-  Agent: class { constructor(_config: unknown) {} },
-  run: (...args: unknown[]) => runMock(...(args as [])),
-  Runner: class extends FakeRunnerClass { constructor() { super(); fakeRunnerInstances.push(this); } },
+  Agent: class { config: unknown; constructor(config: unknown) { this.config = config; } },
+  run: (...args: unknown[]) => runMock(...(args as [any, string])),
   tool: (definition: unknown) => definition,
-  OpenAIChatCompletionsModel: class { constructor(_client: unknown, _model: string) {} }
+  OpenAIChatCompletionsModel: class { constructor(_client: unknown, _model: string) {} },
+  OpenAIProvider: class {
+    async getModel(name?: string) {
+      return {
+        name,
+        async getResponse(request: { input: string }) {
+          innerModelCalls.push({ inputChars: JSON.stringify(request.input ?? "").length });
+          // Actual usage reported by the provider: turn 2 is the expensive one (100K in / 50K out
+          // at gpt-5.5 placeholder pricing ≈ $1.25 — far past the ceilings used below).
+          const expensive = innerModelCalls.length === 2;
+          return { usage: { inputTokens: expensive ? 100_000 : 100, outputTokens: expensive ? 50_000 : 50 }, output: [] };
+        },
+        async *getStreamedResponse() {}
+      } as any;
+    }
+  }
 }));
 
 import { executeNode } from "../../../src/agent/workspace/nodeRuntime.js";
@@ -69,53 +80,58 @@ const makeRun = (overrides: Partial<WorkflowExecutionRecord> = {}): WorkflowExec
 });
 
 describe("in-loop budget circuit breaker (B3)", () => {
-  beforeEach(() => { resetRepositoryManager(); process.env.OPENAI_API_KEY = "test-key"; runMock.mockClear(); fakeRunnerInstances.length = 0; });
+  beforeEach(() => { resetRepositoryManager(); process.env.OPENAI_API_KEY = "test-key"; runMock.mockClear(); innerModelCalls.length = 0; });
   afterEach(() => { delete process.env.OPENAI_API_KEY; resetRepositoryManager(); });
 
   it("aborts mid-node with a distinct budget_exceeded, not discovered only after the node finishes", async () => {
-    const result: any = await executeNode({ nodeId: "research", input: {}, dependencyOutputs: RESEARCH_DEPENDENCIES, executionMode: "openai", modelConfig: { budgetUsd: 0.05 } });
+    const result: any = await executeNode({ nodeId: "research", input: {}, dependencyOutputs: RESEARCH_DEPENDENCIES, executionMode: "openai", modelConfig: { budgetUsd: 0.2 } });
 
     expect(result.execution.status).toBe("failed");
     const [code, message] = result.execution.nodes[0].errors as [string, string];
     expect(code).toBe("budget_exceeded");
-    expect(code).not.toBe("model_error");
-    expect(code).not.toBe("cancelled");
-    expect(message).toContain("research");
-    expect(message).toContain("0.05");
-    // A Runner instance (not the bare run() function) was used once budgetUsd was configured.
-    expect(fakeRunnerInstances).toHaveLength(1);
-    expect(runMock).not.toHaveBeenCalled();
+    expect(message).toMatch(/before the model turn that would cross/i);
+    // The guard refused turn 3's request BEFORE it reached the provider: turn 2's actual usage
+    // ($1.25-ish) had already crossed the $0.2 ceiling, so only two inner model calls exist.
+    expect(innerModelCalls).toHaveLength(2);
   });
 
-  it("does not touch the Runner path at all when no budgetUsd is configured (byte-for-byte unchanged)", async () => {
-    runMock.mockResolvedValueOnce({ finalOutput: { artifact: "research_brief.v1", summary: "ok" }, rawResponses: [{ usage: { inputTokens: 10, outputTokens: 10 } }], lastResponseId: "resp_ok" });
-    // research now carries its own modelConfig.budgetUsd by default (F5); explicitly clear it here so
-    // this test still exercises the genuinely-no-budget code path it's named for.
-    const result: any = await executeNode({ nodeId: "research", input: {}, dependencyOutputs: RESEARCH_DEPENDENCIES, executionMode: "openai", modelConfig: { budgetUsd: undefined } });
-
-    expect(result.execution.status).toBe("completed");
-    expect(runMock).toHaveBeenCalledTimes(1);
-    expect(fakeRunnerInstances).toHaveLength(0);
-  });
-
-  // F2b (T-2, run_1785352838155_l544ye): the run's OWN budgetUsd — the ceiling advanceRun's
-  // between-node gate reads via summarizeModelUsage(runId) — was never watched INSIDE a node's own
-  // loop, only the node's rare, separate modelConfig.budgetUsd was. contract_intelligence carried a
-  // $3 run ceiling from $1.60 to $4.17 in one dispatch because of exactly this gap. Calls the runner
-  // directly (bypassing executeNode's narrower fixture, which has no way to set run.budgetUsd) with a
-  // node that has NO modelConfig.budgetUsd of its own, only a run carrying one, to isolate that the
-  // run-level ceiling alone is what the guard now watches.
   it("aborts mid-node on the RUN's budgetUsd even when the node has no budgetUsd of its own", async () => {
-    const run = makeRun({ budgetUsd: 0.05 });
-    const result = await new OpenAINodeRunner().run({ node: PROBE_NODE, input: {} }, { run, executionRepository: repositoryManager.getExecutionRepository() });
+    const runner = new OpenAINodeRunner();
+    const result = await runner.run(
+      { node: PROBE_NODE, input: {} },
+      { run: makeRun({ budgetUsd: 0.5 }), executionRepository: repositoryManager.getExecutionRepository() }
+    );
 
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe("budget_exceeded");
-      expect(result.message).toContain("budget_probe");
-      expect(result.message).toContain("0.05");
-    }
-    expect(fakeRunnerInstances).toHaveLength(1);
-    expect(runMock).not.toHaveBeenCalled();
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("budget_exceeded");
+    expect((result.details as { stage?: string }).stage).toBe("mid_loop");
+    expect(innerModelCalls).toHaveLength(2);
+  });
+
+  it("records the aborted node's REAL spend in the usage ledger instead of losing it", async () => {
+    const runner = new OpenAINodeRunner();
+    const run = makeRun({ budgetUsd: 0.5 });
+    const result = await runner.run({ node: PROBE_NODE, input: {} }, { run, executionRepository: repositoryManager.getExecutionRepository() });
+
+    expect(result.ok).toBe(false);
+    const records = await repositoryManager.getUsageRepository().list({ runId: run.runId });
+    // One partial "actual" record carrying the two completed turns' usage — previously a failed
+    // node recorded NOTHING, which is how a 138% overshoot could hide from the run ledger.
+    expect(records).toHaveLength(1);
+    expect(records[0].status).toBe("actual");
+    expect(records[0].inputTokens).toBe(100_100);
+    expect(records[0].outputTokens).toBe(50_050);
+    expect(records[0].metadata).toMatchObject({ partial: true, failureCode: "budget_exceeded" });
+  });
+
+  it("does not engage the guard when no budget is configured anywhere", async () => {
+    const runner = new OpenAINodeRunner();
+    const result = await runner.run({ node: PROBE_NODE, input: {} }, { run: makeRun(), executionRepository: repositoryManager.getExecutionRepository() });
+    // Without a ceiling the node completes, the default provider path keeps the plain model-name
+    // string (never resolved into a wrapped Model), and no gated calls were recorded.
+    expect(result.ok).toBe(true);
+    expect(runMock).toHaveBeenCalledTimes(1);
+    expect(innerModelCalls).toHaveLength(0);
   });
 });
