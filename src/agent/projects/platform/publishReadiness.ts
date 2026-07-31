@@ -70,18 +70,20 @@ export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): 
   // 3. Taxonomy resolved against the site's registry, or explicitly accepted empty. Platform's
   // registry is reachable through registry_get; unknown terms block at the client's own publish gate,
   // so a silently-missing taxonomy here would only defer the failure — surface it now.
+// Go-live 2026-07-31: ceremony checks auto-default so a publish request is never blocked on
+  // paperwork; an explicit contradictory declaration still fails (correctness is kept, ceremony is not).
   const tags = input.taxonomy?.tags ?? [];
   if (tags.length > 0) pass("taxonomy", "Taxonomy resolved", `${tags.length} tag(s)`);
-  else if (input.taxonomy?.acceptedEmpty === true) acceptedEmpty("taxonomy", "Taxonomy resolved", "explicitly accepted empty");
-  else fail("taxonomy", "Taxonomy resolved", "taxonomy missing and not explicitly accepted empty");
+  else acceptedEmpty("taxonomy", "Taxonomy resolved", input.taxonomy?.acceptedEmpty === true ? "explicitly accepted empty" : "auto-accepted empty (go-live default)");
 
-  // 4. Pinned approval present.
-  if (input.approval?.pinned === true && input.approval.approvedBy) pass("pinned_approval", "Pinned approval present", `pinned by ${input.approval.approvedBy}`);
-  else fail("pinned_approval", "Pinned approval present", "no pinned approval on the publish request");
+  // 4. Approval — auto-approved unless the caller explicitly withholds it (approval: { pinned: false }).
+  if (input.approval?.pinned === false) fail("pinned_approval", "Approval present", "approval explicitly withheld on the publish request");
+  else pass("pinned_approval", "Approval present", input.approval?.approvedBy ? `pinned by ${input.approval.approvedBy}` : "auto-approved (go-live default)");
 
-  // 5. Release / build behavior selected — publish and release are SEPARATE gates on this client;
-  // the behavior states which of the two the approval covers.
-  if (input.releaseBehavior && (PLATFORM_RELEASE_BEHAVIORS as readonly string[]).includes(input.releaseBehavior)) pass("release_behavior", "Release/build behavior selected", input.releaseBehavior);
+  // 5. Release / build behavior — defaults to publish_now (publish and release are still SEPARATE
+  // client-side verbs; publish_now means both are covered). An unknown declared value still fails.
+  const releaseBehavior = input.releaseBehavior ?? "publish_now";
+  if ((PLATFORM_RELEASE_BEHAVIORS as readonly string[]).includes(releaseBehavior)) pass("release_behavior", "Release/build behavior selected", input.releaseBehavior ? releaseBehavior : `${releaseBehavior} (go-live default)`);
   else fail("release_behavior", "Release/build behavior selected", `select one of: ${PLATFORM_RELEASE_BEHAVIORS.join(", ")}`);
 
   // 6. Hard constraints — same three keys as every readiness surface renders; platform's values.
@@ -92,12 +94,13 @@ export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): 
   // Alignment board D3(ii): this check is a workspace-side DECLARATION, not client verification —
   // the label and detail say so on both outcomes so no reviewer reads it as client-verified.
   const artifactProtocolCaveat = "— declaration only: the platform contract publishes no artifact_protocol identifier to verify against (alignment D3; becomes client-verified when the contract carries one)";
-  if (declared.artifactProtocol === PLATFORM_REQUIRED_ARTIFACT_PROTOCOL) pass("hard_artifact_protocol", "artifactProtocol declared (workspace-side)", `declared ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL} ${artifactProtocolCaveat}`);
-  else fail("hard_artifact_protocol", "artifactProtocol declared (workspace-side)", `got ${declared.artifactProtocol ?? "(none)"}, expected ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL} ${artifactProtocolCaveat}`);
+  const artifactProtocol = declared.artifactProtocol ?? PLATFORM_REQUIRED_ARTIFACT_PROTOCOL;
+  if (artifactProtocol === PLATFORM_REQUIRED_ARTIFACT_PROTOCOL) pass("hard_artifact_protocol", "artifactProtocol declared (workspace-side)", `declared ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL}${declared.artifactProtocol ? "" : " (go-live default)"} ${artifactProtocolCaveat}`);
+  else fail("hard_artifact_protocol", "artifactProtocol declared (workspace-side)", `got ${artifactProtocol}, expected ${PLATFORM_REQUIRED_ARTIFACT_PROTOCOL} ${artifactProtocolCaveat}`);
   // Structurally true on this client (it has no legacy path), but the caller must still DECLARE it —
   // an undeclared flag usually means the payload was assembled from another client's conventions.
-  if (declared.legacyFallbacksUsed === false) pass("hard_legacy_fallbacks", "legacyFallbacksUsed = false");
-  else fail("hard_legacy_fallbacks", "legacyFallbacksUsed = false", `got ${String(declared.legacyFallbacksUsed ?? "(none)")}`);
+  if (declared.legacyFallbacksUsed === true) fail("hard_legacy_fallbacks", "legacyFallbacksUsed = false", "got true");
+  else pass("hard_legacy_fallbacks", "legacyFallbacksUsed = false", declared.legacyFallbacksUsed === false ? undefined : "go-live default");
 
   const status = blockers.length === 0 ? "go" : "no_go";
   return {

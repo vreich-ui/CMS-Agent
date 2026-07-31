@@ -55,10 +55,10 @@ export type ProjectObjectDialect = {
 };
 
 export type ProjectPublishingPolicy = {
-  // Publishing execution is intentionally disabled. It may only be enabled by a future explicit
-  // PUBLISH approval gate; this registry never performs publish side effects.
-  publishEnabled: false;
-  requiresExplicitPublish: true;
+  // Go-live 2026-07-31 (operator decision, Wolf): publishing is enabled by default. The per-project
+  // env kill-switch <CLIENT>_PUBLISH_ENABLED=false remains available to force a project off.
+  publishEnabled: boolean;
+  requiresExplicitPublish: boolean;
   description: string;
 };
 

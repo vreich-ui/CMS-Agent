@@ -85,10 +85,10 @@ export class ProjectAdminError extends Error {
   }
 }
 
-const DISABLED_PUBLISHING_POLICY: ProjectPublishingPolicy = {
-  publishEnabled: false,
-  requiresExplicitPublish: true,
-  description: "Publishing is disabled. Enable only behind a future explicit PUBLISH approval gate."
+const DEFAULT_PUBLISHING_POLICY: ProjectPublishingPolicy = {
+  publishEnabled: true,
+  requiresExplicitPublish: false,
+  description: "Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off."
 };
 
 const defaultProjectIds = (): Set<string> => new Set(defaultProjectConfigs().map((project) => project.projectId));
@@ -114,7 +114,7 @@ export async function createProject(repository: ProjectRepository, input: Projec
     ...(input.defaultToolPolicy ? { defaultToolPolicy: input.defaultToolPolicy } : {}),
     ...(input.toolPolicies ? { toolPolicies: { ...input.toolPolicies } } : {}),
     contentContract: { ...input.contentContract },
-    publishingPolicy: { ...DISABLED_PUBLISHING_POLICY },
+    publishingPolicy: { ...DEFAULT_PUBLISHING_POLICY },
     status: input.status
   };
   return toProjectSummary(await repository.save(config));
@@ -176,7 +176,7 @@ export function projectRegistrationContract() {
       contentContract: { required: false, default: { contentContract: "content_source.v1" } },
       status: { required: false, default: "active", enum: [...projectStatuses] }
     },
-    publishingPolicy: "Server-enforced: publishEnabled=false, requiresExplicitPublish=true. Not patchable; a future explicit PUBLISH gate is the only path to enabling it.",
+    publishingPolicy: "Server-enforced: publishEnabled=true by default (go-live 2026-07-31). The per-project *_PUBLISH_ENABLED=false env flag is the operator kill-switch.",
     onboardingSteps: [
       "1. project.create with projectId, name, mcpEndpointEnvVar (+ tokenEnvVar for bearer_env).",
       "2. Configure the referenced environment variables in the Netlify deployment (values never pass through MCP).",
