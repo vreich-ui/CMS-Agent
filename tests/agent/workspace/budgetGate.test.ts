@@ -6,10 +6,12 @@ import { summarizeRunCost } from "../../../src/agent/workspace/conductor.js";
 import { evaluateRunBudget, recordModelUsage, summarizeModelUsage } from "../../../src/agent/observability/modelUsage.js";
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 
+const TERMINAL = ["blocked", "completed", "failed", "cancelled"];
+
 // Advance a run until it reaches a terminal (blocked/completed/failed/cancelled) state.
 const drive = async (runId: string, store: ExecutionRepository, max = 30) => {
   let run = await getRun(runId, store);
-  for (let i = 0; run && i < max && !A_ARR.includes(run.status); i++) {
+  for (let i = 0; run && i < max && !TERMINAL.includes(run.status); i++) {
     run = await runNextNode(runId, { executionRepository: store });
   }
   return run!;
