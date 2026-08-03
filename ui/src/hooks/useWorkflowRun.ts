@@ -37,8 +37,11 @@ export function useWorkflowRun(client: McpClient) {
     const result = await client.call<{ runs: WorkflowExecutionRecord[] }>("workflow.list_runs", args);
     setRuns(result.runs);
     if (!currentRun && result.runs[0]) {
-      setCurrentRun(result.runs[0]);
-      setSelectedRunId(result.runs[0].runId);
+      // list_runs deliberately omits payload-heavy fields. Hydrate only the one row selected for
+      // the detail panels, instead of downloading every historical run and all of its outputs.
+      const detail = await client.call<{ run: WorkflowExecutionRecord | null }>("workflow.get_run", { runId: result.runs[0].runId });
+      setCurrentRun(detail.run);
+      setSelectedRunId(detail.run?.runId ?? result.runs[0].runId);
     }
     return result.runs;
   }), [client, currentRun, withLoading]);

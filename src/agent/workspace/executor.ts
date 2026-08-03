@@ -59,6 +59,32 @@ export const runModeSummary = (run: Pick<WorkflowExecutionRecord, "executionMode
     ].filter(Boolean).join(" ")
   };
 };
+
+// List endpoints are discovery surfaces, not bulk-export endpoints. A persisted run can contain the
+// complete input/output of every node twice (nodes + stageOutputs) and again in artifacts. Returning
+// that shape for every run made workflow.list_runs grow past a million response tokens in production.
+// Keep the operational fields needed by the overview and run picker; workflow.get_run is the explicit
+// detail read for one selected run.
+export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
+  runId: run.runId,
+  workflowId: run.workflowId,
+  projectId: run.projectId,
+  status: run.status,
+  ...(run.currentNodeId ? { currentNodeId: run.currentNodeId } : {}),
+  startedAt: run.startedAt,
+  updatedAt: run.updatedAt,
+  ...(run.completedAt ? { completedAt: run.completedAt } : {}),
+  nodes: run.nodes.map(({ input: _input, output: _output, ...state }) => state),
+  nodeCount: run.nodes.length,
+  artifactCount: run.artifacts.length,
+  errors: run.errors.slice(0, 10).map((error) => error.slice(0, 2_000)),
+  approvalsRequired: run.approvalsRequired,
+  dryRun: run.dryRun,
+  executionMode: run.executionMode,
+  ...(run.rev !== undefined ? { rev: run.rev } : {}),
+  ...(run.budgetUsd !== undefined ? { budgetUsd: run.budgetUsd } : {}),
+  ...(run.budgetBlock ? { budgetBlock: run.budgetBlock } : {})
+});
 // Statuses from which advanceRun will not proceed. "paused" (R-18) joins them: an operator-paused run
 // must stay put for exactly the same reason a blocked one does. Before "paused" existed, pause_run wrote
 // "blocked" — which worked only because "blocked" was already in this set, and cost the ability to tell

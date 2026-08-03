@@ -21,6 +21,14 @@ const duration = (startedAt: string, endedAt = now()) => Math.max(0, Date.parse(
 export type NodeValidationResult = { valid: boolean; value?: unknown; issues: string[] };
 export type NodeExecutionFilters = { nodeId?: string; runId?: string; executionId?: string; artifactType?: string; from?: string; to?: string };
 
+type NodeVersionSummary = {
+  workspaceVersion: number;
+  createdAt: string;
+  summary?: string;
+  updatedAt: string;
+  changedFields: string[];
+};
+
 export { redactSensitiveKeys as redactSecrets } from "../observability/redaction.js";
 import { redactSensitiveKeys as redactSecrets } from "../observability/redaction.js";
 
@@ -29,15 +37,59 @@ export function validateAgainstNodeSchema(value: unknown, schema: unknown): Node
   return result.ok ? { valid: true, value: result.value, issues: [] } : { valid: false, issues: result.errors };
 }
 
+// Workspace revisions store a complete node graph so restoration can remain lossless. Returning
+// those snapshots from node.get multiplied one node inspection by every node in every revision (a
+// live request exceeded four million response tokens). node.get only needs to describe THIS node's
+// history; exact revision payloads remain available through the changes tools.
+export function summarizeNodeVersions(nodeId: string, versions: Array<{ workspaceVersion: number; createdAt: string; summary?: string; nodes?: WorkspaceNode[] }>): NodeVersionSummary[] {
+  const summaries: NodeVersionSummary[] = [];
+  let previous: WorkspaceNode | undefined;
+  for (const version of [...versions].sort((a, b) => a.workspaceVersion - b.workspaceVersion)) {
+    const current = version.nodes?.find((candidate) => candidate.id === nodeId);
+    if (!current) continue;
+    const fields = new Set([...Object.keys(previous ?? {}), ...Object.keys(current)]);
+    const changedFields = [...fields].filter((field) => JSON.stringify(previous?.[field as keyof WorkspaceNode]) !== JSON.stringify(current[field as keyof WorkspaceNode])).sort();
+    if (previous && changedFields.length === 0) continue;
+    summaries.push({ workspaceVersion: version.workspaceVersion, createdAt: version.createdAt, ...(version.summary ? { summary: version.summary } : {}), updatedAt: current.updatedAt, changedFields });
+    previous = current;
+  }
+  return summaries;
+}
+
+export function summarizeNodeExecution(run: WorkflowExecutionRecord, nodeId: string) {
+  const state = run.nodes.find((candidate) => candidate.nodeId === nodeId);
+  return {
+    runId: run.runId,
+    workflowId: run.workflowId,
+    projectId: run.projectId,
+    status: run.status,
+    startedAt: run.startedAt,
+    updatedAt: run.updatedAt,
+    ...(run.completedAt ? { completedAt: run.completedAt } : {}),
+    executionMode: run.executionMode,
+    node: state ? (({ input: _input, output: _output, ...summary }) => summary)(state) : null,
+    artifactCount: run.artifacts.filter((artifact) => artifact.nodeId === nodeId).length,
+    errors: run.errors.slice(0, 10).map((error) => error.slice(0, 2_000))
+  };
+}
+
 export async function getNodeDetails(nodeId: string, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository(), executionRepository: repositoryManager.getExecutionRepository() }) {
   const node = await repos.workspaceRepository.getNode(nodeId);
   if (!node) return null;
-  const versions = (await repos.workspaceRepository.getVersions())?.filter((version: any) => version.nodes?.some((candidate: WorkspaceNode) => candidate.id === nodeId)) ?? [];
-  const latestExecution = (await listNodeExecutions({ nodeId }, repos.executionRepository))[0] ?? null;
-  const latestOutput = (await listNodeOutputs({ nodeId }, repos.executionRepository))[0] ?? null;
+  const versions = summarizeNodeVersions(nodeId, await repos.workspaceRepository.getVersions());
+  // Read executions once. The previous implementation called listRuns for latestExecution and then
+  // called it again through listNodeOutputs, doubling the GCS scan for every node inspection.
+  const executions = await listNodeExecutions({ nodeId }, repos.executionRepository);
+  const latestRun = executions[0] ?? null;
+  const latestExecution = latestRun ? summarizeNodeExecution(latestRun, nodeId) : null;
+  const latestOutput = executions
+    .flatMap((run) => run.artifacts.map((artifact: any) => ({ ...artifact, runId: artifact.runId ?? run.runId })))
+    .filter((artifact: any) => artifact.nodeId === nodeId)
+    .sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
   return redactSecrets({
     node,
     versions,
+    versionCount: versions.length,
     dependencies: node.dependsOn,
     assignedSkills: node.assignedSkills ?? [],
     allowedTools: node.allowedTools,

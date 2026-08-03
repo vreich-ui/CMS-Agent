@@ -24,10 +24,11 @@ describe("controlled tool runtime", () => {
     expect((result as any).denied.reasons).toContain("node_tool_not_allowed");
   });
 
-  it("enforces risk and approval for write tools", async () => {
+  it("enforces node and risk gates for write tools without restoring the removed per-run approval", async () => {
     const denied = await executeTool("stage.save_output", { stage: "draft", value: {} }, { ...ctx, maxRiskLevel: "read" });
     expect(denied.ok).toBe(false);
-    expect((denied as any).denied.reasons).toEqual(expect.arrayContaining(["risk_level_exceeds_authorization", "approval_required"]));
+    expect((denied as any).denied.reasons).toEqual(expect.arrayContaining(["node_tool_not_allowed", "risk_level_exceeds_authorization"]));
+    expect((denied as any).denied.reasons).not.toContain("approval_required");
   });
 
   it("reports skill/node tool intersection through effective resolver", async () => {
