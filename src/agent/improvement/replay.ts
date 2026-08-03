@@ -31,17 +31,22 @@ const storedInput = (raw: unknown): { input?: unknown; dependencies: Record<stri
   return { input: record.initialInput ?? record.input, dependencies: record.dependencies ?? {} };
 };
 
-export async function buildDataset(params: { nodeId: string; name?: string; limit?: number; projectId?: string }, deps: ReplayDeps): Promise<EvalDataset> {
+export async function buildDataset(params: { nodeId: string; name?: string; limit?: number; projectId?: string; executionMode?: "mock" | "openai" }, deps: ReplayDeps): Promise<EvalDataset> {
   const runs = await deps.executionRepository.listRuns(params.projectId ? { projectId: params.projectId } : {});
   const cases: EvalCase[] = [];
   for (const run of runs) {
     if (cases.length >= (params.limit ?? 20)) break;
+    // Mode filter, opt-in: pass executionMode:"openai" to freeze a dataset of REAL champions only.
+    // Left unset the behaviour is unchanged (mock cases still included) because mock cases are what
+    // make a plumbing test possible at all — but every case now says which it is, so a caller that
+    // cares can no longer be fooled by a placeholder champion.
+    if (params.executionMode && run.executionMode !== params.executionMode) continue;
     const state = run.nodes.find((node) => node.nodeId === params.nodeId);
     if (!state || state.status !== "completed" || state.input === undefined) continue;
     const { input, dependencies } = storedInput(state.input);
-    cases.push({ caseId: makeImprovementId("case"), nodeId: params.nodeId, input, dependencyOutputs: dependencies, sourceRunId: run.runId, championOutput: state.output, frozenAt: now() });
+    cases.push({ caseId: makeImprovementId("case"), nodeId: params.nodeId, input, dependencyOutputs: dependencies, sourceRunId: run.runId, sourceExecutionMode: run.executionMode, championOutput: state.output, frozenAt: now() });
   }
-  if (!cases.length) throw new Error(`no_replay_cases: no completed executions of ${params.nodeId} with persisted inputs were found; run the conductor (even in mock mode) first.`);
+  if (!cases.length) throw new Error(`no_replay_cases: no completed executions of ${params.nodeId}${params.executionMode ? ` in ${params.executionMode} mode` : ""} with persisted inputs were found; run the conductor (even in mock mode) first.`);
   const dataset: EvalDataset = { datasetId: makeImprovementId("ds"), nodeId: params.nodeId, name: params.name ?? `${params.nodeId} replay`, cases, createdAt: now() };
   return deps.improvementRepository.saveDataset(dataset);
 }
