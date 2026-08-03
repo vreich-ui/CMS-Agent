@@ -7,7 +7,7 @@ the next session must know goes here.
 **Rule: a gate check is a command with an expected result. Prose is not a gate check.** If you cannot
 write the call and what it should return, it is context, not a gate — put it under "State".
 
-_Last updated 2026-08-03 by Session A (hygiene & measurement integrity: list_runs pagination, R-20, R-21)._
+_Last updated 2026-08-03 by Session B (evaluation layer: four draft rubrics, frozen datasets, mock regression)._
 
 ---
 
@@ -117,6 +117,47 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
    `modelPricingCatalog` is `placeholder: true, "not billing-grade."`
 
 ---
+
+## State — 2026-08-03 (Session B, evaluation layer) — AT A HUMAN GATE
+
+The evaluation substrate is no longer empty. **Four DRAFT rubrics** (`contract_intelligence`
+`rubric_1785773022345_jzc74l`, `research` `rubric_1785773086490_hmrj61`, `article_body`
+`rubric_1785773157410_dajinj`, `publish_payload` `rubric_1785773218400_ajar9a`), **four frozen replay
+datasets** (`ds_1785772079588_9a01hb`, `ds_1785772111182_5baov9`, `ds_1785772112692_am32rx`,
+`ds_1785772114313_c5gnyl`), and **one mock regression report** (`reg_1785773255851_5ivneg`).
+
+**Nothing is active.** Weights are Wolf's call — the review doc is the project doc
+`claude/cms-agent-rubrics-for-review-2026-08-03.md` (seven decisions). **Session C must not run until
+the rubrics are activated**; an unscored run cannot be a quality baseline.
+
+> **Watch out — `evalRubricInputSchema` defaults `status` to `active`.** Creating a rubric without an
+> explicit `status: "draft"` silently activates it. Session B passed it explicitly and verified all
+> four came back `draft`.
+
+### Four traps the evaluation layer sets, found by using it
+
+1. **A MOCK regression report becomes the baseline for the next REAL one.**
+   `getLatestRegressionReport(nodeId)` picks the most recent prior report *regardless of
+   `executionMode`*, so `reg_1785773255851_5ivneg` (mock, meanScore 0.484) is now what a future
+   `openai`-mode regression on `contract_intelligence` will be graded against — producing a confident
+   and meaningless `improved`. **Session D must discard it or set a real baseline first.** Proposed
+   fix: scope baseline selection by `executionMode`.
+2. **`dataset_build` freezes MOCK outputs as champion outputs.** It does not filter by execution mode.
+   contract_intelligence 1 of 4 cases is from mock run `run_1785247255518_sdkyvv` (championOutput 463
+   bytes against 14–18KB for the live ones); research and article_body 2 of 6 each; publish_payload
+   2 of 5. Replaying a real output against a placeholder champion is noise — filter before Session D's
+   replay, or add a mode filter to `dataset_build`.
+3. **Mock evaluation cannot distinguish cases at all.** All four contract_intelligence cases scored
+   identically (0.484) because the mock runner emits one deterministic schema-derived placeholder —
+   all four shared `subjectHash e8b1ed18`. Mock proves plumbing; it is never quality evidence.
+4. **72% of `contract_intelligence`'s rubric weight is unjudgeable from output alone** — those criteria
+   are diffs against the contract the node was given, and the judge never sees it. Until the run's
+   `prefetchedContract` is wired into judge context, that rubric scores internal fluency, which is what
+   a cheaper model preserves while degrading — on the node that is 52% of spend.
+
+**R-20 confirmed live:** the mock regression recorded $0.062055 of `status:"estimated"` usage with
+`actualCostUsdEstimate: 0`. Pre-R-20 that would have accrued against `budgetUsd` (T-2 F-5, at twice
+the magnitude). First live exercise of Session A's fix; it held.
 
 ## State — 2026-08-03 (Session A, 2026-08 improvement phase)
 
