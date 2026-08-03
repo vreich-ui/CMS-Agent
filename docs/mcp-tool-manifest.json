@@ -51,7 +51,7 @@
     },
     {
       "name": "constellation_get_summary",
-      "description": "System summary for the constellation: agent/relationship/run counts and usage totals split by estimated/actual, with explicit caveats.",
+      "description": "System summary for the constellation: agent/relationship/run counts and usage totals split by estimated/actual, with explicit caveats. Read-only.",
       "inputSchemaHash": "13ea0de3c5a3daa0"
     },
     {
