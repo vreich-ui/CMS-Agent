@@ -54,7 +54,18 @@ export async function runRegression(params: { nodeId: string; datasetId?: string
       cases.push({ caseId: evalCase.caseId, runId: execution.runId, status: "failed" });
       continue;
     }
-    const evalResult = await scoreOutput({ rubric, nodeId: params.nodeId, output: execution.output, mode: params.mode, refs: { trialId: reportId, caseId: evalCase.caseId, runId: execution.runId } }, deps);
+    // Give the judge the same reference material the node had: the case's frozen input (which carries
+    // the prefetched client contract) and its upstream dependency outputs (the approved body a
+    // payload must map exactly). Without these the heaviest criteria in these rubrics are unjudgeable
+    // and quietly score fluency instead — see JudgeEvidence.
+    const evalResult = await scoreOutput({
+      rubric,
+      nodeId: params.nodeId,
+      output: execution.output,
+      mode: params.mode,
+      refs: { trialId: reportId, caseId: evalCase.caseId, runId: execution.runId },
+      evidence: { contract: evalCase.input, dependencyOutputs: evalCase.dependencyOutputs }
+    }, deps);
     scoreSum += evalResult.normalizedScore;
     scored += 1;
     if (evalResult.pass) passed += 1;
@@ -64,8 +75,14 @@ export async function runRegression(params: { nodeId: string; datasetId?: string
   const meanScore = scored ? Number((scoreSum / scored).toFixed(4)) : 0;
   const passRate = scored ? Number((passed / scored).toFixed(4)) : 0;
 
-  // Baseline = the node's most recent PRIOR report (read before this one is recorded).
-  const baseline = await deps.evaluationRepository.getLatestRegressionReport(params.nodeId);
+  // Baseline = the node's most recent prior report IN THE SAME EXECUTION MODE (read before this one
+  // is recorded). Mode-scoping is not a nicety: a mock report's score is a pseudo-random function of
+  // the output hash, so grading a real run against a mock baseline yields a confident, entirely
+  // meaningless improved/regressed verdict. Session B hit exactly this — its plumbing-proof mock
+  // report would otherwise have become the baseline for Session D's real contract_intelligence
+  // regression. Modes are separate ledgers; they are not comparable and must never silently compare.
+  const priorReports = await deps.evaluationRepository.listRegressionReports({ nodeId: params.nodeId });
+  const baseline = priorReports.find((report) => report.executionMode === params.mode);
   let verdict: RegressionVerdict;
   let delta: { meanScore: number; passRate: number } | undefined;
   if (!baseline) {

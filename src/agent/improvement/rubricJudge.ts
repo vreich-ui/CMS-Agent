@@ -20,6 +20,34 @@ export const JUDGE_NODE_ID = "improvement_judge";
 export type JudgeDeps = { evaluationRepository: EvaluationRepository; executionRepository: ExecutionRepository };
 export type JudgeRefs = { runId?: string; trialId?: string; caseId?: string; subject?: EvalResult["subject"] };
 
+// Reference material the judge is allowed to check the output AGAINST (Session B review, Wolf's
+// decision 1). Without this the judge saw only the output, so every criterion that is really a diff —
+// "does this reproduce the contract's rules", "is this faithful to the approved body" — degraded into
+// scoring internal fluency. On contract_intelligence that was 72% of the rubric weight, on the node
+// holding 52% of spend: exactly the criteria a cheaper model would pass while degrading, because
+// fluency is the property cheapness preserves. Evidence is optional and named, and which pieces were
+// present is recorded on the result, so a score taken without the contract is never silently compared
+// to one taken with it.
+export type JudgeEvidence = {
+  // The client contract the node was given (contract_intelligence's prefetch, or the node's input).
+  contract?: unknown;
+  // Upstream outputs this node was built from — e.g. the approved article_body a publish_payload
+  // must map exactly. This is what makes body_fidelity judgeable at all.
+  dependencyOutputs?: Record<string, unknown>;
+  // Per-call tool audit for the node execution, when available: the only way a "no side effects"
+  // criterion can score behaviour instead of the model's narration of its behaviour.
+  toolCalls?: unknown;
+};
+
+const evidenceKeys = (evidence?: JudgeEvidence): string[] => {
+  if (!evidence) return [];
+  const present: string[] = [];
+  if (evidence.contract !== undefined) present.push("contract");
+  if (evidence.dependencyOutputs && Object.keys(evidence.dependencyOutputs).length) present.push("dependencyOutputs");
+  if (evidence.toolCalls !== undefined) present.push("toolCalls");
+  return present;
+};
+
 const judgeModelName = (rubric: EvalRubric): string =>
   String(rubric.judgeModelConfig?.model ?? process.env.IMPROVEMENT_JUDGE_MODEL ?? process.env.OPENAI_AGENT_MODEL ?? "gpt-5.5");
 
@@ -86,6 +114,19 @@ async function runJudge(rubric: EvalRubric, prompt: string, outputSchema: unknow
 const mockScore = (subjectHash: string, criterionId: string, scaleMax: number): number =>
   parseInt(stableHash(`${subjectHash}:${criterionId}`).slice(0, 4), 16) % (scaleMax + 1);
 
+// First criterion whose score trips its declared floor. Deterministic (criteria order), so the
+// recorded reason for a failure is stable across identical inputs. A criterion the judge did not
+// score reads as 0 in `normalize`, and is treated the same way here: an unscored non-negotiable is a
+// failed non-negotiable, never a passed one.
+const firstVeto = (rubric: EvalRubric, scores: EvalScore[]): EvalResult["veto"] => {
+  for (const criterion of rubric.criteria) {
+    if (criterion.criticalMin === undefined) continue;
+    const score = scores.find((candidate) => candidate.criterionId === criterion.id)?.score ?? 0;
+    if (score <= criterion.criticalMin) return { criterionId: criterion.id, score, criticalMin: criterion.criticalMin };
+  }
+  return undefined;
+};
+
 const normalize = (rubric: EvalRubric, scores: EvalScore[]): number => {
   const totalWeight = rubric.criteria.reduce((sum, criterion) => sum + criterion.weight, 0);
   return rubric.criteria.reduce((sum, criterion) => {
@@ -94,9 +135,10 @@ const normalize = (rubric: EvalRubric, scores: EvalScore[]): number => {
   }, 0) / totalWeight;
 };
 
-export async function scoreOutput(params: { rubric: EvalRubric; nodeId: string; output: unknown; mode: "mock" | "openai"; refs?: JudgeRefs }, deps: JudgeDeps): Promise<EvalResult> {
-  const { rubric, output, mode } = params;
+export async function scoreOutput(params: { rubric: EvalRubric; nodeId: string; output: unknown; mode: "mock" | "openai"; refs?: JudgeRefs; evidence?: JudgeEvidence }, deps: JudgeDeps): Promise<EvalResult> {
+  const { rubric, output, mode, evidence } = params;
   const subjectHash = stableHash(output);
+  const present = evidenceKeys(evidence);
   let scores: EvalScore[];
   if (mode === "mock") {
     scores = rubric.criteria.map((criterion) => ({ criterionId: criterion.id, score: mockScore(subjectHash, criterion.id, criterion.scaleMax), max: criterion.scaleMax, evidence: `mock: deterministic score for ${criterion.id}` }));
@@ -104,16 +146,24 @@ export async function scoreOutput(params: { rubric: EvalRubric; nodeId: string; 
     const prompt = [
       "You are a rigorous content evaluation judge. Score the OUTPUT in the user message against each criterion.",
       `Node role: ${params.nodeId}. Rubric: ${rubric.name} — ${rubric.description}`,
-      ...rubric.criteria.map((criterion) => `Criterion ${criterion.id} (weight ${criterion.weight}, scale 0-${criterion.scaleMax}): ${criterion.description}${criterion.guidance ? ` Guidance: ${criterion.guidance}` : ""}`),
-      "Cite concrete evidence from the output for every score. Return only JSON matching the schema."
+      ...rubric.criteria.map((criterion) => `Criterion ${criterion.id} (weight ${criterion.weight}, scale 0-${criterion.scaleMax}): ${criterion.description}${criterion.guidance ? ` Guidance: ${criterion.guidance}` : ""}${criterion.criticalMin !== undefined ? ` NON-NEGOTIABLE: a score of ${criterion.criticalMin} or below on this criterion fails the entire rubric, so score it strictly and only on what you can actually verify.` : ""}`),
+      // The judge must be told what it may check against, and — just as important — must not invent a
+      // diff it could not have performed. A confident "matches the contract" from a judge that never
+      // saw the contract is worse than an honest low-confidence score, because it is indistinguishable
+      // from a real verification in the stored result.
+      present.length
+        ? `REFERENCE MATERIAL is supplied in the user message under "evidence" (${present.join(", ")}). For any criterion that compares the output to a source — fidelity, faithfulness, exact mapping, provenance, absence of invented content — you MUST check the output against that reference and cite the specific reference element in your evidence string. Do not accept the output's own claims about itself where the reference can settle it.`
+        : "NO REFERENCE MATERIAL is supplied: you see only the output. For any criterion that would require comparing the output to a source document you have not been given, you MUST NOT assume the comparison passes. Score such a criterion on what is verifiable from the output alone and say plainly in the evidence string that the source was unavailable.",
+      "Cite concrete evidence for every score. Return only JSON matching the schema."
     ].join("\n");
-    const raw = await runJudge(rubric, prompt, scoreOutputSchema(rubric), { output }, deps) as { scores: Array<{ criterionId: string; score: number; evidence: string }> };
+    const raw = await runJudge(rubric, prompt, scoreOutputSchema(rubric), present.length ? { output, evidence } : { output }, deps) as { scores: Array<{ criterionId: string; score: number; evidence: string }> };
     scores = rubric.criteria.map((criterion) => {
       const judged = raw.scores.find((candidate) => candidate.criterionId === criterion.id);
       return { criterionId: criterion.id, score: Math.max(0, Math.min(judged?.score ?? 0, criterion.scaleMax)), max: criterion.scaleMax, evidence: judged?.evidence ?? "criterion not scored by judge" };
     });
   }
   const normalizedScore = normalize(rubric, scores);
+  const veto = firstVeto(rubric, scores);
   const result: EvalResult = {
     evalId: makeImprovementId("eval"),
     rubricId: rubric.rubricId,
@@ -125,7 +175,11 @@ export async function scoreOutput(params: { rubric: EvalRubric; nodeId: string; 
     subject: params.refs?.subject,
     scores,
     normalizedScore: Number(normalizedScore.toFixed(4)),
-    pass: normalizedScore >= rubric.passThreshold,
+    // A veto fails the rubric even when the weighted mean clears the threshold. The score is still
+    // recorded truthfully — the result carries both "what it scored" and "why it failed anyway".
+    pass: normalizedScore >= rubric.passThreshold && !veto,
+    ...(veto ? { veto } : {}),
+    ...(mode === "openai" ? { evidenceUsed: present } : {}),
     judge: { mode, model: mode === "mock" ? "mock" : judgeModelName(rubric) },
     createdAt: now()
   };
