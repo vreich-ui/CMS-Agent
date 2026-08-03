@@ -51,7 +51,7 @@ describe("R-20: estimated vs actual cost separation", () => {
     const started = await startDryRun({ executionMode: "mock", projectId: "r20-proj", input: "Draft this", budgetUsd: 1 }, executionStore);
     // Drive to a terminal state; with R-20 the mock estimates must not trip the $1 ceiling.
     let run = await getRun(started.runId, executionStore);
-    for (let i = 0; run && i < 40 && !(["blocked", "completed", "failed", "cancelled"].includes(run.status)); i++) {
+    for (let i = 0; run && i < 40 && !​["blocked", "completed", "failed", "cancelled"].includes(run.status); i++) {
       run = await runNextNode(started.runId, { executionRepository: executionStore });
     }
 

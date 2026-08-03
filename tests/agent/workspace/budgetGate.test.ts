@@ -9,7 +9,7 @@ import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 // Advance a run until it reaches a terminal (blocked/completed/failed/cancelled) state.
 const drive = async (runId: string, store: ExecutionRepository, max = 30) => {
   let run = await getRun(runId, store);
-  for (let i = 0; run && i < max && !(["blocked", "completed", "failed", "cancelled"].includes(run.status)); i++) {
+  for (let i = 0; run && i < max && !​["blocked", "completed", "failed", "cancelled"].includes(run.status); i++) {
     run = await runNextNode(runId, { executionRepository: store });
   }
   return run!;
