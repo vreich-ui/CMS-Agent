@@ -34,7 +34,8 @@ export const usageFiltersSchema = z.object({
   workflowId: z.string().min(1).optional(),
   nodeId: z.string().min(1).optional(),
   from: z.string().datetime().optional(),
-  to: z.string().datetime().optional()
+  to: z.string().datetime().optional(),
+  status: z.enum(["estimated", "actual"]).optional()
 }).strict();
 
 export const recordModelUsageSchema = z.object({
@@ -94,9 +95,11 @@ const bucketFor = (buckets: Record<string, ModelUsageSummaryBucket>, key: string
 
 export async function summarizeModelUsage(filters: ModelUsageFilters = {}, store: UsageRepository = repositoryManager.getUsageRepository()): Promise<ModelUsageSummary> {
   const records = await store.list(usageFiltersSchema.parse(filters));
-  const summary: ModelUsageSummary = { ...emptyBucket(), totalInputTokens: 0, totalOutputTokens: 0, totalReasoningTokens: 0, totalCostUsdEstimate: 0, byModel: {}, byNode: {}, byProject: {} };
+  const summary: ModelUsageSummary = { ...emptyBucket(), totalInputTokens: 0, totalOutputTokens: 0, totalReasoningTokens: 0, totalCostUsdEstimate: 0, actualCostUsdEstimate: 0, estimatedCostUsdEstimate: 0, byModel: {}, byNode: {}, byProject: {} };
   for (const record of records) {
     add(summary, record);
+    if (record.status === "actual") summary.actualCostUsdEstimate = roundUsd(summary.actualCostUsdEstimate + record.costUsdEstimate);
+    else summary.estimatedCostUsdEstimate = roundUsd(summary.estimatedCostUsdEstimate + record.costUsdEstimate);
     add(bucketFor(summary.byModel, record.model), record);
     if (record.nodeId) add(bucketFor(summary.byNode, record.nodeId), record);
     if (record.projectId) add(bucketFor(summary.byProject, record.projectId), record);
@@ -113,7 +116,8 @@ export type RunBudgetEvaluation = {
   spentUsdEstimate: number;
   remainingUsdEstimate: number;
   percentUsed: number;
-  // True once accrued (actual+estimated) cost has REACHED the ceiling — the conductor's halt
+  // True once accrued ACTUAL cost has REACHED the ceiling (R-20: estimated/mock records never
+  // accrue against a budget; callers pass summary.actualCostUsdEstimate) — the conductor's halt
   // predicate. Uses `>=` so a run stops before the node that would cross the ceiling, matching the
   // "halt at the node that would cross" contract.
   overBudget: boolean;
@@ -141,7 +145,10 @@ export function evaluateRunBudget(budgetUsd: number | undefined, spentUsdEstimat
 export async function getBudgetStatus(input: { projectId?: string; runId?: string; budgetUsd?: number }, store: UsageRepository = repositoryManager.getUsageRepository()): Promise<BudgetStatus> {
   const budgetUsd = Math.max(0, input.budgetUsd ?? 0);
   const summary = await summarizeModelUsage({ projectId: input.projectId, runId: input.runId }, store);
-  const spentUsdEstimate = summary.totalCostUsdEstimate;
+  // R-20: budgets meter money, and only status:"actual" records represent money. A mock run's
+  // deterministic estimates (T-2 F-5 recorded $0.029 against a ceiling with zero model calls) are
+  // visible in the summary's estimatedCostUsdEstimate but never accrue here.
+  const spentUsdEstimate = summary.actualCostUsdEstimate;
   const percentUsed = budgetUsd > 0 ? Math.round((spentUsdEstimate / budgetUsd) * 10000) / 100 : 0;
   return { spentUsdEstimate, remainingUsdEstimate: roundUsd(Math.max(0, budgetUsd - spentUsdEstimate)), budgetUsd, percentUsed, status: budgetUsd > 0 && spentUsdEstimate > budgetUsd ? "exceeded" : percentUsed >= 80 ? "warning" : "ok" };
 }

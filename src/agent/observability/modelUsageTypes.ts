@@ -29,6 +29,9 @@ export type ModelUsageFilters = {
   nodeId?: string;
   from?: string;
   to?: string;
+  // R-20: "estimated" (mock/dry-run deterministic placeholders) and "actual" (measured model usage)
+  // are different kinds of record; this filter lets callers read either population alone.
+  status?: ModelUsageStatus;
 };
 
 export type ModelUsageSummaryBucket = {
@@ -45,6 +48,12 @@ export type ModelUsageSummary = ModelUsageSummaryBucket & {
   totalOutputTokens: number;
   totalReasoningTokens: number;
   totalCostUsdEstimate: number;
+  // R-20 (T-2 F-5): the two cost populations, reported separately. actualCostUsdEstimate sums only
+  // status:"actual" records (measured model usage) and is THE figure every budgetUsd gate consumes;
+  // estimatedCostUsdEstimate sums only status:"estimated" records (mock/dry-run placeholders), which
+  // must never accrue against a budget ceiling. totalCostUsdEstimate remains their sum for reporting.
+  actualCostUsdEstimate: number;
+  estimatedCostUsdEstimate: number;
   byModel: Record<string, ModelUsageSummaryBucket>;
   byNode: Record<string, ModelUsageSummaryBucket>;
   byProject: Record<string, ModelUsageSummaryBucket>;
