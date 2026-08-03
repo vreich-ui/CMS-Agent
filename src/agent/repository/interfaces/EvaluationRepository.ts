@@ -27,5 +27,9 @@ export interface EvaluationRepository {
   // report for a node — the baseline the next regression run compares against.
   recordRegressionReport(report: RegressionReport): Promise<RegressionReport>;
   listRegressionReports(filters?: RegressionReportFilters): Promise<RegressionReport[]>;
+  // DEPRECATED — do not use for baseline selection. It ignores executionMode, so it will happily
+  // return a mock report as the baseline for a real regression (and vice versa), producing a
+  // confident meaningless verdict. runRegression now filters listRegressionReports by mode instead.
+  // Kept only because it is part of the persisted repository contract.
   getLatestRegressionReport(nodeId: string): Promise<RegressionReport | undefined>;
 }

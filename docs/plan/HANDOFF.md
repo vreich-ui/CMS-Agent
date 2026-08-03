@@ -7,7 +7,7 @@ the next session must know goes here.
 **Rule: a gate check is a command with an expected result. Prose is not a gate check.** If you cannot
 write the call and what it should return, it is context, not a gate — put it under "State".
 
-_Last updated 2026-08-03 by Session B (evaluation layer: four draft rubrics, frozen datasets, mock regression)._
+_Last updated 2026-08-03 by the Session B follow-up (judge evidence channel, criticalMin veto, mode-scoped baselines)._
 
 ---
 
@@ -118,7 +118,44 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
 
 ---
 
-## State — 2026-08-03 (Session B, evaluation layer) — AT A HUMAN GATE
+## State — 2026-08-03 (Session B follow-up) — Wolf's gate rulings, applied in code
+
+Wolf answered the seven rubric-gate decisions (project doc
+`claude/cms-agent-decisions-2026-08-03-rubric-gate.md` — **read decision 4, it is architectural**).
+The evaluation layer now has the mechanisms those answers require:
+
+- **`JudgeEvidence` — the judge can finally check the output against something.** `scoreOutput` takes
+  optional `{ contract, dependencyOutputs, toolCalls }`, and `runRegression` populates it from the
+  frozen case. Criteria that are really diffs (fidelity, exact mapping, provenance, no-invented-rules)
+  were scoring internal fluency, which is precisely the property a cheaper model preserves while
+  degrading — 72% of the `contract_intelligence` rubric weight, on the node holding 52% of spend. When
+  evidence is absent the judge is now told so explicitly and instructed not to assume such a
+  comparison passes; `EvalResult.evidenceUsed` records what it actually had, so a score taken without
+  the contract is never silently compared to one taken with it.
+- **`criticalMin` — ONE hard-fail mechanism, enforced by the harness.** A weighted mean over 7+
+  criteria cannot express "this one is non-negotiable": any single zero is survivable by construction
+  (`contract_intelligence`'s rubric *said* a provenance zero was fatal while the arithmetic scored it
+  0.88 and passed). A criterion may now declare a floor; scoring at or below it fails the rubric
+  whatever the mean says. `EvalResult.veto` records which one tripped, kept separate from
+  `normalizedScore` so "failed the mean" and "tripped a non-negotiable" stay distinguishable. An
+  unscored floor criterion counts as tripped — never as passed by omission. `validateRubric` rejects a
+  floor at or above `scaleMax` (it would veto a perfect score).
+- **Regression baselines are scoped by `executionMode`.** `runRegression` takes the newest prior report
+  *in the same mode*. `getLatestRegressionReport` is now marked DEPRECATED for baseline selection —
+  it ignores mode, and it is what would have graded Session D's real run against Session B's mock
+  plumbing-proof report (meanScore 0.484, a pseudo-random function of an output hash).
+- **`dataset.build` records each case's `sourceExecutionMode` and accepts an `executionMode` filter.**
+  A mock run's "champion output" is a schema-derived placeholder — 463 bytes against 14–18KB for the
+  live cases in the same dataset. Default behaviour is unchanged (mock cases still included, since
+  they are what makes a plumbing test possible), but nothing can now mistake a placeholder for a
+  champion. **Session D: freeze with `executionMode:"openai"`.**
+
+Manifest regenerated: 135 tools, surfaceHash `9f2209d31976…` (dataset.build gained a parameter).
+
+**Still open, and still Wolf's:** the four rubrics remain `draft`. Weights are his call — he asked for
+the mechanism to work first and said he will edit the scoring once it does.
+
+## State — 2026-08-03 (Session B, evaluation layer) — the rubrics themselves
 
 The evaluation substrate is no longer empty. **Four DRAFT rubrics** (`contract_intelligence`
 `rubric_1785773022345_jzc74l`, `research` `rubric_1785773086490_hmrj61`, `article_body`
