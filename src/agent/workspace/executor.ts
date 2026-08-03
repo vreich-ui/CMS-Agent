@@ -118,6 +118,74 @@ const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: Workspa
 export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
 
+// Session A (2026-08-03) — cursor pagination + filters on workflow.list_runs. PR #105 made each row
+// compact (~2.7KB/run); this stops the LIST regrowing as the run ledger accumulates: without a page
+// bound the response grows linearly forever no matter how small each row is. The repository keeps its
+// simple full-list contract (constellation tools and internal callers still need every run); the page
+// window is applied here, on the newest-first ordering, so both repositories page identically.
+export type ListRunsPageInput = ListRunsInput & {
+  // Filter to runs with exactly this status ("failed", "running", ...).
+  status?: ExecutionStatus;
+  // Time-range filter on startedAt (ISO 8601, inclusive both ends).
+  from?: string;
+  to?: string;
+  // Page size; defaults to DEFAULT_LIST_RUNS_LIMIT, capped at MAX_LIST_RUNS_LIMIT.
+  limit?: number;
+  // Opaque cursor from a previous page's nextCursor. Rows strictly after it (newest-first) return.
+  cursor?: string;
+};
+export type ListRunsPage = {
+  runs: WorkflowExecutionRecord[];
+  page: { limit: number; matchedCount: number; hasMore: boolean; nextCursor?: string };
+};
+
+export const DEFAULT_LIST_RUNS_LIMIT = 20;
+export const MAX_LIST_RUNS_LIMIT = 100;
+
+export class InvalidListRunsCursorError extends Error {
+  readonly code = "invalid_cursor";
+  constructor(cursor: string) {
+    super(`invalid_cursor: "${cursor.slice(0, 64)}" is not a cursor produced by workflow.list_runs. Pass the nextCursor value from a previous page verbatim, or omit it for the first page.`);
+    this.name = "InvalidListRunsCursorError";
+  }
+}
+
+type RunCursor = { startedAt: string; runId: string };
+// The cursor encodes the SORT KEY of the last row served, not an index — deleting or adding runs
+// between pages can never skip or repeat a row relative to that key.
+const encodeRunCursor = (run: Pick<WorkflowExecutionRecord, "startedAt" | "runId">): string =>
+  Buffer.from(JSON.stringify({ startedAt: run.startedAt, runId: run.runId }), "utf8").toString("base64url");
+const decodeRunCursor = (cursor: string): RunCursor => {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as RunCursor;
+    if (typeof parsed?.startedAt !== "string" || typeof parsed?.runId !== "string") throw new Error("shape");
+    return parsed;
+  } catch {
+    throw new InvalidListRunsCursorError(cursor);
+  }
+};
+// Newest-first, runId as deterministic tiebreak so paging is stable across same-millisecond starts.
+const compareRunsNewestFirst = (a: Pick<WorkflowExecutionRecord, "startedAt" | "runId">, b: Pick<WorkflowExecutionRecord, "startedAt" | "runId">): number =>
+  b.startedAt.localeCompare(a.startedAt) || b.runId.localeCompare(a.runId);
+
+export async function listRunsPage(filters: ListRunsPageInput = {}, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<ListRunsPage> {
+  const limit = Math.max(1, Math.min(MAX_LIST_RUNS_LIMIT, Math.floor(filters.limit ?? DEFAULT_LIST_RUNS_LIMIT)));
+  const cursor = filters.cursor ? decodeRunCursor(filters.cursor) : undefined;
+  const matched = (await store.listRuns({ projectId: filters.projectId, workflowId: filters.workflowId }))
+    .filter((run) => !filters.status || run.status === filters.status)
+    .filter((run) => !filters.from || run.startedAt >= filters.from)
+    .filter((run) => !filters.to || run.startedAt <= filters.to)
+    .sort(compareRunsNewestFirst);
+  const start = cursor ? matched.findIndex((run) => compareRunsNewestFirst(cursor, run) < 0) : 0;
+  const windowStart = start === -1 ? matched.length : start;
+  const runs = matched.slice(windowStart, windowStart + limit);
+  const hasMore = windowStart + runs.length < matched.length;
+  return {
+    runs,
+    page: { limit, matchedCount: matched.length, hasMore, ...(hasMore && runs.length ? { nextCursor: encodeRunCursor(runs[runs.length - 1]) } : {}) }
+  };
+}
+
 // Transitive ancestors of a node (everything it depends on, directly or indirectly). Used to seed a
 // late-stage entrypoint: the entry node and all its ancestors are marked completed so the run enters
 // directly at the entry node's downstream successors without re-running earlier stages.
@@ -541,7 +609,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
         return await recordTerminationObservations(completed, nodes, store, options);
       }
       // Budget gate (F2, hardened after run_1785435947311_jl8hl4 landed at 138%): before dispatching
-      // the next node, halt the run when accrued (actual+estimated) model cost has reached the
+      // the next node, halt the run when accrued ACTUAL model cost has reached the
       // ceiling — OR when accrued cost plus the next node's own declared budgetUsd would cross it.
       // The reservation is what makes "a run must stop before the dispatch that would cross the
       // ceiling" true: previously a run at $2.2 of a $3 ceiling could legally dispatch a node whose
@@ -549,8 +617,10 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // pending node stays queued — never partially charged — so raising budgetUsd and resuming
       // continues here. Default OFF: with no run budgetUsd configured the gate is skipped entirely.
       if (run.budgetUsd !== undefined) {
+        // R-20: gate on actualCostUsdEstimate, never total — a mock run's deterministic estimates
+        // (status:"estimated") must not consume the ceiling (T-2 F-5).
         const usage = await summarizeModelUsage({ runId });
-        const budget = evaluateRunBudget(run.budgetUsd, usage.totalCostUsdEstimate);
+        const budget = evaluateRunBudget(run.budgetUsd, usage.actualCostUsdEstimate);
         const nodeReserveUsd = nodeBudgetUsdOf(nextNode) ?? 0;
         const reservationExceeded = budget !== undefined && !budget.overBudget && budget.spentUsdEstimate + nodeReserveUsd > budget.budgetUsd;
         if (budget?.overBudget || reservationExceeded) {
