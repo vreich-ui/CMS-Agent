@@ -11,6 +11,7 @@ import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 
 const actual = { model: "gpt-5.5", provider: "openai", inputTokens: 1000, outputTokens: 500, status: "actual" as const };
 const estimated = { ...actual, status: "estimated" as const };
+const TERMINAL = ["blocked", "completed", "failed", "cancelled"];
 
 describe("R-20: estimated vs actual cost separation", () => {
   let store: UsageRepository;
@@ -51,7 +52,7 @@ describe("R-20: estimated vs actual cost separation", () => {
     const started = await startDryRun({ executionMode: "mock", projectId: "r20-proj", input: "Draft this", budgetUsd: 1 }, executionStore);
     // Drive to a terminal state; with R-20 the mock estimates must not trip the $1 ceiling.
     let run = await getRun(started.runId, executionStore);
-    for (let i = 0; run && i < 40 && !​["blocked", "completed", "failed", "cancelled"].includes(run.status); i++) {
+    for (let i = 0; run && i < 40 && !TERMINAL.includes(run.status); i++) {
       run = await runNextNode(started.runId, { executionRepository: executionStore });
     }
 
