@@ -7,7 +7,7 @@ the next session must know goes here.
 **Rule: a gate check is a command with an expected result. Prose is not a gate check.** If you cannot
 write the call and what it should return, it is context, not a gate — put it under "State".
 
-_Last updated 2026-07-30 after PR #99 (W-4 + W-5)._
+_Last updated 2026-08-03 by Session A (hygiene & measurement integrity: list_runs pagination, R-20, R-21)._
 
 ---
 
@@ -68,14 +68,18 @@ constellation_get_attention()
 PASS: zero `blocker`-severity items. `action` items that are publish-gate approvals are the locks
 working as designed and are expected.
 
-### G5 — Publish locks closed
+### G5 — Publish posture known (GO-LIVE 2026-07-31 inverted this gate)
 
 ```
 project_list()
 ```
 
-PASS: every project has `publishingPolicy.publishEnabled: false`. Nothing proceeds with a lock open
-unless opening it is the explicit, human-approved task.
+Since the 2026-07-31 go-live (PR #104, operator decision), `publishingPolicy.publishEnabled: true` on
+every project is the DESIGNED state, and `workflow_publish_run`'s `approved`/`live` default true. PASS
+is now: you KNOW the posture and every test/measurement run passes `approved:false` or `live:false`
+**explicitly** (or sets the `<CLIENT>_PUBLISH_ENABLED=false` kill-switch). Never rely on a default.
+See the project doc `claude/cms-agent-GO-LIVE-2026-07-31.md` for what still blocks (correctness
+gates, kept deliberately).
 
 ### G6 — Do the live workspace and the seeded code agree?
 
@@ -113,6 +117,34 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
    `modelPricingCatalog` is `placeholder: true, "not billing-grade."`
 
 ---
+
+## State — 2026-08-03 (Session A, 2026-08 improvement phase)
+
+Improvement-phase runbook: project doc `claude/cms-agent-session-runbook.md` (sessions A–G); phase
+plan `claude/cms-agent-improvement-phase-plan-2026-08.md`. Session A (this session) shipped the
+hygiene & measurement-integrity PR:
+
+- **`workflow.list_runs` pagination + filters.** Cursor pagination (default 20 rows, max 100,
+  `page.nextCursor`), `status` filter, `from`/`to` startedAt range. `listRunsPage` in `executor.ts`;
+  repositories keep their full-list contract. PR #105's compaction contract preserved and
+  regression-locked (`tests/agent/workspace/listRunsPagination.test.ts`). The GUI still reads `runs`
+  and now sees the newest 20 — wire `page.nextCursor` into the run picker when it needs history.
+- **R-20 fixed.** Estimated (mock/dry-run) usage records no longer accrue against any `budgetUsd`
+  ceiling. `ModelUsageSummary` now carries `actualCostUsdEstimate` + `estimatedCostUsdEstimate`
+  separately; every budget gate (conductor gate, `getBudgetStatus`, runner prior-spend, run-cost
+  ledger) meters `actualCostUsdEstimate` only. Usage filters accept `status`. Regression:
+  `tests/agent/observability/mockUsageBudgetSeparation.test.ts`; `budgetGate.test.ts` rewritten to
+  the new posture (injects `status:"actual"` records to drive the gate).
+- **R-21 fixed.** `validateWorkspaceGraph` now flags a conductor-sequence node whose `dependsOn`
+  entry is not in the canonical conductor sequence, or whose `requiredInputs` entry no sequence node
+  has as id or produces (T-2 F-7 shape). Authored non-conductor nodes exempt. Live store graph
+  re-validated clean against the new checks before merge (no false STOP). Regression in
+  `workspaceNodes.test.ts`.
+- Manifest regenerated (`npm run drift:update`): still 135 tools, new surfaceHash `701c1f84e934…`
+  (list_runs/usage filter/validate_graph description schema changes).
+- **Open item for Wolf (human):** a real browser click-through of the run-details on-demand
+  hydration path (#105). `ui/tests/useWorkflowRun.test.tsx` covers it in vitest and passes; a human
+  click-through has not been done.
 
 ## State — 2026-07-31
 

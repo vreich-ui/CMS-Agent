@@ -26,6 +26,7 @@ export class BlobUsageRepository implements UsageRepository {
       .filter((record) => !filters.projectId || record.projectId === filters.projectId)
       .filter((record) => !filters.workflowId || record.workflowId === filters.workflowId)
       .filter((record) => !filters.nodeId || record.nodeId === filters.nodeId)
+      .filter((record) => !filters.status || record.status === filters.status)
       .filter((record) => inRange(record.recordedAt, filters))
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))
       .map((record) => clone(record));

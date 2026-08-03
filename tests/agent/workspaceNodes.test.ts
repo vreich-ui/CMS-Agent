@@ -112,3 +112,44 @@ describe("Publishing Conductor workspace nodes", () => {
     expect(node!.modelConfig!.timeout as number).toBeGreaterThanOrEqual(180000);
   });
 });
+
+// R-21 (T-2 finding F-7): article_body declared contract_intelligence in both dependsOn and
+// requiredInputs while the conductor sequence omitted it, and validate_graph still said "valid".
+// resolveConductorNodes maps over the canonical list, so a dependency outside that sequence is
+// silently ignored at execution time; validation must flag it, not bless it.
+describe("R-21: conductor-sequence dependency validation", () => {
+  const clone = <T,>(value: T): T => structuredClone(value);
+
+  it("flags a sequence node whose dependsOn entry is not in the conductor sequence, even when the node exists in the validated graph", () => {
+    const nodes = clone(listWorkspaceNodes());
+    // An authored node present in the workspace but absent from the canonical conductor sequence —
+    // the exact F-7 shape: the old "Missing dependency" check cannot see anything wrong.
+    const authored = { ...clone(nodes[0]), id: "authored_side_node", dependsOn: [], requiredInputs: [], produces: ["authored_output.v1"] };
+    const articleBody = nodes.find((node) => node.id === "article_body")!;
+    articleBody.dependsOn = [...articleBody.dependsOn, "authored_side_node"];
+
+    const result = validateWorkspaceGraph([...nodes, authored]);
+    expect(result.valid).toBe(false);
+    expect(result.issues).toEqual(expect.arrayContaining([expect.stringContaining("Dependency not in conductor sequence for article_body: authored_side_node")]));
+  });
+
+  it("flags a sequence node whose requiredInputs artifact no sequence node produces", () => {
+    const nodes = clone(listWorkspaceNodes());
+    const articleBody = nodes.find((node) => node.id === "article_body")!;
+    articleBody.requiredInputs = [...articleBody.requiredInputs, "phantom_artifact.v1"];
+
+    const result = validateWorkspaceGraph(nodes);
+    expect(result.valid).toBe(false);
+    expect(result.issues).toEqual(expect.arrayContaining([expect.stringContaining("Required input not satisfiable by the conductor sequence for article_body: phantom_artifact.v1")]));
+  });
+
+  it("does not punish authored non-conductor nodes: they are not run by the conductor, so the sequence cannot starve them", () => {
+    const nodes = clone(listWorkspaceNodes());
+    const authored = { ...clone(nodes[0]), id: "authored_side_node", dependsOn: ["article_body"], requiredInputs: ["client_object.v1"], produces: ["authored_output.v1"] };
+    expect(validateWorkspaceGraph([...nodes, authored])).toEqual({ valid: true, issues: [] });
+  });
+
+  it("still validates the canonical graph clean (no false positives from the new checks)", () => {
+    expect(validateWorkspaceGraph()).toEqual({ valid: true, issues: [] });
+  });
+});

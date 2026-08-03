@@ -49,13 +49,15 @@ describe("model usage observability", () => {
     expect((await getBudgetStatus({ budgetUsd: 100 }, store)).status).toBe("ok");
   });
 
+  // R-20: budget status meters ACTUAL records only — an estimated record of any size stays "ok"
+  // (see mockUsageBudgetSeparation.test.ts); warning/exceeded require measured spend.
   it("returns warning budget status", async () => {
-    await recordModelUsage({ ...base, costUsdEstimate: 80 }, store);
+    await recordModelUsage({ ...base, status: "actual", costUsdEstimate: 80 }, store);
     expect((await getBudgetStatus({ budgetUsd: 100 }, store)).status).toBe("warning");
   });
 
   it("returns exceeded budget status", async () => {
-    await recordModelUsage({ ...base, costUsdEstimate: 101 }, store);
+    await recordModelUsage({ ...base, status: "actual", costUsdEstimate: 101 }, store);
     expect((await getBudgetStatus({ budgetUsd: 100 }, store)).status).toBe("exceeded");
   });
 });

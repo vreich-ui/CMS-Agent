@@ -131,8 +131,9 @@ export function summarizeRunCost(run: WorkflowExecutionRecord, usage: ModelUsage
     };
   });
   const mostExpensive = stages.reduce<StageCost | undefined>((top, stage) => (!top || stage.costUsdEstimate > top.costUsdEstimate ? stage : top), undefined);
-  // Reuse the same accrued cost figure the gate reads (usage.totalCostUsdEstimate) — no second path.
-  const budgetEval = evaluateRunBudget(run.budgetUsd, usage.totalCostUsdEstimate);
+  // Reuse the same accrued cost figure the gate reads (usage.actualCostUsdEstimate — R-20: mock/
+  // estimated records report but never accrue against the ceiling) — no second path.
+  const budgetEval = evaluateRunBudget(run.budgetUsd, usage.actualCostUsdEstimate);
   return {
     runId: run.runId,
     status: run.status,
