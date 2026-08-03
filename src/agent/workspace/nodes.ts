@@ -3061,6 +3061,29 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
     visited.add(id);
   };
   nodes.forEach((node) => visit(node.id, []));
+  // R-21 (T-2 F-7): a declared dependency that is not in the CONDUCTOR SEQUENCE can never be
+  // satisfied in a run. resolveConductorNodes maps over the canonical Publishing Conductor list, so a
+  // node absent from that list is silently ignored at execution time even if it exists in the
+  // validated (store) graph — exactly how article_body could declare contract_intelligence in both
+  // dependsOn and requiredInputs while the sequence omitted it and validation still said "valid".
+  // Checked here, per sequence node: every dependsOn entry must itself be in the sequence, and every
+  // requiredInputs artifact type must be produced by some sequence node. Authored (non-conductor)
+  // nodes are exempt — they are not run by the conductor, so the sequence cannot starve them.
+  const sequenceNodes = listWorkspaceNodes();
+  const sequenceIds = new Set(sequenceNodes.map((sequenceNode) => sequenceNode.id));
+  const sequenceProduces = new Set(sequenceNodes.flatMap((sequenceNode) => sequenceNode.produces));
+  for (const node of nodes) {
+    if (!sequenceIds.has(node.id)) continue;
+    for (const dependency of node.dependsOn) {
+      if (!sequenceIds.has(dependency)) issues.push(`Dependency not in conductor sequence for ${node.id}: ${dependency} — a conductor run never executes it, so ${node.id} can never become runnable`);
+    }
+    // A requiredInputs entry names either an upstream NODE ID or a produced ARTIFACT TYPE (the
+    // canonical set uses both conventions); satisfiable means some sequence node has that id or
+    // produces that artifact.
+    for (const requiredInput of node.requiredInputs ?? []) {
+      if (!sequenceIds.has(requiredInput) && !sequenceProduces.has(requiredInput)) issues.push(`Required input not satisfiable by the conductor sequence for ${node.id}: ${requiredInput} — no sequence node has this id or produces this artifact`);
+    }
+  }
   const articleBody = nodes.find((node) => node.id === "article_body");
   if (!articleBody) issues.push("Missing article_body node");
   if (articleBody && !articleBody.produces.includes("client_object.v1")) issues.push("article_body must produce client_object.v1");
@@ -3070,4 +3093,3 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
   if (publicationController && !publicationController.dependsOn.includes("publish_payload")) issues.push("publication_controller must depend on publish_payload");
   return issues.length ? { valid: false, issues } : { valid: true, issues: [] };
 }
-
