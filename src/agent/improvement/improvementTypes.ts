@@ -21,7 +21,15 @@ export const stableHash = (value: unknown): string => {
 export const rubricStatuses = ["draft", "active", "deprecated"] as const;
 export type RubricStatus = typeof rubricStatuses[number];
 
-export type EvalCriterion = { id: string; name: string; description: string; weight: number; scaleMax: number; guidance?: string };
+// `criticalMin` is the ONE hard-fail mechanism (Session B review, Wolf's decision 3). Before it,
+// "hard fail" meant three incompatible things across four rubrics: pure arithmetic; arithmetic plus a
+// prose veto the arithmetic contradicted (contract_intelligence's provenance criterion declared a 0
+// there fatal while a 0 there actually scored 0.88 and PASSED); and a veto that lived only in a
+// rationale field no judge ever reads. A weighted mean cannot express "this one thing is
+// non-negotiable" — with 7+ criteria, any single zero is survivable by construction. So the veto is
+// data the judge harness enforces, not prose it hopes someone honors: scoring at or below
+// `criticalMin` on a criterion that declares one fails the rubric outright, whatever the mean says.
+export type EvalCriterion = { id: string; name: string; description: string; weight: number; scaleMax: number; guidance?: string; criticalMin?: number };
 
 export type EvalRubric = {
   rubricId: string;
@@ -51,6 +59,14 @@ export type EvalResult = {
   scores: EvalScore[];
   normalizedScore: number; // 0..1 weighted
   pass: boolean;
+  // Set when a criticalMin veto fired: the rubric failed on this criterion regardless of
+  // normalizedScore. Recorded rather than folded into the score so "failed the mean" and "tripped a
+  // non-negotiable" stay distinguishable in the ledger — they mean different things to an operator.
+  veto?: { criterionId: string; score: number; criticalMin: number };
+  // Which evidence the judge actually had. A criterion that needs the source contract scores very
+  // differently with and without it, so a stored result that does not say which it was is not
+  // comparable to another one. Absent on mock results (the mock judge reads nothing).
+  evidenceUsed?: string[];
   judge: { mode: "mock" | "openai"; model: string };
   createdAt: string;
 };
@@ -85,7 +101,11 @@ export type FeedbackRecord = {
   createdAt: string;
 };
 
-export type EvalCase = { caseId: string; nodeId: string; input?: unknown; dependencyOutputs: Record<string, unknown>; sourceRunId: string; championOutput?: unknown; frozenAt: string };
+// `sourceExecutionMode` exists because a MOCK run's champion output is not a champion — it is a
+// deterministic placeholder generated from the node's outputSchema (Session B measured one at 463
+// bytes against 14–18KB for the live cases in the same dataset). Replaying a real candidate against a
+// placeholder is noise dressed as a comparison, so the mode travels with the case and callers filter.
+export type EvalCase = { caseId: string; nodeId: string; input?: unknown; dependencyOutputs: Record<string, unknown>; sourceRunId: string; sourceExecutionMode?: "mock" | "openai"; championOutput?: unknown; frozenAt: string };
 export type EvalDataset = { datasetId: string; nodeId: string; name: string; cases: EvalCase[]; createdAt: string };
 
 export const proposalStatuses = ["proposed", "trialed", "promoted", "rejected"] as const;
@@ -188,7 +208,11 @@ export const evalCriterionSchema = z.object({
   description: z.string().min(1),
   weight: z.number().positive(),
   scaleMax: z.number().int().min(1).max(10),
-  guidance: z.string().min(1).optional()
+  guidance: z.string().min(1).optional(),
+  // Veto floor: a score <= this fails the whole rubric regardless of the weighted mean. Omit for
+  // ordinary criteria — most criteria should NOT carry one, or the rubric stops grading and starts
+  // gatekeeping.
+  criticalMin: z.number().int().min(0).optional()
 }).strict();
 
 export const evalRubricInputSchema = z.object({
@@ -218,5 +242,12 @@ export function validateRubric(rubric: Pick<EvalRubric, "criteria" | "passThresh
   if (new Set(ids).size !== ids.length) errors.push("criterion ids must be unique");
   const totalWeight = rubric.criteria.reduce((sum, criterion) => sum + criterion.weight, 0);
   if (!(totalWeight > 0)) errors.push("criterion weights must sum to a positive number");
+  // A criticalMin at or above scaleMax vetoes every possible score including a perfect one, which is
+  // never what anyone means — it is always a typo, and a silent one that would fail every run.
+  for (const criterion of rubric.criteria) {
+    if (criterion.criticalMin !== undefined && criterion.criticalMin >= criterion.scaleMax) {
+      errors.push(`criterion ${criterion.id}: criticalMin ${criterion.criticalMin} must be below scaleMax ${criterion.scaleMax} (a floor at or above the max vetoes even a perfect score)`);
+    }
+  }
   return errors;
 }
