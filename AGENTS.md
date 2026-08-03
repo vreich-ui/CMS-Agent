@@ -12,7 +12,7 @@ earlier plan disagrees with it, the vision wins. Detailed UI specs live in
 
 ## Project goal
 
-Build a Netlify-hosted TypeScript agent runtime for content creation and publishing workflows using the OpenAI Agents SDK.
+Build a Google Cloud Run-hosted TypeScript agent runtime for content creation and publishing workflows using the OpenAI Agents SDK. GCS is the authoritative workspace store. Netlify hosts the GUI only; Netlify function code is legacy/GUI support and is out of scope unless a task explicitly concerns the GUI delivery or its authentication proxy.
 
 The runtime must support:
 - One reusable base agent.
@@ -25,7 +25,8 @@ The runtime must support:
 
 ## Architecture rules
 
-- Keep Netlify function handlers thin.
+- Keep Cloud Run HTTP/job entrypoints thin.
+- Do not add agent-runtime or persistence behavior to Netlify functions; Netlify is the GUI host only.
 - Put orchestration logic in `src/agent/runtime`.
 - Put project configuration in `src/agent/projects`.
 - Put reusable local capabilities in `src/agent/skills`.
@@ -37,7 +38,7 @@ The runtime must support:
 ## Runtime rules
 
 - Use TypeScript.
-- Use `.mts` for Netlify function files.
+- Keep transport-neutral runtime behavior outside hosting adapters.
 - Do not hardcode secrets.
 - Read secrets from `process.env`.
 - Default all publishing actions to dry-run unless explicitly told otherwise.

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "setup": "npm ci",
-    "dev": "netlify dev",
+    "dev": "npm run serve:mcp",
+    "dev:legacy-netlify": "netlify dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:drift": "tsx scripts/twoPlaneDrift.ts",
