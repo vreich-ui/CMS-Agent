@@ -3,13 +3,13 @@ import { RepositoryManager } from "../../../src/agent/repository/RepositoryManag
 import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import { getRun, runNextNode, startDryRun, updateRunStatus } from "../../../src/agent/workspace/executor.js";
 import { summarizeRunCost } from "../../../src/agent/workspace/conductor.js";
-import { evaluateRunBudget, summarizeModelUsage } from "../../../src/agent/observability/modelUsage.js";
+import { evaluateRunBudget, recordModelUsage, summarizeModelUsage } from "../../../src/agent/observability/modelUsage.js";
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 
 // Advance a run until it reaches a terminal (blocked/completed/failed/cancelled) state.
 const drive = async (runId: string, store: ExecutionRepository, max = 30) => {
   let run = await getRun(runId, store);
-  for (let i = 0; run && i < max && !["blocked", "completed", "failed", "cancelled"].includes(run.status); i++) {
+  for (let i = 0; run && i < max && !(["blocked", "completed", "failed", "cancelled"].includes(run.status)); i++) {
     run = await runNextNode(runId, { executionRepository: store });
   }
   return run!;
@@ -33,24 +33,20 @@ describe("conductor budget gate", () => {
 
   it("halts before the node that would cross the ceiling; earlier nodes ran, later did not", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    // Measure the deterministic accrued mock cost after one and after two nodes with an un-gated run.
-    const measure = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this" }, store);
-    await runNextNode(measure.runId, { executionRepository: store });
-    const oneNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
-    await runNextNode(measure.runId, { executionRepository: store });
-    const twoNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
-    expect(oneNodeCost).toBeGreaterThan(0);
-    expect(twoNodeCost).toBeGreaterThan(oneNodeCost);
-
-    // Every canonical node now declares its own budgetUsd (0.1 for the early intake/strategy nodes),
-    // and the gate RESERVES the next node's declared budget before dispatching it — a run must stop
+    // Every canonical node declares its own budgetUsd (0.1 for the early intake/strategy nodes), and
+    // the gate RESERVES the next node's declared budget before dispatching it — a run must stop
     // before the dispatch that would cross the ceiling, not discover the crossing afterwards
-    // (run_1785435947311_jl8hl4 landed at 138% without this). A ceiling strictly between
-    // (oneNodeCost + reserve) and (twoNodeCost + reserve) lets nodes 1 and 2 dispatch and blocks
-    // node 3 on its reservation.
-    const reserve = 0.1;
-    const ceiling = (oneNodeCost + twoNodeCost) / 2 + reserve;
+    // (run_1785435947311_jl8hl4 landed at 138% without this).
+    //
+    // R-20 posture: the gate meters ACTUAL spend only — a mock run's own deterministic estimates no
+    // longer accrue (T-2 F-5), so this test injects a measured (status:"actual") record mid-run, the
+    // way live model spend actually arrives, sized so the third node's reservation crosses the
+    // ceiling: $2.95 accrued + reader_insight's $0.1 reserve > $3.
+    const ceiling = 3;
     const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this", budgetUsd: ceiling }, store);
+    await runNextNode(gated.runId, { executionRepository: store }); // input_triage
+    await runNextNode(gated.runId, { executionRepository: store }); // topic_opportunity
+    await recordModelUsage({ runId: gated.runId, nodeId: "topic_opportunity", model: "gpt-5.5", provider: "openai", inputTokens: 0, outputTokens: 0, costUsdEstimate: 2.95, status: "actual" });
     const run = await drive(gated.runId, store);
 
     expect(run.status).toBe("blocked");
@@ -70,15 +66,19 @@ describe("conductor budget gate", () => {
     // run reaches ANY terminal outcome, including this budget block, rather than waiting on
     // publication_controller (which this run never even reaches).
     const records = await repositoryManager.getUsageRepository().list({ runId: gated.runId });
-    expect(records.map((record) => record.nodeId).sort()).toEqual(["input_triage", "learning_recorder", "topic_opportunity"]);
+    expect(records.filter((record) => record.status === "estimated").map((record) => record.nodeId).sort()).toEqual(["input_triage", "learning_recorder", "topic_opportunity"]);
+    expect(records.filter((record) => record.status === "actual")).toHaveLength(1);
 
     // The ledger surfaces the budget view, reusing the same accrued cost figure (no second path).
-    // overBudget is false — the RESERVATION blocked the run before accrued spend ever reached the
-    // ceiling, which is exactly the point — while blocked reports the budget pause.
+    // R-20: that figure is the ACTUAL population only — the mock estimates above are visible in the
+    // summary but never consume the ceiling. overBudget is false — the RESERVATION blocked the run
+    // before accrued spend ever reached the ceiling, which is exactly the point.
     const usage = await summarizeModelUsage({ runId: gated.runId });
     const ledger = summarizeRunCost(run, usage);
     expect(ledger.budget).toMatchObject({ blocked: true, overBudget: false, budgetUsd: ceiling });
-    expect(ledger.budget!.spentUsdEstimate).toBe(usage.totalCostUsdEstimate);
+    expect(ledger.budget!.spentUsdEstimate).toBe(usage.actualCostUsdEstimate);
+    expect(usage.actualCostUsdEstimate).toBe(2.95);
+    expect(usage.estimatedCostUsdEstimate).toBeGreaterThan(0);
   });
 
   it("blocks the very first dispatch when the ceiling cannot even cover that node's declared budget", async () => {
@@ -101,15 +101,12 @@ describe("conductor budget gate", () => {
   // budget-blocked run actually continue instead of immediately re-blocking on the same ceiling.
   it("resuming with a higher budgetUsd lets a budget-blocked run actually continue", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const measure = await startDryRun({ executionMode: "mock", projectId: "budget-proj-2", input: "Draft this" }, store);
-    await runNextNode(measure.runId, { executionRepository: store });
-    const oneNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
-    await runNextNode(measure.runId, { executionRepository: store });
-    const twoNodeCost = (await summarizeModelUsage({ runId: measure.runId })).totalCostUsdEstimate;
-
-    // Between (oneNodeCost + reserve) and (twoNodeCost + reserve): two nodes dispatch, the third's
-    // reservation blocks (see the halt test above for the arithmetic).
-    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj-2", input: "Draft this", budgetUsd: (oneNodeCost + twoNodeCost) / 2 + 0.1 }, store);
+    // R-20 posture: inject measured (actual) spend mid-run so the third node's reservation crosses
+    // the $3 ceiling — the same arithmetic as the halt test above.
+    const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj-2", input: "Draft this", budgetUsd: 3 }, store);
+    await runNextNode(gated.runId, { executionRepository: store }); // input_triage
+    await runNextNode(gated.runId, { executionRepository: store }); // topic_opportunity
+    await recordModelUsage({ runId: gated.runId, nodeId: "topic_opportunity", model: "gpt-5.5", provider: "openai", inputTokens: 0, outputTokens: 0, costUsdEstimate: 2.95, status: "actual" });
     const blocked = await drive(gated.runId, store);
     expect(blocked.status).toBe("blocked");
     expect(blocked.budgetBlock).toBeDefined();
