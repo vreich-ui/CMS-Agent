@@ -26,6 +26,7 @@ export class MemoryUsageRepository implements UsageRepository {
       if (filters.projectId && record.projectId !== filters.projectId) return false;
       if (filters.workflowId && record.workflowId !== filters.workflowId) return false;
       if (filters.nodeId && record.nodeId !== filters.nodeId) return false;
+      if (filters.status && record.status !== filters.status) return false;
       return inRange(record.recordedAt, filters);
     }).sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
   }

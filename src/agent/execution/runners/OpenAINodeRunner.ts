@@ -126,8 +126,9 @@ export class OpenAINodeRunner implements NodeRunner {
     const maxOutputTokens = numberFrom(c.maxOutputTokens) ?? DEFAULT_OUTPUT_TOKEN_RESERVE;
     let priorSpendUsd = 0;
     if (budgetGuardEngaged) {
+      // R-20: prior spend is measured spend only — estimated/mock records never count against budgets.
       const spent = await summarizeModelUsage({ runId: context.run.runId });
-      priorSpendUsd = spent.totalCostUsdEstimate;
+      priorSpendUsd = spent.actualCostUsdEstimate;
       const reserve = estimateModelCost({ model, inputTokens: 1000, outputTokens: maxOutputTokens });
       if (nodeBudgetUsd !== undefined && reserve > nodeBudgetUsd) {
         return { ok: false, code: "budget_exceeded", message: `Node "${node.id}"'s own budgetUsd ($${nodeBudgetUsd}) cannot cover even one model turn's reserve (~$${reserve}); raise modelConfig.budgetUsd or lower maxOutputTokens.`, details: { reserveUsdEstimate: reserve, nodeBudgetUsd, ceiling: "node" } };
