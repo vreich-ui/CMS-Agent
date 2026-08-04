@@ -90,6 +90,13 @@ export type WorkflowExecutionRecord = {
   runId: string;
   workflowId: string;
   projectId: string;
+  // R-9: the join key between a platform workflow record and this workspace run — without it, the
+  // learning corpus sees outcomes with no method (it can see a run happened and see a platform-side
+  // event happened, with no way to prove they are the same request). Generated once at run creation
+  // (buildInitialRun) and copied onto every usage record the run produces; never authored by a node
+  // or the operator — that is the DIFFERENT, human-supplied requestId publish_payload emits per
+  // publish attempt (req_<flow>_<topic>_<yyyymmdd>_<nn>), which this does not replace.
+  requestId?: string;
   status: ExecutionStatus;
   currentNodeId?: string;
   startedAt: string;

@@ -7,7 +7,7 @@ the next session must know goes here.
 **Rule: a gate check is a command with an expected result. Prose is not a gate check.** If you cannot
 write the call and what it should return, it is context, not a gate — put it under "State".
 
-_Last updated 2026-08-04 by Session D (deterministic contract_intelligence) — see also the manual rubric-revision pass and Session E in this same update._
+_Last updated 2026-08-04 by Session E (usage accounting, R-9, tracing policy)._
 
 ---
 
@@ -118,6 +118,61 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
 
 ---
 
+## State — 2026-08-04 — Session E: usage accounting, R-9, tracing policy
+
+Scoped conservatively given the accounting code's history (three prior real incidents: the
+artifact_plan 138% budget overshoot, R-20's mock-cost bug, the pre-#95 contract re-send) — additive
+changes only, nothing touching the budget guard's own real-time gating math.
+
+- **R-9 — `requestId` join key.** `WorkflowExecutionRecord.requestId`, minted once per run
+  (`buildInitialRun`, distinct from `publish_payload`'s human-authored `req_<flow>_<topic>_<...>`
+  publish-attempt id — this is a different, system-generated concept), preserved across a `resetRun`
+  rebuild (same request, not a new one), and threaded onto every `recordModelUsage` call site (the
+  workflow executor's dry-run path, `nodeRuntime.ts`'s independent-node path, both `OpenAINodeRunner`
+  and `AnthropicNodeRunner`). A mock-mode conductor run's every usage record now carries the same
+  `requestId` as the run itself — regression-tested.
+- **`pricingAsOf` / `pricingCatalogVersion`** stamped on every usage record from two new exported
+  constants (`MODEL_PRICING_CATALOG_ASOF`, `MODEL_PRICING_CATALOG_VERSION` in `modelUsage.ts`) — bump
+  the version constant whenever a catalog RATE changes (not for a comment-only edit), so two records
+  with different versions are a visible signal their costs are not directly comparable.
+- **`cachedInputTokens` now actually captured** in `OpenAINodeRunner` — the reduce over
+  `rawResponses` never read `input_tokens_details.cached_tokens` before; it silently stayed 0/undefined
+  on every real run regardless of actual cache hits. Fixed and regression-tested.
+- **Retry under-counting fixed.** A node that failed schema validation, retried, then succeeded
+  previously recorded ONLY the successful attempt's tokens — the failed attempt's real, already-spent
+  tokens vanished from the usage ledger entirely (recorded nowhere: not on that attempt, since it
+  wasn't final; not folded into the eventual success record, which read only the last attempt's own
+  `rawResponses`). Now a per-dispatch `cumulativeUsage` accumulator sums every attempt this dispatch
+  obtained a real SDK result for, and the terminal record (success or exhausted-retries failure) is
+  written from that sum, exactly once. Regression-tested for both directions: no double-counting
+  (exactly one record) and no under-counting (the full sum, not just the last attempt). Deliberately
+  did NOT touch `guardState.accrued` or the budget guard's own real-time turn-by-turn gating — that
+  remains exactly as it was; `cumulativeUsage` is a new, independent, always-populated source (not
+  gated on `budgetGuardEngaged`) that `recordAccruedUsage` now prefers over `guardState.accrued` when
+  both exist, and falls back to `guardState.accrued` only for the case `cumulativeUsage` cannot cover —
+  a throw before any full SDK response completed.
+- **Attempt/turn/tool-call counts** attached to every recorded usage record's `metadata`
+  (`attempt`, `attemptsTotal`, `turnCount`, `toolCallCount`).
+- **Tracing: env-controlled, default OFF.** `AGENT_TRACING_ENABLED` must be the exact string `"true"`
+  — anything else (including `"1"`) fails closed, tracing stays off. Replaces the hardcoded
+  `tracingDisabled: true` literal. When enabled, `traceMetadata` carries exactly five fields —
+  `runId`, `nodeId`, `projectId`, `executionMode`, `attempt` — built from named scalars, never from
+  `input`, `dependencyOutputs`, or anything sourced from the node's own prompt or response; regression
+  test asserts the exact key set and that arbitrary node-input content never reaches trace metadata.
+  `workflowName` is also set (the SDK's own top-level option) when enabled.
+- **Not done, scoped out deliberately:** `AnthropicNodeRunner` does not share the OpenAI runner's
+  retry-accumulation fix (it has no comparable multi-attempt loop reading `rawResponses` the same way,
+  and touching it wasn't necessary for R-9/pricing/tracing, which it already receives via the shared
+  `requestId` threading and `recordModelUsage` schema). The "Agents SDK's accumulated run usage" the
+  runbook mentions preferring — `cumulativeUsage` is the closest available equivalent given the
+  installed SDK version's `run()` returns a batch result rather than exposing a running total; there is
+  no separate SDK-native accumulator to prefer over it.
+
+**Gates:** root suite 993/993 (+9 from this session), GUI 89/89, typecheck clean, UI production build
+green, drift/manifest/alias parity ok, glossary + objects ok.
+
+**Cost:** $0.00 model-run.
+
 ## State — 2026-08-04 — Session D: contract_intelligence made deterministic
 
 **Session B2 (the scheduled rubric-content rewrite) stalled with no output for 1h15m+ and was abandoned.**
@@ -155,12 +210,31 @@ mapping the already-reduced contract into the node's output shape.
   DAG in `openai` mode with **no OpenAI network stub configured at all** (succeeding is the proof no
   model call happened) plus a zero-usage-record assertion, and a fallback proof (prefetch failure still
   completes via the normal model path unchanged).
-- **Not yet done:** the live workspace store's `contract_intelligence` node metadata still needs
-  `contractIntelligenceDeterministic: true` written via `workspace.update_node_metadata` (store mode
-  overlays `metadata` from the live store, same trap #93/#95 hit — "the conductor-level fix shipped in
-  code but its node-side half never reached the live store" — must not repeat here) and a replay against
-  the real dataset (`ds_1785777163498_thqdgr`) to record the actual before/after cost and attach a
-  rubric verdict, before this can be called complete end to end.
+- **Live metadata flag now set** (`workspace.update_node_metadata`, workspaceVersion 263 — the store
+  half of the fix, without which the code change alone does nothing live, the same gap #93/#95 hit
+  once before). Graph re-validated `valid`; health green.
+- **Honest limit found, not fixed: dataset-replay cannot verify this node's cost, at all, by
+  construction.** `dataset.build`'s `storedInput()` extracts only `initialInput`/`input` and
+  `dependencies` from a persisted node state — it never captures `clientProjectId` or
+  `prefetchedContract`, both of which the conductor injects directly into `state.input` at dispatch
+  time (`executor.ts`), outside anything `storedInput` reads. So a frozen replay case for
+  `contract_intelligence` never carries a prefetched contract, and `evaluation.run_regression` /
+  `dataset.build` replay it through `nodeRuntime.ts`'s independent-node path, which has no prefetch
+  logic at all (grep confirms zero references) — replay would exercise neither the pre-existing #93/#95
+  prefetch NOR this session's deterministic bypass, and would return a cost number measuring nothing
+  real. This is exactly what the repo's own prior "Unmeasured" note already said about this node
+  ("a single-node node.execute will not measure it: the prefetch is applied in the workflow
+  executor... a single-node run bypasses it and returns a meaningless number") — confirmed here to
+  extend to dataset replay as well, not just ad hoc `node.execute` calls.
+  **The only real measurement is a live conductor run** (`workflow.run_until(contract_intelligence)`
+  or a full run), which costs real money on the upstream nodes regardless of this node's own $0 —
+  that is Session C's territory (human-gated, one real ≤$3 run), not something to spend unilaterally.
+  **Session C's per-node cost table should show ~$0 for `contract_intelligence`** if this fix is
+  working; that is the actual verification, deferred to Session C by design, not an oversight here.
+- Regression coverage that WAS possible and is in place: the executor-level test proves, with a
+  fabricated-but-real prefetch response and no OpenAI network stub configured at all, that the node
+  completes with zero model calls and zero usage records when the deterministic path fires, and falls
+  back safely to the normal model path when it does not.
 
 ## State — 2026-08-03 (Session B follow-up) — Wolf's gate rulings, applied in code
 

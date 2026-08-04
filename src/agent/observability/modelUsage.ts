@@ -10,6 +10,14 @@ const makeUsageId = () => `usage_${Date.now()}_${Math.random().toString(36).slic
 // and run ceilings price every turn through estimateModelCost), so every entry stays flagged
 // placeholder: there is no billing-grade reconciliation behind this catalog and it goes stale
 // silently — re-check published rates before any production billing decision.
+// Session E (R-9 sibling work): stamped onto every usage record at record time (recordModelUsage),
+// not read back out of the catalog's per-entry notes — those are prose, not a machine-checkable
+// version. Bump PRICING_CATALOG_VERSION whenever an entry's rate changes (not for a comment-only
+// edit), so two usage records with different pricingCatalogVersion values are a signal that their
+// costUsdEstimate figures are not directly comparable without checking what changed.
+export const MODEL_PRICING_CATALOG_ASOF = "2026-07-31";
+export const MODEL_PRICING_CATALOG_VERSION = "2026-07-31.1";
+
 export const modelPricingCatalog: Record<string, { inputUsdPerMillion: number; outputUsdPerMillion: number; cachedInputUsdPerMillion?: number; placeholder: true; note: string }> = {
   "gpt-5.5": { inputUsdPerMillion: 5, outputUsdPerMillion: 30, cachedInputUsdPerMillion: 0.5, placeholder: true, note: "OpenAI published list price as of 2026-07-31; not billing-grade." },
   "gpt-5.5-mini": { inputUsdPerMillion: 0.75, outputUsdPerMillion: 4.5, cachedInputUsdPerMillion: 0.075, placeholder: true, note: "No published OpenAI listing for this id as of 2026-07-31 (the current mini tier is gpt-5.4-mini); priced at that tier's list rate as a proxy. Not billing-grade." },
@@ -45,6 +53,7 @@ export const recordModelUsageSchema = z.object({
   projectId: z.string().min(1).optional(),
   nodeId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
+  requestId: z.string().min(1).optional(),
   model: z.string().min(1),
   provider: z.string().min(1),
   inputTokens: z.number().int().nonnegative(),
@@ -56,6 +65,8 @@ export const recordModelUsageSchema = z.object({
   currency: z.literal("USD").optional(),
   status: z.enum(["estimated", "actual"]),
   recordedAt: z.string().datetime().optional(),
+  pricingAsOf: z.string().min(1).optional(),
+  pricingCatalogVersion: z.string().min(1).optional(),
   metadata: z.record(z.string(), z.unknown()).optional()
 }).strict();
 
@@ -77,6 +88,8 @@ export async function recordModelUsage(input: RecordModelUsageInput, store: Usag
     costUsdEstimate: parsed.costUsdEstimate ?? estimateModelCost(parsed),
     currency: "USD",
     recordedAt: parsed.recordedAt ?? now(),
+    pricingAsOf: parsed.pricingAsOf ?? MODEL_PRICING_CATALOG_ASOF,
+    pricingCatalogVersion: parsed.pricingCatalogVersion ?? MODEL_PRICING_CATALOG_VERSION,
     metadata: parsed.metadata
   };
   return store.record(record);

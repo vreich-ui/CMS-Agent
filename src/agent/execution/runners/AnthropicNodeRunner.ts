@@ -127,7 +127,7 @@ export class AnthropicNodeRunner implements NodeRunner {
         const inputTokens = data.usage?.input_tokens ?? 0;
         const outputTokens = data.usage?.output_tokens ?? 0;
         const usageFields = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
-        await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "anthropic", ...usageFields, status: "actual", metadata: { executionMode: "anthropic" } }).catch(() => undefined);
+        await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "anthropic", ...usageFields, status: "actual", metadata: { executionMode: "anthropic" } }).catch(() => undefined);
         return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: data.id, provider: "anthropic" } };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

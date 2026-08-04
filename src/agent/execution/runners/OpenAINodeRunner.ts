@@ -220,30 +220,89 @@ export class OpenAINodeRunner implements NodeRunner {
     // exactly the overshoot it was supposed to stop. The guard accumulates actual usage per model
     // response; any exit that leaves accrued usage behind records it (best-effort, like the success
     // path's own telemetry).
-    const recordAccruedUsage = async (failureCode: string): Promise<void> => {
-      const { inputTokens, outputTokens } = guardState.accrued;
+    const recordAccruedUsage = async (failureCode: string, attempt: number): Promise<void> => {
+      // Session E: prefer the SDK-accumulated total across every attempt this dispatch actually
+      // completed a response for (cumulativeUsage) over the budget guard's own accrued figure
+      // (guardState.accrued), which is populated only when a run budget is configured at all. Both
+      // read the SAME underlying model responses when both are populated — this is a choice of
+      // source, not an addition of two sources, so it cannot double-count. guardState.accrued remains
+      // the fallback for a throw that happened before any full response completed (this dispatch's own
+      // rawResponses were never populated) where the guard's mid-turn accounting is the only figure
+      // that exists at all.
+      const usable = cumulativeUsage.inputTokens > 0 || cumulativeUsage.outputTokens > 0 ? cumulativeUsage : guardState.accrued;
+      const { inputTokens, outputTokens } = usable;
       if (inputTokens === 0 && outputTokens === 0) return;
-      await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, status: "actual", metadata: { executionMode: "openai", partial: true, failureCode } }).catch(() => undefined);
+      await recordModelUsage({
+        runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label,
+        inputTokens, outputTokens, totalTokens: inputTokens + outputTokens,
+        reasoningTokens: "reasoningTokens" in usable ? (usable as typeof cumulativeUsage).reasoningTokens : undefined,
+        cachedInputTokens: "cachedInputTokens" in usable ? (usable as typeof cumulativeUsage).cachedInputTokens : undefined,
+        status: "actual",
+        metadata: { executionMode: "openai", partial: true, failureCode, attempt: attempt + 1, attemptsTotal: attempt + 1, turnCount, toolCallCount }
+      }).catch(() => undefined);
     };
+    // Session E: accumulates every ATTEMPT this dispatch obtained a real SDK result for — including a
+    // validation-failed attempt that gets retried, whose real token spend previously vanished from the
+    // ledger entirely (recorded neither on that attempt, since it wasn't final, nor folded into the
+    // eventual success record, which used to read only the LAST attempt's own usage). Distinct from
+    // guardState.accrued (the budget guard's own running total, gated on budgetGuardEngaged, updated
+    // per model response for real-time spend gating) — this is the general-purpose ledger source,
+    // present whether or not a budget is configured, and it is what recordAccruedUsage now prefers.
+    const cumulativeUsage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cachedInputTokens: 0 };
+    // Session E: env-controlled, default OFF (matches every prior hardcoded `tracingDisabled: true` —
+    // this is a policy toggle, not a behavior change, until an operator opts in). AGENT_TRACING_ENABLED
+    // must be exactly "true" to turn tracing on. When on, only safe, already-public-within-the-run
+    // metadata is attached — workflow name, run id, node id, project id, execution mode, attempt.
+    // Never authorization headers, tokens, full client contracts, or publish payloads: none of those
+    // are ever assembled into traceMetadata here, by construction (it is built from five named scalars,
+    // not from `input`, `dependencyOutputs`, or anything sourced from the node's own prompt/response).
+    const tracingEnabled = process.env.AGENT_TRACING_ENABLED === "true";
+    const tracingMetadataFor = (attempt: number): Record<string, string> => ({
+      runId: context.run.runId,
+      nodeId: node.id,
+      projectId: context.run.projectId,
+      executionMode: "openai",
+      attempt: String(attempt + 1)
+    });
+    let turnCount = 0;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const runOnce = run(agent, prompt, { maxTurns, signal: context.signal as any, tracingDisabled: true, traceIncludeSensitiveData: false } as any);
+        const runOnce = run(agent, prompt, {
+          maxTurns, signal: context.signal as any,
+          tracingDisabled: !tracingEnabled, traceIncludeSensitiveData: false,
+          ...(tracingEnabled ? { workflowName: context.run.workflowId, traceMetadata: tracingMetadataFor(attempt) } : {})
+        } as any);
         const result: any = await Promise.race([runOnce, new Promise((_, rej) => setTimeout(() => rej(new Error("model_timeout")), timeoutMs))]);
+        const usage = result.rawResponses?.reduce((a: any, r: any) => ({
+          inputTokens: a.inputTokens + (r.usage?.inputTokens ?? r.usage?.input_tokens ?? 0),
+          outputTokens: a.outputTokens + (r.usage?.outputTokens ?? r.usage?.output_tokens ?? 0),
+          reasoningTokens: a.reasoningTokens + (r.usage?.reasoningTokens ?? r.usage?.output_tokens_details?.reasoning_tokens ?? 0),
+          cachedInputTokens: a.cachedInputTokens + (r.usage?.cachedInputTokens ?? r.usage?.input_tokens_details?.cached_tokens ?? 0)
+        }), { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cachedInputTokens: 0 }) ?? { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cachedInputTokens: 0 };
+        cumulativeUsage.inputTokens += usage.inputTokens;
+        cumulativeUsage.outputTokens += usage.outputTokens;
+        cumulativeUsage.reasoningTokens += usage.reasoningTokens;
+        cumulativeUsage.cachedInputTokens += usage.cachedInputTokens;
+        turnCount += result.rawResponses?.length ?? 0;
         const validated = validateOutput(result.finalOutput, node.outputSchema);
         if (!validated.ok) {
           if (attempt < maxRetries) continue;
-          await recordAccruedUsage("output_validation_failed");
+          await recordAccruedUsage("output_validation_failed", attempt);
           return { ok: false, code: "output_validation_failed", message: "OpenAI output did not match node.outputSchema.", details: validated.errors, toolCalls };
         }
-        const usage = result.rawResponses?.reduce((a: any, r: any) => ({ inputTokens: a.inputTokens + (r.usage?.inputTokens ?? r.usage?.input_tokens ?? 0), outputTokens: a.outputTokens + (r.usage?.outputTokens ?? r.usage?.output_tokens ?? 0), reasoningTokens: a.reasoningTokens + (r.usage?.reasoningTokens ?? r.usage?.output_tokens_details?.reasoning_tokens ?? 0) }), { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
         // Usage token fields only. `actual` marks the NodeRunnerResult.usage (estimated vs actual);
         // it must NOT be spread into recordModelUsage, whose schema is strict and carries the
         // estimated/actual distinction in `status`. Spreading `actual` there previously threw
         // "unrecognized key: actual", failing an already-validated, successful model result.
-        const usageFields = { inputTokens: usage?.inputTokens || 0, outputTokens: usage?.outputTokens || 0, reasoningTokens: usage?.reasoningTokens || 0, totalTokens: (usage?.inputTokens || 0) + (usage?.outputTokens || 0) };
+        // cumulativeUsage, not just this attempt's own `usage` — a node retried after a validation
+        // failure previously recorded only its FINAL (successful) attempt's tokens, silently dropping
+        // the real spend of every earlier attempt from the ledger. One record, summed across every
+        // attempt this dispatch made, recorded exactly once (never double-counted, since it is written
+        // only here on the terminal success path).
+        const usageFields = { inputTokens: cumulativeUsage.inputTokens, outputTokens: cumulativeUsage.outputTokens, reasoningTokens: cumulativeUsage.reasoningTokens, cachedInputTokens: cumulativeUsage.cachedInputTokens, totalTokens: cumulativeUsage.inputTokens + cumulativeUsage.outputTokens };
         // Telemetry is non-authoritative: the validated output is the deliverable, so a usage-record
         // write failure must never discard a successful node (matches the workflow executor's pattern).
-        await recordModelUsage({ runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId } }).catch(() => undefined);
+        await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId, attempt: attempt + 1, attemptsTotal: attempt + 1, turnCount, toolCallCount } }).catch(() => undefined);
         return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length }, toolCalls };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -252,7 +311,7 @@ export class OpenAINodeRunner implements NodeRunner {
         // "caller cancelled" no matter how the SDK re-wraps the thrown error.
         if (guardState.exceeded || error instanceof NodeBudgetExceededError) {
           const details = guardState.exceeded ?? (error as NodeBudgetExceededError).details;
-          await recordAccruedUsage("budget_exceeded");
+          await recordAccruedUsage("budget_exceeded", attempt);
           return {
             ok: false,
             code: "budget_exceeded",
@@ -261,12 +320,12 @@ export class OpenAINodeRunner implements NodeRunner {
             toolCalls
           };
         }
-        if (msg === "model_timeout") { await recordAccruedUsage("model_timeout"); return { ok: false, code: "model_timeout", message: "OpenAI node execution timed out.", toolCalls }; }
+        if (msg === "model_timeout") { await recordAccruedUsage("model_timeout", attempt); return { ok: false, code: "model_timeout", message: "OpenAI node execution timed out.", toolCalls }; }
         // Distinct and actionable: an exhausted turn budget is a configuration problem with one
         // specific fix, not the "the model errored" bucket. Reported as such even on a non-final
         // attempt, because retrying with the same cap can only exhaust it again.
         if (isMaxTurnsExceeded(error, msg)) {
-          await recordAccruedUsage("max_turns_exceeded");
+          await recordAccruedUsage("max_turns_exceeded", attempt);
           return {
             ok: false,
             code: "max_turns_exceeded",
@@ -275,13 +334,13 @@ export class OpenAINodeRunner implements NodeRunner {
             toolCalls
           };
         }
-        if (/aborted|cancel/i.test(msg)) { await recordAccruedUsage("cancelled"); return { ok: false, code: "cancelled", message: "OpenAI node execution was cancelled.", toolCalls }; }
-        if (/tool_denied/.test(msg)) { await recordAccruedUsage("tool_denied"); return { ok: false, code: "tool_denied", message: msg, toolCalls }; }
-        if (/tool_failed/.test(msg)) { await recordAccruedUsage("tool_failed"); return { ok: false, code: "tool_failed", message: msg, toolCalls }; }
-        if (attempt >= maxRetries) { await recordAccruedUsage("model_error"); return { ok: false, code: "model_error", message: msg, toolCalls }; }
+        if (/aborted|cancel/i.test(msg)) { await recordAccruedUsage("cancelled", attempt); return { ok: false, code: "cancelled", message: "OpenAI node execution was cancelled.", toolCalls }; }
+        if (/tool_denied/.test(msg)) { await recordAccruedUsage("tool_denied", attempt); return { ok: false, code: "tool_denied", message: msg, toolCalls }; }
+        if (/tool_failed/.test(msg)) { await recordAccruedUsage("tool_failed", attempt); return { ok: false, code: "tool_failed", message: msg, toolCalls }; }
+        if (attempt >= maxRetries) { await recordAccruedUsage("model_error", attempt); return { ok: false, code: "model_error", message: msg, toolCalls }; }
       }
     }
-    await recordAccruedUsage("model_error");
+    await recordAccruedUsage("model_error", maxRetries);
     return { ok: false, code: "model_error", message: "OpenAI node execution failed.", toolCalls };
   }
 }

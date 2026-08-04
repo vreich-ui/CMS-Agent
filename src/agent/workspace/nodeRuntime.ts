@@ -166,7 +166,7 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   run.updatedAt = endedAt; run.currentNodeId = undefined;
   // In openai mode the runner records real usage itself (OpenAINodeRunner); recording here too
   // double-counted every independent execution with fabricated token counts marked "actual".
-  if (data.executionMode !== "openai") await recordModelUsage({ runId, workflowId: run.workflowId, projectId: run.projectId, nodeId: node.id, model: modelName(node, data.modelConfig), provider: "openai", inputTokens: tokenCount(state.input, 64), outputTokens: tokenCount(state.output, 32), status: "estimated", metadata: { executionId, independentNode: true } });
+  if (data.executionMode !== "openai") await recordModelUsage({ runId, requestId: run.requestId, workflowId: run.workflowId, projectId: run.projectId, nodeId: node.id, model: modelName(node, data.modelConfig), provider: "openai", inputTokens: tokenCount(state.input, 64), outputTokens: tokenCount(state.output, 32), status: "estimated", metadata: { executionId, independentNode: true } });
   return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId });
 }
 

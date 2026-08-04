@@ -8,6 +8,11 @@ export type ModelUsageRecord = {
   projectId?: string;
   nodeId?: string;
   agentId?: string;
+  // R-9: the join key between a platform workflow record and this workspace run/usage record. Set
+  // once per run at start (executor.ts) and carried onto every usage record the run produces, so a
+  // learning-corpus consumer can join "what the platform saw happen" to "what this workspace actually
+  // did" without inferring the connection from timing.
+  requestId?: string;
   model: string;
   provider: string;
   inputTokens: number;
@@ -19,6 +24,12 @@ export type ModelUsageRecord = {
   currency: ModelUsageCurrency;
   status: ModelUsageStatus;
   recordedAt: string;
+  // Which pricing list priced this record, stamped at record time (Session E). modelPricingCatalog is
+  // hand-maintained and drifts silently; without this, a stored $-figure from three catalog revisions
+  // ago is indistinguishable from one costed against today's list, and nobody can tell which of two
+  // runs' costs are actually comparable.
+  pricingAsOf?: string;
+  pricingCatalogVersion?: string;
   metadata?: Record<string, unknown>;
 };
 
