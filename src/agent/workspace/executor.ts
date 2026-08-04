@@ -14,6 +14,7 @@ import { autoPromoteEnabled, autoPromoteProposals } from "../improvement/autoPro
 import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 import { getReducedContract } from "./contractPrefetch.js";
+import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -723,9 +724,11 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // constellation.get_attention's node-level surface both read state.warnings), named after the
   // failure's own code so "the cost optimization silently degraded" is a run-level fact, not
   // something inferable only after specifically reading this one node's input.
+  let deterministicPrefetch: Awaited<ReturnType<typeof getReducedContract>> | undefined;
   if (nextNode.metadata?.contractPrefetch === true) {
     try {
       const prefetch = await getReducedContract({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository() });
+      deterministicPrefetch = prefetch;
       state.input = { ...(state.input as Record<string, unknown>), ...(prefetch.ok ? { prefetchedContract: prefetch.reduced } : { prefetchError: prefetch.error }) };
       if (!prefetch.ok) state.warnings = [...(state.warnings ?? []), `contract_prefetch_failed:${prefetch.code ?? "unknown"}`];
     } catch (error) {
@@ -733,6 +736,42 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.input = { ...(state.input as Record<string, unknown>), prefetchError: message };
       state.warnings = [...(state.warnings ?? []), "contract_prefetch_failed:threw"];
     }
+  }
+
+  // Session D (2026-08, improvement phase): once the contract is prefetched and reduced
+  // deterministically (above), the node's own remaining job — per its prompt, "a validation and
+  // pass-through step, not a discovery one" — is field mapping a program can do exactly as well as a
+  // model, for $0 instead of ~$0.134/run. Opt-in per node (metadata.contractIntelligenceDeterministic)
+  // so this stays scoped to the one node it was designed for. NOT a replacement for the model path:
+  // the mapped output is validated against the node's own outputSchema before use, and any failure —
+  // prefetch absent/failed, mapping produces something schema-invalid — falls through to the normal
+  // model dispatch below unchanged. A mapping bug therefore degrades to "spend the $0.134", never to a
+  // failed run or a malformed artifact reaching a downstream node.
+  if (nextNode.metadata?.contractIntelligenceDeterministic === true && deterministicPrefetch?.ok) {
+    const mapped = buildDeterministicContractIntelligence(deterministicPrefetch.reduced, clientProjectId);
+    const mappedValidation = validateOutput(mapped, nextNode.outputSchema);
+    if (mappedValidation.ok) {
+      const completedAt = now();
+      state.status = "completed";
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      // No dedicated NodeExecutionState field for "how this output was produced"; the fact is already
+      // recoverable from the absence of a usage record for this run+node, and from run.warnings if the
+      // mapping had instead failed validation (the branch below).
+      state.output = mapped;
+      run.stageOutputs[nextNode.id] = mapped;
+      run.artifacts.push(buildArtifact(nextNode, mapped));
+      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.updatedAt = completedAt;
+      run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      // No model call happened, so no usage record is written — that is the entire point, and R-20
+      // already established the rule that a $0 event stays $0, not a rounded-up estimate.
+      return { run };
+    }
+    // Deterministic mapping produced something the node's own schema rejects — fall through to the
+    // model path below. Surfaced as a run-visible warning (same convention as a prefetch failure) so a
+    // systematic mapping defect is a run-level fact, not something only found by reading this node.
+    state.warnings = [...(state.warnings ?? []), `contract_intelligence_deterministic_invalid:${mappedValidation.errors[0] ?? "unknown"}`];
   }
 
   if (isPublishRisk(nextNode) && options.approved !== true) {
