@@ -99,12 +99,17 @@ const MAX_SAVE_RETRIES = 5;
 export const STALL_MARGIN_MS = 90_000;
 const now = () => new Date().toISOString();
 const makeRunId = () => `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+// R-9: system-generated, one per run, distinct from publish_payload's human-authored requestId
+// (req_<flow>_<topic>_<yyyymmdd>_<nn>) — this is the join key a platform-side record correlates
+// against, not something a node or operator supplies.
+const makeRequestId = () => `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const duration = (startedAt?: string, endedAt = now()) => startedAt ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt)) : undefined;
 const modelForDryRun = () => process.env.OPENAI_AGENT_MODEL?.trim() || "gpt-5.5";
 const deterministicTokenCount = (value: unknown, minimum: number) => Math.max(minimum, Math.ceil(JSON.stringify(value ?? "").length / 4));
 
 const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: WorkspaceNode, input: unknown, output: unknown) => recordModelUsage({
   runId: run.runId,
+  requestId: run.requestId,
   workflowId: run.workflowId,
   projectId: run.projectId,
   nodeId: node.id,
@@ -282,7 +287,7 @@ export class InvalidEntrypointOutputError extends Error {
   }
 }
 
-const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId = makeRunId()): WorkflowExecutionRecord => {
+const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId = makeRunId(), requestId = makeRequestId()): WorkflowExecutionRecord => {
   const timestamp = now();
   const entrypoint = data.entrypoint;
   if (entrypoint && !nodes.some((node) => node.id === entrypoint.nodeId)) throw new Error(`Unknown entrypoint node: ${entrypoint.nodeId}`);
@@ -318,6 +323,7 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
   const anyQueued = nodeStates.some((state) => state.status === "queued");
   return {
     runId,
+    requestId,
     workflowId: data.workflowId ?? WORKFLOW_ID,
     projectId: data.projectId,
     status: anyQueued ? "queued" : "completed",
@@ -486,7 +492,9 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     // Rebuild from the run's own starting shape, including a late-stage entrypoint, so reset restores
     // the seeded state it began with rather than a full ideation-to-publish run.
     const nodes = await resolveConductorNodes();
-    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId));
+    // requestId travels with the run across a reset — it identifies the same request being retried,
+    // not a new one, and a platform-side record correlating against it must still resolve.
+    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId));
   });
 }
 
