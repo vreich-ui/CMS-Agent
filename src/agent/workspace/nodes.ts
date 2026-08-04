@@ -1661,7 +1661,8 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-31T09:36:03.991Z",
     "metadata": {
       "approvalRequired": false,
-      "contractPrefetch": true
+      "contractPrefetch": true,
+      "contractIntelligenceDeterministic": true
     },
     "modelConfig": {
       "maxTurns": 6,

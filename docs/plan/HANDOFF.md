@@ -7,7 +7,7 @@ the next session must know goes here.
 **Rule: a gate check is a command with an expected result. Prose is not a gate check.** If you cannot
 write the call and what it should return, it is context, not a gate — put it under "State".
 
-_Last updated 2026-08-03 by the Session B follow-up (judge evidence channel, criticalMin veto, mode-scoped baselines)._
+_Last updated 2026-08-04 by Session D (deterministic contract_intelligence) — see also the manual rubric-revision pass and Session E in this same update._
 
 ---
 
@@ -117,6 +117,50 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
    `modelPricingCatalog` is `placeholder: true, "not billing-grade."`
 
 ---
+
+## State — 2026-08-04 — Session D: contract_intelligence made deterministic
+
+**Session B2 (the scheduled rubric-content rewrite) stalled with no output for 1h15m+ and was abandoned.**
+Its intended work — closing the research veto gap, re-anchoring field-ownership criteria to Wolf's
+profession/publication seam, closing the media-free loophole, reweighting `no_side_effects`, authoring
+the fifth `artifact_plan` rubric — was instead done directly in-session (manual `evaluation_update_rubric`
+calls, not a fresh scheduled session) once B2's silence passed the point of plausible "still working."
+All five rubrics remain `status: "draft"`. See project doc `claude/cms-agent-decisions-2026-08-03-rubric-gate.md`
+for the seam ruling and `claude/cms-agent-session-B2-manual-result-2026-08-04.md` for what changed on
+each rubric.
+
+**Session D — the actual finding matters more than the fix.** Before writing any code, `node_get` on
+`contract_intelligence` showed the "biggest lever" premise was already stale: PR #93/#95's deterministic
+contract prefetch (conductor fetches + reduces the contract in code before the node runs) had already
+dropped this node from the historical $3.79/run to **$0.134/run observed** (node-limits audit, v258) —
+well under the phase's own $1 target. What was left was a model call whose entire declared job is field
+mapping the already-reduced contract into the node's output shape.
+
+- **New: `src/agent/workspace/deterministicContractIntelligence.ts`.** A pure function,
+  `buildDeterministicContractIntelligence`, that performs that field mapping in code — no model call.
+  Deliberately does NOT replicate two things earlier LLM outputs did: it never emits a separate
+  `mediaPolicy` duplicate of `mediaConvention.policy` (the rubric review flagged exactly this
+  duplication as a fidelity risk — "a derived duplicate that contradicts its source"), and it never
+  invents an `idConventions.object`/`.nodes` client-specific grouping the raw reduced contract doesn't
+  contain (inventing a partitioning scheme is exactly what `no_invented_client_rules` exists to catch).
+- **Wired into `executor.ts`, opt-in per node** (`metadata.contractIntelligenceDeterministic`, set on
+  `contract_intelligence` in both the canonical seed and — pending — the live store overlay). When the
+  prefetch succeeds AND the mapped output validates against the node's own `outputSchema`, the node
+  completes from the mapping directly: no model dispatch, no usage record at all (R-20's own logic: a
+  $0 event stays $0). **Safety net:** any prefetch failure or schema-invalid mapping falls straight
+  through to the unchanged model path — a mapping bug degrades to "spend the $0.134," never to a failed
+  run or a malformed artifact reaching a downstream node.
+- **Regression:** `tests/agent/workspace/deterministicContractIntelligence.test.ts` (9 tests) — schema
+  validity and content fidelity of the mapper in isolation, an end-to-end proof driven through the real
+  DAG in `openai` mode with **no OpenAI network stub configured at all** (succeeding is the proof no
+  model call happened) plus a zero-usage-record assertion, and a fallback proof (prefetch failure still
+  completes via the normal model path unchanged).
+- **Not yet done:** the live workspace store's `contract_intelligence` node metadata still needs
+  `contractIntelligenceDeterministic: true` written via `workspace.update_node_metadata` (store mode
+  overlays `metadata` from the live store, same trap #93/#95 hit — "the conductor-level fix shipped in
+  code but its node-side half never reached the live store" — must not repeat here) and a replay against
+  the real dataset (`ds_1785777163498_thqdgr`) to record the actual before/after cost and attach a
+  rubric verdict, before this can be called complete end to end.
 
 ## State — 2026-08-03 (Session B follow-up) — Wolf's gate rulings, applied in code
 
