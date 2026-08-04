@@ -7,7 +7,7 @@ the next session must know goes here.
 **Rule: a gate check is a command with an expected result. Prose is not a gate check.** If you cannot
 write the call and what it should return, it is context, not a gate — put it under "State".
 
-_Last updated 2026-08-04 by Session E (usage accounting, R-9, tracing policy)._
+_Last updated 2026-08-04 by Session C (paid cost/quality baseline run)._
 
 ---
 
@@ -117,6 +117,95 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
    `modelPricingCatalog` is `placeholder: true, "not billing-grade."`
 
 ---
+
+## State — 2026-08-04 — Session C: paid cost/quality baseline run (PARTIAL — real cost $2.028635)
+
+**Total real spend this session: $2.028635** (58% of the $3.5 ceiling set for this run). Real money,
+authorized directly by Wolf ("do Session C"). Run `run_1785842430906_tqjk1o`, `requestId`
+`req_1785842430906_nser80`, same frozen T-2 brief as `run_1785405350649_9u5mjz` for direct
+comparability. Publish gates were never approached — `contract_intelligence` was the last node with
+a `publishPolicy` opinion and nothing downstream of it that could publish ever ran.
+
+**Run status: `failed`, at `article_body`, after two failed retries.** 16 of 21 nodes completed with
+real output; `article_body`, `artifact_plan`, `publish_payload`, `publication_controller`, and
+`publish_executor` never produced real content. This is a partial baseline, reported honestly as
+partial — not patched into looking complete.
+
+### Per-node cost table (real, `openai` mode)
+
+| node | status | inputTokens | outputTokens | costUsdEstimate |
+|---|---|---|---|---|
+| input_triage | completed | 746 | 466 | 0.017710 |
+| topic_opportunity | completed (1 retry) | 5,103 | 856 | 0.051195 |
+| reader_insight | completed | 992 | 532 | 0.020920 |
+| research | completed | 37,817 | 3,428 | 0.291925 |
+| objection_mapping | completed | 3,013 | 1,817 | 0.069575 |
+| narrative_movement | completed | 2,373 | 1,772 | 0.065025 |
+| angle_strategy | completed | 2,295 | 665 | 0.031425 |
+| brief_architect | completed | 8,194 | 3,428 | 0.143810 |
+| draft_writer | completed | 4,214 | 3,733 | 0.133060 |
+| human_texture | completed | 4,266 | 822 | 0.045990 |
+| trust_factual | completed | 6,830 | 1,049 | 0.065620 |
+| emotional_resonance | completed | 4,668 | 727 | 0.045150 |
+| reader_simulation | completed | 4,265 | 595 | 0.039175 |
+| review_aggregator | completed | 3,050 | 1,030 | 0.046150 |
+| **contract_intelligence** | completed | **0** | **0** | **0.000000** |
+| article_body | **failed x2** | 84,198 | 13,429 | 0.823860 |
+| artifact_plan | queued (never ran) | — | — | — |
+| publish_payload | queued (never ran) | — | — | — |
+| publication_controller | queued (never ran) | — | — | — |
+| learning_recorder | completed | 22,851 | 793 | 0.138045 |
+| publish_executor | queued (never ran) | — | — | — |
+
+**`contract_intelligence` real cost is $0.00 on a real, live, paid run** — Session D's deterministic
+mapper fired correctly outside any test harness. Node output content matches the mapper's designed
+shape exactly (13 constraints, all blocking, `enforcedLive: true`; taxonomy `unknownTermsBlock: true`;
+`publishPolicy.gated: true`; 4 unmapped-contract notes surfaced, not dropped; `blockers: []`; no
+`mediaPolicy` duplicate). This is the strongest evidence to date that Session D's fix works, not just
+in its own unit tests.
+
+### Two real, repeatable budget-ceiling findings — reported, not silently patched
+
+- **`topic_opportunity`'s $0.10 node ceiling is too tight for current real cost.** First attempt hit
+  `budget_exceeded` at $0.017 spent + $0.086 prospective turn. `workflow.retry_node` (the system's own
+  suggested remedy) succeeded on the fresh attempt. One retry, low stakes, but the ceiling is
+  measurably below what a real turn costs.
+- **`article_body`'s $0.75 node ceiling is confirmed too tight, not a fluke.** First attempt: $0.418
+  spent before failing. Retry: $0.824 total across both attempts, also failed. Two failed retries at
+  the same node is a repeatable result, not noise. **Did not raise the ceiling or retry a third time.**
+  Per this phase's own standing rule — a cost figure changed without a held/improved rubric score
+  behind it is an unmeasured downgrade — quietly loosening a live budget ceiling to make the number
+  disappear is exactly the kind of unreviewed change this measurement work exists to catch. This is
+  now Wolf's call: raise `article_body`'s `budgetUsd`, or accept it fails on this brief as designed.
+
+### Rubric scores (both draft rubrics, real `openai`-mode judge, real outputs)
+
+Rubrics remain `status: "draft"` — **not activated by Wolf.** Scored anyway per his direct
+authorization to run Session C, using explicit `rubricId` references (the same pattern used
+throughout this phase to bypass the "must be active" lookup). Treat these as first real data points,
+not a validated pass/fail gate — draft weights are still Wolf's to finalize.
+
+- **`contract_intelligence`** (`rubric_1785773022345_jzc74l`): **normalizedScore 0.90, pass: true.**
+  Strongest criteria: severity/enforcedLive mapping (10/10), unknown-field surfacing (5/5),
+  no-cross-project-conventions (5/5). Weakest: contract_fidelity (7/10) — the judge flagged several
+  contract rule notes in the output as visibly truncated with ellipses, meaning some literal clauses
+  may not be carried whole; worth a look independent of the rubric-weight question.
+- **`research`** (`rubric_1785773086490_hmrj61`): **normalizedScore 0.857, pass: true.** Strongest:
+  claim-risk flagging (5/5) — the brief honestly reported that the "platform" client record could not
+  be resolved and hedged every claim accordingly rather than fabricating platform-specific detail.
+  Weakest: recency/currency (3/5) — cited sources (Google SRE book, Martin Fowler on feature toggles)
+  carry no visible publication date or fetch timestamp in the output.
+- `article_body`, `publish_payload` rubrics: not scored — no real output exists for either node this
+  run.
+
+### Exit criteria status
+
+Per-node cost table: done (above, repo + project doc). Rubric scores attached: done, for the 2 of 4
+nodes with real output. **The number to beat, for the next comparable run:** total real cost
+$2.028635 for 16/21 nodes with `article_body` unresolved; if `article_body`'s ceiling is raised and it
+completes, expect total real cost to land somewhere above $2.35 (16-node total + a single successful
+`article_body` attempt, historically ~$0.4-0.5 based on this run's first attempt) — an estimate, not a
+promise. Actual total cost reported first, as instructed: **$2.028635.**
 
 ## State — 2026-08-04 — Session E: usage accounting, R-9, tracing policy
 
@@ -231,6 +320,8 @@ mapping the already-reduced contract into the node's output shape.
   that is Session C's territory (human-gated, one real ≤$3 run), not something to spend unilaterally.
   **Session C's per-node cost table should show ~$0 for `contract_intelligence`** if this fix is
   working; that is the actual verification, deferred to Session C by design, not an oversight here.
+  **Confirmed 2026-08-04, Session C: real per-node cost is $0.00 on a live paid run — see the Session
+  C section above.**
 - Regression coverage that WAS possible and is in place: the executor-level test proves, with a
   fabricated-but-real prefetch response and no OpenAI network stub configured at all, that the node
   completes with zero model calls and zero usage records when the deterministic path fires, and falls
@@ -282,8 +373,9 @@ datasets** (`ds_1785772079588_9a01hb`, `ds_1785772111182_5baov9`, `ds_1785772112
 `ds_1785772114313_c5gnyl`), and **one mock regression report** (`reg_1785773255851_5ivneg`).
 
 **Nothing is active.** Weights are Wolf's call — the review doc is the project doc
-`claude/cms-agent-rubrics-for-review-2026-08-03.md` (seven decisions). **Session C must not run until
-the rubrics are activated**; an unscored run cannot be a quality baseline.
+`claude/cms-agent-rubrics-for-review-2026-08-03.md` (seven decisions). **Session C ran 2026-08-04 on
+Wolf's direct authorization despite this** — see the Session C section above, which flags the
+draft-rubric caveat explicitly rather than treating scores as validated.
 
 > **Watch out — `evalRubricInputSchema` defaults `status` to `active`.** Creating a rubric without an
 > explicit `status: "draft"` silently activates it. Session B passed it explicitly and verified all
@@ -399,6 +491,7 @@ Measure with a fresh run plus `run_until(contract_intelligence)` — roughly $0.
 editorial cost plus the node itself. **A single-node `node.execute` will not measure it**: the
 prefetch is applied in the workflow executor (`executeRunnableNode` gates on
 `metadata.contractPrefetch`), so a single-node run bypasses it and returns a meaningless number.
+**Confirmed 2026-08-04, Session C: real conductor-run cost is $0.00 for `contract_intelligence`.**
 
 ### Owed
 
