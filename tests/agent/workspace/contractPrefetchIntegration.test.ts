@@ -25,10 +25,17 @@ describe("contract prefetch wired into node dispatch (F1, end to end through the
     process.env.DR_LURIE_MCP_ENDPOINT = ENDPOINT;
     process.env.DR_LURIE_MCP_TOKEN = "secret-token";
     remoteFetch = vi.fn(async (_url: string, init: { body: string }) => {
-      const request = JSON.parse(init.body) as { method: string; params?: { arguments?: Record<string, unknown> } };
-      const result = request.method === "tools/call"
-        ? { structuredContent: { contract: { object_type: request.params?.arguments?.object_type, body_schema: { type: "object", required: ["slug"] }, constraints: [{ id: "article_slug", severity: "blocks_write" }] } } }
-        : {};
+      const request = JSON.parse(init.body) as { method: string; params?: { name?: string; arguments?: Record<string, unknown> } };
+      // dr-lurie now also carries a voiceObjectId (GUI rework Session B), so nodes upstream of
+      // contract_intelligence that declare metadata.voicePrefetch (topic_opportunity, research,
+      // brief_architect, draft_writer, trust_factual) fetch object_get("editorial_voice") the same
+      // way contract_intelligence fetches object_contract — both go over this same stub.
+      const isVoiceGet = request.params?.name === "object_get" && request.params?.arguments?.object_type === "editorial_voice";
+      const result = request.method !== "tools/call"
+        ? {}
+        : isVoiceGet
+          ? { structuredContent: { object: { name: "Stub voice", audience: "a", tone: ["calm"], cadence: "c", lexicon: { prefer: [], avoid: [] }, claim_policy: "p", cta_policy: "cta", reader_safety_notes: "n", frameworks: [{ framework_id: "fw_x", label: "X", when_to_use: "always" }], default_framework: "fw_x" } } }
+          : { structuredContent: { contract: { object_type: request.params?.arguments?.object_type, body_schema: { type: "object", required: ["slug"] }, constraints: [{ id: "article_slug", severity: "blocks_write" }] } } };
       return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
     });
     vi.stubGlobal("fetch", remoteFetch);
@@ -53,9 +60,13 @@ describe("contract prefetch wired into node dispatch (F1, end to end through the
     expect(input.prefetchedContract).toBeDefined();
     expect(input.prefetchedContract!.clientObjectType).toBe("content_item");
     expect(input.prefetchedContract!.idConventions).toEqual([expect.objectContaining({ id: "article_slug" })]);
-    // The deterministic prefetch happened exactly once for this node's single dispatch, via a plain
-    // MCP call — not a tool call inside the node's own (mock, in this test) agent loop.
-    expect(remoteFetch).toHaveBeenCalledTimes(1);
+    // The deterministic contract prefetch happened exactly once for this node's single dispatch, via
+    // a plain MCP call — not a tool call inside the node's own (mock, in this test) agent loop. The
+    // run also drives through five voicePrefetch-flagged nodes on the way to contract_intelligence
+    // (topic_opportunity, research, brief_architect, draft_writer, trust_factual), and their voice
+    // fetch is cached per run too — so the total is exactly TWO remote calls for the whole run
+    // (one object_contract, one object_get), never five-plus-one from a naive per-node re-fetch.
+    expect(remoteFetch).toHaveBeenCalledTimes(2);
   });
 
   it("hands the node prefetchError instead of crashing the dispatch when the client is unreachable", async () => {
