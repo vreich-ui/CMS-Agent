@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CMS Agent Workspace</title>
+    <!-- S7 reskin: Poppins (headings 24pt+) and Lora (body) — the two typefaces styles.css
+         declares as the operator console's type. Fallbacks (Arial / Georgia) render until these
+         load; only the palette and type are borrowed here, never any Anthropic mark. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Poppins:wght@600;700;800&display=swap" rel="stylesheet" />
     <script>
       // Pre-paint theme hint: resolve the stored preference before first paint so a dark reload
       // never flashes light. React re-applies the full token table on mount (ui/src/theme.ts).
@@ -16,8 +22,8 @@
           root.dataset.theme = dark ? "dark" : "light";
           root.style.colorScheme = dark ? "dark" : "light";
           if (dark) {
-            root.style.setProperty("--color-bg", "#0e1420");
-            root.style.setProperty("--color-text", "#e7ecf6");
+            root.style.setProperty("--color-bg", "#141413");
+            root.style.setProperty("--color-text", "#e7e4db");
           }
         } catch (error) { /* first paint falls back to light */ }
       })();

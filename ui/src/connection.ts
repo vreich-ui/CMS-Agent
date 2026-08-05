@@ -1,62 +1,29 @@
 // Connection model for the workspace MCP client.
 //
-// Authentication state is modeled explicitly as a discriminated union instead of being inferred
-// from incidental field values (the old code derived "secure proxy" from an exact string match on
-// the endpoint field and dropped the manual token whenever it matched — see
-// docs/constellation/data-model-gaps.md §1). The mode is chosen by the user; the endpoint string
-// never decides which credential is sent.
+// GCloud is the only control plane the UI ever talks to (Netlify's MCP proxy paths and the
+// Identity secure-proxy auth mode were retired once Cloud Run became the sole target — the
+// Cloud Run plane always used direct bearer-token auth against its absolute URL, so once it is
+// the only plane, the secure-proxy branch is simply dead). The connection is a plain
+// endpoint + bearer token: the endpoint defaults to the build-time Cloud Run URL and stays a
+// free-text field so an operator can override it for local dev or a staging Cloud Run service.
 //
 // This module is framework-free so root vitest can test it directly.
 
-export type ConnectionMode = "direct" | "secure-proxy";
-
-export type DirectConnection = {
-  mode: "direct";
+export type McpConnection = {
   endpoint: string;
   // Manual MCP bearer token. Empty means "not entered yet"; the client refuses to send a request
   // rather than sending one without credentials.
   token: string;
 };
 
-export type SecureProxyConnection = {
-  mode: "secure-proxy";
-  endpoint: string;
-  // Resolved per request so an expired/renewed identity JWT is picked up automatically and no
-  // credential value is captured at connection-construction time.
-  getAccessToken: () => Promise<string | undefined>;
-};
-
-export type McpConnection = DirectConnection | SecureProxyConnection;
-
-export const defaultEndpointForMode = (mode: ConnectionMode): string =>
-  mode === "secure-proxy" ? "/api/workspace-mcp" : "/api/mcp";
-
-// Which control plane the UI talks to (DIRECTION.md Phase 4). Netlify is the default and is never
-// retired; Cloud Run is offered only when a build-time endpoint is configured. This is a separate
-// axis from the auth mode: the Cloud Run plane always uses direct token auth against its absolute
-// URL (the Identity secure proxy is a Netlify-only construct), so selecting it implies direct mode.
-export type ControlPlane = "netlify" | "cloud-run";
-
-// The Cloud Run endpoint is injected by the React layer from import.meta.env, keeping this module
-// framework-free (root vitest tests it directly). Empty/absent means the Cloud Run plane is hidden.
-export const controlPlaneAvailable = (cloudRunEndpoint: string | undefined): boolean =>
-  typeof cloudRunEndpoint === "string" && cloudRunEndpoint.trim().length > 0;
-
-export const resolveControlPlaneEndpoint = (plane: ControlPlane, mode: ConnectionMode, cloudRunEndpoint: string | undefined): string =>
-  plane === "cloud-run" ? (cloudRunEndpoint?.trim() ?? "") : defaultEndpointForMode(mode);
-
 export type ConnectionAuthSummary =
   | { kind: "direct-missing-token"; label: string }
-  | { kind: "direct-ready"; label: string }
-  | { kind: "secure-proxy"; label: string };
+  | { kind: "direct-ready"; label: string };
 
 // Synchronous, render-safe description of the credential state. Never includes credential values.
 export function summarizeConnectionAuth(connection: McpConnection): ConnectionAuthSummary {
-  if (connection.mode === "secure-proxy") {
-    return { kind: "secure-proxy", label: "Netlify Identity secure proxy; MCP tokens stay server-side." };
-  }
   return connection.token.trim()
-    ? { kind: "direct-ready", label: "Bearer token set; sent with every direct MCP request." }
+    ? { kind: "direct-ready", label: "Bearer token set; sent with every MCP request." }
     : { kind: "direct-missing-token", label: "Enter an MCP bearer token to call workspace tools." };
 }
 
