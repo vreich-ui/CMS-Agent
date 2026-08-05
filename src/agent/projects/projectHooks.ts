@@ -14,6 +14,12 @@ import { drLurieProjectHooks } from "./drLurie/hooks.js";
 import { platformProjectHooks } from "./platform/hooks.js";
 import type { ProjectObjectDialect } from "./projectTypes.js";
 
+// Re-exported so the generic workspace layer (voicePrefetch.ts) can type the fallback voice a hook
+// contributes without ever importing from a client folder directly — the same boundary getProjectHooks
+// already enforces for knowledge/policy/publish hooks.
+export type { EditorialVoiceBody, EditorialVoiceFramework, EditorialVoiceLexicon } from "./drLurie/editorialVoice.js";
+import type { EditorialVoiceBody } from "./drLurie/editorialVoice.js";
+
 export type ProjectPolicyFinding = ArtifactPolicyWarning;
 
 export type ProjectHandoffPayload = { contentSource?: unknown; articleBody?: unknown };
@@ -65,6 +71,13 @@ export type ProjectHooks = {
   executePublish?: (ctx: PublishExecutionContext) => Promise<PublishExecutionOutcome>;
   // Safe, non-secret structured guidance for agents (rules, conventions, pitfalls).
   knowledge?: unknown;
+  // GUI rework Session B: the seeded/fallback editorial voice for this project, in the SAME shape as
+  // the live `editorial_voice` object_contract body. voicePrefetch.ts uses this ONLY when the live
+  // voice_<project> object is unconfigured, unreachable, or missing — never as the primary source for
+  // a project that has a working live voice. Absent means this project has no editorial-voice concept
+  // wired yet: the prefetch is then a clean no-op for it (nothing injected, nothing warned), not a
+  // defect — the same posture projects without objectDialect already have for the content contract.
+  editorialVoiceFallback?: EditorialVoiceBody;
 };
 
 const hooksByProjectId: Record<string, ProjectHooks> = {
