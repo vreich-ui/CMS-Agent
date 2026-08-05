@@ -11,14 +11,17 @@
 // registry ids an agent is told about cannot drift from the ones the publish hook actually uses.
 
 import { DR_LURIE_OBJECT_DIALECT } from "./definition.js";
-import { DR_LURIE_DOMAIN_CAUTION, DR_LURIE_VOICE_SOURCE } from "./editorialVoice.js";
+import { DR_LURIE_VOICE_FALLBACK } from "./editorialVoice.js";
 
 export const drLurieProjectKnowledge = {
   projectId: "dr-lurie",
-  // Client-owned editorial direction (the node-system overhaul moved this out of the shared node
-  // prompts): Dr. Lurie's voice and health-domain caution live with Dr. Lurie, surfaced on
-  // project.get like every other client rule, and seed the future vox_drlurie_default record (P-2).
-  editorial: { voiceSource: DR_LURIE_VOICE_SOURCE, domainCaution: DR_LURIE_DOMAIN_CAUTION },
+  // P-2 CLOSED (GUI rework Session B): this field is NO LONGER the runtime source of Dr. Lurie's
+  // voice — a live run reads voice_drlurie fetched once per run by the conductor (voicePrefetch.ts)
+  // and delivered directly in the input of every voice-consuming node, never through project.get.
+  // What's surfaced here is descriptive only, for an agent inspecting the client's rules: which live
+  // object id backs the voice, and the exact seed voicePrefetch.ts falls back to when that object is
+  // unconfigured, unreachable, or missing (always with a named, run-visible warning — never silently).
+  editorial: { voiceObjectId: DR_LURIE_OBJECT_DIALECT.voiceObjectId, fallback: DR_LURIE_VOICE_FALLBACK },
   sources: [
     "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/agents/publishing-policy.md",
     "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/cms-architecture/",

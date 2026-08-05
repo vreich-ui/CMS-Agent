@@ -52,6 +52,14 @@ export type ProjectObjectDialect = {
   // has not declared one; contractPrefetch.ts falls back to a run-supplied clientObjectType, then to
   // the pipeline's current single-client-family default ("content_item") — see that file for why.
   defaultObjectType?: string;
+  // GUI rework Session B: the object id of this project's governed `editorial_voice` singleton (e.g.
+  // "voice_drlurie"), fetched via object_get {object_type:"editorial_voice", object_id}. Lets the
+  // conductor prefetch the client's live voice deterministically, once per run, before dispatching a
+  // voice-consuming node — mirroring defaultObjectType's F1 pattern so this never repeats
+  // contract_intelligence's per-turn-refetch cost mistake. Absent for a project that has not declared
+  // one; voicePrefetch.ts then falls back to that project's own seeded voice (if any hook module
+  // declares one) rather than guessing an id.
+  voiceObjectId?: string;
 };
 
 export type ProjectPublishingPolicy = {

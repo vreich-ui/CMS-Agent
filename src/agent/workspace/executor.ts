@@ -14,6 +14,7 @@ import { autoPromoteEnabled, autoPromoteProposals } from "../improvement/autoPro
 import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 import { getReducedContract } from "./contractPrefetch.js";
+import { getEditorialVoice } from "./voicePrefetch.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
 
 const WORKFLOW_ID = "publishing_conductor";
@@ -743,6 +744,32 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       const message = error instanceof Error ? error.message : String(error);
       state.input = { ...(state.input as Record<string, unknown>), prefetchError: message };
       state.warnings = [...(state.warnings ?? []), "contract_prefetch_failed:threw"];
+    }
+  }
+
+  // GUI rework Session B: same F1 pattern as the contract prefetch above, for a node whose metadata
+  // declares voicePrefetch — the client's editorial voice (voice_<project>) fetched deterministically
+  // HERE, once per run (RunScopedCache), and delivered directly in the node's input as
+  // `editorialVoice`, never via a tool call the node's own agent loop would re-issue every turn.
+  // Unlike contract prefetch, this can never fail the node: getEditorialVoice always resolves to
+  // either the live object or (for a project that registers one) a seeded fallback, and a fallback is
+  // always accompanied by a run-visible warning named after the reason — the same loud-degradation
+  // contract contract_prefetch_failed uses. A project with no voice concept wired at all (no
+  // objectDialect.voiceObjectId and no registered fallback) is a clean no-op: nothing injected,
+  // nothing warned.
+  if (nextNode.metadata?.voicePrefetch === true) {
+    try {
+      const voiceResult = await getEditorialVoice({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository() });
+      if (voiceResult.voice) {
+        state.input = { ...(state.input as Record<string, unknown>), editorialVoice: voiceResult.voice, editorialVoiceSource: voiceResult.source };
+      }
+      if (voiceResult.source !== "live" && voiceResult.warningCode) {
+        state.warnings = [...(state.warnings ?? []), `voice_prefetch_fallback:${voiceResult.warningCode}`];
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      state.warnings = [...(state.warnings ?? []), "voice_prefetch_fallback:threw"];
+      state.input = { ...(state.input as Record<string, unknown>), editorialVoiceError: message };
     }
   }
 

@@ -113,7 +113,11 @@ describe("project registry + Dr. Lurie definition", () => {
       requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$",
       // F1 (T-2, run_1785352838155_l544ye): object_contract's object_type argument, so the conductor
       // can prefetch and reduce the contract deterministically instead of the node discovering it.
-      defaultObjectType: "content_item"
+      defaultObjectType: "content_item",
+      // GUI rework Session B: object_get's object_id argument for the live editorial_voice singleton,
+      // so the conductor can prefetch the client's voice deterministically instead of a node
+      // discovering it (voicePrefetch.ts).
+      voiceObjectId: "voice_drlurie"
     });
   });
 
