@@ -95,16 +95,25 @@ export const DR_LURIE_OBJECT_DIALECT: ProjectObjectDialect = {
   // recovery, which is why the publisher rejects it before the first call.
   requestIdPattern: "^req_[a-z0-9_]+_\\d{8}_\\d{2}$",
   // F1: object_contract's object_type argument for this client's governed article type.
-  defaultObjectType: "content_item"
+  defaultObjectType: "content_item",
+  // GUI rework Session B: object_contract("editorial_voice") is live for this client and voice_drlurie
+  // is a published singleton (content_revision 1, status active, 2026-08-05). object_get
+  // {object_type:"editorial_voice", object_id:"voice_drlurie"} is how the conductor prefetches it once
+  // per run (voicePrefetch.ts) instead of a node discovering it via a tool call inside its own loop.
+  voiceObjectId: "voice_drlurie"
 };
 
 // Bumped 3 -> 4 when Dr. Lurie moved to full access (defaultToolPolicy "allowed"), 4 -> 5 when the
 // legacy save_json_blob_*/per-stage dialect was retired and the object-dialect parameters were added,
 // 5 -> 6 when defaultObjectType was added (F1, T-2 run_1785352838155_l544ye) so persisted stale
-// configs re-seed from this definition (see defaultMigration.ts), and 6 -> 7 when R-23 removed
+// configs re-seed from this definition (see defaultMigration.ts), 6 -> 7 when R-23 removed
 // contentContract.canonicalArticleBody (every definition declared the identical value; the
-// article_body node's own produces const is the single source) so persisted configs re-seed without it.
-export const DR_LURIE_DEFINITION_VERSION = 8;
+// article_body node's own produces const is the single source) so persisted configs re-seed without
+// it, 7 -> 8 when publishingPolicy was flipped on for go-live (2026-07-31, operator decision), and
+// 8 -> 9 when voiceObjectId was added (GUI rework Session B) closing the P-2 TODO: Dr. Lurie's
+// editorial voice is now read live from voice_drlurie instead of the hardcoded editorialVoice.ts
+// constants, which became fallback/seed data only.
+export const DR_LURIE_DEFINITION_VERSION = 9;
 
 export const drLurieProjectConfig: ProjectConnectionConfig = {
   projectId: "dr-lurie",

@@ -6,6 +6,7 @@ import { summarizeArtifactPolicyWarnings, validateNoRawImageArtifactPublicUrls, 
 import { evaluateDrLurieCallToolPolicy } from "./executablePolicy.js";
 import { evaluateDrLuriePublishReadiness } from "./publishReadiness.js";
 import { drLurieProjectKnowledge } from "./knowledge.js";
+import { DR_LURIE_VOICE_FALLBACK } from "./editorialVoice.js";
 import {
   JUDGEMENT_SUBSTRATE_KEYS,
   buildArticleCandidatePatch,
@@ -115,5 +116,8 @@ export const drLurieProjectHooks = {
   evaluatePublishReadiness: evaluateDrLuriePublishReadiness,
   publishToolSequence: DR_LURIE_PUBLISH_TOOL_SEQUENCE,
   executePublish,
-  knowledge: drLurieProjectKnowledge
+  knowledge: drLurieProjectKnowledge,
+  // voicePrefetch.ts falls back to this ONLY when the live voice_drlurie object is unconfigured,
+  // unreachable, or missing (a named, run-visible warning always accompanies the fallback).
+  editorialVoiceFallback: DR_LURIE_VOICE_FALLBACK
 };
