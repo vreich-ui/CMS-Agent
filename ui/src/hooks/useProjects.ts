@@ -11,7 +11,7 @@ export function useProjects(client: McpClient) {
 
   const refresh = useCallback(async () => {
     // Reset before fetching (mirrors the catch branch's "no data" state) — this refetches on
-    // every [client] change (below), so a control-plane switch must never leave the PREVIOUS
+    // every [client] change (below), so an endpoint/token change must never leave the PREVIOUS
     // connection's project list visible (e.g. in the header selector) while the new one loads.
     setProjects(null);
     try {
