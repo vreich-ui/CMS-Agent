@@ -4,6 +4,8 @@ import type { McpConnection } from "../../ui/src/connection.js";
 
 // The mock server echoes a JSON-RPC result; each test inspects the requests the client actually
 // sent (URL + Authorization header), which is the contract the credential lifecycle must uphold.
+// Cloud Run is the sole control plane and always uses direct bearer-token auth — there is no
+// alternate connection mode to test.
 type SentRequest = { url: string; authorization: string | undefined; body: unknown };
 
 function stubFetch(handler?: (request: SentRequest) => { status?: number; payload?: unknown }) {
@@ -21,14 +23,14 @@ function stubFetch(handler?: (request: SentRequest) => { status?: number; payloa
   return sent;
 }
 
-const direct = (token: string, endpoint = "/api/mcp"): McpConnection => ({ mode: "direct", endpoint, token });
+const direct = (token: string, endpoint = "https://cms-agent-mcp.example.run.app/mcp"): McpConnection => ({ endpoint, token });
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("initial token entry", () => {
-  it("refuses to send a direct request without a token, before any network call", async () => {
+  it("refuses to send a request without a token, before any network call", async () => {
     const sent = stubFetch();
     await expect(callMcpMethod(direct(""), "initialize")).rejects.toThrow("Enter an MCP bearer token");
     expect(sent).toHaveLength(0);
@@ -43,7 +45,7 @@ describe("initial token entry", () => {
     getConnection.mockReturnValue(direct("first-token"));
     await client.method("initialize");
     expect(sent).toHaveLength(1);
-    expect(sent[0].url).toBe("/api/mcp");
+    expect(sent[0].url).toBe("https://cms-agent-mcp.example.run.app/mcp");
     expect(sent[0].authorization).toBe("Bearer first-token");
   });
 });
@@ -71,50 +73,15 @@ describe("token replacement and clearing", () => {
 });
 
 describe("endpoint changes", () => {
-  it("changing the endpoint keeps the same credential behavior in direct mode", async () => {
+  it("changing the endpoint (e.g. a local-dev override) keeps the same credential behavior", async () => {
     const sent = stubFetch();
-    let connection = direct("stable-token", "/api/mcp");
+    let connection = direct("stable-token", "https://cms-agent-mcp.example.run.app/mcp");
     const client = createMcpClient(() => connection);
     await client.method("initialize");
-    connection = direct("stable-token", "http://localhost:9999/api/mcp");
+    connection = direct("stable-token", "http://localhost:9999/mcp");
     await client.method("initialize");
-    expect(sent.map((request) => request.url)).toEqual(["/api/mcp", "http://localhost:9999/api/mcp"]);
+    expect(sent.map((request) => request.url)).toEqual(["https://cms-agent-mcp.example.run.app/mcp", "http://localhost:9999/mcp"]);
     expect(new Set(sent.map((request) => request.authorization))).toEqual(new Set(["Bearer stable-token"]));
-  });
-
-  it("regression: a direct token is still sent when the endpoint happens to be the deployed proxy path", async () => {
-    // The old implementation inferred secure-proxy mode from this exact string and silently
-    // dropped the manual token (docs/constellation/data-model-gaps.md §1).
-    const sent = stubFetch();
-    await callMcpMethod(direct("manual-token", "/api/workspace-mcp"), "initialize");
-    expect(sent[0].authorization).toBe("Bearer manual-token");
-  });
-});
-
-describe("connection-mode changes", () => {
-  it("switching direct -> secure-proxy swaps the credential source on the next request", async () => {
-    const sent = stubFetch();
-    let connection: McpConnection = direct("manual-token");
-    const client = createMcpClient(() => connection);
-    await client.method("initialize");
-
-    connection = { mode: "secure-proxy", endpoint: "/api/workspace-mcp", getAccessToken: async () => "identity-jwt" };
-    await client.method("initialize");
-
-    expect(sent.map((request) => request.authorization)).toEqual(["Bearer manual-token", "Bearer identity-jwt"]);
-    expect(sent.map((request) => request.url)).toEqual(["/api/mcp", "/api/workspace-mcp"]);
-  });
-
-  it("switching secure-proxy -> direct stops calling the identity getter", async () => {
-    const sent = stubFetch();
-    const getAccessToken = vi.fn(async () => "identity-jwt");
-    let connection: McpConnection = { mode: "secure-proxy", endpoint: "/api/workspace-mcp", getAccessToken };
-    const client = createMcpClient(() => connection);
-    await client.method("initialize");
-    connection = direct("manual-token");
-    await client.method("initialize");
-    expect(getAccessToken).toHaveBeenCalledTimes(1);
-    expect(sent[1].authorization).toBe("Bearer manual-token");
   });
 });
 
@@ -139,27 +106,6 @@ describe("stale closure regression", () => {
 
     expect(sentAfterToken.map((request) => request.authorization)).toEqual(["Bearer entered-later", "Bearer rotated-token"]);
     expect(sent).toHaveLength(0); // the pre-token attempt never reached the network
-  });
-});
-
-describe("secure-proxy requests", () => {
-  it("resolves the identity token per request so a renewed JWT is picked up", async () => {
-    const sent = stubFetch();
-    const tokens = ["jwt-1", "jwt-2"];
-    const getAccessToken = vi.fn(async () => tokens.shift());
-    const connection: McpConnection = { mode: "secure-proxy", endpoint: "/api/workspace-mcp", getAccessToken };
-    const client = createMcpClient(() => connection);
-    await client.method("initialize");
-    await client.method("initialize");
-    expect(getAccessToken).toHaveBeenCalledTimes(2);
-    expect(sent.map((request) => request.authorization)).toEqual(["Bearer jwt-1", "Bearer jwt-2"]);
-  });
-
-  it("fails without a network call when no identity session is available", async () => {
-    const sent = stubFetch();
-    const connection: McpConnection = { mode: "secure-proxy", endpoint: "/api/workspace-mcp", getAccessToken: async () => undefined };
-    await expect(callMcpMethod(connection, "initialize")).rejects.toThrow("No identity session is available");
-    expect(sent).toHaveLength(0);
   });
 });
 
