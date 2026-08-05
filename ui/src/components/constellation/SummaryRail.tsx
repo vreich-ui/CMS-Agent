@@ -1,39 +1,24 @@
-import { useEffect, useState } from "react";
 import type { DesignEdgeModel } from "../../designGraph";
 import type { WorkspaceNode } from "../../types/workspace";
 
 type SummaryRailProps = {
-  node: WorkspaceNode | null;
   nodes: WorkspaceNode[];
   selectedEdge: DesignEdgeModel | null;
   saving: boolean;
-  onAddDependency: (dependencyId: string) => void;
-  onRemoveDependency: (dependencyId: string) => void;
-  onDeleteNode: () => void;
   onDeleteEdge: (edge: DesignEdgeModel) => void;
   onClearSelection: () => void;
-  // S4 (CHANGE-PLAN R-11): opens the read-only node inspector. The rail deliberately stays a
-  // summary — "4 tools" — and the inspector is where "which four, and do they resolve" lives.
-  onOpenDetails: () => void;
-  detailsOpen: boolean;
 };
 
 const nameFor = (nodes: WorkspaceNode[], id: string) => nodes.find((node) => node.id === id)?.name ?? id;
 
-// The rail is the keyboard/list-based equivalent of every drag-only canvas interaction:
-// add/remove dependencies without drawing edges, delete with typed confirmation. It lives in a
-// grid column — no absolute positioning, no z-index.
-export function SummaryRail({ node, nodes, selectedEdge, saving, onAddDependency, onRemoveDependency, onDeleteNode, onDeleteEdge, onClearSelection, onOpenDetails, detailsOpen }: SummaryRailProps) {
-  const [dependencyChoice, setDependencyChoice] = useState("");
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
-
-  useEffect(() => {
-    setDependencyChoice("");
-    setDeleteConfirmation("");
-  }, [node?.id]);
-
+// The dock's other two states (S7): an edge is selected, or nothing is. A selected NODE never
+// reaches this component any more — NodeInspector renders directly for that case (see
+// ConstellationDesignMode), folding in the facts and dependency/delete actions this rail used to
+// own, so a node click opens its full detail in one step instead of a summary-then-"Open details"
+// hop.
+export function SummaryRail({ nodes, selectedEdge, saving, onDeleteEdge, onClearSelection }: SummaryRailProps) {
   if (selectedEdge) {
-    return <aside className="design-rail" aria-label="Selection summary">
+    return <aside className="node-dock" aria-label="Selection summary">
       <h3>{selectedEdge.kind} edge</h3>
       <p>{nameFor(nodes, selectedEdge.source)} → {nameFor(nodes, selectedEdge.target)}{selectedEdge.label ? ` (${selectedEdge.label})` : ""}</p>
       {selectedEdge.kind === "execution"
@@ -46,61 +31,8 @@ export function SummaryRail({ node, nodes, selectedEdge, saving, onAddDependency
     </aside>;
   }
 
-  if (!node) {
-    return <aside className="design-rail" aria-label="Selection summary">
-      <h3>Nothing selected</h3>
-      <p className="muted">Select a node on the canvas or in the list below to see its summary and edit its dependencies.</p>
-    </aside>;
-  }
-
-  const dependsOn = node.dependsOn ?? [];
-  const candidates = nodes.filter((candidate) => candidate.id !== node.id && !dependsOn.includes(candidate.id));
-  const risk = node.riskLevel ?? "read";
-
-  return <aside className="design-rail" aria-label="Selection summary">
-    <h3>{node.name}</h3>
-    <dl className="design-rail-facts">
-      <dt>Id</dt><dd><code>{node.id}</code></dd>
-      <dt>Kind</dt><dd>{node.kind ?? "unknown"}</dd>
-      <dt>Status</dt><dd>{node.status ?? "unknown"}</dd>
-      <dt>Risk</dt><dd><span className={`risk-badge risk-badge--${risk}`}>{risk}</span></dd>
-      <dt>Skills</dt><dd>{node.assignedSkills?.length ?? 0}</dd>
-      <dt>Tools</dt><dd>{node.allowedTools?.length ?? 0}</dd>
-      {node.updatedAt && <><dt>Updated</dt><dd>{node.updatedAt}</dd></>}
-    </dl>
-
-    <section aria-label="Dependencies">
-      <h4>Depends on ({dependsOn.length})</h4>
-      {dependsOn.length > 0
-        ? <ul className="design-rail-deps">{dependsOn.map((dependencyId) => <li key={dependencyId}>
-            <span>{nameFor(nodes, dependencyId)}</span>
-            <button className="link-button" disabled={saving} onClick={() => onRemoveDependency(dependencyId)}>Remove</button>
-          </li>)}</ul>
-        : <p className="muted">No dependencies.</p>}
-      <label>
-        Add dependency
-        <select value={dependencyChoice} onChange={(event) => setDependencyChoice(event.target.value)}>
-          <option value="">Select a node…</option>
-          {candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
-        </select>
-      </label>
-      <button disabled={saving || !dependencyChoice} onClick={() => { onAddDependency(dependencyChoice); setDependencyChoice(""); }}>Add</button>
-    </section>
-
-    <button
-      onClick={onOpenDetails}
-      aria-pressed={detailsOpen}
-      title="Prompt, tools, skills, schemas and consistency warnings for this node (read-only)"
-    >{detailsOpen ? "Details open" : "Open details"}</button>
-
-    <section aria-label="Delete node" className="design-rail-danger">
-      <h4>Delete node</h4>
-      <p className="muted">Type <code>{node.id}</code> to confirm. Canonical workspace nodes are refused by the server; this UI does not grant admin removal.</p>
-      <label>
-        Confirm node id
-        <input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={node.id} />
-      </label>
-      <button disabled={saving || deleteConfirmation !== node.id} onClick={onDeleteNode}>Delete {node.name}</button>
-    </section>
+  return <aside className="node-dock node-dock-empty" aria-label="Selection summary">
+    <h3>Nothing selected</h3>
+    <p className="muted">Select a node on the canvas or in the list below to see its full detail — prompt, tools, skills and schemas, right here.</p>
   </aside>;
 }

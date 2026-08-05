@@ -34,10 +34,16 @@ import type { McpClient } from "../mcp/client";
 import type { RJSFSchema } from "@rjsf/utils";
 import type { ProjectSummary, WorkspaceNode } from "../types/workspace";
 
-// S4 node inspector (CHANGE-PLAN R-11). Read surface plus the write path, which ships only now that
-// R-4 gives conflicts a typed envelope: before that, a failed save could not distinguish "someone
-// else edited this" from "the server broke", and a UI that cannot tell those apart has no honest
-// recovery to offer.
+// S4/S7 node inspector (CHANGE-PLAN R-11, GUI rework S7). Read surface plus the write path, which
+// ships only now that R-4 gives conflicts a typed envelope: before that, a failed save could not
+// distinguish "someone else edited this" from "the server broke", and a UI that cannot tell those
+// apart has no honest recovery to offer.
+//
+// S7 folded the old SummaryRail's node-selected content in here so a click on a node reaches its
+// full detail in one step: the header carries the summary facts (id/kind/status/risk/counts), and
+// the Overview tab carries dependency editing and node deletion (previously the rail's own
+// sections) alongside the read-only graph facts it already showed. The rail itself now only
+// renders for "an edge is selected" or "nothing is selected" (see SummaryRail.tsx).
 //
 // Three rules the write path holds to, all of them because the change ledger is only as good as
 // what the editor insists on:
@@ -52,10 +58,21 @@ import type { ProjectSummary, WorkspaceNode } from "../types/workspace";
 
 type Props = {
   node: WorkspaceNode;
+  // Every other node, for dependency-candidate lookup and name resolution — the same slice
+  // SummaryRail used to receive.
+  nodes: WorkspaceNode[];
   client: McpClient;
   project: ProjectSummary | null;
   workspaceVersion?: number;
-  onClose: () => void;
+  // Graph-level mutation in flight (position/dependency/delete), distinct from this component's
+  // own `saving` state for a node-patch save.
+  graphSaving: boolean;
+  onAddDependency: (dependencyId: string) => void;
+  onRemoveDependency: (dependencyId: string) => void;
+  onDeleteNode: () => void;
+  // Deselects the node so the dock falls back to its empty state. There is no separate "closed"
+  // state any more — the dock is always part of the design grid.
+  onClearSelection: () => void;
   // Called after a successful write so the canvas and node list refetch rather than showing stale
   // config next to a node the operator just changed.
   onSaved?: () => void | Promise<void>;
@@ -75,7 +92,9 @@ const stateLabel = (row: ToolRow): string => (row.state === "allowed" ? "allowed
 const toggle = (values: string[], value: string): string[] =>
   values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value];
 
-export function NodeInspector({ node, client, project, workspaceVersion, onClose, onSaved, onReloadWorkspace }: Props) {
+const nameFor = (nodes: WorkspaceNode[], id: string) => nodes.find((candidate) => candidate.id === id)?.name ?? id;
+
+export function NodeInspector({ node, nodes, client, project, workspaceVersion, graphSaving, onAddDependency, onRemoveDependency, onDeleteNode, onClearSelection, onSaved, onReloadWorkspace }: Props) {
   const [tab, setTab] = useState<InspectorTab>("prompt");
   const { effectivePrompt, effectiveTools, skillPolicy, skills, loading, errors, fetchedAt, reload } = useNodeInspector(client, node.id);
   const contract = useClientContract(client, project?.projectId ?? null);
@@ -86,6 +105,8 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<WriteFailure | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [dependencyChoice, setDependencyChoice] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
   // A new node — or the same node reloaded after a save — resets the draft. Keeping a stale draft
   // across a node switch would let an edit intended for one node land on another.
@@ -95,6 +116,8 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
     setConfirming(false);
     setFailure(null);
     setSaved(null);
+    setDependencyChoice("");
+    setDeleteConfirmation("");
   }, [node.id, node.updatedAt]);
 
   const identity = identityLayer(project, { fetchedAt: contract.fetchedAt, error: contract.error });
@@ -107,6 +130,10 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
 
   const changes = draftChanges(node, draft);
   const blockers = saveBlockers(node, draft, reason, workspaceVersion);
+
+  const risk = node.riskLevel ?? "read";
+  const dependsOn = node.dependsOn ?? [];
+  const dependencyCandidates = nodes.filter((candidate) => candidate.id !== node.id && !dependsOn.includes(candidate.id));
 
   const save = async () => {
     setSaving(true);
@@ -135,47 +162,57 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
     <header className="node-inspector-header">
       <div>
         <h3>{node.name}</h3>
-        <p className="muted"><code>{node.id}</code> · {node.kind ?? "unknown"} · <span className={`risk-badge risk-badge--${node.riskLevel ?? "read"}`}>{node.riskLevel ?? "read"}</span></p>
+        <dl className="node-inspector-facts">
+          <dt>Id</dt><dd><code>{node.id}</code></dd>
+          <dt>Kind</dt><dd>{node.kind ?? "unknown"}</dd>
+          <dt>Status</dt><dd>{node.status ?? "unknown"}</dd>
+          <dt>Risk</dt><dd><span className={`risk-badge risk-badge--${risk}`}>{risk}</span></dd>
+          <dt>Skills</dt><dd>{node.assignedSkills?.length ?? 0}</dd>
+          <dt>Tools</dt><dd>{node.allowedTools?.length ?? 0}</dd>
+          {node.updatedAt && <><dt>Updated</dt><dd>{node.updatedAt}</dd></>}
+        </dl>
       </div>
       <div className="node-inspector-header-actions">
         <button onClick={() => void reload()} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
-        <button className="link-button" onClick={onClose}>Close</button>
+        <button className="link-button" onClick={onClearSelection}>Clear selection</button>
       </div>
     </header>
 
-    <ObjectAbout id="node" />
+    <div className="node-inspector-meta">
+      <ObjectAbout id="node" />
 
-    {/* The three layers were previously explained only in `title=` attributes — invisible to touch,
-        keyboard and screen-reader users, which this project's accessibility spec rules out as a sole
-        channel. The definitions now live in a readable disclosure below. */}
-    <div className="node-inspector-layers" role="group" aria-label="Resolution layers">
-      <span className="badge">Method · stored</span>
-      <span className="badge">Effective · {formatFetchedAt(fetchedAt)}</span>
-      <span className={`badge node-inspector-identity node-inspector-identity--${identity.state}`}>
-        Identity · {identity.state === "live" ? formatFetchedAt(identity.fetchedAt) : identity.state.replace("_", " ")}
-      </span>
-      {workspaceVersion !== undefined && <span className="badge">v{workspaceVersion} <span className="muted">· saves are guarded against this version</span></span>}
+      {/* The three layers were previously explained only in `title=` attributes — invisible to touch,
+          keyboard and screen-reader users, which this project's accessibility spec rules out as a sole
+          channel. The definitions now live in a readable disclosure below. */}
+      <div className="node-inspector-layers" role="group" aria-label="Resolution layers">
+        <span className="badge">Method · stored</span>
+        <span className="badge">Effective · {formatFetchedAt(fetchedAt)}</span>
+        <span className={`badge node-inspector-identity node-inspector-identity--${identity.state}`}>
+          Identity · {identity.state === "live" ? formatFetchedAt(identity.fetchedAt) : identity.state.replace("_", " ")}
+        </span>
+        {workspaceVersion !== undefined && <span className="badge">v{workspaceVersion} <span className="muted">· saves are guarded against this version</span></span>}
+      </div>
+      <Glossary id="layer" />
+
+      {identity.state !== "live" && <p className="node-inspector-identity-note muted">
+        {identity.message} Run controls are disabled until the client contract can be fetched.
+        {"detail" in identity && identity.detail ? <> <span className="muted">({identity.detail})</span></> : null}
+      </p>}
+
+      {errors.length > 0 && <ul className="node-inspector-errors" aria-label="Inspector load errors">
+        {errors.map((error) => <li key={error}>{error}</li>)}
+      </ul>}
+
+      {/* A conflict is a recoverable outcome with a named target, not a generic failure. */}
+      {failure && <div className={`node-inspector-failure node-inspector-failure--${failure.kind}`} role="alert">
+        <p><strong>{failure.code}</strong> — {failure.message}</p>
+        <p>{failure.recovery}</p>
+        {failure.currentVersion !== undefined && <p className="muted">Current workspace version: v{failure.currentVersion}{failure.currentRevisionId ? ` (${failure.currentRevisionId})` : ""}.</p>}
+        {failure.kind === "conflict" && onReloadWorkspace && <button onClick={() => void onReloadWorkspace()}>Reload workspace</button>}
+      </div>}
+
+      {saved && <p className="node-inspector-saved" role="status">{saved}</p>}
     </div>
-    <Glossary id="layer" />
-
-    {identity.state !== "live" && <p className="node-inspector-identity-note muted">
-      {identity.message} Run controls are disabled until the client contract can be fetched.
-      {"detail" in identity && identity.detail ? <> <span className="muted">({identity.detail})</span></> : null}
-    </p>}
-
-    {errors.length > 0 && <ul className="node-inspector-errors" aria-label="Inspector load errors">
-      {errors.map((error) => <li key={error}>{error}</li>)}
-    </ul>}
-
-    {/* A conflict is a recoverable outcome with a named target, not a generic failure. */}
-    {failure && <div className={`node-inspector-failure node-inspector-failure--${failure.kind}`} role="alert">
-      <p><strong>{failure.code}</strong> — {failure.message}</p>
-      <p>{failure.recovery}</p>
-      {failure.currentVersion !== undefined && <p className="muted">Current workspace version: v{failure.currentVersion}{failure.currentRevisionId ? ` (${failure.currentRevisionId})` : ""}.</p>}
-      {failure.kind === "conflict" && onReloadWorkspace && <button onClick={() => void onReloadWorkspace()}>Reload workspace</button>}
-    </div>}
-
-    {saved && <p className="node-inspector-saved" role="status">{saved}</p>}
 
     <nav className="node-inspector-tabs" aria-label="Node inspector sections">
       {INSPECTOR_TABS.map((id) => <button
@@ -190,214 +227,239 @@ export function NodeInspector({ node, client, project, workspaceVersion, onClose
       </button>)}
     </nav>
 
-    {tab === "prompt" && <div className="node-inspector-panel" aria-label="Prompt">
-      {composition.injectedFromSkills
-        ? <p className="node-inspector-note">An assigned skill appends instructions to this prompt. The node's own text below is only part of what runs.</p>
-        : <p className="muted">No skill instructions are injected — the stored prompt is what runs.</p>}
-      {composition.unexplainedDrift && <p className="node-inspector-note node-inspector-note--warning">
-        The effective prompt differs from the stored prompt and no skill explains the difference.
-      </p>}
+    <div className="node-inspector-scroll">
+      {tab === "prompt" && <div className="node-inspector-panel" aria-label="Prompt">
+        {composition.injectedFromSkills
+          ? <p className="node-inspector-note">An assigned skill appends instructions to this prompt. The node's own text below is only part of what runs.</p>
+          : <p className="muted">No skill instructions are injected — the stored prompt is what runs.</p>}
+        {composition.unexplainedDrift && <p className="node-inspector-note node-inspector-note--warning">
+          The effective prompt differs from the stored prompt and no skill explains the difference.
+        </p>}
 
-      <label className="node-inspector-field">
-        <span>Own prompt <span className="muted">(Method · editable)</span></span>
-        <textarea
-          className="node-inspector-prompt-input"
-          rows={16}
-          value={draft.prompt}
-          onChange={(event) => setDraft((current) => ({ ...current, prompt: event.target.value }))}
-        />
-      </label>
+        <label className="node-inspector-field">
+          <span>Own prompt <span className="muted">(Method · editable)</span></span>
+          <textarea
+            className="node-inspector-prompt-input"
+            rows={16}
+            value={draft.prompt}
+            onChange={(event) => setDraft((current) => ({ ...current, prompt: event.target.value }))}
+          />
+        </label>
 
-      <h4>Injected skill instructions <span className="muted">(Effective · read-only)</span></h4>
-      <pre className="node-inspector-prompt">{composition.skillInstructions || "None."}</pre>
+        <h4>Injected skill instructions <span className="muted">(Effective · read-only)</span></h4>
+        <pre className="node-inspector-prompt">{composition.skillInstructions || "None."}</pre>
 
-      <h4>Effective prompt <span className="muted">(Effective · what actually runs)</span></h4>
-      <pre className="node-inspector-prompt">{composition.effectivePrompt || "Unavailable."}</pre>
-    </div>}
+        <h4>Effective prompt <span className="muted">(Effective · what actually runs)</span></h4>
+        <pre className="node-inspector-prompt">{composition.effectivePrompt || "Unavailable."}</pre>
+      </div>}
 
-    {tab === "tools" && <div className="node-inspector-panel" aria-label="Tools">
-      <p className="muted">{toolTotals.own} requested by this node · {toolTotals.allowed} allowed by the resolver · {toolTotals.denied} requested but denied.</p>
-      {effectiveTools === null
-        ? <p className="empty-state">Effective tools could not be resolved, so own-vs-effective cannot be shown. Refresh to retry.</p>
-        : groupToolRowsByCategory(rows).map((group) => <div key={group.category} className="node-inspector-tool-group">
-            <h4>{group.category}</h4>
-            <table className="node-inspector-tools">
-              <thead><tr><th scope="col">Tool</th><th scope="col">Own</th><th scope="col">Effective</th><th scope="col">Why</th></tr></thead>
-              <tbody>
-                {group.rows.map((row) => <tr key={row.toolId} className={row.own && row.state !== "allowed" ? "node-inspector-tool-row--denied" : undefined}>
-                  <th scope="row"><code>{row.name}</code> <span className={`risk-badge risk-badge--${row.riskLevel}`}>{row.riskLevel}</span></th>
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`Grant ${row.toolId}`}
-                      checked={row.own}
-                      onChange={() => setDraft((current) => ({ ...current, allowedTools: toggle(current.allowedTools, row.toolId) }))}
-                    />
-                  </td>
-                  <td>{stateLabel(row)}</td>
-                  {/* The reason a specific tool was refused is the primary content of its row, so the
-                      plain-language label is always visible — never collapsed and never a bare enum.
-                      The raw code stays beside it for grepping and for the runbooks; the full
-                      definition and the remedy live in the glossary under the table. */}
-                  <td>{row.denialReasons.length
-                    ? <ul className="node-inspector-why">
-                        {explainDenialReasons(row.denialReasons).map(({ code, term }) => <li key={code}>
-                          {term ? <>{term.label} <code className="node-inspector-why-code">{code}</code></> : <code>{code}</code>}
-                        </li>)}
-                      </ul>
-                    : "—"}</td>
-                </tr>)}
-              </tbody>
-            </table>
-          </div>)}
-      {effectiveTools !== null && <>
-        <Glossary id="denial" />
+      {tab === "tools" && <div className="node-inspector-panel" aria-label="Tools">
+        <p className="muted">{toolTotals.own} requested by this node · {toolTotals.allowed} allowed by the resolver · {toolTotals.denied} requested but denied.</p>
+        {effectiveTools === null
+          ? <p className="empty-state">Effective tools could not be resolved, so own-vs-effective cannot be shown. Refresh to retry.</p>
+          : groupToolRowsByCategory(rows).map((group) => <div key={group.category} className="node-inspector-tool-group">
+              <h4>{group.category}</h4>
+              <table className="node-inspector-tools">
+                <thead><tr><th scope="col">Tool</th><th scope="col">Own</th><th scope="col">Effective</th><th scope="col">Why</th></tr></thead>
+                <tbody>
+                  {group.rows.map((row) => <tr key={row.toolId} className={row.own && row.state !== "allowed" ? "node-inspector-tool-row--denied" : undefined}>
+                    <th scope="row"><code>{row.name}</code> <span className={`risk-badge risk-badge--${row.riskLevel}`}>{row.riskLevel}</span></th>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Grant ${row.toolId}`}
+                        checked={row.own}
+                        onChange={() => setDraft((current) => ({ ...current, allowedTools: toggle(current.allowedTools, row.toolId) }))}
+                      />
+                    </td>
+                    <td>{stateLabel(row)}</td>
+                    {/* The reason a specific tool was refused is the primary content of its row, so the
+                        plain-language label is always visible — never collapsed and never a bare enum.
+                        The raw code stays beside it for grepping and for the runbooks; the full
+                        definition and the remedy live in the glossary under the table. */}
+                    <td>{row.denialReasons.length
+                      ? <ul className="node-inspector-why">
+                          {explainDenialReasons(row.denialReasons).map(({ code, term }) => <li key={code}>
+                            {term ? <>{term.label} <code className="node-inspector-why-code">{code}</code></> : <code>{code}</code>}
+                          </li>)}
+                        </ul>
+                      : "—"}</td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div>)}
+        {effectiveTools !== null && <>
+          <Glossary id="denial" />
+          <Glossary id="risk" />
+        </>}
+      </div>}
+
+      {tab === "skills" && <div className="node-inspector-panel" aria-label="Skills">
+        <h4>Assigned skills</h4>
+        {skills === null
+          ? <p className="empty-state">The skill registry could not be loaded, so assignment is unavailable. Refresh to retry.</p>
+          : <ul className="node-inspector-skill-list">
+              {skills.map((skill) => <li key={skill.skillId}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={draft.assignedSkills.includes(skill.skillId)}
+                    onChange={() => setDraft((current) => ({ ...current, assignedSkills: toggle(current.assignedSkills, skill.skillId) }))}
+                  />
+                  <code>{skill.skillId}</code> <span className="muted">{skill.name}</span>
+                </label>
+              </li>)}
+            </ul>}
+
+        <h4>Conflicts</h4>
+        {skillPolicy === null
+          ? <p className="empty-state">The skill policy could not be resolved, so conflicts are unknown — not clean.</p>
+          : skillSummary.conflicts.length === 0
+            ? <p className="muted">No conflicts reported.</p>
+            : <>
+                <ul className="node-inspector-conflicts">
+                  {skillSummary.conflicts.map((conflict, index) => <li key={`${conflict.source}-${index}`} className={`node-inspector-conflict node-inspector-conflict--${conflict.severity}`}>
+                    <span className="badge">{conflict.severity}</span> <code>{conflict.source}</code> {conflict.message}
+                  </li>)}
+                </ul>
+                <Glossary id="severity" />
+              </>}
+
+        <h4>Resolved tools</h4>
+        <dl className="design-rail-facts">
+          <dt>Effective</dt><dd>{skillSummary.effectiveTools.join(", ") || "—"}</dd>
+          <dt>Requested</dt><dd>{skillSummary.requestedTools.join(", ") || "—"}</dd>
+          <dt>Denied</dt><dd>{skillSummary.deniedTools.join(", ") || "—"}</dd>
+        </dl>
+
+        <h4>Skill instructions</h4>
+        <pre className="node-inspector-prompt">{skillSummary.instructions || "None."}</pre>
+      </div>}
+
+      {tab === "overview" && <div className="node-inspector-panel" aria-label="Overview">
+        <section aria-label="Dependencies">
+          <h4>Depends on ({dependsOn.length})</h4>
+          {dependsOn.length > 0
+            ? <ul className="design-rail-deps">{dependsOn.map((dependencyId) => <li key={dependencyId}>
+                <span>{nameFor(nodes, dependencyId)}</span>
+                <button className="link-button" disabled={graphSaving} onClick={() => onRemoveDependency(dependencyId)}>Remove</button>
+              </li>)}</ul>
+            : <p className="muted">No dependencies.</p>}
+          <label>
+            Add dependency
+            <select value={dependencyChoice} onChange={(event) => setDependencyChoice(event.target.value)}>
+              <option value="">Select a node…</option>
+              {dependencyCandidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+            </select>
+          </label>
+          <button disabled={graphSaving || !dependencyChoice} onClick={() => { onAddDependency(dependencyChoice); setDependencyChoice(""); }}>Add</button>
+        </section>
+
+        <dl className="design-rail-facts">
+          <dt>Required inputs</dt><dd>{node.requiredInputs?.join(", ") || "—"}</dd>
+          <dt>Produces</dt><dd>{node.produces?.join(", ") || "—"}</dd>
+        </dl>
         <Glossary id="risk" />
-      </>}
-    </div>}
 
-    {tab === "skills" && <div className="node-inspector-panel" aria-label="Skills">
-      <h4>Assigned skills</h4>
-      {skills === null
-        ? <p className="empty-state">The skill registry could not be loaded, so assignment is unavailable. Refresh to retry.</p>
-        : <ul className="node-inspector-skill-list">
-            {skills.map((skill) => <li key={skill.skillId}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={draft.assignedSkills.includes(skill.skillId)}
-                  onChange={() => setDraft((current) => ({ ...current, assignedSkills: toggle(current.assignedSkills, skill.skillId) }))}
-                />
-                <code>{skill.skillId}</code> <span className="muted">{skill.name}</span>
-              </label>
-            </li>)}
-          </ul>}
+        <h4>Consistency</h4>
+        {warnings.length === 0
+          ? <p className="muted">No inconsistencies detected between stored config and resolved policy.</p>
+          : <ul className="node-inspector-warnings">
+              {warnings.map((warning) => <li key={warning.key} className={`node-inspector-warning node-inspector-warning--${warning.severity}`}>
+                <span className="badge">{warning.severity}</span> {warning.message}
+              </li>)}
+            </ul>}
 
-      <h4>Conflicts</h4>
-      {skillPolicy === null
-        ? <p className="empty-state">The skill policy could not be resolved, so conflicts are unknown — not clean.</p>
-        : skillSummary.conflicts.length === 0
-          ? <p className="muted">No conflicts reported.</p>
+        <h4>Metadata</h4>
+        <pre className="node-inspector-prompt">{node.metadata ? JSON.stringify(node.metadata, null, 2) : "None."}</pre>
+
+        <h4>Run controls</h4>
+        <p className="muted">
+          {runControlsEnabled(identity)
+            ? "The client contract is live. Run controls arrive with S5 Operate."
+            : "Disabled — the client contract is not live, and this workspace does not execute against a guess."}
+        </p>
+
+        <section aria-label="Delete node" className="design-rail-danger">
+          <h4>Delete node</h4>
+          <p className="muted">Type <code>{node.id}</code> to confirm. Canonical workspace nodes are refused by the server; this UI does not grant admin removal.</p>
+          <label>
+            Confirm node id
+            <input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={node.id} />
+          </label>
+          <button disabled={graphSaving || deleteConfirmation !== node.id} onClick={onDeleteNode}>Delete {node.name}</button>
+        </section>
+      </div>}
+
+      {tab === "schemas" && <div className="node-inspector-panel" aria-label="Schemas">
+        {SCHEMA_DRAFT_FIELDS.map((field) => {
+          const parsed = parseSchemaDraft(draft[field]);
+          const label = field === "inputSchema" ? "Input schema" : "Output schema";
+          return <div key={field} className="node-inspector-schema-editor">
+            <h4>{label}</h4>
+            <label className="node-inspector-field">
+              <span className="muted">JSON Schema — an object, or <code>true</code>/<code>false</code></span>
+              <textarea
+                aria-label={`${label} JSON`}
+                className={parsed.ok ? undefined : "node-inspector-textarea--invalid"}
+                rows={12}
+                spellCheck={false}
+                value={draft[field]}
+                onChange={(event) => setDraft((current) => ({ ...current, [field]: event.target.value }))}
+              />
+            </label>
+            {/* The parse verdict is shown while typing rather than saved for the blocker list, so the
+                operator sees which brace they dropped at the moment they drop it. */}
+            {parsed.ok
+              ? <p className="muted">Valid JSON Schema.</p>
+              : <p className="node-inspector-schema-error" role="status">{label} {parsed.error}.</p>}
+          </div>;
+        })}
+
+        <h4>Deprecated <code>schema</code> alias</h4>
+        <SchemaViewer schema={node.schema as RJSFSchema | undefined} emptyMessage="Not set." />
+        <p className="muted">Derived, not edited: saving the output schema writes this alias in lockstep, exactly as <code>workspace.update_node_output_schema</code> does, so it can never trail a stale copy.</p>
+      </div>}
+
+      {/* The save bar is always visible at the end of the scrolling body, so an edit made on one
+          tab is never lost by switching to another and it is always obvious that changes are
+          pending. */}
+      <footer className="node-inspector-save" role="group" aria-label="Save changes">
+        {changes.length === 0
+          ? <p className="muted">No pending changes.</p>
           : <>
-              <ul className="node-inspector-conflicts">
-                {skillSummary.conflicts.map((conflict, index) => <li key={`${conflict.source}-${index}`} className={`node-inspector-conflict node-inspector-conflict--${conflict.severity}`}>
-                  <span className="badge">{conflict.severity}</span> <code>{conflict.source}</code> {conflict.message}
+              <h4>{changes.length} pending change{changes.length === 1 ? "" : "s"}</h4>
+              <ul className="node-inspector-diff">
+                {changes.map((change) => <li key={change.field}>
+                  <strong>{change.label}</strong>: <span className="node-inspector-diff-before">{change.before}</span> → <span className="node-inspector-diff-after">{change.after}</span>
                 </li>)}
               </ul>
-              <Glossary id="severity" />
             </>}
 
-      <h4>Resolved tools</h4>
-      <dl className="design-rail-facts">
-        <dt>Effective</dt><dd>{skillSummary.effectiveTools.join(", ") || "—"}</dd>
-        <dt>Requested</dt><dd>{skillSummary.requestedTools.join(", ") || "—"}</dd>
-        <dt>Denied</dt><dd>{skillSummary.deniedTools.join(", ") || "—"}</dd>
-      </dl>
+        <label className="node-inspector-field">
+          <span>Reason <span className="muted">(required — this is what a human reviewing the change ledger reads)</span></span>
+          <input
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder={`At least ${MIN_REASON_LENGTH} characters`}
+          />
+        </label>
 
-      <h4>Skill instructions</h4>
-      <pre className="node-inspector-prompt">{skillSummary.instructions || "None."}</pre>
-    </div>}
+        {blockers.length > 0 && changes.length > 0 && <ul className="node-inspector-blockers">
+          {blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+        </ul>}
 
-    {tab === "overview" && <div className="node-inspector-panel" aria-label="Overview">
-      <dl className="design-rail-facts">
-        <dt>Id</dt><dd><code>{node.id}</code></dd>
-        <dt>Kind</dt><dd>{node.kind ?? "unknown"}</dd>
-        <dt>Status</dt><dd>{node.status ?? "unknown"}</dd>
-        <dt>Risk</dt><dd><span className={`risk-badge risk-badge--${node.riskLevel ?? "read"}`}>{node.riskLevel ?? "read"}</span></dd>
-        <dt>Depends on</dt><dd>{node.dependsOn?.join(", ") || "—"}</dd>
-        <dt>Required inputs</dt><dd>{node.requiredInputs?.join(", ") || "—"}</dd>
-        <dt>Produces</dt><dd>{node.produces?.join(", ") || "—"}</dd>
-        <dt>Updated</dt><dd>{node.updatedAt ?? "unknown"}</dd>
-      </dl>
-      <Glossary id="risk" />
-
-      <h4>Consistency</h4>
-      {warnings.length === 0
-        ? <p className="muted">No inconsistencies detected between stored config and resolved policy.</p>
-        : <ul className="node-inspector-warnings">
-            {warnings.map((warning) => <li key={warning.key} className={`node-inspector-warning node-inspector-warning--${warning.severity}`}>
-              <span className="badge">{warning.severity}</span> {warning.message}
-            </li>)}
-          </ul>}
-
-      <h4>Metadata</h4>
-      <pre className="node-inspector-prompt">{node.metadata ? JSON.stringify(node.metadata, null, 2) : "None."}</pre>
-
-      <h4>Run controls</h4>
-      <p className="muted">
-        {runControlsEnabled(identity)
-          ? "The client contract is live. Run controls arrive with S5 Operate."
-          : "Disabled — the client contract is not live, and this workspace does not execute against a guess."}
-      </p>
-    </div>}
-
-    {tab === "schemas" && <div className="node-inspector-panel" aria-label="Schemas">
-      {SCHEMA_DRAFT_FIELDS.map((field) => {
-        const parsed = parseSchemaDraft(draft[field]);
-        const label = field === "inputSchema" ? "Input schema" : "Output schema";
-        return <div key={field} className="node-inspector-schema-editor">
-          <h4>{label}</h4>
-          <label className="node-inspector-field">
-            <span className="muted">JSON Schema — an object, or <code>true</code>/<code>false</code></span>
-            <textarea
-              aria-label={`${label} JSON`}
-              className={parsed.ok ? undefined : "node-inspector-textarea--invalid"}
-              rows={12}
-              spellCheck={false}
-              value={draft[field]}
-              onChange={(event) => setDraft((current) => ({ ...current, [field]: event.target.value }))}
-            />
-          </label>
-          {/* The parse verdict is shown while typing rather than saved for the blocker list, so the
-              operator sees which brace they dropped at the moment they drop it. */}
-          {parsed.ok
-            ? <p className="muted">Valid JSON Schema.</p>
-            : <p className="node-inspector-schema-error" role="status">{label} {parsed.error}.</p>}
-        </div>;
-      })}
-
-      <h4>Deprecated <code>schema</code> alias</h4>
-      <SchemaViewer schema={node.schema as RJSFSchema | undefined} emptyMessage="Not set." />
-      <p className="muted">Derived, not edited: saving the output schema writes this alias in lockstep, exactly as <code>workspace.update_node_output_schema</code> does, so it can never trail a stale copy.</p>
-    </div>}
-
-    {/* The save bar is always visible, so an edit made on one tab is never lost by switching to
-        another and it is always obvious that changes are pending. */}
-    <footer className="node-inspector-save" role="group" aria-label="Save changes">
-      {changes.length === 0
-        ? <p className="muted">No pending changes.</p>
-        : <>
-            <h4>{changes.length} pending change{changes.length === 1 ? "" : "s"}</h4>
-            <ul className="node-inspector-diff">
-              {changes.map((change) => <li key={change.field}>
-                <strong>{change.label}</strong>: <span className="node-inspector-diff-before">{change.before}</span> → <span className="node-inspector-diff-after">{change.after}</span>
-              </li>)}
-            </ul>
-          </>}
-
-      <label className="node-inspector-field">
-        <span>Reason <span className="muted">(required — this is what a human reviewing the change ledger reads)</span></span>
-        <input
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-          placeholder={`At least ${MIN_REASON_LENGTH} characters`}
-        />
-      </label>
-
-      {blockers.length > 0 && changes.length > 0 && <ul className="node-inspector-blockers">
-        {blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
-      </ul>}
-
-      {confirming
-        ? <div className="node-inspector-confirm">
-            <p><strong>Apply these {changes.length} change{changes.length === 1 ? "" : "s"} to <code>{node.id}</code>?</strong> The write is guarded against workspace v{workspaceVersion}.</p>
-            <button disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Confirm save"}</button>
-            <button className="link-button" disabled={saving} onClick={() => setConfirming(false)}>Cancel</button>
-          </div>
-        : <div className="node-inspector-save-actions">
-            <button disabled={blockers.length > 0 || saving} onClick={() => setConfirming(true)}>Review and save</button>
-            <button className="link-button" disabled={changes.length === 0 || saving} onClick={() => { setDraft(draftFromNode(node)); setFailure(null); }}>Discard changes</button>
-          </div>}
-    </footer>
+        {confirming
+          ? <div className="node-inspector-confirm">
+              <p><strong>Apply these {changes.length} change{changes.length === 1 ? "" : "s"} to <code>{node.id}</code>?</strong> The write is guarded against workspace v{workspaceVersion}.</p>
+              <button disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Confirm save"}</button>
+              <button className="link-button" disabled={saving} onClick={() => setConfirming(false)}>Cancel</button>
+            </div>
+          : <div className="node-inspector-save-actions">
+              <button disabled={blockers.length > 0 || saving} onClick={() => setConfirming(true)}>Review and save</button>
+              <button className="link-button" disabled={changes.length === 0 || saving} onClick={() => { setDraft(draftFromNode(node)); setFailure(null); }}>Discard changes</button>
+            </div>}
+      </footer>
+    </div>
   </section>;
 }

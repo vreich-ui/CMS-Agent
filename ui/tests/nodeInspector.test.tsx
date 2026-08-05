@@ -66,8 +66,20 @@ const makeClient = (overrides: Overrides = {}): McpClient => ({
   }
 });
 
+// Shared no-op dock props: these tests exercise the node-selected surface itself, not the
+// dependency/delete plumbing (that's covered where it lives now — designMode.test.tsx, via the
+// Overview tab).
+const dockProps = {
+  nodes: [node],
+  graphSaving: false,
+  onAddDependency: () => {},
+  onRemoveDependency: () => {},
+  onDeleteNode: () => {},
+  onClearSelection: () => {}
+};
+
 const renderInspector = (client: McpClient = makeClient(), projectSummary: ProjectSummary | null = project()) =>
-  render(<NodeInspector node={node} client={client} project={projectSummary} onClose={() => {}} />);
+  render(<NodeInspector node={node} client={client} project={projectSummary} {...dockProps} />);
 
 describe("NodeInspector", () => {
   it("names all three layers so a value is never ambiguous between stored and resolved", async () => {
@@ -178,7 +190,7 @@ describe("NodeInspector", () => {
   it("reports unknown rather than clean when the skill policy fails to load", async () => {
     const user = userEvent.setup();
     const client = makeClient({ "node.get_effective_skills": () => { throw new Error("resolver unavailable"); } });
-    render(<NodeInspector node={node} client={client} project={project()} onClose={() => {}} />);
+    render(<NodeInspector node={node} client={client} project={project()} {...dockProps} />);
 
     await waitFor(() => expect(screen.getByText(/Skill policy unavailable: resolver unavailable/)).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: /^Skills/ }));
@@ -189,7 +201,7 @@ describe("NodeInspector", () => {
   it("still renders the tools tab when only the prompt read failed", async () => {
     const user = userEvent.setup();
     const client = makeClient({ "node.get_effective_prompt": () => { throw new Error("prompt resolver down"); } });
-    render(<NodeInspector node={node} client={client} project={project()} onClose={() => {}} />);
+    render(<NodeInspector node={node} client={client} project={project()} {...dockProps} />);
 
     await waitFor(() => expect(screen.getByText(/Effective prompt unavailable/)).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: /^Tools/ }));
@@ -238,7 +250,7 @@ describe("NodeInspector write path", () => {
         return base.call<T>(name, args);
       }
     };
-    render(<NodeInspector node={node} client={client} project={project()} workspaceVersion={84} onClose={() => {}} {...extra} />);
+    render(<NodeInspector node={node} client={client} project={project()} workspaceVersion={84} {...dockProps} {...extra} />);
     return calls;
   };
 
@@ -408,7 +420,7 @@ describe("NodeInspector write path", () => {
 
   it("blocks saving when the workspace version is unknown, rather than writing unguarded", async () => {
     const user = userEvent.setup();
-    render(<NodeInspector node={node} client={makeClient()} project={project()} onClose={() => {}} />);
+    render(<NodeInspector node={node} client={makeClient()} project={project()} {...dockProps} />);
     await waitLoaded();
     await user.type(screen.getByRole("textbox", { name: /Own prompt/ }), " Extra.");
     await user.type(screen.getByRole("textbox", { name: /Reason/ }), "tightening the blocker criteria");

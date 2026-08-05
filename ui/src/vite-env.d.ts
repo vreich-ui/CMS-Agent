@@ -1,9 +1,9 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  // Absolute URL of the Google Cloud Run MCP service (DIRECTION.md Phase 4b). When set at build
-  // time, the Settings connection panel shows a "Control plane: Netlify | Cloud Run" switch; when
-  // absent, the UI is Netlify-only exactly as before.
+  // Absolute URL of the Google Cloud Run MCP service. Cloud Run is the sole control plane: this is
+  // the build-time default endpoint, shown pre-filled (and still editable) in the Settings
+  // connection panel for local dev or a staging Cloud Run URL.
   readonly VITE_CLOUD_RUN_MCP_URL?: string;
 }
 

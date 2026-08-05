@@ -45,10 +45,6 @@ export function ConstellationDesignMode({ client, workspace, project, onStatus, 
   const [conflict, setConflict] = useState<string | null>(null);
   const [issues, setIssues] = useState<string[] | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<DesignEdgeModel | null>(null);
-  // S4 inspector visibility. Opened from the rail, closed by the operator or by deselecting —
-  // it renders in a grid column beside the canvas, never as an overlay (no absolute panels, no
-  // z-index), so the graph stays visible while you read a node.
-  const [inspectorOpen, setInspectorOpen] = useState(false);
   const savingRef = useRef(false);
 
   // Node loading (and its own loading/error state) is entirely useWorkspace's concern — it
@@ -217,6 +213,10 @@ export function ConstellationDesignMode({ client, workspace, project, onStatus, 
       <ul className="design-issues">{issues.map((issue) => <li key={issue}>{issue}</li>)}</ul>
     </div>}
 
+    {/* S7 click-to-inspect: the dock is a permanent column of design-grid, never rendered below
+        it and never gated behind a separate "Open details" step. A selected node renders its full
+        NodeInspector directly (facts, dependencies and delete folded into it — see
+        NodeInspector.tsx); an edge or nothing selected falls back to the (much smaller) rail. */}
     <div className="design-grid">
       <DesignCanvas
         nodes={nodes}
@@ -231,30 +231,29 @@ export function ConstellationDesignMode({ client, workspace, project, onStatus, 
         onConnectDependency={handleConnect}
         onRequestEdgeDelete={handleEdgeDelete}
       />
-      <SummaryRail
-        node={selectedNode}
-        nodes={nodes}
-        selectedEdge={selectedEdge}
-        saving={saving}
-        onAddDependency={(dependencyId) => { if (selectedNode) handleConnect(dependencyId, selectedNode.id); }}
-        onRemoveDependency={(dependencyId) => { if (selectedNode) handleRemoveDependency(selectedNode.id, dependencyId); }}
-        onDeleteNode={handleDeleteNode}
-        onDeleteEdge={(edge) => { handleRemoveDependency(edge.target, edge.source); setSelectedEdge(null); }}
-        onClearSelection={() => setSelectedEdge(null)}
-        onOpenDetails={() => setInspectorOpen((open) => !open)}
-        detailsOpen={inspectorOpen}
-      />
+      {selectedNode
+        ? <NodeInspector
+            node={selectedNode}
+            nodes={nodes}
+            client={client}
+            project={project}
+            workspaceVersion={workspaceVersion}
+            graphSaving={saving}
+            onAddDependency={(dependencyId) => handleConnect(dependencyId, selectedNode.id)}
+            onRemoveDependency={(dependencyId) => handleRemoveDependency(selectedNode.id, dependencyId)}
+            onDeleteNode={handleDeleteNode}
+            onClearSelection={() => setSelectedId(null)}
+            onSaved={async () => { await loadWorkspace(); onStatus({ tone: "success", message: "Node saved. The change is in the ledger with your reason." }); }}
+            onReloadWorkspace={() => void handleReload()}
+          />
+        : <SummaryRail
+            nodes={nodes}
+            selectedEdge={selectedEdge}
+            saving={saving}
+            onDeleteEdge={(edge) => { handleRemoveDependency(edge.target, edge.source); setSelectedEdge(null); }}
+            onClearSelection={() => setSelectedEdge(null)}
+          />}
     </div>
-
-    {inspectorOpen && selectedNode && <NodeInspector
-      node={selectedNode}
-      client={client}
-      project={project}
-      workspaceVersion={workspaceVersion}
-      onClose={() => setInspectorOpen(false)}
-      onSaved={async () => { await loadWorkspace(); onStatus({ tone: "success", message: "Node saved. The change is in the ledger with your reason." }); }}
-      onReloadWorkspace={() => void handleReload()}
-    />}
 
     <GraphListView entries={listEntries} />
   </section>;

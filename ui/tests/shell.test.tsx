@@ -9,7 +9,7 @@ import type { McpConnection } from "../src/connection";
 // Harness-level shell test: App itself is not mountable in jsdom (its data hooks fire real
 // fetches on mount), so this composes the same routing pieces App uses — useRoute + AppHeader +
 // a route-switched main — and exercises the navigation contract.
-const connection: McpConnection = { mode: "direct", endpoint: "http://localhost/mcp", token: "test-token" };
+const connection: McpConnection = { endpoint: "http://localhost/mcp", token: "test-token" };
 
 function Shell() {
   const { route, navigate } = useRoute();

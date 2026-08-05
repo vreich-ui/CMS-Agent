@@ -35,7 +35,7 @@ describe("theme token tables", () => {
   });
 
   it("is deterministic", () => {
-    expect(buildThemeTokens("dark", "teal")).toEqual(buildThemeTokens("dark", "teal"));
+    expect(buildThemeTokens("dark", "blue")).toEqual(buildThemeTokens("dark", "blue"));
   });
 });
 
@@ -58,7 +58,7 @@ describe("resolveMode", () => {
 
 describe("theme preference persistence", () => {
   it("round-trips", () => {
-    const preference = { mode: "dark" as const, accent: "teal" as const };
+    const preference = { mode: "dark" as const, accent: "blue" as const };
     expect(parseThemePreference(serializeThemePreference(preference))).toEqual(preference);
   });
 
@@ -66,6 +66,10 @@ describe("theme preference persistence", () => {
     expect(parseThemePreference(null)).toEqual(defaultPreference);
     expect(parseThemePreference("not json")).toEqual(defaultPreference);
     expect(parseThemePreference(JSON.stringify({ mode: "neon", accent: "octarine" }))).toEqual(defaultPreference);
-    expect(parseThemePreference(JSON.stringify({ mode: "dark" }))).toEqual({ mode: "dark", accent: "indigo" });
+    expect(parseThemePreference(JSON.stringify({ mode: "dark" }))).toEqual({ mode: "dark", accent: "orange" });
+  });
+
+  it("resets a stale preset from before the S7 reskin (indigo/teal/amber) to the default accent", () => {
+    expect(parseThemePreference(JSON.stringify({ mode: "dark", accent: "teal" }))).toEqual({ mode: "dark", accent: "orange" });
   });
 });

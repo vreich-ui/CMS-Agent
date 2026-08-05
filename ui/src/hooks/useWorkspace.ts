@@ -18,7 +18,7 @@ export function useWorkspace(client: McpClient) {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Every piece of state above belongs to a specific McpClient (i.e. a specific control-plane
+  // Every piece of state above belongs to a specific McpClient (i.e. a specific endpoint/token
   // connection). The instant the client identity changes, reset it all — SYNCHRONOUSLY, during
   // render, not inside a useEffect. An effect-based reset still lags one commit behind the client
   // change, so a render could briefly paint the PREVIOUS client's nodes under the NEW connection;

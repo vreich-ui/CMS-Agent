@@ -24,17 +24,12 @@ type McpToolResult<T> = {
 };
 
 // Resolve the Authorization header for the connection, or throw before any request leaves the
-// browser. Direct mode requires a non-empty manual token; secure-proxy mode fetches a fresh
-// identity token per request (so renewal/expiry is handled at call time, never captured).
+// browser. A non-empty manual bearer token is required — Cloud Run is the sole control plane and
+// always uses direct token auth.
 async function resolveAuthorization(connection: McpConnection): Promise<string> {
-  if (connection.mode === "direct") {
-    const token = connection.token.trim();
-    if (!token) throw new McpClientError("Enter an MCP bearer token before calling workspace tools.");
-    return `Bearer ${token}`;
-  }
-  const accessToken = (await connection.getAccessToken())?.trim();
-  if (!accessToken) throw new McpClientError("No identity session is available for the secure proxy. Log in and try again.");
-  return `Bearer ${accessToken}`;
+  const token = connection.token.trim();
+  if (!token) throw new McpClientError("Enter an MCP bearer token before calling workspace tools.");
+  return `Bearer ${token}`;
 }
 
 export async function callMcpMethod<T>(connection: McpConnection, method: string, params?: Record<string, unknown>): Promise<T> {

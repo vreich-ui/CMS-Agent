@@ -63,11 +63,15 @@ describe("ConstellationDesignMode", () => {
     expect(screen.getByText(/beta — kind agent, status active, risk publish; depends on: alpha/)).toBeInTheDocument();
   });
 
-  it("wires the rail's dependency editing to updateGraph patches", async () => {
+  it("wires the node inspector's Overview-tab dependency editing to updateGraph patches", async () => {
     const u = userEvent.setup();
     const nodes = [node("alpha"), node("beta"), node("gamma", { dependsOn: ["alpha"] })];
     const workspace = fakeWorkspace(nodes, { selectedId: "gamma" });
-    render(<ConstellationDesignMode client={structureClient()} workspace={workspace} onStatus={() => {}} onError={() => {}} />);
+    render(<ConstellationDesignMode client={structureClient()} workspace={workspace} project={null} onStatus={() => {}} onError={() => {}} />);
+
+    // Selecting "gamma" opens its NodeInspector directly (S7 click-to-inspect) — dependency
+    // editing and deletion now live in the Overview tab rather than a standalone rail.
+    await u.click(screen.getByRole("button", { name: "Overview" }));
 
     // Remove the existing dependency.
     await u.click(screen.getByRole("button", { name: "Remove" }));
@@ -89,7 +93,9 @@ describe("ConstellationDesignMode", () => {
     const u = userEvent.setup();
     const nodes = [node("alpha"), node("custom_x")];
     const workspace = fakeWorkspace(nodes, { selectedId: "custom_x" });
-    render(<ConstellationDesignMode client={structureClient()} workspace={workspace} onStatus={() => {}} onError={() => {}} />);
+    render(<ConstellationDesignMode client={structureClient()} workspace={workspace} project={null} onStatus={() => {}} onError={() => {}} />);
+
+    await u.click(screen.getByRole("button", { name: "Overview" }));
 
     const deleteButton = screen.getByRole("button", { name: "Delete custom x" });
     expect(deleteButton).toBeDisabled();
@@ -109,8 +115,9 @@ describe("ConstellationDesignMode", () => {
       selectedId: "gamma",
       updateGraph: vi.fn(async () => { throw new Error("workspace_version_conflict: expected 3, current 5"); })
     });
-    render(<ConstellationDesignMode client={structureClient()} workspace={workspace} onStatus={() => {}} onError={() => {}} />);
+    render(<ConstellationDesignMode client={structureClient()} workspace={workspace} project={null} onStatus={() => {}} onError={() => {}} />);
 
+    await u.click(screen.getByRole("button", { name: "Overview" }));
     await u.click(screen.getByRole("button", { name: "Remove" }));
 
     const banner = await screen.findByRole("alert");
@@ -145,4 +152,3 @@ describe("ConstellationPage (canvas default)", () => {
     expect(await screen.findByRole("region", { name: "Design mode" })).toBeInTheDocument();
   });
 });
-

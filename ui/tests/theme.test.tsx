@@ -65,13 +65,13 @@ describe("theme system", () => {
     render(<Harness />);
     const root = document.documentElement;
 
-    const indigoAccent = root.style.getPropertyValue("--color-accent");
-    await user.click(screen.getByRole("button", { name: "Teal" }));
+    const orangeAccent = root.style.getPropertyValue("--color-accent");
+    await user.click(screen.getByRole("button", { name: "Blue" }));
 
-    const tealAccent = root.style.getPropertyValue("--color-accent");
-    expect(tealAccent).not.toBe(indigoAccent);
-    expect(tealAccent).toBe("#0f766e");
-    expect(screen.getByRole("button", { name: "Teal" })).toHaveAttribute("aria-pressed", "true");
-    expect(JSON.parse(localStorage.getItem(THEME_KEY) ?? "{}")).toMatchObject({ accent: "teal" });
+    const blueAccent = root.style.getPropertyValue("--color-accent");
+    expect(blueAccent).not.toBe(orangeAccent);
+    expect(blueAccent).toBe("#4e7397");
+    expect(screen.getByRole("button", { name: "Blue" })).toHaveAttribute("aria-pressed", "true");
+    expect(JSON.parse(localStorage.getItem(THEME_KEY) ?? "{}")).toMatchObject({ accent: "blue" });
   });
 });

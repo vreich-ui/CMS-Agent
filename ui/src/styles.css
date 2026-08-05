@@ -1,36 +1,44 @@
 :root {
   /* Semantic theme tokens. New UI surfaces must use these tokens instead of raw color values.
-     These light values are the first-paint fallback; ui/src/theme.ts is the source of truth and
-     overwrites every token at runtime for the active mode + accent preset. */
-  --color-bg: #f6f7fb;
-  --color-text: #172033;
-  --color-text-muted: #526078;
+     These light values are the first-paint fallback (light mode, Orange accent preset — the
+     defaults in ui/src/theme.ts); theme.ts is the source of truth and overwrites every token at
+     runtime for the active mode + accent preset.
+     S7 reskin: re-expressed against Anthropic's palette as a design language for this operator
+     console — Dark #141413 / Light #faf9f5 / Mid Gray #b0aea5 / Light Gray #e8e6dc as the base,
+     Orange #d97757 / Blue #6a9bcc / Green #788c5d as the three accent presets. No wordmark, logo
+     or lockup anywhere — palette and type only. */
+  --color-bg: #faf9f5;
+  --color-text: #141413;
+  --color-text-muted: #6b685f;
   --color-surface: #ffffff;
-  --color-surface-muted: #f8fafc;
-  --color-border: #e4e8f0;
-  --color-border-muted: #e2e8f0;
-  --color-accent: #3157d5;
-  --color-accent-strong: #2546b6;
-  --color-accent-surface: #e8edff;
-  --color-accent-text: #2945a5;
-  --color-accent-muted: #aab4cc;
+  --color-surface-muted: #f2f0ea;
+  --color-border: #e8e6dc;
+  --color-border-muted: #efece3;
+  --color-accent: #a75c43;
+  --color-accent-strong: #8e4e39;
+  --color-accent-surface: #faece7;
+  --color-accent-text: #9c563f;
+  --color-accent-muted: #ac8979;
   --color-on-accent: #ffffff;
-  --color-success-surface: #e8f8ef;
-  --color-success-text: #16633a;
-  --color-warning-surface: #fff6d8;
-  --color-warning-text: #8b5d00;
-  --color-danger-surface: #ffecec;
-  --color-danger-text: #9f1d1d;
-  --color-info-surface: #e8edff;
-  --color-info-text: #2945a5;
-  --color-code-surface: #101828;
-  --color-code-text: #e9eefc;
-  --color-focus: #3157d5;
-  --color-shadow: rgba(23, 32, 51, 0.06);
+  --color-success-surface: #e7ede1;
+  --color-success-text: #3f5c2c;
+  --color-warning-surface: #f8ecd2;
+  --color-warning-text: #7a5b12;
+  --color-danger-surface: #f8e4df;
+  --color-danger-text: #8a3b2c;
+  --color-info-surface: #faece7;
+  --color-info-text: #9c563f;
+  --color-code-surface: #141413;
+  --color-code-text: #faf9f5;
+  --color-focus: #a75c43;
+  --color-shadow: rgba(20, 20, 19, 0.08);
 
   color: var(--color-text);
   background: var(--color-bg);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Lora is the body face everywhere by default (Georgia fallback); Poppins is reserved for
+     headings at 24pt+ (Arial fallback) — see the .access-card h1 rule, the one heading in this
+     app that crosses that threshold. Loaded in index.html. */
+  font-family: Lora, Georgia, serif;
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
@@ -106,7 +114,6 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   padding: 0.45rem 0.85rem;
 }
 .connection-chip:hover { background: var(--color-accent-surface); color: var(--color-accent-text); }
-.connection-chip-secure-proxy { background: var(--color-info-surface); border-color: var(--color-info-surface); color: var(--color-info-text); }
 .connection-chip-direct-ready { background: var(--color-success-surface); border-color: var(--color-success-surface); color: var(--color-success-text); }
 .connection-chip-direct-missing-token { background: var(--color-warning-surface); border-color: var(--color-warning-surface); color: var(--color-warning-text); }
 
@@ -202,7 +209,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .design-layer input { width: auto; accent-color: var(--color-accent); }
 .design-layer--unavailable { color: var(--color-text-muted); }
 .design-layer-note { font-size: 0.8rem; }
-.design-grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) 20rem; }
+/* S7 click-to-inspect: the dock (NodeInspector when a node is selected, SummaryRail otherwise) is
+   a permanent second column here, matching the canvas's height — never rendered below the grid,
+   never gated behind a click of its own. */
+.design-grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1.3fr) minmax(23rem, 30rem); }
 .design-canvas {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -250,8 +260,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .risk-badge--write { background: var(--color-warning-surface); color: var(--color-warning-text); }
 .risk-badge--publish, .risk-badge--admin { background: var(--color-danger-surface); color: var(--color-danger-text); }
 .design-edge--data .react-flow__edge-path, .design-edge--policy .react-flow__edge-path { stroke-dasharray: 6 4; }
-.design-rail { align-content: start; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 1.2rem; display: grid; gap: 0.9rem; min-width: 0; padding: 1rem; }
-.design-rail h3, .design-rail h4 { margin: 0; }
+/* The dock's "edge selected" / "nothing selected" states (SummaryRail). Fixed height matches
+   .design-canvas / .node-inspector so the second grid column never jumps size as selection
+   changes between a node, an edge, and nothing. */
+.node-dock { align-content: start; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 1.2rem; display: grid; gap: 0.9rem; height: 34rem; min-width: 0; overflow: auto; padding: 1rem; }
+.node-dock h3, .node-dock h4 { margin: 0; }
 .design-rail-facts { display: grid; gap: 0.3rem 0.8rem; grid-template-columns: max-content minmax(0, 1fr); margin: 0; }
 .design-rail-facts dt { color: var(--color-text-muted); font-weight: 800; }
 .design-rail-facts dd { margin: 0; overflow-wrap: anywhere; }
@@ -270,6 +283,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 980px) {
   .design-grid { grid-template-columns: 1fr; }
   .design-canvas { height: 26rem; }
+  .node-dock, .node-inspector { height: 26rem; }
 }
 
 /* Appearance settings. Swatch colors come inline from theme.ts (the palette source of truth). */
@@ -322,10 +336,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .graph-panel { min-height: 35rem; }
 .graph-panel .react-flow { height: 31rem; }
 .flow-card { display: grid; gap: 0.25rem; max-width: 13rem; text-align: left; }
-.flow-card span { color: #526078; font-size: 0.75rem; }
-.flow-card small { color: #273349; }
-.flow-card em { color: #3157d5; font-size: 0.75rem; font-style: normal; font-weight: 700; }
-.selected-flow-node { outline: 3px solid #3157d5; }
+.flow-card span { color: var(--color-text-muted); font-size: 0.75rem; }
+.flow-card small { color: var(--color-text); }
+.flow-card em { color: var(--color-accent); font-size: 0.75rem; font-style: normal; font-weight: 700; }
+.selected-flow-node { outline: 3px solid var(--color-focus); }
 .inspector { align-content: start; display: grid; gap: 0.9rem; }
 .inspector dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.4rem 0.8rem; }
 .inspector dt { color: var(--color-text-muted); font-weight: 800; }
@@ -347,7 +361,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .session-card { align-items: center; display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: space-between; }
 .access-card { display: grid; gap: 1rem; margin: min(12vh, 6rem) auto; max-width: 42rem; }
-.access-card h1 { font-size: clamp(2rem, 6vw, 4rem); line-height: 1; margin: 0; }
+/* The one heading in this app at or above 24pt (clamp floor is exactly 2rem/32px/24pt) — the only
+   place the Poppins/Arial display face applies; every other heading stays Lora/Georgia body type. */
+.access-card h1 { font-family: Poppins, Arial, sans-serif; font-size: clamp(2rem, 6vw, 4rem); font-weight: 700; line-height: 1; margin: 0; }
 .access-card p { margin: 0; }
 .muted { color: var(--color-text-muted); margin-top: 0; }
 .execution-grid { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -360,8 +376,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .run-status-panel dt, .node-execution-card dt { color: var(--color-text-muted); font-weight: 800; }
 .run-status-panel dd, .node-execution-card dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-/* Execution status colors below stay literal until the S7 visual pass re-tokenizes run/canvas
-   chrome for dark mode. */
+/* Execution status colors — S7 re-tokenized (semantic tokens only, correct in both light and
+   dark). Running and blocked share the warning family deliberately: this codebase already treats
+   a hold as "an expected, resumable state — amber, never red" (see the publish-readiness comment
+   below), and a queued/cancelled node is distinguished by depth (surface-muted vs border-muted)
+   rather than a fourth hue, since neither is a success/warning/danger state. */
 .execution-pill {
   border-radius: 999px;
   display: inline-flex;
@@ -370,21 +389,21 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   padding: 0.2rem 0.55rem;
   text-transform: uppercase;
 }
-.execution-queued { background: #edf1f8; color: #526078; }
-.execution-running { background: #fff6d8; color: #8b5d00; }
-.execution-completed { background: #e8f8ef; color: #16633a; }
-.execution-blocked { background: #fff0dc; color: #8a4700; }
-.execution-failed { background: #ffecec; color: #9f1d1d; }
-.execution-cancelled { background: #f0eef8; color: #58428a; }
+.execution-queued { background: var(--color-surface-muted); color: var(--color-text-muted); }
+.execution-running { background: var(--color-warning-surface); color: var(--color-warning-text); }
+.execution-completed { background: var(--color-success-surface); color: var(--color-success-text); }
+.execution-blocked { background: var(--color-warning-surface); color: var(--color-warning-text); }
+.execution-failed { background: var(--color-danger-surface); color: var(--color-danger-text); }
+.execution-cancelled { background: var(--color-border-muted); color: var(--color-text-muted); }
 .node-list { display: grid; gap: 0.75rem; max-height: 36rem; overflow: auto; padding-right: 0.25rem; }
 .node-execution-card { border: 1px solid var(--color-border); border-left-width: 0.4rem; border-radius: 0.9rem; padding: 0.8rem; }
 .node-execution-heading { align-items: center; display: flex; gap: 0.5rem; justify-content: space-between; }
-.execution-border-queued { border-left-color: #aab4cc; }
-.execution-border-running { border-left-color: #e5a900; }
-.execution-border-completed { border-left-color: #2aa866; }
-.execution-border-blocked { border-left-color: #d97706; }
-.execution-border-failed { border-left-color: #c03333; }
-.execution-border-cancelled { border-left-color: #7b61b7; }
+.execution-border-queued { border-left-color: var(--color-border); }
+.execution-border-running { border-left-color: var(--color-warning-text); }
+.execution-border-completed { border-left-color: var(--color-success-text); }
+.execution-border-blocked { border-left-color: var(--color-warning-text); }
+.execution-border-failed { border-left-color: var(--color-danger-text); }
+.execution-border-cancelled { border-left-color: var(--color-accent-muted); }
 .warning-text { color: var(--color-warning-text); }
 .error-text { color: var(--color-danger-text); }
 .compact-list, .artifact-list { display: grid; gap: 0.55rem; list-style: none; margin: 0; padding: 0; }
@@ -392,11 +411,13 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .link-button { background: transparent; color: var(--color-accent-text); padding: 0; text-align: left; }
 .link-button:hover { background: transparent; color: var(--color-accent-strong); text-decoration: underline; }
 .flow-node-queued { opacity: 0.72; }
-.flow-node-running { box-shadow: 0 0 0 4px rgba(229, 169, 0, 0.35); }
-.flow-node-completed { box-shadow: 0 0 0 4px rgba(42, 168, 102, 0.3); }
-.flow-node-blocked { box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.4); }
-.flow-node-failed { box-shadow: 0 0 0 4px rgba(192, 51, 51, 0.35); }
-.flow-node-cancelled { box-shadow: 0 0 0 4px rgba(123, 97, 183, 0.3); }
+/* Token-driven glows via color-mix() instead of hardcoded rgba() literals, so these follow the
+   active theme (mode + accent) exactly like every other token consumer here. */
+.flow-node-running { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning-text) 35%, transparent); }
+.flow-node-completed { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-success-text) 30%, transparent); }
+.flow-node-blocked { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning-text) 40%, transparent); }
+.flow-node-failed { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-danger-text) 35%, transparent); }
+.flow-node-cancelled { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent-muted) 35%, transparent); }
 @media (max-width: 980px) {
   .execution-grid { grid-template-columns: 1fr; }
 }
@@ -433,10 +454,11 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .usage-stats strong { display: block; margin-top: 0.25rem; font-size: 1.1rem; }
 .budget-field input { display: block; margin-top: 0.35rem; max-width: 12rem; }
 .budget-status { margin: 1rem 0; padding: 0.75rem; border-radius: 0.75rem; display: flex; gap: 0.75rem; flex-wrap: wrap; border: 1px solid var(--color-border); }
-/* Budget state colors stay literal until S7 (light-only palette today). */
-.budget-status.ok { background: #ecfdf5; border-color: #86efac; }
-.budget-status.warning { background: #fffbeb; border-color: #facc15; }
-.budget-status.exceeded { background: #fef2f2; border-color: #fca5a5; }
+/* Budget state colors — S7 re-tokenized so they follow mode + accent instead of a light-only,
+   hardcoded palette. */
+.budget-status.ok { background: var(--color-success-surface); border-color: var(--color-success-text); }
+.budget-status.warning { background: var(--color-warning-surface); border-color: var(--color-warning-text); }
+.budget-status.exceeded { background: var(--color-danger-surface); border-color: var(--color-danger-text); }
 .usage-breakdowns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
 .usage-breakdown ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
 .usage-breakdown li { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--color-border-muted); padding-bottom: 0.5rem; }
@@ -614,12 +636,20 @@ th { color: var(--color-text-muted); font-size: 0.8rem; text-transform: uppercas
 .connection-badge--warning { background: var(--color-warning-surface); color: var(--color-warning-text); }
 .connection-badge--danger { background: var(--color-danger-surface); color: var(--color-danger-text); }
 
-.node-inspector { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 1.2rem; display: grid; gap: 0.9rem; margin-top: 1rem; min-width: 0; padding: 1rem; }
-.node-inspector-header { align-items: start; display: flex; gap: 1rem; justify-content: space-between; }
+/* S7 click-to-inspect dock. Fixed height (matches .design-canvas/.node-dock — see .design-grid)
+   with exactly one scrolling region: header, facts, resolution-layer meta and the tab bar are all
+   `flex: none` (always on screen, no scroll needed to reach a tab); only .node-inspector-scroll
+   scrolls, and it holds the active tab's panel plus the save footer. This is what makes "one
+   click, zero scrolling" to any tab's content structurally true rather than incidental. */
+.node-inspector { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 1.2rem; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.node-inspector-header { align-items: start; display: flex; flex: none; gap: 1rem; justify-content: space-between; padding: 1rem 1rem 0.5rem; }
 .node-inspector-header h3 { margin: 0; }
-.node-inspector-header p { margin: 0.2rem 0 0; }
-.node-inspector-header-actions { display: flex; gap: 0.5rem; }
+.node-inspector-header-actions { display: flex; flex: none; gap: 0.5rem; }
+.node-inspector-facts { display: grid; gap: 0.2rem 0.7rem; grid-template-columns: repeat(2, max-content minmax(2.5rem, 1fr)); margin: 0.5rem 0 0; }
+.node-inspector-facts dt { color: var(--color-text-muted); font-weight: 800; }
+.node-inspector-facts dd { margin: 0; overflow-wrap: anywhere; }
 
+.node-inspector-meta { display: grid; flex: none; gap: 0.6rem; padding: 0 1rem 0.6rem; }
 .node-inspector-layers { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 /* Every non-live identity state is visibly muted: a contract that was never fetched must never
    read like a fresh one. */
@@ -631,7 +661,7 @@ th { color: var(--color-text-muted); font-size: 0.8rem; text-transform: uppercas
 
 .node-inspector-errors { color: var(--color-danger-text); display: grid; gap: 0.3rem; list-style: none; margin: 0; padding: 0; }
 
-.node-inspector-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.node-inspector-tabs { background: var(--color-surface); border-bottom: 1px solid var(--color-border-muted); border-top: 1px solid var(--color-border-muted); display: flex; flex: none; flex-wrap: wrap; gap: 0.3rem; padding: 0.6rem 1rem; }
 .node-inspector-tab { align-items: center; background: transparent; border: 1px solid var(--color-border-muted); border-radius: 999px; color: var(--color-text-muted); cursor: pointer; display: inline-flex; font-weight: 700; gap: 0.35rem; padding: 0.3rem 0.8rem; }
 .node-inspector-tab:hover { color: var(--color-text); }
 .node-inspector-tab:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
@@ -639,6 +669,7 @@ th { color: var(--color-text-muted); font-size: 0.8rem; text-transform: uppercas
 .node-inspector-tab-badge { background: var(--color-warning-surface); color: var(--color-warning-text); }
 .node-inspector-tab-badge--blocker { background: var(--color-danger-surface); color: var(--color-danger-text); }
 
+.node-inspector-scroll { display: grid; flex: 1 1 auto; gap: 0.9rem; min-height: 0; overflow-y: auto; padding: 0.9rem 1rem 1rem; }
 .node-inspector-panel { display: grid; gap: 0.6rem; min-width: 0; }
 .node-inspector-panel h4 { margin: 0.4rem 0 0; }
 .node-inspector-prompt { background: var(--color-code-surface); border-radius: 0.6rem; color: var(--color-code-text); margin: 0; max-height: 24rem; overflow: auto; padding: 0.7rem; white-space: pre-wrap; word-break: break-word; }

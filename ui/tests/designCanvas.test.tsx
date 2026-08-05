@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { DesignCanvas } from "../src/components/constellation/DesignCanvas";
 import { defaultDesignLayers } from "../src/designGraph";
 import type { WorkspaceNode } from "../src/types/workspace";
@@ -39,5 +39,28 @@ describe("DesignCanvas", () => {
     expect(screen.getAllByText("publish")).toHaveLength(2);
     expect(screen.getByText("0 skills · 0 tools · 1 deps")).toBeInTheDocument();
     expect(screen.queryByText(/must never appear/)).not.toBeInTheDocument();
+  });
+
+  // S7 click-to-inspect: a click on a node must call onSelectNode directly (onNodeClick), not
+  // only through React Flow's internal "select" NodeChange bookkeeping — this is the one thing
+  // the smoke test can pin without needing React Flow's jsdom-unavailable measurement.
+  it("calls onSelectNode when a node is clicked", () => {
+    const onSelectNode = vi.fn();
+    render(<DesignCanvas
+      nodes={[node("alpha"), node("beta", { position: { x: 400, y: 40 } })]}
+      relationships={[]}
+      layers={defaultDesignLayers}
+      selectedId={null}
+      selectedEdgeId={null}
+      saving={false}
+      onSelectNode={onSelectNode}
+      onSelectEdge={() => {}}
+      onMoveNode={() => {}}
+      onConnectDependency={() => {}}
+      onRequestEdgeDelete={() => {}}
+    />);
+
+    fireEvent.click(screen.getByText("alpha"));
+    expect(onSelectNode).toHaveBeenCalledWith("alpha");
   });
 });

@@ -6,6 +6,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
+  useReactFlow,
   type Connection,
   type Edge,
   type NodeChange
@@ -42,6 +43,7 @@ const toRfNodes = (nodes: WorkspaceNode[], selectedId: string | null): AgentNode
 // The canvas renders MCP truth: stored positions in, position changes out (persisted on drop by
 // the container). Edges are always derived — there is no local edge state to drift.
 function DesignCanvasInner({ nodes, relationships, layers, selectedId, selectedEdgeId, saving, onSelectNode, onSelectEdge, onMoveNode, onConnectDependency, onRequestEdgeDelete }: DesignCanvasProps) {
+  const { setCenter, getZoom } = useReactFlow();
   const [rfNodes, setRfNodes] = useState<AgentNodeType[]>(() => toRfNodes(nodes, selectedId));
   const storedPositions = useMemo(() => new Map(nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }])), [nodes]);
   // Ref mirror so the debounced keyboard persist always compares against current server truth,
@@ -59,6 +61,28 @@ function DesignCanvasInner({ nodes, relationships, layers, selectedId, selectedE
   useEffect(() => {
     setRfNodes(toRfNodes(nodes, selectedId));
   }, [nodes, selectedId]);
+
+  // Click-to-inspect (S7): a click on a node opens the dock immediately (see onNodeClick below);
+  // this effect is the other half — whichever way a node became selected (canvas click, the text
+  // list, a reload after save), the canvas pans to keep it in view so the operator is never
+  // looking at an inspector for a node scrolled out of frame. jsdom's no-op ResizeObserver means
+  // React Flow never measures nodes in tests, so a missing viewport helper is a silent no-op
+  // rather than a crash.
+  useEffect(() => {
+    if (!selectedId) return;
+    const target = rfNodes.find((candidate) => candidate.id === selectedId);
+    if (!target || typeof setCenter !== "function") return;
+    const width = target.measured?.width ?? 208;
+    const height = target.measured?.height ?? 96;
+    try {
+      setCenter(target.position.x + width / 2, target.position.y + height / 2, { zoom: getZoom(), duration: 300 });
+    } catch {
+      // Best-effort viewport nicety; never block selection on it.
+    }
+    // Re-center only when the SELECTION changes, not on every position/zoom tick — otherwise a
+    // drag or a manual zoom would keep fighting the operator back to center.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   useEffect(() => () => {
     if (keyboardMoveTimer.current) clearTimeout(keyboardMoveTimer.current);
@@ -124,6 +148,11 @@ function DesignCanvasInner({ nodes, relationships, layers, selectedId, selectedE
       edges={rfEdges}
       nodeTypes={nodeTypes}
       onNodesChange={onNodesChange}
+      // Explicit click-to-inspect signal (S7): clicking a node is the one action that must open
+      // its dock, immediately and every time — not an inference from React Flow's internal
+      // selection bookkeeping (onNodesChange's "select" NodeChange, kept above for keyboard/
+      // programmatic selection parity). onNodeClick fires exactly on a pointer click on a node.
+      onNodeClick={(_, node) => onSelectNode(node.id)}
       onNodeDragStart={(_, node) => {
         pointerDragging.current.add(node.id);
         if (keyboardMoveTimer.current) clearTimeout(keyboardMoveTimer.current);
