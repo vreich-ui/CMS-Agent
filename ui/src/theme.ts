@@ -3,18 +3,30 @@
 // this table as CSS custom properties + data-theme + colorScheme, so validated and rendered
 // values can never drift. The :root block in styles.css keeps the light values only as a
 // first-paint fallback. Curated presets only — no free-form theme builder.
+//
+// S7 reskin: this is Wolf's own operator console (client-facing surfaces elsewhere in the app
+// keep the client's own brand — untouched by this file), restyled in Anthropic's palette and type
+// as a design language, never the identity: no wordmark, no logo, no lockup, anywhere. The base
+// grays/darks are Anthropic's Dark (#141413) / Light (#faf9f5) / Mid Gray (#b0aea5) / Light Gray
+// (#e8e6dc); the three accent presets are Anthropic's Orange (#d97757, primary), Blue (#6a9bcc,
+// secondary) and Green (#788c5d, tertiary) — each shade re-derived (darkened for light-mode text
+// use, lightened for dark-mode surfaces) so every table still clears WCAG AA; see
+// validateThemeContrast below. Warning/danger have no counterpart in that seven-color palette —
+// conventional amber/red carry meaning users rely on regardless of brand, so they're kept as
+// distinct, muted, warm-toned functional colors rather than reusing Orange for both "accent" and
+// "danger".
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ResolvedThemeMode = "light" | "dark";
-export type AccentPresetId = "indigo" | "teal" | "amber";
+export type AccentPresetId = "orange" | "blue" | "green";
 export type ThemePreference = { mode: ThemeMode; accent: AccentPresetId };
 
-export const defaultPreference: ThemePreference = { mode: "system", accent: "indigo" };
+export const defaultPreference: ThemePreference = { mode: "system", accent: "orange" };
 
 export const accentPresets: ReadonlyArray<{ id: AccentPresetId; label: string }> = [
-  { id: "indigo", label: "Indigo" },
-  { id: "teal", label: "Teal" },
-  { id: "amber", label: "Amber" }
+  { id: "orange", label: "Orange" },
+  { id: "blue", label: "Blue" },
+  { id: "green", label: "Green" }
 ];
 
 export const themeTokenNames = [
@@ -52,57 +64,62 @@ type BasePalette = Omit<ThemeTokens, "--color-accent" | "--color-accent-strong" 
 
 const basePalettes: Record<ResolvedThemeMode, BasePalette> = {
   light: {
-    "--color-bg": "#f6f7fb",
-    "--color-text": "#172033",
-    "--color-text-muted": "#526078",
+    "--color-bg": "#faf9f5",
+    "--color-text": "#141413",
+    "--color-text-muted": "#6b685f",
     "--color-surface": "#ffffff",
-    "--color-surface-muted": "#f8fafc",
-    "--color-border": "#e4e8f0",
-    "--color-border-muted": "#e2e8f0",
-    "--color-success-surface": "#e8f8ef",
-    "--color-success-text": "#16633a",
-    "--color-warning-surface": "#fff6d8",
-    "--color-warning-text": "#8b5d00",
-    "--color-danger-surface": "#ffecec",
-    "--color-danger-text": "#9f1d1d",
-    "--color-code-surface": "#101828",
-    "--color-code-text": "#e9eefc",
-    "--color-shadow": "rgba(23, 32, 51, 0.06)"
+    "--color-surface-muted": "#f2f0ea",
+    "--color-border": "#e8e6dc",
+    "--color-border-muted": "#efece3",
+    "--color-success-surface": "#e7ede1",
+    "--color-success-text": "#3f5c2c",
+    "--color-warning-surface": "#f8ecd2",
+    "--color-warning-text": "#7a5b12",
+    "--color-danger-surface": "#f8e4df",
+    "--color-danger-text": "#8a3b2c",
+    "--color-code-surface": "#141413",
+    "--color-code-text": "#faf9f5",
+    "--color-shadow": "rgba(20, 20, 19, 0.08)"
   },
   dark: {
-    "--color-bg": "#0e1420",
-    "--color-text": "#e7ecf6",
-    "--color-text-muted": "#a3b0c6",
-    "--color-surface": "#161e2e",
-    "--color-surface-muted": "#1c2537",
-    "--color-border": "#2b374e",
-    "--color-border-muted": "#253046",
-    "--color-success-surface": "#143426",
-    "--color-success-text": "#86d9ab",
-    "--color-warning-surface": "#3a2d0d",
-    "--color-warning-text": "#e5c465",
-    "--color-danger-surface": "#44201f",
-    "--color-danger-text": "#ff9e9e",
-    "--color-code-surface": "#0b1220",
-    "--color-code-text": "#dfe7fa",
-    "--color-shadow": "rgba(0, 0, 0, 0.35)"
+    "--color-bg": "#141413",
+    "--color-text": "#e7e4db",
+    "--color-text-muted": "#948f82",
+    "--color-surface": "#201e1b",
+    "--color-surface-muted": "#29271f",
+    "--color-border": "#3a372e",
+    "--color-border-muted": "#2c2a24",
+    "--color-success-surface": "#233019",
+    "--color-success-text": "#a8c090",
+    "--color-warning-surface": "#3d2f14",
+    "--color-warning-text": "#e8c674",
+    "--color-danger-surface": "#3a231e",
+    "--color-danger-text": "#e6a08f",
+    "--color-code-surface": "#0b0b0a",
+    "--color-code-text": "#eae7de",
+    "--color-shadow": "rgba(0, 0, 0, 0.45)"
   }
 };
 
 type AccentPalette = { accent: string; strong: string; surface: string; text: string; onAccent: string; muted: string };
 
+// Each preset is Anthropic's Orange/Blue/Green re-derived per mode: light mode darkens the raw hue
+// enough to clear 4.5:1 as both a button fill (paired with a white on-accent) and as text on
+// var(--color-surface); dark mode uses the hue closer to raw (mid-brightness hues already read
+// well on a near-black surface) and flips on-accent to the dark base color. accent-surface/text
+// are a separate, softer tint+ink pairing for badges/chips (mirrored onto --color-info-*).
 const accentPalettes: Record<AccentPresetId, Record<ResolvedThemeMode, AccentPalette>> = {
-  indigo: {
-    light: { accent: "#3157d5", strong: "#2546b6", surface: "#e8edff", text: "#2945a5", onAccent: "#ffffff", muted: "#aab4cc" },
-    dark: { accent: "#93aaf8", strong: "#aabcfa", surface: "#22304f", text: "#b6c5fb", onAccent: "#0e1420", muted: "#55618a" }
+  orange: {
+    light: { accent: "#a75c43", strong: "#8e4e39", surface: "#faece7", text: "#9c563f", onAccent: "#ffffff", muted: "#ac8979" },
+    dark: { accent: "#d97757", strong: "#e08f75", surface: "#3f2a22", text: "#dd8568", onAccent: "#141413", muted: "#b7836d" }
   },
-  teal: {
-    light: { accent: "#0f766e", strong: "#115e59", surface: "#e0f5f2", text: "#0b5d55", onAccent: "#ffffff", muted: "#9fbdba" },
-    dark: { accent: "#7cd4c8", strong: "#99e0d6", surface: "#123734", text: "#8fdcd2", onAccent: "#0e1420", muted: "#3f6a65" }
+  blue: {
+    light: { accent: "#4e7397", strong: "#426280", surface: "#eaf1f8", text: "#4a6c8f", onAccent: "#ffffff", muted: "#84939f" },
+    dark: { accent: "#6a9bcc", strong: "#85add5", surface: "#27323c", text: "#79a5d1", onAccent: "#141413", muted: "#7f95a7" }
   },
-  amber: {
-    light: { accent: "#b45309", strong: "#92400e", surface: "#fff1e0", text: "#8a4700", onAccent: "#ffffff", muted: "#cbb193" },
-    dark: { accent: "#e8bd6d", strong: "#f0cd8c", surface: "#3a2d0d", text: "#eac97e", onAccent: "#0e1420", muted: "#7a6a45" }
+  green: {
+    light: { accent: "#65764e", strong: "#566442", surface: "#ecefe8", text: "#60704a", onAccent: "#ffffff", muted: "#8e957e" },
+    dark: { accent: "#7f9265", strong: "#97a682", surface: "#2a2e23", text: "#8c9d75", onAccent: "#141413", muted: "#8a9174" }
   }
 };
 
@@ -187,7 +204,7 @@ export function parseThemePreference(raw: string | null): ThemePreference {
   try {
     const parsed = JSON.parse(raw) as { mode?: unknown; accent?: unknown };
     const mode = parsed.mode === "light" || parsed.mode === "dark" || parsed.mode === "system" ? parsed.mode : defaultPreference.mode;
-    const accent = parsed.accent === "indigo" || parsed.accent === "teal" || parsed.accent === "amber" ? parsed.accent : defaultPreference.accent;
+    const accent = parsed.accent === "orange" || parsed.accent === "blue" || parsed.accent === "green" ? parsed.accent : defaultPreference.accent;
     return { mode, accent };
   } catch {
     return { ...defaultPreference };
