@@ -15,6 +15,14 @@ export type ContractPrefetchDeps = { projectRepository: ProjectRepository; cache
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
+// This call bypasses executeTool (the controlled-tool gateway) entirely — it is deterministic
+// conductor code, not a model-invoked tool — so it never inherited executeTool's per-tool timeout or
+// its AbortController wiring, and previously had NO timeout at all: a hung remote MCP server here
+// would hang the node dispatch indefinitely. 15s matches the other short, single-call project reads
+// (project.list_tools/test_connection) rather than project.call_tool's 30s: this is one read call,
+// not a write that may need to reach a slower operation on the remote.
+const CONTRACT_PREFETCH_TIMEOUT_MS = 15_000;
+
 // MCP tool-call results carry structuredContent (preferred) and/or a content[] text block (a few
 // clients/transports only populate the latter). Prefer structuredContent; parse the text block only
 // when structuredContent is absent. Most contract responses nest the payload under a "contract" key
@@ -65,7 +73,14 @@ export async function getReducedContract(params: ContractPrefetchParams, deps: C
     const blocking = policyFindings.filter((finding) => finding.severity === "error");
     if (blocking.length) return { ok: false, error: `Blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}` };
     const adapter = new ProjectMcpAdapter(config);
-    const call = await adapter.callReadTool("object_contract", arguments_);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CONTRACT_PREFETCH_TIMEOUT_MS);
+    let call: Awaited<ReturnType<typeof adapter.callReadTool>>;
+    try {
+      call = await adapter.callReadTool("object_contract", arguments_, controller.signal);
+    } finally {
+      clearTimeout(timer);
+    }
     if (!call.ok) return { ok: false, error: call.error ?? `object_contract failed for project ${params.projectId}` };
     const raw = extractContractPayload(call.result);
     const reduced = reduceContract(raw, { tool: "object_contract", fetchedAtISO: new Date().toISOString() }, objectType);

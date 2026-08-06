@@ -45,6 +45,13 @@ export type VoicePrefetchDeps = { projectRepository: ProjectRepository; cache?: 
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
+// Same fix as contractPrefetch.ts's CONTRACT_PREFETCH_TIMEOUT_MS, for the identical reason: this call
+// bypasses executeTool entirely (deterministic conductor code, not a model-invoked tool) and so never
+// inherited a timeout at all. A hung remote here degrades gracefully anyway (source: "fallback" via
+// voice_prefetch_unreachable, never a failed node — see getEditorialVoice below) but "gracefully" only
+// if it degrades at ALL rather than hanging the node dispatch forever waiting on a dead connection.
+const VOICE_PREFETCH_TIMEOUT_MS = 15_000;
+
 // object_get's structuredContent/content[] shape mirrors object_contract's (see contractPrefetch.ts's
 // extractContractPayload): prefer structuredContent (checking a couple of plausible nesting keys, then
 // the structured value itself), and parse the content[] text block only when structuredContent is
@@ -130,7 +137,14 @@ export async function getEditorialVoice(params: VoicePrefetchParams, deps: Voice
 
     try {
       const adapter = new ProjectMcpAdapter(config);
-      const call = await adapter.callReadTool("object_get", arguments_);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), VOICE_PREFETCH_TIMEOUT_MS);
+      let call: Awaited<ReturnType<typeof adapter.callReadTool>>;
+      try {
+        call = await adapter.callReadTool("object_get", arguments_, controller.signal);
+      } finally {
+        clearTimeout(timer);
+      }
       if (!call.ok) {
         const warning = `object_get(${voiceObjectId}) failed for project ${params.projectId}: ${call.error ?? "unknown error"}.`;
         if (!fallback) return { source: "unavailable", warningCode: "voice_prefetch_unreachable", warning };

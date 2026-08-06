@@ -38,8 +38,12 @@ export function evaluateToolsForNode(
   });
 }
 
-export async function resolveEffectiveToolsForNode(nodeId: string, context: Partial<ToolExecutionContext> = {}): Promise<ResolvedTool[]> {
-  const node = await repositoryManager.getWorkspaceRepository().getNode(nodeId);
+// preloadedNode lets a caller that already holds the node (nodeRuntime.ts's executeNode, which loads
+// it once itself) skip this function's own getNode round-trip instead of re-fetching the identical
+// record. Every existing caller passes only nodeId and is unaffected — it still fetches exactly as
+// before.
+export async function resolveEffectiveToolsForNode(nodeId: string, context: Partial<ToolExecutionContext> = {}, preloadedNode?: WorkspaceNode): Promise<ResolvedTool[]> {
+  const node = preloadedNode ?? await repositoryManager.getWorkspaceRepository().getNode(nodeId);
   if (!node) throw new Error(`Unknown node: ${nodeId}`);
   const skills = await repositoryManager.getSkillRepository().list({ skillIds: node.assignedSkills ?? [] });
   return evaluateToolsForNode(node, skills, context);
