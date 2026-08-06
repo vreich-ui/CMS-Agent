@@ -1,5 +1,6 @@
 import type { ZodTypeAny } from "zod";
 import type { WorkspaceRiskLevel } from "../workspace/nodeTypes.js";
+import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 
 export const toolCategories = ["workspace", "web", "files", "artifacts", "blobs", "learning", "usage", "project_mcp", "publishing", "diagnostics"] as const;
 export type ToolCategory = typeof toolCategories[number];
@@ -33,6 +34,16 @@ export type ToolExecutionContext = {
   platformAllowedTools?: string[];
   maxRiskLevel?: WorkspaceRiskLevel;
   dryRun?: boolean;
+  // Set by executeTool (toolExecutor.ts) once per call, from the SAME projectId it already fetched
+  // for policy evaluation (evaluateToolPolicy's `project` argument). A project.* handler in
+  // toolRegistry.ts reuses this instead of re-fetching by the projectId in its own arguments when the
+  // two ids match — the common case, since a node's project.call_tool target is its own run's
+  // project — falling back to its own fetch only when a caller genuinely names a different project.
+  project?: ProjectConnectionConfig;
+  // Set by executeTool for every call and aborted when the tool's own Promise.race timeout fires, so
+  // a slow external call (project.call_tool against a cold remote MCP server) actually stops running
+  // instead of merely having its promise rejected while the underlying fetch continues server-side.
+  signal?: AbortSignal;
 };
 
 export type ToolDefinition<I = unknown, O = unknown> = {

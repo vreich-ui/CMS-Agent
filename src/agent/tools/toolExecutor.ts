@@ -56,8 +56,16 @@ export async function executeTool(toolId: string, rawInput: unknown, context: To
   const toolExecutionId = makeId();
   const base = { toolExecutionId, runId: context.runId, nodeId: context.nodeId, toolId: tool.toolId, startedAt, inputSummary: summarize(input), riskLevel: tool.riskLevel };
   const finish = (record: ToolExecutionRecord) => { records.set(toolExecutionId, record); return record; };
+  // One AbortController per call, threaded through the handler as context.signal. Handlers that
+  // reach an external transport (project.call_tool -> ProjectMcpAdapter -> mcpClient's fetch) forward
+  // it all the way down, so the timeout branch below can actually stop the in-flight request instead
+  // of merely abandoning its promise while the fetch keeps running server-side.
+  const controller = new AbortController();
   try {
     const { node, skill } = await resolvePolicySubjects(context.nodeId, context.skillId);
+    // Fetched once, here, and handed to the handler via contextForHandler.project below — a
+    // project.* handler in toolRegistry.ts reuses it instead of fetching the same project record a
+    // second time (see toolTypes.ts's ToolExecutionContext.project for the reuse contract).
     const project = context.projectId ? await repositoryManager.getProjectRepository().get(context.projectId) : undefined;
     const policy = evaluateToolPolicy({ tool, context, node, skill, project });
     if (!policy.allowed) {
@@ -66,8 +74,9 @@ export async function executeTool(toolId: string, rawInput: unknown, context: To
       return { ok: false, denied: { code: policy.code, reasons: policy.reasons }, toolExecutionId: record.toolExecutionId };
     }
     const parsed = tool.inputSchema.parse(input);
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("tool_timeout")), tool.timeoutMs));
-    const output = await Promise.race([Promise.resolve(tool.handler(parsed, context)), timeout]);
+    const contextForHandler: ToolExecutionContext = { ...context, project, signal: controller.signal };
+    const timeout = new Promise((_, reject) => setTimeout(() => { controller.abort(); reject(new Error("tool_timeout")); }, tool.timeoutMs));
+    const output = await Promise.race([Promise.resolve(tool.handler(parsed, contextForHandler)), timeout]);
     const checked = tool.outputSchema.parse(output);
     const completedAt = now();
     const record = finish({ ...base, completedAt, durationMs: Date.parse(completedAt)-Date.parse(startedAt), status: "success", outputSummary: summarize(checked), riskLevel: tool.riskLevel, approvalStatus: policy.approvalStatus });
