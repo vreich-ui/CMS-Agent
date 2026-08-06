@@ -101,27 +101,35 @@ export async function getNodeDetails(nodeId: string, repos = { workspaceReposito
   });
 }
 
-export async function getEffectivePrompt(nodeId: string, workspaceRepository = repositoryManager.getWorkspaceRepository()) {
-  const node = await workspaceRepository.getNode(nodeId);
+// preloadedNode lets executeNode (below), which already loaded the node itself, skip this function's
+// own getNode round-trip. Every other caller (node.get_effective_prompt) passes only nodeId and is
+// unaffected.
+export async function getEffectivePrompt(nodeId: string, workspaceRepository = repositoryManager.getWorkspaceRepository(), preloadedNode?: WorkspaceNode) {
+  const node = preloadedNode ?? await workspaceRepository.getNode(nodeId);
   if (!node) throw new Error(`Unknown node: ${nodeId}`);
   const skills = await resolveSkillsForNode(node, repositoryManager.getSkillRepository());
   return redactSecrets({ prompt: [node.prompt, skills.instructions].filter(Boolean).join("\n\n"), nodePrompt: node.prompt, skillInstructions: skills.instructions });
 }
 
-export async function prepareNodeExecution(data: { nodeId: string; input?: unknown; dependencyOutputs?: Record<string, unknown>; modelConfig?: Record<string, unknown> }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository() }) {
-  const node = await repos.workspaceRepository.getNode(data.nodeId);
+// preloadedNode (same contract as getEffectivePrompt's above) lets executeNode pass down the node it
+// already loaded, instead of prepareNodeExecution loading it again itself AND getEffectivePrompt AND
+// resolveEffectiveToolsForNode each loading it a THIRD and FOURTH time for the very same dispatch —
+// four getNode calls for one node execution, three of them redundant. node.prepare_execution (the only
+// other caller) passes only data.nodeId and is unaffected: it still fetches exactly as before.
+export async function prepareNodeExecution(data: { nodeId: string; input?: unknown; dependencyOutputs?: Record<string, unknown>; modelConfig?: Record<string, unknown> }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository() }, preloadedNode?: WorkspaceNode) {
+  const node = preloadedNode ?? await repos.workspaceRepository.getNode(data.nodeId);
   if (!node) throw new Error(`Unknown node: ${data.nodeId}`);
   const dependencyOutputs = Object.fromEntries(await Promise.all(node.dependsOn.map(async (id) => [id, data.dependencyOutputs?.[id] ?? (await repos.workspaceRepository.getStageOutput(id))?.value])));
   const missingInputs = node.dependsOn.filter((id) => dependencyOutputs[id] === undefined);
   const inputValidation = validateAgainstNodeSchema(data.input ?? {}, node.inputSchema);
-  const prompt = await getEffectivePrompt(node.id, repos.workspaceRepository);
+  const prompt = await getEffectivePrompt(node.id, repos.workspaceRepository, node);
   const inputTokens = tokenCount({ prompt, input: data.input, dependencyOutputs }, 64);
   const outputTokens = tokenCount(node.outputSchema, 32);
   return redactSecrets({
     resolvedNode: node,
     resolvedPrompt: prompt,
     resolvedSkills: await resolveSkillsForNode(node, repositoryManager.getSkillRepository()),
-    resolvedEffectiveTools: await resolveEffectiveToolsForNode(node.id),
+    resolvedEffectiveTools: await resolveEffectiveToolsForNode(node.id, {}, node),
     dependencyOutputs,
     missingInputs: [...missingInputs, ...(!inputValidation.valid ? ["input_schema"] : [])],
     estimatedTokenRange: { min: inputTokens, max: inputTokens + outputTokens * 4 },
@@ -138,7 +146,9 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   if (!node) throw new Error(`Unknown node: ${data.nodeId}`);
   const inputValidation = validateAgainstNodeSchema(data.input ?? {}, node.inputSchema);
   if (!inputValidation.valid) throw new Error(`input_validation_failed: ${inputValidation.issues.join("; ")}`);
-  const prep = await prepareNodeExecution(data, repos);
+  // Threads the node loaded above through prepareNodeExecution (which threads it further, into
+  // getEffectivePrompt and resolveEffectiveToolsForNode) so this dispatch loads it once, not four times.
+  const prep = await prepareNodeExecution(data, repos, node);
   if (prep.readinessStatus !== "ready") throw new Error(`node_not_ready: ${prep.missingInputs.join(", ")}`);
   const runId = data.runId ?? makeRunId();
   const executionId = makeExecutionId();
