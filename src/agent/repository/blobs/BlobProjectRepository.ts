@@ -11,20 +11,36 @@ const projectKey = (projectId: string) => `projects/${projectId}.json`;
 export class BlobProjectRepository implements ProjectRepository {
   constructor(private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
 
+  // Perf (mcp-client-abort-timeouts-memoization): ensureSeeded had no memoization at all, so it
+  // re-downloaded every default project's blob on EVERY get()/list() call — a run that touches
+  // project.call_tool a dozen times across its nodes re-seeded a dozen times over. Memoized to run
+  // its network work exactly once per repository instance (which, through the process-lifetime
+  // singleton RepositoryManager, means once per process): the in-flight promise is shared so
+  // concurrent callers await the SAME seeding attempt rather than each starting their own, and a
+  // failed attempt clears itself so a transient blob-store error doesn't permanently mark this
+  // instance "seeded" without ever having actually seeded anything.
+  private seedPromise?: Promise<void>;
+
   // Seed the code-defined default projects the first time the store is read so the persisted registry
   // always contains the known projects. Only non-secret config is stored; endpoints/tokens stay in
   // environment variables.
   private async ensureSeeded(): Promise<void> {
-    await Promise.all(defaultProjectConfigs().map(async (project) => {
-      const key = projectKey(project.projectId);
-      const persisted = await getBlobJson<ProjectConnectionConfig>(this.store, key);
-      if (persisted === null) {
-        await this.store.setJSON(key, project);
-        return;
-      }
-      const migrated = migrateDefaultProjectConfig(persisted);
-      if (migrated.changed) await this.store.setJSON(key, migrated.config);
-    }));
+    if (!this.seedPromise) {
+      this.seedPromise = Promise.all(defaultProjectConfigs().map(async (project) => {
+        const key = projectKey(project.projectId);
+        const persisted = await getBlobJson<ProjectConnectionConfig>(this.store, key);
+        if (persisted === null) {
+          await this.store.setJSON(key, project);
+          return;
+        }
+        const migrated = migrateDefaultProjectConfig(persisted);
+        if (migrated.changed) await this.store.setJSON(key, migrated.config);
+      })).then(() => undefined).catch((error) => {
+        this.seedPromise = undefined;
+        throw error;
+      });
+    }
+    return this.seedPromise;
   }
 
   async list(): Promise<ProjectConnectionConfig[]> {
