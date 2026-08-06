@@ -127,8 +127,14 @@ export class OpenAINodeRunner implements NodeRunner {
     let priorSpendUsd = 0;
     if (budgetGuardEngaged) {
       // R-20: prior spend is measured spend only — estimated/mock records never count against budgets.
-      const spent = await summarizeModelUsage({ runId: context.run.runId });
-      priorSpendUsd = spent.actualCostUsdEstimate;
+      // Perf (mcp-client-abort-timeouts-memoization): executor.ts's advanceRun computes this SAME
+      // {runId} summary immediately before dispatch, for its own run.budgetUsd gate, whenever a run
+      // budget is configured — which is exactly when runBudgetUsd below would be defined too. Reusing
+      // its figure via context.priorRunSpendUsd avoids re-downloading/re-summing every usage record
+      // for this run a second time in the same dispatch; a caller that never computed it (context.
+      // priorRunSpendUsd undefined) falls back to querying it here exactly as before.
+      const precomputed = numberFrom(context.priorRunSpendUsd);
+      priorSpendUsd = precomputed !== undefined ? precomputed : (await summarizeModelUsage({ runId: context.run.runId })).actualCostUsdEstimate;
       const reserve = estimateModelCost({ model, inputTokens: 1000, outputTokens: maxOutputTokens });
       if (nodeBudgetUsd !== undefined && reserve > nodeBudgetUsd) {
         return { ok: false, code: "budget_exceeded", message: `Node "${node.id}"'s own budgetUsd ($${nodeBudgetUsd}) cannot cover even one model turn's reserve (~$${reserve}); raise modelConfig.budgetUsd or lower maxOutputTokens.`, details: { reserveUsdEstimate: reserve, nodeBudgetUsd, ceiling: "node" } };
@@ -303,7 +309,7 @@ export class OpenAINodeRunner implements NodeRunner {
         // Telemetry is non-authoritative: the validated output is the deliverable, so a usage-record
         // write failure must never discard a successful node (matches the workflow executor's pattern).
         await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId, attempt: attempt + 1, attemptsTotal: attempt + 1, turnCount, toolCallCount } }).catch(() => undefined);
-        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length }, toolCalls };
+        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length }, toolCalls, outputValidated: true };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         // Checked before the generic cancellation/abort branch below: the guard throws from inside the
