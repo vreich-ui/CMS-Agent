@@ -128,7 +128,11 @@ export class AnthropicNodeRunner implements NodeRunner {
         const outputTokens = data.usage?.output_tokens ?? 0;
         const usageFields = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
         await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "anthropic", ...usageFields, status: "actual", metadata: { executionMode: "anthropic" } }).catch(() => undefined);
-        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: data.id, provider: "anthropic" } };
+        // outputValidated: true — see NodeRunner.ts and executor.ts's executeRunnableNode: this runner
+        // already validated `output` against `node.outputSchema` immediately above (to decide whether
+        // to retry), so the executor's own generic output-schema gate can skip re-running the identical
+        // check against the identical (output, schema) pair.
+        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: data.id, provider: "anthropic" }, outputValidated: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (context.signal?.aborted) return { ok: false, code: "cancelled", message: "Anthropic node execution was cancelled." };
