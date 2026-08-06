@@ -77,8 +77,8 @@ export class ProjectMcpAdapter {
     return toConnectionState(this.config, this.env);
   }
 
-  private clientOptions(resolved: ResolvedConnection): McpClientOptions {
-    return { endpoint: resolved.endpoint!, token: resolved.token, transport: this.transport };
+  private clientOptions(resolved: ResolvedConnection, signal?: AbortSignal): McpClientOptions {
+    return { endpoint: resolved.endpoint!, token: resolved.token, transport: this.transport, signal };
   }
 
   private requireConnection(): ResolvedConnection | { error: string } {
@@ -88,19 +88,19 @@ export class ProjectMcpAdapter {
     return resolved;
   }
 
-  async testConnection(): Promise<ConnectionTestResult> {
+  async testConnection(signal?: AbortSignal): Promise<ConnectionTestResult> {
     const connection = this.connectionState();
     const resolved = this.requireConnection();
     if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, error: resolved.error };
     try {
-      const init = await mcpInitialize(this.clientOptions(resolved));
+      const init = await mcpInitialize(this.clientOptions(resolved, signal));
       return { ok: true, projectId: this.config.projectId, connection, server: { name: init.serverInfo?.name, version: init.serverInfo?.version, protocolVersion: init.protocolVersion } };
     } catch (error) {
       return { ok: false, projectId: this.config.projectId, connection, error: sanitizeError(error) };
     }
   }
 
-  async listTools(): Promise<ListToolsResult> {
+  async listTools(signal?: AbortSignal): Promise<ListToolsResult> {
     const connection = this.connectionState();
     const allowedTools = [...this.config.allowedTools];
     const defaultToolPolicy = this.config.defaultToolPolicy ?? "blocked";
@@ -108,7 +108,7 @@ export class ProjectMcpAdapter {
     const resolved = this.requireConnection();
     if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tools: [], allowedTools, defaultToolPolicy, toolPolicies, error: resolved.error };
     try {
-      const { tools } = await mcpListTools(this.clientOptions(resolved));
+      const { tools } = await mcpListTools(this.clientOptions(resolved, signal));
       const safe = (tools ?? []).filter((tool) => typeof tool?.name === "string").map((tool) => ({ name: tool.name, description: tool.description }));
       return { ok: true, projectId: this.config.projectId, connection, tools: safe, allowedTools, defaultToolPolicy, toolPolicies };
     } catch (error) {
@@ -116,7 +116,7 @@ export class ProjectMcpAdapter {
     }
   }
 
-  async callTool(name: string, args: Record<string, unknown> = {}): Promise<CallToolResult> {
+  async callTool(name: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<CallToolResult> {
     const connection = this.connectionState();
     const permission = effectiveToolPermission(this.config, name);
     if (permission === "blocked") {
@@ -130,7 +130,7 @@ export class ProjectMcpAdapter {
     const resolved = this.requireConnection();
     if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, error: resolved.error };
     try {
-      const result = await mcpCallTool(this.clientOptions(resolved), name, args);
+      const result = await mcpCallTool(this.clientOptions(resolved, signal), name, args);
       return { ok: true, projectId: this.config.projectId, connection, tool: name, permission, result };
     } catch (error) {
       return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, error: sanitizeError(error) };
@@ -146,7 +146,7 @@ export class ProjectMcpAdapter {
   // honored exactly as they are for a write call. project.call_tool itself is untouched by this
   // method's existence — it stays riskLevel write / requiresApproval true, the only path to an
   // external write.
-  async callReadTool(name: string, args: Record<string, unknown> = {}): Promise<ReadToolCallResult> {
+  async callReadTool(name: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<ReadToolCallResult> {
     if (!isReadToolOperation(name)) {
       return {
         ok: false,
@@ -157,7 +157,7 @@ export class ProjectMcpAdapter {
         error: `"${name}" is not a permitted read-only operation; project.call_read_tool only allows: ${READ_TOOL_ALLOWLIST.join(", ")}. Use project.call_tool for writes.`
       };
     }
-    return this.callTool(name, args);
+    return this.callTool(name, args, signal);
   }
 
   // Schema/contract discovery, if the remote exposes it: schema/contract-named tools and resources.

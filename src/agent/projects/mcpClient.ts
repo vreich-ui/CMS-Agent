@@ -17,12 +17,20 @@ export type McpResponse = {
   text?: () => Promise<string>;
 };
 
-export type McpTransport = (input: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<McpResponse>;
+// `signal` is optional so every existing McpTransport implementation (test doubles included) keeps
+// type-checking without change; a transport that ignores it simply never aborts, same as before this
+// field existed. defaultTransport forwards it straight to fetch's own AbortSignal support.
+export type McpTransport = (input: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<McpResponse>;
 
 export type McpClientOptions = {
   endpoint: string;
   token?: string;
   transport?: McpTransport;
+  // Callers that need to bound how long a request may run without ALSO tearing down the underlying
+  // connection on our own timer (toolExecutor.ts's Promise.race previously did exactly that: it
+  // rejected the promise but left the fetch running server-side) pass their own AbortController's
+  // signal through here instead.
+  signal?: AbortSignal;
 };
 
 export type RemoteTool = { name: string; description?: string; inputSchema?: unknown };
@@ -87,7 +95,8 @@ async function rpc<T>(options: McpClientOptions, method: string, params?: Record
   const response = await transport(options.endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} })
+    body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
+    signal: options.signal
   });
 
   if (!response.ok) throw new McpClientError(`MCP request failed with HTTP ${response.status}.`);
