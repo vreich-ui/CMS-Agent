@@ -154,5 +154,6 @@ steps:
           echo "$${ENV_NAMES}" | grep -qx "$${VAR}" || echo "note: $${VAR} is not set; publishing is disabled for that client."
         done
 
-        curl -fsS "$${URL}/healthz" >/dev/null && echo "healthz  : ok"
+        curl -fsS "$${URL}/healthz" >/dev/null
+        echo "healthz  : ok"
         echo "verified : $${REVISION} is serving ${_IMAGE} with all client connections present"

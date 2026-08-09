@@ -122,4 +122,16 @@ describe("CA4 deploy script regression guard", () => {
     expect(cloudBuild).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
     expect(cloudBuild).toContain("for VAR in MCP_SCOPED_TOKENS_JSON DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do");
   });
+
+  it("makes the Cloud Build health probe fail the deploy before it can report verified", async () => {
+    const cloudBuild = await readFile(new URL("../../../cloudbuild.deploy.yaml", import.meta.url), "utf8");
+    const lines = cloudBuild.split("\n");
+    const healthIndex = lines.findIndex((line) => line.includes('curl -fsS "$${URL}/healthz"'));
+    const verifiedIndex = lines.findIndex((line) => line.includes('echo "verified : $${REVISION}'));
+
+    expect(healthIndex).toBeGreaterThanOrEqual(0);
+    expect(verifiedIndex).toBeGreaterThan(healthIndex);
+    expect(lines[healthIndex]).toContain('curl -fsS "$${URL}/healthz" >/dev/null');
+    expect(lines[healthIndex]).not.toMatch(/&&|\|\|/);
+  });
 });
