@@ -105,12 +105,21 @@ describe("CA4 scoped MCP bearer tokens", () => {
 });
 
 describe("CA4 deploy script regression guard", () => {
-  it("uses merge-style environment and secret updates and wires the scoped-token secret", async () => {
+  it("keeps automated and manual deploy wiring aligned with merge-style scoped and Fernwell bindings", async () => {
     const script = await readFile(new URL("../../../scripts/deploy-mcp.sh", import.meta.url), "utf8");
+    const cloudBuild = await readFile(new URL("../../../cloudbuild.deploy.yaml", import.meta.url), "utf8");
     const commandLines = script.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    const cloudBuildCommandLines = cloudBuild.split("\n").filter((line) => !line.trimStart().startsWith("#"));
     expect(commandLines.some((line) => /--set-(?:env-vars|secrets)\b/.test(line))).toBe(false);
+    expect(cloudBuildCommandLines.some((line) => /--set-(?:env-vars|secrets)\b/.test(line))).toBe(false);
     expect(script).toContain("--update-env-vars");
     expect(script).toContain("--update-secrets");
     expect(script).toContain("MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest");
+    expect(cloudBuild).toContain("MCP_SCOPED_TOKENS_JSON=mcp-scoped-tokens-json:latest");
+    expect(script).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
+    expect(cloudBuild).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
+    expect(script).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
+    expect(cloudBuild).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
+    expect(cloudBuild).toContain("for VAR in MCP_SCOPED_TOKENS_JSON DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do");
   });
 });
