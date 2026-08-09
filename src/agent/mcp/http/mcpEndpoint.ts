@@ -12,6 +12,7 @@ import { McpSessionManager, negotiateProtocolVersion, type McpClientInfo } from 
 import { OAuthService } from "../auth/oauthService.js";
 import { buildWwwAuthenticate, parseBearerToken, resourceMetadataUrl } from "../auth/wwwAuthenticate.js";
 import { resolveBaseUrl } from "../auth/metadata.js";
+import { findScopedBearerTokenPolicy, type ScopedBearerTokenPolicy } from "../auth/scopedBearerTokens.js";
 
 const SESSION_HEADER = "mcp-session-id";
 const PROTOCOL_HEADER = "mcp-protocol-version";
@@ -63,13 +64,14 @@ const parseActorHeader = (value: string | undefined): WorkspaceActor | undefined
 const parseSourceHeader = (value: string | undefined): WorkspaceChangeSource | undefined =>
   value && (workspaceChangeSources as readonly string[]).includes(value) ? value as WorkspaceChangeSource : undefined;
 
-const buildToolContext = (headers: HeaderMap, tokenActor?: WorkspaceActor): WorkspaceToolContext => ({
+const buildToolContext = (headers: HeaderMap, tokenActor?: WorkspaceActor, scopedPolicy?: ScopedBearerTokenPolicy): WorkspaceToolContext => ({
   actor: parseActorHeader(headers["x-workspace-actor"]) ?? tokenActor ?? { kind: "agent" },
   source: parseSourceHeader(headers["x-workspace-source"]) ?? "mcp",
-  requestId: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  requestId: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  ...(scopedPolicy ? { allowedToolNames: scopedPolicy.toolAllowlist } : {})
 });
 
-type AuthOutcome = { ok: true; actor?: WorkspaceActor } | { ok: false; presentedToken: boolean };
+type AuthOutcome = { ok: true; actor?: WorkspaceActor; scopedPolicy?: ScopedBearerTokenPolicy } | { ok: false; presentedToken: boolean };
 
 // Accept either the static workspace bearer (MCP_API_TOKEN) or an OAuth-minted access token. On
 // failure the caller returns 401 with a WWW-Authenticate pointer so a connector can discover the
@@ -78,10 +80,50 @@ const authenticate = async (headers: HeaderMap): Promise<AuthOutcome> => {
   if (hasBearerToken(headers, process.env.MCP_API_TOKEN)) return { ok: true };
   const token = parseBearerToken(readHeader(headers, "authorization"));
   if (!token) return { ok: false, presentedToken: false };
+  try {
+    const scopedPolicy = findScopedBearerTokenPolicy(token);
+    if (scopedPolicy) return { ok: true, scopedPolicy };
+  } catch {
+    // A malformed scoped-token secret must fail closed exactly like any other invalid bearer and
+    // must not reveal configuration detail through an HTTP response or log.
+    return { ok: false, presentedToken: true };
+  }
   const record = await new OAuthService().verifyAccessToken(token);
   if (record) return { ok: true, actor: record.actor };
   return { ok: false, presentedToken: true };
 };
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+
+const requestedProject = (argumentsValue: unknown): string | undefined | null => {
+  if (!isPlainObject(argumentsValue)) return undefined;
+  const camel = argumentsValue.projectId;
+  const snake = argumentsValue.project_id;
+  if (camel !== undefined && (typeof camel !== "string" || !camel)) return null;
+  if (snake !== undefined && (typeof snake !== "string" || !snake)) return null;
+  if (camel !== undefined && snake !== undefined && camel !== snake) return null;
+  return (camel ?? snake) as string | undefined;
+};
+
+// Scoped callers receive the normal initialize response, but tools/list is reduced to its exact
+// wire-name allowlist. Each tools/call is also checked here before dispatch; the server-side filter
+// is defence in depth for the SDK path. Calls without a direct project argument are still bounded
+// by the explicit tool allowlist, while calls that name projectId/project_id must be in scope.
+const isScopedMessageAllowed = (message: unknown, policy: ScopedBearerTokenPolicy): boolean => {
+  if (!isPlainObject(message) || typeof message.method !== "string") return false;
+  // Scoped site credentials are for the MCP tool channel only. Keep the session handshake and
+  // discovery available, but deny prompts/resources (which can expose workspace-wide metadata)
+  // unless a later explicit scoped-resource contract is added.
+  if (["initialize", "notifications/initialized", "ping", "tools/list"].includes(message.method)) return true;
+  if (message.method !== "tools/call") return false;
+  const params = message.params;
+  if (!isPlainObject(params) || typeof params.name !== "string" || !policy.toolAllowlist.includes(params.name)) return false;
+  const project = requestedProject(params.arguments);
+  return project !== null && (project === undefined || policy.projects.includes(project));
+};
+
+const isScopedRequestAllowed = (body: unknown, policy: ScopedBearerTokenPolicy): boolean =>
+  Array.isArray(body) ? body.every((message) => isScopedMessageAllowed(message, policy)) : isScopedMessageAllowed(body, policy);
 
 const unauthorized = (headers: HeaderMap, presentedToken: boolean) => {
   const baseUrl = resolveBaseUrl(headers);
@@ -119,8 +161,10 @@ export async function handleMcpHttp(request: McpHttpRequest): Promise<McpHttpRes
   if (method !== "POST") return json(405, { error: { code: "method_not_allowed", message: "Use POST." } }, { allow: "POST, DELETE" });
 
   try {
-    const context = buildToolContext(request.headers, auth.actor);
+    const context = buildToolContext(request.headers, auth.actor, auth.scopedPolicy);
     const rawBody = request.body ? JSON.parse(request.body) : {};
+
+    if (auth.scopedPolicy && !isScopedRequestAllowed(rawBody, auth.scopedPolicy)) return unauthorized(request.headers, true);
 
     if (!Array.isArray(rawBody) && isInitialize(rawBody)) {
       const params = (rawBody.params ?? {}) as { protocolVersion?: string; clientInfo?: McpClientInfo };

@@ -40,24 +40,27 @@ export const DEPRECATED_TOOL_ALIASES: Record<string, string> = {
 // connector's entire tool list. tools/call resolves the canonical name and, for backward
 // compatibility, the legacy dotted spelling. Both listing and lookup honor the exposure allowlist:
 // an unexposed tool is neither advertised nor callable (it reads as unknown).
-const listedTools = (tools: WorkspaceTool[]) =>
+const isAllowedForContext = (tool: WorkspaceTool, context: WorkspaceToolContext): boolean =>
+  !context.allowedToolNames || context.allowedToolNames.includes(canonicalToolName(tool.name));
+
+const listedTools = (tools: WorkspaceTool[], context: WorkspaceToolContext) =>
   tools
-    .filter((tool) => isToolExposed(tool.name))
+    .filter((tool) => isToolExposed(tool.name) && isAllowedForContext(tool, context))
     .map((tool) => ({ name: canonicalToolName(tool.name), description: tool.description, inputSchema: tool.inputSchema }));
 
-const indexToolsByName = (tools: WorkspaceTool[]): Map<string, WorkspaceTool> => {
+const indexToolsByName = (tools: WorkspaceTool[], context: WorkspaceToolContext): Map<string, WorkspaceTool> => {
   const all = new Map<string, WorkspaceTool>();
   for (const tool of tools) all.set(tool.name, tool);
 
   const byName = new Map<string, WorkspaceTool>();
   for (const tool of tools) {
-    if (!isToolExposed(tool.name)) continue;
+    if (!isToolExposed(tool.name) || !isAllowedForContext(tool, context)) continue;
     byName.set(canonicalToolName(tool.name), tool);
     byName.set(tool.name, tool);
   }
   for (const [alias, target] of Object.entries(DEPRECATED_TOOL_ALIASES)) {
     const tool = all.get(target);
-    if (!tool || !isToolExposed(alias)) continue;
+    if (!tool || !isToolExposed(alias) || !isAllowedForContext(tool, context)) continue;
     byName.set(alias, tool);
     byName.set(canonicalToolName(alias), tool);
   }
@@ -74,9 +77,9 @@ export function createWorkspaceMcpServer(context: WorkspaceToolContext = {}) {
     { capabilities: { tools: {}, prompts: {}, resources: {} } }
   );
   const tools = createWorkspaceTools(context);
-  const byName = indexToolsByName(tools);
+  const byName = indexToolsByName(tools, context);
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listedTools(tools) }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listedTools(tools, context) }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const tool = byName.get(request.params.name);
@@ -101,7 +104,7 @@ export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolC
   const request = message as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
   const id = request.id ?? null;
   const tools = createWorkspaceTools(context);
-  const byName = indexToolsByName(tools);
+  const byName = indexToolsByName(tools, context);
 
   try {
     switch (request.method) {
@@ -114,7 +117,7 @@ export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolC
         // probe; answering "Method not found" reads as a dead server and can drop the connection.
         return { jsonrpc: "2.0", id, result: {} };
       case "tools/list":
-        return { jsonrpc: "2.0", id, result: { tools: listedTools(tools) } };
+        return { jsonrpc: "2.0", id, result: { tools: listedTools(tools, context) } };
       case "tools/call": {
         const name = String(request.params?.name ?? "");
         const tool = byName.get(name);

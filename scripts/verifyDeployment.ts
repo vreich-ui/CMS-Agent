@@ -27,6 +27,8 @@
 //
 // Usage:
 //   MCP_URL=https://<service>/mcp MCP_API_TOKEN=<bearer> npm run verify:deploy
+//   MCP_URL=... MCP_API_TOKEN=<legacy-bearer> MCP_SCOPED_MCP_TOKEN=<site-bearer> \
+//     MCP_SCOPED_PROJECT_ID=platform npm run verify:deploy
 //
 // Read-only except for idempotent canonical-agent seeding on legacy workspaces. Never publishes.
 
@@ -88,9 +90,15 @@ type AgentResolveResult = {
 const main = async (): Promise<number> => {
   const url = (process.env.MCP_URL ?? "").trim();
   const token = (process.env.MCP_API_TOKEN ?? "").trim();
+  const scopedToken = (process.env.MCP_SCOPED_MCP_TOKEN ?? "").trim();
+  const scopedProjectId = (process.env.MCP_SCOPED_PROJECT_ID ?? "").trim();
 
   if (!url || !token) {
     console.error("verify            USAGE    MCP_URL=https://<service>/mcp MCP_API_TOKEN=<bearer> npm run verify:deploy");
+    return 2;
+  }
+  if (!!scopedToken !== !!scopedProjectId) {
+    console.error("verify            USAGE    set both MCP_SCOPED_MCP_TOKEN and MCP_SCOPED_PROJECT_ID to assert a scoped bearer, or neither to skip that optional live check.");
     return 2;
   }
 
@@ -150,6 +158,22 @@ const main = async (): Promise<number> => {
     console.error("agent             BROKEN   agent_resolve did not return an active canonical client_manager definition.");
   } else {
     console.log(`agent             ok       ${resolved.agent_ref} (${resolved.model})`);
+  }
+
+  // 4. Scoped bearer policy. The scoped secret itself stays in Secret Manager; this optional
+  // shell-only bearer is deliberately never printed. It proves the site token may resolve only
+  // its pinned project and that the deployed parser has accepted the scoped secret.
+  if (scopedToken && scopedProjectId) {
+    const scopedAgent = await rpc<AgentResolveResult>(url, scopedToken, "tools/call", { name: "agent_resolve", arguments: { role: "client_manager", project_id: scopedProjectId } });
+    const scopedResolved = scopedAgent.structuredContent?.data;
+    if (!scopedAgent.structuredContent?.ok || !scopedResolved?.agent_ref || !scopedResolved.rev || !scopedResolved.model || scopedResolved.status !== "active") {
+      failures += 1;
+      console.error("scoped-auth       BROKEN   scoped bearer did not resolve an active canonical client_manager for its pinned project.");
+    } else {
+      console.log("scoped-auth       ok       scoped bearer resolved its pinned project's canonical agent");
+    }
+  } else {
+    console.log("scoped-auth       SKIPPED  set MCP_SCOPED_MCP_TOKEN and MCP_SCOPED_PROJECT_ID in the operator shell to exercise a deployed site token");
   }
 
   return failures === 0 ? 0 : 1;

@@ -318,7 +318,7 @@ const coerceSkillArg = (input: unknown): unknown => (!!input && typeof input ===
 
 // Request-scoped attribution context. The secure proxy stamps a verified human actor via
 // headers; direct MCP callers default to an agent actor. Attribution only — never authorization.
-export type WorkspaceToolContext = { actor?: WorkspaceActor; source?: WorkspaceChangeSource; requestId?: string };
+export type WorkspaceToolContext = { actor?: WorkspaceActor; source?: WorkspaceChangeSource; requestId?: string; allowedToolNames?: readonly string[] };
 
 export function createWorkspaceTools(context: WorkspaceToolContext = {}): WorkspaceTool[] {
   const workspaceRepository = repositoryManager.getWorkspaceRepository();
