@@ -1,6 +1,14 @@
 export type ModelUsageStatus = "estimated" | "actual";
 export type ModelUsageCurrency = "USD";
 
+// Conversation attribution is additive metering metadata. It creates no budget ceiling and does
+// not make the usage record a conversation authority.
+export type ModelUsageMetadata = Record<string, unknown> & {
+  conversationId?: string;
+  turnId?: string;
+  siteId?: string;
+};
+
 export type ModelUsageRecord = {
   usageId: string;
   runId?: string;
@@ -30,7 +38,7 @@ export type ModelUsageRecord = {
   // runs' costs are actually comparable.
   pricingAsOf?: string;
   pricingCatalogVersion?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: ModelUsageMetadata;
 };
 
 export type ModelUsageFilters = {

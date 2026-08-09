@@ -81,6 +81,17 @@ describe("workflow runner MCP tools (end-to-end)", () => {
     expect(run.rev).toBe(12);
   });
 
+  it("rejects removed per-call dependencies instead of silently ignoring them", async () => {
+    const started = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: { instructions: "schema" } });
+    const response = await post({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "workflow.run_node", arguments: { runId: started.data.run.runId, dependencies: { article_body: ["input_triage"] } } } });
+
+    expect(response.json.error).toMatchObject({ code: -32603, data: { ok: false, error: { code: "validation_error" } } });
+
+    const catalog = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const runNode = catalog.json.result.tools.find((tool: { name: string }) => tool.name === "workflow_run_node");
+    expect(runNode.inputSchema.properties).not.toHaveProperty("dependencies");
+  });
+
   it("reset then resume does not restore any pre-reset completed node state", async () => {
     const started = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: { instructions: "reset" } });
     const runId = started.data.run.runId as string;

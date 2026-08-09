@@ -5,6 +5,10 @@
 // workflow.pause_run now reports "paused"; resume_run returns the run to "queued" as before.
 export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled"] as const;
 export type ExecutionStatus = typeof executionStatuses[number];
+// A paused run is intentionally halted alongside completed/failed/blocked/cancelled runs until a
+// caller explicitly resumes it. This is the single status set shared by executor and job drivers.
+export const haltedExecutionStatuses = ["blocked", "cancelled", "completed", "failed", "paused"] as const satisfies readonly ExecutionStatus[];
+export const HALTED_EXECUTION_STATUSES = new Set<ExecutionStatus>(haltedExecutionStatuses);
 
 // Per-call audit stub for the controlled-tool calls a node execution made. ToolExecutor's full audit
 // records live in process memory and die with the serverless invocation (why tool.list_executions

@@ -24,6 +24,12 @@ describe("model usage observability", () => {
     expect(await store.list({ runId: "run-a" })).toHaveLength(1);
   });
 
+  it("stores conversation and tenant attribution in additive usage metadata", async () => {
+    const record = await recordModelUsage({ ...base, metadata: { conversationId: "chat_1", turnId: "turn_1", siteId: "site_platform" } }, store);
+    expect(record.metadata).toMatchObject({ conversationId: "chat_1", turnId: "turn_1", siteId: "site_platform" });
+    await expect(recordModelUsage({ ...base, metadata: { conversationId: "" } }, store)).rejects.toThrow();
+  });
+
   it("summarizes usage totals", async () => {
     await recordModelUsage({ ...base, reasoningTokens: 25, projectId: "project-a", nodeId: "node-a" }, store);
     await recordModelUsage({ ...base, inputTokens: 200, outputTokens: 300, projectId: "project-a", nodeId: "node-b" }, store);

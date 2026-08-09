@@ -9,6 +9,7 @@ import { MemoryUsageRepository } from "../../src/agent/repository/memory/MemoryU
 import { MemoryWorkspaceRepository } from "../../src/agent/repository/memory/MemoryWorkspaceRepository.js";
 import { MemorySkillRepository } from "../../src/agent/skills/skillRegistry.js";
 import { MemoryChangeRepository } from "../../src/agent/repository/memory/MemoryChangeRepository.js";
+import { MemoryConversationTurnRepository } from "../../src/agent/repository/memory/MemoryConversationTurnRepository.js";
 
 describe("RepositoryManager", () => {
   it("defaults repository context to the memory backend", () => {
@@ -34,6 +35,7 @@ describe("RepositoryManager", () => {
     expect(manager.getUsageRepository()).toBeInstanceOf(MemoryUsageRepository);
     expect(manager.getSkillRepository()).toBeInstanceOf(MemorySkillRepository);
     expect(manager.getChangeRepository()).toBeInstanceOf(MemoryChangeRepository);
+    expect(manager.getConversationTurnRepository()).toBeInstanceOf(MemoryConversationTurnRepository);
   });
 
   it("keeps json configured backend mapped to memory repositories as a placeholder", () => {
@@ -63,7 +65,8 @@ describe("RepositoryManager", () => {
       skill: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       change: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       evaluation: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
-      improvement: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
+      improvement: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      conversationTurns: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
     });
   });
 
@@ -79,7 +82,8 @@ describe("RepositoryManager", () => {
       manager.getSkillRepository(),
       manager.getChangeRepository(),
       manager.getEvaluationRepository(),
-      manager.getImprovementRepository()
+      manager.getImprovementRepository(),
+      manager.getConversationTurnRepository()
     ]) {
       await expect(repository.health()).resolves.toEqual({ backend: "memory", readable: true, writable: true, version: "memory.v1" });
     }

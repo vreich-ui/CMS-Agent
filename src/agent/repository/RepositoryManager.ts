@@ -11,6 +11,7 @@ import type { WorkspaceRepository } from "./interfaces/WorkspaceRepository.js";
 import type { ChangeRepository } from "./interfaces/ChangeRepository.js";
 import type { EvaluationRepository } from "./interfaces/EvaluationRepository.js";
 import type { ImprovementRepository } from "./interfaces/ImprovementRepository.js";
+import type { ConversationTurnRepository } from "./interfaces/ConversationTurnRepository.js";
 import { BlobArtifactRepository } from "./blobs/BlobArtifactRepository.js";
 import { BlobEvaluationRepository } from "./blobs/BlobEvaluationRepository.js";
 import { BlobImprovementRepository } from "./blobs/BlobImprovementRepository.js";
@@ -20,6 +21,7 @@ import { BlobProjectRepository } from "./blobs/BlobProjectRepository.js";
 import { BlobUsageRepository } from "./blobs/BlobUsageRepository.js";
 import { BlobWorkspaceRepository } from "./blobs/BlobWorkspaceRepository.js";
 import { BlobChangeRepository } from "./blobs/BlobChangeRepository.js";
+import { BlobConversationTurnRepository } from "./blobs/BlobConversationTurnRepository.js";
 import { BlobSkillRepository, MemorySkillRepository } from "../skills/skillRegistry.js";
 import { MemoryArtifactRepository } from "./memory/MemoryArtifactRepository.js";
 import { MemoryExecutionRepository } from "./memory/MemoryExecutionRepository.js";
@@ -30,6 +32,7 @@ import { MemoryWorkspaceRepository } from "./memory/MemoryWorkspaceRepository.js
 import { MemoryChangeRepository } from "./memory/MemoryChangeRepository.js";
 import { MemoryEvaluationRepository } from "./memory/MemoryEvaluationRepository.js";
 import { MemoryImprovementRepository } from "./memory/MemoryImprovementRepository.js";
+import { MemoryConversationTurnRepository } from "./memory/MemoryConversationTurnRepository.js";
 
 export type RepositoryBackend = "memory" | "json" | "blobs" | "gcs";
 
@@ -55,6 +58,7 @@ export type RepositoryHealthSummary = {
   change: RepositoryHealth;
   evaluation: RepositoryHealth;
   improvement: RepositoryHealth;
+  conversationTurns: RepositoryHealth;
 };
 
 const resolveBackend = (context: Partial<RepositoryContext>) => context.backend ?? (process.env.WORKSPACE_STORE as RepositoryBackend | undefined) ?? "memory";
@@ -72,6 +76,7 @@ export class RepositoryManager {
   private readonly changeRepository: ChangeRepository;
   private readonly evaluationRepository: EvaluationRepository;
   private readonly improvementRepository: ImprovementRepository;
+  private readonly conversationTurnRepository: ConversationTurnRepository;
 
   constructor(context: Partial<RepositoryContext> = {}) {
     this.context = resolveContext(context);
@@ -89,6 +94,7 @@ export class RepositoryManager {
       this.changeRepository = new BlobChangeRepository();
       this.evaluationRepository = new BlobEvaluationRepository();
       this.improvementRepository = new BlobImprovementRepository();
+      this.conversationTurnRepository = new BlobConversationTurnRepository();
       this.workspaceRepository.attachChangeSink?.(this.changeRepository);
       return;
     }
@@ -103,6 +109,7 @@ export class RepositoryManager {
     this.changeRepository = new MemoryChangeRepository(this.context.backend);
     this.evaluationRepository = new MemoryEvaluationRepository(this.context.backend);
     this.improvementRepository = new MemoryImprovementRepository(this.context.backend);
+    this.conversationTurnRepository = new MemoryConversationTurnRepository(this.context.backend);
     this.workspaceRepository.attachChangeSink?.(this.changeRepository);
   }
 
@@ -117,6 +124,7 @@ export class RepositoryManager {
   getChangeRepository(): ChangeRepository { return this.changeRepository; }
   getEvaluationRepository(): EvaluationRepository { return this.evaluationRepository; }
   getImprovementRepository(): ImprovementRepository { return this.improvementRepository; }
+  getConversationTurnRepository(): ConversationTurnRepository { return this.conversationTurnRepository; }
 
   // G3 (T-2 re-run, run_1785405350649_9u5mjz): the project repository's own health() has always
   // existed, but this summary never once called it — the project registry had NO representation in
@@ -125,7 +133,7 @@ export class RepositoryManager {
   // operator or startup check reading repository.get_health instead of leaving them reachable only by
   // calling project repo health directly.
   async getRepositoryHealth(): Promise<RepositoryHealthSummary> {
-    const [workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement] = await Promise.all([
+    const [workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement, conversationTurns] = await Promise.all([
       this.workspaceRepository.health(),
       this.executionRepository.health(),
       this.artifactRepository.health(),
@@ -135,9 +143,10 @@ export class RepositoryManager {
       this.skillRepository.health(),
       this.changeRepository.health(),
       this.evaluationRepository.health(),
-      this.improvementRepository.health()
+      this.improvementRepository.health(),
+      this.conversationTurnRepository.health()
     ]);
-    const storageHealth = [workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
-    return { backend: this.context.backend, storageHealth, workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement };
+    const storageHealth = [workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement, conversationTurns].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
+    return { backend: this.context.backend, storageHealth, workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, project, skill, change, evaluation, improvement, conversationTurns };
   }
 }
