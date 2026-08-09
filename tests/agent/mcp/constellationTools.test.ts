@@ -53,6 +53,7 @@ describe("constellation.* MCP tools", () => {
     expect(attention.filter((item) => item.id.startsWith("attn_run_") || item.id.startsWith("attn_output_validation_"))).toEqual([]);
     expect(attention.map((item) => item.id).sort()).toEqual([
       "attn_project_unconfigured_dr-lurie",
+      "attn_project_unconfigured_fernwell",
       "attn_project_unconfigured_monetizer",
       "attn_project_unconfigured_pdf-tool",
       // T-2 re-run (run_1785405350649_9u5mjz): platform was live-registered via project.create but

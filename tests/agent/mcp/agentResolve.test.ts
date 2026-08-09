@@ -44,6 +44,11 @@ describe("agent.resolve", () => {
     expect(result.data).toEqual(expect.objectContaining({ agent_ref: "agt_client_manager@2", rev: 2, model: "gpt-4.1-mini" }));
   });
 
+  it("resolves the same project-neutral definition for the canonical Fernwell project", async () => {
+    const result = await resolve().execute({ role: "client_manager", project_id: "fernwell" }) as { ok: boolean; data: { agent_ref: string; rev: number; model: string; status: string } };
+    expect(result.data).toEqual({ agent_ref: "agt_client_manager@1", name: "Client Manager", rev: 1, model: "gpt-4.1", status: "active" });
+  });
+
   it("fails closed when the canonical definition is disabled", async () => {
     const workspace = repositoryManager.getWorkspaceRepository();
     const agent = (await workspace.listConversationalAgents())[0];

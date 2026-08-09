@@ -151,13 +151,15 @@ const main = async (): Promise<number> => {
   // 3. Canonical conversational agent. This is a discovery assertion, not a conversation call:
   // the deployment must be able to seed/resolve the project-neutral definition before Platform
   // begins using it. It deliberately does not inspect or expose the prompt.
-  const agent = await rpc<AgentResolveResult>(url, token, "tools/call", { name: "agent_resolve", arguments: { role: "client_manager", project_id: "dr-lurie" } });
-  const resolved = agent.structuredContent?.data;
-  if (!agent.structuredContent?.ok || !resolved?.agent_ref || !resolved.rev || !resolved.model || resolved.status !== "active") {
-    failures += 1;
-    console.error("agent             BROKEN   agent_resolve did not return an active canonical client_manager definition.");
-  } else {
-    console.log(`agent             ok       ${resolved.agent_ref} (${resolved.model})`);
+  for (const projectId of ["dr-lurie", "fernwell"] as const) {
+    const agent = await rpc<AgentResolveResult>(url, token, "tools/call", { name: "agent_resolve", arguments: { role: "client_manager", project_id: projectId } });
+    const resolved = agent.structuredContent?.data;
+    if (!agent.structuredContent?.ok || !resolved?.agent_ref || !resolved.rev || !resolved.model || resolved.status !== "active") {
+      failures += 1;
+      console.error(`agent             BROKEN   ${projectId} did not resolve an active canonical client_manager definition.`);
+    } else {
+      console.log(`agent             ok       ${projectId} ${resolved.agent_ref} (${resolved.model})`);
+    }
   }
 
   // 4. Scoped bearer policy. The scoped secret itself stays in Secret Manager; this optional
