@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
-import type { BudgetStatus, EstimateModelCostInput, ModelUsageFilters, ModelUsageRecord, ModelUsageSummary, ModelUsageSummaryBucket, RecordModelUsageInput } from "./modelUsageTypes.js";
+import type { BudgetStatus, EstimateModelCostInput, ModelUsageFilters, ModelUsageMetadata, ModelUsageRecord, ModelUsageSummary, ModelUsageSummaryBucket, RecordModelUsageInput } from "./modelUsageTypes.js";
 
 const now = () => new Date().toISOString();
 const makeUsageId = () => `usage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -46,6 +46,12 @@ export const usageFiltersSchema = z.object({
   status: z.enum(["estimated", "actual"]).optional()
 }).strict();
 
+export const modelUsageMetadataSchema = z.object({
+  conversationId: z.string().min(1).optional(),
+  turnId: z.string().min(1).optional(),
+  siteId: z.string().min(1).optional()
+}).catchall(z.unknown());
+
 export const recordModelUsageSchema = z.object({
   usageId: z.string().min(1).optional(),
   runId: z.string().min(1).optional(),
@@ -67,7 +73,7 @@ export const recordModelUsageSchema = z.object({
   recordedAt: z.string().datetime().optional(),
   pricingAsOf: z.string().min(1).optional(),
   pricingCatalogVersion: z.string().min(1).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional()
+  metadata: modelUsageMetadataSchema.optional()
 }).strict();
 
 const roundUsd = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
@@ -90,7 +96,7 @@ export async function recordModelUsage(input: RecordModelUsageInput, store: Usag
     recordedAt: parsed.recordedAt ?? now(),
     pricingAsOf: parsed.pricingAsOf ?? MODEL_PRICING_CATALOG_ASOF,
     pricingCatalogVersion: parsed.pricingCatalogVersion ?? MODEL_PRICING_CATALOG_VERSION,
-    metadata: parsed.metadata
+    metadata: parsed.metadata as ModelUsageMetadata | undefined
   };
   return store.record(record);
 }

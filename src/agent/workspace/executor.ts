@@ -1,6 +1,6 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
-import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowEntrypoint, WorkflowExecutionRecord } from "./executionTypes.js";
+import { HALTED_EXECUTION_STATUSES, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
@@ -91,7 +91,6 @@ export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
 // must stay put for exactly the same reason a blocked one does. Before "paused" existed, pause_run wrote
 // "blocked" — which worked only because "blocked" was already in this set, and cost the ability to tell
 // an operator pause apart from a publish hold.
-const TERMINAL_STATUSES = new Set<ExecutionStatus>(["blocked", "cancelled", "completed", "failed", "paused"]);
 const MAX_SAVE_RETRIES = 5;
 // Grace period past a dispatched node's own timeout before the dispatch is considered dead. The
 // runner's Promise.race timeout ends a live node at timeoutMs, so a "running" claim older than
@@ -585,7 +584,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const run = await store.getRun(runId);
     if (!run) throw new Error(`Unknown run: ${runId}`);
     latest = run;
-    if (TERMINAL_STATUSES.has(run.status)) return run;
+    if (HALTED_EXECUTION_STATUSES.has(run.status)) return run;
 
     const nodes = await resolveConductorNodes(options.workspaceRepository);
     // Dispatch-claim bookkeeping (the ~300s silent-death fix). A node persisted as "running" either

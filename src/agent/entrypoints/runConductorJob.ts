@@ -13,9 +13,7 @@ import { registerCmsAgentStoreFactory, type BlobStoreClient } from "../repositor
 import { createGcsStoreClient } from "../repository/gcs/gcsStoreClient.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
-import type { ExecutionStatus, WorkflowExecutionRecord } from "../workspace/executionTypes.js";
-
-const TERMINAL_STATUSES = new Set<ExecutionStatus>(["blocked", "cancelled", "completed", "failed"]);
+import { HALTED_EXECUTION_STATUSES, type ExecutionStatus, type WorkflowExecutionRecord } from "../workspace/executionTypes.js";
 // Matches workflow.run_all's advance bound; the canonical graph has 18 nodes, so this is headroom
 // for retries, never a pacing mechanism.
 const DEFAULT_MAX_STEPS = 100;
@@ -129,7 +127,7 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
   }
   logNodeTransitions(run);
 
-  while (!TERMINAL_STATUSES.has(run.status) && steps < maxSteps) {
+  while (!HALTED_EXECUTION_STATUSES.has(run.status) && steps < maxSteps) {
     if (options.signal?.aborted) { stopped = true; break; }
     run = await runNextNode(run.runId, { executionRepository, workspaceRepository, approved: options.approved });
     steps += 1;

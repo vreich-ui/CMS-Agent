@@ -4,6 +4,8 @@ import { GcsStoreClient } from "../../src/agent/repository/gcs/gcsStoreClient.js
 import { registerCmsAgentStoreFactory, type BlobStoreClient } from "../../src/agent/repository/blobs/blobClient.js";
 import { BlobExecutionRepository } from "../../src/agent/repository/blobs/BlobExecutionRepository.js";
 import { BlobWorkspaceRepository } from "../../src/agent/repository/blobs/BlobWorkspaceRepository.js";
+import { BlobConversationTurnRepository } from "../../src/agent/repository/blobs/BlobConversationTurnRepository.js";
+import { MAX_CONVERSATION_TURNS, type ConversationTurnRecord } from "../../src/agent/conversations/conversationTurnTypes.js";
 import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
 import { RunConcurrencyError } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import { migrateStore, verifyStore } from "../../src/agent/entrypoints/migrateStoreJob.js";
@@ -61,6 +63,12 @@ const makeFakeBucket = () => {
 const clientFor = (bucket: ReturnType<typeof makeFakeBucket>, prefix = "") =>
   new GcsStoreClient(prefix, bucket as unknown as Bucket) as unknown as BlobStoreClient;
 
+const conversationTurn = (index: number): ConversationTurnRecord => ({
+  recordType: "turn", turnId: `turn_${index}`, conversationId: "conversation_race", projectId: "platform", agentRef: "agt_client_manager", agentRev: "rev_1",
+  actor: { kind: "human", id: "usr_123" }, requestPreview: { messageCount: 1 }, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsdEstimate: 0 },
+  createdAt: new Date(Date.UTC(2026, 7, 9, 0, 0, index)).toISOString()
+});
+
 const savedEnv = { ...process.env };
 afterEach(() => {
   process.env = { ...savedEnv };
@@ -110,6 +118,16 @@ describe("GcsStoreClient (BlobStoreClient over GCS)", () => {
 });
 
 describe("lost-update race closed on GCS (Phase 2 acceptance)", () => {
+  it("persists the bounded conversation mirror through the GCS-shaped store", async () => {
+    const repository = new BlobConversationTurnRepository(clientFor(makeFakeBucket()));
+    for (let index = 0; index <= MAX_CONVERSATION_TURNS; index++) await repository.record(conversationTurn(index));
+
+    const entries = await repository.list("conversation_race");
+    expect(entries).toHaveLength(MAX_CONVERSATION_TURNS + 1);
+    expect(entries[0]).toMatchObject({ recordType: "trim_marker", trimmedTurnCount: 1 });
+    expect(entries.at(-1)).toMatchObject({ turnId: `turn_${MAX_CONVERSATION_TURNS}` });
+  });
+
   it("rejects the losing concurrent run writer with RunConcurrencyError", async () => {
     const bucket = makeFakeBucket();
     const repoA = new BlobExecutionRepository(clientFor(bucket));
