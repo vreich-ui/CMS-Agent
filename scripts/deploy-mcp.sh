@@ -41,6 +41,7 @@ die() { say ""; say "✗ $*"; exit 1; }
 
 SERVICE="${SERVICE:-cms-agent-mcp}"
 REPO="${REPO:-cms-agent}"
+SCOPED_TOKENS_SECRET="${MCP_SCOPED_TOKENS_SECRET:-mcp-scoped-tokens-json}"
 IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/mcp-service:$IMAGE_TAG"
 
@@ -76,7 +77,7 @@ gcloud run deploy "$SERVICE" \
   --cpu 1 --memory 512Mi --min-instances 0 --max-instances 4 --port 8080 \
   --allow-unauthenticated \
   --update-env-vars "^|^WORKSPACE_STORE=gcs|GCS_BUCKET=$GCS_BUCKET|MCP_STATE_STORE=blobs|MCP_ALLOWED_ORIGINS=$MCP_ALLOWED_ORIGINS" \
-  --update-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest"
+  --update-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest"
 
 URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')"
 REVISION="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.latestReadyRevisionName)')"
@@ -94,7 +95,8 @@ say "==> Health"
 curl -fsS "$URL/healthz" && say ""
 
 # The check that would have caught both of this project's deploy incidents: is the SERVED tool surface
-# the one this commit expects, and does every active client still have its endpoint and token?
+# the one this commit expects, does every active client still have its endpoint and token, and (when
+# the operator supplied a scoped token only in this shell) does its project pin resolve the agent?
 if [ -n "${MCP_API_TOKEN:-}" ]; then
   say ""
   say "==> Verifying the served surface and client configuration"

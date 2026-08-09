@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { HeaderMap } from "../runtime/auth.js";
 import { routeControlPlaneRequest, type RouterRequest } from "../mcp/http/controlPlaneRouter.js";
 import { bootstrapWorkspaceStore } from "./runConductorJob.js";
+import { validateScopedBearerTokenConfiguration } from "../mcp/auth/scopedBearerTokens.js";
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // MCP tool payloads are small; cap defends against abuse.
 
@@ -98,6 +99,7 @@ export async function handleNodeRequest(req: IncomingMessage, res: ServerRespons
 export function startMcpServer(port = Number(process.env.PORT ?? 8080)) {
   // Fail fast on store misconfiguration and register the GCS transport before the first request
   // (the repository manager is built lazily, so startup registration is always early enough).
+  validateScopedBearerTokenConfiguration();
   bootstrapWorkspaceStore();
   const server = createServer((req, res) => { void handleNodeRequest(req, res); });
   server.listen(port, () => console.error(`CMS-Agent MCP control plane listening on :${port} (store=${process.env.WORKSPACE_STORE ?? "memory"})`));
