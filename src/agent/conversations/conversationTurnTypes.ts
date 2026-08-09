@@ -49,7 +49,56 @@ export type ConversationTrimMarker = {
   createdAt: string;
 };
 
-export type ConversationMirrorEntry = ConversationTurnRecord | ConversationTrimMarker;
+// A compact, durable explanation for a deletion. It intentionally carries neither request nor
+// response content: the learning ledger holds the decision evidence and this mirror explains why
+// the content is no longer present.
+export type ConversationSupersessionTombstone = {
+  recordType: "supersession_tombstone";
+  conversationId: string;
+  projectId: string;
+  supersededTurnId: string;
+  supersedingTurnId: string;
+  supersessionId: string;
+  reason: string;
+  source: "learning" | "evaluation" | "improvement";
+  sourceId: string;
+  deletedAt: string;
+};
+
+export type ConversationMirrorEntry = ConversationTurnRecord | ConversationTrimMarker | ConversationSupersessionTombstone;
+
+// The learning layer is the sole authority that can make a turn stale. This is deliberately
+// explicit rather than inferred from timestamps, sessions, similarity, or a model judgement.
+export type ConversationTurnSupersession = {
+  supersessionId: string;
+  projectId: string;
+  conversationId: string;
+  supersededTurnId: string;
+  supersedingTurnId: string;
+  reason: string;
+  source: "learning" | "evaluation" | "improvement";
+  sourceId: string;
+  recordedAt: string;
+};
+
+// Artifacts do not currently contain conversation-turn ids, so the learning layer maintains this
+// small, durable reference graph rather than guessing from text or unrelated workflow ids.
+export type ConversationTurnReference = {
+  referenceId: string;
+  projectId: string;
+  conversationId: string;
+  turnId: string;
+  artifactType: "learning" | "evaluation" | "improvement";
+  artifactId: string;
+  recordedAt: string;
+};
+
+export type ConversationTurnGcDeletion = Pick<ConversationTurnSupersession,
+  "supersessionId" | "supersededTurnId" | "supersedingTurnId" | "reason" | "source" | "sourceId"> & {
+  expectedCreatedAt: string;
+};
+
+export type ConversationTurnGcApplyResult = { deleted: number; alreadyDeleted: number };
 
 // Durable idempotency state is stored separately from the learning/audit mirror. A pending claim is
 // operational coordination only and must never look like a completed ConversationTurnRecord.

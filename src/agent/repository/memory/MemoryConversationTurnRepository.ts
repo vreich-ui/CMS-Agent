@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { assertStableConversationActor, MAX_CONVERSATION_TURNS, type ConversationMirrorEntry, type ConversationTrimMarker, type ConversationTurnClaim, type ConversationTurnClaimResult, type ConversationTurnRecord } from "../../conversations/conversationTurnTypes.js";
+import { assertStableConversationActor, MAX_CONVERSATION_TURNS, type ConversationMirrorEntry, type ConversationSupersessionTombstone, type ConversationTrimMarker, type ConversationTurnClaim, type ConversationTurnClaimResult, type ConversationTurnGcApplyResult, type ConversationTurnGcDeletion, type ConversationTurnRecord } from "../../conversations/conversationTurnTypes.js";
 import type { RepositoryBackend } from "../RepositoryManager.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { ConversationTurnRepository } from "../interfaces/ConversationTurnRepository.js";
@@ -38,6 +38,30 @@ export class MemoryConversationTurnRepository implements ConversationTurnReposit
 
   async list(conversationId: string): Promise<ConversationMirrorEntry[]> {
     return clone(this.records.get(conversationId) ?? []);
+  }
+
+  async listConversationIds(limit: number): Promise<string[]> {
+    return [...this.records.keys()].sort().slice(0, Math.max(0, limit));
+  }
+
+  async applySupersessionGc(scope: { projectId: string; conversationId: string; deletions: ConversationTurnGcDeletion[] }): Promise<ConversationTurnGcApplyResult> {
+    const current = this.records.get(scope.conversationId) ?? [];
+    const existingTombstones = new Set(current.filter((entry): entry is ConversationSupersessionTombstone => entry.recordType === "supersession_tombstone").map((entry) => entry.supersededTurnId));
+    const turnById = new Map(current.filter((entry): entry is ConversationTurnRecord => entry.recordType === "turn").map((entry) => [entry.turnId, entry]));
+    const now = new Date().toISOString();
+    const accepted = scope.deletions.filter((deletion) => {
+      const turn = turnById.get(deletion.supersededTurnId);
+      return !!turn && turn.projectId === scope.projectId && turn.createdAt === deletion.expectedCreatedAt && !existingTombstones.has(deletion.supersededTurnId);
+    });
+    if (accepted.length === 0) return { deleted: 0, alreadyDeleted: scope.deletions.filter((deletion) => existingTombstones.has(deletion.supersededTurnId)).length };
+    const ids = new Set(accepted.map((deletion) => deletion.supersededTurnId));
+    const tombstones: ConversationSupersessionTombstone[] = accepted.map((deletion) => ({
+      recordType: "supersession_tombstone", conversationId: scope.conversationId, projectId: scope.projectId,
+      supersededTurnId: deletion.supersededTurnId, supersedingTurnId: deletion.supersedingTurnId,
+      supersessionId: deletion.supersessionId, reason: deletion.reason, source: deletion.source, sourceId: deletion.sourceId, deletedAt: now
+    }));
+    this.records.set(scope.conversationId, [...current.filter((entry) => entry.recordType !== "turn" || !ids.has(entry.turnId)), ...tombstones]);
+    return { deleted: accepted.length, alreadyDeleted: scope.deletions.filter((deletion) => existingTombstones.has(deletion.supersededTurnId)).length };
   }
 
   async claim(conversationId: string, turnId: string, requestHash: string): Promise<ConversationTurnClaimResult> {
