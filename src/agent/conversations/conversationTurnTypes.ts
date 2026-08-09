@@ -51,6 +51,25 @@ export type ConversationTrimMarker = {
 
 export type ConversationMirrorEntry = ConversationTurnRecord | ConversationTrimMarker;
 
+// Durable idempotency state is stored separately from the learning/audit mirror. A pending claim is
+// operational coordination only and must never look like a completed ConversationTurnRecord.
+export type ConversationTurnClaim = {
+  conversationId: string;
+  turnId: string;
+  requestHash: string;
+  ownerToken: string;
+  status: "pending" | "completed" | "failed";
+  response?: Record<string, unknown>;
+  error?: { code: string; message: string };
+  updatedAt: string;
+};
+
+export type ConversationTurnClaimResult =
+  | { status: "acquired"; claim: ConversationTurnClaim }
+  | { status: "pending"; claim: ConversationTurnClaim }
+  | { status: "replay"; claim: ConversationTurnClaim; response: Record<string, unknown> }
+  | { status: "conflict"; claim: ConversationTurnClaim };
+
 const emailLike = /\S+@\S+\.\S+/;
 
 // Platform owns identity lookup. Rejecting an email-shaped actor id here protects the learning

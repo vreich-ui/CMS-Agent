@@ -1,0 +1,28 @@
+{
+  "status": "blocked",
+  "currentNodeId": "publication_controller",
+  "nodes": [
+    ["input_triage", "completed", "content_source.v1"],
+    ["topic_opportunity", "completed", "topic_opportunity.v1"],
+    ["reader_insight", "completed", "reader_insight.v1"],
+    ["research", "completed", "research_brief.v1"],
+    ["objection_mapping", "completed", "objection_map.v1"],
+    ["narrative_movement", "completed", "narrative_movement.v1"],
+    ["angle_strategy", "completed", "angle_strategy.v1"],
+    ["brief_architect", "completed", "article_brief.v1"],
+    ["draft_writer", "completed", "draft.v1"],
+    ["human_texture", "completed", "human_texture_review.v1"],
+    ["trust_factual", "completed", "trust_factual_review.v1"],
+    ["emotional_resonance", "completed", "emotional_resonance_review.v1"],
+    ["reader_simulation", "completed", "reader_simulation.v1"],
+    ["review_aggregator", "completed", "review_aggregation.v1"],
+    ["contract_intelligence", "completed", "contract_intelligence.v1"],
+    ["article_body", "completed", "client_object.v1"],
+    ["artifact_plan", "completed", "artifact_plan.v1"],
+    ["publish_payload", "completed", "dry_run_publish_payload.v1"],
+    ["publication_controller", "blocked", "publication_decision.v1"],
+    ["learning_recorder", "completed", "learning_observations.v1"],
+    ["publish_executor", "queued", "publish_execution.v1"]
+  ],
+  "approvalsRequired": [["publication_controller", "approval_required"]]
+}

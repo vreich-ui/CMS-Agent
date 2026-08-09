@@ -128,6 +128,21 @@ describe("lost-update race closed on GCS (Phase 2 acceptance)", () => {
     expect(entries.at(-1)).toMatchObject({ turnId: `turn_${MAX_CONVERSATION_TURNS}` });
   });
 
+  it("admits one durable conversation-turn claimant and replays its completed response", async () => {
+    const bucket = makeFakeBucket();
+    const repoA = new BlobConversationTurnRepository(clientFor(bucket));
+    const repoB = new BlobConversationTurnRepository(clientFor(bucket));
+    const [left, right] = await Promise.all([repoA.claim("chat_race", "turn_race", "hash_1"), repoB.claim("chat_race", "turn_race", "hash_1")]);
+    const acquired = [left, right].find((result) => result.status === "acquired");
+
+    expect([left.status, right.status].sort()).toEqual(["acquired", "pending"]);
+    expect(acquired?.status).toBe("acquired");
+    if (acquired?.status !== "acquired") throw new Error("expected one acquired claim");
+    await repoA.completeClaim(acquired.claim, { assistant_text: "same", usage: {}, agent_rev: 1, model: "gpt-4.1" });
+    await expect(repoB.claim("chat_race", "turn_race", "hash_1")).resolves.toMatchObject({ status: "replay", response: { assistant_text: "same" } });
+    await expect(repoB.claim("chat_race", "turn_race", "different_hash")).resolves.toMatchObject({ status: "conflict" });
+  });
+
   it("rejects the losing concurrent run writer with RunConcurrencyError", async () => {
     const bucket = makeFakeBucket();
     const repoA = new BlobExecutionRepository(clientFor(bucket));
