@@ -114,6 +114,10 @@ describe("CA4 deploy script regression guard", () => {
     expect(cloudBuildCommandLines.some((line) => /--set-(?:env-vars|secrets)\b/.test(line))).toBe(false);
     expect(script).toContain("--update-env-vars");
     expect(script).toContain("--update-secrets");
+    const manualHealthLine = script.split("\n").find((line) => line.includes('curl -fsS "$URL/health"'));
+    expect(manualHealthLine).toContain('curl -fsS "$URL/health" >/dev/null');
+    expect(manualHealthLine).not.toMatch(/&&|\|\|/);
+    expect(script).not.toContain('/healthz');
     expect(script).toContain("MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest");
     expect(cloudBuild).toContain("MCP_SCOPED_TOKENS_JSON=mcp-scoped-tokens-json:latest");
     expect(script).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
@@ -121,17 +125,18 @@ describe("CA4 deploy script regression guard", () => {
     expect(script).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
     expect(cloudBuild).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
     expect(cloudBuild).toContain("for VAR in MCP_SCOPED_TOKENS_JSON DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do");
+    expect(cloudBuild).not.toContain('/healthz');
   });
 
   it("makes the Cloud Build health probe fail the deploy before it can report verified", async () => {
     const cloudBuild = await readFile(new URL("../../../cloudbuild.deploy.yaml", import.meta.url), "utf8");
     const lines = cloudBuild.split("\n");
-    const healthIndex = lines.findIndex((line) => line.includes('curl -fsS "$${URL}/healthz"'));
+    const healthIndex = lines.findIndex((line) => line.includes('curl -fsS "$${URL}/health"'));
     const verifiedIndex = lines.findIndex((line) => line.includes('echo "verified : $${REVISION}'));
 
     expect(healthIndex).toBeGreaterThanOrEqual(0);
     expect(verifiedIndex).toBeGreaterThan(healthIndex);
-    expect(lines[healthIndex]).toContain('curl -fsS "$${URL}/healthz" >/dev/null');
+    expect(lines[healthIndex]).toContain('curl -fsS "$${URL}/health" >/dev/null');
     expect(lines[healthIndex]).not.toMatch(/&&|\|\|/);
   });
 });

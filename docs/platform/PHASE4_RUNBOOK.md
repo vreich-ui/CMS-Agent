@@ -12,7 +12,7 @@ except the GCS state store.
 | Piece | Path | Purpose |
 |---|---|---|
 | MCP endpoint core | `src/agent/mcp/http/mcpEndpoint.ts` | Transport-neutral auth+session+dispatch, extracted from `netlify/functions/mcp.mts` (now a thin adapter, mirroring the OAuth `oauthEndpoints.ts` pattern) so Netlify and Cloud Run share ONE implementation |
-| Control-plane router | `src/agent/mcp/http/controlPlaneRouter.ts` | Routes `/mcp`, `/healthz`, and the OAuth discovery/flow to the shared cores |
+| Control-plane router | `src/agent/mcp/http/controlPlaneRouter.ts` | Routes `/mcp`, `/health`, and the OAuth discovery/flow to the shared cores (`/healthz` is a compatibility alias) |
 | Cloud Run server | `src/agent/entrypoints/mcpServerMain.ts` (`npm run serve:mcp`) | `node:http` wrapper; `bootstrapWorkspaceStore()` on start; graceful SIGTERM drain |
 | Container image | `Dockerfile.mcp` + `cloudbuild.mcp.yaml` | node:22-slim, prod deps, runs TS via tsx |
 | Shared session/OAuth state | `stateStore.ts` (`mcpStateUsesBlobs` now includes `gcs`) | Sessions + OAuth codes/tokens persist in **GCS**, shared across all instances — **no session affinity required** |
@@ -59,7 +59,7 @@ gcloud run deploy cms-agent-mcp \
   --update-env-vars "^|^WORKSPACE_STORE=gcs|GCS_BUCKET=<bucket>|MCP_STATE_STORE=blobs|MCP_ALLOWED_ORIGINS=https://<site>.netlify.app,http://localhost:5173" \
   --update-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest"
 
-# 3. Note the service URL; the MCP endpoint is <url>/mcp and health is <url>/healthz.
+# 3. Note the service URL; the MCP endpoint is <url>/mcp and health is <url>/health.
 gcloud run services describe cms-agent-mcp --project "$PROJECT" --region "$REGION" --format 'value(status.url)'
 ```
 
@@ -78,7 +78,7 @@ Auth choices:
   MCP connectors (Claude) can authorize against the Cloud Run plane exactly as against
   Netlify.
 
-Health check: `curl <url>/healthz` → `{"status":"ok","service":"cms-agent-mcp","store":"gcs"}`.
+Health check: `curl <url>/health` → `{"status":"ok","service":"cms-agent-mcp","store":"gcs"}`.
 Smoke the MCP endpoint: `curl -XPOST <url>/mcp -H "authorization: Bearer <MCP_API_TOKEN>" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`.
 
 ### Diagnosing "Failed to fetch" from the browser
@@ -98,7 +98,7 @@ curl -sS -i -X OPTIONS <url>/mcp \
 | `403`, Google-generated body, no `access-control-*` | Cloud Run IAM is rejecting the preflight (`--no-allow-unauthenticated`) | Redeploy with `--allow-unauthenticated`; app-level bearer auth still applies |
 | `401` | Revision predates the CORS layer — pre-fix code required a bearer on OPTIONS | Rebuild + redeploy (steps 1–2) from a commit containing the CORS layer |
 | `204`, but **no** `access-control-allow-origin` | Origin is not on the allow-list (`MCP_ALLOWED_ORIGINS` unset = deny all, or an exact-match miss) | `gcloud run services update cms-agent-mcp --region "$REGION" --update-env-vars "MCP_ALLOWED_ORIGINS=https://<site>.netlify.app"` — for more than one origin, switch the separator: `--update-env-vars "^\|^MCP_ALLOWED_ORIGINS=https://<site>.netlify.app,http://localhost:5173"` |
-| `204` **with** `access-control-allow-origin` echoing the origin | CORS is healthy; the failure is elsewhere | Check `<url>/healthz`, DNS, and that `VITE_CLOUD_RUN_MCP_URL` matches the current service URL |
+| `204` **with** `access-control-allow-origin` echoing the origin | CORS is healthy; the failure is elsewhere | Check `<url>/health`, DNS, and that `VITE_CLOUD_RUN_MCP_URL` matches the current service URL |
 
 ### Use `scripts/deploy-mcp.sh` rather than assembling this by hand
 
@@ -192,7 +192,7 @@ active plane an explicit, one-click choice instead of an implicit one.
 1. `npm test` — the control-plane router suite passes (health, MCP dispatch through
    the shared core, OAuth discovery, 404s) and the existing MCP function tests stay
    green (the extraction is transparent).
-2. `<url>/healthz` returns ok; `tools/list` over `<url>/mcp` returns the full tool
+2. `<url>/health` returns ok; `tools/list` over `<url>/mcp` returns the full tool
    catalog including the Phase 3 `evaluation.*`/`optimizer.*`/`playbook.*` tools.
 3. In the UI with `VITE_CLOUD_RUN_MCP_URL` set, the toggle flips planes and
    "Test connection" succeeds against each; with it unset, no toggle appears.
