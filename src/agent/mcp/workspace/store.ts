@@ -8,6 +8,7 @@ import { relationshipDirections, relationshipKinds, type WorkspaceRelationship, 
 import { WorkspaceVersionConflictError } from "../../workspace/workspaceErrors.js";
 import { type WorkspaceActor, type WorkspaceChangeCorrelation, type WorkspaceChangeOperation, type WorkspaceChangeSink, type WorkspaceChangeSource, type WorkspaceChangeTarget, type WorkspaceRevision } from "../../workspace/changeTypes.js";
 import { redactSensitiveKeys } from "../../observability/redaction.js";
+import { conversationalAgentStatuses, seededConversationalAgents, type ConversationalAgentDefinition } from "../../conversations/agentDefinitions.js";
 
 // Replace a node in place when it already exists, otherwise append it. This preserves the existing
 // array order so editing a node's prompt/schema never moves it (e.g. to the end of the workflow).
@@ -39,7 +40,7 @@ export const normalizeActor = (actor?: string | WorkspaceActor): WorkspaceActor 
 export const actorLabel = (meta?: WorkspaceMutationMeta): string | undefined =>
   meta?.actor === undefined ? undefined : typeof meta.actor === "string" ? meta.actor : meta.actor.label ?? meta.actor.id ?? meta.actor.kind;
 export type WorkspaceGraphUpdate = { create?: WorkspaceNode[]; update?: Array<Partial<WorkspaceNode> & { id: string }>; delete?: string[]; dependencies?: Record<string, string[]>; orderedNodeIds?: string[]; positions?: Record<string, { x: number; y: number }>; allowCanonicalNodeRemoval?: boolean; adminApproved?: boolean };
-export type WorkspaceDocument = { schemaVersion: 1; workspaceVersion: number; updatedAt: string; nodes: WorkspaceNode[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[]; versions: WorkspaceVersionSnapshot[]; events: WorkspaceEvent[]; relationships: WorkspaceRelationship[]; currentRevisionId?: string };
+export type WorkspaceDocument = { schemaVersion: 1; workspaceVersion: number; updatedAt: string; nodes: WorkspaceNode[]; conversationalAgents: ConversationalAgentDefinition[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[]; versions: WorkspaceVersionSnapshot[]; events: WorkspaceEvent[]; relationships: WorkspaceRelationship[]; currentRevisionId?: string };
 export interface WorkspaceStore {
   getWorkspaceVersion(): Promise<number>;
   getCurrentRevisionId(): Promise<string | undefined>;
@@ -48,6 +49,10 @@ export interface WorkspaceStore {
   updateRelationships(update: WorkspaceRelationshipsUpdate, meta: WorkspaceMutationMeta): Promise<{ relationships: WorkspaceRelationship[]; workspaceVersion: number; revisionId?: string }>;
   getNodes(): Promise<WorkspaceNode[]>;
   getNode(id: string): Promise<WorkspaceNode | undefined>;
+  ensureConversationalAgentSeeds(meta?: WorkspaceMutationMeta): Promise<ConversationalAgentDefinition[]>;
+  listConversationalAgents(): Promise<ConversationalAgentDefinition[]>;
+  getConversationalAgent(id: string): Promise<ConversationalAgentDefinition | undefined>;
+  updateConversationalAgent(id: string, patch: Partial<Omit<ConversationalAgentDefinition, "id" | "role" | "rev" | "updatedAt">>, meta: WorkspaceMutationMeta): Promise<{ agent: ConversationalAgentDefinition; workspaceVersion: number }>;
   // Return the node together with the workspaceVersion the mutation produced. The caller reports and
   // enforces THAT version, never a second racy read that could reflect a later, unrelated mutation.
   updateNodePrompt(id: string, prompt: string, meta?: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
@@ -85,7 +90,10 @@ const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toSt
 // with the article_body.* wire tools that served it; the article_body node's own outputSchema — and,
 // beyond it, the client's fetched contract — is the only remaining definition of "what a body is".
 const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes();
-export const createDefaultWorkspaceDocument = (): WorkspaceDocument => ({ schemaVersion: 1, workspaceVersion: 0, updatedAt: now(), nodes: defaultWorkspaceNodes(), stageOutputs: [], learningObservations: [], versions: [], events: [], relationships: [] });
+export const createDefaultWorkspaceDocument = (): WorkspaceDocument => {
+  const createdAt = now();
+  return { schemaVersion: 1, workspaceVersion: 0, updatedAt: createdAt, nodes: defaultWorkspaceNodes(), conversationalAgents: seededConversationalAgents(createdAt), stageOutputs: [], learningObservations: [], versions: [], events: [], relationships: [] };
+};
 
 const workspaceNodeSchema = z.object({
   id: z.string().min(1),
@@ -109,6 +117,17 @@ const workspaceNodeSchema = z.object({
   modelConfig: z.record(z.string(), z.unknown()).optional(),
   executionConfig: z.record(z.string(), z.unknown()).optional()
 }).passthrough().transform((node) => ({ ...node, outputSchema: node.outputSchema ?? node.schema ?? { type: "object" } }));
+const conversationalAgentSchema: z.ZodType<ConversationalAgentDefinition> = z.object({
+  id: z.string().regex(/^agt_[a-z0-9_]+$/),
+  role: z.literal("client_manager"),
+  name: z.string().min(1).max(120),
+  prompt: z.string().min(1).max(24_000),
+  modelConfig: z.object({ provider: z.string().min(1), model: z.string().min(1), timeoutMs: z.number().int().positive().max(120_000), maxOutputTokens: z.number().int().positive().max(32_000) }).strict(),
+  skills: z.array(z.string().min(1).max(128)).max(64),
+  status: z.enum(conversationalAgentStatuses),
+  rev: z.number().int().positive(),
+  updatedAt: z.string().datetime()
+}).strict();
 const stageOutputSchema: z.ZodType<StageOutput> = z.object({ id: z.string().min(1), stage: z.string().min(1), value: z.unknown().optional(), createdAt: z.string().datetime() }).strict();
 const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), createdAt: z.string().datetime() }).strict();
 const workspaceEventSchema: z.ZodType<WorkspaceEvent> = z.object({ id: z.string(), type: z.string(), nodeId: z.string().optional(), actor: z.string().optional(), summary: z.string().optional(), workspaceVersion: z.number().int().nonnegative(), beforeHash: z.string().optional(), afterHash: z.string().optional(), createdAt: z.string().datetime() }).strict();
@@ -129,7 +148,7 @@ const workspaceRelationshipSchema = z.object({
 }).strict() as z.ZodType<WorkspaceRelationship>;
 // relationships and currentRevisionId default/omit so documents persisted before change-history
 // existed keep parsing (migration/default logic, same pattern as versions/events).
-export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema), versions: z.array(workspaceVersionSnapshotSchema).default([]), events: z.array(workspaceEventSchema).default([]), relationships: z.array(workspaceRelationshipSchema).default([]), currentRevisionId: z.string().min(1).optional() }).strict();
+export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), conversationalAgents: z.array(conversationalAgentSchema).default([]), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema), versions: z.array(workspaceVersionSnapshotSchema).default([]), events: z.array(workspaceEventSchema).default([]), relationships: z.array(workspaceRelationshipSchema).default([]), currentRevisionId: z.string().min(1).optional() }).strict();
 
 
 export const hashValue = (value: unknown) => JSON.stringify(value).split("").reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0).toString(16);
@@ -255,7 +274,8 @@ const operationForEventType = (eventType: string): WorkspaceChangeOperation => {
   if (eventType === "stage.output_saved" || eventType === "learning.observation_recorded") return "record";
   return "update";
 };
-const targetForEventType = (eventType: string, nodeId?: string): WorkspaceChangeTarget => {
+const targetForEventType = (eventType: string, nodeId?: string, agentId?: string): WorkspaceChangeTarget => {
+  if (agentId) return { type: "agent", id: agentId };
   if (nodeId) return { type: "node", id: nodeId };
   if (eventType.startsWith("graph.")) return { type: "graph" };
   if (eventType === "workspace.relationships_updated") return { type: "relationship" };
@@ -300,7 +320,7 @@ export class WorkspaceStateStore implements WorkspaceStore {
 
   protected async load() { return this.document; }
   protected async save(document: WorkspaceDocument) { this.document = document; }
-  protected async mutate(update: (document: WorkspaceDocument) => void, meta?: WorkspaceMutationMeta, eventType = "workspace.updated", nodeId?: string) {
+  protected async mutate(update: (document: WorkspaceDocument) => void, meta?: WorkspaceMutationMeta, eventType = "workspace.updated", nodeId?: string, agentId?: string) {
     let document = await this.load();
     // Eventual-consistency reconciliation: if the caller expects a NEWER version than we just read,
     // our read is lagging a version already committed elsewhere (a fresh instance under Blobs'
@@ -314,24 +334,27 @@ export class WorkspaceStateStore implements WorkspaceStore {
     assertWorkspaceVersion(document, meta);
     assertBaseRevision(document, meta);
     const beforeNodes = structuredClone(document.nodes);
+    const beforeConversationalAgents = structuredClone(document.conversationalAgents ?? []);
     const beforeRelationships = structuredClone(document.relationships ?? []);
     update(document);
     // Normalize, then validate every node before anything is saved: save() does not re-validate, so
     // this is the single backstop that guarantees no mutation persists a node a strict read rejects.
     document.nodes = document.nodes.map(normalizeNode).map(assertPersistableNode);
+    document.conversationalAgents = document.conversationalAgents.map((agent) => conversationalAgentSchema.parse(agent));
+    if (new Set(document.conversationalAgents.map((agent) => agent.id)).size !== document.conversationalAgents.length) throw new Error("Duplicate conversational agent id.");
     assertGraphValid(document.nodes);
     document.workspaceVersion += 1;
     document.updatedAt = now();
     // Revisions are minted only when structural state changed; record-style mutations (stage
     // outputs, observations) still produce change events but no snapshot.
-    const structuralChange = hashValue({ nodes: document.nodes, relationships: document.relationships ?? [] }) !== hashValue({ nodes: beforeNodes, relationships: beforeRelationships });
+    const structuralChange = hashValue({ nodes: document.nodes, conversationalAgents: document.conversationalAgents ?? [], relationships: document.relationships ?? [] }) !== hashValue({ nodes: beforeNodes, conversationalAgents: beforeConversationalAgents, relationships: beforeRelationships });
     const parentRevisionId = document.currentRevisionId;
     const actor = normalizeActor(meta?.actor);
     const source = meta?.source ?? "system";
     const reason = meta?.reason ?? meta?.summary;
     let revision: WorkspaceRevision | undefined;
     if (structuralChange) {
-      revision = { revisionId: makeId("rev"), parentRevisionId, workspaceVersion: document.workspaceVersion, createdAt: document.updatedAt, actor, source, reason, nodes: redactSensitiveKeys(structuredClone(document.nodes)), relationships: redactSensitiveKeys(structuredClone(document.relationships ?? [])) };
+      revision = { revisionId: makeId("rev"), parentRevisionId, workspaceVersion: document.workspaceVersion, createdAt: document.updatedAt, actor, source, reason, nodes: redactSensitiveKeys(structuredClone(document.nodes)), conversationalAgents: redactSensitiveKeys(structuredClone(document.conversationalAgents ?? [])), relationships: redactSensitiveKeys(structuredClone(document.relationships ?? [])) };
       document.currentRevisionId = revision.revisionId;
     }
     // Legacy in-document events keep appending for back-compat readers; the full-node versions[]
@@ -346,11 +369,15 @@ export class WorkspaceStateStore implements WorkspaceStore {
       const targetNode = nodeId ? document.nodes.find((node) => node.id === nodeId) ?? beforeNodes.find((node) => node.id === nodeId) : undefined;
       const before = nodeId
         ? beforeNodes.find((node) => node.id === nodeId)
+        : agentId
+          ? beforeConversationalAgents.find((agent) => agent.id === agentId)
         : structuralChange
           ? { nodes: beforeNodes.filter((node) => ids.has(node.id)), ...(relationshipsChanged ? { relationships: beforeRelationships } : {}) }
           : undefined;
       const after = nodeId
         ? document.nodes.find((node) => node.id === nodeId)
+        : agentId
+          ? document.conversationalAgents.find((agent) => agent.id === agentId)
         : structuralChange
           ? { nodes: document.nodes.filter((node) => ids.has(node.id)), ...(relationshipsChanged ? { relationships: document.relationships ?? [] } : {}) }
           : undefined;
@@ -360,7 +387,7 @@ export class WorkspaceStateStore implements WorkspaceStore {
           eventId: makeId("evt"),
           type: eventType,
           operation: operationForEventType(eventType),
-          target: targetForEventType(eventType, nodeId),
+          target: targetForEventType(eventType, nodeId, agentId),
           actor,
           source,
           reason,
@@ -382,6 +409,27 @@ export class WorkspaceStateStore implements WorkspaceStore {
   async getCurrentRevisionId() { return (await this.load()).currentRevisionId; }
   async getNodes() { return sortWorkspaceNodes([...(await this.load()).nodes]); }
   async getNode(id: string) { return (await this.load()).nodes.find((node) => node.id === id); }
+  async ensureConversationalAgentSeeds(meta: WorkspaceMutationMeta = { actor: { kind: "system" }, source: "system", reason: "Seed canonical conversational agents" }) {
+    const current = await this.load();
+    const missing = seededConversationalAgents(current.updatedAt).filter((seed) => !current.conversationalAgents.some((agent) => agent.id === seed.id));
+    if (missing.length === 0) return structuredClone(current.conversationalAgents);
+    await this.mutate((document) => {
+      document.conversationalAgents = [...document.conversationalAgents, ...seededConversationalAgents(document.updatedAt).filter((seed) => !document.conversationalAgents.some((agent) => agent.id === seed.id))];
+    }, meta, "agent.seeded", undefined, missing[0]?.id);
+    return structuredClone((await this.load()).conversationalAgents);
+  }
+  async listConversationalAgents() { return structuredClone((await this.load()).conversationalAgents); }
+  async getConversationalAgent(id: string) { return structuredClone((await this.load()).conversationalAgents.find((agent) => agent.id === id)); }
+  async updateConversationalAgent(id: string, patch: Partial<Omit<ConversationalAgentDefinition, "id" | "role" | "rev" | "updatedAt">>, meta: WorkspaceMutationMeta) {
+    let agent: ConversationalAgentDefinition | undefined;
+    const workspaceVersion = await this.mutate((document) => {
+      const existing = document.conversationalAgents.find((candidate) => candidate.id === id);
+      if (!existing) throw new Error(`Unknown conversational agent: ${id}`);
+      agent = { ...existing, ...patch, id: existing.id, role: existing.role, rev: existing.rev + 1, updatedAt: now() };
+      document.conversationalAgents = document.conversationalAgents.map((candidate) => candidate.id === id ? agent! : candidate);
+    }, meta, "agent.updated", undefined, id);
+    return { agent: agent!, workspaceVersion };
+  }
   async getEvents() { return [...((await this.load()).events ?? [])]; }
   async getVersions() {
     const document = await this.load();

@@ -28,7 +28,7 @@
 // Usage:
 //   MCP_URL=https://<service>/mcp MCP_API_TOKEN=<bearer> npm run verify:deploy
 //
-// Read-only: tools/list and project.list only. Never publishes, never mutates.
+// Read-only except for idempotent canonical-agent seeding on legacy workspaces. Never publishes.
 
 import { fingerprintTools, readManifest, surfaceHash, type ListedTool } from "./twoPlaneDrift.js";
 
@@ -75,6 +75,13 @@ type ProjectListResult = {
         connection?: { endpointConfigured?: boolean; tokenConfigured?: boolean; mcpEndpointEnvVar?: string; tokenEnvVar?: string };
       }>;
     };
+  };
+};
+
+type AgentResolveResult = {
+  structuredContent?: {
+    ok?: boolean;
+    data?: { agent_ref?: string; rev?: number; model?: string; status?: string };
   };
 };
 
@@ -131,6 +138,18 @@ const main = async (): Promise<number> => {
     } else {
       console.log(`clients           ok       ${rows.length} project(s), every active one configured`);
     }
+  }
+
+  // 3. Canonical conversational agent. This is a discovery assertion, not a conversation call:
+  // the deployment must be able to seed/resolve the project-neutral definition before Platform
+  // begins using it. It deliberately does not inspect or expose the prompt.
+  const agent = await rpc<AgentResolveResult>(url, token, "tools/call", { name: "agent_resolve", arguments: { role: "client_manager", project_id: "dr-lurie" } });
+  const resolved = agent.structuredContent?.data;
+  if (!agent.structuredContent?.ok || !resolved?.agent_ref || !resolved.rev || !resolved.model || resolved.status !== "active") {
+    failures += 1;
+    console.error("agent             BROKEN   agent_resolve did not return an active canonical client_manager definition.");
+  } else {
+    console.log(`agent             ok       ${resolved.agent_ref} (${resolved.model})`);
   }
 
   return failures === 0 ? 0 : 1;
