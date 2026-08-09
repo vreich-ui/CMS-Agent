@@ -12,6 +12,7 @@ import type { ArtifactPolicyWarning } from "./drLurie/artifactPolicy.js";
 import type { PublishReadinessInput, PublishReadinessResult } from "./drLurie/publishReadiness.js";
 import { drLurieProjectHooks } from "./drLurie/hooks.js";
 import { platformProjectHooks } from "./platform/hooks.js";
+import { fernwellProjectHooks } from "./fernwell/hooks.js";
 import type { ProjectObjectDialect } from "./projectTypes.js";
 
 // Re-exported so the generic workspace layer (voicePrefetch.ts) can type the fallback voice a hook
@@ -82,7 +83,8 @@ export type ProjectHooks = {
 
 const hooksByProjectId: Record<string, ProjectHooks> = {
   "dr-lurie": drLurieProjectHooks,
-  "platform": platformProjectHooks
+  "platform": platformProjectHooks,
+  "fernwell": fernwellProjectHooks
 };
 
 export const getProjectHooks = (projectId: string): ProjectHooks | undefined => hooksByProjectId[projectId];

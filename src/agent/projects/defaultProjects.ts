@@ -28,10 +28,12 @@ import { drLurieProjectConfig } from "./drLurie/definition.js";
 import { pdfToolProjectConfig } from "./pdfTool/definition.js";
 import { monetizerProjectConfig } from "./monetizer/definition.js";
 import { platformProjectConfig } from "./platform/definition.js";
+import { fernwellProjectConfig } from "./fernwell/definition.js";
 
 export const defaultProjectConnections: ProjectConnectionConfig[] = [
   drLurieProjectConfig,
   pdfToolProjectConfig,
   monetizerProjectConfig,
-  platformProjectConfig
+  platformProjectConfig,
+  fernwellProjectConfig
 ];
