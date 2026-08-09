@@ -76,8 +76,8 @@ gcloud run deploy "$SERVICE" \
   --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
   --cpu 1 --memory 512Mi --min-instances 0 --max-instances 4 --port 8080 \
   --allow-unauthenticated \
-  --update-env-vars "^|^WORKSPACE_STORE=gcs|GCS_BUCKET=$GCS_BUCKET|MCP_STATE_STORE=blobs|MCP_ALLOWED_ORIGINS=$MCP_ALLOWED_ORIGINS" \
-  --update-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest"
+  --update-env-vars "^|^WORKSPACE_STORE=gcs|GCS_BUCKET=$GCS_BUCKET|MCP_STATE_STORE=blobs|MCP_ALLOWED_ORIGINS=$MCP_ALLOWED_ORIGINS|FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp" \
+  --update-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest,FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest"
 
 URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')"
 REVISION="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.latestReadyRevisionName)')"
