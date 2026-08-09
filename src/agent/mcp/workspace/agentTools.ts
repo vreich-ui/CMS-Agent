@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { ProjectRepository } from "../../repository/interfaces/ProjectRepository.js";
 import type { WorkspaceRepository } from "../../repository/interfaces/WorkspaceRepository.js";
+import type { ConversationTurnRepository } from "../../repository/interfaces/ConversationTurnRepository.js";
+import type { UsageRepository } from "../../repository/interfaces/UsageRepository.js";
+import { ConversationalRunner } from "../../conversations/conversationalRunner.js";
+import { agentConverseInputSchema, agentConverseJsonSchema } from "../../conversations/conversationContract.js";
 import { objectSchema, ok, tool, type WorkspaceTool } from "./toolKit.js";
 
 const resolveAgentInput = z.object({
@@ -22,12 +26,16 @@ export class AgentResolveError extends Error {
 export type AgentToolDeps = {
   workspaceRepository: WorkspaceRepository;
   projectRepository: ProjectRepository;
+  conversationTurnRepository: ConversationTurnRepository;
+  usageRepository: UsageRepository;
+  conversationalRunner?: Pick<ConversationalRunner, "run">;
 };
 
 // CA2 deliberately resolves only the canonical workspace seed. Project-specific overrides and
 // conversational execution are later waves; callers discover an opaque ref instead of selecting
 // a node or implementation id.
-export function createAgentTools({ workspaceRepository, projectRepository }: AgentToolDeps): WorkspaceTool[] {
+export function createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository, conversationalRunner }: AgentToolDeps): WorkspaceTool[] {
+  const runner = conversationalRunner ?? new ConversationalRunner({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository });
   return [
     tool({
       name: "agent.resolve",
@@ -52,6 +60,13 @@ export function createAgentTools({ workspaceRepository, projectRepository }: Age
           status: agent.status
         });
       }
+    }),
+    tool({
+      name: "agent.converse",
+      description: "Execute exactly one client_manager.turn.v1 model turn. Caller tools are passed to the provider and returned as unexecuted tool calls; CMS-Agent never executes them or owns the human wait state. Duplicate conversation_id + turn_id calls replay one stored response without another provider call.",
+      zodSchema: agentConverseInputSchema,
+      inputSchema: agentConverseJsonSchema,
+      execute: async (input) => ok(await runner.run(input))
     })
   ];
 }
