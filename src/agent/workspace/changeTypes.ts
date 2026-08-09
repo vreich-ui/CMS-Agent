@@ -9,6 +9,7 @@
 
 import type { WorkspaceNode, WorkspaceRiskLevel } from "./nodeTypes.js";
 import type { WorkspaceRelationship } from "./relationshipTypes.js";
+import type { ConversationalAgentDefinition } from "../conversations/agentDefinitions.js";
 
 export const workspaceActorKinds = ["human", "agent", "system"] as const;
 export type WorkspaceActorKind = typeof workspaceActorKinds[number];
@@ -23,7 +24,7 @@ export type WorkspaceChangeSource = typeof workspaceChangeSources[number];
 
 // Extensible: "edge" | "policy" | "memory" | "schema" | "theme" join later without a storage
 // migration — the field is a plain string union in records already persisted.
-export const workspaceChangeTargetTypes = ["node", "graph", "relationship", "workspace"] as const;
+export const workspaceChangeTargetTypes = ["node", "agent", "graph", "relationship", "workspace"] as const;
 export type WorkspaceChangeTargetType = typeof workspaceChangeTargetTypes[number];
 export type WorkspaceChangeTarget = { type: WorkspaceChangeTargetType; id?: string };
 
@@ -62,6 +63,8 @@ export type WorkspaceRevision = {
   source: WorkspaceChangeSource;
   reason?: string;
   nodes: WorkspaceNode[];
+  // Optional for revisions created before conversational definitions were added.
+  conversationalAgents?: ConversationalAgentDefinition[];
   relationships: WorkspaceRelationship[];
 };
 
