@@ -179,7 +179,7 @@ Full strategy, product choices, and its own basic→advanced staging:
 > into `src/agent/mcp/http/mcpEndpoint.ts` (the `.mts` is now a thin adapter, mirroring the
 > OAuth pattern), so Netlify and Cloud Run share ONE implementation. The Cloud Run MCP
 > Service (`src/agent/entrypoints/mcpServerMain.ts`, `npm run serve:mcp`, `Dockerfile.mcp`)
-> serves `/mcp` + `/healthz` + the full OAuth flow; sessions/OAuth state persist in GCS
+> serves `/mcp` + `/health` + the full OAuth flow; sessions/OAuth state persist in GCS (`/healthz` remains a compatibility alias)
 > (`mcpStateUsesBlobs` now includes `gcs`) so **no session affinity is required**. The UI
 > gained a "Control plane: Netlify | Cloud Run" toggle in the existing connection panel,
 > shown only when `VITE_CLOUD_RUN_MCP_URL` is set. Deploy steps: `docs/platform/PHASE4_RUNBOOK.md`.

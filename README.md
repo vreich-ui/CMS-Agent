@@ -2,12 +2,12 @@
 
 A Google Cloud Run-hosted TypeScript workspace for Agent SDK content workflows and an MCP control server, with authoritative state in GCS. Netlify hosts the React GUI only.
 
-> **Current deployment (August 2026):** the agent runtime, conductor, MCP control plane, and persistence have migrated to Google Cloud. The active Streamable HTTP MCP endpoint is the Cloud Run service's `/mcp`; `/healthz` provides service health. Netlify backend/function material retained below documents legacy compatibility and GUI authentication/proxy behavior—it is not the active agent runtime and should not guide new backend work.
+> **Current deployment (August 2026):** the agent runtime, conductor, MCP control plane, and persistence have migrated to Google Cloud. The active Streamable HTTP MCP endpoint is the Cloud Run service's `/mcp`; `/health` provides service health. Netlify backend/function material retained below documents legacy compatibility and GUI authentication/proxy behavior—it is not the active agent runtime and should not guide new backend work.
 
 ## Current runtime endpoints
 
 * `POST /mcp` exposes the Cloud Run workspace MCP server over Streamable HTTP.
-* `GET /healthz` reports Cloud Run service health.
+* `GET /health` reports Cloud Run service health. `/healthz` remains a local/backward-compatible alias only.
 * Long-running Publishing Conductor execution runs through the Cloud Run job entrypoint.
 
 ## Legacy Netlify compatibility endpoints

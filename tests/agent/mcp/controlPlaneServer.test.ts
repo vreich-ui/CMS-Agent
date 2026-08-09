@@ -16,6 +16,12 @@ const route = (method: string, path: string, body: unknown = null, headers: Reco
 
 describe("control-plane router", () => {
   it("serves an unauthenticated health probe", async () => {
+    const response = await route("GET", "/health");
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({ status: "ok", service: "cms-agent-mcp" });
+  });
+
+  it("retains /healthz as a backward-compatible health alias", async () => {
     const response = await route("GET", "/healthz");
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body)).toMatchObject({ status: "ok", service: "cms-agent-mcp" });
@@ -70,8 +76,8 @@ describe("handleNodeRequest (node:http translation)", () => {
     expect(Array.isArray(parsed.result.tools)).toBe(true);
   });
 
-  it("serves health over HTTP", async () => {
-    const response = await fetch(`${baseUrl}/healthz`);
+  it("serves the canonical health route over HTTP", async () => {
+    const response = await fetch(`${baseUrl}/health`);
     expect(response.status).toBe(200);
     expect((await response.json()).status).toBe("ok");
   });

@@ -23,7 +23,10 @@ const MCP_PATHS = new Set(["/mcp", "/api/mcp"]);
 export async function routeControlPlaneRequest(request: RouterRequest): Promise<HttpResponse> {
   const { method, path } = request;
 
-  if (path === "/healthz" || path === "/") return health();
+  // /health is the canonical Cloud Run probe path. Keep /healthz as a local/backward-compatible
+  // alias because some existing callers still use it; Cloud Run's edge may reserve paths ending
+  // in "z" before they reach this container.
+  if (path === "/health" || path === "/healthz" || path === "/") return health();
   if (MCP_PATHS.has(path)) return handleMcpHttp({ httpMethod: method, headers: request.headers, body: request.body });
 
   // OAuth discovery + endpoints (trailing-segment forms allowed, matching the netlify.toml globs).

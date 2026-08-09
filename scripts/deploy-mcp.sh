@@ -92,7 +92,8 @@ gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" 
 
 say ""
 say "==> Health"
-curl -fsS "$URL/healthz" && say ""
+curl -fsS "$URL/health" >/dev/null
+say "health    : ok"
 
 # The check that would have caught both of this project's deploy incidents: is the SERVED tool surface
 # the one this commit expects, does every active client still have its endpoint and token, and (when
