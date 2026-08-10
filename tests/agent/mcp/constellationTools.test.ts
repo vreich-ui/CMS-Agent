@@ -22,7 +22,7 @@ describe("constellation.* MCP tools", () => {
 
   it("returns structural data with derived execution edges matching the graph derivation", async () => {
     const structure = await data("constellation.get_structure");
-    expect(structure.agents).toHaveLength(21); // R-22: the re-seeded conductor graph
+    expect(structure.agents).toHaveLength(23); // R-22 re-seed + §2.16 placement_resolver/monetization_strategy
     expect(structure.relationships).toEqual([]);
     const graph = await data("workspace.get_graph");
     expect(structure.derivedExecutionEdges).toHaveLength(graph.edges.length);
@@ -33,7 +33,7 @@ describe("constellation.* MCP tools", () => {
 
   it("returns honest empty-system shapes before any runs or usage exist", async () => {
     const metrics = await data("constellation.get_metrics");
-    expect(metrics.agents).toHaveLength(21); // R-22: the re-seeded conductor graph
+    expect(metrics.agents).toHaveLength(23); // R-22 re-seed + §2.16 placement_resolver/monetization_strategy
     for (const agent of metrics.agents) {
       expect(agent.usage.estimated.recordCount).toBe(0);
       expect(agent.usage.actual.recordCount).toBe(0);

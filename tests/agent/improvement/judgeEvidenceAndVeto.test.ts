@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
-import { scoreOutput } from "../../../src/agent/improvement/rubricJudge.js";
-import { buildDataset } from "../../../src/agent/improvement/replay.js";
-import { validateRubric, type EvalRubric } from "../../../src/agent/improvement/improvementTypes.js";
+import { firstVeto, scoreOutput } from "../../../src/agent/improvement/rubricJudge.js";
+import { buildDataset, caseContract, judgeEvidenceFromNodeState, replayInput } from "../../../src/agent/improvement/replay.js";
+import { stableHash, validateRubric, type EvalRubric } from "../../../src/agent/improvement/improvementTypes.js";
 import { runNextNode, startDryRun } from "../../../src/agent/workspace/executor.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
@@ -82,6 +82,41 @@ describe("criticalMin veto (one hard-fail mechanism, enforced by the harness)", 
     expect(validateRubric({ passThreshold: 0.7, criteria: [{ id: "a", name: "A", description: "x", weight: 1, scaleMax: 5, criticalMin: 5 }] }))
       .toEqual([expect.stringContaining("must be below scaleMax")]);
     expect(validateRubric({ passThreshold: 0.7, criteria: [{ id: "a", name: "A", description: "x", weight: 1, scaleMax: 5, criticalMin: 4 }] })).toEqual([]);
+    // criticalMin 0 is a LIVE veto ("a zero here is fatal"), not a typo — it must stay accepted.
+    expect(validateRubric({ passThreshold: 0.7, criteria: [{ id: "a", name: "A", description: "x", weight: 1, scaleMax: 10, criticalMin: 0 }] })).toEqual([]);
+  });
+});
+
+// The floor is INCLUSIVE and the four production non-negotiables all declare criticalMin 0
+// (contract_source_provenance, no_side_effects, materialization_verification, request_id_confirmed),
+// so these assertions are the whole difference between a live veto and a dead one.
+describe("criticalMin floor semantics", () => {
+  const criterion = (criticalMin: number | undefined, scaleMax = 10) => ({ id: "floor", name: "Floor", description: "x", weight: 1, scaleMax, ...(criticalMin !== undefined ? { criticalMin } : {}) });
+  const withFloor = (criticalMin: number | undefined, scaleMax = 10) => rubric({ criteria: [criterion(criticalMin, scaleMax)] });
+  const score = (value: number, max = 10) => [{ criterionId: "floor", score: value, max, evidence: "e" }];
+
+  it("fires on exactly the floor: criticalMin 0 vetoes a 0 and clears a 1", () => {
+    expect(firstVeto(withFloor(0), score(0))).toMatchObject({ criterionId: "floor", score: 0, criticalMin: 0, reason: "at_or_below_floor" });
+    expect(firstVeto(withFloor(0), score(1))).toBeUndefined();
+    expect(firstVeto(withFloor(0), score(10))).toBeUndefined();
+  });
+
+  it("leaves the research.citation_integrity case (criticalMin 2) exactly as it was", () => {
+    expect(firstVeto(withFloor(2), score(1))).toMatchObject({ score: 1, criticalMin: 2, reason: "at_or_below_floor" });
+    expect(firstVeto(withFloor(2), score(2))).toMatchObject({ score: 2, criticalMin: 2, reason: "at_or_below_floor" });
+    expect(firstVeto(withFloor(2), score(3))).toBeUndefined();
+  });
+
+  it("vetoes a criterion the judge skipped, with its own reason rather than a fabricated zero", () => {
+    // The judge returned nothing for the criterion. It is not a pass (or the veto would be opt-out for
+    // any judge that declines to answer) and it is not evidence of a zero either — so it says so.
+    expect(firstVeto(withFloor(0), score(0), new Set(["floor"]))).toMatchObject({ criterionId: "floor", criticalMin: 0, reason: "not_scored" });
+    // Even a perfect score is a not_scored veto when the harness knows the judge did not produce it.
+    expect(firstVeto(withFloor(0), score(10), new Set(["floor"]))).toMatchObject({ criterionId: "floor", reason: "not_scored" });
+    // Missing from the scores array entirely is the same failure.
+    expect(firstVeto(withFloor(0), [])).toMatchObject({ criterionId: "floor", reason: "not_scored" });
+    // A criterion with no declared floor is never vetoed, scored or not.
+    expect(firstVeto(withFloor(undefined), [], new Set(["floor"]))).toBeUndefined();
   });
 });
 
@@ -113,7 +148,9 @@ describe("dataset cases carry their source execution mode (mock champions are no
     const run: WorkflowExecutionRecord = {
       runId: `run_mode_${mode}_${n}`, workflowId: "publishing_conductor", projectId: "platform", status: "completed",
       startedAt: new Date(Date.UTC(2026, 7, 1, 0, 0, n)).toISOString(), updatedAt: new Date(Date.UTC(2026, 7, 1, 0, 1, n)).toISOString(),
-      nodes: [{ nodeId: "article_body", status: "completed", input: { brief: "x" }, output: { body: mode }, produces: ["client_object.v1"] }],
+      // Distinct input per run: identical-subject cases are deduplicated at freeze time (see the
+      // degenerate-dataset suite below), and this suite is about mode tagging, not deduplication.
+      nodes: [{ nodeId: "article_body", status: "completed", input: { input: { brief: `x${n}` }, dependencies: {} }, output: { body: mode }, produces: ["client_object.v1"] }],
       artifacts: [], errors: [], approvalsRequired: [], stageOutputs: {}, dryRun: true, executionMode: mode
     } as WorkflowExecutionRecord;
     await store.createRun(run);
@@ -138,6 +175,107 @@ describe("dataset cases carry their source execution mode (mock champions are no
   });
 });
 
+// The one real contract_intelligence evaluation recorded "Source contract was not supplied, so exact
+// fidelity cannot be verified" — while the run had the contract the whole time. The conductor injects
+// it as `prefetchedContract` NEXT TO initialInput/dependencies, and a conductor node with
+// dependencies stores initialInput: undefined, so passing `evalCase.input` as the judge's contract
+// passed undefined.
+describe("the judge gets the contract the node actually had", () => {
+  // Exactly the shape executor.ts persists for a prefetch node with dependencies.
+  const conductorInput = {
+    initialInput: undefined,
+    dependencies: { brief_architect: { artifact: "article_brief.v1" } },
+    clientProjectId: "dr-lurie",
+    prefetchedContract: { clientObjectType: "content_item", contractSource: { tool: "object_contract", fetchedAtISO: "2026-08-01T00:00:00.000Z" } }
+  };
+
+  const seedContractRun = async (manager: RepositoryManager, runId: string) => {
+    await manager.getExecutionRepository().createRun({
+      runId, workflowId: "publishing_conductor", projectId: "dr-lurie", status: "completed",
+      startedAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:10:00.000Z",
+      nodes: [{ nodeId: "contract_intelligence", status: "completed", input: conductorInput, output: { artifact: "contract_intelligence.v1" }, toolCalls: [], produces: ["contract_intelligence.v1"] }],
+      artifacts: [], errors: [], approvalsRequired: [], stageOutputs: {}, dryRun: true, executionMode: "openai"
+    } as unknown as WorkflowExecutionRecord);
+  };
+
+  it("freezes the prefetched contract onto the case and resolves it as the judge's contract evidence", async () => {
+    const manager = new RepositoryManager();
+    const replayDeps = { executionRepository: manager.getExecutionRepository(), improvementRepository: manager.getImprovementRepository(), workspaceRepository: manager.getWorkspaceRepository(), evaluationRepository: manager.getEvaluationRepository() } as Parameters<typeof buildDataset>[1];
+    await seedContractRun(manager, "run_contract_evidence_1");
+
+    const dataset = await buildDataset({ nodeId: "contract_intelligence" }, replayDeps);
+    const frozen = dataset.cases[0]!;
+    // The old case shape kept only `input`, which is undefined here — the whole bug.
+    expect(frozen.input).toBeUndefined();
+    expect(frozen.context?.prefetchedContract).toEqual(conductorInput.prefetchedContract);
+    expect(frozen.context?.clientProjectId).toBe("dr-lurie");
+    expect(caseContract(frozen)).toEqual(conductorInput.prefetchedContract);
+    // ...and the replay hands it back to the node, so the output being judged for contract fidelity
+    // was produced with the contract in hand.
+    expect(replayInput(frozen)).toMatchObject({ prefetchedContract: conductorInput.prefetchedContract, clientProjectId: "dr-lurie" });
+  });
+
+  it("recovers the same evidence from a stored run for the one-off evaluation.run path", () => {
+    const evidence = judgeEvidenceFromNodeState({ input: conductorInput, toolCalls: [{ tool: "project.call_read_tool" }] });
+    expect(evidence.contract).toEqual(conductorInput.prefetchedContract);
+    expect(evidence.dependencyOutputs).toEqual(conductorInput.dependencies);
+    expect(evidence.toolCalls).toEqual([{ tool: "project.call_read_tool" }]);
+  });
+
+  it("reports no contract rather than an empty one when the node genuinely had none", () => {
+    const evidence = judgeEvidenceFromNodeState({ input: { initialInput: undefined, dependencies: { upstream: { a: 1 } } } });
+    expect(evidence.contract).toBeUndefined();
+    expect(evidence.dependencyOutputs).toEqual({ upstream: { a: 1 } });
+  });
+});
+
+// ds_1785772079588_9a01hb: four cases, one subject hash (e8b1ed18), byte-identical mock scores — a
+// dataset of one dressed as a dataset of four, whose regression verdicts looked exactly like real ones.
+describe("dataset discriminating power is measured at build time", () => {
+  const seedIdenticalRun = async (manager: RepositoryManager, n: number, input: unknown) => {
+    await manager.getExecutionRepository().createRun({
+      runId: `run_degenerate_${n}`, workflowId: "publishing_conductor", projectId: "degenerate-proj", status: "completed",
+      startedAt: new Date(Date.UTC(2026, 7, 2, 0, 0, n)).toISOString(), updatedAt: new Date(Date.UTC(2026, 7, 2, 0, 1, n)).toISOString(),
+      nodes: [{ nodeId: "article_body", status: "completed", input, output: { body: `out_${n}` }, produces: ["client_object.v1"] }],
+      artifacts: [], errors: [], approvalsRequired: [], stageOutputs: {}, dryRun: true, executionMode: "mock"
+    } as unknown as WorkflowExecutionRecord);
+  };
+  const replayDepsFor = (manager: RepositoryManager) => ({ executionRepository: manager.getExecutionRepository(), improvementRepository: manager.getImprovementRepository(), workspaceRepository: manager.getWorkspaceRepository(), evaluationRepository: manager.getEvaluationRepository() } as Parameters<typeof buildDataset>[1]);
+
+  it("drops identical-subject cases and flags the surviving dataset as degenerate", async () => {
+    const manager = new RepositoryManager();
+    const same = { initialInput: undefined, dependencies: { brief_architect: { artifact: "article_brief.v1" } }, clientProjectId: "dr-lurie" };
+    for (const n of [1, 2, 3, 4]) await seedIdenticalRun(manager, n, same);
+
+    const dataset = await buildDataset({ nodeId: "article_body" }, replayDepsFor(manager));
+    expect(dataset.cases).toHaveLength(1);
+    expect(dataset.metadata).toMatchObject({ distinctSubjects: 1, duplicateSubjects: 3, degenerate: true });
+    expect(dataset.metadata?.warning).toContain("degenerate_dataset");
+    expect(dataset.cases[0]!.subjectHash).toBe(stableHash({ input: undefined, dependencies: same.dependencies, context: { clientProjectId: "dr-lurie" } }));
+  });
+
+  it("keeps genuinely distinct cases and reports the dataset as non-degenerate", async () => {
+    const manager = new RepositoryManager();
+    for (const n of [1, 2, 3]) await seedIdenticalRun(manager, n, { initialInput: `brief ${n}`, dependencies: {} });
+
+    const dataset = await buildDataset({ nodeId: "article_body" }, replayDepsFor(manager));
+    expect(dataset.cases).toHaveLength(3);
+    expect(new Set(dataset.cases.map((c) => c.subjectHash)).size).toBe(3);
+    expect(dataset.metadata).toMatchObject({ distinctSubjects: 3, duplicateSubjects: 0, degenerate: false });
+    expect(dataset.metadata?.warning).toBeUndefined();
+  });
+
+  it("can be asked to keep duplicates, and still counts them honestly", async () => {
+    const manager = new RepositoryManager();
+    const same = { initialInput: "identical", dependencies: {} };
+    for (const n of [1, 2]) await seedIdenticalRun(manager, n, same);
+
+    const dataset = await buildDataset({ nodeId: "article_body", allowDuplicateSubjects: true }, replayDepsFor(manager));
+    expect(dataset.cases).toHaveLength(2);
+    expect(dataset.metadata).toMatchObject({ distinctSubjects: 1, duplicateSubjects: 1, degenerate: true });
+  });
+});
+
 describe("regression baseline is scoped by execution mode", () => {
   it("a mock report is not the baseline for a real regression, and vice versa", async () => {
     // Asserted at the repository level, which is where the selection now happens: runRegression reads
@@ -146,7 +284,7 @@ describe("regression baseline is scoped by execution mode", () => {
     // run — a confident verdict computed against a pseudo-random number.
     const manager = new RepositoryManager();
     const store = manager.getEvaluationRepository();
-    const base = { nodeId: "contract_intelligence", datasetId: "ds_x", rubricId: "rubric_x", cases: [], summary: { casesTotal: 0, casesScored: 0, casesFailed: 0, casesPassed: 0, passRate: 0, meanScore: 0, threshold: 0.85 }, verdict: "baseline_set" as const };
+    const base = { nodeId: "contract_intelligence", datasetId: "ds_x", rubricId: "rubric_x", cases: [], summary: { casesTotal: 0, casesScored: 0, casesFailed: 0, casesPassed: 0, casesErrored: 0, passRate: 0, meanScore: 0, threshold: 0.85 }, gate: "fail" as const, gateReasons: ["no_cases_scored" as const], drift: "baseline_set" as const, verdict: "failing" as const };
     await store.recordRegressionReport({ ...base, reportId: "reg_real", executionMode: "openai", summary: { ...base.summary, meanScore: 0.91 }, createdAt: "2026-08-03T10:00:00.000Z" });
     await store.recordRegressionReport({ ...base, reportId: "reg_mock", executionMode: "mock", summary: { ...base.summary, meanScore: 0.484 }, createdAt: "2026-08-03T16:00:00.000Z" });
 

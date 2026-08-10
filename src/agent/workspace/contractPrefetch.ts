@@ -3,15 +3,26 @@
 // invokes from inside its own agent loop — and reduces it via contractReduction.ts. Cached per
 // (runId, projectId, objectType) through the SAME RunScopedCache getRunContext already uses, so a run
 // that (re)dispatches contract_intelligence more than once never re-fetches the client's server.
+//
+// §2.20 (cross-run reduced-contract cache): the RunScopedCache above only ever helps a run that
+// dispatches contract_intelligence more than once — a fresh run re-fetches AND re-reduces even when
+// the client's contract has not changed since the last run. When `deps.workspaceRepository` is
+// supplied, the raw payload's content fingerprint (§2.21) is checked against a small persisted cache
+// (projectId, objectType, fingerprint) -> ReducedContract before reduceContract runs, and the result
+// is stored there after. Optional and best-effort: a caller that omits workspaceRepository, or a
+// store that errors on the lookup/write, gets exactly today's behavior — the raw fetch and reduction
+// still happen, just without cross-run reuse.
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
+import { stableHash } from "../improvement/improvementTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
+import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import { conductorCache, type RunScopedCache } from "./conductor.js";
 import { reduceContract, type ReducedContract } from "./contractReduction.js";
 
 export type ContractPrefetchResult = { ok: true; reduced: ReducedContract } | { ok: false; error: string; code?: "prefetch_object_type_unresolved" };
 export type ContractPrefetchParams = { runId: string; projectId: string; requestedObjectType?: string };
-export type ContractPrefetchDeps = { projectRepository: ProjectRepository; cache?: RunScopedCache };
+export type ContractPrefetchDeps = { projectRepository: ProjectRepository; cache?: RunScopedCache; workspaceRepository?: WorkspaceRepository };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -83,7 +94,17 @@ export async function getReducedContract(params: ContractPrefetchParams, deps: C
     }
     if (!call.ok) return { ok: false, error: call.error ?? `object_contract failed for project ${params.projectId}` };
     const raw = extractContractPayload(call.result);
-    const reduced = reduceContract(raw, { tool: "object_contract", fetchedAtISO: new Date().toISOString() }, objectType);
+    // §2.21: a stable content hash of the RAW payload, computed before any reduction — this is what
+    // makes a contract that changed between fetch and publish detectable, and is the cache key below.
+    const fingerprint = stableHash(raw);
+    if (deps.workspaceRepository) {
+      const cached = await deps.workspaceRepository.getReducedContractCacheEntry(params.projectId, objectType, fingerprint).catch(() => undefined);
+      if (cached) return { ok: true, reduced: cached.reduced };
+    }
+    const reduced = reduceContract(raw, { tool: "object_contract", fetchedAtISO: new Date().toISOString(), fingerprint }, objectType);
+    if (deps.workspaceRepository) {
+      await deps.workspaceRepository.putReducedContractCacheEntry({ projectId: params.projectId, objectType, fingerprint, reduced }).catch(() => undefined);
+    }
     return { ok: true, reduced };
   });
 }

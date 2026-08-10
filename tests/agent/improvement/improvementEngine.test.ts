@@ -195,4 +195,23 @@ describe("end-to-end improvement loop (mock mode)", () => {
     expect(migration.data.dryRun).toBe(true);
     expect(typeof migration.data.migratedNodes).toBe("number");
   });
+
+  // 2.7 (handoff 2026-08-10): migration used to read ONLY observation.metadata?.nodeId, but
+  // learning.record_observation (and the executeTool controlled-tool path, toolRegistry.ts) has only
+  // ever written nodeId at the TOP level — zero of 34 production observations matched. Prove the fix:
+  // an observation recorded the ordinary way (top-level nodeId only, no metadata.nodeId) now migrates.
+  it("migrate_observations matches an observation via its top-level nodeId, not just metadata.nodeId", async () => {
+    const targetNodeId = "migration_target_2_7";
+    await callTool("learning.record_observation", { observation: "2.7 regression: top-level nodeId must migrate.", nodeId: targetNodeId });
+
+    const dryRun = await callTool("playbook.migrate_observations", { dryRun: true });
+    expect(dryRun.data.dryRun).toBe(true);
+
+    const applied = await callTool("playbook.migrate_observations", { dryRun: false });
+    expect(applied.data.migratedObservations).toBeGreaterThanOrEqual(1);
+
+    const playbook = await callTool("playbook.get", { nodeId: targetNodeId });
+    expect(playbook.data.playbook).not.toBeNull();
+    expect(JSON.stringify(playbook.data.playbook)).toContain("2.7 regression");
+  });
 });

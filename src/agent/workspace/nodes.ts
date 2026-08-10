@@ -100,11 +100,210 @@ export const publishingConductorNodes = [
     }
   },
   {
+    "id": "placement_resolver",
+    "name": "Placement Resolver",
+    "kind": "strategy",
+    "description": "Compute the aggression TARGET vector — claim_strength, urgency, emotional_agitation, cta_density on a 0-1 scale — deterministically from the request's traffic source and awareness stage. The target is computed by engine code, never hand-set; the resolved vector applied downstream is min(client ceiling, target) componentwise.",
+    "prompt": "Objective: Establish the aggression TARGET vector for this placement — four dials (claim_strength, urgency, emotional_agitation, cta_density), each 0-1 — from the request's trafficSource and awarenessStage.\nInputs expected: input_triage (the content_source.v1 envelope; trafficSource and awarenessStage are read from it or from the run's initial input).\nDeterminism policy: the target is COMPUTED by the engine's deterministic mapping (aggressionVector.ts), which runs before any model turn and normally completes this node without one. Never invent, adjust, or hand-set a dial value; never resolve against a client ceiling here — resolution (min(ceiling, target) componentwise) happens where the client contract is available, and an absent ceiling is a blocker there, not a default.\nOutput required: produce placement_resolution.v1 with trafficSource and awarenessStage echoed, target carrying the four dials as numbers 0-1, and rationale naming the mapping applied.\nCompletion criteria: the target reflects the deterministic mapping for the declared traffic source and awareness stage; the scale is 0-1; rationale is explicit.\nBlocker criteria: trafficSource or awarenessStage missing from the request — a target must never be guessed from content alone.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "schema": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "summary",
+        "trafficSource",
+        "awarenessStage",
+        "target",
+        "rationale"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {
+          "const": "placement_resolution.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trafficSource": {
+          "type": "string",
+          "minLength": 1
+        },
+        "awarenessStage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "object",
+          "description": "The aggression TARGET vector, 0-1 scale per dial, computed deterministically from (trafficSource, awarenessStage) — never hand-set. Resolution against the client ceiling (min componentwise; absent ceiling blocks) happens downstream where the contract is available.",
+          "required": [
+            "claim_strength",
+            "urgency",
+            "emotional_agitation",
+            "cta_density"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "claim_strength": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "urgency": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "emotional_agitation": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "cta_density": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "stageOutputs": {
+          "type": "object"
+        },
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "summary",
+        "trafficSource",
+        "awarenessStage",
+        "target",
+        "rationale"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {
+          "const": "placement_resolution.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trafficSource": {
+          "type": "string",
+          "minLength": 1
+        },
+        "awarenessStage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "object",
+          "description": "The aggression TARGET vector, 0-1 scale per dial, computed deterministically from (trafficSource, awarenessStage) — never hand-set. Resolution against the client ceiling (min componentwise; absent ceiling blocks) happens downstream where the contract is available.",
+          "required": [
+            "claim_strength",
+            "urgency",
+            "emotional_agitation",
+            "cta_density"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "claim_strength": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "urgency": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "emotional_agitation": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "cta_density": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "assignedSkills": [],
+    "requiredInputs": [
+      "input_triage"
+    ],
+    "produces": [
+      "placement_resolution.v1"
+    ],
+    "riskLevel": "read",
+    "dependsOn": [
+      "input_triage"
+    ],
+    "status": "active",
+    "position": {
+      "x": -60,
+      "y": 0
+    },
+    "updatedAt": "2026-08-10T00:00:00.000Z",
+    "metadata": {
+      "approvalRequired": false,
+      "placementResolverDeterministic": true
+    },
+    "modelConfig": {
+      "maxTurns": 2,
+      "toolCallLimit": 1,
+      "timeout": 60000,
+      "budgetUsd": 0.05,
+      "maxOutputTokens": 1500
+    }
+  },
+  {
     "id": "topic_opportunity",
     "name": "Topic Opportunity Agent",
     "kind": "strategy",
     "description": "Assess topic viability, audience value, search/editorial opportunity, and recommended positioning.",
-    "prompt": "Objective: Decide whether the request should become an article, page section, content update, product/resource support asset, or no-build recommendation for the target client.\nInputs expected: input_triage, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce topic_opportunity.v1 with recommended content route, reader value, business value, SEO/search intent notes when relevant, evidence depth needed, and cost path.\nCost policy: choose the smallest workflow that can satisfy the request safely. Recommend deep research only for current, comparative, regulatory, source-sensitive, or claim-heavy work; a client whose domain needs a stricter evidence bar (health, finance, legal) declares it in its own record. Recommend skipping redundant strategy passes when the request is simple.\nNext-step policy: prefer content that moves a reader toward a useful next step: related reading, newsletter, routine decision, product/resource consideration, or trust-building.\nClient policy: this node serves any registered client. clientProjectId names the target; the client's voice, audience, and commercial direction come from the client's own record and the run's inputs, never from this prompt. When the conductor delivers editorialVoice in this node's input (fetched live from the client's voice_<project> record, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), use its audience/tone/frameworks to judge reader value and route; do not assume a different client's voice when editorialVoice is absent. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nCompletion criteria: the route, audience value, evidence need, and blockers are explicit.\nBlocker criteria: unclear target, missing or unresolvable target client, unsafe request, no viable reader value, missing critical input, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Decide whether the request should become an article, page section, content update, product/resource support asset, or no-build recommendation for the target client.\nInputs expected: input_triage and placement_resolver (the computed aggression TARGET vector for this placement — use it to judge how commercially assertive the recommended route may be; never recompute or override its dials), plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce topic_opportunity.v1 with recommended content route, reader value, business value, SEO/search intent notes when relevant, evidence depth needed, and cost path.\nCost policy: choose the smallest workflow that can satisfy the request safely. Recommend deep research only for current, comparative, regulatory, source-sensitive, or claim-heavy work; a client whose domain needs a stricter evidence bar (health, finance, legal) declares it in its own record. Recommend skipping redundant strategy passes when the request is simple.\nNext-step policy: prefer content that moves a reader toward a useful next step: related reading, newsletter, routine decision, product/resource consideration, or trust-building.\nClient policy: this node serves any registered client. clientProjectId names the target; the client's voice, audience, and commercial direction come from the client's own record and the run's inputs, never from this prompt. When the conductor delivers editorialVoice in this node's input (fetched live from the client's voice_<project> record, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), use its audience/tone/frameworks to judge reader value and route; do not assume a different client's voice when editorialVoice is absent. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nCompletion criteria: the route, audience value, evidence need, and blockers are explicit.\nBlocker criteria: unclear target, missing or unresolvable target client, unsafe request, no viable reader value, missing critical input, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -175,14 +374,16 @@ export const publishingConductorNodes = [
       "seo_review"
     ],
     "requiredInputs": [
-      "input_triage"
+      "input_triage",
+      "placement_resolver"
     ],
     "produces": [
       "topic_opportunity.v1"
     ],
     "riskLevel": "read",
     "dependsOn": [
-      "input_triage"
+      "input_triage",
+      "placement_resolver"
     ],
     "status": "active",
     "position": {
@@ -200,6 +401,147 @@ export const publishingConductorNodes = [
       "timeout": 90000,
       "budgetUsd": 0.1,
       "maxOutputTokens": 2500
+    }
+  },
+  {
+    "id": "monetization_strategy",
+    "name": "Monetization Strategy Agent",
+    "kind": "strategy",
+    "description": "Select the commercial offer (or an explicit no-offer decision) for the piece BEFORE the brief is written, using the monetizer project's live offer data reached read-only at runtime.",
+    "prompt": "Objective: Decide what this piece is monetizing before the brief exists: select one offer from the monetizer project's live data, or decide explicitly that no offer fits, and say why.\nInputs expected: topic_opportunity (the recommended route and audience/business value), plus clientProjectId (the run's registered client) delivered in this node's input.\nOffer policy: reach the monetizer project read-only through project.call_read_tool to list and inspect candidate offers. Prefer offers matching the topic's commercial intent and the client's audience; an unmatched topic gets selectedOffer null with the gap named in offerRationale rather than a forced fit. Never invent an offer, a payout, or a merchant that the monetizer's own data does not carry.\nOutput required: produce monetization_strategy.v1 with selectedOffer (the chosen offer's identifying fields as the monetizer returns them, or null), offerRationale (why this offer, or why none), and commercialIntent (the piece's commercial posture, e.g. transactional, commercial, supporting, none).\nCompletion criteria: the brief architect can aim the brief at a named offer or a named no-offer decision without re-doing this selection; assumptions and blockers are explicit.\nBlocker criteria: missing topic_opportunity, missing or unresolvable target client, or the monetizer project being unreachable when an offer decision materially depends on live offer data — record the outage rather than guessing.\nTool policy: use only allowedTools; reads go through project.call_read_tool, which needs no approval; project.call_tool is approval-gated and reserved for writes, which this node never performs — do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "schema": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "summary",
+        "selectedOffer",
+        "offerRationale",
+        "commercialIntent"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {
+          "const": "monetization_strategy.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selectedOffer": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The chosen offer's identifying fields as returned by the monetizer project (id/name/merchant/url/payout as available), or null when no offer fits this piece."
+        },
+        "offerRationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commercialIntent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The piece's commercial posture, e.g. transactional, commercial, supporting, none."
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "stageOutputs": {
+          "type": "object"
+        },
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "summary",
+        "selectedOffer",
+        "offerRationale",
+        "commercialIntent"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {
+          "const": "monetization_strategy.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selectedOffer": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The chosen offer's identifying fields as returned by the monetizer project (id/name/merchant/url/payout as available), or null when no offer fits this piece."
+        },
+        "offerRationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commercialIntent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The piece's commercial posture, e.g. transactional, commercial, supporting, none."
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs",
+      "project.call_read_tool"
+    ],
+    "assignedSkills": [],
+    "requiredInputs": [
+      "topic_opportunity"
+    ],
+    "produces": [
+      "monetization_strategy.v1"
+    ],
+    "riskLevel": "read",
+    "dependsOn": [
+      "topic_opportunity"
+    ],
+    "status": "active",
+    "position": {
+      "x": 420,
+      "y": 90
+    },
+    "updatedAt": "2026-08-10T00:00:00.000Z",
+    "metadata": {
+      "approvalRequired": false
+    },
+    "modelConfig": {
+      "maxTurns": 4,
+      "toolCallLimit": 3,
+      "timeout": 120000,
+      "budgetUsd": 0.2,
+      "maxOutputTokens": 3000
     }
   },
   {
@@ -716,7 +1058,7 @@ export const publishingConductorNodes = [
     "name": "Brief Architect",
     "kind": "planning",
     "description": "Convert strategy into an executable article brief with structure, claims, proof points, and acceptance criteria.",
-    "prompt": "Objective: Convert upstream strategy and evidence into one executable article/content brief for the target client.\nInputs expected: topic_opportunity, reader_insight, research, objection_mapping, narrative_movement, and angle_strategy — all delivered directly in this node's input as dependency outputs — plus clientProjectId (the run's registered client). Everything this brief needs is already in your input; do not fetch stage outputs or hunt for additional context.\nOutput required: produce article_brief.v1 with title/slug direction, reader promise, article structure, claim/proof map, reader next step, SEO/meta notes, tone guardrails, acceptance criteria, and what to skip.\nCost policy: collapse duplicate strategy into this brief. Do not ask downstream agents to rediscover the angle. Include only sections, claims, and review needs that materially improve the article.\nNext-step policy: make the content useful first and commercially aware second. Add a low-pressure next step only where it fits the reader journey.\nClient policy: clientProjectId names the target client. Voice, styling, and audience direction belong to the client's own record, never to this prompt. Take tone guardrails ONLY from what is present in this node's input (the run's initial instructions and the delivered upstream outputs); when a client voice record exists the conductor delivers it in your input as editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), and its tone/cadence/lexicon/cta_policy/frameworks are this brief's tone guardrails. If no voice direction is present, record that gap as an assumption, set neutral reader-first guardrails, and continue — do not spend tool calls searching other stages for a voice record that was not delivered. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nContract policy: note likely target object type, expected content-object fields, taxonomy needs, and whether contract_intelligence must inspect anything beyond the client's default object type.\nCompletion criteria: the draft writer can write without guessing; research and factual risks are visible; blockers are explicit.\nBlocker criteria: missing strategy, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Convert upstream strategy and evidence into one executable article/content brief for the target client.\nInputs expected: topic_opportunity, monetization_strategy (the selected offer — or explicit no-offer decision — this brief must be aimed at; a hard input, never re-decided here), reader_insight, research, objection_mapping, narrative_movement, and angle_strategy — all delivered directly in this node's input as dependency outputs — plus clientProjectId (the run's registered client). Everything this brief needs is already in your input; do not fetch stage outputs or hunt for additional context.\nOutput required: produce article_brief.v1 with title/slug direction, reader promise, article structure, claim/proof map, reader next step, SEO/meta notes, tone guardrails, acceptance criteria, and what to skip.\nCost policy: collapse duplicate strategy into this brief. Do not ask downstream agents to rediscover the angle. Include only sections, claims, and review needs that materially improve the article.\nNext-step policy: make the content useful first and commercially aware second. Add a low-pressure next step only where it fits the reader journey.\nClient policy: clientProjectId names the target client. Voice, styling, and audience direction belong to the client's own record, never to this prompt. Take tone guardrails ONLY from what is present in this node's input (the run's initial instructions and the delivered upstream outputs); when a client voice record exists the conductor delivers it in your input as editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), and its tone/cadence/lexicon/cta_policy/frameworks are this brief's tone guardrails. If no voice direction is present, record that gap as an assumption, set neutral reader-first guardrails, and continue — do not spend tool calls searching other stages for a voice record that was not delivered. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nContract policy: note likely target object type, expected content-object fields, taxonomy needs, and whether contract_intelligence must inspect anything beyond the client's default object type.\nCompletion criteria: the draft writer can write without guessing; research and factual risks are visible; blockers are explicit.\nBlocker criteria: missing strategy, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -789,6 +1131,7 @@ export const publishingConductorNodes = [
     ],
     "requiredInputs": [
       "topic_opportunity",
+      "monetization_strategy",
       "reader_insight",
       "research",
       "objection_mapping",
@@ -801,6 +1144,7 @@ export const publishingConductorNodes = [
     "riskLevel": "read",
     "dependsOn": [
       "topic_opportunity",
+      "monetization_strategy",
       "reader_insight",
       "research",
       "objection_mapping",
@@ -1145,7 +1489,7 @@ export const publishingConductorNodes = [
     "name": "Emotional Resonance Evaluator",
     "kind": "review",
     "description": "Evaluate emotional clarity, stakes, empathy, reader momentum, and resonance with the intended audience.",
-    "prompt": "Objective: Evaluate emotional clarity, stakes, empathy, reader momentum, and resonance with the intended audience.\nInputs expected: draft_writer and input_triage (the original request envelope, for audience and intent).\nOutput required: produce emotional_resonance_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Evaluate emotional clarity, stakes, empathy, reader momentum, and resonance with the intended audience.\nInputs expected: draft_writer, input_triage (the original request envelope, for audience and intent), reader_insight (the audience definition: needs, motivations, sophistication, decision context) and objection_mapping (the reader's skepticism, confusion points, and trust gaps).\nOutput required: produce emotional_resonance_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1217,7 +1561,9 @@ export const publishingConductorNodes = [
     ],
     "requiredInputs": [
       "draft_writer",
-      "input_triage"
+      "input_triage",
+      "reader_insight",
+      "objection_mapping"
     ],
     "produces": [
       "emotional_resonance_review.v1"
@@ -1225,7 +1571,9 @@ export const publishingConductorNodes = [
     "riskLevel": "read",
     "dependsOn": [
       "draft_writer",
-      "input_triage"
+      "input_triage",
+      "reader_insight",
+      "objection_mapping"
     ],
     "status": "active",
     "position": {
@@ -1249,7 +1597,7 @@ export const publishingConductorNodes = [
     "name": "Reader Simulation",
     "kind": "review",
     "description": "Simulate likely reader reactions, drop-off points, questions, objections, and conversion readiness.",
-    "prompt": "Objective: Simulate likely reader reactions, drop-off points, questions, objections, and conversion readiness.\nInputs expected: draft_writer.\nOutput required: produce reader_simulation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Simulate likely reader reactions, drop-off points, questions, objections, and conversion readiness.\nInputs expected: draft_writer, reader_insight (who this reader is and what they came for), objection_mapping (the objections and trust gaps they are likely to raise) and angle_strategy (the promised angle and tension the piece must pay off).\nOutput required: produce reader_simulation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1318,14 +1666,20 @@ export const publishingConductorNodes = [
     ],
     "assignedSkills": [],
     "requiredInputs": [
-      "draft_writer"
+      "draft_writer",
+      "reader_insight",
+      "objection_mapping",
+      "angle_strategy"
     ],
     "produces": [
       "reader_simulation.v1"
     ],
     "riskLevel": "read",
     "dependsOn": [
-      "draft_writer"
+      "draft_writer",
+      "reader_insight",
+      "objection_mapping",
+      "angle_strategy"
     ],
     "status": "active",
     "position": {
@@ -1455,7 +1809,7 @@ export const publishingConductorNodes = [
     "name": "Contract Intelligence Agent",
     "kind": "research",
     "description": "Fetch the target client's live object contract at runtime and reduce it to the rules downstream nodes must obey. The client contract is the single source of truth; never author content rules from memory or from a workspace-local copy.",
-    "prompt": "Objective: Turn the target client's ALREADY-FETCHED, ALREADY-REDUCED object contract into contract_intelligence.v1, the rules every downstream node must obey. The client's contract is the single source of truth for content shape, ids, media paths, taxonomy, and publishing gates. Never author these rules from memory, from a workspace-local schema, or from another client's contract.\nInputs expected: article_brief, plus clientProjectId (the run's registered client — the conductor delivers it in every node's input; never guess it and never substitute a remembered client) and `prefetchedContract` supplied directly in your input — the conductor calls the client's contract surface deterministically, in code, BEFORE you run, and reduces it (dropping prose, examples, and error catalogues) precisely so you never have to fetch or carry the raw multi-KB contract yourself across your own turns. `prefetchedContract` carries: clientObjectType, bodySchema (the real JSON Schema, kept whole — it is structural, not prose), idConventions, mediaConvention, taxonomy, constraints (with severity and enforcedLive), publishPolicy, workflowSequence, validationSurface (patch/write operations with their required fields), contractSource {tool, fetchedAtISO}, and an `unmapped` bucket for anything the deterministic reduction did not recognize but preserved anyway.\nIf `prefetchedContract` is present: this is a validation and pass-through step, not a discovery one. Sanity-check it, write a concise summary, carry its fields into your own output verbatim (mapping field names as needed — see Output required), and surface anything in `unmapped` worth downstream attention. Do not call project.call_read_tool to re-fetch the primary contract — it has already been fetched this run. Reach for project.call_read_tool ONLY for something genuinely missing from the prefetch (e.g. a registry/taxonomy lookup the client's contract pointed at but did not inline, or the client's own contract tool for a DIFFERENT object type than what was prefetched) — it needs no approval and only reaches read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping); reserve project.call_tool for a genuine write, which this node does not perform.\nIf `prefetchError` is present instead (the deterministic fetch failed — unreachable client, policy block, unsupported object type): treat it exactly as the unreachable-client blocker criterion below; do not attempt to fetch the contract yourself as a substitute unless prefetchedContract is entirely absent from your input (an older run/deployment that never wired the prefetch), in which case fall back to the discovery policy your allowedTools describe.\nOutput required: produce contract_intelligence.v1 carrying, at minimum: clientProjectId (from your own input's clientProjectId — the run's registered client), clientObjectType, bodySchema (from prefetchedContract.bodySchema, or your own reduction of a fetched contract, verbatim — never the full raw contract re-derived, so the large fetched payload does not compound across turns nor get carried whole into every downstream node's input), the id conventions (object id and node/child id patterns, from prefetchedContract.idConventions), the media/artifact path convention (raw artifact reference field vs public serving path, and which fields accept which, from prefetchedContract.mediaConvention), the taxonomy source and whether unknown terms block (from prefetchedContract.taxonomy), the enumerated structural constraints with their severity and whether each is enforced live (from prefetchedContract.constraints), the publish policy including whether approval is required and any pinning rules (from prefetchedContract.publishPolicy), and contractSource {tool, fetchedAtISO} (from prefetchedContract.contractSource, or your own fetch's).\nGeneralization policy: this node must work for ANY client the workflow encounters, not one named client. Do not hardcode a client's field names, path prefixes, or object types into your reasoning; read them from prefetchedContract (or the contract you fetched) and pass them forward as data. Where a client's contract is silent, say so explicitly as an assumption rather than filling the gap from another client's conventions.\nCompletion criteria: a downstream node can construct and validate a client object using only your output plus the client's own validator, without guessing and without consulting any workspace-local schema.\nBlocker criteria: the client project is unreachable or unconfigured, clientProjectId is missing from your input, its contract tools are unavailable or denied by policy, the requested object type is unsupported, the contract cannot be fetched read-only, or the contract declares constraints this workspace cannot satisfy.\nTool policy: use only allowedTools; reach the client only through project.call_read_tool and only with its permitted read-only contract, registry, inventory, and validation operations, and only for what prefetchedContract does not already supply; project.call_tool is also granted for a future write but this node must never publish, create, patch, or otherwise mutate the client.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Turn the target client's ALREADY-FETCHED, ALREADY-REDUCED object contract into contract_intelligence.v1, the rules every downstream node must obey. The client's contract is the single source of truth for content shape, ids, media paths, taxonomy, and publishing gates. Never author these rules from memory, from a workspace-local schema, or from another client's contract.\nInputs expected: brief_architect (its article_brief.v1 output), plus clientProjectId (the run's registered client — the conductor delivers it in every node's input; never guess it and never substitute a remembered client) and `prefetchedContract` supplied directly in your input — the conductor calls the client's contract surface deterministically, in code, BEFORE you run, and reduces it (dropping prose, examples, and error catalogues) precisely so you never have to fetch or carry the raw multi-KB contract yourself across your own turns. `prefetchedContract` carries: clientObjectType, bodySchema (the real JSON Schema, kept whole — it is structural, not prose), idConventions, mediaConvention, taxonomy, constraints (with severity and enforcedLive), publishPolicy, workflowSequence, validationSurface (patch/write operations with their required fields), contractSource {tool, fetchedAtISO}, and an `unmapped` bucket for anything the deterministic reduction did not recognize but preserved anyway.\nIf `prefetchedContract` is present: this is a validation and pass-through step, not a discovery one. Sanity-check it, write a concise summary, carry its fields into your own output verbatim (mapping field names as needed — see Output required), and surface anything in `unmapped` worth downstream attention. Do not call project.call_read_tool to re-fetch the primary contract — it has already been fetched this run. Reach for project.call_read_tool ONLY for something genuinely missing from the prefetch (e.g. a registry/taxonomy lookup the client's contract pointed at but did not inline, or the client's own contract tool for a DIFFERENT object type than what was prefetched) — it needs no approval and only reaches read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping); reserve project.call_tool for a genuine write, which this node does not perform.\nIf `prefetchError` is present instead (the deterministic fetch failed — unreachable client, policy block, unsupported object type): treat it exactly as the unreachable-client blocker criterion below; do not attempt to fetch the contract yourself as a substitute unless prefetchedContract is entirely absent from your input (an older run/deployment that never wired the prefetch), in which case fall back to the discovery policy your allowedTools describe.\nOutput required: produce contract_intelligence.v1 carrying, at minimum: clientProjectId (from your own input's clientProjectId — the run's registered client), clientObjectType, bodySchema (from prefetchedContract.bodySchema, or your own reduction of a fetched contract, verbatim — never the full raw contract re-derived, so the large fetched payload does not compound across turns nor get carried whole into every downstream node's input), the id conventions (object id and node/child id patterns, from prefetchedContract.idConventions), the media/artifact path convention (raw artifact reference field vs public serving path, and which fields accept which, from prefetchedContract.mediaConvention), the taxonomy source and whether unknown terms block (from prefetchedContract.taxonomy), the enumerated structural constraints with their severity and whether each is enforced live (from prefetchedContract.constraints), the publish policy including whether approval is required and any pinning rules (from prefetchedContract.publishPolicy), and contractSource {tool, fetchedAtISO} (from prefetchedContract.contractSource, or your own fetch's).\nGeneralization policy: this node must work for ANY client the workflow encounters, not one named client. Do not hardcode a client's field names, path prefixes, or object types into your reasoning; read them from prefetchedContract (or the contract you fetched) and pass them forward as data. Where a client's contract is silent, say so explicitly as an assumption rather than filling the gap from another client's conventions.\nCompletion criteria: a downstream node can construct and validate a client object using only your output plus the client's own validator, without guessing and without consulting any workspace-local schema.\nBlocker criteria: the client project is unreachable or unconfigured, clientProjectId is missing from your input, its contract tools are unavailable or denied by policy, the requested object type is unsupported, the contract cannot be fetched read-only, or the contract declares constraints this workspace cannot satisfy.\nTool policy: use only allowedTools; reach the client only through project.call_read_tool and only with its permitted read-only contract, registry, inventory, and validation operations, and only for what prefetchedContract does not already supply; project.call_tool is approval-gated and reserved for writes only; this node performs no writes and must never publish, create, patch, or otherwise mutate the client.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
@@ -1683,7 +2037,7 @@ export const publishingConductorNodes = [
     "name": "Article Body Builder",
     "kind": "builder",
     "description": "Build the client's content object in the client's own shape, using the contract fetched at runtime by contract_intelligence. The client contract is the only source of truth; no workspace-local content schema is authoritative.",
-    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content), contract_intelligence (the client contract), narrative_movement (the reader-journey arc: section movement, stakes, transitions, resolution) and angle_strategy (the chosen angle, promise, and tension) — the upstream editorial reasoning your per-node private annotations are built from. clientProjectId also arrives directly in this node's input from the conductor and must agree with contract_intelligence's clientProjectId; if they disagree, that is a blocker. Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nPrivate annotation policy: where the contract's body schema declares per-node private annotation fields (for example a private block with closed strategy/intent enums and a free-text notes field), populate them on EVERY node you emit — an absent private annotation is a defect, not a default. Choose each enum value ONLY from the enum the contract itself declares — never invent, pluralize, or approximate a value — mapping each node's role in the piece from narrative_movement's arc and angle_strategy's angle/promise plus review_aggregator's build instructions, and put the one-sentence reasoning for the choice in the contract's free-text private notes field. If narrative_movement or angle_strategy outputs are absent or skipped (for example a late-stage entry run), derive the annotation from the approved content itself and record that as an assumption. Private annotation is never reader-visible — the contract's renderer emits public fields only — so annotate every node rather than leaving private fields absent. If the contract declares no private annotation fields for this object type, note that instead; never add undeclared fields.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_read_tool, read-only, and record the outcome in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable — that tool is deliberately approval-gated for writes only. If the client's validator requires an existing object record that does not yet exist, do NOT attempt to create one — this node is write-prohibited. Record clientValidation {attempted: true, tool, valid: false, deferred: \"requires_existing_object\"} quoting the client's own refusal in issues, and treat that as a NORMAL outcome, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch. Do not claim validity, and do not spend further calls re-attempting once the client has reported the object does not exist. If the client cannot be reached or its read-only validator is denied by the project's own policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; contract-declared private annotation fields are populated on every emitted node (or the contract's silence on them is noted); every media reference is verified and in the correct form for its field; clientValidation records a real result from the client, or a deferral because the validator requires an object that does not yet exist; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; clientProjectId is missing from this node's input or disagrees with contract_intelligence's; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client through project.call_read_tool for every read-only contract and validation operation; project.call_tool is approval-gated and reserved for writes — never create, patch, publish, or release from this node.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content), draft_writer (the complete drafted prose — build the body FROM this draft as amended by review_aggregator's revision instructions, never by re-writing the article from notes), contract_intelligence (the client contract), narrative_movement (the reader-journey arc: section movement, stakes, transitions, resolution) and angle_strategy (the chosen angle, promise, and tension) — the upstream editorial reasoning your per-node private annotations are built from. clientProjectId also arrives directly in this node's input from the conductor and must agree with contract_intelligence's clientProjectId; if they disagree, that is a blocker. Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nPrivate annotation policy: where the contract's body schema declares per-node private annotation fields (for example a private block with closed strategy/intent enums and a free-text notes field), populate them on EVERY node you emit — an absent private annotation is a defect, not a default. Choose each enum value ONLY from the enum the contract itself declares — never invent, pluralize, or approximate a value — mapping each node's role in the piece from narrative_movement's arc and angle_strategy's angle/promise plus review_aggregator's build instructions, and put the one-sentence reasoning for the choice in the contract's free-text private notes field. If narrative_movement or angle_strategy outputs are absent or skipped (for example a late-stage entry run), derive the annotation from the approved content itself and record that as an assumption. Private annotation is never reader-visible — the contract's renderer emits public fields only — so annotate every node rather than leaving private fields absent. If the contract declares no private annotation fields for this object type, note that instead; never add undeclared fields.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_read_tool, read-only, and record the outcome in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable — that tool is deliberately approval-gated for writes only. If the client's validator requires an existing object record that does not yet exist, do NOT attempt to create one — this node is write-prohibited. Record clientValidation {attempted: true, tool, valid: false, deferred: \"requires_existing_object\"} quoting the client's own refusal in issues, and treat that as a NORMAL outcome, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch. Do not claim validity, and do not spend further calls re-attempting once the client has reported the object does not exist. If the client cannot be reached or its read-only validator is denied by the project's own policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; contract-declared private annotation fields are populated on every emitted node (or the contract's silence on them is noted); every media reference is verified and in the correct form for its field; clientValidation records a real result from the client, or a deferral because the validator requires an object that does not yet exist; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; clientProjectId is missing from this node's input or disagrees with contract_intelligence's; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client through project.call_read_tool for every read-only contract and validation operation; project.call_tool is approval-gated and reserved for writes — never create, patch, publish, or release from this node.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "required": [
@@ -1852,6 +2206,7 @@ export const publishingConductorNodes = [
     ],
     "requiredInputs": [
       "review_aggregator",
+      "draft_writer",
       "contract_intelligence",
       "narrative_movement",
       "angle_strategy"
@@ -1862,6 +2217,7 @@ export const publishingConductorNodes = [
     "riskLevel": "write",
     "dependsOn": [
       "review_aggregator",
+      "draft_writer",
       "contract_intelligence",
       "narrative_movement",
       "angle_strategy"
@@ -1895,7 +2251,7 @@ export const publishingConductorNodes = [
     "name": "Artifact Planning Agent",
     "kind": "adapter",
     "description": "Plan and verify media/artifact requirements against the client's declared artifact protocol and id conventions. No legacy fallbacks, no unverified media.",
-    "prompt": "Objective: Plan and verify every media/artifact need for the client-shaped body produced by article_body, using only the artifact protocol the client's contract declares.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: article_body (client-shaped body plus its artifact references), delivered in this node's input.\nZero-media shortcut: when the delivered body declares no media slots and carries no artifact references — a text-only object — emit the plan immediately from your input with an empty slot list and zero tool calls. There is nothing to verify; spending turns proving the absence of media is the failure mode this node's budget exists to prevent.\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy: never mark a slot has_trusted_artifact because a key merely matches a pattern. Trust requires verification evidence from the artifact service that the reference was materialized for this request, with matching key, digest, content type, size and timestamp — record it in the slot's verification field. Where the artifact service offers an explicit verification tool, use it and keep its proof. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both — the raw reference for the client's reference fields and publicPath for its rendered fields. Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream.\nBlocker criteria: missing body; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Reach external services only through project.call_tool. Read-only policy and status lookups are allowed; do not publish, release, or mutate the client from this node.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Plan and verify every media/artifact need for the client-shaped body produced by article_body, using only the artifact protocol the client's contract declares.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: article_body (client-shaped body plus its artifact references), delivered in this node's input.\nZero-media shortcut: when the delivered body declares no media slots and carries no artifact references — a text-only object — emit the plan immediately from your input with an empty slot list and zero tool calls. There is nothing to verify; spending turns proving the absence of media is the failure mode this node's budget exists to prevent. A zero-media plan may omit artifactProtocol entirely — there was no protocol to consult, and inventing a protocol string for an empty plan is exactly the fabrication this node forbids elsewhere.\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy: never mark a slot has_trusted_artifact because a key merely matches a pattern. Trust requires verification evidence from the artifact service that the reference was materialized for this request, with matching key, digest, content type, size and timestamp — record it in the slot's verification field. Where the artifact service offers an explicit verification tool, use it and keep its proof. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both — the raw reference for the client's reference fields and publicPath for its rendered fields. Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream.\nBlocker criteria: missing body; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Read-only policy, status, and id-confirmation lookups go through project.call_read_tool, which needs no approval; project.call_tool is approval-gated and reserved for writes (artifact generation under an approved capability). Do not publish, release, or mutate the client from this node.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "additionalProperties": true,
@@ -1904,9 +2260,23 @@ export const publishingConductorNodes = [
         "summary",
         "clientProjectId",
         "clientObjectType",
-        "artifactProtocol",
         "media_slots"
       ],
+      "if": {
+        "required": [
+          "media_slots"
+        ],
+        "properties": {
+          "media_slots": {
+            "minItems": 1
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "artifactProtocol"
+        ]
+      },
       "properties": {
         "artifact": {
           "const": "artifact_plan.v1"
@@ -2046,9 +2416,23 @@ export const publishingConductorNodes = [
         "summary",
         "clientProjectId",
         "clientObjectType",
-        "artifactProtocol",
         "media_slots"
       ],
+      "if": {
+        "required": [
+          "media_slots"
+        ],
+        "properties": {
+          "media_slots": {
+            "minItems": 1
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "artifactProtocol"
+        ]
+      },
       "properties": {
         "artifact": {
           "const": "artifact_plan.v1"
@@ -2193,8 +2577,7 @@ export const publishingConductorNodes = [
     },
     "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
-      "approvalRequired": false,
-      "projectId": "pdf-tool",
+      "approvalRequired": true,
       "canonicalRules": [
         "The client's contract declares the artifact protocol, id convention and media path rules",
         "A pattern-valid key is never proof of materialization",
@@ -2575,11 +2958,404 @@ export const publishingConductorNodes = [
     }
   },
   {
+    "id": "publish_executor",
+    "name": "Publish Executor",
+    "kind": "publisher",
+    "description": "Draft execution node for approval-gated publishing to any client. Follows the publish sequence, lock discipline and pin rules the client's contract declares. Remains draft until the runner and project policy support safe live execution.",
+    "prompt": "Objective: Execute an approved publish against the target client, only after explicit approval and only when project policy enables live publish tools. This node stays DRAFT until the runner and project policy support safe live execution.\nSource of truth: the client's fetched contract declares the publish sequence, the lock and version discipline, the approval pin rules, the valid publication actions, the release/build behaviours, and the error codes. Read them from contractSource carried through publication_controller. Never execute a sequence remembered from another client or hardcoded here. Missing contract provenance is a hard block.\nInputs expected: publication_controller.\nOutput required when activated: publish_execution.v1 with the exact approved action, the client object and request id, the artifact set, the publish result, the release/build status, and the verification performed.\nContent path policy: the only valid content is the client-shaped object the contract declares. Refuse Markdown, prose blobs, repo files, or any representation the contract does not declare.\nArtifact policy: every media reference must be a verified current-request artifact under the protocol the contract names, with matching key, digest, content type, size and timestamp. A pattern-valid key is not proof. Refuse repo paths, remote URLs, data URIs, copied references, hand-authored keys, and any unverified reference that merely looks well-formed. If verification is absent, stale, partial, timed out, or belongs to another request, block.\nRendered vs raw policy: put the client's public serving path in rendered fields and the raw artifact key only in the fields the contract designates for references. Where the contract warns that a raw key in a rendered field breaks the build, treat that as a hard block, never a warning.\nApproval policy: execute only when the decision record carries explicit approval matching the exact object, request, artifact set, publication action and release behaviour. Honour the contract's pin rules literally — where an approval is pinned to a specific action or revision, a mismatch or a stale pin is a block. Absent, partial, or superseded approval is a block.\nSequence policy: follow the contract's declared workflow in order, including its checkout/validate/patch/publish/checkin discipline and its lock and expected-version rules. Dry-run validate before mutating. Surface the contract's own error codes rather than reinterpreting them: a lock conflict means re-acquire, a version conflict means re-read, never force.\nPublish vs release policy: treat publishing and going live as separate gates whenever the contract separates them. Where publish commits without deploying and a distinct release performs the build, do not trigger a release unless it was explicitly approved — a release may deploy every accumulated pending publish at once. After any release, confirm go-live is real: a production-confirmed deploy of the target commit, then page and media verification. A queued or ready-but-undeployed build is not live.\nCompletion criteria when active: the action exactly matches the approval; content and artifacts are verified; the sequence followed the contract; the release matches the approved behaviour; the result and go-live confirmation are recorded; no unapproved release or build was triggered.\nBlocker criteria: draft status; missing contract provenance; disabled project publishing policy; missing, stale, partial or mismatched approval; missing artifact verification; unresolved taxonomy where the contract blocks unknown terms; lock or version conflicts; runner idempotency doubt; unavailable publish or release tools; content outside the client's declared shape; or non-protocol artifact references.\nTool policy: while draft, do not call project tools at all. When activated, reach the client only through explicitly allowed publish, release and verification tools, and never bypass project policy.\nMemory policy: never expose or persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "status",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "approvalMatched",
+        "publishPolicyChecked",
+        "blockers"
+      ],
+      "if": {
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "executed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "result",
+          "verification"
+        ],
+        "properties": {
+          "approvalMatched": {
+            "const": true
+          },
+          "verification": {
+            "type": "object",
+            "required": [
+              "deployStatus",
+              "productionConfirmed"
+            ],
+            "properties": {
+              "deployStatus": {
+                "const": "ready"
+              },
+              "productionConfirmed": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "properties": {
+        "artifact": {
+          "const": "publish_execution.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "blocked",
+            "skipped",
+            "executed"
+          ]
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approvalMatched": {
+          "type": "boolean",
+          "description": "True only when the operator's durable publish decision for this run (run.operatorPublishDecision, set via workflow.set_operator_publish_decision) is \"approved\". The engine verifies this claim deterministically; a status of \"executed\" requires it to be true and to match that record."
+        },
+        "publishPolicyChecked": {
+          "type": "boolean"
+        },
+        "approvedAction": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "clientObjectId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "publicationAction": {
+              "type": "string",
+              "minLength": 1
+            },
+            "releaseBuildBehavior": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifactSet": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "deployAware": {
+              "type": "boolean"
+            },
+            "requiredChecks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "goLiveConfirmed": {
+              "type": "boolean"
+            },
+            "deployStatus": {
+              "type": "string",
+              "description": "Client deploy status for the target commit; \"ready\" is the only value that counts toward go-live evidence."
+            },
+            "productionConfirmed": {
+              "type": "boolean",
+              "description": "True only when the production site was confirmed to serve the target commit. Required (with deployStatus \"ready\") for status \"executed\"."
+            }
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "stageOutputs": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "status",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "approvalMatched",
+        "publishPolicyChecked",
+        "blockers"
+      ],
+      "if": {
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "executed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "result",
+          "verification"
+        ],
+        "properties": {
+          "approvalMatched": {
+            "const": true
+          },
+          "verification": {
+            "type": "object",
+            "required": [
+              "deployStatus",
+              "productionConfirmed"
+            ],
+            "properties": {
+              "deployStatus": {
+                "const": "ready"
+              },
+              "productionConfirmed": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "properties": {
+        "artifact": {
+          "const": "publish_execution.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "blocked",
+            "skipped",
+            "executed"
+          ]
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approvalMatched": {
+          "type": "boolean",
+          "description": "True only when the operator's durable publish decision for this run (run.operatorPublishDecision, set via workflow.set_operator_publish_decision) is \"approved\". The engine verifies this claim deterministically; a status of \"executed\" requires it to be true and to match that record."
+        },
+        "publishPolicyChecked": {
+          "type": "boolean"
+        },
+        "approvedAction": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "clientObjectId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "publicationAction": {
+              "type": "string",
+              "minLength": 1
+            },
+            "releaseBuildBehavior": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifactSet": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "deployAware": {
+              "type": "boolean"
+            },
+            "requiredChecks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "goLiveConfirmed": {
+              "type": "boolean"
+            },
+            "deployStatus": {
+              "type": "string",
+              "description": "Client deploy status for the target commit; \"ready\" is the only value that counts toward go-live evidence."
+            },
+            "productionConfirmed": {
+              "type": "boolean",
+              "description": "True only when the production site was confirmed to serve the target commit. Required (with deployStatus \"ready\") for status \"executed\"."
+            }
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool"
+    ],
+    "assignedSkills": [],
+    "requiredInputs": [
+      "publication_controller"
+    ],
+    "produces": [
+      "publish_execution.v1"
+    ],
+    "riskLevel": "publish",
+    "dependsOn": [
+      "publication_controller"
+    ],
+    "status": "draft",
+    "position": {
+      "x": 560,
+      "y": 1600
+    },
+    "updatedAt": "2026-07-31T09:36:58.473Z",
+    "metadata": {
+      "activationRequired": true,
+      "approvalRequired": true,
+      "canonicalRules": [
+        "The client's contract declares the publish sequence, lock discipline and approval pin rules",
+        "Publish and release are separate gates",
+        "Only verified current-request artifacts may be published",
+        "No legacy fallback systems"
+      ]
+    },
+    "modelConfig": {
+      "maxTurns": 4,
+      "toolCallLimit": 3,
+      "timeout": 180000,
+      "budgetUsd": 0.5,
+      "maxOutputTokens": 4000
+    }
+  },
+  {
     "id": "learning_recorder",
     "name": "Learning Recorder",
     "kind": "learning",
     "description": "Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.",
-    "prompt": "Objective: Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller when the run reached it; on early termination (blocked or failed) this node fires directly with the run's terminal state.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; stage.list_outputs returns bounded summaries (id, stage, size, preview) — record observations from those summaries and the run's terminal state, and do not try to read every stage in full. Do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller and publish_executor when the run reached them — publish_execution.v1 carries the executor/publish outcome (blocks, lock conflicts, failed releases, unconfirmed go-lives) this node exists to observe, and a publish_executor refused at its own gate still leaves an observable blocked decision record. When publish_executor never executed (refused upstream, or publishing happened outside node execution via workflow.publish_run), its input slot is simply absent — record what the run's terminal state shows instead of treating the absence as a blocker. On early termination (blocked or failed) this node fires directly with the run's terminal state.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; stage.list_outputs returns bounded summaries (id, stage, size, preview) — record observations from those summaries and the run's terminal state, and do not try to read every stage in full. Do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -2647,14 +3423,16 @@ export const publishingConductorNodes = [
     ],
     "assignedSkills": [],
     "requiredInputs": [
-      "publication_controller"
+      "publication_controller",
+      "publish_executor"
     ],
     "produces": [
       "learning_observations.v1"
     ],
     "riskLevel": "write",
     "dependsOn": [
-      "publication_controller"
+      "publication_controller",
+      "publish_executor"
     ],
     "status": "active",
     "position": {
@@ -2674,311 +3452,8 @@ export const publishingConductorNodes = [
       "maxTurns": 5,
       "toolCallLimit": 4,
       "timeout": 300000,
-      "budgetUsd": 0.3,
-      "maxOutputTokens": 3000
-    }
-  },
-  {
-    "id": "publish_executor",
-    "name": "Publish Executor",
-    "kind": "publisher",
-    "description": "Draft execution node for approval-gated publishing to any client. Follows the publish sequence, lock discipline and pin rules the client's contract declares. Remains draft until the runner and project policy support safe live execution.",
-    "prompt": "Objective: Execute an approved publish against the target client, only after explicit approval and only when project policy enables live publish tools. This node stays DRAFT until the runner and project policy support safe live execution.\nSource of truth: the client's fetched contract declares the publish sequence, the lock and version discipline, the approval pin rules, the valid publication actions, the release/build behaviours, and the error codes. Read them from contractSource carried through publication_controller. Never execute a sequence remembered from another client or hardcoded here. Missing contract provenance is a hard block.\nInputs expected: publication_controller.\nOutput required when activated: publish_execution.v1 with the exact approved action, the client object and request id, the artifact set, the publish result, the release/build status, and the verification performed.\nContent path policy: the only valid content is the client-shaped object the contract declares. Refuse Markdown, prose blobs, repo files, or any representation the contract does not declare.\nArtifact policy: every media reference must be a verified current-request artifact under the protocol the contract names, with matching key, digest, content type, size and timestamp. A pattern-valid key is not proof. Refuse repo paths, remote URLs, data URIs, copied references, hand-authored keys, and any unverified reference that merely looks well-formed. If verification is absent, stale, partial, timed out, or belongs to another request, block.\nRendered vs raw policy: put the client's public serving path in rendered fields and the raw artifact key only in the fields the contract designates for references. Where the contract warns that a raw key in a rendered field breaks the build, treat that as a hard block, never a warning.\nApproval policy: execute only when the decision record carries explicit approval matching the exact object, request, artifact set, publication action and release behaviour. Honour the contract's pin rules literally — where an approval is pinned to a specific action or revision, a mismatch or a stale pin is a block. Absent, partial, or superseded approval is a block.\nSequence policy: follow the contract's declared workflow in order, including its checkout/validate/patch/publish/checkin discipline and its lock and expected-version rules. Dry-run validate before mutating. Surface the contract's own error codes rather than reinterpreting them: a lock conflict means re-acquire, a version conflict means re-read, never force.\nPublish vs release policy: treat publishing and going live as separate gates whenever the contract separates them. Where publish commits without deploying and a distinct release performs the build, do not trigger a release unless it was explicitly approved — a release may deploy every accumulated pending publish at once. After any release, confirm go-live is real: a production-confirmed deploy of the target commit, then page and media verification. A queued or ready-but-undeployed build is not live.\nCompletion criteria when active: the action exactly matches the approval; content and artifacts are verified; the sequence followed the contract; the release matches the approved behaviour; the result and go-live confirmation are recorded; no unapproved release or build was triggered.\nBlocker criteria: draft status; missing contract provenance; disabled project publishing policy; missing, stale, partial or mismatched approval; missing artifact verification; unresolved taxonomy where the contract blocks unknown terms; lock or version conflicts; runner idempotency doubt; unavailable publish or release tools; content outside the client's declared shape; or non-protocol artifact references.\nTool policy: while draft, do not call project tools at all. When activated, reach the client only through explicitly allowed publish, release and verification tools, and never bypass project policy.\nMemory policy: never expose or persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
-    "schema": {
-      "type": "object",
-      "additionalProperties": true,
-      "required": [
-        "artifact",
-        "summary",
-        "status",
-        "clientProjectId",
-        "clientObjectType",
-        "contractSource",
-        "approvalMatched",
-        "publishPolicyChecked",
-        "blockers"
-      ],
-      "properties": {
-        "artifact": {
-          "const": "publish_execution.v1"
-        },
-        "summary": {
-          "type": "string",
-          "minLength": 1
-        },
-        "status": {
-          "enum": [
-            "blocked",
-            "skipped",
-            "executed"
-          ]
-        },
-        "clientProjectId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "clientObjectType": {
-          "type": "string",
-          "minLength": 1
-        },
-        "contractSource": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "artifactProtocol": {
-          "type": "string",
-          "minLength": 1
-        },
-        "approvalMatched": {
-          "type": "boolean"
-        },
-        "publishPolicyChecked": {
-          "type": "boolean"
-        },
-        "approvedAction": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "clientObjectId": {
-              "type": "string",
-              "minLength": 1
-            },
-            "requestId": {
-              "type": "string",
-              "minLength": 1
-            },
-            "publicationAction": {
-              "type": "string",
-              "minLength": 1
-            },
-            "releaseBuildBehavior": {
-              "type": "string",
-              "minLength": 1
-            },
-            "artifactSet": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "clientValidation": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "result": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "verification": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "deployAware": {
-              "type": "boolean"
-            },
-            "requiredChecks": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "goLiveConfirmed": {
-              "type": "boolean"
-            }
-          }
-        },
-        "blockers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "notes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "inputSchema": {
-      "additionalProperties": true,
-      "properties": {
-        "contentSource": {
-          "type": "object"
-        },
-        "instructions": {
-          "type": "string"
-        },
-        "stageOutputs": {
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
-    "outputSchema": {
-      "type": "object",
-      "additionalProperties": true,
-      "required": [
-        "artifact",
-        "summary",
-        "status",
-        "clientProjectId",
-        "clientObjectType",
-        "contractSource",
-        "approvalMatched",
-        "publishPolicyChecked",
-        "blockers"
-      ],
-      "properties": {
-        "artifact": {
-          "const": "publish_execution.v1"
-        },
-        "summary": {
-          "type": "string",
-          "minLength": 1
-        },
-        "status": {
-          "enum": [
-            "blocked",
-            "skipped",
-            "executed"
-          ]
-        },
-        "clientProjectId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "clientObjectType": {
-          "type": "string",
-          "minLength": 1
-        },
-        "contractSource": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "artifactProtocol": {
-          "type": "string",
-          "minLength": 1
-        },
-        "approvalMatched": {
-          "type": "boolean"
-        },
-        "publishPolicyChecked": {
-          "type": "boolean"
-        },
-        "approvedAction": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "clientObjectId": {
-              "type": "string",
-              "minLength": 1
-            },
-            "requestId": {
-              "type": "string",
-              "minLength": 1
-            },
-            "publicationAction": {
-              "type": "string",
-              "minLength": 1
-            },
-            "releaseBuildBehavior": {
-              "type": "string",
-              "minLength": 1
-            },
-            "artifactSet": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "clientValidation": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "result": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "verification": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "deployAware": {
-              "type": "boolean"
-            },
-            "requiredChecks": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "goLiveConfirmed": {
-              "type": "boolean"
-            }
-          }
-        },
-        "blockers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "notes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "allowedTools": [
-      "workspace.get_node",
-      "stage.get_output",
-      "stage.save_output",
-      "stage.list_outputs",
-      "project.call_tool"
-    ],
-    "assignedSkills": [],
-    "requiredInputs": [
-      "publication_controller"
-    ],
-    "produces": [
-      "publish_execution.v1"
-    ],
-    "riskLevel": "publish",
-    "dependsOn": [
-      "publication_controller"
-    ],
-    "status": "draft",
-    "position": {
-      "x": 560,
-      "y": 1600
-    },
-    "updatedAt": "2026-07-31T09:36:58.473Z",
-    "metadata": {
-      "activationRequired": true,
-      "approvalRequired": true,
-      "canonicalRules": [
-        "The client's contract declares the publish sequence, lock discipline and approval pin rules",
-        "Publish and release are separate gates",
-        "Only verified current-request artifacts may be published",
-        "No legacy fallback systems"
-      ]
-    },
-    "modelConfig": {
-      "maxTurns": 4,
-      "toolCallLimit": 3,
-      "timeout": 180000,
       "budgetUsd": 0.5,
-      "maxOutputTokens": 4000
+      "maxOutputTokens": 3000
     }
   }
 ] satisfies WorkspaceNode[];
@@ -3037,7 +3512,12 @@ export function getWorkspaceNode(id: string): WorkspaceNode | undefined {
   return listWorkspaceNodes().find((node) => node.id === id);
 }
 
-export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConductorNodes): WorkspaceGraphValidation {
+// `sequenceNodes` is the node list a conductor RUN would actually execute for the workflow being
+// validated. It defaults to the canonical Publishing Conductor sequence — the only workflow today —
+// so every existing caller is unchanged. composeWorkflowNodes (§2.23, publishingTail.ts) passes the
+// composed array itself, so a future second workflow is validated against its own sequence instead of
+// being falsely flagged for depending on nodes the conductor sequence does not contain.
+export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConductorNodes, sequenceNodes: WorkspaceNode[] = listWorkspaceNodes()): WorkspaceGraphValidation {
   const issues: string[] = [];
   const validRiskLevels = new Set(["read", "write", "publish", "admin"]);
   const validStatuses = new Set(["draft", "active", "deprecated"]);
@@ -3074,7 +3554,6 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
   // Checked here, per sequence node: every dependsOn entry must itself be in the sequence, and every
   // requiredInputs artifact type must be produced by some sequence node. Authored (non-conductor)
   // nodes are exempt — they are not run by the conductor, so the sequence cannot starve them.
-  const sequenceNodes = listWorkspaceNodes();
   const sequenceIds = new Set(sequenceNodes.map((sequenceNode) => sequenceNode.id));
   const sequenceProduces = new Set(sequenceNodes.flatMap((sequenceNode) => sequenceNode.produces));
   for (const node of nodes) {

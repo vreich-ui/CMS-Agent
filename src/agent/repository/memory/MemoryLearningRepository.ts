@@ -14,8 +14,16 @@ export class MemoryLearningRepository implements LearningRepository {
     return this.workspaceRepository.recordObservation(observation, metadata, provenance);
   }
 
-  listObservations(): Promise<LearningObservation[]> {
-    return this.workspaceRepository.listObservations();
+  listObservations(options?: { includeArchived?: boolean }): Promise<LearningObservation[]> {
+    return this.workspaceRepository.listObservations(options);
+  }
+
+  archiveObservation(id: string, reason?: string): Promise<LearningObservation> {
+    return this.workspaceRepository.archiveObservation(id, reason);
+  }
+
+  archiveObservationsByPredicate(predicate: (observation: LearningObservation) => boolean, reason?: string): Promise<{ archived: number; ids: string[] }> {
+    return this.workspaceRepository.archiveObservationsByPredicate(predicate, reason);
   }
 
   async recordConversationTurnSupersession(evidence: ConversationTurnSupersession): Promise<ConversationTurnSupersession> {

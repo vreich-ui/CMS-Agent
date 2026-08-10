@@ -28,6 +28,16 @@ const imageBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "
 const blobMediaBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] });
 const REQUEST_ID = "req_publish_test_20260716_01";
 const ENABLED_ENV = { [publishEnabledEnvVar(drLurieProjectConfig)]: "true" } as NodeJS.ProcessEnv;
+// P0 §2.1 — publishRun now refuses unless the run carries an EXPLICIT affirmative
+// publication_controller decision (decision: "go"). This is the affirmative shape; the fixtures
+// below seed it so the underlying gate/sequence logic can be exercised. publishDecisionGate.test.ts
+// owns the refusal cases (absent record, prose-only summary, no_go, veto).
+const GO_DECISION = { artifact: "publication_decision.v1", summary: "Controller explicitly authorizes this publish.", decision: "go", blockers: [] };
+const seedControllerDecision = async (executionRepository: { getRun: (id: string) => Promise<any>; saveRun: (run: any) => Promise<any> }, runId: string, decision: unknown = GO_DECISION) => {
+  const run = await executionRepository.getRun(runId);
+  run.stageOutputs.publication_controller = decision;
+  await executionRepository.saveRun(run);
+};
 // Satisfies Dr. Lurie's publish-readiness policy (GO) so the underlying gate logic can be exercised.
 const READY = {
   taxonomy: { tags: ["science", "longevity"] },
@@ -59,6 +69,7 @@ const seedRun = async (articleBody: unknown, projectId = "dr-lurie") => {
   if (projectId === "platform") await projectRepository.save(platformProjectConfig);
   if (projectId === "acme-live") await projectRepository.save(hooklessProjectConfig);
   const run = await startDryRun({ executionMode: "mock", projectId, input: "publish", entrypoint: { nodeId: "article_body", output: articleBody } }, executionRepository);
+  await seedControllerDecision(executionRepository, run.runId);
   const learningRepository = manager.getLearningRepository();
   return { runId: run.runId, executionRepository, projectRepository, learningRepository };
 };
@@ -210,6 +221,7 @@ describe("live publish gates", () => {
     const executionRepository = manager.getExecutionRepository();
     const learningRepository = manager.getLearningRepository();
     const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+    await seedControllerDecision(executionRepository, run.runId);
     const adapter = fakeCallTool();
     const result = await publishRun({ runId: run.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository, learningRepository, env: ENABLED_ENV, callTool: adapter.fn });
 
@@ -340,14 +352,25 @@ describe("live publish gates", () => {
   });
 
   it("keeps the publish gate set closed and named — nothing else may satisfy a gate", () => {
-    expect(__test__.PUBLISH_GATE_NAMES).toEqual(["operator_enabled", "explicit_approval", "explicit_live"]);
-    // Go-live: every gate defaults open…
-    const open = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID }, {} as NodeJS.ProcessEnv);
+    // P0 2026-08-10: two new gates join the closed set — the operator veto (§2.2) and the
+    // refuse-by-default controller decision (§2.1).
+    expect(__test__.PUBLISH_GATE_NAMES).toEqual(["operator_enabled", "explicit_approval", "explicit_live", "operator_not_withheld", "controller_decision_go"]);
+    const goRun = { stageOutputs: { publication_controller: GO_DECISION }, nodes: [] } as any;
+    // Go-live: every operator/caller gate defaults open (with an explicit go decision on the run)…
+    const open = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID }, {} as NodeJS.ProcessEnv, goRun);
     expect(open.allPassed).toBe(true);
     // …and each still closes on its own explicit input, nothing else.
-    const gates = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv);
+    const gates = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv, goRun);
     expect(gates.allPassed).toBe(false);
     expect(gates.operatorEnabled).toBe(false);
+    // The operator veto closes its own gate regardless of every other input.
+    const withheld = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, {} as NodeJS.ProcessEnv, { ...goRun, operatorPublishDecision: "withheld" });
+    expect(withheld.allPassed).toBe(false);
+    expect(withheld.gates.find((gate) => gate.name === "operator_not_withheld")?.passed).toBe(false);
+    // Prose-only controller output ("Looks fine.") is NOT an authorization — refuse-by-default.
+    const hedged = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, {} as NodeJS.ProcessEnv, { stageOutputs: { publication_controller: { artifact: "publication_decision.v1", summary: "Looks fine." } }, nodes: [] } as any);
+    expect(hedged.allPassed).toBe(false);
+    expect(hedged.gates.find((gate) => gate.name === "controller_decision_go")?.passed).toBe(false);
   });
 
   it("exposes a request_id validator that matches the Dr. Lurie contract", () => {

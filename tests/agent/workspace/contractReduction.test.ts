@@ -66,7 +66,7 @@ const REAL_SHAPED_CONTRACT = {
 };
 
 describe("reduceContract (F1 deterministic contract reduction)", () => {
-  const source = { tool: "object_contract", fetchedAtISO: "2026-07-29T00:00:00.000Z" };
+  const source = { tool: "object_contract", fetchedAtISO: "2026-07-29T00:00:00.000Z", fingerprint: "fp_test" };
 
   it("keeps the body schema whole (structural, not prose) and carries clientObjectType/contractSource through", () => {
     const reduced = reduceContract(REAL_SHAPED_CONTRACT, source, "content_item");

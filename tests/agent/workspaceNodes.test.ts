@@ -1,13 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { listWorkspaceNodes, validateWorkspaceGraph } from "../../src/agent/workspace/nodes.js";
+import { validateOutput } from "../../src/agent/execution/outputValidator.js";
 
 describe("Publishing Conductor workspace nodes", () => {
-  // R-22: 21, not 18. nodes.ts is now re-seeded from the live workspace by
+  // R-22: 21, not 18 — nodes.ts is re-seeded from the live workspace by
   // scripts/seedNodesFromWorkspace.ts, which brought in contract_intelligence, artifact_plan and
-  // publish_executor. Before the re-seed the conductor ran an 18-node graph that no longer existed
-  // anywhere but in this file — which is why T-2 certified an obsolete pipeline.
-  it("defines the full 21-node graph", () => {
-    expect(listWorkspaceNodes()).toHaveLength(21);
+  // publish_executor; before the re-seed the conductor ran an 18-node graph that no longer existed
+  // anywhere but in this file, which is why T-2 certified an obsolete pipeline. §2.16 (2026-08-10)
+  // adds placement_resolver (the computed aggression target) and monetization_strategy (the offer
+  // decision before the brief): 23. This canonical change reaches live runs only via a deliberate
+  // re-seed + redeploy (Wolf's coordinated step).
+  it("defines the full 23-node graph", () => {
+    expect(listWorkspaceNodes()).toHaveLength(23);
+  });
+
+  // §2.16 — the two new scaffolds and their edges.
+  it("wires placement_resolver between input_triage and topic_opportunity, and monetization_strategy between topic_opportunity and brief_architect", () => {
+    const nodes = listWorkspaceNodes();
+    const node = (id: string) => nodes.find((candidate) => candidate.id === id)!;
+    expect(node("placement_resolver")).toMatchObject({ kind: "strategy", riskLevel: "read", status: "active", dependsOn: ["input_triage"], requiredInputs: ["input_triage"], produces: ["placement_resolution.v1"] });
+    expect(node("placement_resolver").metadata?.placementResolverDeterministic).toBe(true);
+    expect(node("topic_opportunity").dependsOn).toContain("placement_resolver");
+    expect(node("topic_opportunity").requiredInputs).toContain("placement_resolver");
+    expect(node("monetization_strategy")).toMatchObject({ riskLevel: "read", status: "active", dependsOn: ["topic_opportunity"], requiredInputs: ["topic_opportunity"], produces: ["monetization_strategy.v1"] });
+    // The offer decision needs the monetizer project reachable at runtime — read-only surface only.
+    expect(node("monetization_strategy").allowedTools).toContain("project.call_read_tool");
+    expect(node("monetization_strategy").allowedTools).not.toContain("project.call_tool");
+    // brief_architect's dependency is HARD: the brief is aimed at a selected offer, never written first.
+    expect(node("brief_architect").dependsOn).toContain("monetization_strategy");
+    expect(node("brief_architect").requiredInputs).toContain("monetization_strategy");
   });
 
   it("includes the three nodes store mode could never have delivered", () => {
@@ -26,6 +47,22 @@ describe("Publishing Conductor workspace nodes", () => {
     expect(nodes.find((node) => node.id === "publish_payload")?.dependsOn).toContain("artifact_plan");
     expect(nodes.find((node) => node.id === "trust_factual")?.dependsOn).toContain("research");
     expect(nodes.find((node) => node.id === "emotional_resonance")?.dependsOn).toContain("input_triage");
+  });
+
+  // §2.14 (handoff 2026-08-10) — edges whose absence silently degraded output: article_body was
+  // re-writing the article from notes because the drafted prose only reached it via
+  // review_aggregator's single-string schema; emotional_resonance judged "resonance with the intended
+  // audience" without ever receiving the audience definition; reader_simulation simulated drop-off
+  // and conversion readiness from the draft alone.
+  it("delivers the drafted prose and the audience/strategy context to the nodes that judge against them (§2.14)", () => {
+    const nodes = listWorkspaceNodes();
+    const edges = (id: string) => nodes.find((node) => node.id === id)!;
+    expect(edges("article_body").dependsOn).toContain("draft_writer");
+    expect(edges("article_body").requiredInputs).toContain("draft_writer");
+    expect(edges("emotional_resonance").dependsOn).toEqual(expect.arrayContaining(["reader_insight", "objection_mapping"]));
+    expect(edges("emotional_resonance").requiredInputs).toEqual(expect.arrayContaining(["reader_insight", "objection_mapping"]));
+    expect(edges("reader_simulation").dependsOn).toEqual(expect.arrayContaining(["reader_insight", "objection_mapping", "angle_strategy"]));
+    expect(edges("reader_simulation").requiredInputs).toEqual(expect.arrayContaining(["reader_insight", "objection_mapping", "angle_strategy"]));
   });
 
   it("has no duplicate ids", () => {
@@ -98,6 +135,63 @@ describe("Publishing Conductor workspace nodes", () => {
       expect(node?.assignedSkills).toEqual([]);
     }
     expect(listWorkspaceNodes().find((node) => node.id === "publish_executor")?.status).toBe("draft");
+  });
+
+  // §3 correctness batch (handoff 2026-08-10, items 2.24-2.29).
+  describe("§3 lower-priority correctness items", () => {
+    const node = (id: string) => listWorkspaceNodes().find((candidate) => candidate.id === id)!;
+
+    // 2.24: artifact_plan metadata hardcoded "projectId": "pdf-tool" — the run carries projectId, and
+    // the system's own rule forbids hardcoding a client into a node.
+    it("artifact_plan no longer hardcodes a projectId in its metadata (2.24)", () => {
+      expect(node("artifact_plan").metadata?.projectId).toBeUndefined();
+    });
+
+    // 2.25: ONE project.call_tool policy across the four client-reaching nodes: reads go via
+    // project.call_read_tool; project.call_tool is approval-gated and for writes only.
+    it("all four client-reaching prompts state the same call_tool policy (2.25)", () => {
+      for (const id of ["artifact_plan", "article_body", "publish_payload", "contract_intelligence"]) {
+        const prompt = node(id).prompt;
+        expect(prompt, `${id} names the read surface`).toContain("project.call_read_tool");
+        expect(prompt, `${id} states the approval-gated writes-only rule`).toMatch(/approval-gated and (?:reserved )?for writes only|approval-gated and reserved for writes/);
+        expect(prompt, `${id} carries no future-write grant language`).not.toContain("granted for a future write");
+        expect(prompt).not.toContain("Reach external services only through project.call_tool");
+      }
+    });
+
+    // 2.26: artifact_plan performs approval-gated writes (artifact generation) — the one pre-executor
+    // node that does — so its approval flag matches the other approval-carrying nodes, and it holds
+    // the read grant it needs to confirm the request id with the client.
+    it("artifact_plan carries approvalRequired and the client read grant (2.26)", () => {
+      expect(node("artifact_plan").metadata?.approvalRequired).toBe(true);
+      expect(node("artifact_plan").allowedTools).toContain("project.call_read_tool");
+    });
+
+    // 2.28: the zero-media shortcut ("emit the plan immediately... with zero tool calls") used to
+    // collide with a schema requiring artifactProtocol minLength 1 — a text-only article had to
+    // invent a protocol string it never consulted. The schema is now honest: artifactProtocol may be
+    // absent for a zero-media plan, and is still required the moment any media slot exists.
+    it("artifact_plan's schema permits a protocol-less zero-media plan but requires the protocol once media exists (2.28)", () => {
+      const artifactPlan = node("artifact_plan");
+      const zeroMedia = { artifact: "artifact_plan.v1", summary: "Text-only object; no media slots.", clientProjectId: "client-x", clientObjectType: "content_item", media_slots: [] };
+      const withMedia = { ...zeroMedia, media_slots: [{ slotId: "hero", purpose: "hero image", status: "needs_generation" }] };
+      for (const schema of [artifactPlan.outputSchema, artifactPlan.schema]) {
+        expect(validateOutput(zeroMedia, schema).ok).toBe(true);
+        expect(validateOutput({ ...zeroMedia, artifactProtocol: "" }, schema).ok).toBe(false); // present must still be non-empty
+        expect(validateOutput(withMedia, schema).ok).toBe(false); // media without a protocol
+        expect(validateOutput({ ...withMedia, artifactProtocol: "agent_artifact_jobs" }, schema).ok).toBe(true);
+      }
+      // Both schema copies stay in sync.
+      expect(artifactPlan.schema).toEqual(artifactPlan.outputSchema);
+    });
+
+    // 2.29: the prompt said "Inputs expected: article_brief" while requiredInputs is
+    // ["brief_architect"] — node-name/artifact-name confusion.
+    it("contract_intelligence's prompt names its input by node id and artifact (2.29)", () => {
+      const prompt = node("contract_intelligence").prompt;
+      expect(prompt).toContain("Inputs expected: brief_architect (its article_brief.v1 output)");
+      expect(prompt).not.toContain("Inputs expected: article_brief,");
+    });
   });
 
   // Defect (T-2, run_1785352838155_l544ye): F5's timeout audit sized every node the T-2 run actually

@@ -16,6 +16,9 @@ import type { ExecutionMode } from "../execution/executionContext.js";
 import { getReducedContract } from "./contractPrefetch.js";
 import { getEditorialVoice } from "./voicePrefetch.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
+import { buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector } from "./aggressionVector.js";
+import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
+import { getWorkflowDefinition } from "./workflowRegistry.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -85,7 +88,8 @@ export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   executionMode: run.executionMode,
   ...(run.rev !== undefined ? { rev: run.rev } : {}),
   ...(run.budgetUsd !== undefined ? { budgetUsd: run.budgetUsd } : {}),
-  ...(run.budgetBlock ? { budgetBlock: run.budgetBlock } : {})
+  ...(run.budgetBlock ? { budgetBlock: run.budgetBlock } : {}),
+  ...(run.operatorPublishDecision ? { operatorPublishDecision: run.operatorPublishDecision } : {})
 });
 // Statuses from which advanceRun will not proceed. "paused" (R-18) joins them: an operator-paused run
 // must stay put for exactly the same reason a blocked one does. Before "paused" existed, pause_run wrote
@@ -256,8 +260,14 @@ const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): Work
 // the store is seeded from the static definition (late-stage seeding preserved), and non-canonical
 // store nodes are ignored — the conductor runs its canonical topology only. A store-read failure falls
 // back to the static definitions so a transient repository error never aborts a run.
-export async function resolveConductorNodes(workspaceRepository?: WorkspaceRepository): Promise<WorkspaceNode[]> {
-  const canonical = listWorkspaceNodes();
+// §2.23: the canonical array is resolved through the workflow registry keyed by the run's
+// workflowId, so a future second workflow (different upstream + the same shared publishing tail)
+// plugs in by registering its composed node array — the store overlay below then applies unchanged,
+// and an authoring edit to a shared tail node reaches every workflow. An unregistered workflowId
+// resolves to the publishing_conductor canonical set, which is exactly what every run got before the
+// registry existed.
+export async function resolveConductorNodes(workspaceRepository?: WorkspaceRepository, workflowId: string = WORKFLOW_ID): Promise<WorkspaceNode[]> {
+  const canonical = getWorkflowDefinition(workflowId)?.canonicalNodes() ?? listWorkspaceNodes();
   if (nodeSource() !== "store") return canonical;
   let stored: WorkspaceNode[];
   try {
@@ -367,6 +377,10 @@ const buildArtifact = (node: WorkspaceNode, output: unknown): ExecutionArtifact 
 // the "stop before any publishing side effect" boundary, generalized beyond the single
 // publication_controller id so any future publish-risk node is gated the same way.
 const isPublishRisk = (node: WorkspaceNode): boolean => node.riskLevel === "publish" || node.riskLevel === "admin";
+// P0 §2.1/§2.3 — the node whose output CLAIMS a publish happened (publish_execution.v1). Matched by
+// kind, per the isPublishRisk/isLearningRecorder precedent of a semantic node property rather than a
+// hardcoded id, so any future publisher node is guarded identically.
+const isPublishExecutorNode = (node: WorkspaceNode): boolean => node.kind === "publisher";
 const isConcurrencyConflict = (error: unknown): error is RunConcurrencyError => error instanceof RunConcurrencyError;
 
 // R-18 — look-ahead publish-gate visibility.
@@ -474,7 +488,7 @@ export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date
 }
 
 export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository): Promise<WorkflowExecutionRecord> {
-  return store.createRun(buildInitialRun(data, await resolveConductorNodes(workspaceRepository)));
+  return store.createRun(buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID)));
 }
 
 export async function getRun(runId: string, store: ExecutionRepository = repositoryManager.getExecutionRepository()) {
@@ -491,10 +505,15 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     if (!existing) throw new Error(`Unknown run: ${runId}`);
     // Rebuild from the run's own starting shape, including a late-stage entrypoint, so reset restores
     // the seeded state it began with rather than a full ideation-to-publish run.
-    const nodes = await resolveConductorNodes();
+    const nodes = await resolveConductorNodes(undefined, existing.workflowId);
     // requestId travels with the run across a reset — it identifies the same request being retried,
-    // not a new one, and a platform-side record correlating against it must still resolve.
-    return store.resetRun(runId, buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId));
+    // not a new one, and a platform-side record correlating against it must still resolve. The
+    // operator's durable publish decision (P0 §2.2) survives a reset for the same reason: a reset
+    // retries the request, it does not un-say the operator's veto/approval.
+    return store.resetRun(runId, {
+      ...buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId),
+      ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision } : {})
+    });
   });
 }
 
@@ -556,6 +575,55 @@ async function reflectOnCompletedRun(run: WorkflowExecutionRecord, store: Execut
 // budget-blocked run must stay "blocked" even if learning_recorder's own execution fails).
 const isLearningRecorder = (node: WorkspaceNode): boolean => node.kind === "learning";
 
+// 2.4 (handoff 2026-08-10, run_1785842430906_tqjk1o): the F4 bypass above ignores dependsOn entirely,
+// which let learning_recorder fire 23 SECONDS into a run that went on to run for another hour — the
+// budget gate or a first-node failure can produce a "terminal" transition (blocked/failed) before the
+// run has gotten anywhere near learning_recorder's declared dependency. That is a scheduler bug, not
+// F4's intended behaviour.
+//
+// The fix is NOT "require the dependency to be literally completed" — that would silently re-introduce
+// the exact defect F4 fixed: learning_recorder's one declared dependency is publication_controller,
+// which is publish-risk and reaches "completed" on essentially no dry run (it blocks there by design
+// absent explicit approval). Gating on status==="completed" would mean zero observations again on the
+// overwhelmingly common path, the whole reason F4 exists.
+//
+// Instead this checks that every declared dependency has been REACHED at least once — its state moved
+// off "queued" (completed, blocked, or failed) — which is the actual signal that the run got far enough
+// for a learning observation to mean anything. "Queued" means the node was never touched: the run died
+// before the DAG ever got there, which is precisely the run-start-bypass bug. A dependency that reached
+// "blocked" (e.g. the publish gate, attempted and refused for lack of approval) still counts as reached,
+// preserving F4's fix for the common unapproved-dry-run path.
+// §2.15 (handoff 2026-08-10): learning_recorder moved downstream of publish_executor (dependsOn
+// [publication_controller, publish_executor]) so it can observe publish_execution.v1 outcomes —
+// executor blocks, lock conflicts, failed releases, unconfirmed go-lives — which were structurally
+// invisible when it hung off publication_controller in parallel with the executor. That edge would
+// strand this dispatch on the overwhelmingly common path if "reached" stayed literal: an unapproved
+// dry run terminal-blocks AT publication_controller, so publish_executor is still "queued" and can
+// never leave it in this run's state. Hence SEALED, the second way a dependency counts as resolved:
+// every one of ITS OWN direct dependencies was reached, but at least one did not complete, so the
+// dependency can never become runnable — the DAG got all the way to its doorstep and was refused
+// there. Deliberately ONE level and NOT recursive: recursive sealing would mark the whole graph
+// sealed the moment the first node fails, silently re-introducing the exact run-start-bypass bug 2.4
+// fixed (a run dead at input_triage must still skip this dispatch, because publication_controller's
+// own dependencies were never reached either). A queued dependency whose deps ALL completed is NOT
+// sealed — it simply has not run yet (e.g. parked behind a budget block) and may still run after a
+// resume, at which point the next terminal transition fires this dispatch with more to observe.
+const dependenciesReached = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[], node: WorkspaceNode): boolean => {
+  const states = stateById(run);
+  const byId = nodeById(nodes);
+  const reached = (id: string): boolean => {
+    const state = states.get(id);
+    return !!state && state.status !== "queued";
+  };
+  const sealed = (id: string): boolean => {
+    const dependencies = byId.get(id)?.dependsOn ?? [];
+    return dependencies.length > 0
+      && dependencies.every(reached)
+      && dependencies.some((dependency) => states.get(dependency)?.status !== "completed");
+  };
+  return node.dependsOn.every((dependency) => reached(dependency) || sealed(dependency));
+};
+
 async function recordTerminationObservations(run: WorkflowExecutionRecord, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
   const node = nodes.find(isLearningRecorder);
   if (!node) return run;
@@ -563,6 +631,11 @@ async function recordTerminationObservations(run: WorkflowExecutionRecord, nodes
   // Fire at most once per run: either it already ran the ordinary way (an approved run reaching it
   // through the DAG), or this hook already fired on an earlier terminal transition in this same run.
   if (!state || state.status !== "queued") return run;
+  // 2.4: skip silently (rather than mark a state the runtime has no "skipped" status for) when the
+  // run terminated before the node's own declared dependencies were ever reached — the run-start
+  // bypass bug. This is best-effort telemetry, not a required step, so a quiet no-op is correct; the
+  // next terminal transition in the same run (if any) gets another chance once more of the DAG has run.
+  if (!dependenciesReached(run, nodes, node)) return run;
   const status = run.status;
   const currentNodeId = run.currentNodeId;
   try {
@@ -586,7 +659,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     latest = run;
     if (HALTED_EXECUTION_STATUSES.has(run.status)) return run;
 
-    const nodes = await resolveConductorNodes(options.workspaceRepository);
+    const nodes = await resolveConductorNodes(options.workspaceRepository, run.workflowId);
     // Dispatch-claim bookkeeping (the ~300s silent-death fix). A node persisted as "running" either
     // IS running somewhere (another driver, within its claim window) — in which case advancing here
     // would double-dispatch it — or its driver died mid-node and the claim has expired, in which case
@@ -733,12 +806,32 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // failure's own code so "the cost optimization silently degraded" is a run-level fact, not
   // something inferable only after specifically reading this one node's input.
   let deterministicPrefetch: Awaited<ReturnType<typeof getReducedContract>> | undefined;
+  // §2.16 — aggression RESOLUTION happens here, the first place both halves exist at once: the
+  // placement TARGET (placement_resolver's stage output, refused if it is a mock placeholder) and the
+  // client CEILING (the prefetched, reduced contract's aggressionCeiling). resolved =
+  // min(ceiling, target) componentwise; an ABSENT or PARTIAL ceiling is a typed BLOCKER, never a
+  // default (Wolf's explicit decision, handoff §5) — stamped into this node's input
+  // (aggressionBlocker) and as a run-visible warning named after the blocker's own code, the same
+  // loud-degradation convention contract_prefetch_failed uses. A successful resolution travels in the
+  // node's input as resolvedAggression and is carried onto the deterministic contract_intelligence
+  // artifact below so downstream nodes consume the RESOLVED vector, never the raw target.
+  let aggressionResolution: ReturnType<typeof resolveAggressionVector> | undefined;
   if (nextNode.metadata?.contractPrefetch === true) {
     try {
-      const prefetch = await getReducedContract({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository() });
+      const prefetch = await getReducedContract({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository(), workspaceRepository: options.workspaceRepository ?? repositoryManager.getWorkspaceRepository() });
       deterministicPrefetch = prefetch;
       state.input = { ...(state.input as Record<string, unknown>), ...(prefetch.ok ? { prefetchedContract: prefetch.reduced } : { prefetchError: prefetch.error }) };
       if (!prefetch.ok) state.warnings = [...(state.warnings ?? []), `contract_prefetch_failed:${prefetch.code ?? "unknown"}`];
+      const placementTarget = prefetch.ok ? readPlacementTarget(run.stageOutputs.placement_resolver) : undefined;
+      if (prefetch.ok && placementTarget) {
+        aggressionResolution = resolveAggressionVector(placementTarget, prefetch.reduced);
+        if (aggressionResolution.ok) {
+          state.input = { ...(state.input as Record<string, unknown>), resolvedAggression: { resolved: aggressionResolution.resolved, ceiling: aggressionResolution.ceiling, target: aggressionResolution.target } };
+        } else {
+          state.input = { ...(state.input as Record<string, unknown>), aggressionBlocker: aggressionResolution.blocker };
+          state.warnings = [...(state.warnings ?? []), aggressionResolution.blocker.code];
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       state.input = { ...(state.input as Record<string, unknown>), prefetchError: message };
@@ -782,7 +875,13 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // model dispatch below unchanged. A mapping bug therefore degrades to "spend the $0.134", never to a
   // failed run or a malformed artifact reaching a downstream node.
   if (nextNode.metadata?.contractIntelligenceDeterministic === true && deterministicPrefetch?.ok) {
-    const mapped = buildDeterministicContractIntelligence(deterministicPrefetch.reduced, clientProjectId);
+    const built = buildDeterministicContractIntelligence(deterministicPrefetch.reduced, clientProjectId);
+    // §2.16 — carry the aggression resolution (computed above from placement_resolver's target and
+    // the contract's ceiling) onto the artifact downstream nodes actually consume. A blocker rides in
+    // the artifact's own blockers array so the controller's "blockers are blockers" posture sees it.
+    const mapped = aggressionResolution === undefined ? built : aggressionResolution.ok
+      ? { ...built, resolvedAggression: { resolved: aggressionResolution.resolved, ceiling: aggressionResolution.ceiling, target: aggressionResolution.target } }
+      : { ...built, aggressionBlocker: aggressionResolution.blocker, blockers: [...built.blockers, `${aggressionResolution.blocker.code}: ${aggressionResolution.blocker.message}`] };
     const mappedValidation = validateOutput(mapped, nextNode.outputSchema);
     if (mappedValidation.ok) {
       const completedAt = now();
@@ -808,16 +907,99 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     state.warnings = [...(state.warnings ?? []), `contract_intelligence_deterministic_invalid:${mappedValidation.errors[0] ?? "unknown"}`];
   }
 
-  if (isPublishRisk(nextNode) && options.approved !== true) {
+  // §2.16 — placement_resolver (metadata.placementResolverDeterministic): the aggression TARGET
+  // vector is COMPUTED, never hand-set, so this node's execution path is deterministic engine code
+  // (aggressionVector.ts), following the contractIntelligenceDeterministic pattern above with one
+  // deliberate inversion: there is NO model fallback. Missing placement signals (trafficSource /
+  // awarenessStage, read from the node's dependency outputs and the run's initial input) BLOCK the
+  // node on a live run — a model guessing dial values is exactly what the deterministic mapping
+  // exists to prevent. A mock run falls through to the MockNodeRunner placeholder instead (same
+  // reasoning as the P0 controller-decision guard's mock scope: mock CI traversal has no client reach
+  // and its placeholder target is refused by readPlacementTarget's dryRun guard anyway).
+  if (nextNode.metadata?.placementResolverDeterministic === true) {
+    const signals = extractPlacementSignals(...nextNode.dependsOn.map((dependency) => run.stageOutputs[dependency]), run.initialInput);
+    const missingSignals = [...(signals.trafficSource ? [] : ["trafficSource"]), ...(signals.awarenessStage ? [] : ["awarenessStage"])];
+    let refusal: { code: string; message: string } | undefined;
+    if (missingSignals.length) {
+      refusal = {
+        code: "aggression_signals_missing",
+        message: `placement_resolver cannot compute the aggression target: ${missingSignals.join(" and ")} missing from the request. The target is computed deterministically from (trafficSource, awarenessStage) and is never guessed from content — supply both in the run's input (top level or under contentSource) and retry the node.`
+      };
+    } else {
+      const resolution = buildPlacementResolution(signals.trafficSource!, signals.awarenessStage!);
+      const resolutionValidation = validateOutput(resolution, nextNode.outputSchema);
+      if (resolutionValidation.ok) {
+        const completedAt = now();
+        state.status = "completed";
+        state.completedAt = completedAt;
+        state.durationMs = duration(startedAt, completedAt);
+        state.output = resolution;
+        run.stageOutputs[nextNode.id] = resolution;
+        run.artifacts.push(buildArtifact(nextNode, resolution));
+        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.updatedAt = completedAt;
+        run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+        // Deterministic, $0: no model call, no usage record (the R-20 rule).
+        return { run };
+      }
+      // Only reachable when a store-overlaid outputSchema rejects the engine-built resolution — a
+      // configuration conflict, not a reason to let a model invent dials.
+      refusal = { code: "placement_resolution_invalid", message: `placement_resolver's deterministic resolution does not satisfy the node's current outputSchema (${resolutionValidation.errors[0] ?? "unknown"}); fix the schema/engine mismatch rather than letting a model hand-set dial values.` };
+    }
+    const liveExecution = ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock";
+    if (liveExecution) {
+      const completedAt = now();
+      state.status = "blocked";
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = { error: { code: refusal.code, message: refusal.message } };
+      state.warnings = [...(state.warnings ?? []), refusal.code];
+      run.status = "blocked";
+      run.updatedAt = completedAt;
+      return { run };
+    }
+    // Mock run: fall through to the MockNodeRunner placeholder below so CI traversal keeps working.
+  }
+
+  // P0 §2.1/§2.2 — the deterministic publish refusals, evaluated BEFORE any dispatch so a refused
+  // publish-risk node never starts a model turn (and therefore can never fire a client tool):
+  //   1. operator veto (§2.2) — run.operatorPublishDecision === "withheld" (set via
+  //      workflow.set_operator_publish_decision, read through the ONE reader
+  //      isOperatorPublishWithheld shared with publishRun's gate) blocks every publish-risk node
+  //      regardless of the approved flag.
+  //   2. missing approval — unchanged: a publish-risk node needs options.approved === true.
+  //   3. controller decision (§2.1) — a publisher-kind node (publish_executor) additionally requires
+  //      an EXPLICIT affirmative publication_controller decision (decision: "go"); silence, hedging,
+  //      or a malformed record refuses with the reason recorded. Scoped to live runs: a mock run's
+  //      placeholder pipeline has no client reach (MockNodeRunner calls no tools) and a mock decision
+  //      is refused by readPublicationDecision anyway (dryRun marker), so mock CI traversal keeps
+  //      working while a live publisher node can never dispatch without an explicit go.
+  const operatorVeto = isPublishRisk(nextNode) && isOperatorPublishWithheld(run);
+  const approvalMissing = isPublishRisk(nextNode) && options.approved !== true;
+  const liveRun = ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock";
+  const controllerDecision = isPublishExecutorNode(nextNode) && liveRun ? readPublicationDecision(findPublicationDecision(run)) : undefined;
+  const publishRefusals: string[] = [
+    ...(operatorVeto ? [`operator_publish_withheld: the operator's durable publish decision for this run (run.operatorPublishDecision, set via workflow.set_operator_publish_decision) is "withheld"; node ${nextNode.id} cannot run regardless of approval flags.`] : []),
+    ...(approvalMissing ? [`Dry-run stopped before publish-risk node ${nextNode.id}; explicit approval is required before any publishing side effect.`] : []),
+    ...(controllerDecision && !controllerDecision.authorized ? [`publication_decision_not_affirmative (${controllerDecision.code}): ${controllerDecision.reason}`] : [])
+  ];
+  if (publishRefusals.length) {
     const completedAt = now();
     state.status = "blocked";
     state.completedAt = completedAt;
     state.durationMs = duration(startedAt, completedAt);
-    state.output = { artifact: nextNode.produces[0] ?? `${nextNode.id}.decision`, dryRun: true, decision: "blocked", approvalRequired: true, reason: `Dry-run stopped before publish-risk node ${nextNode.id}; explicit approval is required before any publishing side effect.` };
-    state.warnings = ["approval_required", "no_publication_performed"];
+    state.output = { artifact: nextNode.produces[0] ?? `${nextNode.id}.decision`, dryRun: true, decision: "blocked", approvalRequired: approvalMissing, reason: publishRefusals.join(" ") };
+    state.warnings = [
+      ...(approvalMissing ? ["approval_required"] : []),
+      ...(operatorVeto ? ["operator_publish_withheld"] : []),
+      ...(controllerDecision && !controllerDecision.authorized ? ["publication_decision_not_affirmative"] : []),
+      "no_publication_performed"
+    ];
     run.status = "blocked";
     run.updatedAt = completedAt;
-    run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", reason: `Publish-risk node ${nextNode.id} requires explicit approval; dry-run blocked before publishing.`, requestedAt: completedAt }];
+    if (approvalMissing) {
+      run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", reason: `Publish-risk node ${nextNode.id} requires explicit approval; dry-run blocked before publishing.`, requestedAt: completedAt }];
+    }
     run.stageOutputs[nextNode.id] = state.output;
     run.artifacts.push(buildArtifact(nextNode, state.output));
     return { run, commit: async () => { await recordDryRunNodeUsage(run, nextNode, state.input, state.output); } };
@@ -872,7 +1054,23 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     run.updatedAt = completedAt;
     return { run };
   }
-  const output = result.output;
+  let output = result.output;
+
+  // P0 §2.3/§2.27 — an "executed" claim from a publisher-kind node must carry go-live evidence
+  // (verification.deployStatus === "ready" AND verification.productionConfirmed === true, plus a
+  // result) and an approvalMatched that matches the operator's durable publish decision
+  // (run.operatorPublishDecision === "approved"). The node's outputSchema enforces the same shape
+  // structurally (if/then on status), but schemas are store-overlayable — this deterministic check
+  // holds even when the schema was edited: an unevidenced claim is DOWNGRADED to status "blocked"
+  // with the missing evidence recorded in blockers, before validation and before anything downstream
+  // can read it as a confirmed go-live.
+  if (isPublishExecutorNode(nextNode)) {
+    const enforced = enforcePublishExecutionEvidence(output, run);
+    if (enforced.downgraded) {
+      output = enforced.output;
+      state.warnings = [...(state.warnings ?? []), "executed_claim_downgraded_to_blocked", ...enforced.reasons.map((reason) => reason.split(":")[0])];
+    }
+  }
 
   // R-16 — a node's output must satisfy the node's OWN output schema before it counts as completed.
   //
@@ -942,6 +1140,27 @@ export async function updateRunStatus(runId: string, status: ExecutionStatus, st
       if (!run) return undefined;
       try {
         return await store.saveRun({ ...run, status, updatedAt: now(), ...patch });
+      } catch (error) {
+        if (isConcurrencyConflict(error)) continue;
+        throw error;
+      }
+    }
+    return store.getRun(runId);
+  });
+}
+
+// P0 §2.2 — the ONE setter for the operator's durable publish decision (run.operatorPublishDecision).
+// Exposed as the MCP tool workflow.set_operator_publish_decision; read by publishRun's
+// operator_not_withheld gate and the executor's publish-risk dispatch guard, both through
+// publishDecision.isOperatorPublishWithheld. Same lock + CAS discipline as updateRunStatus so a veto
+// can never be lost to a concurrent advance.
+export async function setOperatorPublishDecision(runId: string, decision: "approved" | "withheld", store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord | undefined> {
+  return withRunLock(runId, async () => {
+    for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
+      const run = await store.getRun(runId);
+      if (!run) return undefined;
+      try {
+        return await store.saveRun({ ...run, operatorPublishDecision: decision, updatedAt: now() });
       } catch (error) {
         if (isConcurrencyConflict(error)) continue;
         throw error;

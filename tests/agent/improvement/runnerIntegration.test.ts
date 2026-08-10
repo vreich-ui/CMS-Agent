@@ -57,6 +57,9 @@ const rubric: EvalRubric = {
   updatedAt: new Date().toISOString()
 };
 const judgeDeps = () => ({ evaluationRepository: repositoryManager.getEvaluationRepository(), executionRepository: repositoryManager.getExecutionRepository() });
+// The judge's standing instructions reach the model through the Agent config; the run prompt carries
+// only the per-call payload (output + evidence).
+const judgeInstructions = () => String(captured.agentConfigs[0]?.instructions ?? "");
 
 describe("playbook injection (replaces global observations — gap §6)", () => {
   it("injects the node-scoped playbook into the prompt and never the observations key", async () => {
@@ -93,6 +96,49 @@ describe("synthetic judge through the real runner", () => {
     expect(result.judge.mode).toBe("openai");
     const usage = await repositoryManager.getUsageRepository().list({ nodeId: JUDGE_NODE_ID });
     expect(usage.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // A judge that simply omits a non-negotiable criterion must not clear it by omission — and the
+  // ledger must not record the omission as if the judge had scored a zero.
+  it("vetoes a non-negotiable the judge declined to score, with reason not_scored", async () => {
+    const gated: EvalRubric = { ...rubric, criteria: [{ id: "quality", name: "Quality", description: "overall", weight: 9, scaleMax: 5 }, { id: "provenance", name: "Provenance", description: "cites its source", weight: 1, scaleMax: 5, criticalMin: 0 }] };
+    captured.queue.push({ scores: [{ criterionId: "quality", score: 5, evidence: "excellent" }] });
+    const result = await scoreOutput({ rubric: gated, nodeId: "input_triage", output: { summary: "judge me" }, mode: "openai" }, judgeDeps());
+
+    expect(result.pass).toBe(false);
+    expect(result.veto).toMatchObject({ criterionId: "provenance", criticalMin: 0, reason: "not_scored" });
+    expect(result.scores.find((score) => score.criterionId === "provenance")?.evidence).toBe("criterion not scored by judge");
+    // The judge was told the criterion was mandatory before it skipped it.
+    expect(judgeInstructions()).toContain("You MUST return a score for it");
+  });
+
+  it("fires the floor veto on an explicit zero against criticalMin 0", async () => {
+    const gated: EvalRubric = { ...rubric, criteria: [{ id: "quality", name: "Quality", description: "overall", weight: 9, scaleMax: 5 }, { id: "provenance", name: "Provenance", description: "cites its source", weight: 1, scaleMax: 5, criticalMin: 0 }] };
+    captured.queue.push({ scores: [{ criterionId: "quality", score: 5, evidence: "excellent" }, { criterionId: "provenance", score: 0, evidence: "no source cited" }] });
+    const result = await scoreOutput({ rubric: gated, nodeId: "input_triage", output: { summary: "judge me" }, mode: "openai" }, judgeDeps());
+
+    expect(result.normalizedScore).toBe(0.9); // the mean says pass...
+    expect(result.pass).toBe(false);          // ...the non-negotiable says otherwise
+    expect(result.veto).toMatchObject({ criterionId: "provenance", score: 0, criticalMin: 0, reason: "at_or_below_floor" });
+  });
+
+  it("puts the source contract in front of the judge, and says so in the instructions", async () => {
+    captured.queue.push({ scores: [{ criterionId: "quality", score: 4, evidence: "matches the contract's clientObjectType" }] });
+    const contract = { clientObjectType: "content_item", contractSource: { tool: "object_contract", fetchedAtISO: "2026-08-01T00:00:00.000Z" } };
+    const result = await scoreOutput({ rubric, nodeId: "contract_intelligence", output: { summary: "judge me" }, mode: "openai", evidence: { contract, dependencyOutputs: { brief_architect: { artifact: "article_brief.v1" } } } }, judgeDeps());
+
+    expect(result.evidenceUsed).toEqual(["contract", "dependencyOutputs"]);
+    // The evidence travels in the judge's user message, not just in the recorded metadata.
+    expect(captured.runPrompts[0]).toContain("content_item");
+    expect(judgeInstructions()).toContain("REFERENCE MATERIAL is supplied");
+  });
+
+  it("tells the judge plainly when there is no reference material, so it cannot claim a comparison", async () => {
+    captured.queue.push({ scores: [{ criterionId: "quality", score: 4, evidence: "internal consistency only" }] });
+    const result = await scoreOutput({ rubric, nodeId: "contract_intelligence", output: { summary: "judge me" }, mode: "openai" }, judgeDeps());
+
+    expect(result.evidenceUsed).toEqual([]);
+    expect(judgeInstructions()).toContain("NO REFERENCE MATERIAL is supplied");
   });
 
   it("surfaces position bias as an inconsistent pairwise verdict (a judge that always answers A)", async () => {

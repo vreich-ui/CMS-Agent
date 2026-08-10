@@ -34,9 +34,11 @@ describe("Publishing Conductor runner state advancement", () => {
     const final = (await getRun(run.runId, store))!;
 
     // The first eight conductor nodes form a linear chain, so exactly eight distinct nodes complete.
+    // (§2.16: placement_resolver and monetization_strategy joined the chain, so the eighth node is
+    // now narrative_movement.)
     expect(completedNodeIds(final)).toEqual([
-      "input_triage", "topic_opportunity", "reader_insight", "research",
-      "objection_mapping", "narrative_movement", "angle_strategy", "brief_architect"
+      "input_triage", "placement_resolver", "topic_opportunity", "monetization_strategy",
+      "reader_insight", "research", "objection_mapping", "narrative_movement"
     ]);
     // One artifact per completed node — no duplicates from a replayed node.
     expect(artifactNodeIds(final)).toEqual(completedNodeIds(final));
@@ -44,7 +46,7 @@ describe("Publishing Conductor runner state advancement", () => {
     // Sixteen atomic commits over the seeded rev 0: each advance now persists a dispatch CLAIM
     // before executing the node (the ~300s silent-death heartbeat) plus the completion save.
     expect(final.rev).toBe(16);
-    expect(final.currentNodeId).toBe("draft_writer");
+    expect(final.currentNodeId).toBe("angle_strategy");
 
     // Usage is recorded once per completed node, not once per (possibly replayed) execution.
     const usage = await repositoryManager.getUsageRepository().list({ runId: run.runId });
@@ -90,7 +92,13 @@ describe("Publishing Conductor runner state advancement", () => {
 
     expect(final.status).toBe("completed");
     expect(final.nodes.find((node) => node.nodeId === "publication_controller")!.status).toBe("completed");
-    expect(final.nodes.find((node) => node.nodeId === "learning_recorder")!.status).toBe("completed");
+    // §2.15: learning_recorder now sits DOWNSTREAM of publish_executor, so on the approved path it
+    // observes the executor's publish_execution.v1 outcome instead of running in parallel with it.
+    const executor = final.nodes.find((node) => node.nodeId === "publish_executor")!;
+    const learning = final.nodes.find((node) => node.nodeId === "learning_recorder")!;
+    expect(executor.status).toBe("completed");
+    expect(learning.status).toBe("completed");
+    expect(Date.parse(executor.completedAt!)).toBeLessThanOrEqual(Date.parse(learning.startedAt!));
     expect(final.currentNodeId).toBeUndefined();
   });
 
@@ -180,6 +188,6 @@ describe("Publishing Conductor runner state advancement", () => {
     // input_triage ran again (explicit retry) and there is still exactly one artifact for it.
     expect(retried.nodes.find((node) => node.nodeId === "input_triage")!.status).toBe("completed");
     expect(artifactNodeIds(retried).filter((id) => id === "input_triage")).toHaveLength(1);
-    expect(retried.currentNodeId).toBe("topic_opportunity");
+    expect(retried.currentNodeId).toBe("placement_resolver");
   });
 });

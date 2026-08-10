@@ -108,7 +108,7 @@ describe("mcp endpoint", () => {
     const articleBodyNode = response.json.result.structuredContent.data.nodes.find((node: { id: string }) => node.id === "article_body");
 
     expect(response.json.result.structuredContent.ok).toBe(true);
-    expect(response.json.result.structuredContent.data.nodes).toHaveLength(21); // R-22: the re-seeded conductor graph
+    expect(response.json.result.structuredContent.data.nodes).toHaveLength(23); // R-22 re-seed + §2.16 placement_resolver/monetization_strategy
     expect(response.json.result.structuredContent.data.nodes.map((node: { id: string }) => node.id)).toEqual(expect.arrayContaining(["input_triage", "contract_intelligence", "article_body", "artifact_plan", "publish_payload", "publication_controller", "publish_executor"]));
     // The client's fetched contract is the authority, and the envelope carries the provenance that proves
     // it was fetched rather than assumed.
