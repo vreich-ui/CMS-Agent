@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLIENT_MANAGER_PROMPT } from "../../../src/agent/conversations/agentDefinitions.js";
+import { CLIENT_MANAGER_PROMPT, SUPERSEDED_CLIENT_MANAGER_PROMPTS, classifyConversationalAgentPrompt, createCanonicalClientManagerAgent } from "../../../src/agent/conversations/agentDefinitions.js";
 import { WorkspaceStateStore, createDefaultWorkspaceDocument } from "../../../src/agent/mcp/workspace/store.js";
 import { MemoryChangeRepository } from "../../../src/agent/repository/memory/MemoryChangeRepository.js";
 
@@ -22,7 +22,7 @@ describe("canonical client_manager workspace definition", () => {
     expect(events[0]).toMatchObject({ type: "agent.seeded", target: { type: "agent", id: first[0].id } });
     const revision = await changes.getRevision(events[0].resultingRevisionId!);
     expect(revision?.conversationalAgents).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: first[0].id, rev: 1, prompt: CLIENT_MANAGER_PROMPT })
+      expect.objectContaining({ id: first[0].id, rev: createCanonicalClientManagerAgent().rev, prompt: CLIENT_MANAGER_PROMPT })
     ]));
   });
 
@@ -41,7 +41,57 @@ describe("canonical client_manager workspace definition", () => {
 
   it("keeps the canonical prompt project-neutral while owning learning-mode candidates", () => {
     expect(CLIENT_MANAGER_PROMPT).toMatch(/context\.learning_mode is true/i);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/2-3 distinct candidate versions/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/2-3 genuinely distinct versions/i);
     expect(CLIENT_MANAGER_PROMPT).not.toMatch(/dr-lurie|fernwell|platform/i);
+  });
+
+  // CA6 prompt parity. Each assertion stands for a governance rule the calling platform used to
+  // send per-turn and no longer does. A deletion here is a live defect, not a copy change.
+  it("carries every house rule the platform stopped sending with its own system prompt", () => {
+    // Editor-facing language: the identifiers and internals that must never reach editor text.
+    for (const forbidden of ["identifiers", "schema", "provider names", "model names", "credentials", "hidden prompts"]) {
+      expect(CLIENT_MANAGER_PROMPT.toLowerCase()).toContain(forbidden);
+    }
+    // The Owner-only diagnostics escape hatch, and its non-negotiable floor.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/context\.diagnostics_requested is true/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never reveal credentials/i);
+    // Lifecycle vocabulary, including the claim that publishing alone never proves Live.
+    for (const term of ["Draft means", "Approved means", "Published means", "Live means"]) {
+      expect(CLIENT_MANAGER_PROMPT).toContain(term);
+    }
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never proves Live/i);
+    // Refusal handling and the focus-is-not-authorization framing.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/do not re-submit the same call/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never authorization/i);
+  });
+
+  it("classifies stored prompts against the shipped canonical text", () => {
+    expect(classifyConversationalAgentPrompt(CLIENT_MANAGER_PROMPT)).toBe("canonical");
+    expect(classifyConversationalAgentPrompt(SUPERSEDED_CLIENT_MANAGER_PROMPTS[0])).toBe("superseded");
+    expect(classifyConversationalAgentPrompt("An operator wrote this.")).toBe("diverged");
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).not.toContain(CLIENT_MANAGER_PROMPT);
+  });
+
+  // A workspace seeded before CA6 holds the superseded text. Seeding is additive, so without this
+  // upgrade it would keep the pre-parity prompt forever — while an operator's own edit must survive.
+  it("upgrades a superseded canonical prompt on seed but never overwrites an operator edit", async () => {
+    const canonical = createCanonicalClientManagerAgent();
+    const stale = { ...canonical, prompt: SUPERSEDED_CLIENT_MANAGER_PROMPTS[0], rev: 1 };
+    const store = new WorkspaceStateStore({ ...createDefaultWorkspaceDocument(), conversationalAgents: [stale] });
+
+    const upgraded = (await store.ensureConversationalAgentSeeds())[0];
+    expect(upgraded.prompt).toBe(CLIENT_MANAGER_PROMPT);
+    expect(upgraded.rev).toBe(2);
+
+    // Idempotent: a second pass is a no-op and does not bump the workspace again.
+    const versionAfterUpgrade = await store.getWorkspaceVersion();
+    await store.ensureConversationalAgentSeeds();
+    expect(await store.getWorkspaceVersion()).toBe(versionAfterUpgrade);
+
+    const edited = { ...canonical, prompt: "House rules, rewritten by the operator.", rev: 9 };
+    const editedStore = new WorkspaceStateStore({ ...createDefaultWorkspaceDocument(), conversationalAgents: [edited] });
+    const afterSeed = (await editedStore.ensureConversationalAgentSeeds())[0];
+    expect(afterSeed.prompt).toBe("House rules, rewritten by the operator.");
+    expect(afterSeed.rev).toBe(9);
   });
 });

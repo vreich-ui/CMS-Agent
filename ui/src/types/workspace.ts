@@ -120,7 +120,7 @@ export type WorkspaceActorKind = "human" | "agent" | "system";
 export type WorkspaceActor = { kind: WorkspaceActorKind; id?: string; label?: string };
 export type WorkspaceChangeSource = "mcp" | "ui" | "system";
 export type WorkspaceChangeOperation = "create" | "update" | "delete" | "clone" | "reorder" | "restore" | "import" | "record";
-export type WorkspaceChangeTarget = { type: "node" | "graph" | "relationship" | "workspace"; id?: string };
+export type WorkspaceChangeTarget = { type: "node" | "agent" | "graph" | "relationship" | "workspace"; id?: string };
 
 export type WorkspaceChangeEvent = {
   eventId: string;

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { summarizeCapabilities, type CapabilityReport, type ToolListResult } from "../capabilities";
 import { McpClientError } from "../mcp/client";
 import type { McpClient } from "../mcp/client";
 import type { ConnectionStatus, InitializeResult } from "../types/workspace";
@@ -25,6 +26,7 @@ export function getErrorMessage(error: unknown) {
 // divergence documented in docs/constellation/data-model-gaps.md §1).
 export function useConnection(client: McpClient) {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({ tone: "idle" });
+  const [capabilities, setCapabilities] = useState<CapabilityReport | null>(null);
 
   const testConnection = async () => {
     try {
@@ -34,13 +36,21 @@ export function useConnection(client: McpClient) {
         serverName: result.serverInfo?.name,
         protocolVersion: result.protocolVersion
       });
+      // Best effort: a token that can initialize can always list tools, but a probe failure must
+      // never turn a working connection into a failed one — it only leaves capabilities unknown.
+      try {
+        setCapabilities(summarizeCapabilities(await client.method<ToolListResult>("tools/list", {})));
+      } catch {
+        setCapabilities(null);
+      }
       return result;
     } catch (error) {
       const message = getErrorMessage(error);
       setConnectionStatus({ tone: "error", error: message });
+      setCapabilities(null);
       throw error;
     }
   };
 
-  return { connectionStatus, testConnection };
+  return { connectionStatus, capabilities, testConnection };
 }

@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { createAgentTools } from "../../../src/agent/mcp/workspace/agentTools.js";
 import { ConversationalRunner } from "../../../src/agent/conversations/conversationalRunner.js";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
+import { createCanonicalClientManagerAgent } from "../../../src/agent/conversations/agentDefinitions.js";
+
+// Derived, not hardcoded: bumping the canonical prompt bumps rev and must not break these.
+const CANONICAL_REV = createCanonicalClientManagerAgent().rev;
 
 const input = {
-  agent_ref: "agt_client_manager@1",
+  agent_ref: `agt_client_manager@${CANONICAL_REV}`,
   project_id: "platform",
   conversation_id: "chat_wire",
   turn_id: "turn_wire",
@@ -29,7 +33,7 @@ describe("agent_converse MCP tool", () => {
     }).find((tool) => tool.name === "agent.converse")!;
 
     expect(converse.inputSchema).toMatchObject({ additionalProperties: false, required: ["agent_ref", "project_id", "conversation_id", "turn_id", "actor", "context", "messages", "tools", "constraints"] });
-    await expect(converse.execute(input)).resolves.toMatchObject({ ok: true, data: { assistant_text: "Hello", usage: { input_tokens: 3, output_tokens: 1 }, agent_rev: 1, model: "gpt-4.1" } });
+    await expect(converse.execute(input)).resolves.toMatchObject({ ok: true, data: { assistant_text: "Hello", usage: { input_tokens: 3, output_tokens: 1 }, agent_rev: CANONICAL_REV, model: "gpt-4.1" } });
     expect(provider).toHaveBeenCalledTimes(1);
   });
 

@@ -3,12 +3,12 @@
 // unknown paths render Overview WITHOUT rewriting the URL, so an identity token in the hash is
 // never destroyed by a canonicalizing redirect at load.
 
-export type AppPage = "overview" | "constellation" | "runs" | "changes" | "access" | "settings";
+export type AppPage = "overview" | "constellation" | "agents" | "runs" | "changes" | "access" | "settings";
 export type LegacyPanel = "builder" | "nodes";
 export type ConstellationMode = "design" | "operate" | "history";
 
 export type AppRoute =
-  | { page: "overview" | "runs" | "changes" | "access" | "settings" }
+  | { page: "overview" | "agents" | "runs" | "changes" | "access" | "settings" }
   | { page: "constellation"; legacy?: LegacyPanel; mode?: ConstellationMode };
 
 export const defaultRoute: AppRoute = { page: "overview" };
@@ -16,13 +16,14 @@ export const defaultRoute: AppRoute = { page: "overview" };
 export const navPages: ReadonlyArray<{ page: AppPage; label: string }> = [
   { page: "overview", label: "Overview" },
   { page: "constellation", label: "Constellation" },
+  { page: "agents", label: "Agents" },
   { page: "runs", label: "Runs" },
   { page: "changes", label: "Changes" },
   { page: "access", label: "Access" },
   { page: "settings", label: "Settings" }
 ];
 
-const pages = new Set<AppPage>(["overview", "constellation", "runs", "changes", "access", "settings"]);
+const pages = new Set<AppPage>(["overview", "constellation", "agents", "runs", "changes", "access", "settings"]);
 const legacyPanels = new Set<LegacyPanel>(["builder", "nodes"]);
 const constellationModes = new Set<ConstellationMode>(["design", "operate", "history"]);
 
