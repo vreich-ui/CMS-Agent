@@ -3,6 +3,10 @@ import { updateProject } from "../../../src/agent/projects/projectAdmin.js";
 import { resetRepositoryManager, repositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { createWorkspaceTools } from "../../../src/agent/mcp/workspace/tools.js";
 import { toolError } from "../../../src/agent/mcp/workspace/toolKit.js";
+import { createCanonicalClientManagerAgent } from "../../../src/agent/conversations/agentDefinitions.js";
+
+// Derived, not hardcoded: bumping the canonical prompt bumps rev and must not break these.
+const CANONICAL_REV = createCanonicalClientManagerAgent().rev;
 
 const resolve = () => {
   const definition = createWorkspaceTools({}).find((candidate) => candidate.name === "agent.resolve");
@@ -19,7 +23,7 @@ describe("agent.resolve", () => {
   it("seeds and resolves the canonical project-neutral agent without a caller-supplied id", async () => {
     const result = await resolve().execute({ role: "client_manager", project_id: "dr-lurie" }) as { ok: boolean; data: Record<string, unknown> };
 
-    expect(result).toEqual({ ok: true, data: { agent_ref: "agt_client_manager@1", name: "Client Manager", rev: 1, model: "gpt-4.1", status: "active" } });
+    expect(result).toEqual({ ok: true, data: { agent_ref: `agt_client_manager@${CANONICAL_REV}`, name: "Client Manager", rev: CANONICAL_REV, model: "gpt-4.1", status: "active" } });
     await expect(resolve().execute({ role: "client_manager", project_id: "dr-lurie", agent_id: "node_input_triage" })).rejects.toMatchObject({ name: "ZodError" });
   });
 
@@ -41,12 +45,13 @@ describe("agent.resolve", () => {
     await workspace.updateConversationalAgent(agent.id, { modelConfig: { ...agent.modelConfig, model: "gpt-4.1-mini" } }, { actor: { kind: "human", id: "editor-8" }, source: "mcp", reason: "test model revision" });
 
     const result = await resolve().execute({ role: "client_manager", project_id: "platform" }) as { ok: boolean; data: { agent_ref: string; rev: number; model: string } };
-    expect(result.data).toEqual(expect.objectContaining({ agent_ref: "agt_client_manager@2", rev: 2, model: "gpt-4.1-mini" }));
+    const nextRev = agent.rev + 1;
+    expect(result.data).toEqual(expect.objectContaining({ agent_ref: `agt_client_manager@${nextRev}`, rev: nextRev, model: "gpt-4.1-mini" }));
   });
 
   it("resolves the same project-neutral definition for the canonical Fernwell project", async () => {
     const result = await resolve().execute({ role: "client_manager", project_id: "fernwell" }) as { ok: boolean; data: { agent_ref: string; rev: number; model: string; status: string } };
-    expect(result.data).toEqual({ agent_ref: "agt_client_manager@1", name: "Client Manager", rev: 1, model: "gpt-4.1", status: "active" });
+    expect(result.data).toEqual({ agent_ref: `agt_client_manager@${CANONICAL_REV}`, name: "Client Manager", rev: CANONICAL_REV, model: "gpt-4.1", status: "active" });
   });
 
   it("fails closed when the canonical definition is disabled", async () => {

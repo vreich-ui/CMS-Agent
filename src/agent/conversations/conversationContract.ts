@@ -52,6 +52,10 @@ export const conversationContextSchema = z.object({
   object_id: z.string().min(1).max(256).optional(),
   focus: z.string().min(1).max(500).optional(),
   learning_mode: z.boolean().optional(),
+  // CA6, additive: the caller asserts an Owner explicitly asked for technical detail on this run.
+  // The prompt's editor-facing-language default is relaxed for that run only. Absent means false.
+  // This is a caller assertion for tone, never an authorization signal.
+  diagnostics_requested: z.boolean().optional(),
   approval_note: z.string().min(1).max(1_000).optional()
 }).strict().refine((context) => Boolean(context.object_type) === Boolean(context.object_id), {
   message: "object_type and object_id must be supplied together"
@@ -127,7 +131,7 @@ export const agentConverseJsonSchema = {
     conversation_id: { type: "string", minLength: 1, maxLength: 256 },
     turn_id: { type: "string", minLength: 1, maxLength: 256 },
     actor: { type: "object", additionalProperties: false, required: ["kind", "id"], properties: { kind: { type: "string", const: "human" }, id: { type: "string", minLength: 1, maxLength: 256 } } },
-    context: { type: "object", additionalProperties: false, required: ["site_id"], properties: { site_id: { type: "string", minLength: 1, maxLength: 128 }, object_type: { type: "string", minLength: 1, maxLength: 128 }, object_id: { type: "string", minLength: 1, maxLength: 256 }, focus: { type: "string", minLength: 1, maxLength: 500 }, learning_mode: { type: "boolean" }, approval_note: { type: "string", minLength: 1, maxLength: 1000 } } },
+    context: { type: "object", additionalProperties: false, required: ["site_id"], properties: { site_id: { type: "string", minLength: 1, maxLength: 128 }, object_type: { type: "string", minLength: 1, maxLength: 128 }, object_id: { type: "string", minLength: 1, maxLength: 256 }, focus: { type: "string", minLength: 1, maxLength: 500 }, learning_mode: { type: "boolean" }, diagnostics_requested: { type: "boolean" }, approval_note: { type: "string", minLength: 1, maxLength: 1000 } } },
     messages: { type: "array", minItems: 1, maxItems: MAX_TRANSCRIPT_MESSAGES, items: { oneOf: [
       { type: "object", additionalProperties: false, required: ["role", "text"], properties: { role: { type: "string", const: "user" }, text: { type: "string" } } },
       { type: "object", additionalProperties: false, required: ["role"], properties: { role: { type: "string", const: "assistant" }, text: { type: "string" }, tool_calls: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "name", "args"], properties: { id: { type: "string" }, name: { type: "string" }, args: { type: "object" } } } } } },

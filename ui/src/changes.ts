@@ -32,7 +32,9 @@ const typeTitles: Record<string, string> = {
   "workspace.relationships_updated": "Updated relationships",
   "workspace.imported": "Imported workspace",
   "skill.assigned": "Assigned skill",
-  "skill.unassigned": "Unassigned skill"
+  "skill.unassigned": "Unassigned skill",
+  "agent.seeded": "Seeded conversational agent",
+  "agent.updated": "Updated conversational agent"
 };
 
 const humanizeType = (type: string) => {
@@ -69,8 +71,8 @@ export function describeChangeEvent(event: WorkspaceChangeEvent): ChangeEventVie
   const named = asNamed(event.after) ?? asNamed(event.before);
   // Non-node targets without an id get no entity label — the title already names them
   // ("Updated graph · graph" would be redundant noise).
-  const entityLabel = event.target.type === "node"
-    ? (named?.name ?? event.target.id ?? "node")
+  const entityLabel = event.target.type === "node" || event.target.type === "agent"
+    ? (named?.name ?? event.target.id ?? event.target.type)
     : event.target.id ?? "";
   return {
     eventId: event.eventId,

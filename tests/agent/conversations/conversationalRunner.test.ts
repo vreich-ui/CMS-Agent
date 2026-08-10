@@ -5,8 +5,11 @@ import { ConverseError, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_MESSAGES, parseAgen
 import type { ConversationProvider } from "../../../src/agent/conversations/conversationProviders.js";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 
+// Derived, not hardcoded: bumping the canonical prompt bumps rev and must not break these.
+const CANONICAL_REV = createCanonicalClientManagerAgent().rev;
+
 const request = (overrides: Partial<AgentConverseInput> = {}): AgentConverseInput => ({
-  agent_ref: "agt_client_manager@1",
+  agent_ref: `agt_client_manager@${CANONICAL_REV}`,
   project_id: "platform",
   conversation_id: "chat_1",
   turn_id: "turn_1",
@@ -51,7 +54,7 @@ describe("ConversationalRunner client_manager.turn.v1", () => {
     expect(provider).toHaveBeenCalledTimes(1);
     expect(provider).toHaveBeenCalledWith(expect.objectContaining({ tools: request().tools, messages: request().messages, maxTokens: 4_000, timeoutMs: 30_000 }));
     expect(response.tool_calls).toEqual([{ id: "call_1", name: "patch", args: { ops: [] } }]);
-    expect(response).toMatchObject({ usage: { input_tokens: 120, output_tokens: 30 }, agent_rev: 1, model: "gpt-4.1" });
+    expect(response).toMatchObject({ usage: { input_tokens: 120, output_tokens: 30 }, agent_rev: CANONICAL_REV, model: "gpt-4.1" });
   });
 
   it("replays sequential and concurrent duplicates with one provider call and identical responses", async () => {
@@ -92,7 +95,7 @@ describe("ConversationalRunner client_manager.turn.v1", () => {
     const entries = await manager.getConversationTurnRepository().list("chat_1");
     expect(entries).toEqual([expect.objectContaining({
       recordType: "turn", turnId: "turn_1", conversationId: "chat_1", projectId: "platform",
-      actor: { kind: "human", id: "usr_123" }, agentRef: "agt_client_manager@1", agentRev: "1",
+      actor: { kind: "human", id: "usr_123" }, agentRef: `agt_client_manager@${CANONICAL_REV}`, agentRev: String(CANONICAL_REV),
       requestPreview: { messageCount: 1, latestMessagePreview: "Improve the hero.", toolNames: ["patch"] }
     })]);
     const usage = await manager.getUsageRepository().list({ projectId: "platform" });

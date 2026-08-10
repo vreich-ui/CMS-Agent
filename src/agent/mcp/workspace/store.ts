@@ -8,7 +8,7 @@ import { relationshipDirections, relationshipKinds, type WorkspaceRelationship, 
 import { WorkspaceVersionConflictError } from "../../workspace/workspaceErrors.js";
 import { type WorkspaceActor, type WorkspaceChangeCorrelation, type WorkspaceChangeOperation, type WorkspaceChangeSink, type WorkspaceChangeSource, type WorkspaceChangeTarget, type WorkspaceRevision } from "../../workspace/changeTypes.js";
 import { redactSensitiveKeys } from "../../observability/redaction.js";
-import { conversationalAgentStatuses, seededConversationalAgents, type ConversationalAgentDefinition } from "../../conversations/agentDefinitions.js";
+import { conversationalAgentStatuses, pendingCanonicalPromptUpgrades, seededConversationalAgents, type ConversationalAgentDefinition } from "../../conversations/agentDefinitions.js";
 
 // Replace a node in place when it already exists, otherwise append it. This preserves the existing
 // array order so editing a node's prompt/schema never moves it (e.g. to the end of the workflow).
@@ -412,10 +412,19 @@ export class WorkspaceStateStore implements WorkspaceStore {
   async ensureConversationalAgentSeeds(meta: WorkspaceMutationMeta = { actor: { kind: "system" }, source: "system", reason: "Seed canonical conversational agents" }) {
     const current = await this.load();
     const missing = seededConversationalAgents(current.updatedAt).filter((seed) => !current.conversationalAgents.some((agent) => agent.id === seed.id));
-    if (missing.length === 0) return structuredClone(current.conversationalAgents);
+    // CA6: a workspace seeded before a canonical prompt changed keeps the old text, because seeding
+    // is additive. Upgrade only prompts that still match a superseded canonical text exactly — an
+    // operator-edited prompt classifies as "diverged" and is never overwritten here.
+    const upgrades = pendingCanonicalPromptUpgrades(current.conversationalAgents);
+    if (missing.length === 0 && upgrades.length === 0) return structuredClone(current.conversationalAgents);
     await this.mutate((document) => {
       document.conversationalAgents = [...document.conversationalAgents, ...seededConversationalAgents(document.updatedAt).filter((seed) => !document.conversationalAgents.some((agent) => agent.id === seed.id))];
-    }, meta, "agent.seeded", undefined, missing[0]?.id);
+      const upgradeById = new Map(pendingCanonicalPromptUpgrades(document.conversationalAgents).map((upgrade) => [upgrade.id, upgrade.prompt]));
+      document.conversationalAgents = document.conversationalAgents.map((agent) => {
+        const prompt = upgradeById.get(agent.id);
+        return prompt === undefined ? agent : { ...agent, prompt, rev: agent.rev + 1, updatedAt: document.updatedAt };
+      });
+    }, meta, "agent.seeded", undefined, missing[0]?.id ?? upgrades[0]?.id);
     return structuredClone((await this.load()).conversationalAgents);
   }
   async listConversationalAgents() { return structuredClone((await this.load()).conversationalAgents); }

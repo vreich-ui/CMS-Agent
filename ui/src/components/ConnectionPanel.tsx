@@ -1,4 +1,5 @@
 import { useConnection } from "../hooks/useConnection";
+import { describeCapabilities } from "../capabilities";
 import { summarizeConnectionAuth } from "../connection";
 import type { McpConnection } from "../connection";
 import type { McpClient } from "../mcp/client";
@@ -18,7 +19,7 @@ type ConnectionPanelProps = {
 // local dev or a staging Cloud Run URL) and the MCP bearer token. There is no plane or auth-mode
 // choice to make.
 export function ConnectionPanel({ connection, client, token, onEndpointChange, onTokenChange, onConnectionSuccess, onConnectionError }: ConnectionPanelProps) {
-  const { connectionStatus, testConnection } = useConnection(client);
+  const { connectionStatus, capabilities, testConnection } = useConnection(client);
   const authSummary = summarizeConnectionAuth(connection);
 
   const handleTestConnection = async () => {
@@ -35,5 +36,13 @@ export function ConnectionPanel({ connection, client, token, onEndpointChange, o
     <p className="connection-summary">{authSummary.label}</p>
     <div className="auth-actions"><button onClick={handleTestConnection}>Test connection</button></div>
     {connectionStatus.tone === "success" && <p className="connection-summary">Server: <strong>{connectionStatus.serverName ?? "unknown"}</strong><br />Protocol: <strong>{connectionStatus.protocolVersion ?? "unknown"}</strong></p>}
+    {capabilities && <div className="connection-capabilities">
+      <p className="connection-summary">{describeCapabilities(capabilities)}</p>
+      {capabilities.scoped && <ul aria-label="Available surfaces">
+        {capabilities.areas.map((area) => <li key={area.id} className={area.available ? "capability-yes" : "capability-no"}>
+          {area.available ? "Available" : "Not in this token"}: {area.label}
+        </li>)}
+      </ul>}
+    </div>}
   </div>;
 }

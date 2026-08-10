@@ -3,6 +3,7 @@ import { AppHeader } from "./components/AppHeader";
 import { OverviewPanel } from "./components/OverviewPanel";
 import { ConstellationPage } from "./components/pages/ConstellationPage";
 import { RunsPage } from "./components/pages/RunsPage";
+import { AgentsPage } from "./components/pages/AgentsPage";
 import { ChangesPage } from "./components/pages/ChangesPage";
 import { AccessPage } from "./components/pages/AccessPage";
 import { SettingsPage } from "./components/pages/SettingsPage";
@@ -83,6 +84,7 @@ function App() {
     <main className="app-main">
       {route.page === "overview" && <OverviewPanel client={client} projectId={selectedProjectId} onNavigate={navigate} />}
       {route.page === "constellation" && <ConstellationPage legacy={route.legacy} mode={route.mode} onNavigate={navigate} selectedProjectId={selectedProjectId} projects={projects.projects} client={client} workspace={workspace} workflowRun={workflowRun} refreshUsage={modelUsage.refreshUsage} onStatus={setStatus} onError={handleError} />}
+      {route.page === "agents" && <AgentsPage client={client} onStatus={setStatus} onError={handleError} />}
       {route.page === "runs" && <RunsPage selectedProjectId={selectedProjectId} onNavigate={navigate} />}
       {route.page === "changes" && <ChangesPage client={client} selectedProjectId={selectedProjectId} onStatus={setStatus} onError={handleError} />}
       {route.page === "access" && <AccessPage client={client} projects={projects.projects} projectsError={projects.error} onRefreshProjects={() => void projects.refresh()} selectedProjectId={selectedProjectId} onStatus={setStatus} onError={handleError} />}

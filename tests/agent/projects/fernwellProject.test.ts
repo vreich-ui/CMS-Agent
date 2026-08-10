@@ -8,6 +8,10 @@ import { updateProject } from "../../../src/agent/projects/projectAdmin.js";
 import { resetRepositoryManager, repositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { createWorkspaceTools } from "../../../src/agent/mcp/workspace/tools.js";
 import { toolError } from "../../../src/agent/mcp/workspace/toolKit.js";
+import { createCanonicalClientManagerAgent } from "../../../src/agent/conversations/agentDefinitions.js";
+
+// Derived, not hardcoded: bumping the canonical prompt bumps rev.
+const CANONICAL_REV = createCanonicalClientManagerAgent().rev;
 
 const resolveTool = () => {
   const tool = createWorkspaceTools({}).find((candidate) => candidate.name === "agent.resolve");
@@ -56,7 +60,7 @@ describe("Fernwell CA5 project registration", () => {
 
   it("resolves the canonical client_manager for Fernwell and fails closed when Fernwell is disabled", async () => {
     const resolved = await resolveTool().execute({ role: "client_manager", project_id: "fernwell" }) as { ok: boolean; data: Record<string, unknown> };
-    expect(resolved).toEqual({ ok: true, data: { agent_ref: "agt_client_manager@1", name: "Client Manager", rev: 1, model: "gpt-4.1", status: "active" } });
+    expect(resolved).toEqual({ ok: true, data: { agent_ref: `agt_client_manager@${CANONICAL_REV}`, name: "Client Manager", rev: CANONICAL_REV, model: "gpt-4.1", status: "active" } });
 
     await updateProject(repositoryManager.getProjectRepository(), "fernwell", { status: "disabled" });
     try {
