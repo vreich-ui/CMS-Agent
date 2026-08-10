@@ -29,13 +29,14 @@ describe("Publishing Conductor dry-run execution", () => {
   });
 
   // R-22: 21 since nodes.ts was re-seeded from the live workspace (contract_intelligence, artifact_plan,
-  // publish_executor joined the graph). A run seeding 18 nodes was the visible symptom that the conductor
-  // was executing a July 3 snapshot rather than the pipeline the alignment wave rebuilt.
-  it("run has 21 conductor nodes", async () => {
+  // publish_executor joined the graph); a run seeding 18 nodes was the visible symptom that the conductor
+  // was executing a July 3 snapshot rather than the pipeline the alignment wave rebuilt. §2.16: 23 with
+  // placement_resolver and monetization_strategy.
+  it("run has 23 conductor nodes", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ executionMode: "mock", projectId: "project-a", input: "Draft this" }, store);
 
-    expect(run.nodes).toHaveLength(21);
+    expect(run.nodes).toHaveLength(23);
   });
 
   it("run_next_node advances state", async () => {
@@ -45,7 +46,7 @@ describe("Publishing Conductor dry-run execution", () => {
 
     expect(advanced.nodes.find((node) => node.nodeId === "input_triage")?.status).toBe("completed");
     expect(advanced.stageOutputs.input_triage).toMatchObject({ dryRun: true });
-    expect(advanced.currentNodeId).toBe("topic_opportunity");
+    expect(advanced.currentNodeId).toBe("placement_resolver");
   });
 
   it("dependency ordering is respected", async () => {
@@ -53,12 +54,16 @@ describe("Publishing Conductor dry-run execution", () => {
     const run = await startDryRun({ executionMode: "mock", projectId: "project-a", input: "Draft this" }, store);
 
     const afterInput = await runNextNode(run.runId, { executionRepository: store });
-    expect(afterInput.currentNodeId).toBe("topic_opportunity");
-    expect(afterInput.nodes.find((node) => node.nodeId === "reader_insight")?.status).toBe("queued");
+    expect(afterInput.currentNodeId).toBe("placement_resolver");
+    expect(afterInput.nodes.find((node) => node.nodeId === "topic_opportunity")?.status).toBe("queued");
+
+    const afterPlacement = await runNextNode(run.runId, { executionRepository: store });
+    expect(afterPlacement.nodes.find((node) => node.nodeId === "placement_resolver")?.status).toBe("completed");
+    expect(afterPlacement.currentNodeId).toBe("topic_opportunity");
 
     const afterTopic = await runNextNode(run.runId, { executionRepository: store });
     expect(afterTopic.nodes.find((node) => node.nodeId === "topic_opportunity")?.status).toBe("completed");
-    expect(afterTopic.currentNodeId).toBe("reader_insight");
+    expect(afterTopic.currentNodeId).toBe("monetization_strategy");
   });
 
   it("publication_controller blocks without approval", async () => {

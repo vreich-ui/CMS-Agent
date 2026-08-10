@@ -17,7 +17,15 @@
 // memory or another client's conventions. Anything this reducer does not recognize is preserved,
 // bounded, under `unmapped` rather than silently dropped, so a client with an unfamiliar shape still
 // hands downstream nodes something rather than nothing.
-export type ContractSource = { tool: string; fetchedAtISO: string };
+//
+// `fingerprint` (§2.21): a stable content hash of the RAW contract payload this reduction was built
+// from — computed by the one caller that constructs a ContractSource (contractPrefetch.ts) from the
+// exact `raw` it fetched, before reduceContract ever sees it. `tool`/`fetchedAtISO` alone prove a
+// fetch HAPPENED; they say nothing about WHAT was fetched, so a contract that changed between fetch
+// and publish was undetectable. The fingerprint closes that gap and doubles as the cache key for the
+// cross-run reduced-contract cache (§2.20, contractPrefetch.ts) — same contract content, same key,
+// reuse the reduction instead of recomputing it.
+export type ContractSource = { tool: string; fetchedAtISO: string; fingerprint: string };
 
 export type ReducedContract = {
   clientObjectType: string;
@@ -30,6 +38,13 @@ export type ReducedContract = {
   workflowSequence: string[];
   validationSurface: Array<{ op: string; requiredFields: string[]; note?: string }>;
   contractSource: ContractSource;
+  // §2.16 — the client-declared aggression CEILING, carried verbatim from the raw contract's
+  // top-level aggression_ceiling / aggressionCeiling field (the client-side schema change that adds
+  // it is out of scope; this is the engine side reading it). Kept as `unknown` deliberately:
+  // resolveAggressionVector (aggressionVector.ts) is the one validator of its shape — all four dials
+  // (claim_strength, urgency, emotional_agitation, cta_density) as numbers in [0,1] — and an absent
+  // or partial ceiling is a typed blocker there, never a default here.
+  aggressionCeiling?: unknown;
   unmapped?: Record<string, unknown>;
 };
 
@@ -118,7 +133,8 @@ const extractValidationSurface = (raw: Record<string, unknown>): ReducedContract
 
 const MAPPED_KEYS = new Set([
   "object_type", "objectType", "body_schema", "bodySchema", "schema", "constraints", "structural_constraints", "structuralConstraints",
-  "media_policy", "mediaPolicy", "publish_policy", "publishPolicy", "workflow", "patch_ops", "patchOps", "auxiliary_inputs", "auxiliaryInputs"
+  "media_policy", "mediaPolicy", "publish_policy", "publishPolicy", "workflow", "patch_ops", "patchOps", "auxiliary_inputs", "auxiliaryInputs",
+  "aggression_ceiling", "aggressionCeiling"
 ]);
 
 export function reduceContract(raw: unknown, source: ContractSource, requestedObjectType: string): ReducedContract {
@@ -140,6 +156,7 @@ export function reduceContract(raw: unknown, source: ContractSource, requestedOb
     workflowSequence: extractWorkflowSequence(record),
     validationSurface: extractValidationSurface(record),
     contractSource: source,
+    ...(pick(record, ["aggression_ceiling", "aggressionCeiling"]) !== undefined ? { aggressionCeiling: pick(record, ["aggression_ceiling", "aggressionCeiling"]) } : {}),
     ...(Object.keys(unmapped).length ? { unmapped } : {})
   };
 }

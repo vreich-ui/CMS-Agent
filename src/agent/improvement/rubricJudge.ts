@@ -29,7 +29,11 @@ export type JudgeRefs = { runId?: string; trialId?: string; caseId?: string; sub
 // present is recorded on the result, so a score taken without the contract is never silently compared
 // to one taken with it.
 export type JudgeEvidence = {
-  // The client contract the node was given (contract_intelligence's prefetch, or the node's input).
+  // The client contract the node was actually given — the conductor's deterministic prefetch
+  // (`prefetchedContract`) when there is one, else the node's own input. Callers must resolve it with
+  // replay.caseContract rather than passing the raw stored input: the prefetch is a SIBLING of the
+  // input in the run record, so "pass the input" handed contract_intelligence's judge undefined and
+  // it scored fidelity criteria on internal consistency while saying so in its evidence string.
   contract?: unknown;
   // Upstream outputs this node was built from — e.g. the approved article_body a publish_payload
   // must map exactly. This is what makes body_fidelity judgeable at all.
@@ -115,14 +119,24 @@ const mockScore = (subjectHash: string, criterionId: string, scaleMax: number): 
   parseInt(stableHash(`${subjectHash}:${criterionId}`).slice(0, 4), 16) % (scaleMax + 1);
 
 // First criterion whose score trips its declared floor. Deterministic (criteria order), so the
-// recorded reason for a failure is stable across identical inputs. A criterion the judge did not
-// score reads as 0 in `normalize`, and is treated the same way here: an unscored non-negotiable is a
-// failed non-negotiable, never a passed one.
-const firstVeto = (rubric: EvalRubric, scores: EvalScore[]): EvalResult["veto"] => {
+// recorded reason for a failure is stable across identical inputs.
+//
+// The floor is INCLUSIVE — `score <= criticalMin` — which is what makes `criticalMin: 0` a live veto
+// on a zero rather than an inert declaration (see EvalCriterion for the full semantics). The four
+// production non-negotiables (contract_source_provenance, no_side_effects,
+// materialization_verification, request_id_confirmed) all use 0 and all fire on a 0.
+//
+// A criterion the judge never scored is a SEPARATE veto, reason "not_scored". Previously it was
+// defaulted to 0 and recorded as if the judge had scored it 0 — indistinguishable in the ledger from
+// a real zero, and wrong in both directions: it is not evidence about the output (the judge said
+// nothing about it), but it is emphatically not a pass either, or the veto would be opt-out for any
+// judge that simply declines to return the criterion. So it fails, and it says why.
+export const firstVeto = (rubric: EvalRubric, scores: EvalScore[], unscoredCriterionIds: ReadonlySet<string> = new Set()): EvalResult["veto"] => {
   for (const criterion of rubric.criteria) {
     if (criterion.criticalMin === undefined) continue;
-    const score = scores.find((candidate) => candidate.criterionId === criterion.id)?.score ?? 0;
-    if (score <= criterion.criticalMin) return { criterionId: criterion.id, score, criticalMin: criterion.criticalMin };
+    const scored = scores.find((candidate) => candidate.criterionId === criterion.id);
+    if (!scored || unscoredCriterionIds.has(criterion.id)) return { criterionId: criterion.id, score: scored?.score ?? 0, criticalMin: criterion.criticalMin, reason: "not_scored" };
+    if (scored.score <= criterion.criticalMin) return { criterionId: criterion.id, score: scored.score, criticalMin: criterion.criticalMin, reason: "at_or_below_floor" };
   }
   return undefined;
 };
@@ -139,6 +153,9 @@ export async function scoreOutput(params: { rubric: EvalRubric; nodeId: string; 
   const { rubric, output, mode, evidence } = params;
   const subjectHash = stableHash(output);
   const present = evidenceKeys(evidence);
+  // Criteria the judge returned no score for. The mock judge scores every criterion by construction,
+  // so this only ever fills on the LLM path.
+  const unscoredCriterionIds = new Set<string>();
   let scores: EvalScore[];
   if (mode === "mock") {
     scores = rubric.criteria.map((criterion) => ({ criterionId: criterion.id, score: mockScore(subjectHash, criterion.id, criterion.scaleMax), max: criterion.scaleMax, evidence: `mock: deterministic score for ${criterion.id}` }));
@@ -146,7 +163,7 @@ export async function scoreOutput(params: { rubric: EvalRubric; nodeId: string; 
     const prompt = [
       "You are a rigorous content evaluation judge. Score the OUTPUT in the user message against each criterion.",
       `Node role: ${params.nodeId}. Rubric: ${rubric.name} — ${rubric.description}`,
-      ...rubric.criteria.map((criterion) => `Criterion ${criterion.id} (weight ${criterion.weight}, scale 0-${criterion.scaleMax}): ${criterion.description}${criterion.guidance ? ` Guidance: ${criterion.guidance}` : ""}${criterion.criticalMin !== undefined ? ` NON-NEGOTIABLE: a score of ${criterion.criticalMin} or below on this criterion fails the entire rubric, so score it strictly and only on what you can actually verify.` : ""}`),
+      ...rubric.criteria.map((criterion) => `Criterion ${criterion.id} (weight ${criterion.weight}, scale 0-${criterion.scaleMax}): ${criterion.description}${criterion.guidance ? ` Guidance: ${criterion.guidance}` : ""}${criterion.criticalMin !== undefined ? ` NON-NEGOTIABLE: a score of ${criterion.criticalMin} or below on this criterion fails the entire rubric, so score it strictly and only on what you can actually verify. You MUST return a score for it — omitting it fails the rubric as well.` : ""}`),
       // The judge must be told what it may check against, and — just as important — must not invent a
       // diff it could not have performed. A confident "matches the contract" from a judge that never
       // saw the contract is worse than an honest low-confidence score, because it is indistinguishable
@@ -159,11 +176,12 @@ export async function scoreOutput(params: { rubric: EvalRubric; nodeId: string; 
     const raw = await runJudge(rubric, prompt, scoreOutputSchema(rubric), present.length ? { output, evidence } : { output }, deps) as { scores: Array<{ criterionId: string; score: number; evidence: string }> };
     scores = rubric.criteria.map((criterion) => {
       const judged = raw.scores.find((candidate) => candidate.criterionId === criterion.id);
+      if (!judged) unscoredCriterionIds.add(criterion.id);
       return { criterionId: criterion.id, score: Math.max(0, Math.min(judged?.score ?? 0, criterion.scaleMax)), max: criterion.scaleMax, evidence: judged?.evidence ?? "criterion not scored by judge" };
     });
   }
   const normalizedScore = normalize(rubric, scores);
-  const veto = firstVeto(rubric, scores);
+  const veto = firstVeto(rubric, scores, unscoredCriterionIds);
   const result: EvalResult = {
     evalId: makeImprovementId("eval"),
     rubricId: rubric.rubricId,

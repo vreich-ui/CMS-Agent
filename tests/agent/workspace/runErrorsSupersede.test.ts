@@ -72,6 +72,7 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
 
       await runNextNode(started.runId, { executionRepository: store }); // input_triage fails
       const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store }))!; // input_triage succeeds
+      await runNextNode(retried.runId, { executionRepository: store }); // placement_resolver succeeds (§2.16)
       const afterSecondNode = await runNextNode(retried.runId, { executionRepository: store }); // topic_opportunity fails
 
       expect(afterSecondNode.errors).toEqual(["topic_opportunity:model_timeout"]);

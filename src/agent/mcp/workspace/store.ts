@@ -9,6 +9,7 @@ import { WorkspaceVersionConflictError } from "../../workspace/workspaceErrors.j
 import { type WorkspaceActor, type WorkspaceChangeCorrelation, type WorkspaceChangeOperation, type WorkspaceChangeSink, type WorkspaceChangeSource, type WorkspaceChangeTarget, type WorkspaceRevision } from "../../workspace/changeTypes.js";
 import { redactSensitiveKeys } from "../../observability/redaction.js";
 import { conversationalAgentStatuses, pendingCanonicalPromptUpgrades, seededConversationalAgents, type ConversationalAgentDefinition } from "../../conversations/agentDefinitions.js";
+import type { ReducedContract } from "../../workspace/contractReduction.js";
 
 // Replace a node in place when it already exists, otherwise append it. This preserves the existing
 // array order so editing a node's prompt/schema never moves it (e.g. to the end of the workflow).
@@ -21,7 +22,23 @@ export type StageOutput = { id: string; stage: string; value?: unknown; createdA
 // F4 (T-2, run_1785352838155_l544ye): runId/nodeId are optional so existing observations (recorded
 // before this field existed) still parse — but every new one is stamped, so it can finally be joined
 // back to the run/node that produced it. Previously only {id, observation, metadata, createdAt}.
-export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; runId?: string; nodeId?: string; createdAt: string };
+// 2.8 (handoff 2026-08-10): lifecycle fields for soft-deletion. `status` is optional and defaults to
+// "active" wherever it is read (never persisted as a required field) so every observation recorded
+// before this existed still parses. Nothing is ever hard-deleted — archive is the only removal path,
+// so a bad archive can always be reasoned about from the record itself (archivedAt/archivedReason).
+export const learningObservationStatuses = ["active", "archived"] as const;
+export type LearningObservationStatus = typeof learningObservationStatuses[number];
+export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; runId?: string; nodeId?: string; createdAt: string; status?: LearningObservationStatus; archivedAt?: string; archivedReason?: string };
+// §2.20: cross-run cache of already-reduced client contracts, keyed by (projectId, objectType,
+// fingerprint) so a run whose client contract has not changed since a prior run's fetch can reuse the
+// reduction instead of recomputing it (contractPrefetch.ts). `key` is the joined lookup key, stored
+// alongside its parts so a lookup is a plain find() and no caller needs to reconstruct the join
+// format. Capped at REDUCED_CONTRACT_CACHE_CAP entries (oldest evicted first) — a footprint bound on
+// an optimization, not state anything depends on for correctness: a full or cold cache degrades to
+// exactly today's behavior (always recompute).
+export type ReducedContractCacheEntry = { key: string; projectId: string; objectType: string; fingerprint: string; reduced: ReducedContract; createdAt: string };
+const REDUCED_CONTRACT_CACHE_CAP = 20;
+const reducedContractCacheKey = (projectId: string, objectType: string, fingerprint: string): string => `${projectId}:${objectType}:${fingerprint}`;
 export type WorkspaceMutationMeta = {
   expectedWorkspaceVersion?: number;
   // Optimistic concurrency against the change-history revision chain; stale values throw
@@ -40,7 +57,7 @@ export const normalizeActor = (actor?: string | WorkspaceActor): WorkspaceActor 
 export const actorLabel = (meta?: WorkspaceMutationMeta): string | undefined =>
   meta?.actor === undefined ? undefined : typeof meta.actor === "string" ? meta.actor : meta.actor.label ?? meta.actor.id ?? meta.actor.kind;
 export type WorkspaceGraphUpdate = { create?: WorkspaceNode[]; update?: Array<Partial<WorkspaceNode> & { id: string }>; delete?: string[]; dependencies?: Record<string, string[]>; orderedNodeIds?: string[]; positions?: Record<string, { x: number; y: number }>; allowCanonicalNodeRemoval?: boolean; adminApproved?: boolean };
-export type WorkspaceDocument = { schemaVersion: 1; workspaceVersion: number; updatedAt: string; nodes: WorkspaceNode[]; conversationalAgents: ConversationalAgentDefinition[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[]; versions: WorkspaceVersionSnapshot[]; events: WorkspaceEvent[]; relationships: WorkspaceRelationship[]; currentRevisionId?: string };
+export type WorkspaceDocument = { schemaVersion: 1; workspaceVersion: number; updatedAt: string; nodes: WorkspaceNode[]; conversationalAgents: ConversationalAgentDefinition[]; stageOutputs: StageOutput[]; learningObservations: LearningObservation[]; versions: WorkspaceVersionSnapshot[]; events: WorkspaceEvent[]; relationships: WorkspaceRelationship[]; currentRevisionId?: string; reducedContractCache: ReducedContractCacheEntry[] };
 export interface WorkspaceStore {
   getWorkspaceVersion(): Promise<number>;
   getCurrentRevisionId(): Promise<string | undefined>;
@@ -70,7 +87,18 @@ export interface WorkspaceStore {
   getStageOutput(id: string): Promise<StageOutput | undefined>;
   listStageOutputs(stage?: string): Promise<StageOutput[]>;
   recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }): Promise<LearningObservation>;
-  listObservations(): Promise<LearningObservation[]>;
+  // 2.8: includeArchived defaults to false — archived (soft-deleted) observations are excluded from
+  // every existing caller (curation, migration) automatically unless a caller explicitly opts in, so
+  // this one option closes the read side for every consumer at once rather than needing each of them
+  // updated to filter status themselves.
+  listObservations(options?: { includeArchived?: boolean }): Promise<LearningObservation[]>;
+  archiveObservation(id: string, reason?: string): Promise<LearningObservation>;
+  // In-process predicate for callers that already hold the repository directly (e.g. a one-off
+  // script) — never exposed over MCP as-is, since a function cannot cross that boundary. The MCP
+  // bulk tool (learning.archive_observations) wraps this with a serializable filter (a text prefix).
+  archiveObservationsByPredicate(predicate: (observation: LearningObservation) => boolean, reason?: string): Promise<{ archived: number; ids: string[] }>;
+  getReducedContractCacheEntry(projectId: string, objectType: string, fingerprint: string): Promise<ReducedContractCacheEntry | undefined>;
+  putReducedContractCacheEntry(entry: { projectId: string; objectType: string; fingerprint: string; reduced: ReducedContract }): Promise<ReducedContractCacheEntry>;
 }
 
 const now = () => new Date().toISOString();
@@ -92,7 +120,7 @@ const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toSt
 const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes();
 export const createDefaultWorkspaceDocument = (): WorkspaceDocument => {
   const createdAt = now();
-  return { schemaVersion: 1, workspaceVersion: 0, updatedAt: createdAt, nodes: defaultWorkspaceNodes(), conversationalAgents: seededConversationalAgents(createdAt), stageOutputs: [], learningObservations: [], versions: [], events: [], relationships: [] };
+  return { schemaVersion: 1, workspaceVersion: 0, updatedAt: createdAt, nodes: defaultWorkspaceNodes(), conversationalAgents: seededConversationalAgents(createdAt), stageOutputs: [], learningObservations: [], versions: [], events: [], relationships: [], reducedContractCache: [] };
 };
 
 const workspaceNodeSchema = z.object({
@@ -129,7 +157,11 @@ const conversationalAgentSchema: z.ZodType<ConversationalAgentDefinition> = z.ob
   updatedAt: z.string().datetime()
 }).strict();
 const stageOutputSchema: z.ZodType<StageOutput> = z.object({ id: z.string().min(1), stage: z.string().min(1), value: z.unknown().optional(), createdAt: z.string().datetime() }).strict();
-const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), createdAt: z.string().datetime() }).strict();
+const learningObservationSchema: z.ZodType<LearningObservation> = z.object({ id: z.string().min(1), observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), createdAt: z.string().datetime(), status: z.enum(learningObservationStatuses).optional(), archivedAt: z.string().datetime().optional(), archivedReason: z.string().min(1).optional() }).strict();
+// `reduced` stays loose (z.record) rather than a full ReducedContract shape — same posture as
+// StageOutput.value above: this is a cache of an already-validated, internally-produced shape, not an
+// external input this schema needs to police field-by-field.
+const reducedContractCacheEntrySchema = z.object({ key: z.string().min(1), projectId: z.string().min(1), objectType: z.string().min(1), fingerprint: z.string().min(1), reduced: z.record(z.string(), z.unknown()), createdAt: z.string().datetime() }).strict() as unknown as z.ZodType<ReducedContractCacheEntry>;
 const workspaceEventSchema: z.ZodType<WorkspaceEvent> = z.object({ id: z.string(), type: z.string(), nodeId: z.string().optional(), actor: z.string().optional(), summary: z.string().optional(), workspaceVersion: z.number().int().nonnegative(), beforeHash: z.string().optional(), afterHash: z.string().optional(), createdAt: z.string().datetime() }).strict();
 const workspaceVersionSnapshotSchema: z.ZodType<WorkspaceVersionSnapshot> = z.object({ workspaceVersion: z.number().int().nonnegative(), createdAt: z.string().datetime(), summary: z.string().optional(), nodes: z.array(workspaceNodeSchema as z.ZodType<WorkspaceNode>) }).strict();
 const workspaceRelationshipSchema = z.object({
@@ -148,7 +180,7 @@ const workspaceRelationshipSchema = z.object({
 }).strict() as z.ZodType<WorkspaceRelationship>;
 // relationships and currentRevisionId default/omit so documents persisted before change-history
 // existed keep parsing (migration/default logic, same pattern as versions/events).
-export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), conversationalAgents: z.array(conversationalAgentSchema).default([]), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema), versions: z.array(workspaceVersionSnapshotSchema).default([]), events: z.array(workspaceEventSchema).default([]), relationships: z.array(workspaceRelationshipSchema).default([]), currentRevisionId: z.string().min(1).optional() }).strict();
+export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), workspaceVersion: z.number().int().nonnegative(), updatedAt: z.string().datetime(), nodes: z.array(workspaceNodeSchema), conversationalAgents: z.array(conversationalAgentSchema).default([]), stageOutputs: z.array(stageOutputSchema), learningObservations: z.array(learningObservationSchema), versions: z.array(workspaceVersionSnapshotSchema).default([]), events: z.array(workspaceEventSchema).default([]), relationships: z.array(workspaceRelationshipSchema).default([]), currentRevisionId: z.string().min(1).optional(), reducedContractCache: z.array(reducedContractCacheEntrySchema).default([]) }).strict();
 
 
 export const hashValue = (value: unknown) => JSON.stringify(value).split("").reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0).toString(16);
@@ -518,11 +550,67 @@ export class WorkspaceStateStore implements WorkspaceStore {
   async getStageOutput(id: string) { return (await this.load()).stageOutputs.find((output) => output.id === id); }
   async listStageOutputs(stage?: string) { return (await this.load()).stageOutputs.filter((output) => !stage || output.stage === stage); }
   async recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }) {
-    const record: LearningObservation = { id: makeId("learning"), observation, metadata, ...(provenance?.runId ? { runId: provenance.runId } : {}), ...(provenance?.nodeId ? { nodeId: provenance.nodeId } : {}), createdAt: now() };
+    // 2.7 (handoff 2026-08-10): playbook.migrate_observations (improvementTools.ts) reads
+    // observation.metadata?.nodeId, but this method only ever wrote nodeId at the TOP level
+    // (provenance, below) — so every one of 34 stored observations failed that lookup and curation
+    // silently produced nothing. Prefer writing both: mirror the context-stamped provenance into
+    // metadata as well as top-level, so either access path finds it. The mirrored value always comes
+    // from `provenance` (never from caller-supplied metadata), so this cannot be used to forge
+    // attribution to a different run/node than actually recorded it.
+    const metadataWithProvenance = provenance?.runId || provenance?.nodeId
+      ? { ...(metadata ?? {}), ...(provenance?.nodeId ? { nodeId: provenance.nodeId } : {}), ...(provenance?.runId ? { runId: provenance.runId } : {}) }
+      : metadata;
+    const record: LearningObservation = { id: makeId("learning"), observation, metadata: metadataWithProvenance, ...(provenance?.runId ? { runId: provenance.runId } : {}), ...(provenance?.nodeId ? { nodeId: provenance.nodeId } : {}), createdAt: now() };
     await this.mutate((document) => { document.learningObservations = [...document.learningObservations, record]; }, undefined, "learning.observation_recorded");
     return record;
   }
-  async listObservations() { return [...(await this.load()).learningObservations]; }
+  // 2.8: default excludes archived (soft-deleted) records — an observation's status is undefined
+  // ("active" is never actually persisted for the common case) until something archives it, so
+  // "status !== 'archived'" is the correct default-active check without needing a default value
+  // migration for every existing record.
+  async listObservations(options?: { includeArchived?: boolean }) {
+    const observations = (await this.load()).learningObservations;
+    return options?.includeArchived ? [...observations] : observations.filter((observation) => observation.status !== "archived");
+  }
+  async archiveObservation(id: string, reason?: string): Promise<LearningObservation> {
+    let archived: LearningObservation | undefined;
+    await this.mutate((document) => {
+      const existing = document.learningObservations.find((observation) => observation.id === id);
+      if (!existing) throw new Error(`Unknown learning observation: ${id}`);
+      archived = { ...existing, status: "archived", archivedAt: now(), ...(reason ? { archivedReason: reason } : {}) };
+      document.learningObservations = document.learningObservations.map((observation) => observation.id === id ? archived! : observation);
+    }, undefined, "learning.observation_archived");
+    return archived!;
+  }
+  async archiveObservationsByPredicate(predicate: (observation: LearningObservation) => boolean, reason?: string): Promise<{ archived: number; ids: string[] }> {
+    const ids: string[] = [];
+    await this.mutate((document) => {
+      document.learningObservations = document.learningObservations.map((observation) => {
+        if (observation.status === "archived" || !predicate(observation)) return observation;
+        ids.push(observation.id);
+        return { ...observation, status: "archived" as const, archivedAt: now(), ...(reason ? { archivedReason: reason } : {}) };
+      });
+    }, undefined, "learning.observations_archived");
+    return { archived: ids.length, ids };
+  }
+  async getReducedContractCacheEntry(projectId: string, objectType: string, fingerprint: string) {
+    const key = reducedContractCacheKey(projectId, objectType, fingerprint);
+    return (await this.load()).reducedContractCache?.find((entry) => entry.key === key);
+  }
+  async putReducedContractCacheEntry(entry: { projectId: string; objectType: string; fingerprint: string; reduced: ReducedContract }) {
+    const key = reducedContractCacheKey(entry.projectId, entry.objectType, entry.fingerprint);
+    const record: ReducedContractCacheEntry = { key, projectId: entry.projectId, objectType: entry.objectType, fingerprint: entry.fingerprint, reduced: entry.reduced, createdAt: now() };
+    await this.mutate((document) => {
+      // Replace-on-write (same fingerprint overwrites, never duplicates), then cap by dropping the
+      // oldest entries — insertion order, not access order: simple, bounded, and correct enough for a
+      // footprint cap on an optimization (a full cache degrades to "always recompute", never to a
+      // wrong answer).
+      const withoutExisting = (document.reducedContractCache ?? []).filter((existing) => existing.key !== key);
+      const next = [...withoutExisting, record];
+      document.reducedContractCache = next.length > REDUCED_CONTRACT_CACHE_CAP ? next.slice(next.length - REDUCED_CONTRACT_CACHE_CAP) : next;
+    }, undefined, "contract.reduced_cache_stored");
+    return record;
+  }
 }
 
 export class InMemoryWorkspaceStore extends WorkspaceStateStore {}

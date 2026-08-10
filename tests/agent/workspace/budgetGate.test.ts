@@ -43,32 +43,37 @@ describe("conductor budget gate", () => {
     // R-20 posture: the gate meters ACTUAL spend only — a mock run's own deterministic estimates no
     // longer accrue (T-2 F-5), so this test injects a measured (status:"actual") record mid-run, the
     // way live model spend actually arrives, sized so the third node's reservation crosses the
-    // ceiling: $2.95 accrued + reader_insight's $0.1 reserve > $3.
+    // ceiling: $2.95 accrued + topic_opportunity's $0.1 reserve > $3. (§2.16 inserted
+    // placement_resolver between input_triage and topic_opportunity, so the second advance runs it
+    // and the boundary node the gate stops before is now topic_opportunity.)
     const ceiling = 3;
     const gated = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this", budgetUsd: ceiling }, store);
     await runNextNode(gated.runId, { executionRepository: store }); // input_triage
-    await runNextNode(gated.runId, { executionRepository: store }); // topic_opportunity
-    await recordModelUsage({ runId: gated.runId, nodeId: "topic_opportunity", model: "gpt-5.5", provider: "openai", inputTokens: 0, outputTokens: 0, costUsdEstimate: 2.95, status: "actual" });
+    await runNextNode(gated.runId, { executionRepository: store }); // placement_resolver
+    await recordModelUsage({ runId: gated.runId, nodeId: "placement_resolver", model: "gpt-5.5", provider: "openai", inputTokens: 0, outputTokens: 0, costUsdEstimate: 2.95, status: "actual" });
     const run = await drive(gated.runId, store);
 
     expect(run.status).toBe("blocked");
     expect(run.budgetBlock).toBeDefined();
-    expect(run.budgetBlock!.nextNodeId).toBe("reader_insight");
+    expect(run.budgetBlock!.nextNodeId).toBe("topic_opportunity");
     expect(run.budgetBlock!.reason).toMatch(/paused for budget/i);
     expect(run.budgetBlock!.reason).toMatch(/would cross/i);
-    expect(run.currentNodeId).toBe("reader_insight");
+    expect(run.currentNodeId).toBe("topic_opportunity");
     // Earlier nodes ran; the boundary node and everything after it did not.
     expect(run.nodes.find((node) => node.nodeId === "input_triage")!.status).toBe("completed");
-    expect(run.nodes.find((node) => node.nodeId === "topic_opportunity")!.status).toBe("completed");
-    expect(run.nodes.find((node) => node.nodeId === "reader_insight")!.status).toBe("queued");
+    expect(run.nodes.find((node) => node.nodeId === "placement_resolver")!.status).toBe("completed");
+    expect(run.nodes.find((node) => node.nodeId === "topic_opportunity")!.status).toBe("queued");
     // A budget pause is NOT an approval pause: no ApprovalRequired entry is minted.
     expect(run.approvalsRequired).toEqual([]);
-    // Never partially charged the un-run node (reader_insight, the boundary the gate stopped before).
-    // learning_recorder also recorded usage: F4 fires it as a best-effort side effect the moment the
-    // run reaches ANY terminal outcome, including this budget block, rather than waiting on
-    // publication_controller (which this run never even reaches).
+    // Never partially charged the un-run node (topic_opportunity, the boundary the gate stopped before).
+    // 2.4: learning_recorder does NOT record usage here. F4's best-effort dispatch still fires on this
+    // budget-block terminal transition, but 2.4 additionally requires learning_recorder's own declared
+    // dependency (publication_controller) to have been REACHED at least once first — and this run
+    // blocked at reader_insight, so publication_controller was never touched (still "queued"). Firing
+    // here is exactly the run-start-bypass bug 2.4 fixed (learning_recorder recording 23 seconds into
+    // a run that continued for another hour).
     const records = await repositoryManager.getUsageRepository().list({ runId: gated.runId });
-    expect(records.filter((record) => record.status === "estimated").map((record) => record.nodeId).sort()).toEqual(["input_triage", "learning_recorder", "topic_opportunity"]);
+    expect(records.filter((record) => record.status === "estimated").map((record) => record.nodeId).sort()).toEqual(["input_triage", "placement_resolver"]);
     expect(records.filter((record) => record.status === "actual")).toHaveLength(1);
 
     // The ledger surfaces the budget view, reusing the same accrued cost figure (no second path).
@@ -94,6 +99,9 @@ describe("conductor budget gate", () => {
     expect(run.budgetBlock!.nextNodeId).toBe("input_triage");
     expect(run.budgetBlock!.reason).toMatch(/would cross/i);
     expect(run.nodes.find((node) => node.nodeId === "input_triage")!.status).toBe("queued");
+    // 2.4: the run died at the very first node — learning_recorder's dependency (publication_controller)
+    // was never reached, so the best-effort dispatch skips it entirely rather than firing early.
+    expect(run.nodes.find((node) => node.nodeId === "learning_recorder")!.status).toBe("queued");
   });
 
   // F3 (T-2, run_1785352838155_l544ye): the budget gate's own reported remedy — "Raise budgetUsd and
@@ -140,5 +148,51 @@ describe("conductor budget gate", () => {
     expect(run.approvalsRequired).toEqual([expect.objectContaining({ nodeId: "publication_controller", type: "approval_required" })]);
     // No budget view is attached to a run without a ceiling.
     expect(summarizeRunCost(run, await summarizeModelUsage({ runId: run.runId })).budget).toBeUndefined();
+  });
+});
+
+// 2.4 (handoff 2026-08-10, run_1785842430906_tqjk1o): learning_recorder used to be dispatched directly
+// by recordTerminationObservations at ANY terminal transition, bypassing dependsOn entirely — so a run
+// that died at its very first node still fired learning_recorder, long before its declared dependency
+// (publication_controller) had ever been touched. Fixed by requiring every declared dependency to have
+// been REACHED (moved off "queued") at least once before the best-effort dispatch fires.
+describe("learning_recorder does not fire before its dependencies are reached (2.4)", () => {
+  beforeEach(() => repositoryManager.getUsageRepository().clear());
+
+  it("a run that fails at the very first node never dispatches learning_recorder", async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    // An empty projectId makes the very first node fail immediately with client_project_unresolved —
+    // the run reaches a terminal "failed" status 0 nodes in, with publication_controller (and every
+    // other node) still "queued".
+    const started = await startDryRun({ executionMode: "mock", projectId: "", input: "Draft this" }, store);
+    const run = await runNextNode(started.runId, { executionRepository: store });
+
+    expect(run.status).toBe("failed");
+    expect(run.nodes.find((node) => node.nodeId === "input_triage")!.status).toBe("failed");
+    expect(run.nodes.find((node) => node.nodeId === "publication_controller")!.status).toBe("queued");
+    // The dependency (publication_controller) was never reached, so learning_recorder is skipped
+    // silently rather than dispatched early — it stays queued, and no usage is recorded for it.
+    expect(run.nodes.find((node) => node.nodeId === "learning_recorder")!.status).toBe("queued");
+    const records = await repositoryManager.getUsageRepository().list({ runId: started.runId });
+    expect(records.map((record) => record.nodeId)).not.toContain("learning_recorder");
+  });
+
+  it("regression guard: learning_recorder still fires once its dependency is reached (even only as far as blocked)", async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    const started = await startDryRun({ executionMode: "mock", projectId: "budget-proj", input: "Draft this" }, store);
+    let run = await getRun(started.runId, store);
+    for (let i = 0; run && i < 30 && !TERMINAL.includes(run.status); i++) {
+      run = await runNextNode(started.runId, { executionRepository: store });
+    }
+    // publication_controller is publish-risk and this run was never approved, so it is attempted and
+    // refused ("blocked") rather than "completed" — F4's whole reason for existing: that dependency
+    // almost never literally completes. Reaching "blocked" still counts as reached. §2.15:
+    // learning_recorder's OTHER dependency, publish_executor, never left "queued" here (the run
+    // terminal-blocked at the controller, one node upstream of it) — it counts as SEALED, not
+    // reached: its own sole dependency was attempted and refused, so it can never run in this run's
+    // state, and treating that as unresolved would strand learning_recorder on the most common path.
+    expect(run!.nodes.find((node) => node.nodeId === "publication_controller")!.status).toBe("blocked");
+    expect(run!.nodes.find((node) => node.nodeId === "publish_executor")!.status).toBe("queued");
+    expect(run!.nodes.find((node) => node.nodeId === "learning_recorder")!.status).toBe("completed");
   });
 });

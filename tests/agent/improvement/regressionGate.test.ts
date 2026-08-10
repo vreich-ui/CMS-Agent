@@ -12,7 +12,7 @@ const deps = (): RegressionDeps => ({
   evaluationRepository: repositoryManager.getEvaluationRepository()
 });
 
-const rubricFor = (nodeId: string): EvalRubric => ({
+const rubricFor = (nodeId: string, overrides: Partial<EvalRubric> = {}): EvalRubric => ({
   rubricId: `rubric_reg_${nodeId}`,
   nodeId,
   name: `${nodeId} regression rubric`,
@@ -25,7 +25,8 @@ const rubricFor = (nodeId: string): EvalRubric => ({
   passThreshold: 0,
   metadata: {},
   createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString()
+  updatedAt: new Date().toISOString(),
+  ...overrides
 });
 
 // One mock conductor run seeds completed executions (frozen-replay source) for every node the gate
@@ -81,6 +82,65 @@ describe("per-node regression gate", () => {
     expect(regressed.verdict).toBe("regressed");
     expect(regressed.baseline?.reportId).toBe("reg_research_strict_baseline");
     expect(regressed.delta!.meanScore).toBeLessThan(0);
+  });
+
+  // The two production reports (contract_intelligence, 2026-08) read meanScore 0.484 against
+  // threshold 0.85 with all four cases pass:false — and verdict "held", because the verdict only ever
+  // compared this run to the last one. A permanently failing node reported healthy forever.
+  it("fails the gate on absolute health, however stable the drift", async () => {
+    // A threshold no mock score can reach: every case is scored, every case fails its rubric.
+    await repositoryManager.getEvaluationRepository().createRubric(rubricFor("human_texture", { passThreshold: 0.999 }));
+
+    const first = await runRegression({ nodeId: "human_texture", mode: "mock" }, deps());
+    expect(first.summary.meanScore).toBeLessThan(first.summary.threshold);
+    expect(first.gate).toBe("fail");
+    expect(first.gateReasons).toContain("mean_below_threshold");
+    expect(first.gateReasons).toContain("cases_failed");
+    // The drift is still recorded truthfully — but it is no longer what the headline says.
+    expect(first.drift).toBe("baseline_set");
+    expect(first.verdict).toBe("failing");
+
+    // The exact production shape: nothing moved since the last (equally broken) run...
+    const second = await runRegression({ nodeId: "human_texture", mode: "mock" }, deps());
+    expect(second.drift).toBe("held");
+    expect(second.delta?.meanScore).toBe(0);
+    // ...and it still must not read as healthy.
+    expect(second.gate).toBe("fail");
+    expect(second.verdict).toBe("failing");
+  });
+
+  it("passes the gate when the node actually clears its rubric, and then reports drift as the headline", async () => {
+    await repositoryManager.getEvaluationRepository().createRubric(rubricFor("narrative_movement"));
+    const report = await runRegression({ nodeId: "narrative_movement", mode: "mock" }, deps());
+    expect(report.summary.meanScore).toBeGreaterThanOrEqual(report.summary.threshold);
+    expect(report.gate).toBe("pass");
+    expect(report.gateReasons).toEqual([]);
+    expect(report.verdict).toBe(report.drift);
+    expect(report.verdict).toBe("baseline_set");
+  });
+
+  // casesTotal 4 / casesScored 4 / casesPassed 0 / casesFailed 0 with four pass:false cases was the
+  // other half of the same wrong report: a rubric failure incremented nothing, and casesFailed
+  // counted EXECUTION failures under a name every reader took to mean "failed the rubric".
+  it("keeps the case buckets disjoint and consistent with the per-case results", async () => {
+    await repositoryManager.getEvaluationRepository().createRubric(rubricFor("trust_factual", { passThreshold: 0.999 }));
+    const report = await runRegression({ nodeId: "trust_factual", mode: "mock" }, deps());
+    const { casesTotal, casesScored, casesPassed, casesFailed, casesErrored, passRate } = report.summary;
+
+    expect(casesPassed + casesFailed).toBe(casesScored);
+    expect(casesScored + casesErrored).toBe(casesTotal);
+    expect(casesTotal).toBe(report.cases.length);
+    expect(passRate).toBe(casesScored ? Number((casesPassed / casesScored).toFixed(4)) : 0);
+
+    // The buckets must equal what the per-case entries actually say.
+    expect(casesScored).toBe(report.cases.filter((entry) => entry.status === "completed").length);
+    expect(casesErrored).toBe(report.cases.filter((entry) => entry.status === "failed").length);
+    expect(casesPassed).toBe(report.cases.filter((entry) => entry.pass === true).length);
+    expect(casesFailed).toBe(report.cases.filter((entry) => entry.pass === false).length);
+    // The production case: every scored case failed the rubric, so casesFailed cannot be 0.
+    expect(casesFailed).toBeGreaterThan(0);
+    expect(casesPassed).toBe(0);
+    expect(passRate).toBe(0);
   });
 
   it("is a report-only gate exposed via MCP: no promotion, no publish, no workspace mutation", async () => {

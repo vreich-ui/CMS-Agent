@@ -33,7 +33,9 @@ describe("node.* MCP tools", () => {
 
   it("prepares missing dependency and ready states without model calls", async () => {
     expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {} })).preparation.readinessStatus).toBe("missing_inputs");
-    expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {}, dependencyOutputs: { input_triage: { artifact: "content_source.v1", summary: "ok" } } })).preparation.readinessStatus).toBe("ready");
+    // §2.16: topic_opportunity now also depends on placement_resolver (the computed aggression target).
+    expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {}, dependencyOutputs: { input_triage: { artifact: "content_source.v1", summary: "ok" } } })).preparation.readinessStatus).toBe("missing_inputs");
+    expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {}, dependencyOutputs: { input_triage: { artifact: "content_source.v1", summary: "ok" }, placement_resolver: { artifact: "placement_resolution.v1", summary: "ok" } } })).preparation.readinessStatus).toBe("ready");
   });
 
   it("executes one node independently and retrieves outputs/history", async () => {

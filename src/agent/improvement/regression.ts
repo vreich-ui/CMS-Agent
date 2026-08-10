@@ -9,8 +9,8 @@
 // report becomes the baseline the next run compares against ("last stored baseline").
 import type { EvaluationRepository } from "../repository/interfaces/EvaluationRepository.js";
 import { scoreOutput } from "./rubricJudge.js";
-import { buildDataset, runTrialCase, type ReplayDeps } from "./replay.js";
-import { makeImprovementId, type EvalRubric, type RegressionCaseResult, type RegressionReport, type RegressionVerdict } from "./improvementTypes.js";
+import { buildDataset, caseContract, runTrialCase, type ReplayDeps } from "./replay.js";
+import { makeImprovementId, type EvalRubric, type RegressionCaseResult, type RegressionDrift, type RegressionGateReason, type RegressionReport } from "./improvementTypes.js";
 
 const now = () => new Date().toISOString();
 // Ignore sub-1e-4 aggregate wobble so float noise is never reported as a real improvement/regression.
@@ -44,18 +44,27 @@ export async function runRegression(params: { nodeId: string; datasetId?: string
 
   const reportId = makeImprovementId("reg");
   const cases: RegressionCaseResult[] = [];
-  let scoreSum = 0, scored = 0, passed = 0, failed = 0;
+  // Three disjoint buckets, because conflating them is how both production reports came to read
+  // "casesScored 4, casesPassed 0, casesFailed 0" while every one of the four cases was pass:false:
+  //  - errored  = the node could not be executed at all, so there is no score (was counted as
+  //               casesFailed, which is why an execution failure and a rubric failure were the same
+  //               number and neither was the number of cases that actually failed the rubric);
+  //  - passed   = scored AND the rubric passed;
+  //  - failed   = scored AND the rubric failed (this increment simply did not exist).
+  // Invariants the report must satisfy: passed + failed === scored, scored + errored === total.
+  let scoreSum = 0, scored = 0, passed = 0, failed = 0, errored = 0;
   for (const evalCase of dataset.cases.slice(0, Math.max(1, params.caseLimit ?? dataset.cases.length))) {
     // variant {} = the node exactly as it stands. runTrialCase runs it through the trial workspace
     // facade, so a regression run never bumps workspaceVersion or writes live stage outputs.
     const execution = await runTrialCase({ evalCase, trialId: reportId, variant: {}, mode: params.mode }, deps);
     if (execution.status === "failed") {
-      failed += 1;
+      errored += 1;
       cases.push({ caseId: evalCase.caseId, runId: execution.runId, status: "failed" });
       continue;
     }
-    // Give the judge the same reference material the node had: the case's frozen input (which carries
-    // the prefetched client contract) and its upstream dependency outputs (the approved body a
+    // Give the judge the same reference material the node had: the case's frozen SOURCE CONTRACT
+    // (caseContract digs out the conductor's prefetch, which does not live in `input`) and its
+    // upstream dependency outputs (the approved body a
     // payload must map exactly). Without these the heaviest criteria in these rubrics are unjudgeable
     // and quietly score fluency instead — see JudgeEvidence.
     const evalResult = await scoreOutput({
@@ -64,11 +73,11 @@ export async function runRegression(params: { nodeId: string; datasetId?: string
       output: execution.output,
       mode: params.mode,
       refs: { trialId: reportId, caseId: evalCase.caseId, runId: execution.runId },
-      evidence: { contract: evalCase.input, dependencyOutputs: evalCase.dependencyOutputs }
+      evidence: { contract: caseContract(evalCase), dependencyOutputs: evalCase.dependencyOutputs }
     }, deps);
     scoreSum += evalResult.normalizedScore;
     scored += 1;
-    if (evalResult.pass) passed += 1;
+    if (evalResult.pass) passed += 1; else failed += 1;
     cases.push({ caseId: evalCase.caseId, runId: execution.runId, status: "completed", evalId: evalResult.evalId, normalizedScore: evalResult.normalizedScore, pass: evalResult.pass });
   }
 
@@ -83,16 +92,30 @@ export async function runRegression(params: { nodeId: string; datasetId?: string
   // regression. Modes are separate ledgers; they are not comparable and must never silently compare.
   const priorReports = await deps.evaluationRepository.listRegressionReports({ nodeId: params.nodeId });
   const baseline = priorReports.find((report) => report.executionMode === params.mode);
-  let verdict: RegressionVerdict;
+  let drift: RegressionDrift;
   let delta: { meanScore: number; passRate: number } | undefined;
   if (!baseline) {
-    verdict = "baseline_set";
+    drift = "baseline_set";
   } else {
     const dMean = Number((meanScore - baseline.summary.meanScore).toFixed(4));
     const dPass = Number((passRate - baseline.summary.passRate).toFixed(4));
     delta = { meanScore: dMean, passRate: dPass };
-    verdict = dMean > VERDICT_EPSILON ? "improved" : dMean < -VERDICT_EPSILON ? "regressed" : "held";
+    drift = dMean > VERDICT_EPSILON ? "improved" : dMean < -VERDICT_EPSILON ? "regressed" : "held";
   }
+
+  // ABSOLUTE health, against the rubric's own passThreshold and nothing else. Drift alone answered
+  // "did it move?", so a node scoring 0.484 against a 0.85 threshold with all four cases failing
+  // reported "held" — stable, and stably broken — and would have gone on reporting it forever. No
+  // epsilon here on purpose: drift tolerates float wobble because a 1e-5 move is not news, but a mean
+  // below the threshold the rubric itself declares is not a wobble, it is a failure.
+  const gateReasons: RegressionGateReason[] = [];
+  if (!scored) gateReasons.push("no_cases_scored");
+  else {
+    if (meanScore < rubric.passThreshold) gateReasons.push("mean_below_threshold");
+    if (failed > 0) gateReasons.push("cases_failed");
+  }
+  if (errored > 0) gateReasons.push("cases_errored");
+  const gate = gateReasons.length ? "fail" : "pass";
 
   const report: RegressionReport = {
     reportId,
@@ -101,9 +124,14 @@ export async function runRegression(params: { nodeId: string; datasetId?: string
     rubricId: rubric.rubricId,
     executionMode: params.mode,
     cases,
-    summary: { casesTotal: cases.length, casesScored: scored, casesFailed: failed, casesPassed: passed, passRate, meanScore, threshold: rubric.passThreshold },
+    summary: { casesTotal: cases.length, casesScored: scored, casesFailed: failed, casesPassed: passed, casesErrored: errored, passRate, meanScore, threshold: rubric.passThreshold },
     baseline: baseline ? { reportId: baseline.reportId, meanScore: baseline.summary.meanScore, passRate: baseline.summary.passRate, createdAt: baseline.createdAt } : undefined,
-    verdict,
+    gate,
+    gateReasons,
+    drift,
+    // The headline reports the gate FIRST: a node below its own threshold must never read as healthy
+    // because it happens not to have moved since the last equally-broken run.
+    verdict: gate === "fail" ? "failing" : drift,
     delta,
     createdAt: now()
   };

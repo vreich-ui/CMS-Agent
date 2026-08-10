@@ -3,7 +3,9 @@
   "currentNodeId": "publication_controller",
   "nodes": [
     ["input_triage", "completed", "content_source.v1"],
+    ["placement_resolver", "completed", "placement_resolution.v1"],
     ["topic_opportunity", "completed", "topic_opportunity.v1"],
+    ["monetization_strategy", "completed", "monetization_strategy.v1"],
     ["reader_insight", "completed", "reader_insight.v1"],
     ["research", "completed", "research_brief.v1"],
     ["objection_mapping", "completed", "objection_map.v1"],
@@ -21,8 +23,8 @@
     ["artifact_plan", "completed", "artifact_plan.v1"],
     ["publish_payload", "completed", "dry_run_publish_payload.v1"],
     ["publication_controller", "blocked", "publication_decision.v1"],
-    ["learning_recorder", "completed", "learning_observations.v1"],
-    ["publish_executor", "queued", "publish_execution.v1"]
+    ["publish_executor", "queued", "publish_execution.v1"],
+    ["learning_recorder", "completed", "learning_observations.v1"]
   ],
   "approvalsRequired": [["publication_controller", "approval_required"]]
 }

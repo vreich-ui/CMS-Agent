@@ -29,7 +29,7 @@ const sampleReduced = (overrides: Partial<ReducedContract> = {}): ReducedContrac
   publishPolicy: { gated: true, requires_approval: false, note: "autonomous publish permitted" },
   workflowSequence: ["object_validate", "object_patch", "object_publish"],
   validationSurface: [{ op: "object_patch", requiredFields: ["lock_token"], note: "checkout required first" }],
-  contractSource: { tool: "object_contract", fetchedAtISO: "2026-08-04T09:00:00.000Z" },
+  contractSource: { tool: "object_contract", fetchedAtISO: "2026-08-04T09:00:00.000Z", fingerprint: "fp_sample" },
   ...overrides
 });
 

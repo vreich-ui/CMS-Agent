@@ -24,16 +24,62 @@ export const trialWorkspaceFacade = (target: WorkspaceRepository): WorkspaceRepo
   }
 });
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
 // Persisted node-input shapes differ by path: the conductor stores { initialInput, dependencies }
-// (executor.ts), independent executions store { input, dependencies } (nodeRuntime.ts).
-const storedInput = (raw: unknown): { input?: unknown; dependencies: Record<string, unknown> } => {
-  const record = (raw ?? {}) as { initialInput?: unknown; input?: unknown; dependencies?: Record<string, unknown> };
-  return { input: record.initialInput ?? record.input, dependencies: record.dependencies ?? {} };
+// (executor.ts), independent executions store { input, dependencies } (nodeRuntime.ts). EVERYTHING
+// ELSE at the top level is conductor-injected context — clientProjectId, `prefetchedContract` (the
+// deterministically fetched+reduced client contract), `prefetchError`, `editorialVoice`. It is a
+// SIBLING of initialInput, not a field inside it, and a conductor node with dependencies stores
+// initialInput: undefined — so a case built from `input` alone carried no contract at all. That is
+// why the judge recorded "Source contract was not supplied" on the one real contract_intelligence
+// evaluation while the run itself had the contract the whole time.
+const storedInput = (raw: unknown): { input?: unknown; dependencies: Record<string, unknown>; context: Record<string, unknown> } => {
+  if (!isRecord(raw)) return { dependencies: {}, context: {} };
+  const { initialInput, input, dependencies, ...context } = raw as { initialInput?: unknown; input?: unknown; dependencies?: Record<string, unknown> } & Record<string, unknown>;
+  return { input: initialInput ?? input, dependencies: (dependencies ?? {}) as Record<string, unknown>, context };
 };
 
-export async function buildDataset(params: { nodeId: string; name?: string; limit?: number; projectId?: string; executionMode?: "mock" | "openai" }, deps: ReplayDeps): Promise<EvalDataset> {
+// The source contract the node actually had, for the judge to compare the output AGAINST: the
+// conductor's prefetch when there is one (contract_intelligence and anything else declaring
+// contractPrefetch), else the node's own input, which for a node fed a document IS the source
+// material. Undefined when there is genuinely nothing to compare against — the judge is then told so
+// explicitly rather than being handed an empty object it would read as "supplied".
+export const caseContract = (evalCase: { input?: unknown; context?: Record<string, unknown> }): unknown =>
+  evalCase.context?.prefetchedContract ?? (isRecord(evalCase.input) ? evalCase.input.prefetchedContract : undefined) ?? evalCase.input;
+
+// The same reference material the regression gate gives the judge, recovered from a stored run's
+// node state — so evaluation.run scores a recorded output against what the node was given, not
+// against nothing.
+export const judgeEvidenceFromNodeState = (state?: { input?: unknown; toolCalls?: unknown }): { contract?: unknown; dependencyOutputs: Record<string, unknown>; toolCalls?: unknown } => {
+  const { input, dependencies, context } = storedInput(state?.input);
+  const contract = caseContract({ input, context });
+  return { ...(contract !== undefined ? { contract } : {}), dependencyOutputs: dependencies, ...(state?.toolCalls !== undefined ? { toolCalls: state.toolCalls } : {}) };
+};
+
+// A frozen case replays with the SAME conductor-injected context the original run had, merged back
+// alongside the input. Without it contract_intelligence is re-executed with no contract and then
+// judged on contract fidelity — a guaranteed, meaningless failure.
+export const replayInput = (evalCase: { input?: unknown; context?: Record<string, unknown> }): unknown => {
+  const context = evalCase.context;
+  if (!context || !Object.keys(context).length) return evalCase.input;
+  return isRecord(evalCase.input)
+    ? { ...context, ...evalCase.input }
+    : { ...context, ...(evalCase.input !== undefined ? { initialInput: evalCase.input } : {}) };
+};
+
+export async function buildDataset(params: { nodeId: string; name?: string; limit?: number; projectId?: string; executionMode?: "mock" | "openai"; allowDuplicateSubjects?: boolean }, deps: ReplayDeps): Promise<EvalDataset> {
   const runs = await deps.executionRepository.listRuns(params.projectId ? { projectId: params.projectId } : {});
   const cases: EvalCase[] = [];
+  // A case's discriminating power lives in its replay SUBJECT — input + dependency outputs + injected
+  // context. Two cases with the same subject hash re-execute to the same output and score
+  // identically, so a dataset of four of them is a dataset of one: ds_1785772079588_9a01hb froze four
+  // contract_intelligence cases that all hashed to e8b1ed18 and produced byte-identical scores, and
+  // the regression verdict computed from it looked exactly like a real one. Duplicates are dropped by
+  // default and the distinct count travels on the dataset, so a degenerate dataset is visible at
+  // BUILD time instead of being discovered as a suspiciously stable verdict months later.
+  const subjectHashes = new Set<string>();
+  let duplicateSubjects = 0;
   for (const run of runs) {
     if (cases.length >= (params.limit ?? 20)) break;
     // Mode filter, opt-in: pass executionMode:"openai" to freeze a dataset of REAL champions only.
@@ -43,11 +89,24 @@ export async function buildDataset(params: { nodeId: string; name?: string; limi
     if (params.executionMode && run.executionMode !== params.executionMode) continue;
     const state = run.nodes.find((node) => node.nodeId === params.nodeId);
     if (!state || state.status !== "completed" || state.input === undefined) continue;
-    const { input, dependencies } = storedInput(state.input);
-    cases.push({ caseId: makeImprovementId("case"), nodeId: params.nodeId, input, dependencyOutputs: dependencies, sourceRunId: run.runId, sourceExecutionMode: run.executionMode, championOutput: state.output, frozenAt: now() });
+    const { input, dependencies, context } = storedInput(state.input);
+    const subjectHash = stableHash({ input, dependencies, context });
+    if (subjectHashes.has(subjectHash)) {
+      duplicateSubjects += 1;
+      if (!params.allowDuplicateSubjects) continue;
+    }
+    subjectHashes.add(subjectHash);
+    cases.push({ caseId: makeImprovementId("case"), nodeId: params.nodeId, input, dependencyOutputs: dependencies, ...(Object.keys(context).length ? { context } : {}), subjectHash, sourceRunId: run.runId, sourceExecutionMode: run.executionMode, championOutput: state.output, frozenAt: now() });
   }
   if (!cases.length) throw new Error(`no_replay_cases: no completed executions of ${params.nodeId}${params.executionMode ? ` in ${params.executionMode} mode` : ""} with persisted inputs were found; run the conductor (even in mock mode) first.`);
-  const dataset: EvalDataset = { datasetId: makeImprovementId("ds"), nodeId: params.nodeId, name: params.name ?? `${params.nodeId} replay`, cases, createdAt: now() };
+  const degenerate = subjectHashes.size < 2;
+  const metadata = {
+    distinctSubjects: subjectHashes.size,
+    duplicateSubjects,
+    degenerate,
+    ...(degenerate ? { warning: `degenerate_dataset: ${cases.length} case(s) over ${subjectHashes.size} distinct subject(s) — every case replays to the same output, so any regression or trial verdict from it has no discriminating power. Rebuild from runs with genuinely different inputs (dataset.build with executionMode:"openai" once real runs exist).` } : {})
+  };
+  const dataset: EvalDataset = { datasetId: makeImprovementId("ds"), nodeId: params.nodeId, name: params.name ?? `${params.nodeId} replay`, cases, metadata, createdAt: now() };
   return deps.improvementRepository.saveDataset(dataset);
 }
 
@@ -57,7 +116,7 @@ export async function runTrialCase(params: { evalCase: EvalCase; trialId: string
   const runId = `trial_${params.trialId}_${params.evalCase.caseId}`;
   try {
     const result = await executeNode(
-      { nodeId: params.evalCase.nodeId, input: params.evalCase.input, runId, dependencyOutputs: params.evalCase.dependencyOutputs, executionMode: params.mode, modelConfig: params.variant.modelConfig, promptOverride: params.variant.promptOverride },
+      { nodeId: params.evalCase.nodeId, input: replayInput(params.evalCase), runId, dependencyOutputs: params.evalCase.dependencyOutputs, executionMode: params.mode, modelConfig: params.variant.modelConfig, promptOverride: params.variant.promptOverride },
       { workspaceRepository: trialWorkspaceFacade(deps.workspaceRepository), executionRepository: deps.executionRepository }
     ) as { execution: { status: string; stageOutputs: Record<string, unknown> } };
     if (result.execution.status !== "completed") return { caseId: params.evalCase.caseId, runId, status: "failed" };

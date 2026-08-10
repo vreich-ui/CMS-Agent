@@ -15,7 +15,7 @@ import type { WorkflowExecutionRecord } from "../workspace/executionTypes.js";
 import type { WorkspaceMutationMeta } from "../mcp/workspace/store.js";
 import type { EvaluationRepository } from "../repository/interfaces/EvaluationRepository.js";
 import { comparePairwise, scoreOutput } from "./rubricJudge.js";
-import { buildDataset, runTrialCase, type ReplayDeps } from "./replay.js";
+import { buildDataset, caseContract, runTrialCase, type ReplayDeps } from "./replay.js";
 import { recommendModel, type ModelLadderRecommendation } from "./modelLadder.js";
 import { makeImprovementId, stableHash, type EvalRubric, type ImprovementProposal, type TrialCaseResult, type TrialRecord } from "./improvementTypes.js";
 
@@ -176,7 +176,10 @@ export async function runTrial(params: { proposalId?: string; nodeId?: string; p
   for (const evalCase of dataset.cases.slice(0, Math.max(1, params.caseLimit ?? dataset.cases.length))) {
     const execution = await runTrialCase({ evalCase, trialId, variant, mode: params.mode }, deps);
     if (execution.status === "failed") { casesFailed += 1; cases.push({ caseId: evalCase.caseId, runId: execution.runId, status: "failed" }); continue; }
-    const evalResult = await scoreOutput({ rubric, nodeId, output: execution.output, mode: params.mode, refs: { trialId, caseId: evalCase.caseId, runId: execution.runId, subject: { model: String(variant.modelConfig?.model ?? "node_default"), executionMode: params.mode } } }, deps);
+    // Same reference material the regression gate gives the judge (see JudgeEvidence): a challenger
+    // scored without the source contract is scored on fluency, which is exactly the property a
+    // cheaper challenger model preserves while degrading everything else.
+    const evalResult = await scoreOutput({ rubric, nodeId, output: execution.output, mode: params.mode, refs: { trialId, caseId: evalCase.caseId, runId: execution.runId, subject: { model: String(variant.modelConfig?.model ?? "node_default"), executionMode: params.mode } }, evidence: { contract: caseContract(evalCase), dependencyOutputs: evalCase.dependencyOutputs } }, deps);
     scoreSum += evalResult.normalizedScore; scored += 1;
     let comparisonId: string | undefined;
     if (evalCase.championOutput !== undefined) {

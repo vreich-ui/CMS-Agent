@@ -2,7 +2,10 @@
 // turns a reviewed client_object.v1 into a real publication on a project's live site. Publishing is
 // irreversible and outward-facing, so it is protected by defense-in-depth: a live publish runs ONLY
 // when the operator has enabled publishing for the project AND the caller passes explicit approval
-// AND an explicit live flag. Missing any gate yields a dry-run PLAN that performs no external call.
+// AND an explicit live flag AND (P0 2026-08-10) the operator has not durably withheld publishing for
+// the run (run.operatorPublishDecision) AND the run's publication_controller decision record is an
+// EXPLICIT go (see publishDecision.ts — silence, hedging, or malformed output refuses by default).
+// Missing any gate yields a dry-run PLAN that performs no external call.
 //
 // Publish EXECUTION is per-project: each client's dialect (its tool names, lock protocol, and call
 // shapes) lives in that project's executePublish hook (see ../projects/projectHooks.ts), driven
@@ -22,6 +25,7 @@ import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks, type PublishExecutionOutcome, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
+import { findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
@@ -94,19 +98,30 @@ export const isProjectPublishEnabled = (config: ProjectConnectionConfig, env: No
 // publish gate is the day the gates stop meaning anything. (Go-live 2026-07-31: the controlled-tool
 // layer's former per-run approval lock on project.call_tool was removed — requiresApproval is now
 // false — so granted nodes reach client tools without a per-run approval ceremony.)
-const PUBLISH_GATE_NAMES = ["operator_enabled", "explicit_approval", "explicit_live"] as const;
+const PUBLISH_GATE_NAMES = ["operator_enabled", "explicit_approval", "explicit_live", "operator_not_withheld", "controller_decision_go"] as const;
 
-const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, env: NodeJS.ProcessEnv): PublishGates => {
+const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, env: NodeJS.ProcessEnv, run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision">): PublishGates => {
   const operatorEnabled = isProjectPublishEnabled(config, env);
   // Go-live 2026-07-31: approval and live default to TRUE — a publish request is taken at its word.
   // Passing approved:false or live:false still forces a dry-run plan, so a deliberate rehearsal
   // remains one explicit flag away; it is simply no longer the default posture.
   const approved = input.approved !== false;
   const live = input.live !== false;
+  // P0 §2.2 — the operator veto: run.operatorPublishDecision (the ONE named field, set only by
+  // workflow.set_operator_publish_decision) read through the ONE reader shared with the executor's
+  // publish-risk guard. A withheld veto closes this gate regardless of every other input.
+  const operatorNotWithheld = !isOperatorPublishWithheld(run);
+  // P0 §2.1 — refuse-by-default controller decision. Publish is authorized ONLY by an explicit,
+  // structurally-present affirmative decision record (decision: "go") from publication_controller;
+  // an absent record, prose-only approval, hedging, or malformed output closes the gate with the
+  // reason named. This inverts the old prompt-side "execute unless explicitly withheld" posture.
+  const decision = readPublicationDecision(findPublicationDecision(run));
   const gates: PublishGate[] = [
     { name: "operator_enabled", passed: operatorEnabled, reason: operatorEnabled ? undefined : `Publishing is not enabled for ${config.projectId}; set ${publishEnabledEnvVar(config)}=true in the deployment.` },
     { name: "explicit_approval", passed: approved, reason: approved ? undefined : "approved: true is required for a live publish." },
-    { name: "explicit_live", passed: live, reason: live ? undefined : "live: true (dryRun false) is required for a live publish." }
+    { name: "explicit_live", passed: live, reason: live ? undefined : "live: true (dryRun false) is required for a live publish." },
+    { name: "operator_not_withheld", passed: operatorNotWithheld, reason: operatorNotWithheld ? undefined : "operator_publish_withheld: the operator's durable publish decision for this run (run.operatorPublishDecision, set via workflow.set_operator_publish_decision) is \"withheld\"; nothing publishes until the operator replaces it." },
+    { name: "controller_decision_go", passed: decision.authorized, reason: decision.authorized ? undefined : `publication_decision_not_affirmative (${decision.code}): ${decision.reason}` }
   ];
   // Structural assertion, not decoration: an unreachable state here means a gate was renamed, dropped,
   // or made to pass on something other than its own input. Cheap, and it fails loudly at the one place
@@ -115,7 +130,7 @@ const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, 
   if (names.length !== PUBLISH_GATE_NAMES.length || !PUBLISH_GATE_NAMES.every((name, index) => names[index] === name)) {
     throw new Error(`publish_gate_set_changed: expected exactly [${PUBLISH_GATE_NAMES.join(", ")}], got [${names.join(", ")}]. The publish gates are a closed set; adding or removing one is a deliberate act, not a refactor.`);
   }
-  const allPassed = operatorEnabled && approved && live;
+  const allPassed = operatorEnabled && approved && live && operatorNotWithheld && decision.authorized;
   if (allPassed !== gates.every((gate) => gate.passed)) throw new Error("publish_gate_evaluation_inconsistent: a gate's passed flag disagrees with its own input.");
   return { operatorEnabled, approved, live, allPassed, gates };
 };
@@ -165,7 +180,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   const config = await projectRepository.get(projectId);
   if (!config) throw new Error(`Unknown projectId: ${projectId}`);
 
-  const gates = evaluateGates(config, input, env);
+  const gates = evaluateGates(config, input, env, run);
   const emptyPlan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: 0, publishedTime: input.publishedTime ?? null, toolSequence: [] };
 
   const requestIdPattern = compileRequestIdPattern(config.objectDialect?.requestIdPattern);

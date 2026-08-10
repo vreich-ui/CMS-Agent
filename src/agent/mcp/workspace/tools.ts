@@ -10,7 +10,7 @@ import { createConstellationTools } from "./constellationTools.js";
 import { createImprovementTools } from "./improvementTools.js";
 import { createAgentTools } from "./agentTools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
-import { DEFAULT_EXECUTION_MODE, MAX_LIST_RUNS_LIMIT, assessRunStall, getRun, listRuns, listRunsPage, resetRun, retryNode, runModeSummary, runNextNode, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
+import { DEFAULT_EXECUTION_MODE, MAX_LIST_RUNS_LIMIT, assessRunStall, getRun, listRuns, listRunsPage, resetRun, retryNode, runModeSummary, runNextNode, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
 import { conductorCache, getRunContext, planRun, summarizeRunCost, RUN_CONTEXT_KEY } from "../../workspace/conductor.js";
 import { executionStatuses } from "../../workspace/executionTypes.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
@@ -125,6 +125,8 @@ const runIdInput = z.object({ runId: z.string().min(1) }).strict();
 // keeps working exactly as before; supplying it raises (or sets) the run's ceiling in the same call.
 const resumeRunInput = z.object({ runId: z.string().min(1), budgetUsd: z.number().nonnegative().optional() }).strict();
 const runNextNodeInput = z.object({ runId: z.string().min(1), approved: z.boolean().optional() }).strict();
+// P0 §2.2 — the ONE setter for the operator's durable publish decision (run.operatorPublishDecision).
+const operatorPublishDecisionInput = z.object({ runId: z.string().min(1), decision: z.enum(["approved", "withheld"]) }).strict();
 const listRunsInput = z.object({
   projectId: z.string().min(1).optional(),
   workflowId: z.string().min(1).optional(),
@@ -187,6 +189,20 @@ const importWorkspaceJsonSchema = objectSchema({ nodes: { type: "array", items: 
 const saveOutputJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, stage: { type: "string", minLength: 1 }, value: {} }, ["stage", "value"]);
 const listOutputsJsonSchema = objectSchema({ stage: { type: "string", minLength: 1 } });
 const recordObservationJsonSchema = objectSchema({ observation: { type: "string", minLength: 1 }, metadata: { type: "object" }, runId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the run that produced it, so it can be joined back later." }, nodeId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the node that produced it." } }, ["observation"]);
+// 2.8 (handoff 2026-08-10): lifecycle/archival for learning observations. Nothing is ever hard-deleted
+// — archive is soft: the record stays, gains status:"archived" plus archivedAt/archivedReason, and
+// listObservations excludes it by default (includeArchived:true opts back in). This is what lets
+// curation/migration skip a sunset directive's observations (e.g. the "[ALIGN" coordination-board
+// records — see scripts/purgeAlignObservations.ts) without needing every reader updated separately.
+const listObservationsInput = z.object({ includeArchived: z.boolean().optional() }).strict();
+const listObservationsJsonSchema = objectSchema({ includeArchived: { type: "boolean", description: "Include archived (soft-deleted) observations. Default false." } });
+const archiveObservationInput = z.object({ id: z.string().min(1), reason: z.string().min(1).optional() }).strict();
+const archiveObservationJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, reason: { type: "string", minLength: 1, description: "Optional human-readable reason recorded on the archived observation." } }, ["id"]);
+// Bulk archive by a text prefix rather than an arbitrary predicate — a predicate function cannot cross
+// the MCP wire, and a prefix match is exactly what the sunset "[ALIGN" coordination-board directive
+// needs (every one of those 27 records' observation text starts with the same marker).
+const archiveObservationsInput = z.object({ textPrefix: z.string().min(1), reason: z.string().min(1).optional(), dryRun: z.boolean().optional() }).strict();
+const archiveObservationsJsonSchema = objectSchema({ textPrefix: { type: "string", minLength: 1, description: "Archive every active observation whose `observation` text starts with this prefix." }, reason: { type: "string", minLength: 1 }, dryRun: { type: "boolean", description: "Preview the count/ids without archiving anything. Default false." } }, ["textPrefix"]);
 // Advertised as an opaque object: the authority on the body's shape is the article_body node's OWN
 // outputSchema (fetch it via node.get_output_schema) and, beyond that envelope, the client's fetched
 // contract — never a workspace-local article schema baked into a tool's input schema.
@@ -198,6 +214,7 @@ const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLen
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
 const resumeRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0, description: "Optional: raise (or set) the run's per-run cost ceiling in the same call that resumes it. Omit to resume unchanged — this is what makes the budget gate's own remedy (\"raise budgetUsd and resume\") actually reachable; previously resume_run took only runId and there was no way to raise the ceiling that blocked the run." } }, ["runId"]);
 const runNextNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
+const operatorPublishDecisionJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, decision: { type: "string", enum: ["approved", "withheld"], description: "\"withheld\" is a durable operator veto: it blocks workflow.publish_run and every publish-risk node for this run regardless of approved/live flags, until replaced. \"approved\" records explicit, durable operator approval — the record an executed publish_execution.v1's approvalMatched must match." } }, ["runId", "decision"]);
 
 // R-19 — the run-advancing tools used to advertise mutationJsonSchema, the WORKSPACE-mutation shape. That
 // schema has no `runId` property, lists nothing as required, and (like every objectSchema) sets
@@ -439,7 +456,20 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "stage.get_output", description: "Get stage output.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => ok({ output: await workspaceRepository.getStageOutput(nodeId.parse(input).id) ?? null }) }),
     tool({ name: "stage.list_outputs", description: "List stage outputs.", zodSchema: listOutputs, inputSchema: listOutputsJsonSchema, execute: async (input) => ok({ outputs: await workspaceRepository.listStageOutputs(listOutputs.parse(input).stage) }) }),
     tool({ name: "learning.record_observation", description: "Record a learning observation, optionally stamped with the runId/nodeId it came from.", zodSchema: recordObservation, inputSchema: recordObservationJsonSchema, execute: async (input) => { const data = recordObservation.parse(input); const observation = await learningRepository.recordObservation(data.observation, data.metadata, { runId: data.runId, nodeId: data.nodeId }); return ok({ observation, workspaceVersion: await workspaceRepository.getWorkspaceVersion() }); } }),
-    tool({ name: "learning.list_observations", description: "List learning observations.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ observations: await learningRepository.listObservations() }); } }),
+    tool({ name: "learning.list_observations", description: "List learning observations. Archived (soft-deleted) observations are excluded by default.", zodSchema: listObservationsInput, inputSchema: listObservationsJsonSchema, execute: async (input) => { const data = listObservationsInput.parse(input); return ok({ observations: await learningRepository.listObservations({ includeArchived: data.includeArchived }) }); } }),
+    tool({ name: "learning.archive_observation", description: "Archive (soft-delete) one learning observation by id. The record is never removed — it gains status:\"archived\" plus archivedAt/archivedReason and is excluded from listObservations unless includeArchived is set.", zodSchema: archiveObservationInput, inputSchema: archiveObservationJsonSchema, execute: async (input) => {
+      const data = archiveObservationInput.parse(input);
+      return ok({ observation: await learningRepository.archiveObservation(data.id, data.reason) });
+    } }),
+    tool({ name: "learning.archive_observations", description: "Bulk-archive every ACTIVE observation whose text starts with textPrefix (e.g. a sunset coordination-board marker). Set dryRun:true to preview the count/ids without archiving anything.", zodSchema: archiveObservationsInput, inputSchema: archiveObservationsJsonSchema, execute: async (input) => {
+      const data = archiveObservationsInput.parse(input);
+      if (data.dryRun) {
+        const matches = (await learningRepository.listObservations()).filter((observation) => observation.observation.startsWith(data.textPrefix));
+        return ok({ archived: 0, ids: [], matched: matches.length, matchedIds: matches.map((observation) => observation.id), dryRun: true });
+      }
+      const result = await learningRepository.archiveObservationsByPredicate((observation) => observation.observation.startsWith(data.textPrefix), data.reason);
+      return ok({ ...result, dryRun: false });
+    } }),
     tool({ name: "publish.build_payload", description: "Build a dry-run publish payload without side effects. The articleBody must satisfy the article_body node's own outputSchema (see node.get_output_schema) — an invalid body is refused with the failing fields named.", zodSchema: publishBuild, inputSchema: publishBuildJsonSchema, execute: async (input) => { const data = publishBuild.parse(input); const articleBody = coerceJsonObjectInput(data.articleBody); const errors = validateAgainstArticleBodyNode(articleBody); if (errors.length) throw new Error(`invalid_article_body: does not satisfy the article_body node's outputSchema (${errors.slice(0, 6).join("; ")})`); return ok({ payload: { articleBody, target: data.target, dryRun: true, builtAt: new Date().toISOString() } }); } }),
     tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload: envelope fields (target, dryRun, builtAt) plus the articleBody against the article_body node's own outputSchema.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); const bodyErrors = parsed.success ? validateAgainstArticleBodyNode(coerceJsonObjectInput(parsed.data.payload.articleBody)) : []; const issues = [...(parsed.success ? [] : parsed.error.issues), ...bodyErrors.map((message) => ({ code: "custom", path: ["payload", "articleBody"], message }))]; return ok({ valid: issues.length === 0, issues }); } }),
     tool({ name: "repository.get_health", description: "Return safe repository health metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ health: await repositoryManager.getRepositoryHealth() }); } }),
@@ -493,6 +523,10 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // against accrued spend on the very next advance and clears budgetBlock itself once it passes.
     tool({ name: "workflow.resume_run", description: "Resume a run: status becomes \"queued\". Optionally raise (or set) budgetUsd in the same call — the reachable form of the budget gate's own \"raise budgetUsd and resume\" remedy. Node completion state is never mutated.", zodSchema: resumeRunInput, inputSchema: resumeRunJsonSchema, execute: async (input) => { const data = resumeRunInput.parse(input); return ok({ run: await updateRunStatus(data.runId, "queued", executionRepository, data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {}) ?? null }); } }),
     tool({ name: "workflow.retry_node", description: "Reset a completed or failed node back to queued and run the next dependency-ready node.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); return ok({ run: await retryNode(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved }) ?? null }); } }),
+    // P0 §2.2 — the operator veto channel: ONE named field (run.operatorPublishDecision), ONE setter
+    // (this tool), ONE reader (publishDecision.isOperatorPublishWithheld, consumed by the publish
+    // gates and the executor's publish-risk dispatch guard).
+    tool({ name: "workflow.set_operator_publish_decision", description: "Record the operator's durable publish decision for a run (run.operatorPublishDecision). \"withheld\" is the operator VETO: it blocks workflow.publish_run and every publish-risk node for this run regardless of approved/live flags, until the operator replaces it. \"approved\" records explicit durable operator approval — the referent an executed publish_execution.v1's approvalMatched must match. The decision survives workflow.reset_run.", zodSchema: operatorPublishDecisionInput, inputSchema: operatorPublishDecisionJsonSchema, execute: async (input) => { const data = operatorPublishDecisionInput.parse(input); return ok({ run: await setOperatorPublishDecision(data.runId, data.decision, executionRepository) ?? null }); } }),
     tool({ name: "workflow.reset_run", description: "Reset a dry-run workflow execution to its initial queued state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await resetRun(runIdInput.parse(input).runId, executionRepository) }) }),
     tool({ name: "workflow.get_run_context", description: "Return the reusable per-run context bundle (project contract, article_body schema, project tool policy, object contracts, node registry), memoized per run so the conductor fetches it once instead of re-reading contracts and the registry at every step.", zodSchema: runContextInput, inputSchema: runContextJsonSchema, execute: async (input) => { const data = runContextInput.parse(input); const cacheHit = conductorCache.has(data.runId, `${RUN_CONTEXT_KEY}:${data.projectId}`); const context = await getRunContext({ runId: data.runId, projectId: data.projectId, projectRepository }); return ok({ context, cacheHit }); } }),
     tool({ name: "workflow.get_run_cost", description: "Return a per-node cost ledger for a run plus a plan recommending the cheapest way to make progress: poll a terminal run, resume a blocked one, re-enter at the late-stage entrypoint reusing a finished article_body, or run in full.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => { const runId = runIdInput.parse(input).runId; const run = await getRun(runId, executionRepository); if (!run) return ok({ ledger: null, plan: null }); const usage = await summarizeModelUsage({ runId }, usageRepository); return ok({ ledger: summarizeRunCost(run, usage), plan: planRun(run) }); } }),

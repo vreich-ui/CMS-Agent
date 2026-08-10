@@ -131,4 +131,14 @@ export type WorkflowExecutionRecord = {
   // Present only while the run is paused for budget (see RunBudgetBlock). Cleared the moment the
   // run advances past the budget check (e.g. after the ceiling is raised and the run resumes).
   budgetBlock?: RunBudgetBlock;
+  // P0 §2.2 — THE operator publish veto/approval field: ONE named field, ONE setter, ONE reader.
+  // Set ONLY by workflow.set_operator_publish_decision (executor.setOperatorPublishDecision); read
+  // ONLY through publishDecision.isOperatorPublishWithheld / isOperatorPublishApproved, consumed by
+  // publishRun's "operator_not_withheld" gate and the executor's publish-risk dispatch guard.
+  // "withheld" is a durable operator veto: it blocks workflow.publish_run and every publish-risk
+  // node regardless of approved/live flags until the operator replaces it. "approved" is the durable
+  // operator approval an "executed" publish_execution.v1 claim must match (its approvalMatched
+  // field refers to exactly this record). Absent means no operator decision has been recorded;
+  // absence never authorizes anything by itself. Preserved across workflow.reset_run.
+  operatorPublishDecision?: "approved" | "withheld";
 };

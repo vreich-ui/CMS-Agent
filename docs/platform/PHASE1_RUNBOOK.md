@@ -156,6 +156,49 @@ Delete the Cloud Run job and (optionally) the image and secrets. Nothing on Netl
 changed; no data migration happened (same store). A run interrupted mid-flight is
 resumable (`--run <runId>`) or resettable via the existing `workflow.reset_run` tool.
 
+## Other jobs on the same pattern: `job:monetizer-ingest` (§2.19)
+
+`src/agent/entrypoints/monetizerIngestJob.ts` (+ `monetizerIngestJobMain.ts`) is a second,
+independent Cloud Run Job entrypoint built on the exact same shape as `conductor-run`
+above — same image, same env/flag convention, same JSON-summary-plus-exit-code contract.
+It calls `feedback.ingest_monetizer` (`ingestMonetizerAnalytics`), which the run graph
+itself never calls — before this job existed nothing ever triggered it outside a manual
+MCP call, so the feedback store held zero outcome records, ever.
+
+It is safe to deploy and schedule BEFORE `MONETIZER_MCP_ENDPOINT` / `MONETIZER_MCP_TOKEN`
+are set (that is Wolf's operator task, not this job's concern): with either unset the job
+exits 0 having done nothing, with `status: "skipped_unconfigured"` and a named reason in
+its JSON summary — never a crash, so a schedule created ahead of the secrets does not
+spam failure alerts.
+
+```bash
+# Local smoke — reports the connection state; ingests nothing (no live endpoint here):
+npm run job:monetizer-ingest -- --dry-run
+
+# 1-3. Build image, create secrets, create the job — same steps as conductor-run above,
+#      pointed at the same image (both entrypoints ship in one Dockerfile) with its own
+#      Cloud Run Job resource:
+#   gcloud run jobs create monetizer-ingest-run \
+#     --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
+#     --cpu 1 --memory 512Mi --max-retries 0 --task-timeout 300 \
+#     --set-env-vars "WORKSPACE_STORE=blobs,NETLIFY_BLOBS_SITE_ID=<site-api-id>" \
+#     --set-secrets "NETLIFY_BLOBS_TOKEN=netlify-blobs-token:latest,MONETIZER_MCP_ENDPOINT=monetizer-mcp-endpoint:latest,MONETIZER_MCP_TOKEN=monetizer-mcp-token:latest" \
+#     --command "npm" --args "run,job:monetizer-ingest,--"
+#
+# 4. Execute on demand:
+#   gcloud run jobs execute monetizer-ingest-run --project "$PROJECT" --region "$REGION" --wait
+#
+# Scheduled (e.g. hourly) — same mechanism as conductor-run's "Scheduled runs" line above:
+#   gcloud scheduler jobs create http monetizer-ingest-hourly \
+#     --schedule="0 * * * *" \
+#     --uri="https://<region>-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/<project>/jobs/monetizer-ingest-run:run" \
+#     --http-method=POST \
+#     --oauth-service-account-email="<job-runtime-sa>"
+```
+
+This block is documentation only — nothing above runs as part of any build or deploy;
+no live deploy behavior changes until an operator runs these commands by hand.
+
 ## Known limits (accepted for Phase 1, resolved in Phase 2)
 
 - Cross-cloud storage: the job talks to Netlify Blobs over HTTPS — fine for batch;

@@ -130,4 +130,37 @@ describe("controlled tool runtime", () => {
     expect(observation.nodeId).toBe("learning_recorder");
     expect(observation.observation).toContain("contract fetch");
   });
+
+  // 2.6 (handoff 2026-08-10): root-caused the production validation_error to the PRIOR .strict()
+  // schema rejecting a plausible model turn shape — an echoed nodeId/runId alongside observation. The
+  // fix drops unrecognized keys instead of rejecting them, and never lets a caller-supplied nodeId/runId
+  // reach provenance: it stays context-stamped no matter what the model sent.
+  it("ignores caller-supplied nodeId/runId instead of erroring, and never uses them for provenance", async () => {
+    const result = await executeTool(
+      "learning.record_observation",
+      { observation: "extra fields should be dropped, not rejected", nodeId: "forged_node", runId: "forged_run" },
+      { runId: "run-real", nodeId: "learning_recorder", maxRiskLevel: "write", runAuthorizedTools: ["learning.record_observation"] }
+    );
+    expect(result.ok).toBe(true);
+    const observation = (result as any).output.data.observation;
+    expect(observation.runId).toBe("run-real");
+    expect(observation.nodeId).toBe("learning_recorder");
+  });
+
+  // metadata sent as a JSON string (the same shape MCP clients are already known to send for
+  // object-typed args elsewhere) is coerced instead of failing validation.
+  it("coerces a JSON-string metadata field instead of rejecting it", async () => {
+    const result = await executeTool(
+      "learning.record_observation",
+      { observation: "metadata arrived as a JSON string", metadata: JSON.stringify({ nodeId: "learning_recorder", kind: "test" }) },
+      { runId: "run-real-2", nodeId: "learning_recorder", maxRiskLevel: "write", runAuthorizedTools: ["learning.record_observation"] }
+    );
+    expect(result.ok).toBe(true);
+    const observation = (result as any).output.data.observation;
+    // 2.7: recordObservation mirrors the context-stamped provenance (runId here) into metadata as
+    // well as top-level — kind survives from the coerced JSON string, nodeId/runId are the mirrored,
+    // context-stamped values (identical to nodeId here since the caller's JSON string also said
+    // "learning_recorder", but runId is added even though the caller's metadata never mentioned it).
+    expect(observation.metadata).toEqual({ nodeId: "learning_recorder", runId: "run-real-2", kind: "test" });
+  });
 });

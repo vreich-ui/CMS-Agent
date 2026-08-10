@@ -7,6 +7,7 @@ import { toProjectSummary } from "../projects/projectRegistry.js";
 import { getBlobJson, getCmsAgentBlobStore } from "../repository/blobs/blobClient.js";
 import type { ExecutionArtifact } from "../workspace/executionTypes.js";
 import type { ToolDefinition } from "./toolTypes.js";
+import { coerceJsonObjectInput } from "./jsonCoercion.js";
 
 const ok = (data: unknown) => ({ ok: true, data });
 const anyObj = z.record(z.string(), z.unknown());
@@ -20,6 +21,19 @@ const memoryArtifacts = new Map<string, ExecutionArtifact[]>();
 const artifactId = () => `artifact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const makeTool = (t: ToolDefinition): ToolDefinition => t;
 const schema = z.unknown();
+// 2.6 (handoff 2026-08-10): learning_recorder's single call to this tool was the most failure-prone
+// node in the system — validation_error in production, root-caused to the PRIOR .strict() schema
+// rejecting benign shape variance a model turn plausibly produces: an echoed nodeId/runId (provenance
+// is ALWAYS context-stamped below and any caller-supplied value here is simply never read — dropping
+// it, rather than erroring on it, cannot forge provenance), or metadata sent as a JSON string instead
+// of a nested object (the same shape MCP clients are already known to send for object-typed args
+// elsewhere — see jsonCoercion.ts). No .strict(): an unrecognized key is silently stripped (zod's
+// default), not rejected. `observation` stays a required non-empty string — that really is invalid
+// input, and describeValidationError (toolExecutor.ts) already reports it with a clear field path.
+const learningObservationInput = z.object({
+  observation: z.string().trim().min(1),
+  metadata: z.preprocess((value) => typeof value === "string" ? coerceJsonObjectInput(value) : value, anyObj.optional())
+});
 const getRunArtifacts = async (rid: string) => [...(await repositoryManager.getArtifactRepository().listArtifacts(rid)), ...(memoryArtifacts.get(rid) ?? [])];
 const saveArtifact = (runId: string, artifact: ExecutionArtifact) => memoryArtifacts.set(runId, [...(memoryArtifacts.get(runId) ?? []), artifact]);
 
@@ -70,8 +84,11 @@ export function createToolRegistry(): ToolDefinition[] {
     // anything, so — unlike an external write — it does not need human gating; riskLevel/sideEffect
     // stay "write"/"workspace_write" (it does mutate the workspace) but requiresApproval is now false.
     // context.runId/nodeId are stamped on every record so it can be joined back to the run that
-    // produced it — the existing (pre-fix) observations carry neither field.
-    makeTool({ toolId:"learning.record_observation", name:"learning.record_observation", description:"Record observation. Stamped with the recording run/node's id.", inputSchema:z.object({ observation:z.string().min(1), metadata:anyObj.optional() }).strict(), outputSchema:schema, riskLevel:"write", sideEffect:"workspace_write", requiresApproval:false, timeoutMs:2000, category:"learning", enabled:true, metadata:{}, handler: async (i,c) => { const d=z.object({observation:z.string(),metadata:anyObj.optional()}).parse(i); return ok({ observation: await ws.recordObservation(d.observation,d.metadata,{ runId:c.runId, nodeId:c.nodeId }) }); } }),
+    // produced it — the existing (pre-fix) observations carry neither field. 2.6: timeoutMs raised
+    // 2000 -> 8000 — model_timeout was observed in production against the old 2s ceiling, which is
+    // tight for a workspace write reached at the end of a model turn; still well under the node's own
+    // dispatch timeout (learning_recorder's modelConfig.timeout is 300000ms, nodes.ts).
+    makeTool({ toolId:"learning.record_observation", name:"learning.record_observation", description:"Record observation. Stamped with the recording run/node's id. Extra fields (e.g. an echoed nodeId/runId) are ignored, not rejected — provenance always comes from the execution context.", inputSchema:learningObservationInput, outputSchema:schema, riskLevel:"write", sideEffect:"workspace_write", requiresApproval:false, timeoutMs:8000, category:"learning", enabled:true, metadata:{}, handler: async (i,c) => { const d=learningObservationInput.parse(i); return ok({ observation: await ws.recordObservation(d.observation,d.metadata,{ runId:c.runId, nodeId:c.nodeId }) }); } }),
     makeTool({ toolId:"web.fetch", name:"web.fetch", description:"Fetch text from a validated public URL.", inputSchema:z.object({ url:z.string().url() }).strict(), outputSchema:schema, riskLevel:"read", sideEffect:"external_read", requiresApproval:false, timeoutMs:8000, category:"web", enabled:true, metadata:{ providerEnvVar:"WEB_PROVIDER" }, handler: async (i) => ok({ response: await safeFetch(z.object({url:z.string().url()}).parse(i).url, 8000) }) }),
     makeTool({ toolId:"web.search", name:"web.search", description:"Provider-backed web search.", inputSchema:z.object({ query:z.string().min(1) }).strict(), outputSchema:schema, riskLevel:"read", sideEffect:"external_read", requiresApproval:false, timeoutMs:8000, category:"web", enabled:true, metadata:{}, handler: async (i) => ok({ provider: process.env.WEB_PROVIDER ?? "disabled", results: [], query: z.object({query:z.string()}).parse(i).query }) }),
     ...["file.list","file.get_metadata","file.read_text","file.save_text","file.delete"].map((name) => makeTool({ toolId:name, name, description:"Workspace-managed file operation backed by artifacts.", inputSchema:z.object({ path:safeKey.optional(), text:z.string().optional() }).strict(), outputSchema:schema, riskLevel:name.includes("save")||name.includes("delete")?"write":"read", sideEffect:name.includes("save")||name.includes("delete")?"workspace_write":"none", requiresApproval:name.includes("save")||name.includes("delete"), timeoutMs:2000, category:"files", enabled:true, metadata:{}, handler: async (i,c) => { const d=z.object({path:safeKey.optional(),text:z.string().optional()}).parse(i); if (d.path) assertPrefix(`agent-tools/files/${d.path}`); const arts=await getRunArtifacts(c.runId); if (name==="file.list") return ok({ files: arts.filter(a=>a.type==="file.text").map(a=>({ path:a.id, createdAt:a.createdAt })) }); if (name==="file.save_text") { const a={id:d.path!,nodeId:c.nodeId,type:"file.text",value:d.text??"",createdAt:new Date().toISOString()}; saveArtifact(c.runId,a); return ok({ saved:true, file:a }); } const found=arts.find(a=>a.id===d.path); if (name==="file.delete") return ok({ deleted:Boolean(found) }); return ok(name==="file.get_metadata" ? { metadata: found ? { path:found.id, type:found.type, createdAt:found.createdAt } : null } : { text: typeof found?.value === "string" ? found.value : null }); } })),

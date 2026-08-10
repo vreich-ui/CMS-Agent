@@ -15,7 +15,7 @@ import { redactSensitiveKeys } from "../../observability/redaction.js";
 import { evalRubricInputSchema, feedbackKinds, makeImprovementId, playbookDeltaSchema, rubricStatuses, type EvalRubric, type FeedbackRecord, type PlaybookDelta } from "../../improvement/improvementTypes.js";
 import { applyPlaybookDelta, renderPlaybookForPrompt } from "../../improvement/playbook.js";
 import { scoreOutput } from "../../improvement/rubricJudge.js";
-import { buildDataset, exportPreferences, exportSft, type ReplayDeps } from "../../improvement/replay.js";
+import { buildDataset, exportPreferences, exportSft, judgeEvidenceFromNodeState, type ReplayDeps } from "../../improvement/replay.js";
 import { analyzeNode, optimizerStatus, promoteProposal, proposeImprovement, runTrial } from "../../improvement/optimizer.js";
 import { autoPromoteProposals } from "../../improvement/autoPromote.js";
 import { curatePlaybook } from "../../improvement/curator.js";
@@ -50,7 +50,7 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
   const feedbackRecordInput = z.object({ kind: z.enum(feedbackKinds), nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), evalId: z.string().min(1).optional(), editDiff: z.unknown().optional(), outcome: z.unknown().optional(), note: z.string().min(1).optional(), ...mutationMeta }).strict();
   const listFeedbackInput = z.object({ nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), kind: z.enum(feedbackKinds).optional(), limit: z.number().int().min(1).max(200).optional() }).strict();
   const ingestMonetizerInput = z.object({ nodeId: z.string().min(1).optional(), runId: z.string().min(1).optional(), signals: z.array(z.enum(["performance", "demand_signals"])).min(1).optional(), args: z.unknown().optional(), note: z.string().min(1).optional(), ...mutationMeta }).strict();
-  const datasetBuildInput = z.object({ nodeId: z.string().min(1), name: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional(), projectId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).optional() }).strict();
+  const datasetBuildInput = z.object({ nodeId: z.string().min(1), name: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional(), projectId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).optional(), allowDuplicateSubjects: z.boolean().optional() }).strict();
   const datasetIdInput = z.object({ datasetId: z.string().min(1) }).strict();
   const nodeFilterInput = z.object({ nodeId: z.string().min(1).optional() }).strict();
   const exportSftInput = z.object({ nodeId: z.string().min(1), minScore: z.number().min(0).max(1).optional(), limit: z.number().int().min(1).max(500).optional() }).strict();
@@ -100,21 +100,26 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
     tool({ name: "evaluation.run", description: "Score a node output against its rubric with the LLM judge (mode=openai) or the deterministic mock judge. Supply output inline or reference a run to score its recorded stage output.", zodSchema: evaluationRunInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, rubricId: { type: "string" }, runId: { type: "string" }, output: {}, mode: modeJson }, ["nodeId"]), execute: async (input) => {
       const data = evaluationRunInput.parse(input);
       const rubric = await resolveRubric(data.nodeId, data.rubricId);
+      const run = data.runId ? await deps.executionRepository.getRun(data.runId) : undefined;
+      if (data.runId && !run) throw new Error(`Unknown run: ${data.runId}`);
       let output = coerceJsonObjectInput(data.output);
       let subject: { model?: string; executionMode?: string } | undefined;
       if (output === undefined || output === null) {
-        if (!data.runId) throw new Error("Provide output inline or a runId whose stage output should be judged.");
-        const run = await deps.executionRepository.getRun(data.runId);
-        if (!run) throw new Error(`Unknown run: ${data.runId}`);
+        if (!run) throw new Error("Provide output inline or a runId whose stage output should be judged.");
         output = run.stageOutputs[data.nodeId] ?? run.nodes.find((node) => node.nodeId === data.nodeId)?.output;
         if (output === undefined) throw new Error(`Run ${data.runId} has no recorded output for node ${data.nodeId}.`);
         subject = { executionMode: String(run.executionMode ?? "mock") };
       }
-      return ok({ result: await scoreOutput({ rubric, nodeId: data.nodeId, output, mode: data.mode, refs: { runId: data.runId, subject } }, deps) });
+      // Scoring a RECORDED run gets the same reference material the regression gate supplies — the
+      // source contract the node was handed, its dependency outputs, its tool audit. Without it every
+      // comparison criterion silently degrades into scoring the output's fluency against itself.
+      const state = run?.nodes.find((node) => node.nodeId === data.nodeId);
+      const evidence = state ? judgeEvidenceFromNodeState(state) : undefined;
+      return ok({ result: await scoreOutput({ rubric, nodeId: data.nodeId, output, mode: data.mode, refs: { runId: data.runId, subject }, evidence }, deps) });
     } }),
     tool({ name: "evaluation.list_results", description: "List evaluation results, newest first.", zodSchema: listResultsInput, inputSchema: objectSchema({ nodeId: { type: "string" }, runId: { type: "string" }, rubricId: { type: "string" }, trialId: { type: "string" }, from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" }, limit: { type: "integer", minimum: 1, maximum: 200 } }), execute: async (input) => ok({ results: await evaluationRepository.listResults(listResultsInput.parse(input)) }) }),
     tool({ name: "evaluation.get_result", description: "Get one evaluation result.", zodSchema: z.object({ evalId: z.string().min(1) }).strict(), inputSchema: objectSchema({ evalId: { type: "string", minLength: 1 } }, ["evalId"]), execute: async (input) => ok({ result: await evaluationRepository.getResult(z.object({ evalId: z.string().min(1) }).strict().parse(input).evalId) ?? null }) }),
-    tool({ name: "evaluation.run_regression", description: "Pre-ship regression gate for a node: re-run the node over a frozen replay dataset and rubric-score each output (mode=openai LLM judge or deterministic mock), then compare the aggregate to the node's last stored baseline. Returns a RegressionReport with per-case pass/fail and an aggregate verdict (baseline_set on the first run, else improved | held | regressed). REPORTS ONLY — never applies, promotes, or publishes; promotion stays optimizer.promote / the human path.", zodSchema: runRegressionInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, datasetId: { type: "string", description: "Frozen dataset to replay; omit to use the node's newest dataset or freeze one from history." }, rubricId: { type: "string", description: "Rubric to score against; omit to use the node's active rubric." }, mode: modeJson, caseLimit: { type: "integer", minimum: 1, maximum: 100 } }, ["nodeId"]), execute: async (input) => ok({ report: await runRegression(runRegressionInput.parse(input), replayDeps) }) }),
+    tool({ name: "evaluation.run_regression", description: "Pre-ship regression gate for a node: re-run the node over a frozen replay dataset and rubric-score each output (mode=openai LLM judge or deterministic mock), then compare the aggregate to the node's last stored baseline. Returns a RegressionReport with per-case pass/fail, an absolute health GATE against the rubric's own passThreshold (gate pass|fail plus every gateReason: mean_below_threshold, cases_failed, cases_errored, no_cases_scored), the DRIFT against the node's last stored baseline in the same mode (baseline_set | improved | held | regressed), and a headline verdict that is \"failing\" whenever the gate fails and the drift value otherwise — so a node that scores below its threshold can never read as healthy just because it has not moved. Summary accounting is disjoint: casesPassed + casesFailed = casesScored, casesScored + casesErrored = casesTotal. REPORTS ONLY — never applies, promotes, or publishes; promotion stays optimizer.promote / the human path.", zodSchema: runRegressionInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, datasetId: { type: "string", description: "Frozen dataset to replay; omit to use the node's newest dataset or freeze one from history." }, rubricId: { type: "string", description: "Rubric to score against; omit to use the node's active rubric." }, mode: modeJson, caseLimit: { type: "integer", minimum: 1, maximum: 100 } }, ["nodeId"]), execute: async (input) => ok({ report: await runRegression(runRegressionInput.parse(input), replayDeps) }) }),
     tool({ name: "evaluation.list_regression_reports", description: "List stored regression-gate reports (newest first). The newest for a node is the baseline the next evaluation.run_regression compares against.", zodSchema: listRegressionInput, inputSchema: objectSchema({ nodeId: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }), execute: async (input) => ok({ reports: await evaluationRepository.listRegressionReports(listRegressionInput.parse(input)) }) }),
 
     tool({ name: "feedback.record", description: "Record human/analytics feedback: approve, reject, edit (with diff), or a published-performance outcome. Edit diffs are redacted before persistence.", zodSchema: feedbackRecordInput, inputSchema: objectSchema({ kind: { type: "string", enum: [...feedbackKinds] }, nodeId: { type: "string" }, runId: { type: "string" }, evalId: { type: "string" }, editDiff: { type: "object" }, outcome: { type: "object" }, note: { type: "string" }, ...metaJson }, ["kind"]), execute: async (input) => {
@@ -141,7 +146,10 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       return ok({ result: await ingestMonetizerAnalytics({ nodeId: data.nodeId, runId: data.runId, signals: data.signals, args: coerceJsonObjectInput(data.args) as Record<string, unknown> | undefined, actor: stamped.actor, note: data.note }, { evaluationRepository }) });
     } }),
 
-    tool({ name: "dataset.build", description: "Freeze a replay dataset for a node from completed historical executions (inputs + champion outputs) for offline champion/challenger trials. Each case records the execution mode it came from; pass executionMode:\"openai\" to freeze REAL champions only — a mock run's champion output is a deterministic schema-derived placeholder, not a champion.", zodSchema: datasetBuildInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, name: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 }, projectId: { type: "string" }, executionMode: { type: "string", enum: ["mock", "openai"], description: "Only freeze cases from runs of this mode. Omit to include both (each case still reports its own sourceExecutionMode)." } }, ["nodeId"]), execute: async (input) => ok({ dataset: await buildDataset(datasetBuildInput.parse(input), replayDeps) }) }),
+    tool({ name: "dataset.build", description: "Freeze a replay dataset for a node from completed historical executions (inputs + champion outputs) for offline champion/challenger trials. Each case records the execution mode it came from; pass executionMode:\"openai\" to freeze REAL champions only — a mock run's champion output is a deterministic schema-derived placeholder, not a champion. Cases are hashed by replay SUBJECT (input + dependency outputs + conductor-injected context) and identical subjects are dropped, because they re-execute to the same output and score identically; the result reports distinctSubjects and flags degenerate:true when fewer than two distinct subjects survive — a dataset with no discriminating power, whose regression verdicts look exactly like real ones.", zodSchema: datasetBuildInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, name: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 }, projectId: { type: "string" }, executionMode: { type: "string", enum: ["mock", "openai"], description: "Only freeze cases from runs of this mode. Omit to include both (each case still reports its own sourceExecutionMode)." }, allowDuplicateSubjects: { type: "boolean", description: "Keep cases whose replay subject is identical to one already frozen (default false). They add cost and no signal; duplicateSubjects is reported either way." } }, ["nodeId"]), execute: async (input) => {
+      const dataset = await buildDataset(datasetBuildInput.parse(input), replayDeps);
+      return ok({ dataset, distinctSubjects: dataset.metadata?.distinctSubjects, duplicateSubjects: dataset.metadata?.duplicateSubjects, degenerate: dataset.metadata?.degenerate ?? false, ...(dataset.metadata?.warning ? { warning: dataset.metadata.warning } : {}) });
+    } }),
     tool({ name: "dataset.list", description: "List replay datasets.", zodSchema: nodeFilterInput, inputSchema: objectSchema({ nodeId: { type: "string" } }), execute: async (input) => ok({ datasets: await improvementRepository.listDatasets(nodeFilterInput.parse(input)) }) }),
     tool({ name: "dataset.get", description: "Get one replay dataset.", zodSchema: datasetIdInput, inputSchema: objectSchema({ datasetId: { type: "string", minLength: 1 } }, ["datasetId"]), execute: async (input) => ok({ dataset: await improvementRepository.getDataset(datasetIdInput.parse(input).datasetId) ?? null }) }),
     tool({ name: "dataset.export_sft", description: "Export judge-approved traces for a node as chat-format SFT JSONL (Vertex tuning / Unsloth compatible), with provenance metadata.", zodSchema: exportSftInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, minScore: { type: "number", minimum: 0, maximum: 1 }, limit: { type: "integer", minimum: 1, maximum: 500 } }, ["nodeId"]), execute: async (input) => ok(await exportSft(exportSftInput.parse(input), replayDeps)) }),
@@ -179,13 +187,20 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       const data = curateInput.parse(input);
       return ok(await curatePlaybook(data, replayDeps));
     } }),
-    tool({ name: "playbook.migrate_observations", description: "One-shot curation of legacy global learning observations into per-node playbooks (observations with metadata.nodeId only). The learning.* tools stay untouched.", zodSchema: migrateInput, inputSchema: objectSchema({ dryRun: { type: "boolean" } }), execute: async (input) => {
+    // 2.7 (handoff 2026-08-10): this used to read ONLY observation.metadata?.nodeId, but recordObservation
+    // has only ever written nodeId at the TOP level — so of 34 stored observations, zero matched and this
+    // migration silently curated nothing. Now checks the top-level field first (the authoritative,
+    // provenance-stamped one — see store.ts recordObservation), falling back to metadata.nodeId for any
+    // legacy record that predates the top-level field's mirroring into metadata. listObservations()
+    // defaults to excluding archived records (2.8), so the 27 "[ALIGN" coordination-board observations
+    // are skipped here once purged rather than needing a second, duplicate filter.
+    tool({ name: "playbook.migrate_observations", description: "One-shot curation of legacy global learning observations into per-node playbooks (observations with a nodeId, top-level or in metadata). Archived observations are excluded. The learning.* tools stay untouched.", zodSchema: migrateInput, inputSchema: objectSchema({ dryRun: { type: "boolean" } }), execute: async (input) => {
       const data = migrateInput.parse(input);
       const observations = await learningRepository.listObservations();
       const byNode = new Map<string, string[]>();
       let skipped = 0;
       for (const observation of observations) {
-        const nodeId = typeof observation.metadata?.nodeId === "string" ? observation.metadata.nodeId : undefined;
+        const nodeId = observation.nodeId ?? (typeof observation.metadata?.nodeId === "string" ? observation.metadata.nodeId : undefined);
         if (!nodeId) { skipped += 1; continue; }
         byNode.set(nodeId, [...(byNode.get(nodeId) ?? []), observation.observation]);
       }

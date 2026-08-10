@@ -44,6 +44,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { listWorkspaceNodes, validateWorkspaceGraph } from "../src/agent/workspace/nodes.js";
+import { publishingTailConformanceIssues } from "../src/agent/workspace/publishingTail.js";
 import { seededSkillDefinitions } from "../src/agent/skills/seededSkills.js";
 import type { SkillDefinition } from "../src/agent/skills/skillTypes.js";
 import type { WorkspaceNode } from "../src/agent/workspace/nodeTypes.js";
@@ -192,6 +193,13 @@ const refuseUnsafe = (incoming: WorkspaceNode[]): void => {
 
   const validation = validateWorkspaceGraph(incoming);
   if (!validation.valid) problems.push(...validation.issues.map((issue) => `graph: ${issue}`));
+
+  // §2.23: the publishing tail (contract_intelligence → … → learning_recorder) is a SHARED sub-graph
+  // declared once in src/agent/workspace/publishingTail.ts and reused by every workflow. A re-seed
+  // whose tail diverges from that declaration would fork the tail for this workflow only — every
+  // future gate/fix would then have to land N times — so it refuses here. A deliberate tail change is
+  // still possible: update publishingTail.ts in the same change, then re-seed.
+  problems.push(...publishingTailConformanceIssues(incoming).map((issue) => `tail: ${issue} — the tail is declared in src/agent/workspace/publishingTail.ts; a deliberate tail change must update that declaration in the same change.`));
 
   if (problems.length) die(`Refusing to re-seed ${problems.length} problem(s):`, problems);
 };

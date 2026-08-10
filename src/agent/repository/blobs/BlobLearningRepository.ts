@@ -18,11 +18,20 @@ export class BlobLearningRepository implements LearningRepository {
     return this.workspaceRepository.recordObservation(observation, metadata, provenance);
   }
 
-  async listObservations(): Promise<LearningObservation[]> {
+  async listObservations(options?: { includeArchived?: boolean }): Promise<LearningObservation[]> {
     const result = await this.store.list({ prefix: "learning/" });
-    if (result.blobs.length === 0) return this.workspaceRepository.listObservations();
+    if (result.blobs.length === 0) return this.workspaceRepository.listObservations(options);
     const records = await Promise.all(result.blobs.map((blob) => getBlobJson<LearningObservation>(this.store, blob.key)));
-    return records.filter((record): record is LearningObservation => record !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((record) => clone(record));
+    const observations = records.filter((record): record is LearningObservation => record !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((record) => clone(record));
+    return options?.includeArchived ? observations : observations.filter((observation) => observation.status !== "archived");
+  }
+
+  async archiveObservation(id: string, reason?: string): Promise<LearningObservation> {
+    return this.workspaceRepository.archiveObservation(id, reason);
+  }
+
+  async archiveObservationsByPredicate(predicate: (observation: LearningObservation) => boolean, reason?: string): Promise<{ archived: number; ids: string[] }> {
+    return this.workspaceRepository.archiveObservationsByPredicate(predicate, reason);
   }
 
   async recordConversationTurnSupersession(evidence: ConversationTurnSupersession): Promise<ConversationTurnSupersession> {

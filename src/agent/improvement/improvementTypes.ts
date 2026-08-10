@@ -29,6 +29,14 @@ export type RubricStatus = typeof rubricStatuses[number];
 // non-negotiable" — with 7+ criteria, any single zero is survivable by construction. So the veto is
 // data the judge harness enforces, not prose it hopes someone honors: scoring at or below
 // `criticalMin` on a criterion that declares one fails the rubric outright, whatever the mean says.
+//
+// SEMANTICS (enforced in rubricJudge.firstVeto, validated below):
+//  - The floor is INCLUSIVE: `score <= criticalMin` vetoes. `criticalMin: 0` is therefore a LIVE
+//    veto that fires on a score of 0 — which is what the production rubrics mean by "a
+//    hollow-provenance output fails outright". It is the correct way to write "a zero here is fatal".
+//  - The floor is a floor, not a bar: it must sit BELOW scaleMax, or it would veto a perfect score.
+//  - A criterion the judge did NOT score is also a veto, recorded with reason "not_scored" rather
+//    than as a fabricated score of 0. A judge that skips a non-negotiable has not cleared it.
 export type EvalCriterion = { id: string; name: string; description: string; weight: number; scaleMax: number; guidance?: string; criticalMin?: number };
 
 export type EvalRubric = {
@@ -62,7 +70,10 @@ export type EvalResult = {
   // Set when a criticalMin veto fired: the rubric failed on this criterion regardless of
   // normalizedScore. Recorded rather than folded into the score so "failed the mean" and "tripped a
   // non-negotiable" stay distinguishable in the ledger — they mean different things to an operator.
-  veto?: { criterionId: string; score: number; criticalMin: number };
+  // `reason` distinguishes the two ways a non-negotiable fails: the judge scored it at or below its
+  // inclusive floor ("at_or_below_floor"), or the judge never scored it at all ("not_scored").
+  // Optional only because results recorded before the distinction existed do not carry it.
+  veto?: { criterionId: string; score: number; criticalMin: number; reason?: "at_or_below_floor" | "not_scored" };
   // Which evidence the judge actually had. A criterion that needs the source contract scores very
   // differently with and without it, so a stored result that does not say which it was is not
   // comparable to another one. Absent on mock results (the mock judge reads nothing).
@@ -105,8 +116,21 @@ export type FeedbackRecord = {
 // deterministic placeholder generated from the node's outputSchema (Session B measured one at 463
 // bytes against 14–18KB for the live cases in the same dataset). Replaying a real candidate against a
 // placeholder is noise dressed as a comparison, so the mode travels with the case and callers filter.
-export type EvalCase = { caseId: string; nodeId: string; input?: unknown; dependencyOutputs: Record<string, unknown>; sourceRunId: string; sourceExecutionMode?: "mock" | "openai"; championOutput?: unknown; frozenAt: string };
-export type EvalDataset = { datasetId: string; nodeId: string; name: string; cases: EvalCase[]; createdAt: string };
+// `context` is the material the CONDUCTOR injected beside the node's input — clientProjectId, the
+// deterministically prefetched client contract, the editorial voice (executor.ts). It is a sibling of
+// initialInput/dependencies in the stored run record, not a field inside the input, so a case that
+// kept only `input` silently dropped the contract the node was actually given: the replay ran without
+// it and the judge was handed `undefined` as the source contract.
+// `subjectHash` is that whole replay subject (input + dependencies + context) hashed at freeze time:
+// two cases with the same hash replay to the same output and score identically, so a dataset's
+// distinct-subject count is its real discriminating power. Optional on cases frozen before it existed.
+export type EvalCase = { caseId: string; nodeId: string; input?: unknown; dependencyOutputs: Record<string, unknown>; context?: Record<string, unknown>; subjectHash?: string; sourceRunId: string; sourceExecutionMode?: "mock" | "openai"; championOutput?: unknown; frozenAt: string };
+// distinctSubjects is the dataset's real size: how many genuinely different things it replays.
+// duplicateSubjects counts cases whose subject repeated one already frozen — dropped unless the
+// builder was told to keep them. degenerate = fewer than two distinct subjects, i.e. a dataset that
+// cannot discriminate between a good and a bad version of the node no matter how many cases it has.
+export type EvalDatasetMetadata = { distinctSubjects: number; duplicateSubjects: number; degenerate: boolean; warning?: string };
+export type EvalDataset = { datasetId: string; nodeId: string; name: string; cases: EvalCase[]; metadata?: EvalDatasetMetadata; createdAt: string };
 
 export const proposalStatuses = ["proposed", "trialed", "promoted", "rejected"] as const;
 export type ProposalStatus = typeof proposalStatuses[number];
@@ -154,13 +178,24 @@ export type RegressionCaseResult = {
   normalizedScore?: number;
   pass?: boolean;
 };
-export type RegressionVerdict = "baseline_set" | "improved" | "held" | "regressed";
+// Drift = movement against the previous stored report in the same mode. It is NOT health: a node
+// that has failed every case since the day it shipped drifts by 0.0000 and reads "held" forever
+// (both production contract_intelligence reports: meanScore 0.484, threshold 0.85, all four cases
+// pass:false, verdict "held").
+export type RegressionDrift = "baseline_set" | "improved" | "held" | "regressed";
+// Gate = ABSOLUTE health against the rubric's own passThreshold, computed independently of any
+// baseline. `verdict` reports the gate first ("failing") and the drift only when the gate passes, so
+// no reader of a single field can mistake a permanently broken node for a stable one.
+export type RegressionGate = "pass" | "fail";
+export type RegressionGateReason = "no_cases_scored" | "mean_below_threshold" | "cases_failed" | "cases_errored";
+export type RegressionVerdict = RegressionDrift | "failing";
 export type RegressionReportSummary = {
-  casesTotal: number;
-  casesScored: number;
-  casesFailed: number;
-  casesPassed: number;
-  passRate: number;   // 0..1 over scored cases
+  casesTotal: number;   // cases attempted = casesScored + casesErrored
+  casesScored: number;  // cases that executed and were rubric-scored = casesPassed + casesFailed
+  casesFailed: number;  // SCORED cases whose rubric result was pass:false (mean below threshold or a veto)
+  casesPassed: number;  // scored cases whose rubric result was pass:true
+  casesErrored: number; // cases whose EXECUTION failed, so they were never scored at all
+  passRate: number;   // casesPassed / casesScored (0 when nothing scored)
   meanScore: number;  // 0..1 mean normalized rubric score over scored cases
   threshold: number;  // rubric.passThreshold, carried for context
 };
@@ -174,6 +209,14 @@ export type RegressionReport = {
   summary: RegressionReportSummary;
   // The prior stored report this run was compared against (absent on the first, baseline_set run).
   baseline?: { reportId: string; meanScore: number; passRate: number; createdAt: string };
+  // Absolute health against rubric.passThreshold — never against the baseline. Every reason that
+  // failed the gate is listed, so "it is below threshold AND two cases errored" is one report.
+  gate: RegressionGate;
+  gateReasons: RegressionGateReason[];
+  // Movement against the baseline, always recorded even when the gate fails (a failing node can
+  // still be improving, and that is worth seeing).
+  drift: RegressionDrift;
+  // gate === "fail" ? "failing" : drift.
   verdict: RegressionVerdict;
   // this-run minus baseline (absent on baseline_set).
   delta?: { meanScore: number; passRate: number };
@@ -242,8 +285,10 @@ export function validateRubric(rubric: Pick<EvalRubric, "criteria" | "passThresh
   if (new Set(ids).size !== ids.length) errors.push("criterion ids must be unique");
   const totalWeight = rubric.criteria.reduce((sum, criterion) => sum + criterion.weight, 0);
   if (!(totalWeight > 0)) errors.push("criterion weights must sum to a positive number");
-  // A criticalMin at or above scaleMax vetoes every possible score including a perfect one, which is
-  // never what anyone means — it is always a typo, and a silent one that would fail every run.
+  // criticalMin is an INCLUSIVE floor (see EvalCriterion): score <= criticalMin fails the rubric, so
+  // criticalMin: 0 is a live "a zero here is fatal" veto and NOT an inert declaration. The only
+  // unusable value is one at or above scaleMax: it would veto every possible score including a
+  // perfect one, which is never what anyone means — always a typo, and a silent one.
   for (const criterion of rubric.criteria) {
     if (criterion.criticalMin !== undefined && criterion.criticalMin >= criterion.scaleMax) {
       errors.push(`criterion ${criterion.id}: criticalMin ${criterion.criticalMin} must be below scaleMax ${criterion.scaleMax} (a floor at or above the max vetoes even a perfect score)`);
