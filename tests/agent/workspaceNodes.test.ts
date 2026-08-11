@@ -134,7 +134,14 @@ describe("Publishing Conductor workspace nodes", () => {
       // attention warning. The grant stays; the skill went.
       expect(node?.assignedSkills).toEqual([]);
     }
-    expect(listWorkspaceNodes().find((node) => node.id === "publish_executor")?.status).toBe("draft");
+    // publish_executor is ACTIVE, per the operator go-live of 2026-07-31 ("remove all publishing
+    // barriers"). That decision was applied to the live workspace and never re-seeded, so this
+    // assertion went on enforcing the pre-go-live draft state in code for eleven days — which is
+    // precisely why nobody noticed that a static-mode run or a freshly seeded workspace would get a
+    // publisher blocked on `draft status`. The locks that actually stop a publish are the riskLevel
+    // gate and per-run approval on project.call_tool, both asserted above; node status is not one of
+    // them, and pinning it here only froze the drift.
+    expect(listWorkspaceNodes().find((node) => node.id === "publish_executor")?.status).toBe("active");
   });
 
   // §3 correctness batch (handoff 2026-08-10, items 2.24-2.29).
