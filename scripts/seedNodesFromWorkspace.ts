@@ -31,6 +31,7 @@
  *   npm run nodes:check                     # exit 1 if nodes.ts differs from the source (drift gate)
  *   npm run nodes:update                    # rewrite nodes.ts from the live workspace
  *   tsx scripts/seedNodesFromWorkspace.ts --from snapshot.json --write
+ *   npm run nodes:update -- --allow-prompt-shrink   # confirm a deliberate prompt cut (see MAX_PROMPT_SHRINK)
  *
  * `--from` accepts a workspace.get_nodes / workspace.export_workspace payload: `{ok,data:{nodes}}`,
  * `{nodes}`, or a bare array. Without it the live WorkspaceRepository is read, which needs store
@@ -56,6 +57,23 @@ const CLOSE_MARKER = "] satisfies WorkspaceNode[];";
 
 // Ascending order of authority. A re-seed may raise a node's rung (adding a gate) but never lower it.
 const RISK_LADDER = ["read", "write", "publish", "admin"];
+
+// A re-seed may tighten a prompt; it may not gut one.
+//
+// 2026-08-10 incident. A session rewrote three live prompts and a re-seed carried them into code with
+// no complaint, because every guard below this line watches TOPOLOGY — nodes, edges, risk rungs, tool
+// grants — and nothing watched PROSE. article_body went 7271 -> 2473 chars (-66%), losing the private
+// annotation policy, the reader-projection leak rule, the media placement rule this store elsewhere
+// records as a build-breaker, and the clientProjectId cross-client guard. contract_intelligence went
+// 5738 -> 1854 (-68%), losing taxonomy, constraint severity and pin rules that two downstream nodes
+// still block on — leaving them blocked on facts nobody produces. None of it moved to canonicalRules
+// or the schemas; it simply stopped existing.
+//
+// The threshold is deliberately loose. Real editing passes tighten a prompt by a few percent; a rewrite
+// that removes a third of a node's operating rules is a different act and should be stated out loud.
+// `--allow-prompt-shrink` is the way to say it out loud, and it is recorded in the run output.
+const MAX_PROMPT_SHRINK = 0.4;
+const ALLOW_SHRINK_FLAG = "--allow-prompt-shrink";
 
 // Fields listWorkspaceNodes() spreads or copies. A node missing any of them would crash the runtime or
 // silently lose data, so an incomplete source is refused rather than emitted.
@@ -149,10 +167,72 @@ const orderKeys = (node: WorkspaceNode): Record<string, unknown> => {
   return ordered;
 };
 
-const refuseUnsafe = (incoming: WorkspaceNode[]): void => {
+/**
+ * Prompt erosion and gate regression — the two ways a re-seed can weaken the pipeline without
+ * touching a single edge, and the two the topology guards below are blind to.
+ *
+ * Erosion runs workspace -> code: a gutted live prompt gets baked into the canonical definitions.
+ * Regression runs the other way and is the older bug: a gate opened in the LIVE workspace and never
+ * re-seeded means code still ships the closed version, so every fresh workspace and every static-mode
+ * run silently gets the blocked node. publish_executor carried exactly that for eleven days — the
+ * 2026-07-31 go-live removed its draft gate live, code kept `status: "draft"` and
+ * `activationRequired: true`, and nothing compared them. This is the "workspace fix ≠ fixed" trap
+ * this file's own header names, caught in the direction the header did not cover.
+ */
+const promptAndGateProblems = (incoming: WorkspaceNode[], allowShrink: boolean): string[] => {
+  const problems: string[] = [];
+  const canonicalById = new Map(listWorkspaceNodes().map((node) => [node.id, node]));
+
+  for (const node of incoming) {
+    const existing = canonicalById.get(node.id);
+    if (!existing) continue;
+
+    const before = (existing.prompt ?? "").length;
+    const after = (node.prompt ?? "").length;
+    if (before > 0 && after < before) {
+      const shrink = (before - after) / before;
+      if (shrink > MAX_PROMPT_SHRINK && !allowShrink) {
+        problems.push(
+          `${node.id}: prompt would shrink ${before} -> ${after} chars (-${Math.round(shrink * 100)}%), past the ${Math.round(MAX_PROMPT_SHRINK * 100)}% ceiling. ` +
+          `A prompt carries this node's operating rules; losing a third of it loses rules that nothing else enforces. ` +
+          `Diff it, move anything still wanted into canonicalRules or the schemas, then re-run with ${ALLOW_SHRINK_FLAG} to confirm the cut is intended.`
+        );
+      }
+    }
+
+    // A canonical rule is the distilled, load-bearing half of a prompt. Dropping one during a re-seed
+    // is the same class of loss as erosion, and cheaper to detect precisely.
+    const beforeRules: string[] = (existing.metadata as { canonicalRules?: string[] } | undefined)?.canonicalRules ?? [];
+    const afterRules: string[] = (node.metadata as { canonicalRules?: string[] } | undefined)?.canonicalRules ?? [];
+    const droppedRules = beforeRules.filter((rule) => !afterRules.includes(rule));
+    if (droppedRules.length && !allowShrink) {
+      problems.push(`${node.id}: would drop ${droppedRules.length} canonicalRule(s): ${droppedRules.map((rule) => JSON.stringify(rule)).join("; ")}. Re-run with ${ALLOW_SHRINK_FLAG} if the rule is genuinely retired.`);
+    }
+
+    // Gate regression. Never blocked — code is being brought INTO line with live here, which is the
+    // whole point of the script — but it must be said, loudly, because it is invisible otherwise.
+    if (existing.status !== node.status) {
+      problems.push(`NOTE ${node.id}: status ${existing.status} -> ${node.status}. Canonical and live disagreed; the re-seed adopts live.`);
+    }
+    const beforeActivation = (existing.metadata as { activationRequired?: boolean } | undefined)?.activationRequired ?? false;
+    const afterActivation = (node.metadata as { activationRequired?: boolean } | undefined)?.activationRequired ?? false;
+    if (beforeActivation !== afterActivation) {
+      problems.push(`NOTE ${node.id}: activationRequired ${beforeActivation} -> ${afterActivation}. Canonical and live disagreed; the re-seed adopts live.`);
+    }
+  }
+  return problems;
+};
+
+const refuseUnsafe = (incoming: WorkspaceNode[], allowShrink = false): void => {
   const problems: string[] = [];
   const canonical = listWorkspaceNodes();
   const incomingById = new Map(incoming.map((node) => [node.id, node]));
+
+  // NOTE-prefixed entries are reported but never block: they record a real divergence the operator
+  // should see, in a direction that is safe to adopt.
+  const promptProblems = promptAndGateProblems(incoming, allowShrink);
+  for (const note of promptProblems.filter((problem) => problem.startsWith("NOTE "))) say(`divergence        ${note.slice(5)}`);
+  problems.push(...promptProblems.filter((problem) => !problem.startsWith("NOTE ")));
 
   for (const node of incoming) {
     const missing = REQUIRED_FIELDS.filter((field) => (node as unknown as Record<string, unknown>)[field] === undefined);
@@ -237,6 +317,7 @@ ${body}
 const main = async () => {
   const args = process.argv.slice(2);
   const write = args.includes("--write");
+  const allowShrink = args.includes(ALLOW_SHRINK_FLAG);
   const fromIndex = args.indexOf("--from");
   const from = fromIndex === -1 ? undefined : args[fromIndex + 1];
   const skillsIndex = args.indexOf("--skills");
@@ -246,7 +327,8 @@ const main = async () => {
   say(`source            ${source.length} nodes from ${from ?? "the live workspace store"}`);
 
   const ordered = topologicallyOrdered(source);
-  refuseUnsafe(ordered);
+  refuseUnsafe(ordered, allowShrink);
+  if (allowShrink) say(`prompt guard      DISABLED via ${ALLOW_SHRINK_FLAG} — prompt shrink and canonicalRule removal were explicitly permitted for this run`);
 
   // Skills travel with the nodes that reference them, or the graph points at things that do not exist.
   const skills = (from && !skillsFrom) ? seededSkillDefinitions : (await readSkillSource(skillsFrom)) ?? seededSkillDefinitions;
