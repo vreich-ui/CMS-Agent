@@ -551,4 +551,3 @@ refuses tool-using nodes by name and `modelPricingCatalog` has Anthropic entries
 
 Deep background: `docs/plan/CHANGE-PLAN.md` (governing plan and every wave log),
 `docs/plan/findings/`, `docs/plan/TEST-PROTOCOL.md`, `docs/platform/DIRECTION.md`.
-
