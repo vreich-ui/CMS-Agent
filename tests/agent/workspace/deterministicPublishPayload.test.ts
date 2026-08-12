@@ -3,6 +3,7 @@ import {
   buildDeterministicPublishPayload,
   collectUpstreamBlockers,
   readArticleBody,
+  readRequestShapeRejection,
   readTopLevelObjectId,
   resolveBlockers,
   runDeterministicPublishPayload,
@@ -324,5 +325,21 @@ describe("wired into a real run: replaces the model call entirely", () => {
     expect(state.status).not.toBe("completed");
     expect(advanced).toBeDefined();
     expect(remoteFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("readRequestShapeRejection — a 400 is an engine defect, never a verdict about the object", () => {
+  it("surfaces the platform's request-shape 400 with its own message", () => {
+    const rejection = readRequestShapeRejection({
+      isError: true,
+      content: [{ type: "text", text: "Invalid request fields." }],
+      structuredContent: { error: "Invalid request fields.", statusCode: 400, issues: [{ code: "invalid_value", path: ["object_type"] }] }
+    });
+    expect(rejection).toBe("Invalid request fields.");
+  });
+
+  it("leaves non-400 client statements (object/lifecycle verdicts) alone", () => {
+    expect(readRequestShapeRejection({ structuredContent: { error: "no such object", statusCode: 404 } })).toBeUndefined();
+    expect(readRequestShapeRejection({ summary: { eligible: false, blockers: [] } })).toBeUndefined();
   });
 });

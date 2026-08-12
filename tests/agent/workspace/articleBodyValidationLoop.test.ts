@@ -249,3 +249,29 @@ describe("publish_payload consumes the engine's verdict instead of re-validating
     expect(built.payload.blockers.join(" ")).toMatch(/client_validation_failed/);
   });
 });
+
+describe("applyMechanicalFixes — unrecognized ROOT keys named by the client are stripped (run_1786549907145_hf4wgb)", () => {
+  it("removes exactly the root key the client named, copy-on-write, and records the fix", () => {
+    const body = { object_type: "content_item", title: "T", slug: "t", nodes: [] };
+    const fixed = applyMechanicalFixes(body, ['(root): Unrecognized key: "object_type"']);
+    expect(fixed.fixes).toContain("unrecognized_root_key:object_type");
+    expect("object_type" in fixed.body).toBe(false);
+    expect(fixed.body).not.toBe(body);
+    expect(body.object_type).toBe("content_item");
+    expect(fixed.body.title).toBe("T");
+  });
+
+  it("does not strip a key from a NESTED unrecognized-key complaint", () => {
+    const body = { title: "T", private: "x" };
+    const fixed = applyMechanicalFixes(body, ['nodes[0].public: Unrecognized key: "private"']);
+    expect(fixed.fixes).toEqual([]);
+    expect(fixed.body).toBe(body);
+  });
+
+  it("does not strip a named key that is absent from the body root", () => {
+    const body = { title: "T" };
+    const fixed = applyMechanicalFixes(body, ['(root): Unrecognized key: "object_type"']);
+    expect(fixed.fixes).toEqual([]);
+    expect(fixed.body).toBe(body);
+  });
+});
