@@ -82,7 +82,21 @@ const TEMPERATURE_BY_SOURCE: Record<string, TrafficTemperature> = {
   owned_audience: "warm", sms: "warm", push: "warm"
 };
 
-const AWARENESS_STAGES = new Set<string>(Object.keys(BASE_BY_AWARENESS));
+// W6.5 (2026-08-12) — the canonical value lists, exported so any JSON Schema that wants to validate a
+// trafficSource/awarenessStage field (rather than accept it as an untyped free string) derives its
+// `enum` from here instead of hand-copying a list that can silently drift out of sync with the mapping
+// tables above. AWARENESS_STAGE_VALUES is the closed, five-value set computeAggressionTarget will
+// normalize any OTHER string down to "unaware" for (never a schema-validation failure at that call
+// site — see the module comment at the top of this file); RECOGNIZED_TRAFFIC_SOURCES is the token set
+// TEMPERATURE_BY_SOURCE recognizes without falling back to "cold". Neither list should be imported to
+// retroactively reject placement_resolver's own trafficSource/awarenessStage echo fields — those are
+// deliberately tolerant free strings by design (an unrecognized value normalizes rather than blocks);
+// these exports exist for OTHER schemas (contract_intelligence.v1, article_brief.v1) that want to
+// validate a value they expect to already be one of the recognized ones.
+export const AWARENESS_STAGE_VALUES: readonly AwarenessStage[] = Object.keys(BASE_BY_AWARENESS) as AwarenessStage[];
+export const RECOGNIZED_TRAFFIC_SOURCES: readonly string[] = Object.keys(TEMPERATURE_BY_SOURCE);
+
+const AWARENESS_STAGES = new Set<string>(AWARENESS_STAGE_VALUES);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);

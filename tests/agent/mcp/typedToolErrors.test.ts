@@ -80,6 +80,47 @@ describe("R-1 — single-field writers refuse a patch missing their target field
   });
 });
 
+// W6.4 (docs/plan/WORK-ORDER-2026-08-12-determinism.md): workspace.update_node_model_config used to
+// build its store patch as `{ modelConfig: data.patch.modelConfig }`, and updateNode's own merge is a
+// SHALLOW `{ ...existing, ...patch }` — so a caller who wanted to change just one knob and sent
+// `{ maxTurns: 8 }` had every other key (toolCallLimit, timeout, budgetUsd, maxOutputTokens, ...)
+// silently wiped. requirePatchField (R-1, above) does not catch this: the field IS present, it just
+// carries an incomplete object. Fixed by deep-merging the patch onto the node's existing modelConfig
+// before the write.
+describe("W6.4 — workspace.update_node_model_config merges recursively; omitted keys are preserved", () => {
+  it("does not drop sibling keys when the patch names only one (the original defect, reproduced)", async () => {
+    const before = await repositoryManager.getWorkspaceRepository().getNode(NODE);
+    expect(before?.modelConfig).toMatchObject({ maxTurns: 3, toolCallLimit: 2, timeout: 90000, budgetUsd: 0.1, maxOutputTokens: 2500 });
+
+    const { structured } = await call("workspace_update_node_model_config", { id: NODE, patch: { modelConfig: { maxTurns: 8 } } });
+
+    expect(structured.ok).toBe(true);
+    expect(structured.data.node.modelConfig).toEqual({ maxTurns: 8, toolCallLimit: 2, timeout: 90000, budgetUsd: 0.1, maxOutputTokens: 2500 });
+
+    const after = await repositoryManager.getWorkspaceRepository().getNode(NODE);
+    expect(after?.modelConfig).toEqual({ maxTurns: 8, toolCallLimit: 2, timeout: 90000, budgetUsd: 0.1, maxOutputTokens: 2500 });
+  });
+
+  it("a key present in the patch overwrites the existing value for that key", async () => {
+    const { structured } = await call("workspace_update_node_model_config", { id: NODE, patch: { modelConfig: { budgetUsd: 0.75 } } });
+
+    expect(structured.data.node.modelConfig.budgetUsd).toBe(0.75);
+    expect(structured.data.node.modelConfig.maxTurns).toBe(3); // untouched by this call
+  });
+
+  it("still refuses an omitted or undefined modelConfig field (R-1 guard unchanged)", async () => {
+    const { rpcError } = await call("workspace_update_node_model_config", { id: NODE, patch: {} });
+
+    expect(rpcError.data.error).toMatchObject({ code: "missing_patch_field", field: "modelConfig" });
+  });
+
+  it("refuses a non-object modelConfig rather than silently coercing it", async () => {
+    const { rpcError } = await call("workspace_update_node_model_config", { id: NODE, patch: { modelConfig: "not-an-object" } });
+
+    expect(rpcError).toBeDefined();
+  });
+});
+
 describe("R-4 — typed failure envelopes on the wire", () => {
   it("returns a recoverable version_conflict carrying the current version", async () => {
     const current = await repositoryManager.getWorkspaceRepository().getWorkspaceVersion();
