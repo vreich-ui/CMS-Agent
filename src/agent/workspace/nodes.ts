@@ -1,4 +1,19 @@
 import type { WorkspaceNode, WorkspaceGraphValidation } from "./nodeTypes.js";
+// W6.5: contract_intelligence.v1 and article_brief.v1 carry trafficSource/awarenessStage validation
+// below sourced from aggressionVector.ts's canonical value lists, not a hand-copied enum, so the two
+// can never drift out of sync with the mapping tables that actually govern the aggression vector.
+import { AWARENESS_STAGE_VALUES, RECOGNIZED_TRAFFIC_SOURCES } from "./aggressionVector.js";
+
+const TRAFFIC_SOURCE_ENUM_PROPERTY = {
+  type: "string",
+  enum: [...RECOGNIZED_TRAFFIC_SOURCES],
+  description: "The run's traffic source, echoed for provenance. Validated against aggressionVector.ts's RECOGNIZED_TRAFFIC_SOURCES (the same table placement_resolver's target computation reads) — never a hand-copied list, so this cannot drift from the value that actually determined the aggression target/ceiling/resolved vectors upstream."
+} as const;
+const AWARENESS_STAGE_ENUM_PROPERTY = {
+  type: "string",
+  enum: [...AWARENESS_STAGE_VALUES],
+  description: "The run's awareness stage, echoed for provenance. Validated against aggressionVector.ts's AWARENESS_STAGE_VALUES (the same five-stage set computeAggressionTarget's base table is keyed on) — never a hand-copied list, so this cannot drift from the value that actually determined the aggression target/ceiling/resolved vectors upstream."
+} as const;
 
 export const publishingConductorNodes = [
   {
@@ -514,7 +529,8 @@ export const publishingConductorNodes = [
       "workspace.get_node",
       "stage.get_output",
       "stage.list_outputs",
-      "project.call_read_tool"
+      "project.call_read_tool",
+      "monetize.ev_floor"
     ],
     "assignedSkills": [],
     "requiredInputs": [
@@ -1074,6 +1090,8 @@ export const publishingConductorNodes = [
           "type": "string",
           "minLength": 1
         },
+        "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
+        "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
         "notes": {
           "type": "array",
           "items": {
@@ -1112,6 +1130,8 @@ export const publishingConductorNodes = [
           "type": "string",
           "minLength": 1
         },
+        "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
+        "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
         "notes": {
           "type": "array",
           "items": {
@@ -1136,12 +1156,19 @@ export const publishingConductorNodes = [
       "research",
       "objection_mapping",
       "narrative_movement",
-      "angle_strategy"
+      "angle_strategy",
+      "placement_resolver"
     ],
     "produces": [
       "article_brief.v1"
     ],
     "riskLevel": "read",
+    // W6.5 (2026-08-12): placement_resolver added as an explicit dependency so the conductor delivers
+    // placement_resolution.v1 (the trafficSource/awarenessStage-derived aggression TARGET) directly in
+    // this node's input, rather than the node having to fetch it itself as a fallback stage read. This
+    // edge exists in the live workspace store already; it is added here to the code seed so the two
+    // stop drifting — reaching the LIVE store still requires a deliberate re-seed (npm run
+    // nodes:update), which this change does not perform.
     "dependsOn": [
       "topic_opportunity",
       "monetization_strategy",
@@ -1149,7 +1176,8 @@ export const publishingConductorNodes = [
       "research",
       "objection_mapping",
       "narrative_movement",
-      "angle_strategy"
+      "angle_strategy",
+      "placement_resolver"
     ],
     "status": "active",
     "position": {
@@ -1840,6 +1868,8 @@ export const publishingConductorNodes = [
           "type": "object",
           "additionalProperties": true
         },
+        "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
+        "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
         "bodySchema": {
           "type": "object",
           "additionalProperties": true
@@ -1938,6 +1968,8 @@ export const publishingConductorNodes = [
           "type": "object",
           "additionalProperties": true
         },
+        "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
+        "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
         "bodySchema": {
           "type": "object",
           "additionalProperties": true
