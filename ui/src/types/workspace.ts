@@ -3,8 +3,18 @@ import type { RJSFSchema } from "@rjsf/utils";
 export type JsonValue = unknown;
 
 // Mirrors src/agent/workspace/executionTypes.ts. "paused" (R-18) is an operator pause, kept distinct from
-// the "blocked" that means a publish-approval hold or a budget hold.
-export type ExecutionStatus = "queued" | "running" | "paused" | "completed" | "failed" | "blocked" | "cancelled";
+// the "blocked" that means a publish-approval hold or a budget hold. "skipped" (W4) is a NODE-only
+// status: a declarative skip predicate fired before dispatch, so the node never ran and never cost
+// anything; downstream it counts as satisfied-with-absent, not as a failure.
+export type ExecutionStatus = "queued" | "running" | "paused" | "completed" | "failed" | "blocked" | "cancelled" | "skipped";
+
+// Mirrors NodeSkipRecord in src/agent/workspace/executionTypes.ts — the audit record of a skip.
+export type NodeSkipRecord = {
+  reason: string;
+  predicate?: Record<string, unknown>;
+  basis?: string[];
+  evaluatedAt: string;
+};
 
 export type NodeExecutionState = {
   nodeId: string;
@@ -17,6 +27,8 @@ export type NodeExecutionState = {
   errors?: string[];
   warnings?: string[];
   produces?: string[];
+  skip?: NodeSkipRecord;
+  skipOverride?: boolean;
 };
 
 export type ApprovalRequired = {
