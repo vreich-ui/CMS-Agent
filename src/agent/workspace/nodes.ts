@@ -1,4 +1,19 @@
 import type { WorkspaceNode, WorkspaceGraphValidation } from "./nodeTypes.js";
+// W6.5: contract_intelligence.v1 and article_brief.v1 carry trafficSource/awarenessStage validation
+// below sourced from aggressionVector.ts's canonical value lists, not a hand-copied enum, so the two
+// can never drift out of sync with the mapping tables that actually govern the aggression vector.
+import { AWARENESS_STAGE_VALUES, RECOGNIZED_TRAFFIC_SOURCES } from "./aggressionVector.js";
+
+const TRAFFIC_SOURCE_ENUM_PROPERTY = {
+  type: "string",
+  enum: [...RECOGNIZED_TRAFFIC_SOURCES],
+  description: "The run's traffic source, echoed for provenance. Validated against aggressionVector.ts's RECOGNIZED_TRAFFIC_SOURCES (the same table placement_resolver's target computation reads) — never a hand-copied list, so this cannot drift from the value that actually determined the aggression target/ceiling/resolved vectors upstream."
+} as const;
+const AWARENESS_STAGE_ENUM_PROPERTY = {
+  type: "string",
+  enum: [...AWARENESS_STAGE_VALUES],
+  description: "The run's awareness stage, echoed for provenance. Validated against aggressionVector.ts's AWARENESS_STAGE_VALUES (the same five-stage set computeAggressionTarget's base table is keyed on) — never a hand-copied list, so this cannot drift from the value that actually determined the aggression target/ceiling/resolved vectors upstream."
+} as const;
 
 export const publishingConductorNodes = [
   {
@@ -514,7 +529,8 @@ export const publishingConductorNodes = [
       "workspace.get_node",
       "stage.get_output",
       "stage.list_outputs",
-      "project.call_read_tool"
+      "project.call_read_tool",
+      "monetize.ev_floor"
     ],
     "assignedSkills": [],
     "requiredInputs": [
@@ -650,7 +666,7 @@ export const publishingConductorNodes = [
     "name": "Research Agent",
     "kind": "research",
     "description": "Gather source-backed claims, evidence, examples, constraints, and open questions for the article.",
-    "prompt": "Objective: Gather only the evidence needed to support the article's material claims, reader decisions, and the trust standard the target client's content must meet.\nInputs expected: reader_insight, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce research_brief.v1 with sourced facts, practical implications, claim risk notes, open questions, and source references.\nCost policy: do not browse by default. Use web.search/web.fetch only for claims that are current, comparative, regulatory, or otherwise source-sensitive; a client whose domain needs a stricter evidence bar declares it in its own record. Prefer primary, authoritative, or source-owner pages when available. Stop once reliable evidence covers the decision the article must help the reader make. Extract what you need from each fetched page as soon as you read it — quote the finding with its source — instead of re-fetching or carrying whole pages forward; every retained page is re-sent on each of your subsequent turns.\nEvidence policy: separate sourced facts, interpretation, uncertainty, and unsupported claims. Flag claims that should be softened or removed. When this node's input carries editorialVoice, its claim_policy and reader_safety_notes set the evidence bar for THIS client — a stricter bar (e.g. a health/finance/legal audience) tightens what counts as sufficient sourcing; treat its absence as no stricter bar declared, not as license to relax defaults.\nCompletion criteria: required inputs are addressed, sources are concise and relevant, output matches schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unavailable evidence for important claims, unsupported certainty on high-stakes claims, contradictory instructions, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Gather only the evidence needed to support the article's material claims, reader decisions, and the trust standard the target client's content must meet.\nInputs expected: reader_insight, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce research_brief.v1 with sourced facts, practical implications, claim risk notes, open questions, and source references.\nCost policy: do not browse by default. Use web.search/web.fetch only for claims that are current, comparative, regulatory, or otherwise source-sensitive; a client whose domain needs a stricter evidence bar declares it in its own record. Prefer primary, authoritative, or source-owner pages when available. Stop once reliable evidence covers the decision the article must help the reader make. Extract what you need from each fetched page as soon as you read it — quote the finding with its source — instead of re-fetching or carrying whole pages forward; every retained page is re-sent on each of your subsequent turns.\nEvidence policy: separate sourced facts, interpretation, uncertainty, and unsupported claims. Flag claims that should be softened or removed. When this node's input carries editorialVoice, its claim_policy and reader_safety_notes set the evidence bar for THIS client — a stricter bar (e.g. a health/finance/legal audience) tightens what counts as sufficient sourcing; treat its absence as no stricter bar declared, not as license to relax defaults.\nCompletion criteria: required inputs are addressed, sources are concise and relevant, output matches schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unavailable evidence for important claims, unsupported certainty on high-stakes claims, contradictory instructions, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or ra w authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1074,6 +1090,8 @@ export const publishingConductorNodes = [
           "type": "string",
           "minLength": 1
         },
+        "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
+        "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
         "notes": {
           "type": "array",
           "items": {
@@ -1112,6 +1130,8 @@ export const publishingConductorNodes = [
           "type": "string",
           "minLength": 1
         },
+        "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
+        "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
         "notes": {
           "type": "array",
           "items": {
@@ -1136,12 +1156,19 @@ export const publishingConductorNodes = [
       "research",
       "objection_mapping",
       "narrative_movement",
-      "angle_strategy"
+      "angle_strategy",
+      "placement_resolver"
     ],
     "produces": [
       "article_brief.v1"
     ],
     "riskLevel": "read",
+    // W6.5 (2026-08-12): placement_resolver added as an explicit dependency so the conductor delivers
+    // placement_resolution.v1 (the trafficSource/awarenessStage-derived aggression TARGET) directly in
+    // this node's input, rather than the node having to fetch it itself as a fallback stage read. This
+    // edge exists in the live workspace store already; it is added here to the code seed so the two
+    // stop drifting — reaching the LIVE store still requires a deliberate re-seed (npm run
+    // nodes:update), which this change does not perform.
     "dependsOn": [
       "topic_opportunity",
       "monetization_strategy",
@@ -1149,7 +1176,8 @@ export const publishingConductorNodes = [
       "research",
       "objection_mapping",
       "narrative_movement",
-      "angle_strategy"
+      "angle_strategy",
+      "placement_resolver"
     ],
     "status": "active",
     "position": {
@@ -1381,7 +1409,7 @@ export const publishingConductorNodes = [
     "name": "Trust / Factual Editor",
     "kind": "review",
     "description": "Check claims, citations, hedging, trust signals, factual risk, and unsupported assertions.",
-    "prompt": "Objective: Check the draft for claim safety, citation sufficiency, hedging, reader trust, and the evidence standards the target client's content must meet.\nInputs expected: draft_writer and research, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce trust_factual_review.v1 with claims to keep, soften, support, remove, or re-source; citation gaps; compliance risk; and concise revision instructions.\nCost policy: use existing research first. Fetch only source URLs already cited or clearly necessary to resolve a material uncertainty. Do not run broad new research unless the draft contains an important unsupported claim.\nEvidence policy: distinguish sourced facts, interpretation, and uncertainty. Flag unsupported claims and overconfident language on high-stakes points; a client whose domain needs a stricter evidence bar declares it in its own record. When this node's input carries editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), its claim_policy and reader_safety_notes ARE that bar — apply them directly rather than inferring a generic one. Prefer softer practical phrasing when evidence is limited.\nCompletion criteria: factual risks are prioritized, actionable, and tied to the draft; blockers are explicit.\nBlocker criteria: missing draft, missing research for material claims, unavailable source evidence, unsupported certainty on high-stakes claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Check the draft for claim safety, citation sufficiency, hedging, reader trust, and the evidence standards the target client's content must meet.\nInputs expected: draft_writer and research, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce trust_factual_review.v1 with claims to keep, soften, support, remove, or re-source; citation gaps; compliance risk; and concise revision instructions.\nCost policy: use existing research first. Fetch only source URLs already cited or clearly necessary to resolve a material uncertainty. Do not run broad new research unless the draft contains an important unsupported claim.\nEvidence policy: distinguish sourced facts, interpretation, and uncertainty. Flag unsupported claims and overconfident language on high-stakes points; a client whose domain needs a stricter evidence bar declares it in its own record. When this node's input carries editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), its claim_policy and reader_safety_notes ARE that bar — apply them directly rather than inferring a generic one. Prefer softer practical phrasing when evidence is limited.\nCompletion criteria: factual risks are prioritized, actionable, and tied to the draft; blockers are explicit.\nBlocker criteria: missing draft, missing rese arch for material claims, unavailable source evidence, unsupported certainty on high-stakes claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -1840,6 +1868,8 @@ export const publishingConductorNodes = [
           "type": "object",
           "additionalProperties": true
         },
+        "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
+        "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
         "bodySchema": {
           "type": "object",
           "additionalProperties": true
@@ -1938,6 +1968,8 @@ export const publishingConductorNodes = [
           "type": "object",
           "additionalProperties": true
         },
+        "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
+        "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
         "bodySchema": {
           "type": "object",
           "additionalProperties": true
@@ -2642,7 +2674,7 @@ export const publishingConductorNodes = [
           "type": "string",
           "minLength": 1
         },
-        "clientValidation": {
+        "clientValidat ion": {
           "type": "object",
           "additionalProperties": true
         },
@@ -2836,6 +2868,7 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
       "approvalRequired": false,
+      "publishPayloadDeterministic": true,
       "canonicalRules": [
         "Consumes the client-shaped body from article_body",
         "Produces a dry-run candidate only, never a publish",
@@ -2962,7 +2995,7 @@ export const publishingConductorNodes = [
     "name": "Publish Executor",
     "kind": "publisher",
     "description": "Active execution node for publishing to any client under the standing go-live authorization (2026-07-31). Follows the publish sequence, lock discipline and pin rules the client's contract declares.",
-    "prompt": "Objective: Execute a publish against the target client under the standing go-live authorization (operator decision, 2026-07-31). Publishing is enabled; no separate per-publish approval ceremony is required. An explicitly withheld approval in the decision record is still honoured as a block.\nSource of truth: the client's fetched contract declares the publish sequence, the lock and version discipline, the valid publication actions, the release/build behaviours, and the error codes. Read them from contractSource carried through publication_controller. Never execute a sequence remembered from another client or hardcoded here. Missing contract provenance is a hard block.\nInputs expected: publication_controller.\nOutput required: publish_execution.v1 with the exact action taken, the client object and request id, the artifact set, the publish result, the release/build status, and the verification performed.\nContent path policy: the only valid content is the client-shaped object the contract declares. Refuse Markdown, prose blobs, repo files, or any representation the contract does not declare.\nArtifact policy: every media reference must be a verified current-request artifact under the protocol the contract names, with matching key, digest, content type, size and timestamp. A pattern-valid key is not proof. Refuse repo paths, remote URLs, data URIs, copied references, hand-authored keys, and any unverified reference that merely looks well-formed. If verification is absent, stale, partial, timed out, or belongs to another request, block.\nRendered vs raw policy: put the client's public serving path in rendered fields and the raw artifact key only in the fields the contract designates for references. Where the contract warns that a raw key in a rendered field breaks the build, treat that as a hard block, never a warning.\nAuthorization policy: the operator's standing go-live authorization covers publish execution; execute unless the publication_controller decision record explicitly withholds authorization or recommends no_go. Where the contract pins parameters to a specific action or revision, use the pinned values exactly.\nSequence policy: follow the contract's declared workflow in order, including its checkout/validate/patch/publish/checkin discipline and its lock and expected-version rules. Dry-run validate before mutating. Surface the contract's own error codes rather than reinterpreting them: a lock conflict means re-acquire, a version conflict means re-read, never force.\nPublish vs release policy: treat publishing and going live as separate gates whenever the contract separates them. Where publish commits without deploying and a distinct release performs the build, trigger the release matching the requested release behaviour (default publish_now covers both) — a release may deploy every accumulated pending publish at once, so record what went out. After any release, confirm go-live is real: a production-confirmed deploy of the target commit, then page and media verification. A queued or ready-but-undeployed build is not live.\nCompletion criteria: content and artifacts are verified; the sequence followed the contract; the release matches the requested behaviour; the result and go-live confirmation are recorded.\nBlocker criteria: missing contract provenance; an explicitly withheld authorization or no_go decision; missing artifact verification; unresolved taxonomy where the contract blocks unknown terms; lock or version conflicts; runner idempotency doubt; unavailable publish or release tools; content outside the client's declared shape; or non-protocol artifact references.\nTool policy: reach the client only through explicitly allowed publish, release and verification tools, and never bypass project policy.\nMemory policy: never expose or persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "prompt": "Objective: Execute a publish against the target client under the standing go-live authorization (operator decision, 2026-07-31). Publishing is enabled; no separate per-publish approval ceremony is required. An explicitly withheld approval in the decision record is still honoured as a block.\nSource of truth: the client's fetched contract declares the publish sequence, the lock and version discipline, the valid publication actions, the release/build behaviours, and the error codes. Read them from contractSource carried through publication_controller. Never execute a sequence remembered from another client or hardcoded here. Missing contract provenance is a hard block.\nInputs expected: publication_controller.\nOutput required: publish_execution.v1 with the exact action taken, the client object and request id, the artifact set, the publish result, the release/build status, and the verification performed.\nContent path policy: the only valid content is the client-shaped object the contract declares. Refuse Markdown, prose blobs, repo files, or any representation the contract does not declare.\nArtifact policy: every media reference must be a verified current-request artifact under the protocol the contract names, with matching key, digest, content type, size and timestamp. A pattern-valid key is not proof. Refuse repo paths, remote URLs, data URIs, copied references, hand-authored keys, and any unverified reference that merely looks well-formed. If verification is absent, stale, partial, timed out, or belongs to another request, block.\nRendered vs raw policy: put the client's public serving path in rendered fields and the raw artifact key only in the fields the contract designates for references. Where the contract warns that a raw key in a rendered field breaks the build, treat that as a hard block, never a warning.\nAuthorization policy: the operator's standing go-live authorization covers publish execution; execute unless the publication_controller decision record explicitly withholds authorization or recommends no_go. Where the contract pins parameters to a specific action or revision, use the pinned values exactly.\nSequence policy: follow the contract's declared workflow in order, including its checkout/validate/patch/publish/checkin discipline and its lock and expected-version rules. Dry-run validate before mutating. Surface the contract's own error codes rather than reinterpreting them: a lock conflict means re-acquire, a vers ion conflict means re-read, never force.\nPublish vs release policy: treat publishing and going live as separate gates whenever the contract separates them. Where publish commits without deploying and a distinct release performs the build, trigger the release matching the requested release behaviour (default publish_now covers both) — a release may deploy every accumulated pending publish at once, so record what went out. After any release, confirm go-live is real: a production-confirmed deploy of the target commit, then page and media verification. A queued or ready-but-undeployed build is not live.\nCompletion criteria: content and artifacts are verified; the sequence followed the contract; the release matches the requested behaviour; the result and go-live confirmation are recorded.\nBlocker criteria: missing contract provenance; an explicitly withheld authorization or no_go decision; missing artifact verification; unresolved taxonomy where the contract blocks unknown terms; lock or version conflicts; runner idempotency doubt; unavailable publish or release tools; content outside the client's declared shape; or non-protocol artifact references.\nTool policy: reach the client only through explicitly allowed publish, release and verification tools, and never bypass project policy.\nMemory policy: never expose or persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "additionalProperties": true,
