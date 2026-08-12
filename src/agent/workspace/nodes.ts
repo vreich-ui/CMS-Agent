@@ -2868,6 +2868,7 @@ export const publishingConductorNodes = [
     "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
       "approvalRequired": false,
+      "publishPayloadDeterministic": true,
       "canonicalRules": [
         "Consumes the client-shaped body from article_body",
         "Produces a dry-run candidate only, never a publish",
