@@ -23,6 +23,7 @@
 // candidate reaching the publication controller.
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
+import { stableHash } from "../improvement/improvementTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import {
   JUDGEMENT_SUBSTRATE_KEYS,
@@ -59,7 +60,7 @@ export type PublishPayloadOutput = {
   notes: string[];
 };
 
-export type PublishPayloadSources = { articleBody: unknown; artifactPlan?: unknown; clientProjectId: string };
+export type PublishPayloadSources = { articleBody: unknown; artifactPlan?: unknown; clientProjectId: string; requestId?: string };
 export type PublishPayloadBuildResult = { ok: true; payload: PublishPayloadOutput } | { ok: false; code: string; error: string };
 export type PublishPayloadDeps = { projectRepository: ProjectRepository };
 
@@ -203,7 +204,11 @@ export function buildDeterministicPublishPayload(sources: PublishPayloadSources,
       ? (plan!.artifactReferences as unknown[])
       : undefined;
   const artifactProtocol = nonEmptyString(plan?.artifactProtocol) ? (plan!.artifactProtocol as string) : undefined;
-  const requestId = nonEmptyString(plan?.requestId) ? (plan!.requestId as string) : undefined;
+  // W3 part 2: the publish request id travels as RUN CONTEXT (runContext.requestId, lifted once from
+  // artifact_plan by the conductor), so this node no longer depends on finding it in the exact
+  // upstream output it happens to read. artifact_plan's own value still wins where it is present —
+  // this is a fallback for the read that did not carry one, never an override of an upstream statement.
+  const requestId = nonEmptyString(plan?.requestId) ? (plan!.requestId as string) : nonEmptyString(sources.requestId) ? sources.requestId.trim() : undefined;
 
   const notes: string[] = [
     "Assembled deterministically by the conductor (publishPayload.ts): clientObject is article_body's own `body` carried by reference, not a re-derivation, so the candidate cannot differ from what was built and reviewed.",
@@ -211,8 +216,13 @@ export function buildDeterministicPublishPayload(sources: PublishPayloadSources,
     ...(resolved.length ? [`Upstream blocker(s) resolved by this node's own client-validator pass: ${resolved.join(" | ")}`] : [])
   ];
 
+  const engineLoop = (validation as { source?: unknown; engineLoop?: unknown }).source === "engine_validation_loop" ? (validation as { engineLoop?: { revalidations?: number; revisionTurns?: number; mechanicalFixes?: string[] } }).engineLoop : undefined;
+
   const validationAssumptions: string[] = [
     "The client's own validator (object_validate, read-only via project.call_read_tool) is the only verdict recorded here; no workspace-local verdict was substituted, and an unreadable verdict is treated as invalid rather than as a pass.",
+    ...(engineLoop
+      ? [`This verdict was earned by the engine's own validate→fix→revalidate loop at article_body, against this exact body (fingerprint-matched), and is reused here rather than re-earned: ${engineLoop.revalidations ?? 0} revalidation(s), ${engineLoop.revisionTurns ?? 0} model revision turn(s), mechanical fixes [${(engineLoop.mechanicalFixes ?? []).join(", ") || "none"}].`]
+      : []),
     ...(validation.deferred === "requires_existing_object"
       ? ["The client refused to validate a candidate for an object that does not exist yet. Per the object lifecycle this is a NORMAL deferral, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch."]
       : []),
@@ -249,13 +259,35 @@ export function buildDeterministicPublishPayload(sources: PublishPayloadSources,
   return { ok: true, payload };
 }
 
-// The one entry point executor.ts calls: read upstream, make exactly ONE object_validate call, build.
-// Every failure mode is returned as {ok:false} so the caller's single decision stays "use it, or fall
-// through to the model path".
-export async function runDeterministicPublishPayload(params: { projectId: string; clientProjectId: string; articleBody: unknown; artifactPlan?: unknown }, deps: PublishPayloadDeps): Promise<PublishPayloadBuildResult> {
+// W3 part 1 (determinism program, 2026-08-12): article_body's ENGINE-owned validate→fix→revalidate
+// loop (articleBodyValidation.ts) already earned a verdict from the client's own validator, against
+// this exact body, in this exact run. Re-earning it here is the duplicated spend W3 exists to remove —
+// so publish_payload reuses it, but only under conditions that make reuse indistinguishable from
+// re-validating:
+//   - the record was written by the engine loop (source), not typed by a model into clientValidation;
+//   - the call ACTUALLY LANDED (attempted) — an unreachable client at article_body time is a reason
+//     to try again here, not a verdict to inherit;
+//   - the body about to be published hashes to the body the verdict was earned against. A verdict is
+//     about an object. If anything touched the object since, the verdict is void and the validator is
+//     called again.
+export const readRecordedValidation = (articleBody: unknown, body: Record<string, unknown>): PublishPayloadValidation | undefined => {
+  if (!isObject(articleBody)) return undefined;
+  const record = articleBody.clientValidation;
+  if (!isObject(record)) return undefined;
+  if (record.source !== "engine_validation_loop" || record.attempted !== true) return undefined;
+  if (typeof record.tool !== "string" || typeof record.valid !== "boolean") return undefined;
+  if (record.bodyFingerprint !== stableHash(body)) return undefined;
+  return record as unknown as PublishPayloadValidation;
+};
+
+// The one entry point executor.ts calls: read upstream, reuse article_body's engine-earned verdict or
+// make exactly ONE object_validate call, build. Every failure mode is returned as {ok:false} so the
+// caller's single decision stays "use it, or fall through to the model path".
+export async function runDeterministicPublishPayload(params: { projectId: string; clientProjectId: string; articleBody: unknown; artifactPlan?: unknown; requestId?: string }, deps: PublishPayloadDeps): Promise<PublishPayloadBuildResult> {
   const read = readArticleBody(params.articleBody);
   if (!read.ok) return read;
   const objectId = readTopLevelObjectId(read.body);
-  const validation = await validateClientObjectOnce({ projectId: params.projectId, body: read.body, objectId }, deps);
-  return buildDeterministicPublishPayload({ articleBody: params.articleBody, artifactPlan: params.artifactPlan, clientProjectId: params.clientProjectId }, validation);
+  const recorded = readRecordedValidation(params.articleBody, read.body);
+  const validation = recorded ?? await validateClientObjectOnce({ projectId: params.projectId, body: read.body, objectId }, deps);
+  return buildDeterministicPublishPayload({ articleBody: params.articleBody, artifactPlan: params.artifactPlan, clientProjectId: params.clientProjectId, requestId: params.requestId }, validation);
 }
