@@ -1,5 +1,19 @@
 # CMS-Agent — session handoff
 
+## State (2026-08-12)
+
+**The active work order is `docs/plan/WORK-ORDER-2026-08-12-determinism.md`.** It supersedes handoff
+v3/v4 and is where the next physical action lives. Read it before this file's gates.
+
+- Determinism audit of live run `run_1786468126136_ev9goe`: $4.23 of $5.56 (76%) is determinizable.
+  Workstreams W0–W6 are ordered there.
+- **W0 is in flight** (`claude/w0-publish-payload-deterministic`): publish_payload becomes a
+  deterministic engine node (`src/agent/workspace/publishPayload.ts`, `metadata.publishPayloadDeterministic`),
+  mirroring `deterministicContractIntelligence.ts` — clientObject by reference from article_body, one
+  `object_validate`, schema-validate, fall through to the model path on any failure. $2.73/run.
+- Store↔seed drift is EXPECTED (workspace v312→v355 this cycle). `npm run nodes:update` re-seeds from
+  live; never hand-copy.
+
 **This file lives in the repo on purpose.** Earlier handoffs lived in Claude Project knowledge, which
 neither a Cowork session nor Claude Code can read — one cost a session-start to a screenshot. Anything
 the next session must know goes here.

@@ -16,6 +16,7 @@ import type { ExecutionMode } from "../execution/executionContext.js";
 import { getReducedContract } from "./contractPrefetch.js";
 import { getEditorialVoice } from "./voicePrefetch.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
+import { runDeterministicPublishPayload } from "./publishPayload.js";
 import { buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector } from "./aggressionVector.js";
 import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
 import { getWorkflowDefinition } from "./workflowRegistry.js";
@@ -1003,6 +1004,53 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     run.stageOutputs[nextNode.id] = state.output;
     run.artifacts.push(buildArtifact(nextNode, state.output));
     return { run, commit: async () => { await recordDryRunNodeUsage(run, nextNode, state.input, state.output); } };
+  }
+
+  // W0 (determinism program, 2026-08-12): publish_payload was $2.73 of the last $5.56 live run and its
+  // `clientObject` came out byte-identical to `article_body.body` — it paid a model to copy JSON. Opt-in
+  // per node (metadata.publishPayloadDeterministic), identical dispatch semantics to
+  // contractIntelligenceDeterministic above: build deterministically, validate the result against the
+  // node's OWN outputSchema, and on any failure fall through to the model path below unchanged, with a
+  // run-visible warning naming the failure. Placed after the publish-refusal block on purpose — this
+  // node is riskLevel "write" today, but if it is ever raised to publish-risk the gate must still fire
+  // first, and a deterministic path must never be the thing that skips a gate.
+  //
+  // Scoped to LIVE runs, for the same reason placement_resolver's deterministic path scopes itself: a
+  // mock run has no client reach (MockNodeRunner calls no tools), and this path makes a real read-only
+  // object_validate call against the client. A mock run's article_body "body" is a placeholder, not a
+  // client object, so validating it would be both a real network call and a meaningless verdict. Mock
+  // runs fall through to MockNodeRunner exactly as before.
+  if (nextNode.metadata?.publishPayloadDeterministic === true && ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+    let built: Awaited<ReturnType<typeof runDeterministicPublishPayload>>;
+    try {
+      built = await runDeterministicPublishPayload({
+        projectId: run.projectId,
+        clientProjectId,
+        articleBody: run.stageOutputs.article_body,
+        artifactPlan: run.stageOutputs.artifact_plan
+      }, { projectRepository: repositoryManager.getProjectRepository() });
+    } catch (error) {
+      built = { ok: false, code: "threw", error: error instanceof Error ? error.message : String(error) };
+    }
+    const payloadValidation = built.ok ? validateOutput(built.payload, nextNode.outputSchema) : undefined;
+    if (built.ok && payloadValidation?.ok) {
+      const completedAt = now();
+      state.status = "completed";
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = built.payload;
+      run.stageOutputs[nextNode.id] = built.payload;
+      run.artifacts.push(buildArtifact(nextNode, built.payload));
+      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.updatedAt = completedAt;
+      run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
+      return { run };
+    }
+    // Same loud-degradation convention the prefetch and contract-intelligence paths use: a systematic
+    // defect here is a run-level fact, not something only found by reading this one node.
+    const reason = built.ok ? (payloadValidation && !payloadValidation.ok ? payloadValidation.errors[0] ?? "schema_invalid" : "schema_invalid") : built.code;
+    state.warnings = [...(state.warnings ?? []), `publish_payload_deterministic_unavailable:${reason}`];
   }
 
   // Dispatch claim (the ~300s silent-death fix): persist "this node is in flight, with this timeout"
