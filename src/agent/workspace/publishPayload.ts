@@ -1,0 +1,261 @@
+// W0 (determinism program, 2026-08-12) — the deterministic half of publish_payload.
+//
+// WHY THIS EXISTS. On the last live run (run_1786468126136_ev9goe) publish_payload cost $2.73 of a
+// $5.56 run — 49% of the run — across five attempts (two node-budget stops, one 429, one
+// toolCallLimit timeout, one success). What it produced for that money was a `clientObject` that was
+// BYTE-IDENTICAL to `article_body.body`. It paid $2.73 to copy JSON. Everything else in its output is
+// an envelope carry-through (clientProjectId / clientObjectType / contractSource), a reference set
+// copied from upstream, a blocker union, and ONE call to the client's own validator. None of that
+// requires judgment a program cannot make.
+//
+// WHAT THIS DOES NOT DO. It does not reshape, re-key, prune, or "improve" the client object — the
+// client's contract is the only authority on that shape and article_body already built to it, so the
+// object travels BY REFERENCE (identity-preserving, deliberately not a clone: a copy is an
+// opportunity to differ). It does not upgrade unverified media to trusted media, does not invent a
+// requestId or an artifactProtocol the upstream plan never named, and does not assert validity the
+// client did not state — an unreadable validator verdict is INVALID, never a pass (the rule
+// objectDialect.parseValidateResult already encodes for the publish path).
+//
+// SAFETY. This is a fast path, not the only path. runDeterministicPublishPayload's caller
+// (executor.ts) validates the result against the node's own outputSchema before using it and falls
+// back to the normal model dispatch on any failure — exactly the deterministicContractIntelligence
+// contract. A bug here degrades to "spend the $2.73", never to a failed run or a malformed publish
+// candidate reaching the publication controller.
+import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
+import { getProjectHooks } from "../projects/projectHooks.js";
+import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
+import {
+  JUDGEMENT_SUBSTRATE_KEYS,
+  buildArticleCandidatePatch,
+  describeCandidatePatch,
+  parseValidateResult
+} from "../projects/objectDialect.js";
+
+export type PublishPayloadValidation = {
+  attempted: boolean;
+  tool: string;
+  valid: boolean;
+  issues: unknown[];
+  candidate_patch_summary?: string;
+  deferred?: string;
+  error?: string;
+};
+
+export type PublishPayloadOutput = {
+  artifact: "dry_run_publish_payload.v1";
+  summary: string;
+  clientProjectId: string;
+  clientObjectType: string;
+  contractSource: unknown;
+  dryRun: true;
+  clientObject: Record<string, unknown>;
+  requestId?: string;
+  clientValidation: PublishPayloadValidation;
+  artifactProtocol?: string;
+  artifactReferences?: unknown[];
+  artifactHandling: { legacyFallbacksUsed: false; notes: string[] };
+  validationAssumptions: string[];
+  blockers: string[];
+  notes: string[];
+};
+
+export type PublishPayloadSources = { articleBody: unknown; artifactPlan?: unknown; clientProjectId: string };
+export type PublishPayloadBuildResult = { ok: true; payload: PublishPayloadOutput } | { ok: false; code: string; error: string };
+export type PublishPayloadDeps = { projectRepository: ProjectRepository };
+
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const nonEmptyString = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+const stringArray = (value: unknown): string[] => (Array.isArray(value) ? value.filter(nonEmptyString) : []);
+
+// Same reasoning (and the same 15s) as contractPrefetch.ts: this is deterministic conductor code that
+// bypasses executeTool's gateway entirely, so it inherits none of that path's timeout/abort wiring
+// and would otherwise hang a node dispatch forever on a wedged remote. One read call, not a write.
+const OBJECT_VALIDATE_TIMEOUT_MS = 15_000;
+
+// The client refusing to validate an object that does not exist yet is the NORMAL outcome for a
+// dry-run candidate, not a defect — article_body's own prompt names it verbatim ("Record
+// clientValidation {attempted: true, ..., deferred: "requires_existing_object"} ... and treat that as
+// a NORMAL outcome, not a blocker"). Detected over the stringified result because the refusal shape
+// is the client's, not ours, and varies by tenant.
+const REQUIRES_EXISTING_OBJECT = /requires[_ ]existing[_ ]object|object[_ ]not[_ ]found|no such object|does not exist|unknown[_ ]object[_ ]id/i;
+
+// Blocker identity for the union/subtraction below. Whitespace and case are presentation, not
+// meaning: two upstream nodes stating the same blocker differently-cased is ONE blocker, and the
+// first-seen wording is the one carried (never a re-worded merge, which would rewrite an upstream
+// node's own words).
+const blockerKey = (blocker: string): string => blocker.trim().toLowerCase().replace(/\s+/g, " ");
+
+// An upstream blocker this node's OWN evidence closes. The only evidence this node produces is the
+// client validator's verdict, so the only resolvable class is a client-validation blocker, and it is
+// only resolved by an explicit `valid: true`. Deliberately narrow: a deterministic path that talks
+// itself out of upstream blockers is strictly worse than one that carries them forward, and the
+// publication controller's whole job is to see them.
+const CLIENT_VALIDATION_BLOCKER = /client[ _-]?validation|client'?s own validator|object_validate|not (?:yet )?validated|validation (?:is )?(?:deferred|pending|incomplete)|final_revalidation/i;
+
+export const collectUpstreamBlockers = (...upstreamOutputs: unknown[]): string[] => {
+  const seen = new Set<string>();
+  const blockers: string[] = [];
+  for (const output of upstreamOutputs) {
+    if (!isObject(output)) continue;
+    for (const blocker of stringArray(output.blockers)) {
+      const key = blockerKey(blocker);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      blockers.push(blocker);
+    }
+  }
+  return blockers;
+};
+
+export const resolveBlockers = (upstream: string[], validation: PublishPayloadValidation): { blockers: string[]; resolved: string[] } => {
+  const validatorPassed = validation.attempted && validation.valid;
+  const resolved = validatorPassed ? upstream.filter((blocker) => CLIENT_VALIDATION_BLOCKER.test(blocker)) : [];
+  const resolvedKeys = new Set(resolved.map(blockerKey));
+  return { blockers: upstream.filter((blocker) => !resolvedKeys.has(blockerKey(blocker))), resolved };
+};
+
+// The client object the candidate patch is validated against, taken BY REFERENCE from article_body's
+// output — the identity check in the tests is the point, not a nicety: the $2.73 finding was that a
+// model was paid to reproduce this object, and the only way to guarantee it is reproduced exactly is
+// to not reproduce it at all.
+export const readArticleBody = (articleBody: unknown): { ok: true; body: Record<string, unknown>; envelope: Record<string, unknown> } | { ok: false; code: string; error: string } => {
+  if (!isObject(articleBody)) return { ok: false, code: "article_body_absent", error: "publish_payload's article_body dependency output is missing or is not an object; nothing to build a publish candidate from." };
+  const body = articleBody.body;
+  if (!isObject(body) || Object.keys(body).length === 0) return { ok: false, code: "client_object_absent", error: "article_body produced no non-empty `body` object; a publish candidate cannot be assembled deterministically from an absent client object." };
+  if (!nonEmptyString(articleBody.clientObjectType)) return { ok: false, code: "client_object_type_absent", error: "article_body carries no clientObjectType; the publish candidate's envelope cannot be carried through without inventing one." };
+  if (!isObject(articleBody.contractSource)) return { ok: false, code: "contract_source_absent", error: "article_body carries no contractSource provenance object; an unprovenanced candidate is a blocker by this node's own criteria, not something to assemble around." };
+  return { ok: true, body, envelope: articleBody };
+};
+
+// Deliberately NOT objectDialect.findObjectId: that helper searches DEEP for `object_id` or `id`, and
+// a client body's `nodes[]` entries carry their own `id` — a deep search would hand the validator a
+// child node's id as the object under validation. A dry-run candidate for an object that does not
+// exist yet has no id at all, and no id is the correct, honest argument in that case.
+export const readTopLevelObjectId = (body: Record<string, unknown>): string | number | undefined => {
+  for (const key of ["object_id", "objectId", "id"]) {
+    const value = body[key];
+    if (typeof value === "number" || nonEmptyString(value)) return value;
+  }
+  return undefined;
+};
+
+export async function validateClientObjectOnce(params: { projectId: string; body: Record<string, unknown>; objectId?: string | number }, deps: PublishPayloadDeps): Promise<PublishPayloadValidation> {
+  const { patch, nodeCount } = buildArticleCandidatePatch(params.body, JUDGEMENT_SUBSTRATE_KEYS);
+  const summary = describeCandidatePatch(patch, nodeCount);
+  const config = await deps.projectRepository.get(params.projectId);
+  if (!config) return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: `Unknown projectId: ${params.projectId}` };
+
+  const arguments_ = { ...(params.objectId === undefined ? {} : { object_id: params.objectId }), candidate_patch: patch };
+  // Mirrors project.call_read_tool's own handler ordering (toolRegistry.ts) exactly as contractPrefetch
+  // does: the project's executable policy runs before any transport, so a client-specific block still
+  // applies even though this call never reaches the model-facing controlled-tool gate.
+  const policyFindings = getProjectHooks(params.projectId)?.enforceCallToolPolicy?.({ tool: "object_validate", arguments: arguments_ }) ?? [];
+  const blocking = policyFindings.filter((finding) => finding.severity === "error");
+  if (blocking.length) return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: `Blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}` };
+
+  const adapter = new ProjectMcpAdapter(config);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OBJECT_VALIDATE_TIMEOUT_MS);
+  let call: Awaited<ReturnType<typeof adapter.callReadTool>>;
+  try {
+    call = await adapter.callReadTool("object_validate", arguments_, controller.signal);
+  } catch (error) {
+    return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!call.ok) {
+    const message = call.error ?? "object_validate failed";
+    // A refusal because the object does not exist yet is the client answering correctly about a
+    // candidate for an object nobody has created — a deferral, and attempted:true, because the call
+    // was made and the client did speak.
+    if (REQUIRES_EXISTING_OBJECT.test(message)) return { attempted: true, tool: "object_validate", valid: false, issues: [message], candidate_patch_summary: summary, deferred: "requires_existing_object" };
+    return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: message };
+  }
+  const rawText = JSON.stringify(call.result ?? null);
+  const parsed = parseValidateResult(call.result, summary);
+  if (!parsed.valid && REQUIRES_EXISTING_OBJECT.test(rawText)) {
+    return { attempted: true, tool: "object_validate", valid: false, issues: parsed.issues, candidate_patch_summary: summary, deferred: "requires_existing_object" };
+  }
+  return { attempted: true, tool: "object_validate", valid: parsed.valid, issues: parsed.issues, candidate_patch_summary: summary };
+}
+
+export function buildDeterministicPublishPayload(sources: PublishPayloadSources, validation: PublishPayloadValidation): PublishPayloadBuildResult {
+  const read = readArticleBody(sources.articleBody);
+  if (!read.ok) return read;
+  const { body, envelope } = read;
+  const plan = isObject(sources.artifactPlan) ? sources.artifactPlan : undefined;
+
+  const upstream = collectUpstreamBlockers(envelope, plan);
+  const { blockers: carried, resolved } = resolveBlockers(upstream, validation);
+
+  // Blockers this node itself owns, per its own blocker criteria ("client unreachable ... raise a
+  // blocker; do not assert validity"). A deferral is explicitly NOT one of them.
+  const ownBlockers: string[] = [];
+  if (!validation.attempted) ownBlockers.push(`client_validation_unavailable: the client's own read-only validator could not be reached for this candidate (${validation.error ?? "no reason reported"}); validity is not asserted.`);
+  else if (!validation.valid && !validation.deferred) ownBlockers.push(`client_validation_failed: the client's own validator rejected the candidate patch (${validation.issues.slice(0, 3).map((issue) => (typeof issue === "string" ? issue : JSON.stringify(issue))).join("; ") || "no issues reported"}).`);
+
+  const blockers = [...carried, ...ownBlockers.filter((blocker) => !carried.some((existing) => blockerKey(existing) === blockerKey(blocker)))];
+
+  const artifactReferences = Array.isArray(envelope.artifactReferences)
+    ? (envelope.artifactReferences as unknown[])
+    : Array.isArray(plan?.artifactReferences)
+      ? (plan!.artifactReferences as unknown[])
+      : undefined;
+  const artifactProtocol = nonEmptyString(plan?.artifactProtocol) ? (plan!.artifactProtocol as string) : undefined;
+  const requestId = nonEmptyString(plan?.requestId) ? (plan!.requestId as string) : undefined;
+
+  const notes: string[] = [
+    "Assembled deterministically by the conductor (publishPayload.ts): clientObject is article_body's own `body` carried by reference, not a re-derivation, so the candidate cannot differ from what was built and reviewed.",
+    ...(artifactProtocol ? [] : ["No artifactProtocol was named by artifact_plan; none is asserted here rather than inventing one (a zero-media plan legitimately omits it)."]),
+    ...(resolved.length ? [`Upstream blocker(s) resolved by this node's own client-validator pass: ${resolved.join(" | ")}`] : [])
+  ];
+
+  const validationAssumptions: string[] = [
+    "The client's own validator (object_validate, read-only via project.call_read_tool) is the only verdict recorded here; no workspace-local verdict was substituted, and an unreadable verdict is treated as invalid rather than as a pass.",
+    ...(validation.deferred === "requires_existing_object"
+      ? ["The client refused to validate a candidate for an object that does not exist yet. Per the object lifecycle this is a NORMAL deferral, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch."]
+      : []),
+    ...(Array.isArray(envelope.artifactReferences) ? [] : ["article_body carried no artifactReferences array; the reference set here is whatever artifact_plan carried, or absent."])
+  ];
+
+  const artifactNotes = [
+    "No legacy fallback path exists in this code path: no repo asset paths, remote URLs, data URIs, or hand-authored keys can be introduced, because references are carried verbatim from upstream and never synthesized."
+  ];
+
+  const summary =
+    `Deterministic dry-run publish candidate for ${sources.clientProjectId}/${envelope.clientObjectType as string}: clientObject carried by reference from article_body ` +
+    `(${Object.keys(body).length} top-level field(s)), ${artifactReferences?.length ?? 0} artifact reference(s), client validator ` +
+    `${validation.attempted ? (validation.valid ? "valid" : validation.deferred ? `deferred (${validation.deferred})` : "invalid") : "unreachable"}, ` +
+    `${blockers.length} blocker(s). No model call.`;
+
+  const payload: PublishPayloadOutput = {
+    artifact: "dry_run_publish_payload.v1",
+    summary,
+    clientProjectId: sources.clientProjectId,
+    clientObjectType: envelope.clientObjectType as string,
+    contractSource: envelope.contractSource,
+    dryRun: true,
+    clientObject: body,
+    ...(requestId ? { requestId } : {}),
+    clientValidation: validation,
+    ...(artifactProtocol ? { artifactProtocol } : {}),
+    ...(artifactReferences ? { artifactReferences } : {}),
+    artifactHandling: { legacyFallbacksUsed: false, notes: artifactNotes },
+    validationAssumptions,
+    blockers,
+    notes
+  };
+  return { ok: true, payload };
+}
+
+// The one entry point executor.ts calls: read upstream, make exactly ONE object_validate call, build.
+// Every failure mode is returned as {ok:false} so the caller's single decision stays "use it, or fall
+// through to the model path".
+export async function runDeterministicPublishPayload(params: { projectId: string; clientProjectId: string; articleBody: unknown; artifactPlan?: unknown }, deps: PublishPayloadDeps): Promise<PublishPayloadBuildResult> {
+  const read = readArticleBody(params.articleBody);
+  if (!read.ok) return read;
+  const objectId = readTopLevelObjectId(read.body);
+  const validation = await validateClientObjectOnce({ projectId: params.projectId, body: read.body, objectId }, deps);
+  return buildDeterministicPublishPayload({ articleBody: params.articleBody, artifactPlan: params.artifactPlan, clientProjectId: params.clientProjectId }, validation);
+}
