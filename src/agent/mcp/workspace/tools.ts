@@ -16,6 +16,7 @@ import { executionStatuses } from "../../workspace/executionTypes.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
 import { validateOutput } from "../../execution/outputValidator.js";
 import { evaluatePublishReadiness, publishRun } from "../../workspace/publisher.js";
+import { runDeterministicPublishPayload } from "../../workspace/publishPayload.js";
 import { executeNode, getEffectivePrompt, getNodeDetails, listNodeExecutions, listNodeOutputs, prepareNodeExecution, validateAgainstNodeSchema } from "../../workspace/nodeRuntime.js";
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
 import { toProjectSummary, validateHandoff } from "../../projects/projectRegistry.js";
@@ -127,7 +128,15 @@ const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(
 const saveOutput = z.object({ id: z.string().min(1).optional(), stage: z.string().min(1), value: z.unknown() }).strict();
 const listOutputs = z.object({ stage: z.string().min(1).optional() }).strict();
 const recordObservation = z.object({ observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional() }).strict();
-const publishBuild = z.object({ articleBody: z.unknown(), target: z.enum(["preview", "cms"]).default("preview") }).strict();
+// W0 complement (determinism program, 2026-08-12): this tool used to do exactly one thing — wrap an
+// articleBody you already had in a {target, dryRun, builtAt} envelope and refuse it if it did not
+// satisfy the article_body node's outputSchema. That is useful for a caller holding a body, and
+// useless for the question actually being asked ("what would publish_payload emit for this run?").
+// With `runId` it now answers that question directly, off the SAME deterministic engine the executor
+// uses (publishPayload.ts), so the projection cannot drift from what the node would really produce.
+// Exactly one of articleBody / runId; the articleBody path is byte-identical to its old behavior.
+const publishBuild = z.object({ articleBody: z.unknown().optional(), runId: z.string().min(1).optional(), target: z.enum(["preview", "cms"]).default("preview") }).strict()
+  .refine((value) => (value.articleBody === undefined) !== (value.runId === undefined), { message: "supply exactly one of `articleBody` (wrap a body you already hold) or `runId` (project what publish_payload would emit for that run)" });
 const publishValidate = z.object({ payload: publishPayloadSchema }).strict();
 // The one remaining definition of "what an article body is": the article_body node's own outputSchema.
 // Returns the error list (empty = valid) so wire tools can refuse or report without re-encoding the shape.
@@ -230,7 +239,7 @@ const archiveObservationsJsonSchema = objectSchema({ textPrefix: { type: "string
 // outputSchema (fetch it via node.get_output_schema) and, beyond that envelope, the client's fetched
 // contract — never a workspace-local article schema baked into a tool's input schema.
 const articleBodyArgJsonSchema = { type: "object", description: "Client-shaped client_object.v1 envelope (formerly article_body.v1) produced by the article_body node. Validated against that node's own outputSchema (see node.get_output_schema), never a workspace-local article schema." };
-const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, ["articleBody"]);
+const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, runId: { type: "string", minLength: 1, description: "Project what publish_payload would emit for this run, built deterministically from the run's own article_body/artifact_plan stage outputs (dry_run_publish_payload.v1). Mutually exclusive with articleBody." }, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, []);
 const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
 const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." } }, ["projectId", "input"]);
@@ -496,7 +505,24 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       const result = await learningRepository.archiveObservationsByPredicate((observation) => observation.observation.startsWith(data.textPrefix), data.reason);
       return ok({ ...result, dryRun: false });
     } }),
-    tool({ name: "publish.build_payload", description: "Build a dry-run publish payload without side effects. The articleBody must satisfy the article_body node's own outputSchema (see node.get_output_schema) — an invalid body is refused with the failing fields named.", zodSchema: publishBuild, inputSchema: publishBuildJsonSchema, execute: async (input) => { const data = publishBuild.parse(input); const articleBody = coerceJsonObjectInput(data.articleBody); const errors = validateAgainstArticleBodyNode(articleBody); if (errors.length) throw new Error(`invalid_article_body: does not satisfy the article_body node's outputSchema (${errors.slice(0, 6).join("; ")})`); return ok({ payload: { articleBody, target: data.target, dryRun: true, builtAt: new Date().toISOString() } }); } }),
+    tool({ name: "publish.build_payload", description: "Build a dry-run publish payload without side effects. With `articleBody`: wraps a body you already hold in a {target, dryRun, builtAt} envelope; the body must satisfy the article_body node's own outputSchema (see node.get_output_schema) and an invalid body is refused with the failing fields named. With `runId`: projects the dry_run_publish_payload.v1 that publish_payload would emit for that run, built by the same deterministic engine the executor uses (client object carried by reference from the run's article_body output, one read-only object_validate against the client, blockers = union(upstream) - resolved). Never publishes, patches or releases.", zodSchema: publishBuild, inputSchema: publishBuildJsonSchema, execute: async (input) => {
+      const data = publishBuild.parse(input);
+      if (data.runId !== undefined) {
+        const run = await getRun(data.runId);
+        if (!run) throw new Error(`unknown_run: ${data.runId}`);
+        const built = await runDeterministicPublishPayload({ projectId: run.projectId, clientProjectId: run.projectId, articleBody: run.stageOutputs.article_body, artifactPlan: run.stageOutputs.artifact_plan }, { projectRepository: repositoryManager.getProjectRepository() });
+        if (!built.ok) throw new Error(`cannot_project_publish_payload (${built.code}): ${built.error}`);
+        // Validated against the publish_payload node's own outputSchema for the same reason the
+        // executor does it: this projection is only worth anything if it is the artifact the node
+        // would actually have emitted, and the node's schema is the one authority on that.
+        const projectionErrors = validateOutput(built.payload, getWorkspaceNode("publish_payload")?.outputSchema);
+        return ok({ runId: data.runId, projection: built.payload, target: data.target, dryRun: true, builtAt: new Date().toISOString(), schemaValid: projectionErrors.ok, ...(projectionErrors.ok ? {} : { schemaErrors: projectionErrors.errors }) });
+      }
+      const articleBody = coerceJsonObjectInput(data.articleBody);
+      const errors = validateAgainstArticleBodyNode(articleBody);
+      if (errors.length) throw new Error(`invalid_article_body: does not satisfy the article_body node's outputSchema (${errors.slice(0, 6).join("; ")})`);
+      return ok({ payload: { articleBody, target: data.target, dryRun: true, builtAt: new Date().toISOString() } });
+    } }),
     tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload: envelope fields (target, dryRun, builtAt) plus the articleBody against the article_body node's own outputSchema.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); const bodyErrors = parsed.success ? validateAgainstArticleBodyNode(coerceJsonObjectInput(parsed.data.payload.articleBody)) : []; const issues = [...(parsed.success ? [] : parsed.error.issues), ...bodyErrors.map((message) => ({ code: "custom", path: ["payload", "articleBody"], message }))]; return ok({ valid: issues.length === 0, issues }); } }),
     tool({ name: "repository.get_health", description: "Return safe repository health metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ health: await repositoryManager.getRepositoryHealth() }); } }),
     tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects. Supply entrypoint 'article_body' with a valid client_object.v1 to enter the run at the publish stages without re-running ideation/research/draft nodes.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => {
