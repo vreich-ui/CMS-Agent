@@ -9,6 +9,7 @@ import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult, NodeToolCallRecord } from "./NodeRunner.js";
+import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { NodeBudgetExceededError, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
 
 const forbidden = /api[_-]?key|authorization|bearer|jwt|cookie|token|secret|blob.*credential/i;
@@ -91,9 +92,14 @@ function instructions(node: WorkspaceNode, deps: unknown, observations: unknown)
     "You are the CMS-Agent node runner. Return only structured JSON matching the output schema.",
     `Node: ${node.name} (${node.id})`,
     `Description: ${node.description}`,
+    // W3 part 3 (determinism program, 2026-08-12): the run's client facts, stated once by the
+    // conductor for every node, so a node never has to reconstruct clientProjectId/clientObjectType/
+    // contractSource by echoing a dependency's output. Empty (and therefore absent from the system
+    // prompt) for any dispatch whose input carries no runContext — a test double, a synthetic node.
+    renderRunContextInstruction(readRunContext(deps)),
     "Node prompt:", node.prompt,
     "Assigned dependencies and memory are provided in the user message. Never reveal secrets. Use only exposed tools."
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 export class OpenAINodeRunner implements NodeRunner {
