@@ -103,14 +103,26 @@ const readContentClassFrom = (carrier: unknown): string | undefined => {
 // First explicit declaration wins, scanned carrier by carrier in the order the caller supplies them
 // (executor passes: run.initialInput, then input_triage's output). Each carrier is read both at its
 // top level and under `contentSource`, mirroring extractPlacementSignals' carrier convention.
-export function readContentClass(...carriers: unknown[]): string {
+//
+// W4 (2026-08-12) — split in two WITHOUT changing readContentClass's behaviour, because the skip
+// predicates need a distinction this waiver does not: whether a class was DECLARED at all.
+// readContentClass answers "which class is in force" and defaults to client_property, which is the
+// right answer for a waiver (absent ⇒ waive nothing). A skip predicate asking the same question would
+// read that default as a positive declaration and could gate on it, so it calls
+// readDeclaredContentClass, which returns undefined when nobody said. Same signal, same carriers, one
+// reader — deliberately not a second content-class concept.
+export function readDeclaredContentClass(...carriers: unknown[]): string | undefined {
   for (const carrier of carriers) {
     for (const value of [carrier, isObject(carrier) ? carrier.contentSource : undefined]) {
       const declared = readContentClassFrom(value);
       if (declared !== undefined) return OWN_PROPERTY_VALUES.has(declared) ? OWN_PROPERTY_CONTENT_CLASS : declared;
     }
   }
-  return DEFAULT_CONTENT_CLASS;
+  return undefined;
+}
+
+export function readContentClass(...carriers: unknown[]): string {
+  return readDeclaredContentClass(...carriers) ?? DEFAULT_CONTENT_CLASS;
 }
 
 export const isOwnProperty = (contentClass: string): boolean => contentClass === OWN_PROPERTY_CONTENT_CLASS;

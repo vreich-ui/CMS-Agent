@@ -3,7 +3,16 @@
 // pause (neither populated). An operator-paused run was therefore only distinguishable from a
 // publish-held one by the ABSENCE of both markers, which is not a signal anyone should have to read.
 // workflow.pause_run now reports "paused"; resume_run returns the run to "queued" as before.
-export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled"] as const;
+// W4 — "skipped" is a NODE status: the conductor evaluated a declarative skip predicate
+// (skipPredicates.ts) BEFORE dispatching the node and decided it had nothing to contribute to this
+// run, so nothing was dispatched and nothing was charged. It is deliberately its own status rather
+// than a completed-with-empty-output: a skipped node produced no artifact and asserted nothing, and a
+// reader of the run must be able to tell "the conductor decided this was unnecessary" from "this ran
+// and had nothing to say" — the latter is exactly the $0.06 research call W4 exists to stop paying
+// for. Downstream, a skipped node counts as SATISFIED-with-absent for dependency purposes (executor:
+// findNextRunnableNode / dependenciesReached), never as a failure and never as a blocker. A run never
+// takes this status; only a node does.
+export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled", "skipped"] as const;
 export type ExecutionStatus = typeof executionStatuses[number];
 // A paused run is intentionally halted alongside completed/failed/blocked/cancelled runs until a
 // caller explicitly resumes it. This is the single status set shared by executor and job drivers.
@@ -24,6 +33,18 @@ export type NodeToolCallRecord = { toolId: string; toolExecutionId?: string; sta
 // forever. A stale dispatch is reclaimed to queued on the next advance, so the run stays resumable.
 export type NodeDispatchClaim = { dispatchedAt: string; timeoutMs: number };
 
+// W4 — the audit record of a skip. Written by the executor at the moment it decides NOT to dispatch,
+// carrying the predicate that fired verbatim (it is data, so it round-trips) plus the facts it fired
+// on. This is what makes gating auditable rather than merely cheap: months later, "why did this run
+// have no emotional_resonance review" is answered by the record on the node itself, not reconstructed
+// from a policy document and a guess about which content class the run declared.
+export type NodeSkipRecord = {
+  reason: string;
+  predicate?: Record<string, unknown>;
+  basis?: string[];
+  evaluatedAt: string;
+};
+
 export type NodeExecutionState = {
   nodeId: string;
   status: ExecutionStatus;
@@ -37,6 +58,12 @@ export type NodeExecutionState = {
   produces?: string[];
   toolCalls?: NodeToolCallRecord[];
   dispatch?: NodeDispatchClaim;
+  // Present only on a node whose status is "skipped" (W4).
+  skip?: NodeSkipRecord;
+  // Set when an operator explicitly retried a node the conductor had skipped: the retry IS the
+  // operator saying "run this one", so the predicate is not re-evaluated on the next dispatch. Durable
+  // (a retry that only cleared the skip record would be re-skipped immediately, forever).
+  skipOverride?: boolean;
 };
 
 // R-18 — `pending` distinguishes the two moments a publish gate is knowable:

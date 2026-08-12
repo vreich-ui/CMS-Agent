@@ -78,7 +78,8 @@ const EXECUTION: Vocabulary = {
     { term: "paused", label: "Paused", summary: "Stopped because someone pressed pause. Nothing is wrong and nothing is waiting on a decision — the run simply stays where it is until it is resumed.", remedy: "Resume the run when you are ready; no node state was changed." },
     { term: "blocked", label: "Blocked", summary: "Stopped on purpose, waiting on a human decision — either an approval before a publish-risk node, or a run that reached its cost ceiling. This is a safety hold, not an error, and it is resumable.", remedy: "Review what it is asking for — the approval list or the budget ceiling — and resume the run." },
     { term: "failed", label: "Failed", summary: "Stopped because something went wrong — a tool error, a schema violation, an unreachable client.", remedy: "Read the node's error, fix the cause, then retry that node rather than the whole run." },
-    { term: "cancelled", label: "Cancelled", summary: "Called off by a human or by the system before it finished." }
+    { term: "cancelled", label: "Cancelled", summary: "Called off by a human or by the system before it finished." },
+    { term: "skipped", label: "Skipped", summary: "The conductor decided this node had nothing to contribute to this run — a rule on the node matched the run's own facts — so it was never started and cost nothing. Nothing is wrong: the run carries the rule that fired and what it fired on, and the nodes that depend on this one treat its output as deliberately absent.", remedy: "If it should have run, retry that node — an explicit retry overrides the skip for this run." }
   ]
 };
 
