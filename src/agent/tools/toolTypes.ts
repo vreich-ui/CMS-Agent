@@ -2,7 +2,9 @@ import type { ZodTypeAny } from "zod";
 import type { WorkspaceRiskLevel } from "../workspace/nodeTypes.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 
-export const toolCategories = ["workspace", "web", "files", "artifacts", "blobs", "learning", "usage", "project_mcp", "publishing", "diagnostics"] as const;
+// "monetize" added W5 (2026-08-12) for monetize.ev_floor — deterministic EV-floor arithmetic, its
+// own category rather than folded into "usage" since it is offer/commercial math, not usage telemetry.
+export const toolCategories = ["workspace", "web", "files", "artifacts", "blobs", "learning", "usage", "project_mcp", "publishing", "diagnostics", "monetize"] as const;
 export type ToolCategory = typeof toolCategories[number];
 
 // Every reason evaluateToolPolicy can refuse a call for. Declared here rather than left as inline

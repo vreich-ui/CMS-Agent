@@ -55,7 +55,20 @@ export type CallToolResult = { ok: boolean; projectId: string; connection: Proje
 // boundary the clients already draw themselves: on both Dr. Lurie and Platform these operations are
 // "allowed" while every mutating verb is "needs_approval" (see object_contract's publish_policy /
 // creation_policy and the live toolPolicies on both project records).
-export const READ_TOOL_ALLOWLIST = ["object_contract", "registry_get", "object_inventory", "object_get", "object_list", "object_validate", "ping"] as const;
+//
+// W5 (2026-08-12): the object-substrate names above (object_contract, registry_get, ...) were the
+// only entries, so the monetizer project's own read-only tool names (see
+// projects/monetizer/definition.ts's MONETIZER_SAFE_READ_ONLY_TOOLS — list_sources, list_connections,
+// search_offers, performance, demand_signals, explain_decision) were refused with
+// read_tool_operation_not_permitted even when MONETIZER_MCP_ENDPOINT/_TOKEN were configured and the
+// project's own toolPolicies allowed them: this gate runs first and named only the object-substrate
+// vocabulary. This module stays project-agnostic by NOT importing the monetizer definition — the
+// names are added here as plain strings, same as every other entry, so a project-specific constant
+// never becomes a dependency of this generic adapter.
+export const READ_TOOL_ALLOWLIST = [
+  "object_contract", "registry_get", "object_inventory", "object_get", "object_list", "object_validate", "ping",
+  "list_sources", "list_connections", "search_offers", "performance", "demand_signals", "explain_decision"
+] as const;
 export type ReadToolOperation = typeof READ_TOOL_ALLOWLIST[number];
 const isReadToolOperation = (name: string): name is ReadToolOperation => (READ_TOOL_ALLOWLIST as readonly string[]).includes(name);
 
