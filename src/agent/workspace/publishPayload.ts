@@ -140,13 +140,26 @@ export const readTopLevelObjectId = (body: Record<string, unknown>): string | nu
   return undefined;
 };
 
-export async function validateClientObjectOnce(params: { projectId: string; body: Record<string, unknown>; objectId?: string | number }, deps: PublishPayloadDeps): Promise<PublishPayloadValidation> {
+export async function validateClientObjectOnce(params: { projectId: string; body: Record<string, unknown>; objectId?: string | number; objectType?: string }, deps: PublishPayloadDeps): Promise<PublishPayloadValidation> {
   const { patch, nodeCount } = buildArticleCandidatePatch(params.body, JUDGEMENT_SUBSTRATE_KEYS);
   const summary = describeCandidatePatch(patch, nodeCount);
   const config = await deps.projectRepository.get(params.projectId);
   if (!config) return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: `Unknown projectId: ${params.projectId}` };
 
-  const arguments_ = { ...(params.objectId === undefined ? {} : { object_id: params.objectId }), candidate_patch: patch };
+  // The regression on run_1786549907145_hf4wgb, in one line: this call carried NO `object_type`, and
+  // the client's request schema requires it (a 12-value enum), so every engine validation 400'd with
+  // `invalid_value at ["object_type"]` before the body was ever judged. The value was always in hand —
+  // article_body's envelope carries clientObjectType — it just was never threaded through. Reproduced
+  // and counterfactual-proven 2026-08-12: the same body with object_type supplied validates "ready".
+  //
+  // Calling convention, confirmed against the client itself: an EXISTING object is validated as
+  // {object_type, object_id, candidate_patch}; a dry-run candidate that has no object_id yet is
+  // validated as {object_type, body} — the client rejects candidate_patch without object_id outright
+  // ("validate requires either object_id ... or body ...").
+  const arguments_ = {
+    ...(nonEmptyString(params.objectType) ? { object_type: params.objectType } : {}),
+    ...(params.objectId === undefined ? { body: params.body } : { object_id: params.objectId, candidate_patch: patch })
+  };
   // Mirrors project.call_read_tool's own handler ordering (toolRegistry.ts) exactly as contractPrefetch
   // does: the project's executable policy runs before any transport, so a client-specific block still
   // applies even though this call never reaches the model-facing controlled-tool gate.
@@ -174,12 +187,41 @@ export async function validateClientObjectOnce(params: { projectId: string; body
     return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: message };
   }
   const rawText = JSON.stringify(call.result ?? null);
+  // A request-shape rejection (HTTP 400) is the client refusing to LOOK at the object because the
+  // REQUEST was malformed — an engine defect, not a verdict about the body. Recording it as
+  // valid:false was how the missing-object_type bug cascaded on run_1786549907145_hf4wgb: the engine
+  // loop handed its own 400 to the model as "the client rejected your body" and the model dutifully
+  // "fixed" a body that was never judged. attempted:false is the honest record (the client never
+  // spoke about the object), and the loop's "unavailable" outcome correctly spends no revision turn
+  // on it. A requires-existing-object refusal keeps its precedence as a NORMAL deferral.
+  const requestShape = readRequestShapeRejection(call.result);
+  if (requestShape && !REQUIRES_EXISTING_OBJECT.test(rawText)) {
+    return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: `client rejected the validate REQUEST itself (HTTP 400, engine-side defect — the object was never judged): ${requestShape}` };
+  }
   const parsed = parseValidateResult(call.result, summary);
   if (!parsed.valid && REQUIRES_EXISTING_OBJECT.test(rawText)) {
     return { attempted: true, tool: "object_validate", valid: false, issues: parsed.issues, candidate_patch_summary: summary, deferred: "requires_existing_object" };
   }
   return { attempted: true, tool: "object_validate", valid: parsed.valid, issues: parsed.issues, candidate_patch_summary: summary };
 }
+
+// The client's request-shape rejection, wherever the transport put it: a 400 statusCode next to an
+// error/message string (the platform returns {isError, content, structuredContent:{error, statusCode,
+// issues}}). Deliberately 400 ONLY — 404/409/422/423 are statements about the OBJECT or its lifecycle
+// and must keep flowing into parseValidateResult / the deferral check unchanged.
+export const readRequestShapeRejection = (result: unknown): string | undefined => {
+  const found: { statusCode?: number; message?: string } = {};
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    if (!isObject(value)) return;
+    if (found.statusCode === undefined && typeof value.statusCode === "number") found.statusCode = value.statusCode;
+    if (found.message === undefined && nonEmptyString(value.error)) found.message = value.error;
+    if (found.message === undefined && nonEmptyString(value.message)) found.message = value.message;
+    Object.values(value).forEach(walk);
+  };
+  walk(result);
+  return found.statusCode === 400 ? (found.message ?? "Invalid request fields.") : undefined;
+};
 
 export function buildDeterministicPublishPayload(sources: PublishPayloadSources, validation: PublishPayloadValidation): PublishPayloadBuildResult {
   const read = readArticleBody(sources.articleBody);
@@ -288,6 +330,6 @@ export async function runDeterministicPublishPayload(params: { projectId: string
   if (!read.ok) return read;
   const objectId = readTopLevelObjectId(read.body);
   const recorded = readRecordedValidation(params.articleBody, read.body);
-  const validation = recorded ?? await validateClientObjectOnce({ projectId: params.projectId, body: read.body, objectId }, deps);
+  const validation = recorded ?? await validateClientObjectOnce({ projectId: params.projectId, body: read.body, objectId, objectType: read.envelope.clientObjectType as string }, deps);
   return buildDeterministicPublishPayload({ articleBody: params.articleBody, artifactPlan: params.artifactPlan, clientProjectId: params.clientProjectId, requestId: params.requestId }, validation);
 }

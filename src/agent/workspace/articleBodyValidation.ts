@@ -114,11 +114,33 @@ const ID_FIELD = /^(id|_id|object_id|objectId|slug)$/;
 
 const mechanicalValue = (value: string): string => value.trim().toLowerCase();
 
+// The second mechanical class (run_1786549907145_hf4wgb): the client's strict per-type schema names
+// an undeclared BODY-ROOT key in its own words — `(root): Unrecognized key: "object_type"` — and
+// removing exactly that key is a program's job, not a model revision's. Root-scoped on purpose: a
+// nested "Unrecognized key" describes a key inside a node/field this fixer has no business rewriting.
+const UNRECOGNIZED_ROOT_KEY = /\(root\):\s*Unrecognized key:?\s*"([^"]+)"/i;
+
+const unrecognizedRootKeys = (text: string): string[] => {
+  const keys = new Set<string>();
+  // A fresh g-flagged copy per call: matchAll requires the flag, and a module-level g-regex is
+  // stateful across calls (lastIndex), which is exactly the class of silent bug this file exists to
+  // keep out of the publish path.
+  for (const match of text.matchAll(new RegExp(UNRECOGNIZED_ROOT_KEY.source, "gi"))) keys.add(match[1]);
+  return [...keys];
+};
+
 // Copy-on-write: the body travels BY REFERENCE all the way to publish_payload (W0), so a fix that
 // mutated it in place would silently rewrite an artifact already recorded upstream. A fixed body is a
 // new object; an unfixed body is the same object, identity intact.
 export function applyMechanicalFixes(body: Record<string, unknown>, issues: unknown[]): { body: Record<string, unknown>; fixes: string[] } {
   const text = issueText(issues);
+  const rootKeysToStrip = unrecognizedRootKeys(text).filter((key) => key in body);
+  if (rootKeysToStrip.length) {
+    const stripped: Record<string, unknown> = { ...body };
+    for (const key of rootKeysToStrip) delete stripped[key];
+    const rest = applyMechanicalFixes(stripped, issues.filter((issue) => !UNRECOGNIZED_ROOT_KEY.test(typeof issue === "string" ? issue : JSON.stringify(issue))));
+    return { body: rest.body, fixes: [...rootKeysToStrip.map((key) => `unrecognized_root_key:${key}`), ...rest.fixes] };
+  }
   if (!ID_COMPLAINT.test(text) || !FORM_COMPLAINT.test(text)) return { body, fixes: [] };
 
   const fixes: string[] = [];

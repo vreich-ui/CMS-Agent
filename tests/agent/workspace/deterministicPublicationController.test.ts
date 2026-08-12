@@ -278,3 +278,22 @@ describe("wired into a real run: replaces the model call entirely", () => {
     expect(waivedOutput.waivedBlockers).toEqual([expect.objectContaining({ rule: WAIVER_RULE_ID, nodeId: "publish_payload" })]);
   });
 });
+
+describe("collectSourcedBlockers — prefix-aware dedup (run_1786549907145_hf4wgb: 7 real blockers inflated to 19)", () => {
+  it("treats an aggregator's 'node: '-prefixed echo of an upstream blocker as the SAME blocker", () => {
+    const collected = collectSourcedBlockers([
+      { nodeId: "contract_intelligence", output: { blockers: ["aggression_ceiling_missing: no ceiling declared."] } },
+      { nodeId: "learning_recorder", output: { blockers: ["contract_intelligence: aggression_ceiling_missing: no ceiling declared."] } }
+    ]);
+    expect(collected).toHaveLength(1);
+    expect(collected[0]).toEqual({ nodeId: "contract_intelligence", blocker: "aggression_ceiling_missing: no ceiling declared." });
+  });
+
+  it("does NOT collapse a blocker whose own vocabulary starts with a code that is not a node id", () => {
+    const collected = collectSourcedBlockers([
+      { nodeId: "publish_payload", output: { blockers: ["client_validation_failed: the validator rejected the patch."] } },
+      { nodeId: "article_body", output: { blockers: ["the validator rejected the patch."] } }
+    ]);
+    expect(collected).toHaveLength(2);
+  });
+});

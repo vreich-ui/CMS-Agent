@@ -393,6 +393,25 @@ const mockOutputForNode = (node: WorkspaceNode, run: WorkflowExecutionRecord) =>
 
 const buildArtifact = (node: WorkspaceNode, output: unknown): ExecutionArtifact => ({ id: `artifact_${node.id}_${Date.now()}`, nodeId: node.id, type: node.produces[0] ?? "mock_output", value: output, createdAt: now() });
 
+// The transitive dependsOn closure of `nodeId`, returned in canonical `nodes` order (ordering is part
+// of determinism — publicationController collects blockers in the order given). This is what
+// "upstream" means for a decision node: publication_controller must never read its own successors,
+// and on run_1786549907145_hf4wgb the looser `!== self` filter let an early-fired learning_recorder
+// (a successor) feed re-prefixed copies of upstream blockers back into the decision it observes.
+const upstreamNodeIds = (nodeId: string, nodes: WorkspaceNode[]): string[] => {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const upstream = new Set<string>();
+  const visit = (id: string): void => {
+    for (const dep of byId.get(id)?.dependsOn ?? []) {
+      if (upstream.has(dep)) continue;
+      upstream.add(dep);
+      visit(dep);
+    }
+  };
+  visit(nodeId);
+  return nodes.filter((node) => upstream.has(node.id)).map((node) => node.id);
+};
+
 // Publish-risk nodes (riskLevel publish/admin) must never run without explicit approval — this is
 // the "stop before any publishing side effect" boundary, generalized beyond the single
 // publication_controller id so any future publish-risk node is gated the same way.
@@ -1187,8 +1206,12 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         clientProjectId,
         articleBody: run.stageOutputs.article_body,
         // Canonical node order, upstream of this node only: a decision never reads its own successors,
-        // and ordering is part of determinism.
-        stageOutputs: nodes.filter((node) => node.id !== nextNode.id).map((node) => ({ nodeId: node.id, output: run.stageOutputs[node.id] })),
+        // and ordering is part of determinism. "Upstream" is now ENFORCED as the transitive dependsOn
+        // closure, not merely stated: on run_1786549907145_hf4wgb the old `!== nextNode.id` filter let
+        // learning_recorder — a SUCCESSOR that fires early on gate-blocked runs — feed its echoed,
+        // "node: "-prefixed copies of upstream blockers back into this decision, inflating 7 real
+        // blockers to 19.
+        stageOutputs: upstreamNodeIds(nextNode.id, nodes).map((nodeId) => ({ nodeId, output: run.stageOutputs[nodeId] })),
         // Most authoritative carrier first: the run's own initial input, then input_triage's echoed
         // envelope. The content class is an EXPLICIT run-level field (see publicationController.ts) —
         // a waiver that switches itself on from an inferred signal is a waiver nobody authorized.
@@ -1370,7 +1393,11 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   if (ownsValidationLoop(nextNode) && mode !== "mock" && readBodyForValidation(output)) {
     try {
       const loop = await runArticleBodyValidationLoop(output as Record<string, unknown>, {
-        validate: (body) => validateClientObjectOnce({ projectId: run.projectId, body, objectId: readTopLevelObjectId(body) }, { projectRepository: repositoryManager.getProjectRepository() }),
+        // objectType threaded from the envelope the model just emitted (its schema requires
+        // clientObjectType): the client's validate request schema REQUIRES object_type, and omitting
+        // it was the run_1786549907145_hf4wgb regression — every loop validation 400'd on the request
+        // shape before the body was judged.
+        validate: (body) => validateClientObjectOnce({ projectId: run.projectId, body, objectId: readTopLevelObjectId(body), objectType: typeof (output as Record<string, unknown>).clientObjectType === "string" ? ((output as Record<string, unknown>).clientObjectType as string) : undefined }, { projectRepository: repositoryManager.getProjectRepository() }),
         // ONE bounded revision turn, engine-driven: the model is handed the client's own errors and
         // its own previous envelope and asked for a corrected one. A fresh dispatch, so the node's
         // toolCallLimit is not what runs out; the runner records its own usage, so the turn is paid

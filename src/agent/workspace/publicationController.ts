@@ -149,7 +149,23 @@ const blockerKey = (blocker: string): string => blocker.trim().toLowerCase().rep
 
 // Collect every `blockers[]` entry from the supplied stage outputs, in the order given (the
 // conductor's canonical node order), de-duplicated across nodes.
+//
+// Dedup identity is PREFIX-AWARE (run_1786549907145_hf4wgb): an aggregator node that echoes an
+// upstream blocker prefixes it with its source ("contract_intelligence: aggression_ceiling_missing…"),
+// which defeated a raw-string dedup and inflated 7 real blockers to 19. Identity therefore strips any
+// repeated leading "<node-id>: " where <node-id> is a node in THIS collection — never an arbitrary
+// "word:" prefix, because this node's own vocabulary legitimately starts blockers with codes like
+// "client_validation_failed:". First-seen wording is still the one carried, never a re-worded merge.
 export function collectSourcedBlockers(stageOutputs: Array<{ nodeId: string; output: unknown }>): SourcedBlocker[] {
+  const nodeIds = new Set(stageOutputs.map(({ nodeId }) => nodeId.trim().toLowerCase()));
+  const identity = (blocker: string): string => {
+    let text = blocker;
+    for (;;) {
+      const match = /^([a-z0-9_.-]+):\s+/i.exec(text);
+      if (!match || !nodeIds.has(match[1].toLowerCase())) return blockerKey(text);
+      text = text.slice(match[0].length);
+    }
+  };
   const seen = new Set<string>();
   const collected: SourcedBlocker[] = [];
   for (const { nodeId, output } of stageOutputs) {
@@ -157,7 +173,7 @@ export function collectSourcedBlockers(stageOutputs: Array<{ nodeId: string; out
     const blockers = Array.isArray(output.blockers) ? output.blockers : [];
     for (const entry of blockers) {
       if (!nonEmptyString(entry)) continue;
-      const key = blockerKey(entry);
+      const key = identity(entry);
       if (seen.has(key)) continue;
       seen.add(key);
       collected.push({ nodeId, blocker: entry.trim() });
