@@ -25,6 +25,9 @@ import { buildLearningObservations } from "./learningRecord.js";
 import { buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector } from "./aggressionVector.js";
 import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
 import { getWorkflowDefinition } from "./workflowRegistry.js";
+import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
+import { declaresContractPrefetch } from "./nodeGatingSeed.js";
+import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -362,13 +365,24 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
 const nodeById = (nodes: WorkspaceNode[]) => new Map(nodes.map((node) => [node.id, node]));
 const stateById = (run: WorkflowExecutionRecord) => new Map(run.nodes.map((node) => [node.nodeId, node]));
 
+// W4 — DEPENDENCY SATISFACTION, WITH SKIPS.
+//
+// A dependency is satisfied when it COMPLETED (it produced its artifact) or when it was SKIPPED (the
+// conductor decided, before dispatch, that it had nothing to contribute — skipPredicates.ts). The
+// second case is the whole point of node gating: review_aggregator must aggregate over whichever
+// reviewers ran, and a deliberately-skipped node must never park the run behind an artifact that is
+// never coming. Skipped is satisfied-with-ABSENT, not satisfied-with-empty: the dependant is handed no
+// stage output for it, plus an explicit ledger saying which inputs are absent and why (see
+// executeRunnableNode). Every OTHER status — queued, running, failed, blocked, cancelled — is
+// unsatisfied exactly as before, so a failure still stops the run where it always did.
+const isDependencySatisfied = (state: NodeExecutionState | undefined): boolean => state?.status === "completed" || state?.status === "skipped";
+
 const findNextRunnableNode = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[]): WorkspaceNode | undefined => {
   const states = stateById(run);
-  const completed = new Set(run.nodes.filter((node) => node.status === "completed").map((node) => node.nodeId));
   return nodes.find((node) => {
     const state = states.get(node.id);
     if (!state || state.status !== "queued") return false;
-    return node.dependsOn.every((dependency) => completed.has(dependency));
+    return node.dependsOn.every((dependency) => isDependencySatisfied(states.get(dependency)));
   });
 };
 
@@ -621,11 +635,14 @@ const dependenciesReached = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[
     const state = states.get(id);
     return !!state && state.status !== "queued";
   };
+  // W4: "did not complete" here means "cannot ever satisfy", so a SKIPPED dependency does not seal —
+  // a skip is a satisfied dependency (isDependencySatisfied), and treating it as a seal would report
+  // the DAG as refused at a node the conductor deliberately routed around.
   const sealed = (id: string): boolean => {
     const dependencies = byId.get(id)?.dependsOn ?? [];
     return dependencies.length > 0
       && dependencies.every(reached)
-      && dependencies.some((dependency) => states.get(dependency)?.status !== "completed");
+      && dependencies.some((dependency) => !isDependencySatisfied(states.get(dependency)));
   };
   return node.dependsOn.every((dependency) => reached(dependency) || sealed(dependency));
 };
@@ -787,11 +804,54 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     run.updatedAt = completedAt;
     return { run };
   }
+  // W4 — SKIP PREDICATES, EVALUATED PRE-DISPATCH.
+  //
+  // This is the earliest point at which the run holds everything a predicate reads and nothing has
+  // been spent: the node is dependency-ready, its upstream outputs are in run.stageOutputs, and no
+  // prefetch, no runner and no model call has happened yet. A predicate that fired AFTER the dispatch
+  // would be a refund request, not a gate.
+  //
+  // The decision is a real state transition — status "skipped", with the predicate that fired and the
+  // facts it fired on recorded on the node — never a quiet no-op. No stage output and no artifact are
+  // written (a skipped node asserted nothing), no usage is recorded (nothing was charged), and the
+  // dependants treat the node as satisfied-with-absent (isDependencySatisfied).
+  //
+  // An operator's explicit retry of a skipped node sets skipOverride, which bypasses this: a retry is
+  // the operator saying "run this one", and re-deciding it against them would be an infinite loop.
+  if (!state.skipOverride) {
+    const verdict = evaluateNodeSkip(nextNode, { initialInput: run.initialInput, stageOutputs: run.stageOutputs });
+    if (verdict?.warnings.length) state.warnings = [...(state.warnings ?? []), ...verdict.warnings];
+    if (verdict?.skip) {
+      const completedAt = now();
+      state.status = "skipped";
+      state.startedAt = startedAt;
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.skip = { reason: verdict.reason, predicate: verdict.predicate as Record<string, unknown> | undefined, basis: verdict.basis, evaluatedAt: completedAt };
+      // A run-visible warning as well as the record: `workflow.get_run` readers and the attention feed
+      // both read state.warnings, so a gated run is legible without opening each node.
+      state.warnings = [...(state.warnings ?? []), `node_skipped:${verdict.predicate?.when ?? "predicate"}`];
+      delete state.dispatch;
+      run.status = "running";
+      run.updatedAt = completedAt;
+      run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      return { run };
+    }
+  }
+
   state.status = "running";
   state.startedAt = startedAt;
+  // W4 — the ledger of dependencies this run deliberately skipped, delivered in the dependant's own
+  // input. Without it a skipped dependency is an unexplained hole: review_aggregator would see three
+  // reviewer outputs where its prompt names four and could reasonably conclude one failed, wait for
+  // it, or invent it. With it, absence arrives with the reason attached and is aggregatable.
+  const skippedDependencies: SkippedDependencyEntry[] = nextNode.dependsOn
+    .map((dependency) => ({ dependency, dependencyState: stateById(run).get(dependency) }))
+    .filter((entry) => entry.dependencyState?.status === "skipped")
+    .map((entry) => ({ nodeId: entry.dependency, reason: entry.dependencyState?.skip?.reason ?? "skipped by the conductor before dispatch", predicate: entry.dependencyState?.skip?.predicate as SkippedDependencyEntry["predicate"] }));
   // W-4: clientProjectId travels in EVERY node's input — client identity is run state, delivered by
   // the conductor, not something an editorial prompt may assume or a downstream node must reconstruct.
-  state.input = { initialInput: nextNode.dependsOn.length ? undefined : run.initialInput, dependencies: Object.fromEntries(nextNode.dependsOn.map((dependency) => [dependency, run.stageOutputs[dependency]])), clientProjectId };
+  state.input = { initialInput: nextNode.dependsOn.length ? undefined : run.initialInput, dependencies: Object.fromEntries(nextNode.dependsOn.map((dependency) => [dependency, run.stageOutputs[dependency]])), clientProjectId, ...(skippedDependencies.length ? { skippedDependencies } : {}) };
   run.status = "running";
   run.currentNodeId = nextNode.id;
   run.updatedAt = startedAt;
@@ -822,7 +882,10 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // node's input as resolvedAggression and is carried onto the deterministic contract_intelligence
   // artifact below so downstream nodes consume the RESOLVED vector, never the raw target.
   let aggressionResolution: ReturnType<typeof resolveAggressionVector> | undefined;
-  if (nextNode.metadata?.contractPrefetch === true) {
+  // W6.3: read through the gating seed (nodeGatingSeed.ts) so brief_architect's prefetch — the
+  // declaration that puts the client ceiling in the run BEFORE the brief is written — is honoured
+  // whether it arrives from the node's own stored metadata or from the code seed.
+  if (declaresContractPrefetch(nextNode)) {
     try {
       const prefetch = await getReducedContract({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository(), workspaceRepository: options.workspaceRepository ?? repositoryManager.getWorkspaceRepository() });
       deterministicPrefetch = prefetch;
@@ -882,14 +945,27 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // that same prefetch) — never from an arbitrary node's retyping, and never invented: a fact the run
   // does not yet hold is simply absent. Schemas keep declaring these fields for now (removing them is
   // a re-seed topology change); what changes is that the ENGINE fills them, below.
+  // W6.3 — the vectors the engine will clamp this node's `resolved` against, read from this
+  // dispatch's own resolution first and from the run's earlier deterministic artifacts otherwise.
+  const resolvedVectorSources = readResolvedVectorSources({
+    resolution: aggressionResolution?.ok ? aggressionResolution : undefined,
+    reducedCeiling: deterministicPrefetch?.ok ? deterministicPrefetch.reduced.aggressionCeiling : undefined,
+    stageOutputs: run.stageOutputs
+  });
   const runContext = buildRunContext({
     clientProjectId,
     reducedContract: deterministicPrefetch?.ok ? deterministicPrefetch.reduced : undefined,
     stageOutputs: run.stageOutputs,
     // W3 part 1's prompt-side half: the node whose validator loop the engine has taken over is told
     // so HERE, in the same dispatch that takes it over, instead of in a seeded prompt the live
-    // (store-sourced) workspace would not see until a re-seed.
-    enginePolicies: ownsValidationLoop(nextNode) ? [ENGINE_VALIDATION_POLICY] : []
+    // (store-sourced) workspace would not see until a re-seed. W4 and W6.3 add their own halves on
+    // the same channel and for the same reason: the code that changes the behaviour is the code that
+    // states it, so prompt and behaviour cannot drift apart between re-seeds.
+    enginePolicies: [
+      ...(ownsValidationLoop(nextNode) ? [ENGINE_VALIDATION_POLICY] : []),
+      ...(declaresResolvedVector(undefined, nextNode.outputSchema) ? [ENGINE_RESOLVED_VECTOR_POLICY] : []),
+      ...(renderSkippedDependencyPolicy(skippedDependencies) ? [renderSkippedDependencyPolicy(skippedDependencies)!] : [])
+    ]
   });
   state.input = { ...(state.input as Record<string, unknown>), runContext };
 
@@ -1339,6 +1415,23 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     if (echoed.corrected.length) state.warnings = [...(state.warnings ?? []), `run_context_envelope_corrected:${echoed.corrected.join(",")}`];
   }
 
+  // W6 item 3 — the RESOLVED aggression vector is engine-computed, never model-emitted.
+  //
+  // Same seam, same reason as the envelope echo above: `resolved = min(ceiling, target)` is
+  // arithmetic the engine owns, and the live run proved what asking a model for it costs — the
+  // contract prefetch runs after brief_architect, so the brief's required `resolved` was filled from
+  // the only vector in sight (the unclamped target) and the ceiling blocker surfaced after the draft
+  // was already written against it. Whatever the model emitted is overwritten with the computed
+  // vector and `resolvedBasis` is rewritten to state what it was computed from; a disagreement is
+  // named as a run warning, and a run with no ceiling to clamp against is warned about LOUDLY rather
+  // than passing quietly (resolvedVectorClamp.ts explains why the value is left alone in that case).
+  if (mode !== "mock" && declaresResolvedVector(output, nextNode.outputSchema)) {
+    const clamp = applyResolvedVectorClamp(output, resolvedVectorSources, nextNode.outputSchema);
+    output = clamp.output;
+    if (clamp.warnings.length) state.warnings = [...(state.warnings ?? []), ...clamp.warnings];
+    if (clamp.clampedDials.length) state.warnings = [...(state.warnings ?? []), `resolved_vector_clamped:${clamp.clampedDials.join(",")}`];
+  }
+
   // P0 §2.3/§2.27 — an "executed" claim from a publisher-kind node must carry go-live evidence
   // (verification.deployStatus === "ready" AND verification.productionConfirmed === true, plus a
   // result) and an approvalMatched that matches the operator's durable publish decision
@@ -1463,6 +1556,12 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
       if (!run) return undefined;
       const node = run.nodes.find((candidate) => !nodeId || candidate.nodeId === nodeId);
       if (!node) return run;
+      // W4: retrying a SKIPPED node is the operator overriding the gate — "run this one". Without the
+      // durable override the next advance would re-evaluate the same predicate against the same facts
+      // and skip it again, so the retry control would silently do nothing. The skip record is cleared
+      // (the node is about to have a real execution record) but the override survives it.
+      if (node.status === "skipped") node.skipOverride = true;
+      delete node.skip;
       node.status = "queued";
       delete node.errors;
       delete node.output;
