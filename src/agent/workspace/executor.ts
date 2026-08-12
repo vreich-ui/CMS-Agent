@@ -17,6 +17,9 @@ import { getReducedContract } from "./contractPrefetch.js";
 import { getEditorialVoice } from "./voicePrefetch.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
 import { runDeterministicPublishPayload } from "./publishPayload.js";
+import { runDeterministicPublicationController } from "./publicationController.js";
+import { runDeterministicPublishExecutor } from "./publishExecution.js";
+import { buildLearningObservations } from "./learningRecord.js";
 import { buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector } from "./aggressionVector.js";
 import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
 import { getWorkflowDefinition } from "./workflowRegistry.js";
@@ -1051,6 +1054,141 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     // defect here is a run-level fact, not something only found by reading this one node.
     const reason = built.ok ? (payloadValidation && !payloadValidation.ok ? payloadValidation.errors[0] ?? "schema_invalid" : "schema_invalid") : built.code;
     state.warnings = [...(state.warnings ?? []), `publish_payload_deterministic_unavailable:${reason}`];
+  }
+
+  // W1 + W6.1 (determinism program, 2026-08-12): publication_controller reads a checklist and states a
+  // decision — and the checklist is computed by the project's OWN readiness policy
+  // (evaluatePublishReadiness, the function workflow.publish_readiness wraps), called here engine-side,
+  // never over MCP. Opt-in per node (metadata.publicationControllerDeterministic), same dispatch
+  // semantics as every deterministic path above: build, validate against the node's OWN outputSchema,
+  // fall through to the model path on any failure with a run-visible warning naming it.
+  //
+  // W6.1 rides in the same block because it is the same decision: every upstream stage output's
+  // blockers[] is collected in canonical node order and carried INTO the decision, so a "go" can never
+  // be emitted while an unwaived blocker exists (the live defect on run_1786468126136_ev9goe was
+  // exactly that: decision "go" alongside aggression_ceiling_missing and an EV-floor block). The one
+  // exemption — own-property content is exempt from EV-floor and aggression-ceiling blockers by
+  // standing operator rule — is AUDITED, not silent: every waived blocker is listed in the decision's
+  // waivedBlockers[] with the rule that waived it and the node that raised it.
+  //
+  // Scoped to LIVE runs for the same reason the other publish-path deterministic routes are: a mock
+  // run's article_body is a placeholder, so a readiness verdict over it is meaningless, and mock
+  // traversal keeps working through MockNodeRunner unchanged. Placed AFTER the publish-refusal block
+  // (this node is riskLevel "publish") because a deterministic path must never be the thing that
+  // skips a gate.
+  if (nextNode.metadata?.publicationControllerDeterministic === true && ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+    let decided: Awaited<ReturnType<typeof runDeterministicPublicationController>>;
+    try {
+      decided = await runDeterministicPublicationController({
+        projectId: run.projectId,
+        clientProjectId,
+        articleBody: run.stageOutputs.article_body,
+        // Canonical node order, upstream of this node only: a decision never reads its own successors,
+        // and ordering is part of determinism.
+        stageOutputs: nodes.filter((node) => node.id !== nextNode.id).map((node) => ({ nodeId: node.id, output: run.stageOutputs[node.id] })),
+        // Most authoritative carrier first: the run's own initial input, then input_triage's echoed
+        // envelope. The content class is an EXPLICIT run-level field (see publicationController.ts) —
+        // a waiver that switches itself on from an inferred signal is a waiver nobody authorized.
+        contentClassCarriers: [run.initialInput, run.stageOutputs.input_triage]
+      });
+    } catch (error) {
+      decided = { ok: false, code: "threw", error: error instanceof Error ? error.message : String(error) };
+    }
+    const decisionValidation = decided.ok ? validateOutput(decided.decision, nextNode.outputSchema) : undefined;
+    if (decided.ok && decisionValidation?.ok) {
+      const completedAt = now();
+      state.status = "completed";
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = decided.decision;
+      run.stageOutputs[nextNode.id] = decided.decision;
+      run.artifacts.push(buildArtifact(nextNode, decided.decision));
+      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.updatedAt = completedAt;
+      run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
+      return { run };
+    }
+    const reason = decided.ok ? (decisionValidation && !decisionValidation.ok ? decisionValidation.errors[0] ?? "schema_invalid" : "schema_invalid") : decided.code;
+    state.warnings = [...(state.warnings ?? []), `publication_controller_deterministic_unavailable:${reason}`];
+  }
+
+  // W2a (determinism program, 2026-08-12): the publish gate is two exact comparisons the engine
+  // already owns (publishDecision.ts) — an explicit publication_controller decision:"go" AND
+  // run.operatorPublishDecision === "approved" — and this is the ONE node that can mutate a live site,
+  // so its refusal path is the last place a model turn belongs. Opt-in per node
+  // (metadata.publishExecutorDeterministic).
+  //
+  // FAIL-CLOSED HALF ONLY, deliberately: when the gate does NOT pass, the blocked publish_execution.v1
+  // record is emitted here with ZERO client calls (bit-for-bit the outcome verified live on
+  // run_1786468126136_ev9goe, where the model spent a turn to reach the same refusal). When the gate
+  // DOES pass, runDeterministicPublishExecutor returns {ok:false, gate_passed_execution_not_deterministic}
+  // and execution falls through to the model path unchanged — engine-side publish EXECUTION would need
+  // a release + go-live verification tail that publisher.ts structurally does not have (board decision
+  // B2: publishRun never releases), and an "executed" claim without that evidence is downgraded to
+  // "blocked" by enforcePublishExecutionEvidence anyway. That tail is its own change, not a rider on a
+  // refusal path.
+  if (nextNode.metadata?.publishExecutorDeterministic === true && isPublishExecutorNode(nextNode) && liveRun) {
+    const executed = runDeterministicPublishExecutor({
+      run,
+      clientProjectId,
+      // Envelope facts taken verbatim from upstream, nearest-to-this-node first; never invented.
+      envelopeCarriers: [run.stageOutputs.publication_controller, run.stageOutputs.publish_payload, run.stageOutputs.article_body]
+    });
+    const executionValidation = executed.ok ? validateOutput(executed.output, nextNode.outputSchema) : undefined;
+    if (executed.ok && executionValidation?.ok) {
+      const completedAt = now();
+      // The node COMPLETED (it produced its artifact); the PUBLISH is what is blocked, and the record
+      // says so in its own status field. This is exactly what the live run recorded, so learning_recorder
+      // and every downstream reader see the same shape they saw then.
+      state.status = "completed";
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = executed.output;
+      state.warnings = [...(state.warnings ?? []), "no_publication_performed"];
+      run.stageOutputs[nextNode.id] = executed.output;
+      run.artifacts.push(buildArtifact(nextNode, executed.output));
+      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.updatedAt = completedAt;
+      run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
+      return { run };
+    }
+    const reason = executed.ok ? (executionValidation && !executionValidation.ok ? executionValidation.errors[0] ?? "schema_invalid" : "schema_invalid") : executed.code;
+    state.warnings = [...(state.warnings ?? []), `publish_executor_deterministic_unavailable:${reason}`];
+  }
+
+  // W2b (determinism program, 2026-08-12): learning_recorder writes down what the run DID — which
+  // nodes ran, which were blocked, what the gates decided, what it cost. Every one of those is a
+  // structured fact on the run record or the usage ledger, so the record is TEMPLATED (learningRecord.ts),
+  // with no model call and no free-text generation at all. Opt-in per node
+  // (metadata.learningRecorderDeterministic). Unlike the publish-path routes this one is NOT scoped to
+  // live runs: it reads run facts rather than client state, so a mock run gets an equally true record.
+  if (nextNode.metadata?.learningRecorderDeterministic === true) {
+    let usage: Awaited<ReturnType<typeof summarizeModelUsage>> | undefined;
+    let usageError: string | undefined;
+    try {
+      usage = await summarizeModelUsage({ runId: run.runId });
+    } catch (error) {
+      usageError = error instanceof Error ? error.message : String(error);
+    }
+    const observations = buildLearningObservations({ run, usage, usageError });
+    const observationsValidation = validateOutput(observations, nextNode.outputSchema);
+    if (observationsValidation.ok) {
+      const completedAt = now();
+      state.status = "completed";
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = observations;
+      run.stageOutputs[nextNode.id] = observations;
+      run.artifacts.push(buildArtifact(nextNode, observations));
+      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.updatedAt = completedAt;
+      run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
+      return { run };
+    }
+    state.warnings = [...(state.warnings ?? []), `learning_recorder_deterministic_unavailable:${observationsValidation.errors[0] ?? "schema_invalid"}`];
   }
 
   // Dispatch claim (the ~300s silent-death fix): persist "this node is in flight, with this timeout"
