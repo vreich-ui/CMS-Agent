@@ -542,14 +542,14 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
         // buildInitialRun now validates the seeded output against the entry node's OWN outputSchema and
         // throws InvalidEntrypointOutputError before a run is created. This call only coerces and hands
         // it over, so the check stays correct through R-23 renaming the contract — there is no second
-        // copy of \"what an article body looks like\" to drift.
+        // copy of "what an article body looks like" to drift.
         entrypoint = { nodeId: "article_body", output: coerceJsonObjectInput(data.articleBody) };
       }
       // The `input` envelope gets the same coercion `articleBody` already had. Some MCP clients serialize
       // object-typed arguments as JSON strings (documented in toolKit.ts, observed live with Claude's
       // connector) — and reproduced here: a content_source.v1 envelope passed to start_dry_run was stored
       // in initialInput as a JSON *string*, so input_triage would consume a string where an envelope
-      // belongs. That is precisely the input side of the T-3 publish path, where a \"successful\" run
+      // belongs. That is precisely the input side of the T-3 publish path, where a "successful" run
       // carrying a stringified envelope is worse than a failed one.
       return ok({ run: await startDryRun({ projectId: data.projectId, input: coerceJsonObjectInput(data.input), workflowId: data.workflowId, executionMode: data.executionMode, entrypoint, budgetUsd: data.budgetUsd }, executionRepository) });
     } }),
