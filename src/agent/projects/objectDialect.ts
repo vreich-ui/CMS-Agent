@@ -48,8 +48,23 @@ export type ClientValidation = { tool: string; candidate_patch_summary: string; 
 export const parseValidateResult = (validated: unknown, candidatePatchSummary: string): ClientValidation => {
   const parsedValid = findDeep(validated, (key, child) => key === "valid" && typeof child === "boolean");
   const parsedIssues = findDeep(validated, (key, child) => key === "issues" && Array.isArray(child));
-  const valid = typeof parsedValid === "boolean" ? parsedValid : false;
-  const issues: unknown[] = Array.isArray(parsedIssues) ? parsedIssues : typeof parsedValid === "boolean" ? [] : ["unparseable_validate_result"];
+  // The id-less dry-run flavor (object_validate {object_type, body} — a candidate for an object that
+  // does not exist yet) answers with the platform's CHECKLIST shape, not {valid, issues}:
+  //   { dry_run, validation: [...groups...], summary: { level, eligible: boolean, blockers: [...] } }
+  // `summary.eligible` is that shape's verdict and `summary.blockers` its issues. Learned live
+  // (run_1786555553280_r7a4fd, 2026-08-12): once the validate REQUEST was fixed to actually reach the
+  // client, this parser read the checklist answer as "unparseable_validate_result" and a correct
+  // `eligible: true` verdict was recorded as a client_validation_failed blocker. {valid} still wins
+  // where both appear — it is the explicit form — and a result carrying NEITHER boolean stays
+  // unparseable-as-invalid, exactly as before.
+  const parsedEligible = findDeep(validated, (key, child) => key === "eligible" && typeof child === "boolean");
+  const parsedBlockers = findDeep(validated, (key, child) => key === "blockers" && Array.isArray(child));
+  const valid = typeof parsedValid === "boolean" ? parsedValid : typeof parsedEligible === "boolean" ? parsedEligible : false;
+  const issues: unknown[] =
+    Array.isArray(parsedIssues) ? parsedIssues
+    : typeof parsedValid === "boolean" ? []
+    : typeof parsedEligible === "boolean" ? (Array.isArray(parsedBlockers) ? parsedBlockers : [])
+    : ["unparseable_validate_result"];
   return { tool: "object_validate", candidate_patch_summary: candidatePatchSummary, valid, issues };
 };
 
