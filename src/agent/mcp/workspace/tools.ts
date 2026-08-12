@@ -98,6 +98,29 @@ const requirePatchField = (patch: Record<string, unknown>, field: string, toolNa
   if (!(field in patch) || patch[field] === undefined) throw new MissingPatchFieldError(toolName, field);
   return patch[field];
 };
+
+// W6.4 (docs/plan/WORK-ORDER-2026-08-12-determinism.md): workspace.update_node_model_config used to
+// share the map above's handler, building its store patch as `{ modelConfig: data.patch.modelConfig }`.
+// requirePatchField stops the undefined-overwrite case, but modelConfig is a settings BAG (maxTurns,
+// toolCallLimit, timeout, budgetUsd, maxOutputTokens, ...), not a single opaque value like a prompt
+// string — and updateNode's store-level merge (`{ ...existing, ...patch }`, store.ts) is a SHALLOW
+// top-level merge. A caller who wants to change only one knob and sends `{ maxTurns: 8 }` had that
+// object become the ENTIRE new modelConfig: every other previously-set key was silently dropped. That
+// is a real, reproduced data-loss bug, distinct from the allowedTools/assignedSkills/dependsOn case
+// above (those are arrays with no keys to preserve — wholesale replace is the correct semantics for
+// them). Fixed by giving modelConfig its own handler: the caller's patch.modelConfig is deep-merged
+// onto the node's EXISTING stored modelConfig before it ever reaches updateNode, so updateNode's own
+// shallow merge sees an object that already carries every key the caller did not mention. Nested plain
+// objects merge key-by-key recursively; any other value (including arrays) replaces outright, matching
+// ordinary JSON-merge-patch semantics.
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const deepMergeRecords = (base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> => {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    merged[key] = isPlainRecord(value) && isPlainRecord(base[key]) ? deepMergeRecords(base[key] as Record<string, unknown>, value) : value;
+  }
+  return merged;
+};
 const updateGraphInput = z.object({ create: z.array(z.any()).optional(), update: z.array(z.record(z.string(), z.unknown()).and(z.object({ id: z.string().min(1) }))).optional(), delete: z.array(z.string().min(1)).optional(), dependencies: z.record(z.string(), z.array(z.string().min(1))).optional(), orderedNodeIds: z.array(z.string().min(1)).optional(), positions: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).optional(), allowCanonicalNodeRemoval: z.boolean().optional(), adminApproved: z.boolean().optional(), ...mutationMeta }).strict();
 const validateNodeInput = z.object({ node: z.any().optional(), id: z.string().min(1).optional() }).strict();
 const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(), stageOutputs: z.array(stageOutputImport).optional(), learningObservations: z.array(learningObservationImport).optional() }).strict();
@@ -440,7 +463,10 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "workspace.update_node_input_schema", description: "Update node input JSON Schema.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const schema = coerceSchemaInput(data.schema); const issues = validateJsonSchema(schema); if (issues.length) throw new Error(issues.join("; ")); return ok(await workspaceRepository.updateNode(data.id, { inputSchema: schema }, meta(data), "node.input_schema_updated")); } }),
     tool({ name: "workspace.update_node_output_schema", description: "Update node output JSON Schema draft 2020-12.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const schema = coerceSchemaInput(data.schema); const issues = validateJsonSchema(schema); if (issues.length) throw new Error(issues.join("; ")); return ok(await workspaceRepository.updateNode(data.id, { outputSchema: schema, schema }, meta(data), "node.output_schema_updated")); } }),
     ...[["workspace.update_node_tools", "allowedTools", "node.tools_updated"], ["workspace.update_node_skills", "assignedSkills", "node.skills_updated"], ["workspace.update_node_dependencies", "dependsOn", "node.dependencies_updated"]].map(([name, field, eventType]) => tool({ name, description: `Update node ${field}.`, zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); return ok(await workspaceRepository.updateNode(data.id, { [field]: requirePatchField(data.patch, field, name) } as Partial<WorkspaceNode>, meta(data), eventType)); } })),
-    ...[["workspace.update_node_metadata", "metadata"], ["workspace.update_node_model_config", "modelConfig"]].map(([name, field]) => tool({ name, description: `Update node ${field}.`, zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); return ok(await workspaceRepository.updateNode(data.id, { [field]: requirePatchField(data.patch, field, name) } as Partial<WorkspaceNode>, meta(data), field === "modelConfig" ? "node.model_config_updated" : "node.updated")); } })),
+    tool({ name: "workspace.update_node_metadata", description: "Update node metadata.", zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); return ok(await workspaceRepository.updateNode(data.id, { metadata: requirePatchField(data.patch, "metadata", "workspace.update_node_metadata") } as Partial<WorkspaceNode>, meta(data), "node.updated")); } }),
+    // See the deepMergeRecords comment above requirePatchField for why this tool does not share the
+    // wholesale-replace handler the array-valued node writers use.
+    tool({ name: "workspace.update_node_model_config", description: "Update node modelConfig. Recursively MERGES the given keys onto the node's existing modelConfig — keys the patch omits are preserved, not dropped; a key present in the patch overwrites (nested plain objects merge key-by-key, any other value including arrays replaces outright).", zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); const incoming = requirePatchField(data.patch, "modelConfig", "workspace.update_node_model_config"); if (!isPlainRecord(incoming)) throw new Error("workspace.update_node_model_config: patch.modelConfig must be an object"); const existingNode = await workspaceRepository.getNode(data.id); if (!existingNode) throw new Error(`Unknown node: ${data.id}`); const merged = deepMergeRecords(existingNode.modelConfig ?? {}, incoming); return ok(await workspaceRepository.updateNode(data.id, { modelConfig: merged } as Partial<WorkspaceNode>, meta(data), "node.model_config_updated")); } }),
     tool({ name: "workspace.reorder_nodes", description: "Reorder nodes without changing dependencies.", zodSchema: updateGraphInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateGraphInput.parse(input); return ok(await workspaceRepository.updateGraph(data, meta(data), "graph.reordered")); } }),
     tool({ name: "workspace.update_graph", description: "Atomically update workflow graph.", zodSchema: updateGraphInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateGraphInput.parse(input); return ok(await workspaceRepository.updateGraph(data, meta(data), "graph.updated")); } }),
     tool({ name: "workspace.validate_graph", description: "Validate workflow graph: ids, statuses, risk levels, missing dependencies, cycles, publish-chain edges, and (R-21) that every conductor-sequence node's dependsOn / requiredInputs entries are actually satisfiable by the conductor sequence.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); const { validateWorkspaceGraph } = await import("../../workspace/nodes.js"); const nodes = await workspaceRepository.getNodes(); return ok({ validation: validateWorkspaceGraph(nodes) }); } }),
