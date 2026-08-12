@@ -21,6 +21,7 @@ import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner.js";
+import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 
 const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
@@ -33,10 +34,14 @@ const stringFrom = (value: unknown) => typeof value === "string" && value.trim()
 const cfg = (node: WorkspaceNode) => ({ ...(node.modelConfig ?? {}), ...(node.executionConfig ?? {}) });
 const apiKeyEnv = (node: WorkspaceNode) => stringFrom(cfg(node).apiKeyEnv) ?? "ANTHROPIC_API_KEY";
 
-const instructions = (node: WorkspaceNode, playbookText: string): string => [
+const instructions = (node: WorkspaceNode, playbookText: string, input?: unknown): string => [
   "You are the CMS-Agent node runner running natively on Claude.",
   `Node: ${node.name} (${node.id})`,
   `Description: ${node.description}`,
+  // W3 part 3 (determinism program, 2026-08-12): parity with the OpenAI runner — the run's client
+  // facts stated once by the conductor, so a node on either provider works from the same delivered
+  // context instead of echoing a dependency's envelope. Absent when the input carries no runContext.
+  renderRunContextInstruction(readRunContext(input)),
   "Node prompt:", node.prompt,
   playbookText ? `Playbook (curated lessons for this node):\n${playbookText}` : "",
   "Assigned dependencies and memory are provided in the user message. Never reveal secrets.",
@@ -86,7 +91,7 @@ export class AnthropicNodeRunner implements NodeRunner {
     const body = {
       model,
       max_tokens: numberFrom(c.maxOutputTokens) ?? 4096,
-      system: instructions(node, playbookText),
+      system: instructions(node, playbookText, input),
       messages: [{ role: "user", content: userContent }],
       tools: [{ name: "emit_output", description: "Emit this node's structured output. Call exactly once with the full result matching the schema.", input_schema: node.outputSchema as Record<string, unknown> }],
       tool_choice: { type: "tool", name: "emit_output" }
