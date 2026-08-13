@@ -5,6 +5,7 @@ import { getNodeRunner } from "../execution/runnerRegistry.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 import { validateOutput } from "../execution/outputValidator.js";
 import { recordModelUsage } from "../observability/modelUsage.js";
+import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 import { resolveSkillsForNode } from "../skills/skillResolver.js";
 import { resolveEffectiveToolsForNode } from "../tools/toolResolver.js";
 import { DEFAULT_EXECUTION_MODE } from "./executor.js";
@@ -177,6 +178,11 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   // In openai mode the runner records real usage itself (OpenAINodeRunner); recording here too
   // double-counted every independent execution with fabricated token counts marked "actual".
   if (data.executionMode !== "openai") await recordModelUsage({ runId, requestId: run.requestId, workflowId: run.workflowId, projectId: run.projectId, nodeId: node.id, model: modelName(node, data.modelConfig), provider: "openai", inputTokens: tokenCount(state.input, 64), outputTokens: tokenCount(state.output, 32), status: "estimated", metadata: { executionId, independentNode: true } });
+  // T6 (Wave 3, ships dark) — node.execute is the SECOND node-completion path (executor.ts's
+  // executeRunnableNode is the first); a ledger that only saw conductor-dispatched nodes would miss
+  // every independent single-node execution entirely. Best-effort, same posture as executor.ts's own
+  // hook: a timing-repository failure must never fail an otherwise-successful node.execute call.
+  await recordNodeTimingCompletion({ runId, workflowId: run.workflowId, nodeId: node.id, durationMs: state.durationMs ?? 0, outcome: state.status as NodeTimingOutcome }).catch(() => undefined);
   return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId });
 }
 

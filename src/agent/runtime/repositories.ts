@@ -39,6 +39,7 @@ export const getExecutionRepository = () => getRepositoryManager().getExecutionR
 export const getArtifactRepository = () => getRepositoryManager().getArtifactRepository();
 export const getLearningRepository = () => getRepositoryManager().getLearningRepository();
 export const getUsageRepository = () => getRepositoryManager().getUsageRepository();
+export const getNodeTimingRepository = () => getRepositoryManager().getNodeTimingRepository();
 export const getProjectRepository = () => getRepositoryManager().getProjectRepository();
 export const getChangeRepository = () => getRepositoryManager().getChangeRepository();
 export const getEvaluationRepository = () => getRepositoryManager().getEvaluationRepository();

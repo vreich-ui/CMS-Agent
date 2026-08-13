@@ -25,6 +25,7 @@ describe("§2.23 workflow registry", () => {
       .map((node) => ({ ...node, id: `money_${node.id}`, dependsOn: node.dependsOn.map((dependency) => `money_${dependency}`), requiredInputs: node.requiredInputs.map((input) => (input.includes(".") ? input : `money_${input}`)) }));
     const binding = {
       contract_intelligence: ["money_brief_architect"],
+      artifact_plan: ["money_brief_architect"],
       article_body: ["money_review_aggregator", "money_draft_writer", "money_narrative_movement", "money_angle_strategy"]
     } as const;
     registerWorkflow({ workflowId: "money_page_test", canonicalNodes: () => composeWorkflowNodes(upstream, binding) });

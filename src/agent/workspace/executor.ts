@@ -29,6 +29,7 @@ import { getWorkflowDefinition } from "./workflowRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
 import { declaresContractPrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
+import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -382,6 +383,30 @@ async function applyOperatorPublishPolicyDefault(run: WorkflowExecutionRecord, p
 const nodeById = (nodes: WorkspaceNode[]) => new Map(nodes.map((node) => [node.id, node]));
 const stateById = (run: WorkflowExecutionRecord) => new Map(run.nodes.map((node) => [node.nodeId, node]));
 
+// T6 (Wave 3, ships dark) — every node completion executeRunnableNode reaches lands one
+// NodeTimingRecord here: model-dispatched nodes AND every deterministic fast path (skip predicates,
+// contractIntelligenceDeterministic/placementResolverDeterministic mapping, the budget/approval
+// blocks, output_schema_violation failures) all set a terminal state.status + state.durationMs before
+// every one of executeRunnableNode's `return { run, ... }` statements — see nodeTimings.ts's header
+// for why a ledger that only saw the model-dispatched paths would be worse than none. Reading
+// state.durationMs off the ALREADY-SAVED run (rather than timing this call itself) means the recorded
+// duration is the exact figure the run record itself reports, not a second, possibly-drifted clock.
+// Best-effort: a timing-repository failure must never fail the run it is merely observing, matching
+// the posture prepared.commit's own usage/stage-output side effects already take (both call sites
+// wrap this in .catch(() => undefined)).
+const TERMINAL_TIMING_OUTCOMES = new Set<ExecutionStatus>(["completed", "failed", "blocked", "cancelled", "skipped"]);
+async function recordNodeTiming(run: WorkflowExecutionRecord, nodeId: string): Promise<void> {
+  const state = stateById(run).get(nodeId);
+  if (!state || state.durationMs === undefined || !TERMINAL_TIMING_OUTCOMES.has(state.status)) return;
+  await recordNodeTimingCompletion({
+    runId: run.runId,
+    workflowId: run.workflowId,
+    nodeId,
+    durationMs: state.durationMs,
+    outcome: state.status as NodeTimingOutcome
+  });
+}
+
 // W4 — DEPENDENCY SATISFACTION, WITH SKIPS.
 //
 // A dependency is satisfied when it COMPLETED (it produced its artifact) or when it was SKIPPED (the
@@ -394,13 +419,26 @@ const stateById = (run: WorkflowExecutionRecord) => new Map(run.nodes.map((node)
 // unsatisfied exactly as before, so a failure still stops the run where it always did.
 const isDependencySatisfied = (state: NodeExecutionState | undefined): boolean => state?.status === "completed" || state?.status === "skipped";
 
+// The one runnability predicate, shared by the single-node and the T7 batch selectors below so
+// "dependency-ready" cannot come to mean two different things in the same dispatch loop.
+const isNodeRunnable = (states: Map<string, NodeExecutionState>, node: WorkspaceNode): boolean => {
+  const state = states.get(node.id);
+  if (!state || state.status !== "queued") return false;
+  return node.dependsOn.every((dependency) => isDependencySatisfied(states.get(dependency)));
+};
+
 const findNextRunnableNode = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[]): WorkspaceNode | undefined => {
   const states = stateById(run);
-  return nodes.find((node) => {
-    const state = states.get(node.id);
-    if (!state || state.status !== "queued") return false;
-    return node.dependsOn.every((dependency) => isDependencySatisfied(states.get(dependency)));
-  });
+  return nodes.find((node) => isNodeRunnable(states, node));
+};
+
+// T7: EVERY dependency-ready queued node, in canonical `nodes` order — findNextRunnableNode's own
+// `find` is this list's head, so the serial dispatch order a run has always had is exactly this list
+// consumed one element at a time. That identity is what lets the concurrent batch below be defined as
+// a PREFIX of it and still leave run.artifacts / run.errors in the order a serial run produced them.
+const findRunnableNodes = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[]): WorkspaceNode[] => {
+  const states = stateById(run);
+  return nodes.filter((node) => isNodeRunnable(states, node));
 };
 
 // Kept as a re-export so the existing __test__ surface stays stable. The implementation is shared with
@@ -790,11 +828,206 @@ async function recordTerminationObservations(run: WorkflowExecutionRecord, nodes
     prepared.run.currentNodeId = currentNodeId;
     const saved = await store.saveRun(prepared.run);
     await prepared.commit?.().catch(() => undefined);
+    await recordNodeTiming(saved, node.id).catch(() => undefined);
     return saved;
   } catch {
     // Best-effort: recording observations must never fail the run or mask its real terminal status.
     return run;
   }
+}
+
+// ── T7 (Wave 3, 2026-08-13) — BOUNDED CONCURRENT DISPATCH ───────────────────────────────────────
+//
+// Evidence (run_1786557897658_elj34j, verified live 2026-08-12): the review quartet — human_texture,
+// trust_factual, emotional_resonance, reader_simulation — ran SERIALLY for ~113 seconds. None of the
+// four depends on another and all four feed review_aggregator. The serialization was the DRIVER's, not
+// the graph's: findNextRunnableNode returns the canonically-first ready node and advanceRun dispatched
+// exactly that one, so four independent nodes cost four advances.
+//
+// review_aggregator gets NO special case. It waits because isDependencySatisfied reports its four
+// dependencies unsatisfied until each completes — the same rule that makes it impossible for a batch to
+// contain a node and its own dependency (a node whose dependency has not completed is not runnable, so
+// the two can never appear in one ready list). The dependency graph does the barriering, as it always did.
+//
+// The bound is the QUARTET WIDTH — the four independent reviewers this exists for — and is not a
+// throughput tuning knob to be raised casually. Every batch member is a live model dispatch against the
+// same client and the same run ceiling, and the budget reservation below can only defend that ceiling
+// for members that DECLARE a budgetUsd; raising this raises the worst-case overshoot of an undeclared
+// node linearly with it. Four is also the widest independent fan-out this graph has.
+export const CONCURRENT_DISPATCH_LIMIT = 4;
+
+// Node metadata that routes a dispatch into a DETERMINISTIC path inside executeRunnableNode. Such a
+// node is excluded from the batch, so the batch admits only nodes whose deterministic/skip evaluation
+// has ALREADY run (here, before the batch is formed) and came out as ordinary model dispatches. Reasons,
+// concretely: those paths are engine code that costs nothing to run serially, so concurrency buys
+// nothing; several of them read stage outputs OUTSIDE their own dependsOn (publish_payload reads
+// article_body, publication_controller reads its whole upstream closure), which is exactly what an
+// interleaved schedule would perturb; and one of them can publish.
+const DETERMINISTIC_ROUTE_METADATA_KEYS = [
+  "contractIntelligenceDeterministic",
+  "placementResolverDeterministic",
+  "publishPayloadDeterministic",
+  "publicationControllerDeterministic",
+  "publishExecutorDeterministic",
+  "learningRecorderDeterministic"
+] as const;
+const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
+  DETERMINISTIC_ROUTE_METADATA_KEYS.some((key) => {
+    const declared = node.metadata?.[key];
+    return declared !== undefined && declared !== false;
+  });
+
+// The stage outputs the ENGINE reads outside a node's own dependsOn: buildRunContext (runContext.ts)
+// lifts requestId from artifact_plan and the client facts from contract_intelligence;
+// readResolvedVectorSources (resolvedVectorClamp.ts) reads contract_intelligence and placement_resolver.
+// A serial run dispatches in canonical order, so a node canonically AFTER one of these sees its output
+// — a batch member would not. The batch therefore ENDS at the first such node (it may still ride with
+// earlier-canonical siblings, which would not have seen its output serially either), which is what keeps
+// every batch exactly equivalent to the serial prefix it replaces.
+const RUN_CONTEXT_SOURCE_NODE_IDS = new Set(["artifact_plan", "contract_intelligence", "placement_resolver"]);
+
+// The skip verdict, READ without recording anything — executeRunnableNode remains the only place that
+// writes the skip state and its warnings, and it re-evaluates the same pure predicate moments later. The
+// two cannot disagree: batch members are mutually independent, so no sibling writes a stage output
+// another sibling's predicate reads, and every member is handed the same pre-batch snapshot.
+const wouldSkipBeforeDispatch = (run: WorkflowExecutionRecord, node: WorkspaceNode): boolean => {
+  if (stateById(run).get(node.id)?.skipOverride) return false;
+  return evaluateNodeSkip(node, { initialInput: run.initialInput, stageOutputs: run.stageOutputs })?.skip === true;
+};
+
+// Publish-risk is the hard exclusion: a publish-risk node is NEVER dispatched alongside anything. Its
+// gates (operator veto, explicit approval, an affirmative controller decision) exist to STOP the run
+// there, and a sibling completing beside it would be work done past a stop.
+const isConcurrentDispatchEligible = (run: WorkflowExecutionRecord, node: WorkspaceNode): boolean =>
+  !isPublishRisk(node) && !isPublishExecutorNode(node) && !declaresDeterministicRoute(node) && !wouldSkipBeforeDispatch(run, node);
+
+// THE BATCH: the longest PREFIX of the ready list (canonical order) whose members are all eligible, at
+// most CONCURRENT_DISPATCH_LIMIT long, that the run budget can still reserve for. A prefix, never a
+// filtered subset — stepping over an ineligible node to reach an eligible one would dispatch out of
+// canonical order and leave run.artifacts / run.errors in an order no serial run ever produced. []
+// means "use the serial path", and so does a batch of one.
+//
+// BUDGET: the ceiling is reserved for the WHOLE batch before any of it is dispatched — the same
+// reservation the serial gate performs for one node (F2, hardened after run_1785435947311_jl8hl4 landed
+// at 138%). A node whose declared budgetUsd no longer fits alongside those already admitted ends the
+// batch and is dispatched on a later advance, where the serial gate re-decides it with the batch's
+// actual spend accrued. Four concurrent nodes therefore cannot collectively RESERVE past a ceiling one
+// serial node would have stopped at. What concurrency does widen is the un-reservable remainder: a node
+// that declares no budgetUsd reserves $0, so up to CONCURRENT_DISPATCH_LIMIT of them can be in flight
+// when the ceiling is crossed mid-node instead of one — the overshoot is bounded by the batch's own
+// actual spend beyond what it reserved, and the run still halts at the next advance.
+const selectConcurrentBatch = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[], head: WorkspaceNode, budget: ReturnType<typeof evaluateRunBudget>): WorkspaceNode[] => {
+  const ready = findRunnableNodes(run, nodes);
+  // The head must be the node the serial path would have dispatched, or this is not a prefix.
+  if (ready.length < 2 || ready[0]?.id !== head.id) return [];
+  const batch: WorkspaceNode[] = [];
+  let reservedUsd = 0;
+  for (const node of ready) {
+    if (batch.length >= CONCURRENT_DISPATCH_LIMIT) break;
+    if (!isConcurrentDispatchEligible(run, node)) break;
+    const reserveUsd = nodeBudgetUsdOf(node) ?? 0;
+    if (budget && budget.spentUsdEstimate + reservedUsd + reserveUsd > budget.budgetUsd) break;
+    reservedUsd += reserveUsd;
+    batch.push(node);
+    if (RUN_CONTEXT_SOURCE_NODE_IDS.has(node.id)) break;
+  }
+  return batch.length > 1 ? batch : [];
+};
+
+// One batch: one claim save, one reconciliation save.
+//
+// RUN-RECORD WRITES — per-node save-and-merge is NOT available here, so this is a single post-batch
+// reconciliation. executeRunnableNode mutates the run record it is handed and advanceRun persists the
+// WHOLE record under a compare-and-swap (ExecutionRepository.saveRun, RunConcurrencyError): four
+// dispatches each saving their own copy would either lose three writes or trip the CAS against each
+// other on every single batch. Each node therefore executes against its own structuredClone of the
+// claimed record, nothing is persisted until every sibling has settled, and the results are merged into
+// one record in canonical node order and written once. Two saves per batch — exactly what one serial
+// advance costs today.
+//
+// THE CLAIM SAVE IS NOT OPTIONAL. It is the dispatch heartbeat runContinuation's tick reads through
+// assessRunStall: without a persisted "these nodes are in flight, with these timeouts" marker, a tick
+// firing mid-batch would see an idle driver and re-enter a run that is genuinely in flight. It is also
+// what protects the reconciliation save's CAS — a competing advanceRun that loads the claimed record
+// finds an in-flight node inside its window and returns without writing. `claim` is left false on the
+// executeRunnableNode calls precisely because this save already made that claim, for all four at once.
+async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: WorkspaceNode[], nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
+  const dispatchedAt = now();
+  const claimStates = stateById(run);
+  for (const node of batch) {
+    const state = claimStates.get(node.id) as NodeExecutionState;
+    state.status = "running";
+    state.startedAt = dispatchedAt;
+    state.dispatch = { dispatchedAt, timeoutMs: nodeTimeoutMs(node) };
+  }
+  run.status = "running";
+  run.currentNodeId = batch[0].id;
+  run.updatedAt = dispatchedAt;
+  const claimed = await store.saveRun(run);
+
+  // FAILURE ISOLATION: allSettled, never all. One sibling rejecting must not discard the three that
+  // returned — their transitions are reconciled and persisted below, and only then is the rejection
+  // re-thrown into advanceRun's existing error handling.
+  const settled = await Promise.allSettled(batch.map((node) => executeRunnableNode(structuredClone(claimed), node, nodes, store, options)));
+
+  // RECONCILIATION, in CANONICAL node order — never completion order. Everything order-bearing on the
+  // record (run.errors, run.artifacts, stageOutputs insertion, the run's own status) is rebuilt by
+  // walking `batch`, which is a canonical prefix, so which sibling finished first is not observable in
+  // the persisted record. Blocker collection needs nothing here: publicationController is handed
+  // `upstreamNodeIds(...).map(id => ({ id, output: run.stageOutputs[id] }))` and collects in the order
+  // GIVEN, which is canonical node order keyed by node id — VERIFIED, it never reads dispatch order.
+  const reconciled = structuredClone(claimed);
+  const claimedArtifactIds = new Set(claimed.artifacts.map((artifact) => artifact.id));
+  const commits: Array<() => Promise<void>> = [];
+  let halted: { nodeId: string; status: ExecutionStatus } | undefined;
+  let rejection: unknown;
+
+  batch.forEach((node, index) => {
+    const outcome = settled[index];
+    if (outcome.status === "rejected") {
+      // executeRunnableNode THREW — not a node that failed (that is a returned record, handled below).
+      // The node is left exactly as the claim save wrote it: "running", holding its dispatch claim,
+      // which is the state a serial run leaves behind when a dispatch throws and the state the
+      // stale-claim reclaim path at the top of advanceRun already knows how to recover. Never marked
+      // completed, never assumed to have passed.
+      rejection ??= outcome.reason;
+      return;
+    }
+    const produced = outcome.value.run;
+    const producedState = stateById(produced).get(node.id) as NodeExecutionState;
+    // A node that is no longer running holds no live claim. The model path deletes it itself; the
+    // pre-dispatch failure paths return before that line and would otherwise carry the batch's claim
+    // into a terminal state, looking in-flight forever to assessRunStall.
+    if (producedState.status !== "running") delete producedState.dispatch;
+    reconciled.nodes[reconciled.nodes.findIndex((state) => state.nodeId === node.id)] = producedState;
+    if (Object.prototype.hasOwnProperty.call(produced.stageOutputs, node.id)) reconciled.stageOutputs[node.id] = produced.stageOutputs[node.id];
+    reconciled.artifacts.push(...produced.artifacts.filter((artifact) => !claimedArtifactIds.has(artifact.id)));
+    // The same supersede semantics executeRunnableNode applies serially (T-2, run_1785352838155_l544ye):
+    // this node's earlier entries are dropped, then whatever THIS attempt recorded is appended — in
+    // batch (canonical) order, so a slow sibling's error never sorts ahead of a fast one's.
+    reconciled.errors = [...reconciled.errors.filter((entry) => !entry.startsWith(`${node.id}:`)), ...produced.errors.filter((entry) => entry.startsWith(`${node.id}:`))];
+    if (!halted && HALTED_EXECUTION_STATUSES.has(produced.status)) halted = { nodeId: node.id, status: produced.status };
+    if (outcome.value.commit) commits.push(outcome.value.commit);
+  });
+
+  // The FIRST batch member in canonical order that halted decides the run's status and currentNodeId —
+  // that is the node a serial run would have stopped at, since serial dispatches in exactly this order.
+  // A halt deliberately outranks a sibling left in flight by a rejection: leaving the run "running" with
+  // a failed node in it would let the next advance walk past the failure and eventually stamp
+  // "completed" on a run that failed, which is the most expensive lie the record can tell (T5 fix 2).
+  reconciled.status = halted ? halted.status : "running";
+  reconciled.currentNodeId = halted ? halted.nodeId : findNextRunnableNode(reconciled, nodes)?.id;
+  if (reconciled.budgetBlock) reconciled.budgetBlock = undefined;
+  markPendingPublishApproval(reconciled, nodes, options.approved === true);
+  reconciled.updatedAt = now();
+  const saved = await store.saveRun(reconciled);
+  // Side effects after the durable commit, in canonical order, non-authoritative — same posture and same
+  // sequence the serial path uses: usage/stage-output mirror first, then T6's timing ledger, which lands
+  // exactly one record per node completion because it reads the terminal state off the SAVED record.
+  for (const commit of commits) await commit().catch(() => undefined);
+  for (const node of batch) await recordNodeTiming(saved, node.id).catch(() => undefined);
+  if (rejection !== undefined) throw rejection;
+  return saved;
 }
 
 async function advanceRun(runId: string, store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
@@ -885,11 +1118,14 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // own budget allowed another $0.75, and the ceiling could only be defended mid-node. The
       // pending node stays queued — never partially charged — so raising budgetUsd and resuming
       // continues here. Default OFF: with no run budgetUsd configured the gate is skipped entirely.
+      // T7: hoisted out of the block below so the concurrent batch can reserve against the SAME budget
+      // view the serial gate just used — one evaluation per advance, never a second, possibly-drifted read.
+      let budget: ReturnType<typeof evaluateRunBudget> = undefined;
       if (run.budgetUsd !== undefined) {
         // R-20: gate on actualCostUsdEstimate, never total — a mock run's deterministic estimates
         // (status:"estimated") must not consume the ceiling (T-2 F-5).
         const usage = await summarizeModelUsage({ runId });
-        const budget = evaluateRunBudget(run.budgetUsd, usage.actualCostUsdEstimate);
+        budget = evaluateRunBudget(run.budgetUsd, usage.actualCostUsdEstimate);
         const nodeReserveUsd = nodeBudgetUsdOf(nextNode) ?? 0;
         const reservationExceeded = budget !== undefined && !budget.overBudget && budget.spentUsdEstimate + nodeReserveUsd > budget.budgetUsd;
         if (budget?.overBudget || reservationExceeded) {
@@ -912,6 +1148,18 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
           return await recordTerminationObservations(blocked, nodes, store, options);
         }
       }
+      // T7: the concurrent path, taken ONLY when the batch is a canonical prefix of two or more
+      // eligible nodes (selectConcurrentBatch). Everything else — a single ready node, a publish-risk
+      // head, a deterministic route, a node about to be skipped — falls through to the serial dispatch
+      // below, byte-for-byte as before, and the same terminal-observation hook fires on either path.
+      const batch = selectConcurrentBatch(run, nodes, nextNode, budget);
+      if (batch.length > 1) {
+        const batched = await dispatchConcurrentBatch(run, batch, nodes, store, options);
+        if (batched.status === "blocked" || batched.status === "failed") {
+          return await recordTerminationObservations(batched, nodes, store, options);
+        }
+        return batched;
+      }
       const prepared = await executeRunnableNode(run, nextNode, nodes, store, options, true);
       // A run that clears the budget gate is no longer paused for budget: drop any stale marker so a
       // resumed-under-ceiling run doesn't keep reporting "paused for budget".
@@ -925,6 +1173,10 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // usage behind. They are non-authoritative — the run record itself already holds the output —
       // so a failure here must not report an otherwise-successful advance as failed.
       await prepared.commit?.().catch(() => undefined);
+      // T6 (Wave 3, ships dark): the node timing ledger's one hook into the main dispatch loop. Same
+      // non-authoritative posture as the line above — recordNodeTiming is itself best-effort internally
+      // and this call is not awaited-and-thrown on failure either.
+      await recordNodeTiming(saved, nextNode.id).catch(() => undefined);
       // F4: the most common way a run reaches a learning-relevant terminal state — blocked (almost
       // always the publish-risk-without-approval gate above) or failed — happens right here, not in
       // the no-more-runnable-nodes branch reflection already covers.
@@ -1849,4 +2101,4 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
 }
 
 export const publishingConductorWorkflowId = WORKFLOW_ID;
-export const __test__ = { buildInitialRun, findNextRunnableNode, mockOutputForNode, nodeById, isPublishRisk, nodeSource, overlayStoreNode, resolveConductorNodes };
+export const __test__ = { buildInitialRun, findNextRunnableNode, findRunnableNodes, mockOutputForNode, nodeById, isPublishRisk, nodeSource, overlayStoreNode, resolveConductorNodes, selectConcurrentBatch };
