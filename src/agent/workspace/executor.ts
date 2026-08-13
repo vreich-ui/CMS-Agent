@@ -1,6 +1,6 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
-import { HALTED_EXECUTION_STATUSES, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
+import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
@@ -470,6 +470,83 @@ const markPendingPublishApproval = (run: WorkflowExecutionRecord, nodes: Workspa
   }];
 };
 
+// T5 (Wave 2b, 2026-08-13) — THE APPROVAL-GATE STUB, named.
+//
+// When the publish gate refuses, executeRunnableNode writes a placeholder output on the node:
+// { artifact, dryRun, decision: "blocked", approvalRequired, reason }. It is a REFUSAL RECEIPT, not a
+// decision — no readiness checklist was evaluated and no publication_decision.v1 was produced. A real
+// deterministic decision (publicationController.buildPublicationDecision) always carries BOTH `state`
+// and `blockers`; the stub carries neither and carries `approvalRequired` instead. That field triple
+// IS the discriminator: no new marker was added to the record, because a marker today's records carry
+// and yesterday's don't would mis-classify every run that blocked before this landed.
+const isOutputRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const isPublishRefusalStub = (output: unknown): boolean =>
+  isOutputRecord(output) && output.decision === "blocked" && "approvalRequired" in output && !("state" in output) && !("blockers" in output);
+
+// The narrow case fix 1 clears: the gate refused for want of approval SPECIFICALLY. A stub minted by
+// the operator veto or by a non-affirmative controller decision carries approvalRequired:false and is
+// never cleared by an approval flag — different refusals, different remedies.
+export const isApprovalGateStub = (output: unknown): boolean =>
+  isPublishRefusalStub(output) && (output as Record<string, unknown>).approvalRequired === true;
+
+// Refusal warnings an `approved: true` flag has no authority over. A node carrying one of these
+// blocked for a reason approval does not answer, so it stays blocked even when its stub also reports
+// approvalRequired:true (both refusals can fire on the same attempt).
+const NON_APPROVAL_REFUSAL_WARNINGS = new Set(["operator_publish_withheld", "publication_decision_not_affirmative"]);
+
+// T5 fix 1 — "the run's ONLY blocker is the publish-approval gate", as a predicate rather than a
+// vibe. Deliberately conservative: any budget hold, any operator veto, any failed node, or any
+// blocked node whose refusal was not purely the approval gate answers false, and the run stays put.
+export const approvalGateOnlyBlockedNodes = (run: WorkflowExecutionRecord): NodeExecutionState[] => {
+  if (run.status !== "blocked") return [];
+  if (run.budgetBlock) return [];                    // budget hold — the remedy is a raised ceiling, not approval
+  if (isOperatorPublishWithheld(run)) return [];     // P0 §2.2 — the durable veto outranks every approved flag
+  if (run.nodes.some((node) => node.status === "failed")) return [];
+  const blocked = run.nodes.filter((node) => node.status === "blocked");
+  if (!blocked.length) return [];
+  const approvalOnly = blocked.every((node) => isApprovalGateStub(node.output) && !(node.warnings ?? []).some((warning) => NON_APPROVAL_REFUSAL_WARNINGS.has(warning)));
+  return approvalOnly ? blocked : [];
+};
+
+export const isApprovalGateOnlyBlock = (run: WorkflowExecutionRecord): boolean => approvalGateOnlyBlockedNodes(run).length > 0;
+
+// retryNode's exact reset, applied to a gate-blocked node so the approved advance re-dispatches it.
+// Same clearing, one place, so "re-enter with approval" and "operator retried it by hand" cannot
+// leave two different shapes of node behind.
+const requeueGateBlockedNode = (run: WorkflowExecutionRecord, node: NodeExecutionState): void => {
+  node.status = "queued";
+  delete node.output;
+  delete node.errors;
+  delete node.warnings;
+  delete node.startedAt;
+  delete node.completedAt;
+  delete node.durationMs;
+  delete node.dispatch;
+  delete run.stageOutputs[node.nodeId];
+  run.artifacts = run.artifacts.filter((artifact) => artifact.nodeId !== node.nodeId);
+  run.approvalsRequired = run.approvalsRequired.filter((approval) => approval.nodeId !== node.nodeId);
+};
+
+// T5 fix 2 — nodes still holding a publish-refusal receipt. Scoped to the whole refusal family, not
+// just the approval one: a run that reported "completed" while a node's output says the operator's
+// veto stopped it would be exactly as false a receipt as the approval case.
+const publishRefusalStubNodes = (run: WorkflowExecutionRecord): NodeExecutionState[] =>
+  run.nodes.filter((node) => isPublishRefusalStub(node.output));
+
+// Restore the attempted (non-pending) approval entry for a refused node when a re-entry found the run
+// with the receipt still on it. A look-ahead entry for the same node is dropped: the attempt happened.
+const approvalEntriesForRefusals = (run: WorkflowExecutionRecord, refused: NodeExecutionState[]): ApprovalRequired[] => {
+  const refusedIds = new Set(refused.filter((node) => isApprovalGateStub(node.output)).map((node) => node.nodeId));
+  const kept = run.approvalsRequired.filter((approval) => !(refusedIds.has(approval.nodeId) && approval.pending === true));
+  const missing = [...refusedIds].filter((nodeId) => !kept.some((approval) => approval.nodeId === nodeId));
+  return [...kept, ...missing.map((nodeId) => ({
+    nodeId,
+    type: "approval_required" as const,
+    reason: `Publish-risk node ${nodeId} requires explicit approval; its output is still the gate's refusal receipt, so the run is not finished.`,
+    requestedAt: now()
+  }))];
+};
+
 // Per-run in-process mutex. Every mutation of a given run is serialized through a promise chain
 // keyed by runId, so overlapping run_next_node / reset / status calls in one process can never
 // interleave their read-mutate-write cycles (which was re-running already-completed nodes). Across
@@ -726,7 +803,20 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const run = await store.getRun(runId);
     if (!run) throw new Error(`Unknown run: ${runId}`);
     latest = run;
-    if (HALTED_EXECUTION_STATUSES.has(run.status)) return run;
+    // T5 fix 1 (2026-08-13) — an advance carrying explicit approval re-enters a run whose ONLY blocker
+    // is the publish-approval gate. Until now that took workflow.resume_run + workflow.retry_node by
+    // hand, because resume_run re-queues the RUN while the executor schedules only queued NODES: the
+    // gate-blocked node stayed "blocked", nothing was runnable, and the run fell straight into the
+    // completed branch below (which is T5 fix 2's defect). Approval is the whole remedy for THIS
+    // blocker, so an approved advance may clear it — and nothing else. Every other halt returns
+    // untouched below: budget, operator veto, a non-affirmative controller decision, a failed node, an
+    // operator pause or cancel. The requeue happens before the halted-status return so one
+    // workflow.run_all call carries the run through the gate instead of stopping at it.
+    if (options.approved === true && isApprovalGateOnlyBlock(run)) {
+      for (const blockedNode of approvalGateOnlyBlockedNodes(run)) requeueGateBlockedNode(run, blockedNode);
+      run.status = "queued";
+      run.updatedAt = now();
+    } else if (HALTED_EXECUTION_STATUSES.has(run.status)) return run;
 
     const nodes = await resolveConductorNodes(options.workspaceRepository, run.workflowId);
     // Dispatch-claim bookkeeping (the ~300s silent-death fix). A node persisted as "running" either
@@ -750,6 +840,34 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const nextNode = findNextRunnableNode(run, nodes);
     try {
       if (!nextNode) {
+        // T5 fix 2 (2026-08-13, run_1786557897658_elj34j) — a run must NOT report "completed" while a
+        // node's output is still the publish gate's refusal receipt. The path is exactly the one
+        // runConductorJob warns about in prose: resume_run re-queues the RUN but not the blocked NODE,
+        // the executor schedules only queued nodes, so the next advance finds nothing runnable and
+        // stamps "completed" over a run that refused to publish and whose decision node holds a stub
+        // saying so. "completed" is the one status downstream readers (attention feed, learning
+        // corpus, publish_run's own preconditions) trust without re-reading the nodes, so a false one
+        // is the most expensive lie the record can tell. The honest state is the blocked one the gate
+        // already produced, restored with its approval entry.
+        //
+        // The stub is told from a REAL deterministic decision by its fields, never by node id: the
+        // stub has approvalRequired and no state/blockers; publication_decision.v1 always carries both
+        // (isPublishRefusalStub). A run that legitimately completed a decision node therefore reaches
+        // "completed" exactly as before.
+        //
+        // No termination observation is recorded here: this path is only reachable by re-entering a
+        // run the gate already refused, and that refusal was already observed when it happened —
+        // re-recording would bill a second learning_recorder dispatch for one event.
+        const refused = publishRefusalStubNodes(run);
+        if (refused.length) {
+          return await store.saveRun({
+            ...run,
+            status: "blocked",
+            currentNodeId: refused[0].nodeId,
+            updatedAt: now(),
+            approvalsRequired: approvalEntriesForRefusals(run, refused)
+          });
+        }
         // Terminal transition for a run that ran to the end. This is the single place a run becomes
         // "completed" (node execution never sets it), so it is the natural trigger for Phase 7
         // automatic post-run reflection. Reflection is fired best-effort AFTER the durable save and
