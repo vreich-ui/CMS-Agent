@@ -20,10 +20,14 @@
 // A v2 function gets its Blobs environment from the runtime directly, so getStore({name}) binds with
 // no connectLambda step at all — which is why the connectLambdaBlobs call is GONE below rather than
 // guarded. Do not "restore consistency" with the v1 functions here; the inconsistency is the fix.
-import { refreshRepositoryManagerForRequest, repositoryManager } from "../../src/agent/runtime/repositories.js";
-import { CONTINUATION_TICK_CRON, runContinuationTick } from "../../src/agent/workspace/runContinuation.js";
+// NOTHING IS IMPORTED AT MODULE SCOPE, deliberately — see the `config` export at the bottom. The
+// imports live inside the handler so this module loads with no side effects and no dependency chain,
+// which is what lets the build's config extraction read the schedule without executing the agent
+// runtime.
 
 export default async () => {
+  const { refreshRepositoryManagerForRequest, repositoryManager } = await import("../../src/agent/runtime/repositories.js");
+  const { runContinuationTick } = await import("../../src/agent/workspace/runContinuation.js");
   // Refreshed per invocation so a Blob-backed store binds to THIS invocation's environment rather
   // than a manager cached from a previous warm invocation.
   refreshRepositoryManagerForRequest();
@@ -58,4 +62,17 @@ export default async () => {
   }
 };
 
-export const config = { schedule: CONTINUATION_TICK_CRON };
+// THE SCHEDULE MUST BE A LITERAL HERE. It was `{ schedule: CONTINUATION_TICK_CRON }` — an imported
+// identifier — and the deploy that first made this function v2 (6a7df900, 2026-08-13T17:04:38Z) came
+// back with `function_schedules: []`, where the preceding v1 deploy had reported
+// `[{cron: "* * * * *", name: "run-continuation"}]`. The build's config extraction could not resolve
+// the identifier, so the function deployed correctly and nothing ever called it — a worse failure
+// than the Blobs bug it replaced, because an unscheduled function logs nothing at all.
+//
+// netlify.toml still declares the same expression, but that path is a v1 mechanism and this deploy
+// proved it is INERT for a v2 function: the toml entry was present and the schedule was still empty.
+// It is kept only as a safety net should this function ever regress to v1.
+//
+// tests/agent/continuationTickSchedule.test.ts asserts this literal equals CONTINUATION_TICK_CRON, so
+// the duplication cannot drift.
+export const config = { schedule: "* * * * *" };
