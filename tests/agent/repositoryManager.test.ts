@@ -59,6 +59,8 @@ describe("RepositoryManager", () => {
       artifact: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       learning: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       usage: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      // T6 (Wave 3): the node timing ledger's own repository, mirroring usage's health shape exactly.
+      nodeTiming: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       // dr-lurie and platform both carry a complete objectDialect, so the audit (G3) reports no
       // findings and this looks exactly like every other clean repository health entry.
       project: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
@@ -79,6 +81,7 @@ describe("RepositoryManager", () => {
       manager.getArtifactRepository(),
       manager.getLearningRepository(),
       manager.getUsageRepository(),
+      manager.getNodeTimingRepository(),
       manager.getSkillRepository(),
       manager.getChangeRepository(),
       manager.getEvaluationRepository(),

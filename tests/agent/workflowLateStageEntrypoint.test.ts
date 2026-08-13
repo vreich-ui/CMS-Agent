@@ -30,20 +30,25 @@ const drive = async (runId: string, store: ExecutionRepository, options: { appro
 const state = (run: WorkflowExecutionRecord, id: string) => run.nodes.find((node) => node.nodeId === id)!;
 const IDEATION_NODES = ["input_triage", "topic_opportunity", "reader_insight", "research", "draft_writer", "review_aggregator"];
 
-// R-22 changed this path's shape. publish_payload now dependsOn [article_body, artifact_plan], and
-// artifact_plan is a DESCENDANT of article_body, not an ancestor — so seeding article_body does not seed it.
-// A late-stage run therefore enters at artifact_plan (plan the media for the supplied body) and reaches
-// publish_payload one step later. That is correct: reusing a finished article_body must not also skip the
-// artifact verification publish_payload depends on for its evidence.
-describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payload -> publication_controller)", () => {
+// T8 (Wave 3, 2026-08-13, run_1786557897658_elj34j) reversed R-22's shape: artifact_plan now dependsOn
+// [brief_architect, contract_intelligence] and runs BEFORE article_body (it generates and verifies the
+// media article_body then binds, instead of planning against a body that already shipped without it).
+// artifact_plan is therefore an ANCESTOR of article_body again, not a descendant — so seeding
+// article_body's late-stage entry point (buildInitialRun seeds every ANCESTOR of the entry node
+// completed) now seeds artifact_plan too. That is correct, not a regression: a late-stage entry
+// supplies an ALREADY-FINISHED client object — whatever media it carries is already embedded in the
+// supplied body, so there is nothing left for artifact_plan to plan or generate, exactly like the
+// ideation/research/draft nodes it already skipped for the same reason. A late-stage run now enters
+// one step later, directly at publish_payload.
+describe("late-stage entrypoint (article_body -> publish_payload -> publication_controller, with artifact_plan seeded as an ancestor)", () => {
   beforeEach(() => repositoryManager.getUsageRepository().clear());
 
-  it("seeds the entry node and its ancestors as completed and starts at artifact_plan", async () => {
+  it("seeds the entry node and its ancestors (including artifact_plan) as completed and starts at publish_payload", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "late", entrypoint }, store);
 
     expect(run.status).toBe("queued");
-    expect(run.currentNodeId).toBe("artifact_plan");
+    expect(run.currentNodeId).toBe("publish_payload");
     expect(state(run, "article_body").status).toBe("completed");
     expect(state(run, "article_body").output).toEqual(validArticleBody);
     expect(run.stageOutputs.article_body).toEqual(validArticleBody);
@@ -52,8 +57,12 @@ describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payloa
       expect(state(run, id).status).toBe("completed");
       expect(state(run, id).warnings).toContain("late_stage_entry_skipped");
     }
+    // artifact_plan is now an ANCESTOR of article_body, so it is seeded completed too — the supplied
+    // body already carries whatever media it has; there is nothing left for artifact_plan to plan.
+    expect(state(run, "artifact_plan").status).toBe("completed");
+    expect(state(run, "artifact_plan").warnings).toContain("late_stage_entry_skipped");
     // Downstream publish stages remain queued.
-    for (const id of ["artifact_plan", "publish_payload", "publication_controller", "learning_recorder", "publish_executor"]) expect(state(run, id).status).toBe("queued");
+    for (const id of ["publish_payload", "publication_controller", "learning_recorder", "publish_executor"]) expect(state(run, id).status).toBe("queued");
   });
 
   it("runs only the publish stages: consumes the seeded body and stops before the publish-risk node", async () => {
@@ -114,11 +123,13 @@ describe("late-stage entrypoint (article_body -> artifact_plan -> publish_payloa
 
     const afterReset = await resetRun(run.runId, store);
 
-    expect(afterReset.currentNodeId).toBe("artifact_plan");
+    expect(afterReset.currentNodeId).toBe("publish_payload");
     expect(state(afterReset, "article_body").status).toBe("completed");
     expect(afterReset.stageOutputs.article_body).toEqual(validArticleBody);
-    // Upstream nodes are still seeded-completed (the entrypoint is preserved across reset).
+    // Upstream nodes are still seeded-completed (the entrypoint is preserved across reset), including
+    // artifact_plan now that it is an ancestor of the entry node.
     for (const id of IDEATION_NODES) expect(state(afterReset, id).status).toBe("completed");
+    expect(state(afterReset, "artifact_plan").status).toBe("completed");
     expect(state(afterReset, "publish_payload").status).toBe("queued");
   });
 });
@@ -131,11 +142,12 @@ describe("late-stage entrypoint via the MCP endpoint", () => {
   beforeEach(() => { process.env.MCP_API_TOKEN = "test-token"; delete process.env.WORKSPACE_STORE; resetRepositoryManager(); });
   afterEach(() => { delete process.env.MCP_API_TOKEN; resetRepositoryManager(); });
 
-  it("accepts a supplied client_object.v1 and starts the run at artifact_plan", async () => {
+  it("accepts a supplied client_object.v1 and starts the run at publish_payload", async () => {
     const res = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: validArticleBody });
     const run = res.result.structuredContent.data.run;
-    expect(run.currentNodeId).toBe("artifact_plan");
+    expect(run.currentNodeId).toBe("publish_payload");
     expect(run.nodes.find((node: any) => node.nodeId === "article_body").status).toBe("completed");
+    expect(run.nodes.find((node: any) => node.nodeId === "artifact_plan").status).toBe("completed");
     expect(run.stageOutputs.article_body).toEqual(validArticleBody);
   });
 

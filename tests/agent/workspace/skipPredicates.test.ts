@@ -124,30 +124,48 @@ describe("no_external_claims — research's trigger ($0.06 to conclude there was
 });
 
 describe("no_media_slots — artifact_plan's own zero-media rule, moved pre-dispatch", () => {
+  // T8 (Wave 3, 2026-08-13, run_1786557897658_elj34j): artifact_plan's dependsOn moved from
+  // [article_body] to [brief_architect, contract_intelligence] — the topology fix that lets
+  // artifact_plan generate and verify media BEFORE article_body builds the body that would reference
+  // it (run_1786557897658_elj34j published with zero media because artifact_plan used to run AFTER
+  // article_body and had nothing left to plan against). carriersFor reads context.dependsOn, so once
+  // brief_architect is a declared dependency it becomes a carrier automatically — nothing in
+  // carriersFor itself needed to change. brief_architect's mediaSlots is now the primary signal.
   const node = () => nodeFor("artifact_plan");
-  const body = (nodes: unknown[]) => ({ artifact: "client_object.v1", body: { nodes } });
 
-  it("skips when the client object it would plan for carries no media reference at all", () => {
-    const verdict = evaluateNodeSkip(node(), { stageOutputs: { article_body: body([{ public: { text: "a" } }, { public: {} }]) } })!;
+  it("brief_architect is a carrier this predicate consults (declared via artifact_plan's own dependsOn, not a special case in carriersFor)", () => {
+    expect(node().dependsOn).toContain("brief_architect");
+  });
+
+  it("skips when brief_architect declares mediaSlots: [] — the envelope asked for no media", () => {
+    const verdict = evaluateNodeSkip(node(), { stageOutputs: { brief_architect: { artifact: "article_brief.v1", mediaSlots: [] } } })!;
+    expect(verdict.skip).toBe(true);
+    expect(verdict.basis).toContain("mediaSlots: empty");
+  });
+
+  it("runs when brief_architect declares a populated mediaSlots array — there is media to plan", () => {
+    const verdict = evaluateNodeSkip(node(), { stageOutputs: { brief_architect: { artifact: "article_brief.v1", mediaSlots: [{ slotId: "hero", purpose: "hero image", desiredKind: "photo", placement: "top" }] } } })!;
+    expect(verdict.skip).toBe(false);
+    expect(verdict.basis).toContain("mediaSlots: non-empty");
+  });
+
+  it("honours an explicit media declaration on the run's own initial input ahead of brief_architect's", () => {
+    expect(evaluateNodeSkip(node(), { initialInput: { mediaSlots: [] } })!.skip).toBe(true);
+    expect(evaluateNodeSkip(node(), { initialInput: { mediaSlots: ["hero"] }, stageOutputs: { brief_architect: { mediaSlots: [] } } })!.skip).toBe(false);
+    expect(evaluateNodeSkip(node(), { initialInput: { noMedia: true } })!.skip).toBe(true);
+  });
+
+  it("falls back to a structural scan of a client-object-shaped carrier when nothing declares presence — the generic fallback the predicate function still supports for any future carrier", () => {
+    const clientObjectCarrier = { artifact: "client_object.v1", body: { nodes: [{ public: { text: "a" } }, { public: {} }] } };
+    const verdict = evaluateNodeSkip(node(), { stageOutputs: { contract_intelligence: clientObjectCarrier } })!;
     expect(verdict.skip).toBe(true);
     expect(verdict.basis).toContain("client object: 2 node(s), 0 carrying media");
   });
 
-  it("runs when any node carries media — the artifacts are what it plans", () => {
-    const verdict = evaluateNodeSkip(node(), { stageOutputs: { article_body: body([{ public: { media: { src: "images/x/y.png" } } }]) } })!;
-    expect(verdict.skip).toBe(false);
-  });
-
-  it("honours an explicit media declaration ahead of the structural scan", () => {
-    expect(evaluateNodeSkip(node(), { initialInput: { mediaSlots: [] } })!.skip).toBe(true);
-    expect(evaluateNodeSkip(node(), { initialInput: { mediaSlots: ["hero"] }, stageOutputs: { article_body: body([]) } })!.skip).toBe(false);
-    expect(evaluateNodeSkip(node(), { initialInput: { noMedia: true } })!.skip).toBe(true);
-  });
-
   it("runs when there is nothing scannable, and never treats a mock placeholder as proof of absence", () => {
     expect(evaluateNodeSkip(node(), {})!.skip).toBe(false);
-    expect(evaluateNodeSkip(node(), { stageOutputs: { article_body: { dryRun: true, body: { nodes: [] } } } })!.skip).toBe(false);
-    expect(evaluateNodeSkip(node(), { stageOutputs: { article_body: { artifact: "client_object.v1", summary: "no body key" } } })!.skip).toBe(false);
+    expect(evaluateNodeSkip(node(), { stageOutputs: { brief_architect: { dryRun: true, mediaSlots: [] } } })!.skip).toBe(false);
+    expect(evaluateNodeSkip(node(), { stageOutputs: { brief_architect: { artifact: "article_brief.v1", summary: "no mediaSlots key" } } })!.skip).toBe(false);
   });
 });
 

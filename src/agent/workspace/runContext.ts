@@ -39,6 +39,19 @@ export type RunContext = {
   // re-seed, while the engine's own behaviour changes the moment this code ships. The prompt and the
   // behaviour therefore cannot drift apart: the same code that runs the loop says that it runs it.
   enginePolicies?: string[];
+  // T2 (2026-08-13, run_1786557897658_elj34j) — THE live bug this field fixes. run.operatorPublishDecision
+  // is set via workflow.set_operator_publish_decision (or, now, a project's publishingPolicy.operatorDefault
+  // at run creation), but before this it was never echoed into a node's OWN run context — only the
+  // executor's pre-dispatch guard (executor.ts) and publisher.ts read it directly off the run record. On
+  // run_1786557897658_elj34j the publish_executor node's model dispatch had no way to see the field at
+  // all and incorrectly claimed it was absent when it was actually set. Echoing it here (present only when
+  // the run actually has a decision — never invented) is what lets any node's OWN reasoning agree with the
+  // engine's gates instead of re-deriving (or mis-deriving) the same fact blind.
+  operatorPublishDecision?: "approved" | "withheld";
+  // WHICH source produced operatorPublishDecision — see publishDecision.describeOperatorDecisionSource.
+  // Present only alongside operatorPublishDecision, so a node can distinguish an explicit operator act
+  // from a standing project default without guessing.
+  operatorDecisionSource?: "explicit" | "project_policy_default";
 };
 
 export const RUN_CONTEXT_ENVELOPE_FIELDS = ["clientProjectId", "clientObjectType", "contractSource"] as const;
@@ -60,6 +73,10 @@ export type BuildRunContextParams = {
   // the same prefetch), so reading it is reading the prefetch one hop later — not trusting an
   // arbitrary node's retyping.
   stageOutputs?: Record<string, unknown> | undefined;
+  // T2 — echoed verbatim from run.operatorPublishDecision / run.operatorDecisionSource. See
+  // RunContext.operatorPublishDecision for why this exists.
+  operatorPublishDecision?: "approved" | "withheld";
+  operatorDecisionSource?: "explicit" | "project_policy_default";
 };
 
 export function buildRunContext(params: BuildRunContextParams): RunContext {
@@ -81,6 +98,13 @@ export function buildRunContext(params: BuildRunContextParams): RunContext {
   if (isObject(intelligence)) {
     if (context.clientObjectType === undefined && nonEmptyString(intelligence.clientObjectType)) context.clientObjectType = intelligence.clientObjectType;
     if (context.contractSource === undefined && isObject(intelligence.contractSource)) context.contractSource = intelligence.contractSource;
+  }
+  // T2 — echoed only when the run actually has a decision (never invented, same discipline as every
+  // other field here). This is what fixes run_1786557897658_elj34j: the field existed on the run
+  // record all along, it just never reached a node's own input.
+  if (params.operatorPublishDecision !== undefined) {
+    context.operatorPublishDecision = params.operatorPublishDecision;
+    if (params.operatorDecisionSource !== undefined) context.operatorDecisionSource = params.operatorDecisionSource;
   }
   return context;
 }
@@ -110,6 +134,9 @@ export function renderRunContextInstruction(context: RunContext | undefined): st
     context.clientObjectType ? `- clientObjectType: ${context.clientObjectType}` : "- clientObjectType: not yet established for this run",
     context.contractSource ? `- contractSource: delivered in your input under runContext.contractSource${provenance ? ` (${provenance})` : ""}` : "- contractSource: not yet established for this run",
     ...(context.requestId ? [`- requestId: ${context.requestId}`] : []),
+    // T2 (run_1786557897658_elj34j) — stated explicitly so a publish-risk node's own reasoning never
+    // has to guess or claim absence: this is the SAME fact the engine's publish gates already read.
+    ...(context.operatorPublishDecision ? [`- operatorPublishDecision: ${context.operatorPublishDecision} (source: ${context.operatorDecisionSource ?? "explicit"})`] : []),
     "These values are carried onto your output by the engine where your schema declares them; you do not need to spend a turn copying them from a dependency.",
     ...(context.enginePolicies?.length ? ["Engine-owned for this dispatch (do not do these yourself):", ...context.enginePolicies.map((policy) => `- ${policy}`)] : [])
   ].join("\n");

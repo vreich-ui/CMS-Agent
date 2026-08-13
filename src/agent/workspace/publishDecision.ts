@@ -82,6 +82,25 @@ export const isOperatorPublishWithheld = (run: Pick<WorkflowExecutionRecord, "op
 export const isOperatorPublishApproved = (run: Pick<WorkflowExecutionRecord, "operatorPublishDecision">): boolean =>
   run.operatorPublishDecision === "approved";
 
+// T2 (2026-08-13, run_1786557897658_elj34j) — §2.2's gates (above) deliberately do not change: PASS
+// and FAIL are still exactly the two comparisons they always were. What changed is that
+// operatorPublishDecision now has TWO possible sources — an explicit workflow.set_operator_publish_
+// decision call, or a project's publishingPolicy.operatorDefault applied at run creation — and a
+// receipt that says "approved" without naming which one authorized it can be misread as explicit
+// operator sign-off when it was actually a standing project default. This is the ONE describer every
+// publish receipt (publishExecution.ts, publisher.ts) calls so that misreading can't happen; it never
+// participates in gate PASS/FAIL, only in the reason text attached to the result.
+export const describeOperatorDecisionSource = (
+  run: Pick<WorkflowExecutionRecord, "operatorPublishDecision" | "operatorDecisionSource">
+): string | undefined => {
+  if (!run.operatorPublishDecision) return undefined;
+  // Absent source on a present decision predates this field — "explicit" was the only source that
+  // ever existed before it, so that is the correct (not merely convenient) fallback reading.
+  return run.operatorDecisionSource === "project_policy_default"
+    ? `${run.operatorPublishDecision} (source: project_policy_default — the project's publishingPolicy.operatorDefault, not an explicit operator action)`
+    : `${run.operatorPublishDecision} (source: explicit — set via workflow.set_operator_publish_decision)`;
+};
+
 export type PublishExecutionEvidenceResult = { output: unknown; downgraded: boolean; reasons: string[] };
 
 // §2.3/§2.27 — deterministic post-check of a publish_execution.v1 output. Anything other than an

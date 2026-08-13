@@ -168,4 +168,15 @@ export type WorkflowExecutionRecord = {
   // field refers to exactly this record). Absent means no operator decision has been recorded;
   // absence never authorizes anything by itself. Preserved across workflow.reset_run.
   operatorPublishDecision?: "approved" | "withheld";
+  // T2 (2026-08-13, run_1786557897658_elj34j) — WHICH source wrote operatorPublishDecision.
+  // "explicit" is the ONLY source that existed before this field: an operator's own
+  // workflow.set_operator_publish_decision call. "project_policy_default" means run creation applied
+  // the owning project's publishingPolicy.operatorDefault === "approved" (executor.ts
+  // applyOperatorPublishPolicyDefault) — nobody made an explicit call for THIS run. The setter always
+  // writes "explicit", so a later explicit call (approved OR withheld) overwrites a policy default's
+  // source along with its decision; a withheld veto is source "explicit" by construction — the
+  // policy default never produces "withheld". Absent alongside a present operatorPublishDecision
+  // means the record predates this field and is treated as "explicit" (publishDecision.ts
+  // describeOperatorDecisionSource), since explicit was the only source that ever existed then.
+  operatorDecisionSource?: "explicit" | "project_policy_default";
 };

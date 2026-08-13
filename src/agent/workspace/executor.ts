@@ -1,9 +1,10 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
-import { HALTED_EXECUTION_STATUSES, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
+import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
+import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { recordModelUsage, summarizeModelUsage, evaluateRunBudget } from "../observability/modelUsage.js";
 import { getNodeRunner } from "../execution/runnerRegistry.js";
 import { validateOutput } from "../execution/outputValidator.js";
@@ -20,7 +21,7 @@ import { runDeterministicPublishPayload, validateClientObjectOnce, readTopLevelO
 import { ENGINE_VALIDATION_POLICY, ownsValidationLoop, runArticleBodyValidationLoop, readBodyForValidation } from "./articleBodyValidation.js";
 import { applyRunContextEnvelope, buildRunContext } from "./runContext.js";
 import { runDeterministicPublicationController } from "./publicationController.js";
-import { runDeterministicPublishExecutor } from "./publishExecution.js";
+import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
 import { buildLearningObservations } from "./learningRecord.js";
 import { buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector } from "./aggressionVector.js";
 import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
@@ -28,6 +29,7 @@ import { getWorkflowDefinition } from "./workflowRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
 import { declaresContractPrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
+import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -98,7 +100,7 @@ export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   ...(run.rev !== undefined ? { rev: run.rev } : {}),
   ...(run.budgetUsd !== undefined ? { budgetUsd: run.budgetUsd } : {}),
   ...(run.budgetBlock ? { budgetBlock: run.budgetBlock } : {}),
-  ...(run.operatorPublishDecision ? { operatorPublishDecision: run.operatorPublishDecision } : {})
+  ...(run.operatorPublishDecision ? { operatorPublishDecision: run.operatorPublishDecision, operatorDecisionSource: run.operatorDecisionSource ?? "explicit" } : {})
 });
 // Statuses from which advanceRun will not proceed. "paused" (R-18) joins them: an operator-paused run
 // must stay put for exactly the same reason a blocked one does. Before "paused" existed, pause_run wrote
@@ -362,8 +364,48 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
   } as WorkflowExecutionRecord;
 };
 
+// T2 (2026-08-13, run_1786557897658_elj34j) — apply a project's publishingPolicy.operatorDefault to a
+// FRESH run (buildInitialRun's output never carries operatorPublishDecision, so "unset" here just
+// means "this run has no decision yet"). Only "approved" default is ever applied; "require_explicit"
+// or an absent policy leaves the run exactly as buildInitialRun made it — today's behavior,
+// unchanged. This can NEVER produce "withheld": a veto is only ever an explicit operator act (the
+// setter below), so a project policy has no way to durably block a run it did not also create.
+// projectRepository.get returning undefined (unknown/deleted project) is not an error here — it is
+// handled the same as "no policy", because startDryRun's own downstream node dispatch is what
+// surfaces an unknown-project failure, not run creation.
+async function applyOperatorPublishPolicyDefault(run: WorkflowExecutionRecord, projectRepository: ProjectRepository): Promise<WorkflowExecutionRecord> {
+  if (run.operatorPublishDecision !== undefined) return run;
+  const config = await projectRepository.get(run.projectId);
+  if (config?.publishingPolicy.operatorDefault !== "approved") return run;
+  return { ...run, operatorPublishDecision: "approved", operatorDecisionSource: "project_policy_default" };
+}
+
 const nodeById = (nodes: WorkspaceNode[]) => new Map(nodes.map((node) => [node.id, node]));
 const stateById = (run: WorkflowExecutionRecord) => new Map(run.nodes.map((node) => [node.nodeId, node]));
+
+// T6 (Wave 3, ships dark) — every node completion executeRunnableNode reaches lands one
+// NodeTimingRecord here: model-dispatched nodes AND every deterministic fast path (skip predicates,
+// contractIntelligenceDeterministic/placementResolverDeterministic mapping, the budget/approval
+// blocks, output_schema_violation failures) all set a terminal state.status + state.durationMs before
+// every one of executeRunnableNode's `return { run, ... }` statements — see nodeTimings.ts's header
+// for why a ledger that only saw the model-dispatched paths would be worse than none. Reading
+// state.durationMs off the ALREADY-SAVED run (rather than timing this call itself) means the recorded
+// duration is the exact figure the run record itself reports, not a second, possibly-drifted clock.
+// Best-effort: a timing-repository failure must never fail the run it is merely observing, matching
+// the posture prepared.commit's own usage/stage-output side effects already take (both call sites
+// wrap this in .catch(() => undefined)).
+const TERMINAL_TIMING_OUTCOMES = new Set<ExecutionStatus>(["completed", "failed", "blocked", "cancelled", "skipped"]);
+async function recordNodeTiming(run: WorkflowExecutionRecord, nodeId: string): Promise<void> {
+  const state = stateById(run).get(nodeId);
+  if (!state || state.durationMs === undefined || !TERMINAL_TIMING_OUTCOMES.has(state.status)) return;
+  await recordNodeTimingCompletion({
+    runId: run.runId,
+    workflowId: run.workflowId,
+    nodeId,
+    durationMs: state.durationMs,
+    outcome: state.status as NodeTimingOutcome
+  });
+}
 
 // W4 — DEPENDENCY SATISFACTION, WITH SKIPS.
 //
@@ -377,13 +419,26 @@ const stateById = (run: WorkflowExecutionRecord) => new Map(run.nodes.map((node)
 // unsatisfied exactly as before, so a failure still stops the run where it always did.
 const isDependencySatisfied = (state: NodeExecutionState | undefined): boolean => state?.status === "completed" || state?.status === "skipped";
 
+// The one runnability predicate, shared by the single-node and the T7 batch selectors below so
+// "dependency-ready" cannot come to mean two different things in the same dispatch loop.
+const isNodeRunnable = (states: Map<string, NodeExecutionState>, node: WorkspaceNode): boolean => {
+  const state = states.get(node.id);
+  if (!state || state.status !== "queued") return false;
+  return node.dependsOn.every((dependency) => isDependencySatisfied(states.get(dependency)));
+};
+
 const findNextRunnableNode = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[]): WorkspaceNode | undefined => {
   const states = stateById(run);
-  return nodes.find((node) => {
-    const state = states.get(node.id);
-    if (!state || state.status !== "queued") return false;
-    return node.dependsOn.every((dependency) => isDependencySatisfied(states.get(dependency)));
-  });
+  return nodes.find((node) => isNodeRunnable(states, node));
+};
+
+// T7: EVERY dependency-ready queued node, in canonical `nodes` order — findNextRunnableNode's own
+// `find` is this list's head, so the serial dispatch order a run has always had is exactly this list
+// consumed one element at a time. That identity is what lets the concurrent batch below be defined as
+// a PREFIX of it and still leave run.artifacts / run.errors in the order a serial run produced them.
+const findRunnableNodes = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[]): WorkspaceNode[] => {
+  const states = stateById(run);
+  return nodes.filter((node) => isNodeRunnable(states, node));
 };
 
 // Kept as a re-export so the existing __test__ surface stays stable. The implementation is shared with
@@ -451,6 +506,83 @@ const markPendingPublishApproval = (run: WorkflowExecutionRecord, nodes: Workspa
     requestedAt: now(),
     pending: true
   }];
+};
+
+// T5 (Wave 2b, 2026-08-13) — THE APPROVAL-GATE STUB, named.
+//
+// When the publish gate refuses, executeRunnableNode writes a placeholder output on the node:
+// { artifact, dryRun, decision: "blocked", approvalRequired, reason }. It is a REFUSAL RECEIPT, not a
+// decision — no readiness checklist was evaluated and no publication_decision.v1 was produced. A real
+// deterministic decision (publicationController.buildPublicationDecision) always carries BOTH `state`
+// and `blockers`; the stub carries neither and carries `approvalRequired` instead. That field triple
+// IS the discriminator: no new marker was added to the record, because a marker today's records carry
+// and yesterday's don't would mis-classify every run that blocked before this landed.
+const isOutputRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const isPublishRefusalStub = (output: unknown): boolean =>
+  isOutputRecord(output) && output.decision === "blocked" && "approvalRequired" in output && !("state" in output) && !("blockers" in output);
+
+// The narrow case fix 1 clears: the gate refused for want of approval SPECIFICALLY. A stub minted by
+// the operator veto or by a non-affirmative controller decision carries approvalRequired:false and is
+// never cleared by an approval flag — different refusals, different remedies.
+export const isApprovalGateStub = (output: unknown): boolean =>
+  isPublishRefusalStub(output) && (output as Record<string, unknown>).approvalRequired === true;
+
+// Refusal warnings an `approved: true` flag has no authority over. A node carrying one of these
+// blocked for a reason approval does not answer, so it stays blocked even when its stub also reports
+// approvalRequired:true (both refusals can fire on the same attempt).
+const NON_APPROVAL_REFUSAL_WARNINGS = new Set(["operator_publish_withheld", "publication_decision_not_affirmative"]);
+
+// T5 fix 1 — "the run's ONLY blocker is the publish-approval gate", as a predicate rather than a
+// vibe. Deliberately conservative: any budget hold, any operator veto, any failed node, or any
+// blocked node whose refusal was not purely the approval gate answers false, and the run stays put.
+export const approvalGateOnlyBlockedNodes = (run: WorkflowExecutionRecord): NodeExecutionState[] => {
+  if (run.status !== "blocked") return [];
+  if (run.budgetBlock) return [];                    // budget hold — the remedy is a raised ceiling, not approval
+  if (isOperatorPublishWithheld(run)) return [];     // P0 §2.2 — the durable veto outranks every approved flag
+  if (run.nodes.some((node) => node.status === "failed")) return [];
+  const blocked = run.nodes.filter((node) => node.status === "blocked");
+  if (!blocked.length) return [];
+  const approvalOnly = blocked.every((node) => isApprovalGateStub(node.output) && !(node.warnings ?? []).some((warning) => NON_APPROVAL_REFUSAL_WARNINGS.has(warning)));
+  return approvalOnly ? blocked : [];
+};
+
+export const isApprovalGateOnlyBlock = (run: WorkflowExecutionRecord): boolean => approvalGateOnlyBlockedNodes(run).length > 0;
+
+// retryNode's exact reset, applied to a gate-blocked node so the approved advance re-dispatches it.
+// Same clearing, one place, so "re-enter with approval" and "operator retried it by hand" cannot
+// leave two different shapes of node behind.
+const requeueGateBlockedNode = (run: WorkflowExecutionRecord, node: NodeExecutionState): void => {
+  node.status = "queued";
+  delete node.output;
+  delete node.errors;
+  delete node.warnings;
+  delete node.startedAt;
+  delete node.completedAt;
+  delete node.durationMs;
+  delete node.dispatch;
+  delete run.stageOutputs[node.nodeId];
+  run.artifacts = run.artifacts.filter((artifact) => artifact.nodeId !== node.nodeId);
+  run.approvalsRequired = run.approvalsRequired.filter((approval) => approval.nodeId !== node.nodeId);
+};
+
+// T5 fix 2 — nodes still holding a publish-refusal receipt. Scoped to the whole refusal family, not
+// just the approval one: a run that reported "completed" while a node's output says the operator's
+// veto stopped it would be exactly as false a receipt as the approval case.
+const publishRefusalStubNodes = (run: WorkflowExecutionRecord): NodeExecutionState[] =>
+  run.nodes.filter((node) => isPublishRefusalStub(node.output));
+
+// Restore the attempted (non-pending) approval entry for a refused node when a re-entry found the run
+// with the receipt still on it. A look-ahead entry for the same node is dropped: the attempt happened.
+const approvalEntriesForRefusals = (run: WorkflowExecutionRecord, refused: NodeExecutionState[]): ApprovalRequired[] => {
+  const refusedIds = new Set(refused.filter((node) => isApprovalGateStub(node.output)).map((node) => node.nodeId));
+  const kept = run.approvalsRequired.filter((approval) => !(refusedIds.has(approval.nodeId) && approval.pending === true));
+  const missing = [...refusedIds].filter((nodeId) => !kept.some((approval) => approval.nodeId === nodeId));
+  return [...kept, ...missing.map((nodeId) => ({
+    nodeId,
+    type: "approval_required" as const,
+    reason: `Publish-risk node ${nodeId} requires explicit approval; its output is still the gate's refusal receipt, so the run is not finished.`,
+    requestedAt: now()
+  }))];
 };
 
 // Per-run in-process mutex. Every mutation of a given run is serialized through a promise chain
@@ -526,8 +658,9 @@ export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date
   };
 }
 
-export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository): Promise<WorkflowExecutionRecord> {
-  return store.createRun(buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID)));
+export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository, projectRepository: ProjectRepository = repositoryManager.getProjectRepository()): Promise<WorkflowExecutionRecord> {
+  const initial = buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID));
+  return store.createRun(await applyOperatorPublishPolicyDefault(initial, projectRepository));
 }
 
 export async function getRun(runId: string, store: ExecutionRepository = repositoryManager.getExecutionRepository()) {
@@ -548,10 +681,19 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     // requestId travels with the run across a reset — it identifies the same request being retried,
     // not a new one, and a platform-side record correlating against it must still resolve. The
     // operator's durable publish decision (P0 §2.2) survives a reset for the same reason: a reset
-    // retries the request, it does not un-say the operator's veto/approval.
+    // retries the request, it does not un-say the operator's veto/approval — and that includes WHICH
+    // source recorded it (T2): a reset must not relabel an existing explicit decision as a policy
+    // default, or vice versa. When the run had NO decision yet, the rebuilt run re-applies the
+    // project's current policy default exactly as a brand-new run would (a reset that lost its
+    // pre-approval because the policy default logic only ran at original creation would be a second,
+    // subtler way to make this same bug reappear).
+    const rebuilt = await applyOperatorPublishPolicyDefault(
+      buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId),
+      repositoryManager.getProjectRepository()
+    );
     return store.resetRun(runId, {
-      ...buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId),
-      ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision } : {})
+      ...rebuilt,
+      ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision, operatorDecisionSource: existing.operatorDecisionSource ?? "explicit" } : {})
     });
   });
 }
@@ -686,11 +828,206 @@ async function recordTerminationObservations(run: WorkflowExecutionRecord, nodes
     prepared.run.currentNodeId = currentNodeId;
     const saved = await store.saveRun(prepared.run);
     await prepared.commit?.().catch(() => undefined);
+    await recordNodeTiming(saved, node.id).catch(() => undefined);
     return saved;
   } catch {
     // Best-effort: recording observations must never fail the run or mask its real terminal status.
     return run;
   }
+}
+
+// ── T7 (Wave 3, 2026-08-13) — BOUNDED CONCURRENT DISPATCH ───────────────────────────────────────
+//
+// Evidence (run_1786557897658_elj34j, verified live 2026-08-12): the review quartet — human_texture,
+// trust_factual, emotional_resonance, reader_simulation — ran SERIALLY for ~113 seconds. None of the
+// four depends on another and all four feed review_aggregator. The serialization was the DRIVER's, not
+// the graph's: findNextRunnableNode returns the canonically-first ready node and advanceRun dispatched
+// exactly that one, so four independent nodes cost four advances.
+//
+// review_aggregator gets NO special case. It waits because isDependencySatisfied reports its four
+// dependencies unsatisfied until each completes — the same rule that makes it impossible for a batch to
+// contain a node and its own dependency (a node whose dependency has not completed is not runnable, so
+// the two can never appear in one ready list). The dependency graph does the barriering, as it always did.
+//
+// The bound is the QUARTET WIDTH — the four independent reviewers this exists for — and is not a
+// throughput tuning knob to be raised casually. Every batch member is a live model dispatch against the
+// same client and the same run ceiling, and the budget reservation below can only defend that ceiling
+// for members that DECLARE a budgetUsd; raising this raises the worst-case overshoot of an undeclared
+// node linearly with it. Four is also the widest independent fan-out this graph has.
+export const CONCURRENT_DISPATCH_LIMIT = 4;
+
+// Node metadata that routes a dispatch into a DETERMINISTIC path inside executeRunnableNode. Such a
+// node is excluded from the batch, so the batch admits only nodes whose deterministic/skip evaluation
+// has ALREADY run (here, before the batch is formed) and came out as ordinary model dispatches. Reasons,
+// concretely: those paths are engine code that costs nothing to run serially, so concurrency buys
+// nothing; several of them read stage outputs OUTSIDE their own dependsOn (publish_payload reads
+// article_body, publication_controller reads its whole upstream closure), which is exactly what an
+// interleaved schedule would perturb; and one of them can publish.
+const DETERMINISTIC_ROUTE_METADATA_KEYS = [
+  "contractIntelligenceDeterministic",
+  "placementResolverDeterministic",
+  "publishPayloadDeterministic",
+  "publicationControllerDeterministic",
+  "publishExecutorDeterministic",
+  "learningRecorderDeterministic"
+] as const;
+const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
+  DETERMINISTIC_ROUTE_METADATA_KEYS.some((key) => {
+    const declared = node.metadata?.[key];
+    return declared !== undefined && declared !== false;
+  });
+
+// The stage outputs the ENGINE reads outside a node's own dependsOn: buildRunContext (runContext.ts)
+// lifts requestId from artifact_plan and the client facts from contract_intelligence;
+// readResolvedVectorSources (resolvedVectorClamp.ts) reads contract_intelligence and placement_resolver.
+// A serial run dispatches in canonical order, so a node canonically AFTER one of these sees its output
+// — a batch member would not. The batch therefore ENDS at the first such node (it may still ride with
+// earlier-canonical siblings, which would not have seen its output serially either), which is what keeps
+// every batch exactly equivalent to the serial prefix it replaces.
+const RUN_CONTEXT_SOURCE_NODE_IDS = new Set(["artifact_plan", "contract_intelligence", "placement_resolver"]);
+
+// The skip verdict, READ without recording anything — executeRunnableNode remains the only place that
+// writes the skip state and its warnings, and it re-evaluates the same pure predicate moments later. The
+// two cannot disagree: batch members are mutually independent, so no sibling writes a stage output
+// another sibling's predicate reads, and every member is handed the same pre-batch snapshot.
+const wouldSkipBeforeDispatch = (run: WorkflowExecutionRecord, node: WorkspaceNode): boolean => {
+  if (stateById(run).get(node.id)?.skipOverride) return false;
+  return evaluateNodeSkip(node, { initialInput: run.initialInput, stageOutputs: run.stageOutputs })?.skip === true;
+};
+
+// Publish-risk is the hard exclusion: a publish-risk node is NEVER dispatched alongside anything. Its
+// gates (operator veto, explicit approval, an affirmative controller decision) exist to STOP the run
+// there, and a sibling completing beside it would be work done past a stop.
+const isConcurrentDispatchEligible = (run: WorkflowExecutionRecord, node: WorkspaceNode): boolean =>
+  !isPublishRisk(node) && !isPublishExecutorNode(node) && !declaresDeterministicRoute(node) && !wouldSkipBeforeDispatch(run, node);
+
+// THE BATCH: the longest PREFIX of the ready list (canonical order) whose members are all eligible, at
+// most CONCURRENT_DISPATCH_LIMIT long, that the run budget can still reserve for. A prefix, never a
+// filtered subset — stepping over an ineligible node to reach an eligible one would dispatch out of
+// canonical order and leave run.artifacts / run.errors in an order no serial run ever produced. []
+// means "use the serial path", and so does a batch of one.
+//
+// BUDGET: the ceiling is reserved for the WHOLE batch before any of it is dispatched — the same
+// reservation the serial gate performs for one node (F2, hardened after run_1785435947311_jl8hl4 landed
+// at 138%). A node whose declared budgetUsd no longer fits alongside those already admitted ends the
+// batch and is dispatched on a later advance, where the serial gate re-decides it with the batch's
+// actual spend accrued. Four concurrent nodes therefore cannot collectively RESERVE past a ceiling one
+// serial node would have stopped at. What concurrency does widen is the un-reservable remainder: a node
+// that declares no budgetUsd reserves $0, so up to CONCURRENT_DISPATCH_LIMIT of them can be in flight
+// when the ceiling is crossed mid-node instead of one — the overshoot is bounded by the batch's own
+// actual spend beyond what it reserved, and the run still halts at the next advance.
+const selectConcurrentBatch = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[], head: WorkspaceNode, budget: ReturnType<typeof evaluateRunBudget>): WorkspaceNode[] => {
+  const ready = findRunnableNodes(run, nodes);
+  // The head must be the node the serial path would have dispatched, or this is not a prefix.
+  if (ready.length < 2 || ready[0]?.id !== head.id) return [];
+  const batch: WorkspaceNode[] = [];
+  let reservedUsd = 0;
+  for (const node of ready) {
+    if (batch.length >= CONCURRENT_DISPATCH_LIMIT) break;
+    if (!isConcurrentDispatchEligible(run, node)) break;
+    const reserveUsd = nodeBudgetUsdOf(node) ?? 0;
+    if (budget && budget.spentUsdEstimate + reservedUsd + reserveUsd > budget.budgetUsd) break;
+    reservedUsd += reserveUsd;
+    batch.push(node);
+    if (RUN_CONTEXT_SOURCE_NODE_IDS.has(node.id)) break;
+  }
+  return batch.length > 1 ? batch : [];
+};
+
+// One batch: one claim save, one reconciliation save.
+//
+// RUN-RECORD WRITES — per-node save-and-merge is NOT available here, so this is a single post-batch
+// reconciliation. executeRunnableNode mutates the run record it is handed and advanceRun persists the
+// WHOLE record under a compare-and-swap (ExecutionRepository.saveRun, RunConcurrencyError): four
+// dispatches each saving their own copy would either lose three writes or trip the CAS against each
+// other on every single batch. Each node therefore executes against its own structuredClone of the
+// claimed record, nothing is persisted until every sibling has settled, and the results are merged into
+// one record in canonical node order and written once. Two saves per batch — exactly what one serial
+// advance costs today.
+//
+// THE CLAIM SAVE IS NOT OPTIONAL. It is the dispatch heartbeat runContinuation's tick reads through
+// assessRunStall: without a persisted "these nodes are in flight, with these timeouts" marker, a tick
+// firing mid-batch would see an idle driver and re-enter a run that is genuinely in flight. It is also
+// what protects the reconciliation save's CAS — a competing advanceRun that loads the claimed record
+// finds an in-flight node inside its window and returns without writing. `claim` is left false on the
+// executeRunnableNode calls precisely because this save already made that claim, for all four at once.
+async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: WorkspaceNode[], nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
+  const dispatchedAt = now();
+  const claimStates = stateById(run);
+  for (const node of batch) {
+    const state = claimStates.get(node.id) as NodeExecutionState;
+    state.status = "running";
+    state.startedAt = dispatchedAt;
+    state.dispatch = { dispatchedAt, timeoutMs: nodeTimeoutMs(node) };
+  }
+  run.status = "running";
+  run.currentNodeId = batch[0].id;
+  run.updatedAt = dispatchedAt;
+  const claimed = await store.saveRun(run);
+
+  // FAILURE ISOLATION: allSettled, never all. One sibling rejecting must not discard the three that
+  // returned — their transitions are reconciled and persisted below, and only then is the rejection
+  // re-thrown into advanceRun's existing error handling.
+  const settled = await Promise.allSettled(batch.map((node) => executeRunnableNode(structuredClone(claimed), node, nodes, store, options)));
+
+  // RECONCILIATION, in CANONICAL node order — never completion order. Everything order-bearing on the
+  // record (run.errors, run.artifacts, stageOutputs insertion, the run's own status) is rebuilt by
+  // walking `batch`, which is a canonical prefix, so which sibling finished first is not observable in
+  // the persisted record. Blocker collection needs nothing here: publicationController is handed
+  // `upstreamNodeIds(...).map(id => ({ id, output: run.stageOutputs[id] }))` and collects in the order
+  // GIVEN, which is canonical node order keyed by node id — VERIFIED, it never reads dispatch order.
+  const reconciled = structuredClone(claimed);
+  const claimedArtifactIds = new Set(claimed.artifacts.map((artifact) => artifact.id));
+  const commits: Array<() => Promise<void>> = [];
+  let halted: { nodeId: string; status: ExecutionStatus } | undefined;
+  let rejection: unknown;
+
+  batch.forEach((node, index) => {
+    const outcome = settled[index];
+    if (outcome.status === "rejected") {
+      // executeRunnableNode THREW — not a node that failed (that is a returned record, handled below).
+      // The node is left exactly as the claim save wrote it: "running", holding its dispatch claim,
+      // which is the state a serial run leaves behind when a dispatch throws and the state the
+      // stale-claim reclaim path at the top of advanceRun already knows how to recover. Never marked
+      // completed, never assumed to have passed.
+      rejection ??= outcome.reason;
+      return;
+    }
+    const produced = outcome.value.run;
+    const producedState = stateById(produced).get(node.id) as NodeExecutionState;
+    // A node that is no longer running holds no live claim. The model path deletes it itself; the
+    // pre-dispatch failure paths return before that line and would otherwise carry the batch's claim
+    // into a terminal state, looking in-flight forever to assessRunStall.
+    if (producedState.status !== "running") delete producedState.dispatch;
+    reconciled.nodes[reconciled.nodes.findIndex((state) => state.nodeId === node.id)] = producedState;
+    if (Object.prototype.hasOwnProperty.call(produced.stageOutputs, node.id)) reconciled.stageOutputs[node.id] = produced.stageOutputs[node.id];
+    reconciled.artifacts.push(...produced.artifacts.filter((artifact) => !claimedArtifactIds.has(artifact.id)));
+    // The same supersede semantics executeRunnableNode applies serially (T-2, run_1785352838155_l544ye):
+    // this node's earlier entries are dropped, then whatever THIS attempt recorded is appended — in
+    // batch (canonical) order, so a slow sibling's error never sorts ahead of a fast one's.
+    reconciled.errors = [...reconciled.errors.filter((entry) => !entry.startsWith(`${node.id}:`)), ...produced.errors.filter((entry) => entry.startsWith(`${node.id}:`))];
+    if (!halted && HALTED_EXECUTION_STATUSES.has(produced.status)) halted = { nodeId: node.id, status: produced.status };
+    if (outcome.value.commit) commits.push(outcome.value.commit);
+  });
+
+  // The FIRST batch member in canonical order that halted decides the run's status and currentNodeId —
+  // that is the node a serial run would have stopped at, since serial dispatches in exactly this order.
+  // A halt deliberately outranks a sibling left in flight by a rejection: leaving the run "running" with
+  // a failed node in it would let the next advance walk past the failure and eventually stamp
+  // "completed" on a run that failed, which is the most expensive lie the record can tell (T5 fix 2).
+  reconciled.status = halted ? halted.status : "running";
+  reconciled.currentNodeId = halted ? halted.nodeId : findNextRunnableNode(reconciled, nodes)?.id;
+  if (reconciled.budgetBlock) reconciled.budgetBlock = undefined;
+  markPendingPublishApproval(reconciled, nodes, options.approved === true);
+  reconciled.updatedAt = now();
+  const saved = await store.saveRun(reconciled);
+  // Side effects after the durable commit, in canonical order, non-authoritative — same posture and same
+  // sequence the serial path uses: usage/stage-output mirror first, then T6's timing ledger, which lands
+  // exactly one record per node completion because it reads the terminal state off the SAVED record.
+  for (const commit of commits) await commit().catch(() => undefined);
+  for (const node of batch) await recordNodeTiming(saved, node.id).catch(() => undefined);
+  if (rejection !== undefined) throw rejection;
+  return saved;
 }
 
 async function advanceRun(runId: string, store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
@@ -699,7 +1036,20 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const run = await store.getRun(runId);
     if (!run) throw new Error(`Unknown run: ${runId}`);
     latest = run;
-    if (HALTED_EXECUTION_STATUSES.has(run.status)) return run;
+    // T5 fix 1 (2026-08-13) — an advance carrying explicit approval re-enters a run whose ONLY blocker
+    // is the publish-approval gate. Until now that took workflow.resume_run + workflow.retry_node by
+    // hand, because resume_run re-queues the RUN while the executor schedules only queued NODES: the
+    // gate-blocked node stayed "blocked", nothing was runnable, and the run fell straight into the
+    // completed branch below (which is T5 fix 2's defect). Approval is the whole remedy for THIS
+    // blocker, so an approved advance may clear it — and nothing else. Every other halt returns
+    // untouched below: budget, operator veto, a non-affirmative controller decision, a failed node, an
+    // operator pause or cancel. The requeue happens before the halted-status return so one
+    // workflow.run_all call carries the run through the gate instead of stopping at it.
+    if (options.approved === true && isApprovalGateOnlyBlock(run)) {
+      for (const blockedNode of approvalGateOnlyBlockedNodes(run)) requeueGateBlockedNode(run, blockedNode);
+      run.status = "queued";
+      run.updatedAt = now();
+    } else if (HALTED_EXECUTION_STATUSES.has(run.status)) return run;
 
     const nodes = await resolveConductorNodes(options.workspaceRepository, run.workflowId);
     // Dispatch-claim bookkeeping (the ~300s silent-death fix). A node persisted as "running" either
@@ -723,6 +1073,34 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const nextNode = findNextRunnableNode(run, nodes);
     try {
       if (!nextNode) {
+        // T5 fix 2 (2026-08-13, run_1786557897658_elj34j) — a run must NOT report "completed" while a
+        // node's output is still the publish gate's refusal receipt. The path is exactly the one
+        // runConductorJob warns about in prose: resume_run re-queues the RUN but not the blocked NODE,
+        // the executor schedules only queued nodes, so the next advance finds nothing runnable and
+        // stamps "completed" over a run that refused to publish and whose decision node holds a stub
+        // saying so. "completed" is the one status downstream readers (attention feed, learning
+        // corpus, publish_run's own preconditions) trust without re-reading the nodes, so a false one
+        // is the most expensive lie the record can tell. The honest state is the blocked one the gate
+        // already produced, restored with its approval entry.
+        //
+        // The stub is told from a REAL deterministic decision by its fields, never by node id: the
+        // stub has approvalRequired and no state/blockers; publication_decision.v1 always carries both
+        // (isPublishRefusalStub). A run that legitimately completed a decision node therefore reaches
+        // "completed" exactly as before.
+        //
+        // No termination observation is recorded here: this path is only reachable by re-entering a
+        // run the gate already refused, and that refusal was already observed when it happened —
+        // re-recording would bill a second learning_recorder dispatch for one event.
+        const refused = publishRefusalStubNodes(run);
+        if (refused.length) {
+          return await store.saveRun({
+            ...run,
+            status: "blocked",
+            currentNodeId: refused[0].nodeId,
+            updatedAt: now(),
+            approvalsRequired: approvalEntriesForRefusals(run, refused)
+          });
+        }
         // Terminal transition for a run that ran to the end. This is the single place a run becomes
         // "completed" (node execution never sets it), so it is the natural trigger for Phase 7
         // automatic post-run reflection. Reflection is fired best-effort AFTER the durable save and
@@ -740,11 +1118,14 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // own budget allowed another $0.75, and the ceiling could only be defended mid-node. The
       // pending node stays queued — never partially charged — so raising budgetUsd and resuming
       // continues here. Default OFF: with no run budgetUsd configured the gate is skipped entirely.
+      // T7: hoisted out of the block below so the concurrent batch can reserve against the SAME budget
+      // view the serial gate just used — one evaluation per advance, never a second, possibly-drifted read.
+      let budget: ReturnType<typeof evaluateRunBudget> = undefined;
       if (run.budgetUsd !== undefined) {
         // R-20: gate on actualCostUsdEstimate, never total — a mock run's deterministic estimates
         // (status:"estimated") must not consume the ceiling (T-2 F-5).
         const usage = await summarizeModelUsage({ runId });
-        const budget = evaluateRunBudget(run.budgetUsd, usage.actualCostUsdEstimate);
+        budget = evaluateRunBudget(run.budgetUsd, usage.actualCostUsdEstimate);
         const nodeReserveUsd = nodeBudgetUsdOf(nextNode) ?? 0;
         const reservationExceeded = budget !== undefined && !budget.overBudget && budget.spentUsdEstimate + nodeReserveUsd > budget.budgetUsd;
         if (budget?.overBudget || reservationExceeded) {
@@ -767,6 +1148,18 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
           return await recordTerminationObservations(blocked, nodes, store, options);
         }
       }
+      // T7: the concurrent path, taken ONLY when the batch is a canonical prefix of two or more
+      // eligible nodes (selectConcurrentBatch). Everything else — a single ready node, a publish-risk
+      // head, a deterministic route, a node about to be skipped — falls through to the serial dispatch
+      // below, byte-for-byte as before, and the same terminal-observation hook fires on either path.
+      const batch = selectConcurrentBatch(run, nodes, nextNode, budget);
+      if (batch.length > 1) {
+        const batched = await dispatchConcurrentBatch(run, batch, nodes, store, options);
+        if (batched.status === "blocked" || batched.status === "failed") {
+          return await recordTerminationObservations(batched, nodes, store, options);
+        }
+        return batched;
+      }
       const prepared = await executeRunnableNode(run, nextNode, nodes, store, options, true);
       // A run that clears the budget gate is no longer paused for budget: drop any stale marker so a
       // resumed-under-ceiling run doesn't keep reporting "paused for budget".
@@ -780,6 +1173,10 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // usage behind. They are non-authoritative — the run record itself already holds the output —
       // so a failure here must not report an otherwise-successful advance as failed.
       await prepared.commit?.().catch(() => undefined);
+      // T6 (Wave 3, ships dark): the node timing ledger's one hook into the main dispatch loop. Same
+      // non-authoritative posture as the line above — recordNodeTiming is itself best-effort internally
+      // and this call is not awaited-and-thrown on failure either.
+      await recordNodeTiming(saved, nextNode.id).catch(() => undefined);
       // F4: the most common way a run reaches a learning-relevant terminal state — blocked (almost
       // always the publish-risk-without-approval gate above) or failed — happens right here, not in
       // the no-more-runnable-nodes branch reflection already covers.
@@ -975,6 +1372,12 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     clientProjectId,
     reducedContract: deterministicPrefetch?.ok ? deterministicPrefetch.reduced : undefined,
     stageOutputs: run.stageOutputs,
+    // T2 (run_1786557897658_elj34j) — the fix: echo the run's own operator publish decision into
+    // every node's run context. Before this, only the executor's own pre-dispatch guard and
+    // publisher.ts read run.operatorPublishDecision directly; a node's model dispatch had no way to
+    // see it at all.
+    operatorPublishDecision: run.operatorPublishDecision,
+    operatorDecisionSource: run.operatorDecisionSource,
     // W3 part 1's prompt-side half: the node whose validator loop the engine has taken over is told
     // so HERE, in the same dispatch that takes it over, instead of in a seeded prompt the live
     // (store-sourced) workspace would not see until a re-seed. W4 and W6.3 add their own halves on
@@ -1254,12 +1657,93 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // B2: publishRun never releases), and an "executed" claim without that evidence is downgraded to
   // "blocked" by enforcePublishExecutionEvidence anyway. That tail is its own change, not a rider on a
   // refusal path.
-  if (nextNode.metadata?.publishExecutorDeterministic === true && isPublishExecutorNode(nextNode) && liveRun) {
+  //
+  // T4 (Wave 2a, 2026-08-13) — the flag is now TRI-state and the EXECUTE half lands below: "gate"
+  // (metadata.publishExecutorDeterministic === true) is the refusal-only behaviour described above,
+  // unchanged; "execute" (=== "execute") additionally has the ENGINE perform the publish on a passing
+  // gate, by calling publisher.ts publishRun directly. Absent/unrecognised is "off" — the model path,
+  // exactly as before this landed. Scoped to LIVE runs and to the publisher node for the same reasons
+  // the sibling routes are.
+  const publishExecutorMode = isPublishExecutorNode(nextNode) && liveRun ? readPublishExecutorDeterministicMode(nextNode.metadata) : "off";
+  // Envelope facts taken verbatim from upstream, nearest-to-this-node first; never invented.
+  const publishEnvelopeCarriers = [run.stageOutputs.publication_controller, run.stageOutputs.publish_payload, run.stageOutputs.article_body];
+
+  // T4's execute half. The one deterministic route in this file with NO model fallback, deliberately:
+  // once this path has entered publishRun's sequence a client object may already exist, and handing
+  // that state to a model dispatch that cannot see what was written is how a run half-publishes twice
+  // (run_1786557897658_elj34j's second failure was a model reading another run's publish state). Every
+  // outcome therefore terminates here — a passing gate + committed publish COMPLETES the node with the
+  // receipts, and anything else BLOCKS it with a typed blocker naming the failing step.
+  if (publishExecutorMode === "execute") {
+    let engine: Awaited<ReturnType<typeof runEnginePublishExecution>>;
+    try {
+      engine = await runEnginePublishExecution({
+        run,
+        clientProjectId,
+        envelopeCarriers: publishEnvelopeCarriers,
+        // W3 part 2's channel: the publish request id travels as run context (lifted once from
+        // artifact_plan), with the upstream outputs as the fallback carriers. Never minted here.
+        requestId: runContext.requestId,
+        // The run store this dispatch is driving — publishRun re-reads the PERSISTED run to evaluate
+        // its own gates, and must not read a different repository than the one the executor saved to.
+        deps: { executionRepository: store, projectRepository: repositoryManager.getProjectRepository() }
+      });
+    } catch (error) {
+      engine = { ok: false, code: "threw", error: error instanceof Error ? error.message : String(error) };
+    }
+    const engineValidation = engine.ok ? validateOutput(engine.output, nextNode.outputSchema) : undefined;
+    if (engine.ok && engineValidation?.ok) {
+      const completedAt = now();
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = engine.output;
+      state.warnings = [...(state.warnings ?? []), ...engine.warnings];
+      run.stageOutputs[nextNode.id] = engine.output;
+      run.artifacts.push(buildArtifact(nextNode, engine.output));
+      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.updatedAt = completedAt;
+      if (engine.nodeBlocked) {
+        // A failed sequence leaves the NODE blocked (and the run with it): the artifact records what
+        // ran, and nothing downstream should proceed as if a publish had happened.
+        state.status = "blocked";
+        run.status = "blocked";
+      } else {
+        // Gate refusal or a committed publish: the node produced its artifact either way, and the
+        // record's own status/publishCommitted fields say which.
+        state.status = "completed";
+        run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      }
+      // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
+      return { run };
+    }
+    // Unusable result (no envelope to record against, or a store-overlaid schema that rejects the
+    // engine's own record). Blocked, never dispatched: the sibling routes' "fall through to the model"
+    // degradation is safe for a node that computes a value and unsafe for the one node that mutates a
+    // live site.
+    const completedAt = now();
+    const invalid = engineValidation && !engineValidation.ok ? engineValidation.errors : undefined;
+    const reason = engine.ok ? (invalid?.[0] ?? "schema_invalid") : engine.code;
+    state.status = "blocked";
+    state.completedAt = completedAt;
+    state.durationMs = duration(startedAt, completedAt);
+    state.warnings = [...(state.warnings ?? []), `publish_executor_engine_execution_unavailable:${reason}`];
+    state.output = {
+      error: {
+        code: "publish_executor_engine_execution_unavailable",
+        message: `The engine publish path could not produce a usable publish_execution.v1 record (${reason}); the node is blocked rather than handed to a model dispatch that cannot see what the sequence did.`,
+        details: engine.ok ? { record: engine.output, issues: invalid ?? [] } : { code: engine.code, error: engine.error }
+      }
+    };
+    run.status = "blocked";
+    run.updatedAt = completedAt;
+    return { run };
+  }
+
+  if (publishExecutorMode === "gate") {
     const executed = runDeterministicPublishExecutor({
       run,
       clientProjectId,
-      // Envelope facts taken verbatim from upstream, nearest-to-this-node first; never invented.
-      envelopeCarriers: [run.stageOutputs.publication_controller, run.stageOutputs.publish_payload, run.stageOutputs.article_body]
+      envelopeCarriers: publishEnvelopeCarriers
     });
     const executionValidation = executed.ok ? validateOutput(executed.output, nextNode.outputSchema) : undefined;
     if (executed.ok && executionValidation?.ok) {
@@ -1557,13 +2041,18 @@ export async function updateRunStatus(runId: string, status: ExecutionStatus, st
 // operator_not_withheld gate and the executor's publish-risk dispatch guard, both through
 // publishDecision.isOperatorPublishWithheld. Same lock + CAS discipline as updateRunStatus so a veto
 // can never be lost to a concurrent advance.
+// T2 — this call is, BY DEFINITION, the operator's own explicit act (it is the ONE thing a human or
+// an MCP caller invokes on purpose), so it always stamps operatorDecisionSource "explicit" — even
+// when it is overwriting a project-policy-default "approved" set at run creation. That overwrite is
+// exactly how "withheld" always wins over a policy default: this is the only path that can ever set
+// "withheld", and it always does so explicitly.
 export async function setOperatorPublishDecision(runId: string, decision: "approved" | "withheld", store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord | undefined> {
   return withRunLock(runId, async () => {
     for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
       const run = await store.getRun(runId);
       if (!run) return undefined;
       try {
-        return await store.saveRun({ ...run, operatorPublishDecision: decision, updatedAt: now() });
+        return await store.saveRun({ ...run, operatorPublishDecision: decision, operatorDecisionSource: "explicit", updatedAt: now() });
       } catch (error) {
         if (isConcurrencyConflict(error)) continue;
         throw error;
@@ -1612,4 +2101,4 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
 }
 
 export const publishingConductorWorkflowId = WORKFLOW_ID;
-export const __test__ = { buildInitialRun, findNextRunnableNode, mockOutputForNode, nodeById, isPublishRisk, nodeSource, overlayStoreNode, resolveConductorNodes };
+export const __test__ = { buildInitialRun, findNextRunnableNode, findRunnableNodes, mockOutputForNode, nodeById, isPublishRisk, nodeSource, overlayStoreNode, resolveConductorNodes, selectConcurrentBatch };

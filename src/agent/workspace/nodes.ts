@@ -381,7 +381,6 @@ export const publishingConductorNodes = [
       }
     },
     "allowedTools": [
-      "workspace.get_node",
       "stage.get_output",
       "stage.list_outputs"
     ],
@@ -1074,12 +1073,13 @@ export const publishingConductorNodes = [
     "name": "Brief Architect",
     "kind": "planning",
     "description": "Convert strategy into an executable article brief with structure, claims, proof points, and acceptance criteria.",
-    "prompt": "Objective: Convert upstream strategy and evidence into one executable article/content brief for the target client.\nInputs expected: topic_opportunity, monetization_strategy (the selected offer — or explicit no-offer decision — this brief must be aimed at; a hard input, never re-decided here), reader_insight, research, objection_mapping, narrative_movement, and angle_strategy — all delivered directly in this node's input as dependency outputs — plus clientProjectId (the run's registered client). Everything this brief needs is already in your input; do not fetch stage outputs or hunt for additional context.\nOutput required: produce article_brief.v1 with title/slug direction, reader promise, article structure, claim/proof map, reader next step, SEO/meta notes, tone guardrails, acceptance criteria, and what to skip.\nCost policy: collapse duplicate strategy into this brief. Do not ask downstream agents to rediscover the angle. Include only sections, claims, and review needs that materially improve the article.\nNext-step policy: make the content useful first and commercially aware second. Add a low-pressure next step only where it fits the reader journey.\nClient policy: clientProjectId names the target client. Voice, styling, and audience direction belong to the client's own record, never to this prompt. Take tone guardrails ONLY from what is present in this node's input (the run's initial instructions and the delivered upstream outputs); when a client voice record exists the conductor delivers it in your input as editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), and its tone/cadence/lexicon/cta_policy/frameworks are this brief's tone guardrails. If no voice direction is present, record that gap as an assumption, set neutral reader-first guardrails, and continue — do not spend tool calls searching other stages for a voice record that was not delivered. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nContract policy: note likely target object type, expected content-object fields, taxonomy needs, and whether contract_intelligence must inspect anything beyond the client's default object type.\nCompletion criteria: the draft writer can write without guessing; research and factual risks are visible; blockers are explicit.\nBlocker criteria: missing strategy, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Convert upstream strategy and evidence into one executable article/content brief for the target client.\nInputs expected: topic_opportunity, monetization_strategy (the selected offer — or explicit no-offer decision — this brief must be aimed at; a hard input, never re-decided here), reader_insight, research, objection_mapping, narrative_movement, and angle_strategy — all delivered directly in this node's input as dependency outputs — plus clientProjectId (the run's registered client). Everything this brief needs is already in your input; do not fetch stage outputs or hunt for additional context.\nOutput required: produce article_brief.v1 with title/slug direction, reader promise, article structure, claim/proof map, reader next step, SEO/meta notes, tone guardrails, acceptance criteria, and what to skip — plus mediaSlots, a structured array with one entry {slotId, purpose, desiredKind, placement} per media need the run's envelope actually requests (a hero image, an inline diagram, whatever the reader promise calls for). mediaSlots policy: derive slots ONLY from what the envelope's media request states or the article structure demonstrably needs — never invent a slot to make the brief feel complete. When the envelope requests no media at all, emit mediaSlots as an EMPTY ARRAY, not an absent field and not null: artifact_plan's zero-media skip predicate reads this exact array before doing any other work, so an honest empty array is what tells it, cheaply and structurally, that there is nothing to plan. Never omit mediaSlots and never emit null in its place — either would read as 'unknown', which runs artifact_plan needlessly, or worse, silently reads a stale answer from another carrier.\nCost policy: collapse duplicate strategy into this brief. Do not ask downstream agents to rediscover the angle. Include only sections, claims, and review needs that materially improve the article.\nNext-step policy: make the content useful first and commercially aware second. Add a low-pressure next step only where it fits the reader journey.\nClient policy: clientProjectId names the target client. Voice, styling, and audience direction belong to the client's own record, never to this prompt. Take tone guardrails ONLY from what is present in this node's input (the run's initial instructions and the delivered upstream outputs); when a client voice record exists the conductor delivers it in your input as editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), and its tone/cadence/lexicon/cta_policy/frameworks are this brief's tone guardrails. If no voice direction is present, record that gap as an assumption, set neutral reader-first guardrails, and continue — do not spend tool calls searching other stages for a voice record that was not delivered. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nContract policy: note likely target object type, expected content-object fields, taxonomy needs, and whether contract_intelligence must inspect anything beyond the client's default object type.\nCompletion criteria: the draft writer can write without guessing; research and factual risks are visible; blockers are explicit.\nBlocker criteria: missing strategy, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
         "artifact",
-        "summary"
+        "summary",
+        "mediaSlots"
       ],
       "additionalProperties": true,
       "properties": {
@@ -1092,6 +1092,34 @@ export const publishingConductorNodes = [
         },
         "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
         "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
+        "mediaSlots": {
+          "type": "array",
+          "description": "Every media need the envelope's media request implies, one entry per slot. EMPTY ARRAY (never absent, never null) when the run requests no media at all — the honest 'asked, none wanted' signal artifact_plan's no_media_slots skip predicate reads before it does any structural scan.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "slotId",
+              "purpose"
+            ],
+            "properties": {
+              "slotId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1
+              },
+              "desiredKind": {
+                "type": "string"
+              },
+              "placement": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "notes": {
           "type": "array",
           "items": {
@@ -1119,7 +1147,8 @@ export const publishingConductorNodes = [
       "type": "object",
       "required": [
         "artifact",
-        "summary"
+        "summary",
+        "mediaSlots"
       ],
       "additionalProperties": true,
       "properties": {
@@ -1132,6 +1161,34 @@ export const publishingConductorNodes = [
         },
         "trafficSource": TRAFFIC_SOURCE_ENUM_PROPERTY,
         "awarenessStage": AWARENESS_STAGE_ENUM_PROPERTY,
+        "mediaSlots": {
+          "type": "array",
+          "description": "Every media need the envelope's media request implies, one entry per slot. EMPTY ARRAY (never absent, never null) when the run requests no media at all — the honest 'asked, none wanted' signal artifact_plan's no_media_slots skip predicate reads before it does any structural scan.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "slotId",
+              "purpose"
+            ],
+            "properties": {
+              "slotId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1
+              },
+              "desiredKind": {
+                "type": "string"
+              },
+              "placement": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "notes": {
           "type": "array",
           "items": {
@@ -2065,225 +2122,11 @@ export const publishingConductorNodes = [
     }
   },
   {
-    "id": "article_body",
-    "name": "Article Body Builder",
-    "kind": "builder",
-    "description": "Build the client's content object in the client's own shape, using the contract fetched at runtime by contract_intelligence. The client contract is the only source of truth; no workspace-local content schema is authoritative.",
-    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content), draft_writer (the complete drafted prose — build the body FROM this draft as amended by review_aggregator's revision instructions, never by re-writing the article from notes), contract_intelligence (the client contract), narrative_movement (the reader-journey arc: section movement, stakes, transitions, resolution) and angle_strategy (the chosen angle, promise, and tension) — the upstream editorial reasoning your per-node private annotations are built from. clientProjectId also arrives directly in this node's input from the conductor and must agree with contract_intelligence's clientProjectId; if they disagree, that is a blocker. Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nPrivate annotation policy: where the contract's body schema declares per-node private annotation fields (for example a private block with closed strategy/intent enums and a free-text notes field), populate them on EVERY node you emit — an absent private annotation is a defect, not a default. Choose each enum value ONLY from the enum the contract itself declares — never invent, pluralize, or approximate a value — mapping each node's role in the piece from narrative_movement's arc and angle_strategy's angle/promise plus review_aggregator's build instructions, and put the one-sentence reasoning for the choice in the contract's free-text private notes field. If narrative_movement or angle_strategy outputs are absent or skipped (for example a late-stage entry run), derive the annotation from the approved content itself and record that as an assumption. Private annotation is never reader-visible — the contract's renderer emits public fields only — so annotate every node rather than leaving private fields absent. If the contract declares no private annotation fields for this object type, note that instead; never add undeclared fields.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_read_tool, read-only, and record the outcome in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable — that tool is deliberately approval-gated for writes only. If the client's validator requires an existing object record that does not yet exist, do NOT attempt to create one — this node is write-prohibited. Record clientValidation {attempted: true, tool, valid: false, deferred: \"requires_existing_object\"} quoting the client's own refusal in issues, and treat that as a NORMAL outcome, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch. Do not claim validity, and do not spend further calls re-attempting once the client has reported the object does not exist. If the client cannot be reached or its read-only validator is denied by the project's own policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; contract-declared private annotation fields are populated on every emitted node (or the contract's silence on them is noted); every media reference is verified and in the correct form for its field; clientValidation records a real result from the client, or a deferral because the validator requires an object that does not yet exist; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; clientProjectId is missing from this node's input or disagrees with contract_intelligence's; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client through project.call_read_tool for every read-only contract and validation operation; project.call_tool is approval-gated and reserved for writes — never create, patch, publish, or release from this node.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
-    "schema": {
-      "type": "object",
-      "required": [
-        "artifact",
-        "summary",
-        "clientProjectId",
-        "clientObjectType",
-        "contractSource",
-        "body"
-      ],
-      "additionalProperties": true,
-      "properties": {
-        "artifact": {
-          "const": "client_object.v1"
-        },
-        "summary": {
-          "type": "string",
-          "minLength": 1
-        },
-        "clientProjectId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "clientObjectType": {
-          "type": "string",
-          "minLength": 1
-        },
-        "contractSource": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "body": {
-          "type": "object",
-          "minProperties": 1,
-          "additionalProperties": true
-        },
-        "clientValidation": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "artifactReferences": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        },
-        "mediaPathConvention": {
-          "type": "string"
-        },
-        "assumptions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "blockers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "notes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "inputSchema": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "stageOutputs": {
-          "type": "object"
-        },
-        "contentSource": {
-          "type": "object"
-        },
-        "instructions": {
-          "type": "string"
-        }
-      }
-    },
-    "outputSchema": {
-      "type": "object",
-      "required": [
-        "artifact",
-        "summary",
-        "clientProjectId",
-        "clientObjectType",
-        "contractSource",
-        "body"
-      ],
-      "additionalProperties": true,
-      "properties": {
-        "artifact": {
-          "const": "client_object.v1"
-        },
-        "summary": {
-          "type": "string",
-          "minLength": 1
-        },
-        "clientProjectId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "clientObjectType": {
-          "type": "string",
-          "minLength": 1
-        },
-        "contractSource": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "body": {
-          "type": "object",
-          "minProperties": 1,
-          "additionalProperties": true
-        },
-        "clientValidation": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "artifactReferences": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        },
-        "mediaPathConvention": {
-          "type": "string"
-        },
-        "assumptions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "blockers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "notes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "allowedTools": [
-      "workspace.get_node",
-      "stage.get_output",
-      "stage.save_output",
-      "stage.list_outputs",
-      "project.call_tool",
-      "project.call_read_tool"
-    ],
-    "assignedSkills": [
-      "contract_intelligence"
-    ],
-    "requiredInputs": [
-      "review_aggregator",
-      "draft_writer",
-      "contract_intelligence",
-      "narrative_movement",
-      "angle_strategy"
-    ],
-    "produces": [
-      "client_object.v1"
-    ],
-    "riskLevel": "write",
-    "dependsOn": [
-      "review_aggregator",
-      "draft_writer",
-      "contract_intelligence",
-      "narrative_movement",
-      "angle_strategy"
-    ],
-    "status": "active",
-    "position": {
-      "x": 1120,
-      "y": 360
-    },
-    "updatedAt": "2026-07-31T09:36:58.473Z",
-    "metadata": {
-      "approvalRequired": false,
-      "externalStageMapping": "final_article",
-      "canonicalRules": [
-        "The client's fetched contract is the only authoritative content schema",
-        "body must be emitted in the client's own object shape, not a workspace shape",
-        "Renderable media fields carry the client's public path; raw artifact keys only in the client's designated reference fields",
-        "Workspace-local article schemas are advisory and must never be used to validate"
-      ]
-    },
-    "modelConfig": {
-      "maxTurns": 6,
-      "toolCallLimit": 3,
-      "timeout": 300000,
-      "budgetUsd": 0.75,
-      "maxOutputTokens": 10000
-    }
-  },
-  {
     "id": "artifact_plan",
     "name": "Artifact Planning Agent",
     "kind": "adapter",
-    "description": "Plan and verify media/artifact requirements against the client's declared artifact protocol and id conventions. No legacy fallbacks, no unverified media.",
-    "prompt": "Objective: Plan and verify every media/artifact need for the client-shaped body produced by article_body, using only the artifact protocol the client's contract declares.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: article_body (client-shaped body plus its artifact references), delivered in this node's input.\nZero-media shortcut: when the delivered body declares no media slots and carries no artifact references — a text-only object — emit the plan immediately from your input with an empty slot list and zero tool calls. There is nothing to verify; spending turns proving the absence of media is the failure mode this node's budget exists to prevent. A zero-media plan may omit artifactProtocol entirely — there was no protocol to consult, and inventing a protocol string for an empty plan is exactly the fabrication this node forbids elsewhere.\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy: never mark a slot has_trusted_artifact because a key merely matches a pattern. Trust requires verification evidence from the artifact service that the reference was materialized for this request, with matching key, digest, content type, size and timestamp — record it in the slot's verification field. Where the artifact service offers an explicit verification tool, use it and keep its proof. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both — the raw reference for the client's reference fields and publicPath for its rendered fields. Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream.\nBlocker criteria: missing body; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Read-only policy, status, and id-confirmation lookups go through project.call_read_tool, which needs no approval; project.call_tool is approval-gated and reserved for writes (artifact generation under an approved capability). Do not publish, release, or mutate the client from this node.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "description": "Plan and MATERIALIZE media/artifact requirements from brief_architect's mediaSlots, against the client's declared artifact protocol and id conventions, before article_body runs. No legacy fallbacks, no unverified media.",
+    "prompt": "Objective: Plan and MATERIALIZE every media/artifact need brief_architect declared, using only the artifact protocol the client's contract declares — and hand article_body verified references to build with, before article_body ever runs.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence, delivered directly in this node's input, rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: brief_architect (mediaSlots — the desired-media declaration, one entry {slotId, purpose, desiredKind, placement} per slot the envelope's media request asked for) and contract_intelligence (the artifact protocol, id convention, media path rules and budget), both delivered directly in this node's input. article_body has not run yet — do not expect it, do not wait for it, and do not read a body that does not exist yet.\nZero-media shortcut: when brief_architect's mediaSlots is an empty array, emit the plan immediately from your input with an empty slot list and zero tool calls. There is nothing to verify; spending turns proving the absence of media is the failure mode this node's budget exists to prevent. A zero-media plan may omit artifactProtocol entirely — there was no protocol to consult, and inventing a protocol string for an empty plan is exactly the fabrication this node forbids elsewhere.\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy — one call, verified: for each non-empty slot, call the client site bridge's artifact-generation tool (create_agent_artifact_job, reached through project.call_tool) with the slot's purpose, desiredKind and the client's brand styling — this single call GENERATES the artifact AND VERIFIES it was materialized for the current request before returning, so its response IS the verification evidence: record its returned key, digest, content type, size and timestamp in the slot's verification field. Never mark a slot has_trusted_artifact because a key merely matches a pattern — only a materialization response (or an explicit verification tool's proof, where the artifact service offers one instead) is evidence. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both on the slot — the raw reference for the client's reference fields and publicPath for its rendered fields (this is the exact value article_body must bind into body.image.src). Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream — article_body must be able to trust every artifactReferences entry and every slot's publicPath you emit without re-verifying them itself.\nBlocker criteria: missing mediaSlots declaration when one was expected; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. Read-only policy, status, and id-confirmation lookups go through project.call_read_tool, which needs no approval; project.call_tool is approval-gated and reserved for writes, including the create_agent_artifact_job generate-and-verify call. Do not publish, release, or mutate the client from this node.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "additionalProperties": true,
@@ -2593,19 +2436,28 @@ export const publishingConductorNodes = [
       "contract_intelligence"
     ],
     "requiredInputs": [
-      "article_body"
+      "brief_architect",
+      "contract_intelligence"
     ],
     "produces": [
       "artifact_plan.v1"
     ],
     "riskLevel": "write",
+    // T8 (Wave 3, 2026-08-13, run_1786557897658_elj34j): artifact_plan used to depend on article_body,
+    // which meant the media it plans could only be verified AFTER the body that would reference it was
+    // already written — a text-only body always shipped from that run, media or not, because there was
+    // never a verified reference to bind by the time article_body ran. Depending on brief_architect
+    // (mediaSlots, the desired-media declaration) and contract_intelligence (the artifact protocol, id
+    // convention, and media path rules) instead makes artifact_plan run BEFORE article_body, so a
+    // verified reference exists to hand article_body before it builds the body that would carry it.
     "dependsOn": [
-      "article_body"
+      "brief_architect",
+      "contract_intelligence"
     ],
     "status": "active",
     "position": {
       "x": 1120,
-      "y": 1500
+      "y": 500
     },
     "updatedAt": "2026-07-31T09:36:58.473Z",
     "metadata": {
@@ -2614,7 +2466,8 @@ export const publishingConductorNodes = [
         "The client's contract declares the artifact protocol, id convention and media path rules",
         "A pattern-valid key is never proof of materialization",
         "Request ids must satisfy the client's convention before any artifact is written",
-        "No legacy artifact fallback systems"
+        "No legacy artifact fallback systems",
+        "create_agent_artifact_job (client site bridge, via project.call_tool) generates and verifies a brand-styled artifact in one call — that call's response is the verification evidence, not a separate lookup"
       ]
     },
     "modelConfig": {
@@ -2622,6 +2475,228 @@ export const publishingConductorNodes = [
       "timeout": 180000,
       "budgetUsd": 0.5,
       "maxOutputTokens": 3000
+    }
+  },
+  {
+    "id": "article_body",
+    "name": "Article Body Builder",
+    "kind": "builder",
+    "description": "Build the client's content object in the client's own shape, using the contract fetched at runtime by contract_intelligence. The client contract is the only source of truth; no workspace-local content schema is authoritative.",
+    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker — do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content), draft_writer (the complete drafted prose — build the body FROM this draft as amended by review_aggregator's revision instructions, never by re-writing the article from notes), contract_intelligence (the client contract), narrative_movement (the reader-journey arc: section movement, stakes, transitions, resolution), angle_strategy (the chosen angle, promise, and tension) — the upstream editorial reasoning your per-node private annotations are built from — and artifact_plan (media_slots already materialized and verified for this run, with each slot's artifactReference and publicPath), delivered directly in this node's input. artifact_plan has already run and already generated and verified whatever media brief_architect's mediaSlots asked for; you bind its output, you do not plan or generate media yourself. clientProjectId also arrives directly in this node's input from the conductor and must agree with contract_intelligence's clientProjectId; if they disagree, that is a blocker. Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema — its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nPrivate annotation policy: where the contract's body schema declares per-node private annotation fields (for example a private block with closed strategy/intent enums and a free-text notes field), populate them on EVERY node you emit — an absent private annotation is a defect, not a default. Choose each enum value ONLY from the enum the contract itself declares — never invent, pluralize, or approximate a value — mapping each node's role in the piece from narrative_movement's arc and angle_strategy's angle/promise plus review_aggregator's build instructions, and put the one-sentence reasoning for the choice in the contract's free-text private notes field. If narrative_movement or angle_strategy outputs are absent or skipped (for example a late-stage entry run), derive the annotation from the approved content itself and record that as an assumption. Private annotation is never reader-visible — the contract's renderer emits public fields only — so annotate every node rather than leaving private fields absent. If the contract declares no private annotation fields for this object type, note that instead; never add undeclared fields.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that — a raw key in a rendered field is a build-breaking error, not a cosmetic one. Only reference artifacts that were materialized for the CURRENT request and verified by the artifact tool; pattern-valid keys are not proof. Never use remote URLs, data URIs, repo paths, hand-authored keys, or references copied from another request or another slug. Respect the client's media budget and preferred format when the contract or storage grant declares them. Honor any placement or rendering metadata the contract requires for reader-visible media — omitting it can silently drop the media from the published page.\nVerified media binding policy: artifact_plan already ran, already generated the media brief_architect's mediaSlots asked for, and already verified each reference against the client's artifact protocol — its media_slots array is the ONLY source of media for this build. For every slot with status has_trusted_artifact, bind its publicPath into the contract's rendered image field in the contract's own shape — exactly { src: publicPath, alt } where the contract's schema calls it that, or the equivalent rendered-field name the contract declares — and bind its raw artifactReference (never the publicPath) into the contract's raw reference field, and mirror the same bound reference into this node's own media-bearing fields (artifactReferences, mediaPathConvention) so downstream nodes need not re-derive it. NEVER bind a slot artifact_plan marked needs_generation or blocked, NEVER bind a reference this node did not receive from artifact_plan (no re-fetching, no re-generating, no re-verifying — that is artifact_plan's job and it already did it), and NEVER place a raw artifact key in a rendered field: an unverified reference or a raw key in a rendered field must never reach a rendered field, full stop — if artifact_plan left a slot unresolved, leave that slot's rendered field absent and record the gap as a blocker or assumption instead of guessing.\nClient validation policy: before completing, validate through the CLIENT's own validator via project.call_read_tool, read-only, and record the outcome in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable — that tool is deliberately approval-gated for writes only. If the client's validator requires an existing object record that does not yet exist, do NOT attempt to create one — this node is write-prohibited. Record clientValidation {attempted: true, tool, valid: false, deferred: \"requires_existing_object\"} quoting the client's own refusal in issues, and treat that as a NORMAL outcome, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch. Do not claim validity, and do not spend further calls re-attempting once the client has reported the object does not exist. If the client cannot be reached or its read-only validator is denied by the project's own policy, set clientValidation.attempted false, add a blocker, and do not claim validity.\nReader-safety policy: reader-visible strings must never leak strategy labels, prompts, scoring, internal notes, or workflow vocabulary. Put internal annotation only in the private/internal fields the contract designates. Follow the contract's id rules, including any prohibition on ids that reveal intent.\nCompletion criteria: body satisfies the client's contract as fetched; contract-declared private annotation fields are populated on every emitted node (or the contract's silence on them is noted); every media reference is verified and in the correct form for its field; clientValidation records a real result from the client, or a deferral because the validator requires an object that does not yet exist; assumptions and blockers are explicit.\nBlocker criteria: no contract or no contractSource provenance; the client is unreachable or unconfigured; clientProjectId is missing from this node's input or disagrees with contract_intelligence's; required contract fields cannot be satisfied from the approved content; taxonomy terms do not resolve and the contract blocks unknown terms; media is missing, unverified, or cannot be expressed in the form the contract demands; or the contract declares a constraint this workspace cannot meet.\nTool policy: use only allowedTools; reach the client through project.call_read_tool for every read-only contract and validation operation; project.call_tool is approval-gated and reserved for writes — never create, patch, publish, or release from this node.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; never persist secrets, storage grants, raw authorization headers, or tokens.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "schema": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "body"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {
+          "const": "client_object.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "body": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "mediaPathConvention": {
+          "type": "string"
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "stageOutputs": {
+          "type": "object"
+        },
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "contractSource",
+        "body"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {
+          "const": "client_object.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "body": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true
+        },
+        "clientValidation": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "mediaPathConvention": {
+          "type": "string"
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool",
+      "project.call_read_tool"
+    ],
+    "assignedSkills": [
+      "contract_intelligence"
+    ],
+    "requiredInputs": [
+      "review_aggregator",
+      "draft_writer",
+      "contract_intelligence",
+      "narrative_movement",
+      "angle_strategy",
+      "artifact_plan"
+    ],
+    "produces": [
+      "client_object.v1"
+    ],
+    "riskLevel": "write",
+    // T8 (Wave 3, 2026-08-13, run_1786557897658_elj34j): artifact_plan added as a dependency, and moved
+    // ahead of this node in the tail's canonical order (publishingTail.ts), so the media this node binds
+    // already exists and is verified BEFORE this node runs. Before this change, artifact_plan ran after
+    // article_body and could only plan against a body that had already shipped without media — the
+    // published run this fix is named for carried no media for exactly that reason.
+    "dependsOn": [
+      "review_aggregator",
+      "draft_writer",
+      "contract_intelligence",
+      "narrative_movement",
+      "angle_strategy",
+      "artifact_plan"
+    ],
+    "status": "active",
+    "position": {
+      "x": 1120,
+      "y": 700
+    },
+    "updatedAt": "2026-07-31T09:36:58.473Z",
+    "metadata": {
+      "approvalRequired": false,
+      "externalStageMapping": "final_article",
+      "canonicalRules": [
+        "The client's fetched contract is the only authoritative content schema",
+        "body must be emitted in the client's own object shape, not a workspace shape",
+        "Renderable media fields carry the client's public path; raw artifact keys only in the client's designated reference fields",
+        "Workspace-local article schemas are advisory and must never be used to validate",
+        "Media comes from artifact_plan's already-verified media_slots only — never re-planned, re-generated, or re-verified here, and never an unverified reference in a rendered field"
+      ]
+    },
+    "modelConfig": {
+      "maxTurns": 6,
+      "toolCallLimit": 3,
+      "timeout": 300000,
+      "budgetUsd": 0.75,
+      "maxOutputTokens": 10000
     }
   },
   {

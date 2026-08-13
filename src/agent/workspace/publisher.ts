@@ -25,7 +25,7 @@ import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks, type PublishExecutionOutcome, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
-import { findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
+import { describeOperatorDecisionSource, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
@@ -49,14 +49,24 @@ const compileRequestIdPattern = (declared: string | undefined): RegExp => {
 const OWNER = { owner_id: "cms-agent", owner_label: "CMS-Agent Publishing Conductor" };
 
 export type PublishGate = { name: string; passed: boolean; reason?: string };
-export type PublishGates = { operatorEnabled: boolean; approved: boolean; live: boolean; allPassed: boolean; gates: PublishGate[] };
+// T2 (run_1786557897658_elj34j) — operatorDecisionSource names WHICH source (explicit operator call
+// vs. a project's publishingPolicy.operatorDefault) produced run.operatorPublishDecision, whatever
+// its value. Purely descriptive: it rides alongside the gates so a caller can render "approved (source:
+// project_policy_default)" rather than a bare "approved" a reader could take for explicit sign-off. It
+// never feeds gate PASS/FAIL — the operator_not_withheld gate below is unchanged.
+export type PublishGates = { operatorEnabled: boolean; approved: boolean; live: boolean; allPassed: boolean; gates: PublishGate[]; operatorDecisionSource?: string };
 export type PublishStep = { tool: string; ok: boolean; error?: string };
 export type PublishPlan = { projectId: string; requestId: string; nodeCount: number; publishedTime: string | null; toolSequence: string[] };
 // Resumable blocked-state descriptor so an operator/UI can act without reconstructing the run.
 export type PublishBlockedState = { requestId: string; nodeAwaitingApproval: string; artifactSlot: string | null; requiredAction: string; resumable: true };
 export type PublishResult =
   | { published: false; mode: "dry_run"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; reason: string; readiness?: PublishReadinessResult }
-  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; clientValidation?: NonNullable<PublishExecutionOutcome["clientValidation"]>; readiness?: PublishReadinessResult }
+  // T4 (Wave 2a, 2026-08-13) — `objectId` is the hook's own PublishExecutionOutcome.objectId, carried
+  // out instead of dropped. The engine-side publish path (publishExecution.ts) records the client
+  // object id as a receipt, and the only honest source for it is the id the sequence actually created
+  // or minted; re-deriving it by re-reading `result` is exactly the "model re-derives a fact the
+  // engine already holds" failure T4 exists to remove. Optional because a dialect need not mint one.
+  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; objectId?: string; clientValidation?: NonNullable<PublishExecutionOutcome["clientValidation"]>; readiness?: PublishReadinessResult }
   | { published: false; mode: "blocked_for_publish_execution"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; readiness: PublishReadinessResult; blocked: PublishBlockedState }
   | { published: false; mode: "error"; gates: PublishGates; plan: PublishPlan | null; steps: PublishStep[]; error: string };
 
@@ -100,7 +110,7 @@ export const isProjectPublishEnabled = (config: ProjectConnectionConfig, env: No
 // false — so granted nodes reach client tools without a per-run approval ceremony.)
 const PUBLISH_GATE_NAMES = ["operator_enabled", "explicit_approval", "explicit_live", "operator_not_withheld", "controller_decision_go"] as const;
 
-const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, env: NodeJS.ProcessEnv, run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision">): PublishGates => {
+const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, env: NodeJS.ProcessEnv, run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource">): PublishGates => {
   const operatorEnabled = isProjectPublishEnabled(config, env);
   // Go-live 2026-07-31: approval and live default to TRUE — a publish request is taken at its word.
   // Passing approved:false or live:false still forces a dry-run plan, so a deliberate rehearsal
@@ -132,7 +142,10 @@ const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, 
   }
   const allPassed = operatorEnabled && approved && live && operatorNotWithheld && decision.authorized;
   if (allPassed !== gates.every((gate) => gate.passed)) throw new Error("publish_gate_evaluation_inconsistent: a gate's passed flag disagrees with its own input.");
-  return { operatorEnabled, approved, live, allPassed, gates };
+  // T2 — descriptive only (see PublishGates): names the source of run.operatorPublishDecision so a
+  // live publish receipt below can never be misread as explicit operator sign-off when the run
+  // actually started pre-approved by the project's publishingPolicy.operatorDefault.
+  return { operatorEnabled, approved, live, allPassed, gates, operatorDecisionSource: describeOperatorDecisionSource(run) };
 };
 
 const findArticleBody = (run: WorkflowExecutionRecord): unknown =>
@@ -266,7 +279,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     });
 
     await learningRepository.recordObservation(`Live publish executed for ${projectId} request ${input.requestId}.`, { type: "publish_executed", projectId, requestId: input.requestId, runId: input.runId });
-    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(outcome.result), ...(outcome.clientValidation ? { clientValidation: outcome.clientValidation } : {}), readiness };
+    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(outcome.result), ...(outcome.objectId ? { objectId: outcome.objectId } : {}), ...(outcome.clientValidation ? { clientValidation: outcome.clientValidation } : {}), readiness };
   } catch (error) {
     const message = error instanceof Error ? error.message : "publish_failed";
     await learningRepository.recordObservation(`Live publish failed for ${projectId} request ${input.requestId}: ${message}`, { type: "publish_failed", projectId, requestId: input.requestId, runId: input.runId }).catch(() => undefined);

@@ -47,9 +47,29 @@ export class NodeBudgetExceededError extends Error {
 export const estimateRequestTokens = (request: ModelRequest): number =>
   Math.ceil((JSON.stringify(request.input ?? "").length + (request.systemInstructions?.length ?? 0)) / 4);
 
+// A thrown tool-execute error reaches the model through the Agents SDK's OWN default error
+// formatter (tool.js's defaultToolErrorFunction), which always prefixes the text with this exact
+// string before it re-enters conversation history as that call's function_call_result. Matching on
+// it (rather than on our own tool-denial/tool-failure error codes) means this also catches SDK-level
+// tool errors we never authored a message for.
+const SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool.";
+
+// True when the newest item in this dispatch's conversation is the SDK's own error text for a tool
+// call that just threw — i.e. the immediately preceding tool call in THIS turn's history errored.
+const lastItemWasToolError = (request: ModelRequest): boolean => {
+  const items = Array.isArray(request.input) ? request.input : undefined;
+  const last = items?.[items.length - 1] as { type?: string; output?: unknown } | undefined;
+  if (!last || last.type !== "function_call_result") return false;
+  const text = typeof last.output === "string" ? last.output : (last.output as { text?: string } | undefined)?.text;
+  return typeof text === "string" && text.startsWith(SDK_TOOL_ERROR_PREFIX);
+};
+
 export type BudgetGuardState = {
   // Actual token usage accumulated across this node's completed model turns.
   accrued: { inputTokens: number; outputTokens: number };
+  // ACTUAL inputTokens usage from the most recently completed (successful) turn only — not
+  // cumulative like `accrued`. See gate()'s use of this below.
+  lastSuccessfulTurnInputTokens?: number;
   // Set when the guard refused a turn; the runner uses it to tell "budget tripped" from other aborts.
   exceeded?: NodeBudgetExceededError["details"];
 };
@@ -76,7 +96,20 @@ export type BudgetGuardConfig = {
 export function wrapModelWithBudgetGuard(inner: Model, config: BudgetGuardConfig, state: BudgetGuardState): Model {
   const gate = (request: ModelRequest): void => {
     const accruedNodeUsd = estimateModelCost({ model: config.model, inputTokens: state.accrued.inputTokens, outputTokens: state.accrued.outputTokens });
-    const prospectiveTurnUsd = estimateModelCost({ model: config.model, inputTokens: estimateRequestTokens(request), outputTokens: config.maxOutputTokens });
+    // run_1786557897658_elj34j (2026-08-12, verified live): topic_opportunity was stopped here with
+    // only $0.02 of its $0.10 node ceiling actually spent. Cause: a stray workspace.get_node call
+    // ERRORED the turn before, and the SDK's own error text for that call became the newest history
+    // item — a one-off detour, not real conversation growth — which estimateRequestTokens still
+    // prices into this turn like any other. Capping the input-token estimate at the last SUCCESSFUL
+    // turn's ACTUAL usage (never below it, and only when the error detour is what's inflating the
+    // request) removes that one-time spike without hiding genuine growth: a node whose history is
+    // truly ballooning turn over successful turn (the $3->138% overshoot this guard exists to stop)
+    // keeps growing this cap every time a turn actually succeeds.
+    const rawRequestTokens = estimateRequestTokens(request);
+    const requestTokens = lastItemWasToolError(request) && state.lastSuccessfulTurnInputTokens !== undefined
+      ? Math.min(rawRequestTokens, state.lastSuccessfulTurnInputTokens)
+      : rawRequestTokens;
+    const prospectiveTurnUsd = estimateModelCost({ model: config.model, inputTokens: requestTokens, outputTokens: config.maxOutputTokens });
     // Node ceiling: this node's own accrued spend + the upcoming turn. Run ceiling: everything the
     // run has spent (prior nodes + this node) + the upcoming turn. Whichever trips first stops the
     // turn; the details name the ceiling that tripped so the remedy is unambiguous.
@@ -98,6 +131,9 @@ export function wrapModelWithBudgetGuard(inner: Model, config: BudgetGuardConfig
   const absorb = (usage: { inputTokens?: number; outputTokens?: number } | undefined): void => {
     state.accrued.inputTokens += usage?.inputTokens ?? 0;
     state.accrued.outputTokens += usage?.outputTokens ?? 0;
+    // Recorded on every completed (successful) turn, never on a gated-out or thrown turn, so gate()
+    // always caps against a request size that actually reached the model and got a real response.
+    if (usage?.inputTokens !== undefined) state.lastSuccessfulTurnInputTokens = usage.inputTokens;
   };
   return {
     async getResponse(request: ModelRequest): Promise<ModelResponse> {

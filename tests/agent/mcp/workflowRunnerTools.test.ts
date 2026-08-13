@@ -77,7 +77,12 @@ describe("workflow runner MCP tools (end-to-end)", () => {
     // One artifact per completed node — no replays. Twelve atomic commits: each advance persists a
     // dispatch claim (the ~300s silent-death heartbeat) plus the completion save.
     expect(new Set(artifactNodeIds).size).toBe(artifactNodeIds.length);
-    expect(run.nodes.filter((node: any) => node.status === "completed")).toHaveLength(6);
+    // T7 (Wave 3): SEVEN nodes for six advances. monetization_strategy and reader_insight both hang off
+    // topic_opportunity and are independent of one another, so the fourth advance dispatches them as one
+    // bounded concurrent batch. The commit count is unchanged — a batch persists one claim save and one
+    // reconciliation save, exactly what a single serial advance costs — which is what this test is
+    // actually guarding: no replays, no extra revisions, one artifact per node.
+    expect(run.nodes.filter((node: any) => node.status === "completed")).toHaveLength(7);
     expect(run.rev).toBe(12);
   });
 

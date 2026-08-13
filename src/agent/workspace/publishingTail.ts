@@ -23,10 +23,19 @@ import type { WorkspaceNode, WorkspaceRiskLevel } from "./nodeTypes.js";
 //     hands the composed array to the executor).
 
 // The tail's node ids in canonical conductor order. This IS the shared sub-graph.
+//
+// T8 (Wave 3, 2026-08-13, run_1786557897658_elj34j): artifact_plan moved ahead of article_body. It
+// used to run AFTER article_body and plan against a body that had already been built — so the only
+// run this fix is named for shipped with zero media even though the run's envelope requested it:
+// artifact_plan correctly found nothing to bind, because nothing had generated the artifact yet, and
+// by the time it ran article_body had already finished without one. artifact_plan now depends on
+// brief_architect (mediaSlots, the desired-media declaration) and contract_intelligence (the artifact
+// protocol) instead of article_body, generates and verifies the artifact BEFORE the body is built, and
+// article_body binds artifact_plan's verified references rather than planning its own media.
 export const publishingTailNodeIds = [
   "contract_intelligence",
-  "article_body",
   "artifact_plan",
+  "article_body",
   "publish_payload",
   "publication_controller",
   "publish_executor",
@@ -46,8 +55,8 @@ export const isTailNode = (nodeId: string): nodeId is PublishingTailNodeId => ta
 // drift apart silently.
 export const publishingTailDeclaration: Record<PublishingTailNodeId, { dependsOn: readonly string[]; requiredInputs: readonly string[]; produces: readonly string[]; riskLevel: WorkspaceRiskLevel }> = {
   contract_intelligence: { dependsOn: ["brief_architect"], requiredInputs: ["brief_architect"], produces: ["contract_intelligence.v1"], riskLevel: "write" },
-  article_body: { dependsOn: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy"], requiredInputs: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy"], produces: ["client_object.v1"], riskLevel: "write" },
-  artifact_plan: { dependsOn: ["article_body"], requiredInputs: ["article_body"], produces: ["artifact_plan.v1"], riskLevel: "write" },
+  artifact_plan: { dependsOn: ["brief_architect", "contract_intelligence"], requiredInputs: ["brief_architect", "contract_intelligence"], produces: ["artifact_plan.v1"], riskLevel: "write" },
+  article_body: { dependsOn: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_plan"], requiredInputs: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_plan"], produces: ["client_object.v1"], riskLevel: "write" },
   publish_payload: { dependsOn: ["article_body", "artifact_plan"], requiredInputs: ["article_body", "artifact_plan"], produces: ["dry_run_publish_payload.v1"], riskLevel: "write" },
   publication_controller: { dependsOn: ["publish_payload"], requiredInputs: ["publish_payload"], produces: ["publication_decision.v1"], riskLevel: "publish" },
   publish_executor: { dependsOn: ["publication_controller"], requiredInputs: ["publication_controller"], produces: ["publish_execution.v1"], riskLevel: "publish" },
@@ -75,9 +84,9 @@ export const publishingTailInternalEdges: Record<PublishingTailNodeId, readonly 
 export const tailBoundary = (nodeId: string): readonly string[] => (isTailNode(nodeId) ? publishingTailBoundary[nodeId] : []);
 
 // Every upstream node id the tail consumes under the default (publishing_conductor) binding, in
-// first-appearance order: the tail's entry contract. brief_architect's article_brief.v1 feeds
-// contract_intelligence; review_aggregator, draft_writer, narrative_movement and angle_strategy feed
-// article_body.
+// first-appearance order: the tail's entry contract. brief_architect's article_brief.v1 (with its
+// mediaSlots) feeds BOTH contract_intelligence and artifact_plan; review_aggregator, draft_writer,
+// narrative_movement and angle_strategy feed article_body.
 export const publishingTailUpstreamIds: readonly string[] = [...new Set(publishingTailNodeIds.flatMap((nodeId) => publishingTailBoundary[nodeId]))];
 
 const sameStringArray = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((value, index) => value === b[index]);

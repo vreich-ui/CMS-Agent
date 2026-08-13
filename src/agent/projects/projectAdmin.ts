@@ -115,7 +115,15 @@ export const projectUpdateSchema = z.object({
   toolPolicies: toolPoliciesSchema.optional(),
   contentContract: z.object({ contentContract: z.string().min(1) }).strict().optional(),
   capturePolicy: capturePolicySchema.optional(),
-  status: z.enum(projectStatuses).optional()
+  status: z.enum(projectStatuses).optional(),
+  // T2 (2026-08-13): the ONE deliberate crack in "publishingPolicy is server-controlled" (see
+  // updateProject below and the comment at tools.ts's projectPatchJsonSchema). Every other field on
+  // ProjectPublishingPolicy — publishEnabled (the hard kill-switch precondition) and
+  // requiresExplicitPublish — stays untouchable through this API; only operatorDefault is exposed,
+  // by NAME, not by accepting a nested publishingPolicy object a caller could use to smuggle in the
+  // rest. "require_explicit" is accepted explicitly so an operator can revert a project to today's
+  // behavior without needing a null/undefined convention.
+  operatorPublishDefault: z.enum(["approved", "require_explicit"]).optional()
 }).strict();
 
 // The MCP boundary parses defaults before calling createProject. Keeping this optional also lets
@@ -180,9 +188,15 @@ export async function updateProject(repository: ProjectRepository, projectId: st
     ...(patch.contentContract !== undefined ? { contentContract: { ...patch.contentContract } } : {}),
     ...(patch.capturePolicy !== undefined ? { capturePolicy: cloneCapturePolicy(patch.capturePolicy) } : {}),
     ...(patch.status !== undefined ? { status: patch.status } : {}),
-    // Identity and policy are not patchable; publishing stays server-controlled.
+    // Identity and policy are not patchable; publishing stays server-controlled — EXCEPT
+    // operatorDefault (T2), which is copied in from the narrow, separately-validated
+    // operatorPublishDefault field so a caller can only ever move that one sub-field. publishEnabled
+    // (the hard kill-switch precondition) and requiresExplicitPublish are never touched here.
     projectId: existing.projectId,
-    publishingPolicy: { ...existing.publishingPolicy }
+    publishingPolicy: {
+      ...existing.publishingPolicy,
+      ...(patch.operatorPublishDefault !== undefined ? { operatorDefault: patch.operatorPublishDefault } : {})
+    }
   };
   if (patch.tokenEnvVar !== undefined) {
     if (patch.tokenEnvVar === null) delete next.tokenEnvVar;
