@@ -1,4 +1,4 @@
-import type { ProjectConnectionConfig, ProjectObjectDialect } from "../projectTypes.js";
+import type { ProjectCapturePolicy, ProjectConnectionConfig, ProjectObjectDialect } from "../projectTypes.js";
 
 // Platform (client 0) external project MCP connection. The endpoint and token are provided via
 // environment variables (PLATFORM_MCP_ENDPOINT, PLATFORM_MCP_TOKEN) and are never persisted.
@@ -85,7 +85,31 @@ export const PLATFORM_OBJECT_DIALECT: ProjectObjectDialect = {
 // header). Bumped 1 -> 2 when R-23 removed contentContract.canonicalArticleBody (every definition
 // declared the identical value; the article_body node's own produces const is the single source) so
 // persisted stale configs re-seed without it.
-export const PLATFORM_DEFINITION_VERSION = 3;
+export const PLATFORM_CAPTURE_POLICY: ProjectCapturePolicy = {
+  maxPages: 20,
+  allowedCrawlOrigins: ["https://www.zilbermanfilmfoundation.com"],
+  allowedPathPrefixes: ["/"],
+  sameOriginOnly: true,
+  respectRobots: true,
+  concurrency: 1,
+  delayMs: 1500,
+  authenticatedAccess: "prohibited",
+  rights: { content: "retain_allowed_origin_content", media: "retain_referenced_allowed_origin_media" },
+  designReferences: [{
+    origin: "https://prconsulting.net",
+    purpose: "design_inspiration_only",
+    crawlAllowed: false,
+    contentReuse: "prohibited",
+    mediaReuse: "prohibited"
+  }],
+  fidelity: {
+    mode: "design_inspired",
+    sourceDesignTreatment: "source_content_with_design_inspiration_only"
+  }
+};
+
+// Bumped 3 -> 4 to migrate the platform record to its explicit Zilberman capture policy.
+export const PLATFORM_DEFINITION_VERSION = 4;
 
 export const platformProjectConfig: ProjectConnectionConfig = {
   projectId: "platform",
@@ -100,6 +124,7 @@ export const platformProjectConfig: ProjectConnectionConfig = {
   contentContract: {
     contentContract: "content_source.v1"
   },
+  capturePolicy: structuredClone(PLATFORM_CAPTURE_POLICY),
   objectDialect: { ...PLATFORM_OBJECT_DIALECT },
   publishingPolicy: {
     publishEnabled: true,

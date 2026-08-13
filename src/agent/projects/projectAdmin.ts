@@ -21,7 +21,7 @@ import { z } from "zod";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { defaultProjectConfigs } from "./defaultMigration.js";
 import { toProjectSummary } from "./projectRegistry.js";
-import { projectAuthModes, projectStatuses, toolPermissions, type ProjectConnectionConfig, type ProjectPublishingPolicy, type ProjectSummary } from "./projectTypes.js";
+import { DEFAULT_PROJECT_CAPTURE_POLICY, projectAuthModes, projectStatuses, toolPermissions, type ProjectCapturePolicy, type ProjectConnectionConfig, type ProjectPublishingPolicy, type ProjectSummary } from "./projectTypes.js";
 
 // Lowercase-kebab project ids ("acme-daily"), matching the existing "dr-lurie" convention.
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -47,6 +47,46 @@ const toolPoliciesSchema = z.record(z.string().min(1).max(128), toolPermissionSc
   { message: "toolPolicies may not exceed 256 entries." }
 );
 
+const httpsOriginSchema = z.string().url().refine((value) => {
+  const url = new URL(value);
+  return url.protocol === "https:" && url.pathname === "/" && !url.search && !url.hash;
+}, "Expected an HTTPS origin without a path, query, or fragment.");
+const capturePathPrefixSchema = z.string().regex(/^\/(?!\/)[^?#]*$/, "Expected an absolute path prefix without query or fragment.");
+const captureRightsSchema = z.object({
+  content: z.enum(["prohibited", "retain_allowed_origin_content"]),
+  media: z.enum(["prohibited", "retain_referenced_allowed_origin_media"])
+}).strict();
+const designReferenceSchema = z.object({
+  origin: httpsOriginSchema,
+  purpose: z.literal("design_inspiration_only"),
+  crawlAllowed: z.literal(false),
+  contentReuse: z.literal("prohibited"),
+  mediaReuse: z.literal("prohibited")
+}).strict();
+const capturePolicySchema: z.ZodType<ProjectCapturePolicy> = z.object({
+  // Per-project only: this is not a system-wide crawl ceiling. Zero is the fail-closed default.
+  maxPages: z.number().int().min(0),
+  allowedCrawlOrigins: z.array(httpsOriginSchema).max(32),
+  allowedPathPrefixes: z.array(capturePathPrefixSchema).max(128),
+  sameOriginOnly: z.boolean(),
+  respectRobots: z.boolean(),
+  concurrency: z.number().int().min(1).max(32),
+  delayMs: z.number().int().min(0).max(86_400_000),
+  authenticatedAccess: z.literal("prohibited"),
+  rights: captureRightsSchema,
+  designReferences: z.array(designReferenceSchema).max(32),
+  fidelity: z.object({
+    mode: z.enum(["source_faithful", "design_inspired"]),
+    sourceDesignTreatment: z.enum(["source_content_and_design", "source_content_with_design_inspiration_only"]),
+    coverageRubricOverride: z.object({
+      minimumMappedBlockCoverage: z.number().min(0).max(1),
+      requireCompleteTokens: z.boolean(),
+      requireEnumeratedGaps: z.boolean()
+    }).strict().optional()
+  }).strict()
+}).strict();
+const cloneCapturePolicy = (policy: ProjectCapturePolicy): ProjectCapturePolicy => structuredClone(policy);
+
 export const projectCreateSchema = z.object({
   projectId: projectIdSchema,
   name: z.string().min(1).max(120),
@@ -59,6 +99,7 @@ export const projectCreateSchema = z.object({
   defaultToolPolicy: toolPermissionSchema.optional(),
   toolPolicies: toolPoliciesSchema.optional(),
   contentContract: contentContractSchema.default({ contentContract: "content_source.v1" }),
+  capturePolicy: capturePolicySchema.default(DEFAULT_PROJECT_CAPTURE_POLICY),
   status: z.enum(projectStatuses).default("active")
 }).strict();
 
@@ -73,6 +114,7 @@ export const projectUpdateSchema = z.object({
   defaultToolPolicy: toolPermissionSchema.optional(),
   toolPolicies: toolPoliciesSchema.optional(),
   contentContract: z.object({ contentContract: z.string().min(1) }).strict().optional(),
+  capturePolicy: capturePolicySchema.optional(),
   status: z.enum(projectStatuses).optional(),
   // T2 (2026-08-13): the ONE deliberate crack in "publishingPolicy is server-controlled" (see
   // updateProject below and the comment at tools.ts's projectPatchJsonSchema). Every other field on
@@ -84,7 +126,9 @@ export const projectUpdateSchema = z.object({
   operatorPublishDefault: z.enum(["approved", "require_explicit"]).optional()
 }).strict();
 
-export type ProjectCreateInput = z.infer<typeof projectCreateSchema>;
+// The MCP boundary parses defaults before calling createProject. Keeping this optional also lets
+// trusted in-process callers use the same fail-closed default rather than having to duplicate it.
+export type ProjectCreateInput = Omit<z.infer<typeof projectCreateSchema>, "capturePolicy"> & { capturePolicy?: ProjectCapturePolicy };
 export type ProjectUpdateInput = z.infer<typeof projectUpdateSchema>;
 
 export class ProjectAdminError extends Error {
@@ -122,6 +166,7 @@ export async function createProject(repository: ProjectRepository, input: Projec
     ...(input.defaultToolPolicy ? { defaultToolPolicy: input.defaultToolPolicy } : {}),
     ...(input.toolPolicies ? { toolPolicies: { ...input.toolPolicies } } : {}),
     contentContract: { ...input.contentContract },
+    capturePolicy: cloneCapturePolicy(input.capturePolicy ?? DEFAULT_PROJECT_CAPTURE_POLICY),
     publishingPolicy: { ...DEFAULT_PUBLISHING_POLICY },
     status: input.status
   };
@@ -141,6 +186,7 @@ export async function updateProject(repository: ProjectRepository, projectId: st
     ...(patch.defaultToolPolicy !== undefined ? { defaultToolPolicy: patch.defaultToolPolicy } : {}),
     ...(patch.toolPolicies !== undefined ? { toolPolicies: { ...patch.toolPolicies } } : {}),
     ...(patch.contentContract !== undefined ? { contentContract: { ...patch.contentContract } } : {}),
+    ...(patch.capturePolicy !== undefined ? { capturePolicy: cloneCapturePolicy(patch.capturePolicy) } : {}),
     ...(patch.status !== undefined ? { status: patch.status } : {}),
     // Identity and policy are not patchable; publishing stays server-controlled — EXCEPT
     // operatorDefault (T2), which is copied in from the narrow, separately-validated
@@ -188,6 +234,7 @@ export function projectRegistrationContract() {
       tokenEnvVar: { required: "when authMode is bearer_env", example: "ACME_DAILY_MCP_TOKEN" },
       allowedTools: { required: false, default: [], note: "Deny-all until remote tool names are explicitly allow-listed; project.call_tool refuses anything else." },
       contentContract: { required: false, default: { contentContract: "content_source.v1" } },
+      capturePolicy: { required: false, default: DEFAULT_PROJECT_CAPTURE_POLICY, note: "Per-project capture governance. Missing policy denies all capture (maxPages=0, no origins); design references may never contribute copied content or media." },
       status: { required: false, default: "active", enum: [...projectStatuses] }
     },
     publishingPolicy: "Server-enforced: publishEnabled=true by default (go-live 2026-07-31). The per-project *_PUBLISH_ENABLED=false env flag is the operator kill-switch.",

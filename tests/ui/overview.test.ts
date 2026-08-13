@@ -32,6 +32,7 @@ const project = (overrides: Partial<ProjectSummary>): ProjectSummary => ({
   defaultToolPolicy: "blocked",
   toolPolicies: {},
   contentContract: { contentContract: "content_source.v1" },
+  capturePolicy: { maxPages: 0, allowedCrawlOrigins: [], allowedPathPrefixes: [], sameOriginOnly: true, respectRobots: true, concurrency: 1, delayMs: 1500, authenticatedAccess: "prohibited", rights: { content: "prohibited", media: "prohibited" }, designReferences: [], fidelity: { mode: "source_faithful", sourceDesignTreatment: "source_content_and_design" } },
   publishingPolicy: { publishEnabled: false, requiresExplicitPublish: true, description: "Publishing disabled" },
   status: "active",
   connection: { endpointConfigured: true, tokenConfigured: true, mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT", tokenEnvVar: "DR_LURIE_MCP_TOKEN" },
