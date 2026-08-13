@@ -3,9 +3,11 @@ import { RepositoryManager } from "../../../src/agent/repository/RepositoryManag
 import { getRun, runNextNode, setOperatorPublishDecision, startDryRun } from "../../../src/agent/workspace/executor.js";
 import { publishRun, publishEnabledEnvVar } from "../../../src/agent/workspace/publisher.js";
 import { enforcePublishExecutionEvidence, findPublicationDecision, readPublicationDecision } from "../../../src/agent/workspace/publishDecision.js";
+import { evaluatePublishExecutionGate } from "../../../src/agent/workspace/publishExecution.js";
 import { getWorkspaceNode } from "../../../src/agent/workspace/nodes.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
 import { drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
+import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 import type { CallToolResult } from "../../../src/agent/projects/projectMcpAdapter.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 import { handler } from "../../../netlify/functions/mcp.mjs";
@@ -300,3 +302,87 @@ describe("P0 §2.2 — operator veto: one field, one setter, one reader", () => 
     }
   });
 });
+
+// T2 (2026-08-13, run_1786557897658_elj34j) — the operator publish gate becomes a per-project policy.
+// A project's publishingPolicy.operatorDefault can now pre-seed a NEW run's operatorPublishDecision to
+// "approved" at creation, tagged with WHICH source wrote it (operatorDecisionSource), so a receipt can
+// never be misread as an operator's own explicit act. None of this changes the §2.2 gates themselves
+// — an explicit "withheld" always wins, and absent policy is byte-identical to today.
+describe("T2 — project publishingPolicy.operatorDefault applies at run creation", () => {
+  const policyProject = (operatorDefault?: "approved" | "require_explicit"): ProjectConnectionConfig => ({
+    projectId: "t2-policy-project",
+    name: "T2 Policy Project",
+    mcpEndpointEnvVar: "T2_POLICY_MCP_ENDPOINT",
+    authMode: "bearer_env",
+    tokenEnvVar: "T2_POLICY_MCP_TOKEN",
+    allowedTools: [],
+    contentContract: { contentContract: "content_source.v1" },
+    publishingPolicy: { publishEnabled: true, requiresExplicitPublish: false, description: "T2 test fixture.", ...(operatorDefault !== undefined ? { operatorDefault } : {}) },
+    status: "active"
+  });
+
+  it("operatorDefault \"approved\" pre-seeds a new run's operatorPublishDecision, sourced project_policy_default", async () => {
+    const manager = new RepositoryManager();
+    const executionRepository = manager.getExecutionRepository();
+    const projectRepository = manager.getProjectRepository();
+    await projectRepository.save(policyProject("approved"));
+
+    const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "policy default" }, executionRepository, undefined, projectRepository);
+    expect(run.operatorPublishDecision).toBe("approved");
+    expect(run.operatorDecisionSource).toBe("project_policy_default");
+  });
+
+  it("an explicit workflow.set_operator_publish_decision call records source \"explicit\", overwriting a policy default's source", async () => {
+    const manager = new RepositoryManager();
+    const executionRepository = manager.getExecutionRepository();
+    const projectRepository = manager.getProjectRepository();
+    await projectRepository.save(policyProject("approved"));
+
+    const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "explicit" }, executionRepository, undefined, projectRepository);
+    expect(run.operatorDecisionSource).toBe("project_policy_default");
+
+    const reaffirmed = await setOperatorPublishDecision(run.runId, "approved", executionRepository);
+    expect(reaffirmed?.operatorPublishDecision).toBe("approved");
+    expect(reaffirmed?.operatorDecisionSource).toBe("explicit");
+  });
+
+  it("an explicit \"withheld\" ALWAYS wins over an \"approved\" policy default and still blocks", async () => {
+    const manager = new RepositoryManager();
+    const executionRepository = manager.getExecutionRepository();
+    const projectRepository = manager.getProjectRepository();
+    await projectRepository.save(policyProject("approved"));
+
+    const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "veto" }, executionRepository, undefined, projectRepository);
+    expect(run.operatorPublishDecision).toBe("approved");
+
+    const vetoed = await setOperatorPublishDecision(run.runId, "withheld", executionRepository);
+    expect(vetoed?.operatorPublishDecision).toBe("withheld");
+    expect(vetoed?.operatorDecisionSource).toBe("explicit");
+
+    // The veto still blocks the deterministic publish_executor gate exactly as §2.2 requires —
+    // unaffected by the prior policy default, and gate.operatorDecisionSource (T2) names the veto's
+    // own source ("explicit"), never the earlier default's.
+    const gate = evaluatePublishExecutionGate(vetoed!);
+    expect(gate.passed).toBe(false);
+    expect(gate.operatorDecisionSource).toContain("explicit");
+  });
+
+  it("absent policy — or an explicit operatorDefault \"require_explicit\" — leaves a new run's operatorPublishDecision unset (today's behavior, unchanged)", async () => {
+    const manager = new RepositoryManager();
+    const executionRepository = manager.getExecutionRepository();
+    const projectRepository = manager.getProjectRepository();
+
+    // No project registered at all for this id: applyOperatorPublishPolicyDefault treats an unknown
+    // project the same as "no policy" — run creation itself never fails on it.
+    const unregistered = await startDryRun({ executionMode: "mock", projectId: "t2-unregistered-project", input: "none" }, executionRepository, undefined, projectRepository);
+    expect(unregistered.operatorPublishDecision).toBeUndefined();
+    expect(unregistered.operatorDecisionSource).toBeUndefined();
+
+    // A registered project that explicitly declares "require_explicit" behaves identically.
+    await projectRepository.save(policyProject("require_explicit"));
+    const explicitPolicy = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "explicit policy" }, executionRepository, undefined, projectRepository);
+    expect(explicitPolicy.operatorPublishDecision).toBeUndefined();
+    expect(explicitPolicy.operatorDecisionSource).toBeUndefined();
+  });
+});
+

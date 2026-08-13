@@ -90,6 +90,7 @@ Left column = `node.allowedTools` (editable checkboxes against `tool.list`). Rig
 - Controls: `run_node`, `run_next_node`, `run_until`, `run_all`, `pause`, `resume`, `retry_node`, `cancel`, `reset` — all exist as tools. Gate `run_all` behind a confirm.
 - Cost per run from `workflow.get_run_cost`, with the pricing caveat the API itself returns ("placeholder estimates, not billing-grade") shown inline, not buried.
 - **Publish panel**: render `workflow.publish_readiness` as the 8-item checklist it returns, with per-item `detail`. This is the single most important screen for your Dr. Lurie goal and it maps 1:1 to an existing tool response.
+- **Project settings — operator publish default** (T2, 2026-08-13): expose `ProjectPublishingPolicy.operatorDefault` (approved / require_explicit, patched via `project.update`'s `operatorPublishDefault`) on the project settings screen, and label a run's `operatorPublishDecision` with its `operatorDecisionSource` (explicit vs. project_policy_default) wherever it is shown, so a pre-approved run is never displayed as if an operator personally signed off on it.
 
 ### S6 — History mode
 

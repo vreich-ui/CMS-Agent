@@ -8,7 +8,7 @@ import {
 } from "../../../src/agent/workspace/runContext.js";
 import { getWorkspaceNode, listWorkspaceNodes } from "../../../src/agent/workspace/nodes.js";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
-import { getRun, runNextNode, startDryRun } from "../../../src/agent/workspace/executor.js";
+import { getRun, runNextNode, setOperatorPublishDecision, startDryRun } from "../../../src/agent/workspace/executor.js";
 import * as registry from "../../../src/agent/execution/runnerRegistry.js";
 
 // W3 part 3 (determinism program, 2026-08-12). Six nodes echoed clientProjectId / clientObjectType /
@@ -44,6 +44,20 @@ describe("buildRunContext — the run's facts, from the fetch that actually happ
 
   it("invents nothing: a run that has not fetched a contract yet names no object type or source", () => {
     expect(buildRunContext({ clientProjectId: "platform", stageOutputs: {} })).toEqual({ clientProjectId: "platform" });
+  });
+
+  // T2 (2026-08-13, run_1786557897658_elj34j) — the fix, at the unit level: operatorPublishDecision
+  // (and its source) is echoed into the context exactly when the run itself has one, and never
+  // invented when it does not.
+  it("echoes operatorPublishDecision + operatorDecisionSource when the run has recorded one", () => {
+    const context = buildRunContext({ clientProjectId: "platform", operatorPublishDecision: "approved", operatorDecisionSource: "project_policy_default" });
+    expect(context).toEqual({ clientProjectId: "platform", operatorPublishDecision: "approved", operatorDecisionSource: "project_policy_default" });
+  });
+
+  it("carries no operator decision fields at all when the run has no decision — never invented", () => {
+    const context = buildRunContext({ clientProjectId: "platform" });
+    expect(context).not.toHaveProperty("operatorPublishDecision");
+    expect(context).not.toHaveProperty("operatorDecisionSource");
   });
 
   it("carries the PUBLISH request id from artifact_plan, not the run's platform join key", () => {
@@ -161,6 +175,37 @@ describe("wired into a real run: every node is handed the run context", () => {
       expect(readRunContext(seen[0])).toEqual({ clientProjectId: "project-a" });
       expect((state.input as { runContext: unknown }).runContext).toEqual({ clientProjectId: "project-a" });
       expect(state.status).toBe("completed");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+// T2 (2026-08-13, run_1786557897658_elj34j) — THE live bug this file's new field fixes. Before this,
+// run.operatorPublishDecision was set on the run record but never echoed into a dispatched node's own
+// input, so a node's model dispatch had no way to see it and could (and, live, did) incorrectly claim
+// it was absent. This proves the plumbing end to end: set the decision, dispatch a real node, and
+// check the node's OWN delivered input carries both the decision and its source.
+describe("wired into a real run: the operator publish decision reaches every node's run context (T2)", () => {
+  it("echoes operatorPublishDecision + operatorDecisionSource into the dispatched node's own input", async () => {
+    const seen: unknown[] = [];
+    const spy = vi.spyOn(registry, "getNodeRunner").mockReturnValue({
+      supports: () => true,
+      validateConfiguration: () => ({ ok: true as const }),
+      run: async ({ input }: { input: unknown }) => {
+        seen.push(input);
+        return { ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged." } };
+      }
+    } as never);
+    try {
+      const store = new RepositoryManager().getExecutionRepository();
+      const started = await startDryRun({ executionMode: "mock", projectId: "project-a", input: "run context" }, store);
+      await setOperatorPublishDecision(started.runId, "approved", store);
+      const advanced = await runNextNode(started.runId, { executionRepository: store });
+      const state = advanced!.nodes.find((node) => node.nodeId === "input_triage")!;
+
+      expect(readRunContext(seen[0])).toEqual({ clientProjectId: "project-a", operatorPublishDecision: "approved", operatorDecisionSource: "explicit" });
+      expect((state.input as { runContext: { operatorPublishDecision: string; operatorDecisionSource: string } }).runContext).toMatchObject({ operatorPublishDecision: "approved", operatorDecisionSource: "explicit" });
     } finally {
       spy.mockRestore();
     }

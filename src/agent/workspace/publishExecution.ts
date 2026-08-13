@@ -36,7 +36,7 @@
 // evaluated AFTER the executor's publish-refusal block, never before — a deterministic path must
 // never be the thing that skips a gate.
 
-import { findPublicationDecision, isOperatorPublishApproved, readPublicationDecision, OPERATOR_PUBLISH_DECISION_FIELD } from "./publishDecision.js";
+import { describeOperatorDecisionSource, findPublicationDecision, isOperatorPublishApproved, readPublicationDecision, OPERATOR_PUBLISH_DECISION_FIELD } from "./publishDecision.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 
 export const PUBLISH_EXECUTION_ARTIFACT = "publish_execution.v1";
@@ -47,6 +47,11 @@ export type PublishExecutionGate = {
   operatorApproved: boolean;
   // One reason per closed gate, in gate order. Empty when the gate passed.
   reasons: string[];
+  // T2 (run_1786557897658_elj34j) — WHICH source produced operatorApproved's underlying decision
+  // ("explicit" | "project_policy_default"), so a receipt reader can never mistake a project default
+  // for an operator's own act. Undefined when no decision is recorded at all. Purely descriptive:
+  // never read by gate PASS/FAIL logic above.
+  operatorDecisionSource?: string;
 };
 
 export type BlockedPublishExecution = {
@@ -72,14 +77,14 @@ const nonEmptyString = (value: unknown): value is string => typeof value === "st
 // THE gate. Both comparisons are exact-match reads of existing engine facts — no parsing of prose, no
 // inference, no defaulting. Fail-closed: anything that is not an explicit affirmative is a refusal
 // with the reason recorded.
-export function evaluatePublishExecutionGate(run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision">): PublishExecutionGate {
+export function evaluatePublishExecutionGate(run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource">): PublishExecutionGate {
   const decision = readPublicationDecision(findPublicationDecision(run));
   const operatorApproved = isOperatorPublishApproved(run);
   const reasons: string[] = [
     ...(decision.authorized ? [] : [`publication_decision_not_affirmative (${decision.code}): ${decision.reason}`]),
     ...(operatorApproved ? [] : [`operator_approval_absent: the operator's durable publish decision for this run (run.${OPERATOR_PUBLISH_DECISION_FIELD}, set via workflow.set_operator_publish_decision) is ${JSON.stringify(run.operatorPublishDecision ?? null)}, not "approved"; nothing publishes until it is.`])
   ];
-  return { passed: decision.authorized && operatorApproved, controllerGo: decision.authorized, operatorApproved, reasons };
+  return { passed: decision.authorized && operatorApproved, controllerGo: decision.authorized, operatorApproved, reasons, operatorDecisionSource: describeOperatorDecisionSource(run) };
 }
 
 // The envelope facts a publish_execution.v1 record must carry. Taken verbatim from upstream (the
@@ -112,7 +117,10 @@ export function buildBlockedPublishExecution(sources: BlockedPublishExecutionSou
     artifact: PUBLISH_EXECUTION_ARTIFACT,
     summary:
       `Publish refused fail-closed by the engine gate for ${sources.clientProjectId}/${sources.envelope.clientObjectType}: ` +
-      `controller decision ${gate.controllerGo ? "go" : "not \"go\""}, operator publish decision ${gate.operatorApproved ? "approved" : "not \"approved\""}. ` +
+      `controller decision ${gate.controllerGo ? "go" : "not \"go\""}, operator publish decision ${gate.operatorApproved ? "approved" : "not \"approved\""}` +
+      // T2 — an "approved" decision names its source here, so this summary can never be misread as
+      // an explicit operator sign-off when it was actually a project's publishingPolicy default.
+      `${gate.operatorApproved && gate.operatorDecisionSource ? ` (${gate.operatorDecisionSource})` : ""}. ` +
       `No client tool was called, no object was created, patched, published or released. No model call.`,
     status: "blocked",
     clientProjectId: sources.clientProjectId,
@@ -133,7 +141,7 @@ export function buildBlockedPublishExecution(sources: BlockedPublishExecutionSou
 // and a missing envelope both return {ok:false} so the caller's single decision stays "use it, or fall
 // through to the model path".
 export function runDeterministicPublishExecutor(params: {
-  run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision">;
+  run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource">;
   clientProjectId: string;
   envelopeCarriers: unknown[];
 }): PublishExecutionResult {

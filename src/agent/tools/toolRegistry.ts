@@ -69,6 +69,35 @@ async function safeFetch(urlText: string, timeoutMs: number) {
   } catch (e) { if (e instanceof Error && e.name === "AbortError") throw new Error("tool_timeout"); throw e; } finally { clearTimeout(timer); }
 }
 
+// Run-scoping for the stage.* tools (T1, wave1-scoping-policy-hygiene): in live run
+// run_1786557897658_elj34j (2026-08-12), publish_executor called stage.get_output and got back the
+// publication_controller output belonging to a DIFFERENT run, run_1786468126136 — the handler had no
+// notion of which run was calling. Stage-output ids ARE run-scoped by construction wherever the
+// executor itself assigns them (`${run.runId}:${nextNode.id}` in executor.ts,
+// `${runId}:${executionId}:${node.id}` in nodeRuntime.ts); the bug was that these handlers never
+// checked that prefix against the calling context, so any run could name any other run's id and read
+// (or, via save_output's optional id, clobber) its output. runIdOf below recovers that owning run id
+// only when the id actually looks like one of ours (a ":"-delimited head matching /^run_/) — ids
+// created without an explicit id (bare `stage_...`, no prefix) are unscoped by construction and stay
+// freely readable/writable, exactly as before. get_output and save_output (when the caller names an
+// explicit id) now refuse a cross-run id outright via refuseCrossRunStageAccess, naming both the
+// calling and the owning run id in the thrown message so the refusal is debuggable from a log line
+// alone. list_outputs is deliberately NOT a throw site: a list call doesn't address one specific
+// foreign output to refuse — it would otherwise just leak every other run's id/stage/preview text
+// into the response — so it quietly filters foreign-run entries out instead. All three are byte-for-
+// byte unchanged when c?.runId is absent (direct MCP admin calls, tests, dry estimates): this is a
+// run-execution-time guard, not a policy the admin surface needs to know about.
+const runIdOf = (stageOutputId: string): string | undefined => {
+  const sep = stageOutputId.indexOf(":");
+  if (sep < 0) return undefined;
+  const head = stageOutputId.slice(0, sep);
+  return /^run_/.test(head) ? head : undefined;
+};
+const refuseCrossRunStageAccess = (callingRunId: string, targetId: string) => {
+  const owner = runIdOf(targetId);
+  if (owner && owner !== callingRunId) throw new Error(`stage_cross_run_read_refused: run ${callingRunId} refused access to run ${owner}'s stage output (id ${targetId})`);
+};
+
 export function createToolRegistry(): ToolDefinition[] {
   const ws = repositoryManager.getWorkspaceRepository();
   const projects = repositoryManager.getProjectRepository();
@@ -77,14 +106,14 @@ export function createToolRegistry(): ToolDefinition[] {
     makeTool({ toolId:"workspace.get_node", name:"workspace.get_node", description:"Get one workspace node.", inputSchema:id, outputSchema:schema, riskLevel:"read", sideEffect:"none", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async (i) => ok({ node: await ws.getNode(id.parse(i).id) ?? null }) }),
     makeTool({ toolId:"workspace.get_nodes", name:"workspace.get_nodes", description:"List workspace nodes.", inputSchema:empty, outputSchema:schema, riskLevel:"read", sideEffect:"none", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async () => ok({ nodes: await ws.getNodes() }) }),
     makeTool({ toolId:"workspace.get_graph", name:"workspace.get_graph", description:"Get workspace graph.", inputSchema:empty, outputSchema:schema, riskLevel:"read", sideEffect:"none", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async () => { const nodes = await ws.getNodes(); return ok({ nodes, edges: nodes.flatMap((n) => n.dependsOn.map((d) => ({ from:d, to:n.id }))) }); } }),
-    makeTool({ toolId:"stage.get_output", name:"stage.get_output", description:"Get stage output.", inputSchema:id, outputSchema:schema, riskLevel:"read", sideEffect:"none", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async (i) => ok({ output: await ws.getStageOutput(id.parse(i).id) ?? null }) }),
+    makeTool({ toolId:"stage.get_output", name:"stage.get_output", description:"Get stage output.", inputSchema:id, outputSchema:schema, riskLevel:"read", sideEffect:"none", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async (i,c) => { const targetId = id.parse(i).id; if (c?.runId) refuseCrossRunStageAccess(c.runId, targetId); return ok({ output: await ws.getStageOutput(targetId) ?? null }); } }),
     // #93-shape structural fix (run_1785435947311_jl8hl4): this used to return every stage output's
     // FULL value — ~130K characters for a mature run — and it is granted to most conductor nodes,
     // whose conversations then re-sent that dump on every subsequent turn (artifact_plan: 386K input
     // tokens for a 3K output). It now returns bounded summaries; a node that needs a full value names
     // the one it wants via stage.get_output, which the runner's per-result cap still bounds.
-    makeTool({ toolId:"stage.list_outputs", name:"stage.list_outputs", description:"List stage output summaries (id, stage, createdAt, size, short preview) — never full values. Fetch a specific full value with stage.get_output.", inputSchema:z.object({ stage:z.string().optional() }).strict(), outputSchema:schema, riskLevel:"read", sideEffect:"none", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async (i) => ok({ outputs: (await ws.listStageOutputs(z.object({stage:z.string().optional()}).parse(i).stage)).map((output) => { const serialized = JSON.stringify(output.value ?? null); return { id: output.id, stage: output.stage, createdAt: output.createdAt, valueChars: serialized.length, preview: serialized.slice(0, 240) }; }) }) }),
-    makeTool({ toolId:"stage.save_output", name:"stage.save_output", description:"Save stage output.", inputSchema:z.object({ id:z.string().optional(), stage:z.string().min(1), value:z.unknown() }).strict(), outputSchema:schema, riskLevel:"write", sideEffect:"workspace_write", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async (i) => { const d=z.object({id:z.string().optional(),stage:z.string(),value:z.unknown()}).parse(i); return ok({ output: await ws.saveStageOutput(d.stage,d.value,d.id) }); } }),
+    makeTool({ toolId:"stage.list_outputs", name:"stage.list_outputs", description:"List stage output summaries (id, stage, createdAt, size, short preview) — never full values. Fetch a specific full value with stage.get_output.", inputSchema:z.object({ stage:z.string().optional() }).strict(), outputSchema:schema, riskLevel:"read", sideEffect:"none", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async (i,c) => ok({ outputs: (await ws.listStageOutputs(z.object({stage:z.string().optional()}).parse(i).stage)).filter((output) => !c?.runId || !runIdOf(output.id) || runIdOf(output.id) === c.runId).map((output) => { const serialized = JSON.stringify(output.value ?? null); return { id: output.id, stage: output.stage, createdAt: output.createdAt, valueChars: serialized.length, preview: serialized.slice(0, 240) }; }) }) }),
+    makeTool({ toolId:"stage.save_output", name:"stage.save_output", description:"Save stage output.", inputSchema:z.object({ id:z.string().optional(), stage:z.string().min(1), value:z.unknown() }).strict(), outputSchema:schema, riskLevel:"write", sideEffect:"workspace_write", requiresApproval:false, timeoutMs:2000, category:"workspace", enabled:true, metadata:{}, handler: async (i,c) => { const d=z.object({id:z.string().optional(),stage:z.string(),value:z.unknown()}).parse(i); if (c?.runId && d.id) refuseCrossRunStageAccess(c.runId, d.id); return ok({ output: await ws.saveStageOutput(d.stage,d.value,d.id) }); } }),
     makeTool({ toolId:"learning.list_observations", name:"learning.list_observations", description:"List observations.", inputSchema:empty, outputSchema:schema, riskLevel:"read", sideEffect:"none", requiresApproval:false, timeoutMs:2000, category:"learning", enabled:true, metadata:{}, handler: async () => ok({ observations: await learning.listObservations() }) }),
     // F4 (T-2, run_1785352838155_l544ye): requiresApproval:true meant this tool was NEVER actually
     // reachable from live node execution — approvedToolIds is only ever populated for the tool.test

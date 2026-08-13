@@ -4,6 +4,7 @@ import { HALTED_EXECUTION_STATUSES, type ExecutionArtifact, type ExecutionStatus
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
+import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { recordModelUsage, summarizeModelUsage, evaluateRunBudget } from "../observability/modelUsage.js";
 import { getNodeRunner } from "../execution/runnerRegistry.js";
 import { validateOutput } from "../execution/outputValidator.js";
@@ -98,7 +99,7 @@ export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   ...(run.rev !== undefined ? { rev: run.rev } : {}),
   ...(run.budgetUsd !== undefined ? { budgetUsd: run.budgetUsd } : {}),
   ...(run.budgetBlock ? { budgetBlock: run.budgetBlock } : {}),
-  ...(run.operatorPublishDecision ? { operatorPublishDecision: run.operatorPublishDecision } : {})
+  ...(run.operatorPublishDecision ? { operatorPublishDecision: run.operatorPublishDecision, operatorDecisionSource: run.operatorDecisionSource ?? "explicit" } : {})
 });
 // Statuses from which advanceRun will not proceed. "paused" (R-18) joins them: an operator-paused run
 // must stay put for exactly the same reason a blocked one does. Before "paused" existed, pause_run wrote
@@ -362,6 +363,22 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
   } as WorkflowExecutionRecord;
 };
 
+// T2 (2026-08-13, run_1786557897658_elj34j) — apply a project's publishingPolicy.operatorDefault to a
+// FRESH run (buildInitialRun's output never carries operatorPublishDecision, so "unset" here just
+// means "this run has no decision yet"). Only "approved" default is ever applied; "require_explicit"
+// or an absent policy leaves the run exactly as buildInitialRun made it — today's behavior,
+// unchanged. This can NEVER produce "withheld": a veto is only ever an explicit operator act (the
+// setter below), so a project policy has no way to durably block a run it did not also create.
+// projectRepository.get returning undefined (unknown/deleted project) is not an error here — it is
+// handled the same as "no policy", because startDryRun's own downstream node dispatch is what
+// surfaces an unknown-project failure, not run creation.
+async function applyOperatorPublishPolicyDefault(run: WorkflowExecutionRecord, projectRepository: ProjectRepository): Promise<WorkflowExecutionRecord> {
+  if (run.operatorPublishDecision !== undefined) return run;
+  const config = await projectRepository.get(run.projectId);
+  if (config?.publishingPolicy.operatorDefault !== "approved") return run;
+  return { ...run, operatorPublishDecision: "approved", operatorDecisionSource: "project_policy_default" };
+}
+
 const nodeById = (nodes: WorkspaceNode[]) => new Map(nodes.map((node) => [node.id, node]));
 const stateById = (run: WorkflowExecutionRecord) => new Map(run.nodes.map((node) => [node.nodeId, node]));
 
@@ -526,8 +543,9 @@ export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date
   };
 }
 
-export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository): Promise<WorkflowExecutionRecord> {
-  return store.createRun(buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID)));
+export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository, projectRepository: ProjectRepository = repositoryManager.getProjectRepository()): Promise<WorkflowExecutionRecord> {
+  const initial = buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID));
+  return store.createRun(await applyOperatorPublishPolicyDefault(initial, projectRepository));
 }
 
 export async function getRun(runId: string, store: ExecutionRepository = repositoryManager.getExecutionRepository()) {
@@ -548,10 +566,19 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     // requestId travels with the run across a reset — it identifies the same request being retried,
     // not a new one, and a platform-side record correlating against it must still resolve. The
     // operator's durable publish decision (P0 §2.2) survives a reset for the same reason: a reset
-    // retries the request, it does not un-say the operator's veto/approval.
+    // retries the request, it does not un-say the operator's veto/approval — and that includes WHICH
+    // source recorded it (T2): a reset must not relabel an existing explicit decision as a policy
+    // default, or vice versa. When the run had NO decision yet, the rebuilt run re-applies the
+    // project's current policy default exactly as a brand-new run would (a reset that lost its
+    // pre-approval because the policy default logic only ran at original creation would be a second,
+    // subtler way to make this same bug reappear).
+    const rebuilt = await applyOperatorPublishPolicyDefault(
+      buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId),
+      repositoryManager.getProjectRepository()
+    );
     return store.resetRun(runId, {
-      ...buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId),
-      ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision } : {})
+      ...rebuilt,
+      ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision, operatorDecisionSource: existing.operatorDecisionSource ?? "explicit" } : {})
     });
   });
 }
@@ -975,6 +1002,12 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     clientProjectId,
     reducedContract: deterministicPrefetch?.ok ? deterministicPrefetch.reduced : undefined,
     stageOutputs: run.stageOutputs,
+    // T2 (run_1786557897658_elj34j) — the fix: echo the run's own operator publish decision into
+    // every node's run context. Before this, only the executor's own pre-dispatch guard and
+    // publisher.ts read run.operatorPublishDecision directly; a node's model dispatch had no way to
+    // see it at all.
+    operatorPublishDecision: run.operatorPublishDecision,
+    operatorDecisionSource: run.operatorDecisionSource,
     // W3 part 1's prompt-side half: the node whose validator loop the engine has taken over is told
     // so HERE, in the same dispatch that takes it over, instead of in a seeded prompt the live
     // (store-sourced) workspace would not see until a re-seed. W4 and W6.3 add their own halves on
@@ -1557,13 +1590,18 @@ export async function updateRunStatus(runId: string, status: ExecutionStatus, st
 // operator_not_withheld gate and the executor's publish-risk dispatch guard, both through
 // publishDecision.isOperatorPublishWithheld. Same lock + CAS discipline as updateRunStatus so a veto
 // can never be lost to a concurrent advance.
+// T2 — this call is, BY DEFINITION, the operator's own explicit act (it is the ONE thing a human or
+// an MCP caller invokes on purpose), so it always stamps operatorDecisionSource "explicit" — even
+// when it is overwriting a project-policy-default "approved" set at run creation. That overwrite is
+// exactly how "withheld" always wins over a policy default: this is the only path that can ever set
+// "withheld", and it always does so explicitly.
 export async function setOperatorPublishDecision(runId: string, decision: "approved" | "withheld", store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord | undefined> {
   return withRunLock(runId, async () => {
     for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
       const run = await store.getRun(runId);
       if (!run) return undefined;
       try {
-        return await store.saveRun({ ...run, operatorPublishDecision: decision, updatedAt: now() });
+        return await store.saveRun({ ...run, operatorPublishDecision: decision, operatorDecisionSource: "explicit", updatedAt: now() });
       } catch (error) {
         if (isConcurrencyConflict(error)) continue;
         throw error;

@@ -301,10 +301,21 @@ const projectDefinitionJsonSchema = objectSchema({
   status: { type: "string", enum: ["active", "disabled"], default: "active" }
 }, ["projectId", "name", "mcpEndpointEnvVar"]);
 const projectCreateJsonSchema = objectSchema({ project: projectDefinitionJsonSchema, ...metaJson }, ["project"]);
-// Patch surface = the definition minus identity (projectId) and policy (publishingPolicy — server-controlled).
+// Patch surface = the definition minus identity (projectId) and policy (publishingPolicy — server-controlled),
+// PLUS ONE deliberate exception (T2, 2026-08-13): operatorPublishDefault. publishingPolicy stays
+// excluded as a whole — a caller can never patch publishEnabled (the hard kill-switch precondition
+// every publish gate checks) or requiresExplicitPublish through this surface — but a project's
+// operator publish default (whether a NEW run starts pre-approved, see ProjectPublishingPolicy.
+// operatorDefault) is exposed by its own narrow, separately-validated field name instead of by
+// opening the nested publishingPolicy object, so accepting it can never smuggle in the rest of the
+// policy. See projectAdmin.ts's projectUpdateSchema/updateProject for the enforcement.
 const projectPatchJsonSchema = (() => {
   const { projectId: _identity, ...patchable } = projectDefinitionJsonSchema.properties as Record<string, unknown>;
-  return objectSchema({ ...patchable, tokenEnvVar: { oneOf: [{ type: "string", pattern: "^[A-Z][A-Z0-9_]{2,63}$" }, { type: "null" }], description: "Env var NAME for the bearer token; null removes it (only valid when authMode is none)." } });
+  return objectSchema({
+    ...patchable,
+    tokenEnvVar: { oneOf: [{ type: "string", pattern: "^[A-Z][A-Z0-9_]{2,63}$" }, { type: "null" }], description: "Env var NAME for the bearer token; null removes it (only valid when authMode is none)." },
+    operatorPublishDefault: { type: "string", enum: ["approved", "require_explicit"], description: "Whether a NEW run for this project starts with the operator's durable publish decision already \"approved\" (publishingPolicy.operatorDefault). \"require_explicit\" (or omitting this field entirely) is today's unchanged behavior: no run starts pre-approved. Never sets \"withheld\" — an operator veto is only ever explicit, via workflow.set_operator_publish_decision, and always overrides this default." }
+  });
 })();
 const projectUpdateJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, patch: projectPatchJsonSchema, ...metaJson }, ["projectId", "patch"]);
 const projectDeleteJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, ...metaJson }, ["projectId"]);
@@ -622,7 +633,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "project.validate_handoff", description: "Dry structural validation of a handoff against the project content_source.v1 / client_object.v1 contract. Read-only; no publishing.", zodSchema: validateHandoffInput, inputSchema: validateHandoffJsonSchema, execute: async (input) => { const data = validateHandoffInput.parse(input); const config = await requireProject(data.projectId); return ok({ validation: validateHandoff(config, { contentSource: coerceJsonObjectInput(data.contentSource), articleBody: coerceJsonObjectInput(data.articleBody) }) }); } }),
     tool({ name: "project.get_registration_contract", description: "Machine-readable contract for onboarding a new publishing client: field rules, env-var naming conventions, and the step-by-step registration flow.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ contract: projectRegistrationContract() }); } }),
     tool({ name: "project.create", description: "Register a new external publishing-client MCP connection. Endpoint/token are referenced by environment variable NAME only (never values); publishing stays disabled by policy.", zodSchema: projectCreateInput, inputSchema: projectCreateJsonSchema, execute: async (input) => { const data = projectCreateInput.parse(input); return ok({ project: await createProject(projectRepository, data.project) }); } }),
-    tool({ name: "project.update", description: "Patch a registered project's safe fields (name, env var names, auth mode, allowed tools, contract, status). Identity and publishing policy are not patchable.", zodSchema: projectUpdateInput, inputSchema: projectUpdateJsonSchema, execute: async (input) => { const data = projectUpdateInput.parse(input); return ok({ project: await updateProject(projectRepository, data.projectId, data.patch) }); } }),
+    tool({ name: "project.update", description: "Patch a registered project's safe fields (name, env var names, auth mode, allowed tools, contract, status) plus one policy field: operatorPublishDefault (approved | require_explicit) — whether a NEW run for this project starts pre-approved (publishingPolicy.operatorDefault). Identity and the REST of publishing policy (publishEnabled, requiresExplicitPublish) are not patchable.", zodSchema: projectUpdateInput, inputSchema: projectUpdateJsonSchema, execute: async (input) => { const data = projectUpdateInput.parse(input); return ok({ project: await updateProject(projectRepository, data.projectId, data.patch) }); } }),
     tool({ name: "project.delete", description: "Remove an agent-registered project connection. Code-defined default projects cannot be deleted (set status to disabled instead).", zodSchema: projectDeleteInput, inputSchema: projectDeleteJsonSchema, execute: async (input) => { const data = projectDeleteInput.parse(input); return ok(await deleteProject(projectRepository, data.projectId)); } }),
     ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),

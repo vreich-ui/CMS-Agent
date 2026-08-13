@@ -39,7 +39,11 @@ const envelopeCarrier = () => ({
 describe("W2a — the gate is two exact comparisons, fail-closed", () => {
   it("passes only when the controller says \"go\" AND the operator record says \"approved\"", () => {
     const gate = evaluatePublishExecutionGate(runWith(goDecision(), "approved"));
-    expect(gate).toEqual({ passed: true, controllerGo: true, operatorApproved: true, reasons: [] });
+    // T2 (run_1786557897658_elj34j): operatorDecisionSource rides alongside the gate, descriptive
+    // only — it names WHICH source produced the "approved" record ("explicit" here, since runWith
+    // stamps no operatorDecisionSource of its own and describeOperatorDecisionSource's documented
+    // fallback for that shape is "explicit"). PASS/FAIL above is unaffected by its presence.
+    expect(gate).toEqual({ passed: true, controllerGo: true, operatorApproved: true, reasons: [], operatorDecisionSource: "approved (source: explicit — set via workflow.set_operator_publish_decision)" });
   });
 
   it("refuses when the operator record is absent, even on an explicit controller \"go\" (the live run's exact shape)", () => {

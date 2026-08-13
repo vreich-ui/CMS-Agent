@@ -68,6 +68,17 @@ export type ProjectPublishingPolicy = {
   publishEnabled: boolean;
   requiresExplicitPublish: boolean;
   description: string;
+  // T2 (2026-08-13, run_1786557897658_elj34j): whether a NEW run for this project starts with the
+  // operator's durable publish decision (run.operatorPublishDecision, publishDecision.ts) already
+  // "approved". ABSENT is "require_explicit" — today's exact behavior, unchanged: a run starts with
+  // no operator decision and every publish-risk node/publishRun stays refused until
+  // workflow.set_operator_publish_decision is called. "approved" is a PER-PROJECT convenience for a
+  // client that has pre-authorized standing publishes; it never sets the decision to "withheld" (an
+  // operator veto is only ever explicit, see executor.ts applyOperatorPublishPolicyDefault), and an
+  // explicit "withheld" set at any time always overrides it. The decision this produces is recorded
+  // with operatorDecisionSource "project_policy_default" so a receipt can never be misread as
+  // explicit operator sign-off (see publishDecision.ts describeOperatorDecisionSource).
+  operatorDefault?: "approved" | "require_explicit";
 };
 
 export type ProjectConnectionConfig = {
