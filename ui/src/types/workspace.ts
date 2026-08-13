@@ -282,6 +282,23 @@ export type ProjectSummary = {
   // canonicalArticleBody was removed (R-23): the canonical body contract (client_object.v1) is the
   // article_body node's own produces const, not per-project configuration.
   contentContract: { contentContract: string };
+  capturePolicy: {
+    maxPages: number;
+    allowedCrawlOrigins: string[];
+    allowedPathPrefixes: string[];
+    sameOriginOnly: boolean;
+    respectRobots: boolean;
+    concurrency: number;
+    delayMs: number;
+    authenticatedAccess: "prohibited";
+    rights: { content: "prohibited" | "retain_allowed_origin_content"; media: "prohibited" | "retain_referenced_allowed_origin_media" };
+    designReferences: Array<{ origin: string; purpose: "design_inspiration_only"; crawlAllowed: false; contentReuse: "prohibited"; mediaReuse: "prohibited" }>;
+    fidelity: {
+      mode: "source_faithful" | "design_inspired";
+      sourceDesignTreatment: "source_content_and_design" | "source_content_with_design_inspiration_only";
+      coverageRubricOverride?: { minimumMappedBlockCoverage: number; requireCompleteTokens: boolean; requireEnumeratedGaps: boolean };
+    };
+  };
   publishingPolicy: { publishEnabled: boolean; requiresExplicitPublish: boolean; description: string };
   status: "active" | "disabled";
   connection: ProjectConnectionState;

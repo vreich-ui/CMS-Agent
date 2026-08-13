@@ -47,6 +47,8 @@ describe("agentic project registration tools", () => {
     const { data } = structured(await toolCall("project.get_registration_contract"));
     expect(data.contract.version).toBe("project_registration.v1");
     expect(data.contract.fields.projectId.pattern).toBeTruthy();
+    expect(data.contract.fields.capturePolicy.default.maxPages).toBe(0);
+    expect(data.contract.fields.capturePolicy.note).toContain("denies all capture");
     expect(data.contract.onboardingSteps.length).toBeGreaterThanOrEqual(5);
     expect(data.contract.publishingPolicy).toContain("publishEnabled=true");
   });
