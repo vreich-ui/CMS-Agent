@@ -36,6 +36,7 @@ Where a node or run currently stands. The distinction that matters is blocked ve
 | `blocked` | Blocked | Stopped on purpose, waiting on a human decision — either an approval before a publish-risk node, or a run that reached its cost ceiling. This is a safety hold, not an error, and it is resumable.<br>**What to do:** Review what it is asking for — the approval list or the budget ceiling — and resume the run. |
 | `failed` | Failed | Stopped because something went wrong — a tool error, a schema violation, an unreachable client.<br>**What to do:** Read the node's error, fix the cause, then retry that node rather than the whole run. |
 | `cancelled` | Cancelled | Called off by a human or by the system before it finished. |
+| `skipped` | Skipped | The conductor decided this node had nothing to contribute to this run — a rule on the node matched the run's own facts — so it was never started and cost nothing. Nothing is wrong: the run carries the rule that fired and what it fired on, and the nodes that depend on this one treat its output as deliberately absent.<br>**What to do:** If it should have run, retry that node — an explicit retry overrides the skip for this run. |
 
 ## Who made a change — human, agent or system?
 
