@@ -29,6 +29,7 @@ import { resolveSkillsForNode } from "../../skills/skillResolver.js";
 import { skillStatuses, type SkillDefinition } from "../../skills/skillTypes.js";
 import { listTools as listControlledTools, getTool as getControlledTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { executeTool, getToolExecution, listToolExecutions } from "../../tools/toolExecutor.js";
+import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
 
 const emptyInput = z.object({}).strict();
 
@@ -659,6 +660,8 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "project.create", description: "Register a new external publishing-client MCP connection. Endpoint/token are referenced by environment variable NAME only (never values); publishing stays disabled by policy.", zodSchema: projectCreateInput, inputSchema: projectCreateJsonSchema, execute: async (input) => { const data = projectCreateInput.parse(input); return ok({ project: await createProject(projectRepository, data.project) }); } }),
     tool({ name: "project.update", description: "Patch a registered project's safe fields (name, env var names, auth mode, allowed tools, contract, status) plus one policy field: operatorPublishDefault (approved | require_explicit) — whether a NEW run for this project starts pre-approved (publishingPolicy.operatorDefault). Identity and the REST of publishing policy (publishEnabled, requiresExplicitPublish) are not patchable.", zodSchema: projectUpdateInput, inputSchema: projectUpdateJsonSchema, execute: async (input) => { const data = projectUpdateInput.parse(input); return ok({ project: await updateProject(projectRepository, data.projectId, data.patch) }); } }),
     tool({ name: "project.delete", description: "Remove an agent-registered project connection. Code-defined default projects cannot be deleted (set status to disabled instead).", zodSchema: projectDeleteInput, inputSchema: projectDeleteJsonSchema, execute: async (input) => { const data = projectDeleteInput.parse(input); return ok(await deleteProject(projectRepository, data.projectId)); } }),
+    // T12.11 — the one-call composite entry point (R-C5): site.duplicate / site.duplicate_status.
+    ...createSiteDuplicationTools({ executionRepository, workspaceRepository, projectRepository, usageRepository }),
     ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),
