@@ -26,6 +26,10 @@ import { buildLearningObservations } from "./learningRecord.js";
 import { buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector } from "./aggressionVector.js";
 import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
 import { getWorkflowDefinition } from "./workflowRegistry.js";
+// T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
+// that drives runs, since they all import this module. See captureConductorWorkflow.ts.
+import "./captureConductorWorkflow.js";
+import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
 import { declaresContractPrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
@@ -869,7 +873,10 @@ const DETERMINISTIC_ROUTE_METADATA_KEYS = [
   "publishPayloadDeterministic",
   "publicationControllerDeterministic",
   "publishExecutorDeterministic",
-  "learningRecorderDeterministic"
+  "learningRecorderDeterministic",
+  // T12.9: the capture_conductor stages (captureConductorRoutes.ts). String-valued ("crawl", ...),
+  // which declaresDeterministicRoute below already treats as declared.
+  "captureStageDeterministic"
 ] as const;
 const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
   DETERMINISTIC_ROUTE_METADATA_KEYS.some((key) => {
@@ -1799,6 +1806,70 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       return { run };
     }
     state.warnings = [...(state.warnings ?? []), `learning_recorder_deterministic_unavailable:${observationsValidation.errors[0] ?? "schema_invalid"}`];
+  }
+
+  // T12.9 — the capture_conductor deterministic stages (metadata.captureStageDeterministic; R-C3 v2:
+  // build in code, validate against the node's OWN outputSchema, complete with no model call — the
+  // R-20 $0 rule applies, so no usage record is written on the deterministic path). Three outcomes:
+  //   completed — the ordinary deterministic completion the sibling routes above use.
+  //   pending   — capture_crawl's pdf-tool job (T12.8) is not terminal. The node is RE-QUEUED with
+  //               its job bookkeeping persisted in stageOutputs, so completion is awaited by the
+  //               LONG-RUN PLANES (the conductor job's advance loop / the run-continuation tick)
+  //               re-driving this node until a poll is terminal — one create-or-poll per dispatch,
+  //               never a wait loop inside one 30s project-call window.
+  //   refused   — typed refusal. A LIVE run BLOCKS (a model must never fabricate a crawl, mapping,
+  //               theme, emission, or score — the placement_resolver "no model fallback" precedent);
+  //               a MOCK run falls through to MockNodeRunner with a run-visible warning so CI graph
+  //               traversal keeps working. Both carry the refusal code as a run-visible warning.
+  const captureStage = readCaptureStage(nextNode);
+  if (captureStage) {
+    const staged = await runCaptureStage({ run, node: nextNode, stage: captureStage });
+    if (staged.kind === "pending") {
+      const pendingAt = now();
+      state.status = "queued";
+      delete state.startedAt;
+      delete state.dispatch;
+      state.warnings = [...(state.warnings ?? []), staged.warning];
+      run.stageOutputs[staged.jobStateKey] = staged.jobState;
+      run.status = "running";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = pendingAt;
+      return { run };
+    }
+    let refusal: { code: string; message: string } | undefined;
+    if (staged.kind === "completed") {
+      const stagedValidation = validateOutput(staged.output, nextNode.outputSchema);
+      if (stagedValidation.ok) {
+        const completedAt = now();
+        state.status = "completed";
+        state.completedAt = completedAt;
+        state.durationMs = duration(startedAt, completedAt);
+        state.output = staged.output;
+        run.stageOutputs[nextNode.id] = staged.output;
+        run.artifacts.push(buildArtifact(nextNode, staged.output));
+        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.updatedAt = completedAt;
+        run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+        // No model call happened, so no usage record is written (the R-20 rule).
+        return { run };
+      }
+      refusal = { code: "output_schema_invalid", message: `capture stage "${captureStage}" produced an envelope its own node schema rejects: ${stagedValidation.errors[0] ?? "schema_invalid"}` };
+    } else {
+      refusal = { code: staged.code, message: staged.message };
+    }
+    state.warnings = [...(state.warnings ?? []), `capture_stage_deterministic_unavailable:${refusal.code}`];
+    if (((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+      const completedAt = now();
+      state.status = "blocked";
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = { error: { code: refusal.code, message: refusal.message } };
+      run.status = "blocked";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = completedAt;
+      return { run };
+    }
+    // Mock run: fall through to the MockNodeRunner placeholder below so CI traversal keeps working.
   }
 
   // Dispatch claim (the ~300s silent-death fix): persist "this node is in flight, with this timeout"

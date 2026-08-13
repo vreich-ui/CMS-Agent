@@ -4,14 +4,18 @@ import { composeWorkflowNodes, isTailNode, publishingTailNodeIds } from "../../.
 import { getWorkflowDefinition, listRegisteredWorkflowIds, registerWorkflow } from "../../../src/agent/workspace/workflowRegistry.js";
 import { __test__, publishingConductorWorkflowId } from "../../../src/agent/workspace/executor.js";
 
-// §2.23 — minimal multi-workflow plumbing at the seam that matters. The registry is prepared but NOT
-// activated: publishing_conductor is the only shipped entry, and everything an existing run does is
-// byte-identical (unknown workflowIds fall back to the publishing_conductor canonical set).
+// §2.23 — minimal multi-workflow plumbing at the seam that matters. The registry now carries TWO
+// shipped entries: publishing_conductor (the canonical array) and, since T12.9, capture_conductor
+// (registered by captureConductorWorkflow.ts, imported for its side effect by executor.ts — which
+// this file imports, so both registrations are present here exactly as on every run-driving plane).
+// Everything an existing run does is byte-identical (unknown workflowIds still fall back to the
+// publishing_conductor canonical set).
 
 describe("§2.23 workflow registry", () => {
-  it("ships publishing_conductor as the only registered workflow, resolving the canonical array", () => {
-    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId]);
+  it("ships publishing_conductor and capture_conductor as the registered workflows, resolving the canonical arrays", () => {
+    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor"]);
     expect(getWorkflowDefinition(publishingConductorWorkflowId)?.canonicalNodes()).toEqual(listWorkspaceNodes());
+    expect(getWorkflowDefinition("capture_conductor")?.canonicalNodes().map((node) => node.id)).toContain("capture_crawl");
     expect(getWorkflowDefinition("money_page")).toBeUndefined();
   });
 

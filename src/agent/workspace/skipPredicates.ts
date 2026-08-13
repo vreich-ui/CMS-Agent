@@ -56,10 +56,21 @@ export type SkipPredicate =
   | { when: "no_external_claims"; reason?: string }
   // Skip when this reviewer is not in the review tier the run's content class selects (the operator
   // policy below). `reviewer` defaults to the node's own id.
-  | { when: "review_tier_excludes"; reviewer?: string; reason?: string };
+  | { when: "review_tier_excludes"; reviewer?: string; reason?: string }
+  // T12.9 capture_conductor — copy_regenerator's gate. Skip when an upstream capture envelope
+  // POSITIVELY declares policy.rights.content === "retain_allowed_origin_content": rights permit the
+  // extracted copy, so there is nothing to regenerate. The rights fact is stamped onto every capture
+  // stage envelope by captureEngine.ts from the registry policy — a run artifact, not a re-fetch —
+  // and per rule 3 an absent/unreadable declaration RUNS the node (a wasted regeneration costs
+  // model dollars; emitting copy the rights prohibit is what emission's own quarantine prevents).
+  | { when: "capture_rights_allow_extracted_copy"; reason?: string }
+  // T12.9 capture_conductor — block_classifier's gate. Skip when an upstream capture-map envelope
+  // POSITIVELY declares declinedBlocks as an empty array: the heuristic mapper declined nothing, so
+  // there is no block for the classifier to judge. Absent/unreadable declaration runs the node.
+  | { when: "capture_no_declined_blocks"; reason?: string };
 
 export type SkipPredicateKind = SkipPredicate["when"];
-export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes"];
+export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks"];
 
 // ---------------------------------------------------------------------------------------------
 // REVIEW QUARTET TIERING — operator policy, decided by Wolf 2026-08-12. Three tiers:
@@ -309,6 +320,43 @@ function evaluateReviewTierExcludes(predicate: Extract<SkipPredicate, { when: "r
 }
 
 // ---------------------------------------------------------------------------------------------
+// Predicates 5 + 6 — the capture_conductor gates (T12.9). Both read STRUCTURAL facts the capture
+// engine stamps onto its stage envelopes (policy rights; the declined-block ledger), both resolve
+// every uncertainty toward running (rule 3), and both ignore mock placeholders like every other
+// predicate here.
+function evaluateCaptureRightsAllowExtractedCopy(predicate: Extract<SkipPredicate, { when: "capture_rights_allow_extracted_copy" }>, context: SkipEvaluationContext): SkipVerdict {
+  const basis: string[] = [];
+  for (const carrier of carriersFor(context)) {
+    if (isPlaceholder(carrier)) { basis.push("carrier: mock placeholder (dryRun) — not evidence"); continue; }
+    if (!isObject(carrier)) continue;
+    const policy = carrier.policy;
+    const rights = isObject(policy) ? policy.rights : undefined;
+    const content = isObject(rights) ? rights.content : undefined;
+    if (typeof content !== "string") continue;
+    basis.push(`policy.rights.content: ${content}`);
+    return content === "retain_allowed_origin_content"
+      ? { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} skipped: the target project's capture rights permit retaining extracted allowed-origin copy, so there is nothing to regenerate.`, basis, warnings: [] }
+      : { skip: false, predicate, reason: `${context.nodeId} runs: the target project's capture rights (${content}) do not permit extracted copy, so regeneration is required before live emission.`, basis, warnings: [] };
+  }
+  basis.push("no capture policy rights declared on any upstream envelope");
+  return { skip: false, predicate, reason: `${context.nodeId} runs: no upstream capture envelope declares the rights fact, and an unanswered question is answered by running.`, basis, warnings: [] };
+}
+
+function evaluateCaptureNoDeclinedBlocks(predicate: Extract<SkipPredicate, { when: "capture_no_declined_blocks" }>, context: SkipEvaluationContext): SkipVerdict {
+  const basis: string[] = [];
+  for (const carrier of carriersFor(context)) {
+    if (isPlaceholder(carrier)) { basis.push("carrier: mock placeholder (dryRun) — not evidence"); continue; }
+    if (!isObject(carrier) || !Array.isArray(carrier.declinedBlocks)) continue;
+    basis.push(`declinedBlocks: ${carrier.declinedBlocks.length}`);
+    return carrier.declinedBlocks.length === 0
+      ? { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} skipped: the heuristic mapper declined zero blocks, so there is nothing for the classifier to judge.`, basis, warnings: [] }
+      : { skip: false, predicate, reason: `${context.nodeId} runs: the heuristic mapper declined ${carrier.declinedBlocks.length} block(s) awaiting classification.`, basis, warnings: [] };
+  }
+  basis.push("no declined-block ledger declared on any upstream envelope");
+  return { skip: false, predicate, reason: `${context.nodeId} runs: no upstream capture-map envelope declares a declined-block ledger, and an unanswered question is answered by running.`, basis, warnings: [] };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Metadata parsing. `skipWhen` accepts a single predicate or an array of them; an array means OR
 // (the first predicate that fires skips the node), which is the only composition rule worth having
 // while predicates are this few — AND would let two half-true conditions add up to a skip nobody
@@ -338,6 +386,8 @@ const evaluatePredicate = (predicate: SkipPredicate, context: SkipEvaluationCont
     case "no_media_slots": return evaluateNoMediaSlots(predicate, context);
     case "no_external_claims": return evaluateNoExternalClaims(predicate, context);
     case "review_tier_excludes": return evaluateReviewTierExcludes(predicate, context);
+    case "capture_rights_allow_extracted_copy": return evaluateCaptureRightsAllowExtractedCopy(predicate, context);
+    case "capture_no_declined_blocks": return evaluateCaptureNoDeclinedBlocks(predicate, context);
     default: {
       // Unreachable through readSkipPredicates; kept because an unrecognized rule must be inert
       // rather than throwing inside a dispatch path.

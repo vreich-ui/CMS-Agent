@@ -17,7 +17,19 @@ export const PDF_TOOL_SAFE_READ_ONLY_TOOLS = [
 // Bumped 1 -> 2 when R-23 removed contentContract.canonicalArticleBody (every definition declared
 // the identical value; the article_body node's own produces const is the single source) so persisted
 // stale configs re-seed without it.
-export const PDF_TOOL_DEFINITION_VERSION = 3;
+// Bumped 3 -> 4 (T12.9): allow the T12.8 capture job plane's two tools — create_capture_job (the
+// one write, needed so capture.crawl can create the crawl job; the job's bounds come from the
+// TARGET project's registry capturePolicy and are re-enforced worker-side) and
+// get_capture_job_status (read-only poll). Everything else stays exactly as allow-listed.
+export const PDF_TOOL_DEFINITION_VERSION = 4;
+
+// T12.9: the capture job plane's tool policies. create_capture_job is deliberately a toolPolicies
+// entry rather than an allowedTools row so the write permission is explicit and reviewable apart
+// from the safe read-only list.
+export const PDF_TOOL_CAPTURE_JOB_TOOL_POLICIES: ProjectConnectionConfig["toolPolicies"] = {
+  create_capture_job: "allowed",
+  get_capture_job_status: "allowed"
+};
 
 export const pdfToolProjectConfig: ProjectConnectionConfig = {
   projectId: "pdf-tool",
@@ -27,6 +39,7 @@ export const pdfToolProjectConfig: ProjectConnectionConfig = {
   authMode: "bearer_env",
   tokenEnvVar: "PDF_TOOL_MCP_TOKEN",
   allowedTools: [...PDF_TOOL_SAFE_READ_ONLY_TOOLS],
+  toolPolicies: { ...PDF_TOOL_CAPTURE_JOB_TOOL_POLICIES },
   contentContract: {
     contentContract: "content_source.v1"
   },

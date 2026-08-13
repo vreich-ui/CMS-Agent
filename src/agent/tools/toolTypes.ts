@@ -4,7 +4,9 @@ import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 
 // "monetize" added W5 (2026-08-12) for monetize.ev_floor — deterministic EV-floor arithmetic, its
 // own category rather than folded into "usage" since it is offer/commercial math, not usage telemetry.
-export const toolCategories = ["workspace", "web", "files", "artifacts", "blobs", "learning", "usage", "project_mcp", "publishing", "diagnostics", "monetize"] as const;
+// "capture" added T12.9 for the capture.* controlled tools — pure invocations of the vendored
+// platform capture engine under registry-resolved ProjectCapturePolicy bounds (drafts only).
+export const toolCategories = ["workspace", "web", "files", "artifacts", "blobs", "learning", "usage", "project_mcp", "publishing", "diagnostics", "monetize", "capture"] as const;
 export type ToolCategory = typeof toolCategories[number];
 
 // Every reason evaluateToolPolicy can refuse a call for. Declared here rather than left as inline
