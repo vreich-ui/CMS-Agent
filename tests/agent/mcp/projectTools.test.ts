@@ -78,6 +78,24 @@ describe("project.* MCP tools", () => {
     expect(JSON.stringify(project)).not.toContain(SECRET);
   });
 
+  it("project.list and project.get expose the platform capture policy without connection secrets", async () => {
+    const listed = structured(await toolCall("project.list")).data.projects.find((project: { projectId: string }) => project.projectId === "platform");
+    const fetched = structured(await toolCall("project.get", { projectId: "platform" })).data.project;
+
+    expect(listed.capturePolicy).toEqual(fetched.capturePolicy);
+    expect(fetched.capturePolicy).toMatchObject({
+      maxPages: 20,
+      allowedCrawlOrigins: ["https://www.zilbermanfilmfoundation.com"],
+      sameOriginOnly: true,
+      respectRobots: true,
+      concurrency: 1,
+      delayMs: 1500,
+      authenticatedAccess: "prohibited"
+    });
+    expect(fetched.capturePolicy.designReferences).toEqual([expect.objectContaining({ origin: "https://prconsulting.net", crawlAllowed: false, contentReuse: "prohibited", mediaReuse: "prohibited" })]);
+    expect(JSON.stringify(fetched)).not.toContain(SECRET);
+  });
+
   it("project.test_connection uses the adapter to run a primitive initialize", async () => {
     const response = await toolCall("project.test_connection", { projectId: "dr-lurie" });
     const connection = structured(response).data.connection;

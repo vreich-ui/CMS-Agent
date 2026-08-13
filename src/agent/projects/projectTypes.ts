@@ -70,6 +70,60 @@ export type ProjectPublishingPolicy = {
   description: string;
 };
 
+// Capture is intentionally governed per project. A missing policy resolves to the deny-all value
+// below, so a newly introduced capture workflow cannot widen a legacy project's authority.
+export type ProjectCapturePolicy = {
+  maxPages: number;
+  allowedCrawlOrigins: string[];
+  allowedPathPrefixes: string[];
+  sameOriginOnly: boolean;
+  respectRobots: boolean;
+  concurrency: number;
+  delayMs: number;
+  authenticatedAccess: "prohibited";
+  rights: {
+    content: "prohibited" | "retain_allowed_origin_content";
+    media: "prohibited" | "retain_referenced_allowed_origin_media";
+  };
+  designReferences: Array<{
+    origin: string;
+    purpose: "design_inspiration_only";
+    crawlAllowed: false;
+    contentReuse: "prohibited";
+    mediaReuse: "prohibited";
+  }>;
+  fidelity: {
+    mode: "source_faithful" | "design_inspired";
+    sourceDesignTreatment: "source_content_and_design" | "source_content_with_design_inspiration_only";
+    // Omitted means the pipeline's global coverage rubric applies.
+    coverageRubricOverride?: {
+      minimumMappedBlockCoverage: number;
+      requireCompleteTokens: boolean;
+      requireEnumeratedGaps: boolean;
+    };
+  };
+};
+
+// Deliberate fail-closed fallback for legacy persisted records and new registrations. No capture is
+// permitted until a project explicitly declares its source scope.
+export const DEFAULT_PROJECT_CAPTURE_POLICY: ProjectCapturePolicy = {
+  maxPages: 0,
+  allowedCrawlOrigins: [],
+  allowedPathPrefixes: [],
+  sameOriginOnly: true,
+  respectRobots: true,
+  concurrency: 1,
+  delayMs: 1500,
+  authenticatedAccess: "prohibited",
+  rights: { content: "prohibited", media: "prohibited" },
+  designReferences: [],
+  fidelity: { mode: "source_faithful", sourceDesignTreatment: "source_content_and_design" }
+};
+
+export function resolveProjectCapturePolicy(config: Pick<ProjectConnectionConfig, "capturePolicy">): ProjectCapturePolicy {
+  return structuredClone(config.capturePolicy ?? DEFAULT_PROJECT_CAPTURE_POLICY);
+}
+
 export type ProjectConnectionConfig = {
   projectId: string;
   // Monotonic code-definition version used to safely migrate persisted default project records.
@@ -89,6 +143,9 @@ export type ProjectConnectionConfig = {
   // Explicit per-tool overrides. Highest precedence — wins over allowedTools and defaultToolPolicy.
   toolPolicies?: Record<string, ToolPermission>;
   contentContract: ProjectContentContract;
+  // Optional only to represent legacy persisted records. Callers must use
+  // resolveProjectCapturePolicy(), which denies all capture when it is absent.
+  capturePolicy?: ProjectCapturePolicy;
   // Per-site parameters of the object-native publish dialect. Absent for clients that do not publish
   // through the object substrate — a publish hook that needs one and finds none must refuse rather
   // than substitute a default.
@@ -143,6 +200,7 @@ export type ProjectSummary = {
   defaultToolPolicy: ToolPermission;
   toolPolicies: Record<string, ToolPermission>;
   contentContract: ProjectContentContract;
+  capturePolicy: ProjectCapturePolicy;
   publishingPolicy: ProjectPublishingPolicy;
   status: ProjectStatus;
   connection: ProjectConnectionState;
