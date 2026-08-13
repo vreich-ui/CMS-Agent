@@ -61,7 +61,12 @@ export type PublishPlan = { projectId: string; requestId: string; nodeCount: num
 export type PublishBlockedState = { requestId: string; nodeAwaitingApproval: string; artifactSlot: string | null; requiredAction: string; resumable: true };
 export type PublishResult =
   | { published: false; mode: "dry_run"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; reason: string; readiness?: PublishReadinessResult }
-  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; clientValidation?: NonNullable<PublishExecutionOutcome["clientValidation"]>; readiness?: PublishReadinessResult }
+  // T4 (Wave 2a, 2026-08-13) — `objectId` is the hook's own PublishExecutionOutcome.objectId, carried
+  // out instead of dropped. The engine-side publish path (publishExecution.ts) records the client
+  // object id as a receipt, and the only honest source for it is the id the sequence actually created
+  // or minted; re-deriving it by re-reading `result` is exactly the "model re-derives a fact the
+  // engine already holds" failure T4 exists to remove. Optional because a dialect need not mint one.
+  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; objectId?: string; clientValidation?: NonNullable<PublishExecutionOutcome["clientValidation"]>; readiness?: PublishReadinessResult }
   | { published: false; mode: "blocked_for_publish_execution"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; readiness: PublishReadinessResult; blocked: PublishBlockedState }
   | { published: false; mode: "error"; gates: PublishGates; plan: PublishPlan | null; steps: PublishStep[]; error: string };
 
@@ -274,7 +279,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     });
 
     await learningRepository.recordObservation(`Live publish executed for ${projectId} request ${input.requestId}.`, { type: "publish_executed", projectId, requestId: input.requestId, runId: input.runId });
-    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(outcome.result), ...(outcome.clientValidation ? { clientValidation: outcome.clientValidation } : {}), readiness };
+    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(outcome.result), ...(outcome.objectId ? { objectId: outcome.objectId } : {}), ...(outcome.clientValidation ? { clientValidation: outcome.clientValidation } : {}), readiness };
   } catch (error) {
     const message = error instanceof Error ? error.message : "publish_failed";
     await learningRepository.recordObservation(`Live publish failed for ${projectId} request ${input.requestId}: ${message}`, { type: "publish_failed", projectId, requestId: input.requestId, runId: input.runId }).catch(() => undefined);

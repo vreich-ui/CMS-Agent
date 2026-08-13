@@ -21,7 +21,7 @@ import { runDeterministicPublishPayload, validateClientObjectOnce, readTopLevelO
 import { ENGINE_VALIDATION_POLICY, ownsValidationLoop, runArticleBodyValidationLoop, readBodyForValidation } from "./articleBodyValidation.js";
 import { applyRunContextEnvelope, buildRunContext } from "./runContext.js";
 import { runDeterministicPublicationController } from "./publicationController.js";
-import { runDeterministicPublishExecutor } from "./publishExecution.js";
+import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
 import { buildLearningObservations } from "./learningRecord.js";
 import { buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector } from "./aggressionVector.js";
 import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
@@ -1287,12 +1287,93 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // B2: publishRun never releases), and an "executed" claim without that evidence is downgraded to
   // "blocked" by enforcePublishExecutionEvidence anyway. That tail is its own change, not a rider on a
   // refusal path.
-  if (nextNode.metadata?.publishExecutorDeterministic === true && isPublishExecutorNode(nextNode) && liveRun) {
+  //
+  // T4 (Wave 2a, 2026-08-13) — the flag is now TRI-state and the EXECUTE half lands below: "gate"
+  // (metadata.publishExecutorDeterministic === true) is the refusal-only behaviour described above,
+  // unchanged; "execute" (=== "execute") additionally has the ENGINE perform the publish on a passing
+  // gate, by calling publisher.ts publishRun directly. Absent/unrecognised is "off" — the model path,
+  // exactly as before this landed. Scoped to LIVE runs and to the publisher node for the same reasons
+  // the sibling routes are.
+  const publishExecutorMode = isPublishExecutorNode(nextNode) && liveRun ? readPublishExecutorDeterministicMode(nextNode.metadata) : "off";
+  // Envelope facts taken verbatim from upstream, nearest-to-this-node first; never invented.
+  const publishEnvelopeCarriers = [run.stageOutputs.publication_controller, run.stageOutputs.publish_payload, run.stageOutputs.article_body];
+
+  // T4's execute half. The one deterministic route in this file with NO model fallback, deliberately:
+  // once this path has entered publishRun's sequence a client object may already exist, and handing
+  // that state to a model dispatch that cannot see what was written is how a run half-publishes twice
+  // (run_1786557897658_elj34j's second failure was a model reading another run's publish state). Every
+  // outcome therefore terminates here — a passing gate + committed publish COMPLETES the node with the
+  // receipts, and anything else BLOCKS it with a typed blocker naming the failing step.
+  if (publishExecutorMode === "execute") {
+    let engine: Awaited<ReturnType<typeof runEnginePublishExecution>>;
+    try {
+      engine = await runEnginePublishExecution({
+        run,
+        clientProjectId,
+        envelopeCarriers: publishEnvelopeCarriers,
+        // W3 part 2's channel: the publish request id travels as run context (lifted once from
+        // artifact_plan), with the upstream outputs as the fallback carriers. Never minted here.
+        requestId: runContext.requestId,
+        // The run store this dispatch is driving — publishRun re-reads the PERSISTED run to evaluate
+        // its own gates, and must not read a different repository than the one the executor saved to.
+        deps: { executionRepository: store, projectRepository: repositoryManager.getProjectRepository() }
+      });
+    } catch (error) {
+      engine = { ok: false, code: "threw", error: error instanceof Error ? error.message : String(error) };
+    }
+    const engineValidation = engine.ok ? validateOutput(engine.output, nextNode.outputSchema) : undefined;
+    if (engine.ok && engineValidation?.ok) {
+      const completedAt = now();
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = engine.output;
+      state.warnings = [...(state.warnings ?? []), ...engine.warnings];
+      run.stageOutputs[nextNode.id] = engine.output;
+      run.artifacts.push(buildArtifact(nextNode, engine.output));
+      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.updatedAt = completedAt;
+      if (engine.nodeBlocked) {
+        // A failed sequence leaves the NODE blocked (and the run with it): the artifact records what
+        // ran, and nothing downstream should proceed as if a publish had happened.
+        state.status = "blocked";
+        run.status = "blocked";
+      } else {
+        // Gate refusal or a committed publish: the node produced its artifact either way, and the
+        // record's own status/publishCommitted fields say which.
+        state.status = "completed";
+        run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      }
+      // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
+      return { run };
+    }
+    // Unusable result (no envelope to record against, or a store-overlaid schema that rejects the
+    // engine's own record). Blocked, never dispatched: the sibling routes' "fall through to the model"
+    // degradation is safe for a node that computes a value and unsafe for the one node that mutates a
+    // live site.
+    const completedAt = now();
+    const invalid = engineValidation && !engineValidation.ok ? engineValidation.errors : undefined;
+    const reason = engine.ok ? (invalid?.[0] ?? "schema_invalid") : engine.code;
+    state.status = "blocked";
+    state.completedAt = completedAt;
+    state.durationMs = duration(startedAt, completedAt);
+    state.warnings = [...(state.warnings ?? []), `publish_executor_engine_execution_unavailable:${reason}`];
+    state.output = {
+      error: {
+        code: "publish_executor_engine_execution_unavailable",
+        message: `The engine publish path could not produce a usable publish_execution.v1 record (${reason}); the node is blocked rather than handed to a model dispatch that cannot see what the sequence did.`,
+        details: engine.ok ? { record: engine.output, issues: invalid ?? [] } : { code: engine.code, error: engine.error }
+      }
+    };
+    run.status = "blocked";
+    run.updatedAt = completedAt;
+    return { run };
+  }
+
+  if (publishExecutorMode === "gate") {
     const executed = runDeterministicPublishExecutor({
       run,
       clientProjectId,
-      // Envelope facts taken verbatim from upstream, nearest-to-this-node first; never invented.
-      envelopeCarriers: [run.stageOutputs.publication_controller, run.stageOutputs.publish_payload, run.stageOutputs.article_body]
+      envelopeCarriers: publishEnvelopeCarriers
     });
     const executionValidation = executed.ok ? validateOutput(executed.output, nextNode.outputSchema) : undefined;
     if (executed.ok && executionValidation?.ok) {
