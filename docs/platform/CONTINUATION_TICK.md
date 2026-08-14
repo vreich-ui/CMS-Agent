@@ -67,10 +67,20 @@ poller; it bypasses no stop.
     # 3. Dry check before scheduling anything: one manual execution, read the summary line.
     gcloud run jobs execute continuation-tick --project "$PROJECT" --region "$REGION" --wait
 
-    # 4. Schedule it. Cloud Scheduler's floor is 1 minute, which is the 60 s end of the 30–60 s the
-    #    plan asked for; 30 s is not expressible on this platform either.
-    gcloud scheduler jobs create http continuation-tick-every-minute \
-      --project "$PROJECT" --location "$REGION" --schedule "* * * * *" \
+    # 4. Cloud Scheduler MUST be able to invoke the job. Without this the trigger returns
+    #    status.code 7 (PERMISSION_DENIED) and never creates an execution — the runtime SA carries
+    #    only roles/secretmanager.secretAccessor at project level. Job-scoped, least privilege.
+    gcloud run jobs add-iam-policy-binding continuation-tick \
+      --project "$PROJECT" --region "$REGION" \
+      --member "serviceAccount:$RUNTIME_SA" --role roles/run.invoker
+
+    # 5. Schedule it. EVERY TWO MINUTES, not every minute: the first execution measured
+    #    "Started deployed execution in 2m16.3s" — a Cloud Run Job cold-starts this image slower
+    #    than a 60 s cadence, so a 1-minute schedule guarantees permanent overlap. Overlap is SAFE
+    #    (the dispatch claim makes the selector refuse an in-flight run) but it is pure waste.
+    #    Cloud Scheduler cannot express 30 s either way.
+    gcloud scheduler jobs create http continuation-tick-schedule \
+      --project "$PROJECT" --location "$REGION" --schedule "*/2 * * * *" \
       --uri "https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT/jobs/continuation-tick:run" \
       --http-method POST \
       --oauth-service-account-email "$RUNTIME_SA"
