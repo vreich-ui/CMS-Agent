@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { STALL_MARGIN_MS } from "../../../src/agent/workspace/executor.js";
 import {
   CONTINUATION_TICK_CRON,
@@ -117,7 +117,11 @@ const fakeStore = (records: WorkflowExecutionRecord[]): ExecutionRepository => (
 });
 
 describe("T5 continuation tick — the shell over the selector", () => {
-  afterEach(() => { delete process.env.RUN_CONTINUATION_TICK; });
+  // S1: the tick now preflights the driver's environment (driverEnvPreflight.ts) and refuses to
+  // dispatch a run whose project MCP endpoint env var it cannot see. These fixtures are "platform"
+  // runs, so the endpoint must be visible for the tick to drive them at all.
+  beforeEach(() => { process.env.PLATFORM_MCP_ENDPOINT = "https://platform.example/mcp"; });
+  afterEach(() => { delete process.env.RUN_CONTINUATION_TICK; delete process.env.PLATFORM_MCP_ENDPOINT; });
 
   it("drives only the runs the selector chose, and never touches the ones it refused", async () => {
     const records = [
