@@ -19,7 +19,8 @@ import { resolveProjectCapturePolicy } from "../../../src/agent/projects/project
 
 const SOURCE_URL = "https://www.zilbermanfilmfoundation.com/";
 const PDF_TOOL_ENDPOINT = "https://pdf-tool.example/mcp";
-// The minted site's own MCP endpoint — the storage-grant provider for its capture calls (T12.9 fix).
+// The minted site's own MCP endpoint — its capture BRIDGE is the only door to the capture plane
+// (T12.13); no storage grant is involved on either side.
 const NEW_SITE_ENDPOINT = "https://zilbermanfilmfoundation.example/mcp";
 const JOB_ID = "capture_job_genesis_0001";
 
@@ -72,9 +73,9 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // the test if any Netlify API request is ever attempted with it.
     process.env.NETLIFY_API_TOKEN = "netlify-test-token-dry-run-only";
     process.env.PLATFORM_REPO_ROOT = platformRoot;
-    // T12.9 fix: capture_crawl now fetches the TARGET project's storage grant for every pdf-tool call,
-    // so the minted site's own MCP endpoint has to be reachable for the crawl to start — the state
-    // after the checklist's `pdf_tool_storage_grant` / deploy-side env items are done by a human.
+    // T12.13: capture_crawl calls the TARGET SITE'S OWN capture bridge, so the minted site's MCP
+    // endpoint has to be reachable for the crawl to start. Nothing about the per-site pdf-tool storage
+    // grant is required any more — that checklist item is no longer a capture blocker.
     process.env.ZILBERMAN_MCP_ENDPOINT = NEW_SITE_ENDPOINT;
     delete process.env.SITE_GENESIS_NETLIFY_MODE; // default = dry_run
 
@@ -86,12 +87,11 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
       const request = JSON.parse(init.body ?? "{}") as RpcRequest;
       if (request.method !== "tools/call") return respond(request.id, {});
       const name = request.params?.name ?? "";
-      if (String(url).startsWith(NEW_SITE_ENDPOINT) && name === "get_pdf_tool_storage_grant") {
-        return respond(request.id, { grantType: "netlify-pat", projectId: "zilberman", siteId: "site-api-id-zilberman", token: "nfp_mock_grant_token", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
-      }
-      if (String(url).startsWith(PDF_TOOL_ENDPOINT)) {
-        if (name === "create_capture_job") return respond(request.id, { job: { jobId: JOB_ID, status: "pending" } });
-        if (name === "get_capture_job_status") return respond(request.id, { job: { jobId: JOB_ID, status: "running" } });
+      // T12.13: the capture plane is the MINTED SITE'S OWN capture bridge — no credential, no
+      // pdf-tool call. pdf-tool answers nothing here, so a regression that calls it fails loudly.
+      if (String(url).startsWith(NEW_SITE_ENDPOINT)) {
+        if (name === "create_capture_job") return respond(request.id, { jobId: JOB_ID, status: "pending" });
+        if (name === "get_capture_job_status") return respond(request.id, { jobId: JOB_ID, status: "running" });
       }
       throw new Error(`Unexpected endpoint/tool: ${url} ${name}`);
     }));

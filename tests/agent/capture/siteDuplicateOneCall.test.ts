@@ -69,24 +69,22 @@ describe("site.duplicate — one call against an existing project (fixture end-t
       const name = request.params?.name ?? "";
       const args = request.params?.arguments ?? {};
       if (String(url).startsWith(PDF_TOOL_ENDPOINT)) {
-        if (name === "create_capture_job") {
-          createdJobs.push(args);
-          return respond(request.id, { job: { jobId: JOB_ID, status: "pending" } });
-        }
-        if (name === "get_capture_job_status") {
-          jobPolls += 1;
-          if (jobPolls < 2) return respond(request.id, { job: { jobId: JOB_ID, status: "running" } });
-          return respond(request.id, { job: { jobId: JOB_ID, status: "complete", snapshot } });
-        }
-        throw new Error(`Unexpected pdf-tool tool: ${name}`);
+        // T12.13: capture reaches the plane only through the target's own bridge, never pdf-tool.
+        throw new Error(`pdf-tool must not be called directly by the capture plane: ${name}`);
       }
       if (String(url).startsWith(TARGET_ENDPOINT)) {
         targetVerbs.push(name);
-        // T12.9 fix: the target project is the storage-grant provider for every pdf-tool capture call
-        // (pdf-tool holds no storage credentials of its own).
-        if (name === "get_pdf_tool_storage_grant") {
-          return respond(request.id, { grantType: "netlify-pat", projectId: "zilberman-tenant", siteId: "site-api-id-zilberman", token: "nfp_mock_grant_token", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+        // T12.13: the target's capture bridge — no credential in, snapshot read back through it.
+        if (name === "create_capture_job") {
+          createdJobs.push(args);
+          return respond(request.id, { jobId: JOB_ID, status: "pending" });
         }
+        if (name === "get_capture_job_status") {
+          jobPolls += 1;
+          if (jobPolls < 2) return respond(request.id, { jobId: JOB_ID, status: "running" });
+          return respond(request.id, { jobId: JOB_ID, status: "complete", result: { snapshotArtifact: { blobKey: `binary/capture_x/${"a".repeat(64)}.json`, sha256: "a".repeat(64), sizeBytes: 4096 }, capturedPages: 1 } });
+        }
+        if (name === "get_capture_snapshot") return respond(request.id, { jobId: JOB_ID, schemaVersion: "snapshot.v1", snapshot });
         if (name === "object_inventory" && args.object_type === "site") {
           return respond(request.id, { objects: [{ object_type: "site", object_id: "site_zb", status: "active" }] });
         }
@@ -202,7 +200,7 @@ describe("site.duplicate — one call against an existing project (fixture end-t
     expect(emission.report.mediaPolicy?.mediaRetention).toBe("prohibited");
     expect(emission.report.mediaPolicy?.materialized).toBe(0);
     for (const verb of targetVerbs) {
-      expect(["get_pdf_tool_storage_grant", "object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
+      expect(["create_capture_job", "get_capture_job_status", "get_capture_snapshot", "object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
     }
     const report = run.stageOutputs.capture_report as { artifact: string; humanGate: { publishReachable: boolean } };
     expect(report.artifact).toBe("capture_run_report.v1");

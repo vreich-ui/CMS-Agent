@@ -26,6 +26,15 @@ export const PLATFORM_TOOL_POLICIES: ProjectConnectionConfig["toolPolicies"] = {
   object_validate: "allowed",
   deploy_status: "allowed",
   trigger_netlify_build: "allowed",
+  // FLAGGED, NOT CHANGED (T12.13, 2026-08-17): this row is STALE POLICY, not a capability. Platform
+  // core DELETED the `get_pdf_tool_storage_grant` RPC on 2026-08-02 (commit 7d1640ce) and replaced it
+  // with a server-side artifact bridge that mints the grant internally and never returns it —
+  // `grep -rn get_pdf_tool_storage_grant packages/core/server/` in the platform repo returns nothing.
+  // Allow-listing a tool no deployment implements only makes a caller's failure look like a permission
+  // question. Nothing reads it any more: capture stopped needing a grant entirely under Wolf's
+  // 2026-08-14 "option A" ruling. Retiring the row is a policy edit (definitionVersion bump + re-seed
+  // of the live record), which this task deliberately does not do from code — see the T12.13 brief's
+  // "precise asks".
   get_pdf_tool_storage_grant: "allowed",
   create_artifact_from_url: "allowed",
   create_artifact_upload_intent: "allowed",

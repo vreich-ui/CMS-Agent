@@ -54,17 +54,15 @@ describe("site.duplicate_status — a real mid-run (paused) state", () => {
       const request = JSON.parse(init.body) as RpcRequest;
       if (request.method !== "tools/call") return respond(request.id, {});
       const name = request.params?.name ?? "";
-      // T12.9 fix: the target project mints the storage grant every pdf-tool capture call must carry.
-      if (String(url).startsWith(TARGET_ENDPOINT) && name === "get_pdf_tool_storage_grant") {
-        return respond(request.id, { grantType: "netlify-pat", projectId: "zilberman-tenant", siteId: "site-api-id-zilberman", token: "nfp_mock_grant_token", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
-      }
-      if (String(url).startsWith(PDF_TOOL_ENDPOINT)) {
-        if (name === "create_capture_job") return respond(request.id, { job: { jobId: JOB_ID, status: "pending" } });
+      // T12.13: the capture plane is the TARGET's own capture bridge; no grant is fetched or sent.
+      if (String(url).startsWith(TARGET_ENDPOINT)) {
+        if (name === "create_capture_job") return respond(request.id, { jobId: JOB_ID, status: "pending" });
         if (name === "get_capture_job_status") {
           jobPolls += 1;
-          if (jobPolls < 2) return respond(request.id, { job: { jobId: JOB_ID, status: "running" } });
-          return respond(request.id, { job: { jobId: JOB_ID, status: "complete", snapshot } });
+          if (jobPolls < 2) return respond(request.id, { jobId: JOB_ID, status: "running" });
+          return respond(request.id, { jobId: JOB_ID, status: "complete", result: { snapshotArtifact: { blobKey: `binary/capture_x/${"a".repeat(64)}.json`, sha256: "a".repeat(64), sizeBytes: 4096 }, capturedPages: 1 } });
         }
+        if (name === "get_capture_snapshot") return respond(request.id, { jobId: JOB_ID, schemaVersion: "snapshot.v1", snapshot });
       }
       throw new Error(`Unexpected endpoint/tool in mid-run test: ${url} ${name}`);
     }));
