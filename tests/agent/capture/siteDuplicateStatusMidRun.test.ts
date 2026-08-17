@@ -54,6 +54,10 @@ describe("site.duplicate_status — a real mid-run (paused) state", () => {
       const request = JSON.parse(init.body) as RpcRequest;
       if (request.method !== "tools/call") return respond(request.id, {});
       const name = request.params?.name ?? "";
+      // T12.9 fix: the target project mints the storage grant every pdf-tool capture call must carry.
+      if (String(url).startsWith(TARGET_ENDPOINT) && name === "get_pdf_tool_storage_grant") {
+        return respond(request.id, { grantType: "netlify-pat", projectId: "zilberman-tenant", siteId: "site-api-id-zilberman", token: "nfp_mock_grant_token", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+      }
       if (String(url).startsWith(PDF_TOOL_ENDPOINT)) {
         if (name === "create_capture_job") return respond(request.id, { job: { jobId: JOB_ID, status: "pending" } });
         if (name === "get_capture_job_status") {

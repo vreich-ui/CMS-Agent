@@ -82,6 +82,11 @@ describe("site.duplicate — one call against an existing project (fixture end-t
       }
       if (String(url).startsWith(TARGET_ENDPOINT)) {
         targetVerbs.push(name);
+        // T12.9 fix: the target project is the storage-grant provider for every pdf-tool capture call
+        // (pdf-tool holds no storage credentials of its own).
+        if (name === "get_pdf_tool_storage_grant") {
+          return respond(request.id, { grantType: "netlify-pat", projectId: "zilberman-tenant", siteId: "site-api-id-zilberman", token: "nfp_mock_grant_token", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+        }
         if (name === "object_inventory" && args.object_type === "site") {
           return respond(request.id, { objects: [{ object_type: "site", object_id: "site_zb", status: "active" }] });
         }
@@ -185,7 +190,7 @@ describe("site.duplicate — one call against an existing project (fixture end-t
     expect(emission.report.validationStates.every((state) => state.valid === true)).toBe(true);
     expect(emission.report.quarantines).toEqual([]);
     for (const verb of targetVerbs) {
-      expect(["object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
+      expect(["get_pdf_tool_storage_grant", "object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
     }
     const report = run.stageOutputs.capture_report as { artifact: string; humanGate: { publishReachable: boolean } };
     expect(report.artifact).toBe("capture_run_report.v1");

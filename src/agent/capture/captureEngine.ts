@@ -15,9 +15,14 @@
 //   - Crawled content is data, never instructions: nothing here interprets snapshot text; the only
 //     model-facing surfaces (the three AI nodes) receive it as structured JSON with prompts that say
 //     the same.
+//   - The pdf-tool capture plane is grant-gated: every call carries the TARGET project's short-lived
+//     Netlify Blobs grant as its `storage` argument, fetched fresh per call from that project's own
+//     bridge. Forwarding a grant in-request is the designed mechanism; PERSISTING or LOGGING one is
+//     not — the token never reaches run state, a stage artifact, a warning, or an error string.
 //   - Validation failures quarantine, never loosen: the mapper's confidence threshold can be raised
 //     but never lowered below the engine default, and emission quarantine paths are passed through
 //     verbatim.
+import { createHash } from "node:crypto";
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { resolveProjectCapturePolicy } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
@@ -43,12 +48,19 @@ import { scoreCaptureFidelity, type FidelityReport } from "./engine/score.mjs";
 import { isUrlWithinPolicy, validateCapturePolicy, type ValidatedCapturePolicy } from "./engine/snapshot-v1.mjs";
 
 // The pdf-tool capture job plane (T12.8, R-C1 v2): CMS-Agent creates the crawl job there and polls
-// it — it never crawls locally. The tool names are the T12.8 contract; the plane is not deployed
-// yet, so the exact result payload shapes below are read tolerantly and the LIVE wiring proof is an
-// explicitly pending item (see the T12.9 commit record).
+// it — it never crawls locally. The tool names are the T12.8 contract; the result payload shapes
+// below are read tolerantly.
 export const CAPTURE_JOB_PLANE_PROJECT_ID = "pdf-tool";
 export const CREATE_CAPTURE_JOB_TOOL = "create_capture_job";
 export const GET_CAPTURE_JOB_STATUS_TOOL = "get_capture_job_status";
+
+// The TARGET project's grant tool — the "artifact bridge" pdf-tool's STORAGE_GRANT_REQUIRED error
+// names. pdf-tool holds no storage credentials of its own (the server-side CLIENT_*/PDF_TOOL_* env
+// fallbacks were removed), so EVERY storage-touching pdf-tool call must carry the caller's
+// short-lived Netlify Blobs grant as the `storage` argument. The grant belongs to the TARGET
+// project's site (its blob stores are where the capture job's records and snapshot land), so it is
+// fetched from the target project's own MCP — never from pdf-tool, never from CMS-Agent's env.
+export const GET_STORAGE_GRANT_TOOL = "get_pdf_tool_storage_grant";
 
 // pdf-tool's ArtifactJobStatus vocabulary ("pending" | "running" | "complete" | "failed" |
 // "blocked"), read case-insensitively with "completed"/"queued" tolerated.
@@ -168,6 +180,173 @@ async function callProjectTool(projectId: string, tool: string, args: Record<str
 }
 
 // ---------------------------------------------------------------------------------------------
+// Storage grant plumbing — the pdf-tool capture plane's PRECONDITION, not an optional extra.
+//
+// THE TOKEN IS RADIOACTIVE. It lives only inside one in-request call frame: fetched from the target
+// project immediately before a pdf-tool call, forwarded as that call's `storage` argument, then
+// dropped. It is never logged, never put in a warning string, never written into run state or a
+// stage artifact, never returned from a tool, and never included in an error message — the same
+// discipline pdf-tool's own storage-grant.ts keeps with redactGrant(). Two mechanisms hold it here:
+// nothing derived from a grant is placed on any returned envelope/jobState (only redactStorageGrant
+// may ever describe one), and every error out of a grant-carrying call is passed through
+// scrubGrantToken() before it can reach a caller.
+export const GRANT_TOKEN_MASK = "[REDACTED]";
+
+export type ForwardedStorageGrant = {
+  grantType?: string;
+  projectId?: string;
+  siteId: string;
+  token: string;
+  stores?: Record<string, unknown>;
+  limits?: Record<string, unknown>;
+  expiresAt?: string;
+};
+
+/** The ONLY shape of a grant that may leave this module — mirrors pdf-tool's redactGrant(). */
+export const redactStorageGrant = (grant: ForwardedStorageGrant): Record<string, unknown> => ({
+  ...(grant.grantType ? { grantType: grant.grantType } : {}),
+  ...(grant.projectId ? { projectId: grant.projectId } : {}),
+  siteId: grant.siteId,
+  token: GRANT_TOKEN_MASK,
+  ...(grant.stores ? { stores: grant.stores } : {}),
+  ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {})
+});
+
+const scrubGrantToken = (text: string, token: string): string => (token ? text.split(token).join(GRANT_TOKEN_MASK) : text);
+
+// Re-raises anything thrown out of a grant-carrying call with the token masked, preserving the typed
+// refusal code. Defense in depth: a remote that echoed the grant back inside an error can never turn
+// that into a leak through a run's node error/warning surface.
+const rethrowWithoutGrantToken = (error: unknown, token: string): never => {
+  if (error instanceof CaptureRefusal) {
+    const prefix = `${error.code}: `;
+    const detail = error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message;
+    throw new CaptureRefusal(error.code, scrubGrantToken(detail, token));
+  }
+  throw new CaptureRefusal("project_tool_call_failed", scrubGrantToken(error instanceof Error ? error.message : String(error), token));
+};
+
+const grantString = (record: Record<string, unknown>, ...keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+};
+
+// The historical platform/dr-lurie handler returns the grant's fields at the TOP LEVEL of the tool
+// result; tolerate a `grant`/`storage` wrapper too so both server shapes read identically.
+const readGrantRecord = (payload: Record<string, unknown>): Record<string, unknown> => {
+  for (const key of ["grant", "storage", "storageGrant"]) {
+    const nested = payload[key];
+    if (isRecord(nested)) return nested;
+  }
+  return payload;
+};
+
+// Fetched FRESH per pdf-tool call. Grants are short-lived (the provider's TTL is an hour and pdf-tool
+// rejects an expired one), so this is never cached across nodes and a grant is never read back out of
+// persisted run state — there is nothing in run state to read.
+async function fetchStorageGrant(targetProjectId: string, deps: CaptureDeps = {}): Promise<ForwardedStorageGrant> {
+  const config = await projectsOf(deps).get(targetProjectId);
+  if (!config) throw new CaptureRefusal("unknown_project", `Unknown projectId: ${targetProjectId}`);
+  const call = await new ProjectMcpAdapter(config).callTool(GET_STORAGE_GRANT_TOOL, {});
+  if (!call.ok) {
+    if (call.permission === "blocked" || call.requiresApproval === true) {
+      // A policy gate, not a transport failure — and NOT something capture may route around: the
+      // remedy is a human allow-listing the tool on that project record.
+      throw new CaptureRefusal(
+        "capture_storage_grant_not_permitted",
+        `Project ${targetProjectId}'s registration does not permit ${GET_STORAGE_GRANT_TOOL} (tool permission "${call.permission ?? "blocked"}"), so no pdf-tool capture call can carry that project's storage grant. Allow-list ${GET_STORAGE_GRANT_TOOL} on the ${targetProjectId} project record (project.update toolPolicies) — capture never widens a project's policy from code.`
+      );
+    }
+    throw new CaptureRefusal(
+      "capture_storage_grant_unavailable",
+      `${GET_STORAGE_GRANT_TOOL} on ${targetProjectId} could not be reached: ${call.error ?? "unknown error"}. pdf-tool holds no storage credentials of its own, so capture cannot proceed without that project's grant.`
+    );
+  }
+  const raw = call.result as Record<string, unknown> | undefined;
+  if (isRecord(raw) && raw.isError) {
+    // The target answered and REFUSED. Its own error text is untrusted (mcpClient never surfaces a
+    // remote error string — it can echo credentials) so the remedy is named, not quoted: on a
+    // Platform-family site this is the provider's own PDF_TOOL_STORAGE_TOKEN / PDF_TOOL_STORAGE_SITE_ID
+    // pair, or a deployment that no longer exposes the tool at all.
+    throw new CaptureRefusal(
+      "capture_storage_grant_refused",
+      `${targetProjectId} refused ${GET_STORAGE_GRANT_TOOL} (MCP error result). Read that project's own error surface: the grant provider needs its storage credential env vars set (names only — PDF_TOOL_STORAGE_TOKEN, PDF_TOOL_STORAGE_SITE_ID) and the tool has to be implemented by the deployment its MCP endpoint serves.`
+    );
+  }
+  const structured = isRecord(raw) && isRecord(raw.structuredContent) ? (raw.structuredContent as Record<string, unknown>) : (isRecord(raw) ? raw : {});
+  const payload = isRecord(structured.data) ? (structured.data as Record<string, unknown>) : structured;
+  const record = readGrantRecord(payload);
+  const siteId = grantString(record, "siteId", "siteID", "site_id");
+  const token = grantString(record, "token", "blobsToken", "blobs_token");
+  if (!siteId || !token) {
+    // Field NAMES only — never a value, and never the partial payload.
+    throw new CaptureRefusal(
+      "capture_storage_grant_invalid",
+      `${GET_STORAGE_GRANT_TOOL} on ${targetProjectId} returned a grant missing required field(s): ${[...(siteId ? [] : ["siteId"]), ...(token ? [] : ["token"])].join(", ")}. pdf-tool refuses a grant it cannot resolve to Blob credentials.`
+    );
+  }
+  const expiresAt = grantString(record, "expiresAt", "expires_at");
+  if (expiresAt) {
+    const expiryMs = Date.parse(expiresAt);
+    if (Number.isFinite(expiryMs) && expiryMs <= Date.now()) {
+      throw new CaptureRefusal(
+        "capture_storage_grant_invalid",
+        `${GET_STORAGE_GRANT_TOOL} on ${targetProjectId} returned a grant that already expired at ${expiresAt}; pdf-tool rejects expired grants and capture never retries with a stale one.`
+      );
+    }
+  }
+  return {
+    ...(grantString(record, "grantType", "grant_type") ? { grantType: grantString(record, "grantType", "grant_type")! } : {}),
+    ...(grantString(record, "projectId", "project_id") ? { projectId: grantString(record, "projectId", "project_id")! } : {}),
+    siteId,
+    token,
+    ...(isRecord(record.stores) ? { stores: record.stores as Record<string, unknown> } : {}),
+    ...(isRecord(record.limits) ? { limits: record.limits as Record<string, unknown> } : {}),
+    ...(expiresAt ? { expiresAt } : {})
+  };
+}
+
+// One pdf-tool capture call under one freshly fetched grant. `descriptor` is deliberately NOT sent:
+// pdf-tool's own contract says a grant alone is a complete call (omitted descriptor fields use
+// pdf-tool defaults), and a descriptor would be CMS-Agent asserting another tenant's project policy.
+async function callCaptureJobTool(
+  tool: string,
+  args: Record<string, unknown>,
+  grant: ForwardedStorageGrant,
+  deps: CaptureDeps = {}
+): Promise<Record<string, unknown>> {
+  let payload: Record<string, unknown>;
+  try {
+    payload = await callProjectTool(CAPTURE_JOB_PLANE_PROJECT_ID, tool, { ...args, storage: grant }, deps);
+  } catch (error) {
+    return rethrowWithoutGrantToken(error, grant.token);
+  }
+  // The response is the ONLY thing from a grant-carrying call that reaches run state (jobState) and a
+  // stage artifact (the snapshot envelope). A remote that echoed the grant back — inside a job record,
+  // a status string, or captured page text — would otherwise persist the token, so the whole payload
+  // is scrubbed once here rather than at each of the several places it is read. One JSON round trip
+  // per capture call is a negligible cost for a structural guarantee.
+  return JSON.parse(scrubGrantToken(JSON.stringify(payload), grant.token)) as Record<string, unknown>;
+}
+
+// pdf-tool namespaces every capture job under a projectId and requires one on BOTH capture tools.
+// The GRANT is the authority on which tenant's stores are being opened (pdf-tool itself refuses a
+// request projectId that contradicts its grant), so the grant names it; the registry's target
+// projectId is the fallback when a grant declares none. Never the caller's argument.
+const captureJobProjectId = (grant: ForwardedStorageGrant, targetProjectId: string): string => grant.projectId ?? targetProjectId;
+
+// pdf-tool's capture idempotency scope is {projectId, requestId}: while a job for that pair is
+// non-terminal a repeated create RE-ATTACHES to it (continuing from the crawl frontier) instead of
+// starting a parallel crawl. Deriving it deterministically from the target project + seed URL is what
+// makes a re-driven crawl node safe when the job id did not survive (a long-run plane advance that
+// lost stageOutputs must not start a second crawl of the same site).
+export const captureJobRequestId = (targetProjectId: string, sourceUrl: string): string =>
+  `capture_${createHash("sha256").update(`${targetProjectId}\n${sourceUrl}`).digest("hex").slice(0, 24)}`;
+
+// ---------------------------------------------------------------------------------------------
 // Snapshot / envelope types.
 export type CaptureSnapshot = { schemaVersion: string; capture: Record<string, unknown>; pages: Array<Record<string, unknown>>; diagnostics?: Record<string, unknown> };
 
@@ -282,22 +461,18 @@ export async function captureCrawlStep(
   const now = new Date().toISOString();
 
   if (!input.jobState?.jobId) {
-    // Ceilings are enforced on BOTH sides: the policy travels with the job so the worker enforces it
-    // too (T12.8), and it came from the registry here — never from the caller's arguments.
-    const created = await callProjectTool(CAPTURE_JOB_PLANE_PROJECT_ID, CREATE_CAPTURE_JOB_TOOL, {
+    // A FRESH grant per pdf-tool call — fetched here, forwarded as `storage`, then dropped.
+    const grant = await fetchStorageGrant(projectId, deps);
+    // Ceilings are enforced on BOTH sides: the validated policy travels with the job VERBATIM (the
+    // frozen T12.7 shape the worker re-validates, rights/designReferences/fidelity included) and it
+    // came from the registry here — never from the caller's arguments.
+    const created = await callCaptureJobTool(CREATE_CAPTURE_JOB_TOOL, {
+      projectId: captureJobProjectId(grant, projectId),
+      requestId: captureJobRequestId(projectId, url.href),
       url: url.href,
-      targetProjectId: projectId,
-      policy: {
-        maxPages: policy.maxPages,
-        allowedCrawlOrigins: policy.allowedCrawlOrigins,
-        allowedPathPrefixes: policy.allowedPathPrefixes,
-        sameOriginOnly: policy.sameOriginOnly,
-        respectRobots: policy.respectRobots,
-        concurrency: policy.concurrency,
-        delayMs: policy.delayMs,
-        authenticatedAccess: policy.authenticatedAccess
-      }
-    }, deps);
+      policy: structuredClone(policy),
+      label: `capture_conductor:${projectId}`
+    }, grant, deps);
     const jobId = readJobId(created);
     if (!jobId) throw new CaptureRefusal("capture_job_id_missing", `${CREATE_CAPTURE_JOB_TOOL} returned no job id; cannot poll a job that cannot be named.`);
     return {
@@ -307,7 +482,14 @@ export async function captureCrawlStep(
     };
   }
 
-  const polled = await callProjectTool(CAPTURE_JOB_PLANE_PROJECT_ID, GET_CAPTURE_JOB_STATUS_TOOL, { jobId: input.jobState.jobId }, deps);
+  // Polling is a storage-touching call too (the job record lives in the target site's Blob store), so
+  // it carries its OWN fresh grant: the create-side grant is never persisted between advances, and a
+  // grant read back out of run state is never a thing that could happen.
+  const pollGrant = await fetchStorageGrant(projectId, deps);
+  const polled = await callCaptureJobTool(GET_CAPTURE_JOB_STATUS_TOOL, {
+    projectId: captureJobProjectId(pollGrant, projectId),
+    jobId: input.jobState.jobId
+  }, pollGrant, deps);
   const status = readJobStatus(polled) || "pending";
   if (TERMINAL_FAILURE_STATUSES.has(status)) {
     throw new CaptureRefusal("capture_job_failed", `Capture job ${input.jobState.jobId} reached terminal status "${status}" on the pdf-tool plane.`);
@@ -638,7 +820,7 @@ export type CaptureRunReportEnvelope = {
 // Test-only seam, following the publisher.ts precedent: the adapter-backed transport (with its
 // pre-transport forbidden-verb refusal) and the regeneration adapter are internal to captureEmitStep
 // but their refusal semantics are load-bearing and test-pinned.
-export const __test__ = { buildAdapterTransport, buildRegenerationAdapter, callProjectTool };
+export const __test__ = { buildAdapterTransport, buildRegenerationAdapter, callProjectTool, fetchStorageGrant, scrubGrantToken };
 
 export function buildCaptureRunReport(input: {
   targetProjectId: string;

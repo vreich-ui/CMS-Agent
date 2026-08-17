@@ -25,6 +25,13 @@ const TARGET_ENDPOINT = "https://zilberman-capture.example/mcp";
 const PDF_TOOL_ENDPOINT = "https://pdf-tool.example/mcp";
 const SOURCE_URL = "https://www.zilbermanfilmfoundation.com/";
 const JOB_ID = "capture_job_zb_0001";
+// T12.9 fix: this harness used to answer create_capture_job / get_capture_job_status without caring
+// whether the call carried a `storage` grant — precisely the hole that let a grantless (and therefore
+// always-refused, run_1786965304795_ifxxvk) crawl ship. The stub now REFUSES a grantless call exactly
+// as the real plane does, so the harness cannot pass again without the grant wiring.
+const STORAGE_GRANT_TOKEN = "nfp_mock_run_radioactive_token";
+const STORAGE_GRANT_SITE_ID = "site-api-id-zilberman";
+const GRANT_PROJECT_ID = "zilberman-tenant";
 
 const fixturePath = fileURLToPath(new URL("../../fixtures/capture/zilberman.snapshot.v1.redacted.json", import.meta.url));
 
@@ -34,16 +41,35 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
   let snapshot: Record<string, unknown>;
   let jobPolls: number;
   let createdJobs: Array<Record<string, unknown>>;
+  let polledJobs: Array<Record<string, unknown>>;
+  let grantFetches: number;
   let targetVerbs: string[];
 
   const respond = (id: number, data: unknown) =>
     ({ ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id, result: { structuredContent: { data } } }) }) as unknown as Response;
+
+  // The real plane's STORAGE_GRANT_REQUIRED refusal: pdf-tool holds no storage credentials of its own,
+  // so a call with no `storage` argument fails before any business logic.
+  const requireGrant = (id: number, args: Record<string, unknown>): Response | undefined => {
+    const storage = args.storage as Record<string, unknown> | undefined;
+    if (!storage || typeof storage.token !== "string" || !storage.token || typeof storage.siteId !== "string" || !storage.siteId) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/json" },
+        json: async () => ({ jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: "STORAGE_GRANT_REQUIRED" }], structuredContent: { error: "every call must carry the caller's short-lived Netlify Blobs grant as the `storage` argument", errorCode: "STORAGE_GRANT_REQUIRED" } } })
+      } as unknown as Response;
+    }
+    return undefined;
+  };
 
   beforeEach(async () => {
     resetRepositoryManager();
     snapshot = JSON.parse(await readFile(fixturePath, "utf8"));
     jobPolls = 0;
     createdJobs = [];
+    polledJobs = [];
+    grantFetches = 0;
     targetVerbs = [];
     process.env.PDF_TOOL_MCP_ENDPOINT = PDF_TOOL_ENDPOINT;
     process.env.PDF_TOOL_MCP_TOKEN = "pdf-tool-test-token";
@@ -56,10 +82,15 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
       const args = request.params?.arguments ?? {};
       if (String(url).startsWith(PDF_TOOL_ENDPOINT)) {
         if (name === "create_capture_job") {
+          const refusal = requireGrant(request.id, args);
+          if (refusal) return refusal;
           createdJobs.push(args);
           return respond(request.id, { job: { jobId: JOB_ID, status: "pending" } });
         }
         if (name === "get_capture_job_status") {
+          const refusal = requireGrant(request.id, args);
+          if (refusal) return refusal;
+          polledJobs.push(args);
           jobPolls += 1;
           // First poll: still running (the long-run plane must re-drive the node). Second: terminal.
           if (jobPolls < 2) return respond(request.id, { job: { jobId: JOB_ID, status: "running" } });
@@ -69,6 +100,20 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
       }
       if (String(url).startsWith(TARGET_ENDPOINT)) {
         targetVerbs.push(name);
+        if (name === "get_pdf_tool_storage_grant") {
+          // The target project IS the grant provider (its Blob stores are where the capture job's
+          // records land). The token is minted fresh per call and never returned to a run.
+          grantFetches += 1;
+          return respond(request.id, {
+            grantVersion: 1,
+            grantType: "netlify-pat",
+            projectId: GRANT_PROJECT_ID,
+            siteId: STORAGE_GRANT_SITE_ID,
+            token: STORAGE_GRANT_TOKEN,
+            stores: { artifacts: "artifacts", artifactIndex: "artifact-index", templates: "pdf-templates", imageSearch: "image-search", renderData: "pdf-render-data", jobs: "pdf-tool-jobs" },
+            expiresAt: new Date(Date.now() + 3_600_000).toISOString()
+          });
+        }
         if (name === "object_inventory" && args.object_type === "site") {
           return respond(request.id, { objects: [{ object_type: "site", object_id: "site_zb", status: "active" }] });
         }
@@ -145,6 +190,26 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
     expect((createdJobs[0].policy as Record<string, unknown>).maxPages).toBe(20);
     expect((run.stageOutputs[CAPTURE_CRAWL_JOB_STAGE_KEY] as Record<string, unknown>).jobId).toBe(JOB_ID);
 
+    // T12.9 fix — GRANT WIRING: every pdf-tool capture call carried the target project's storage
+    // grant as its `storage` argument (the stub refuses a grantless call exactly as the live plane
+    // does), and one FRESH grant was fetched per call — three calls, three grant fetches, nothing
+    // cached across the advances that re-drove this node.
+    for (const call of [...createdJobs, ...polledJobs]) {
+      expect(call.storage).toMatchObject({ grantType: "netlify-pat", siteId: STORAGE_GRANT_SITE_ID, token: STORAGE_GRANT_TOKEN });
+      expect(call.projectId).toBe(GRANT_PROJECT_ID);
+    }
+    expect(polledJobs).toHaveLength(2);
+    expect(grantFetches).toBe(3);
+
+    // RADIOACTIVE TOKEN: it appears in NO persisted run state (stage outputs, node records, warnings,
+    // errors) and NO stage artifact — the whole persisted run record is searched, not a sample.
+    const persistedRun = JSON.stringify(await getRun(run.runId, store));
+    expect(persistedRun).not.toContain(STORAGE_GRANT_TOKEN);
+    expect(persistedRun).not.toContain(STORAGE_GRANT_SITE_ID);
+    for (const [, output] of Object.entries(run.stageOutputs)) {
+      expect(JSON.stringify(output)).not.toContain(STORAGE_GRANT_TOKEN);
+    }
+
     // Deterministic stages produced REAL engine artifacts (not mock placeholders).
     const crawlOut = run.stageOutputs.capture_crawl as Record<string, unknown>;
     expect(crawlOut.artifact).toBe("capture_snapshot.v1");
@@ -178,7 +243,7 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
     expect(emission.report.validationStates.every((state) => state.valid === true)).toBe(true);
     expect(emission.report.quarantines).toEqual([]);
     for (const verb of targetVerbs) {
-      expect(["object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
+      expect(["get_pdf_tool_storage_grant", "object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
     }
 
     // Scored + reported: governed rubric verdict, gaps enumerated into the W10 evidence feed, and
