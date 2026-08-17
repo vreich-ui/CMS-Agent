@@ -1,6 +1,7 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
-import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
+import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type RunDriver, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
+import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
@@ -31,7 +32,7 @@ import { getWorkflowDefinition } from "./workflowRegistry.js";
 import "./captureConductorWorkflow.js";
 import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
-import { declaresContractPrefetch } from "./nodeGatingSeed.js";
+import { declaresContractPrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 
@@ -140,7 +141,7 @@ const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: Workspa
   metadata: { dryRun: true, source: "workflow.run_next_node", estimateMethod: "deterministic_mock_length" }
 });
 
-export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number };
+export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number; requestId?: string };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
 
 // Session A (2026-08-03) — cursor pagination + filters on workflow.list_runs. PR #105 made each row
@@ -266,7 +267,10 @@ const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): Work
   assignedSkills: stored.assignedSkills ? [...stored.assignedSkills] : canonical.assignedSkills,
   modelConfig: stored.modelConfig ?? canonical.modelConfig,
   executionConfig: stored.executionConfig ?? canonical.executionConfig,
-  metadata: stored.metadata ?? canonical.metadata,
+  // MERGE, not replace: a store row that sets one metadata key (approvalRequired: false) must not
+  // erase the canonical keys it did not mention (voicePrefetch, contractPrefetch, skipWhen). A stored
+  // key still wins where both declare it.
+  metadata: canonical.metadata === undefined && stored.metadata === undefined ? undefined : { ...(canonical.metadata ?? {}), ...(stored.metadata ?? {}) },
   updatedAt: stored.updatedAt ?? canonical.updatedAt
 });
 
@@ -604,7 +608,24 @@ function withRunLock<T>(runId: string, task: () => Promise<T>): Promise<T> {
   return result;
 }
 
-export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean };
+export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean; driver?: RunDriver };
+
+// S1 — dispatch provenance. Resolves, for THIS process, whether the run's project MCP endpoint env var
+// is set (never its value), so the claim written at dispatch says what the dispatching driver could
+// see. Best-effort: an unknown project or a repository error records `false`, never throws — a
+// provenance stamp must not be able to fail a dispatch.
+async function projectEndpointConfiguredFor(projectId: string): Promise<boolean> {
+  try {
+    const config = await repositoryManager.getProjectRepository().get(projectId);
+    return config ? resolveProjectConnection(config).endpointConfigured : false;
+  } catch {
+    return false;
+  }
+}
+const stampDispatch = (state: NodeExecutionState, dispatchedAt: string, timeoutMs: number, driver: RunDriver, projectEndpointConfigured: boolean): void => {
+  state.dispatch = { ...(state.dispatch ?? {}), dispatchedAt, timeoutMs, driver, projectEndpointConfigured };
+  state.lastDispatch = { dispatchedAt, driver, projectEndpointConfigured };
+};
 
 // The dispatched node's effective execution timeout — the same resolution the runner applies
 // (modelConfig/executionConfig.timeout, else the 120s default) — so the dispatch claim written to the
@@ -663,7 +684,9 @@ export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date
 }
 
 export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository, projectRepository: ProjectRepository = repositoryManager.getProjectRepository()): Promise<WorkflowExecutionRecord> {
-  const initial = buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID));
+  // S1 — a caller-supplied requestId (validated by the tool layer against the project's pattern)
+  // becomes the run's requestId; absent, the auto-minted join key is used as before.
+  const initial = buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID), makeRunId(), data.requestId?.trim() || makeRequestId());
   return store.createRun(await applyOperatorPublishPolicyDefault(initial, projectRepository));
 }
 
@@ -961,11 +984,13 @@ const selectConcurrentBatch = (run: WorkflowExecutionRecord, nodes: WorkspaceNod
 async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: WorkspaceNode[], nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
   const dispatchedAt = now();
   const claimStates = stateById(run);
+  const driver: RunDriver = options.driver ?? "http_run_all";
+  const projectEndpointConfigured = await projectEndpointConfiguredFor(run.projectId);
   for (const node of batch) {
     const state = claimStates.get(node.id) as NodeExecutionState;
     state.status = "running";
     state.startedAt = dispatchedAt;
-    state.dispatch = { dispatchedAt, timeoutMs: nodeTimeoutMs(node) };
+    stampDispatch(state, dispatchedAt, nodeTimeoutMs(node), driver, projectEndpointConfigured);
   }
   run.status = "running";
   run.currentNodeId = batch[0].id;
@@ -1341,7 +1366,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // contract contract_prefetch_failed uses. A project with no voice concept wired at all (no
   // objectDialect.voiceObjectId and no registered fallback) is a clean no-op: nothing injected,
   // nothing warned.
-  if (nextNode.metadata?.voicePrefetch === true) {
+  if (declaresVoicePrefetch(nextNode)) {
     try {
       const voiceResult = await getEditorialVoice({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository() });
       if (voiceResult.voice) {
@@ -1879,7 +1904,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // observation path (claim=false), which restores run status itself and must not publish interim
   // state. A CAS conflict here propagates to advanceRun's retry loop like any other save conflict.
   if (claim) {
-    state.dispatch = { dispatchedAt: startedAt, timeoutMs: nodeTimeoutMs(nextNode) };
+    stampDispatch(state, startedAt, nodeTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
     run = await store.saveRun(run);
     state = stateById(run).get(nextNode.id) as NodeExecutionState;
   }
