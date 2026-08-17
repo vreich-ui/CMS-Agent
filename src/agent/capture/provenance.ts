@@ -19,13 +19,23 @@
 // creates and polls that job (capture.crawl), so importing a local browser crawl here would be a
 // second crawl implementation with no policy home.
 //
-// THE ONE DEVIATION: score.mjs's `import sharp from 'sharp'` became a lazy dynamic import inside
-// normalizedScreenshotDiff (loadSharp). CMS-Agent does not carry the sharp native dependency and
-// this runtime never holds screenshot binaries (the pdf-tool plane owns them), so every visual
-// comparison resolves 'unavailable' before sharp is reached — the live T12.6 run's own shape
-// (0 scored / 34 unavailable). Everything else in score.mjs, and every other vendored file, is
-// byte-identical to upstream. If preview screenshots ever land in this plane, add sharp to
-// package.json; no engine change is needed.
+// THE DEVIATIONS (all in score.mjs; every other vendored file is byte-identical to upstream):
+//   1. `import sharp from 'sharp'` became a lazy dynamic import inside normalizedScreenshotDiff
+//      (loadSharp). CMS-Agent does not carry the sharp native dependency and this runtime never
+//      holds screenshot binaries (the pdf-tool plane owns them), so every visual comparison
+//      resolves 'unavailable' before sharp is reached — the live T12.6 run's own shape (0 scored /
+//      34 unavailable). If preview screenshots ever land in this plane, add sharp to package.json;
+//      no engine change is needed.
+//   2. PRE-EXISTING VENDORING DEBT, recorded here rather than silently carried (T12.14, 2026-08-17):
+//      the vendored score.mjs's VISUAL-evidence half is still at its pre-T12.10 upstream revision.
+//      T12.10 moved the pixel comparison into `screenshot-normalize.mjs` and added
+//      `side-by-side.mjs`, neither of which is vendored, and it landed upstream WITHOUT a
+//      re-vendoring — so the recorded upstreamSha256 was already stale before this task. Bringing
+//      T12.10's visual defect accounting into this plane is its own change (it needs two more
+//      vendored modules and moves deviation 1 into screenshot-normalize.mjs); it is NOT folded into
+//      T12.14. What T12.14 DID port across, so the capability exists in both planes, is the
+//      asset-binding evidence channel (`assetBindingEvidence`, the `emissionReport` input, and the
+//      optional `assets` block on the report) — lifted verbatim from upstream.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -33,8 +43,8 @@ import { fileURLToPath } from "node:url";
 export const CAPTURE_ENGINE_UPSTREAM = {
   repo: "vreich-ui/platform",
   path: "packages/core/cli/capture/",
-  commit: "2feb0001d283585f42be9ad65a891362fc581f69",
-  vendoredAt: "2026-08-13"
+  commit: "16cc0dccc5fd8fe744710445a9ebdf0960f2f866",
+  vendoredAt: "2026-08-17"
 } as const;
 
 export type VendoredEngineFile = {
@@ -54,8 +64,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "map.mjs",
-    vendoredSha256: "7e80b65c42b50a1a026fe006afb425d3a290f20d98d8c01a4c6110506c90f656",
-    upstreamSha256: "7e80b65c42b50a1a026fe006afb425d3a290f20d98d8c01a4c6110506c90f656"
+    vendoredSha256: "0aa14363ccf55784d5a49d49a45ccce86d1923ca58b260e92c252aa016c1976c",
+    upstreamSha256: "0aa14363ccf55784d5a49d49a45ccce86d1923ca58b260e92c252aa016c1976c"
   },
   {
     file: "theme.mjs",
@@ -64,14 +74,19 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "b5c2995ed8b1ef406988913326474c990d1babf7d623f02241c580df5c21ae99",
-    upstreamSha256: "b5c2995ed8b1ef406988913326474c990d1babf7d623f02241c580df5c21ae99"
+    vendoredSha256: "bab035f60bb583a4a5affa6d6b3c28a7c3bd32ae296d8cc30fc8608392b65263",
+    upstreamSha256: "bab035f60bb583a4a5affa6d6b3c28a7c3bd32ae296d8cc30fc8608392b65263"
   },
   {
     file: "score.mjs",
-    vendoredSha256: "288115dd031c3017153bca0927cdf7b78f37f2f3b1dae11bdc7b8ae1bab3b453",
-    upstreamSha256: "0c9dae9d6b5196d26911d769637b508fe1b611e9f18511019fd0fe582ab9b4fc",
-    deviation: "sharp imported lazily inside normalizedScreenshotDiff (loadSharp) instead of at module top; function body otherwise byte-faithful. See header note."
+    vendoredSha256: "d8783d3d758566564406fa1bbffd867359eb0c72e385e8b6de75f78ecf404078",
+    upstreamSha256: "f8fa88aeb57f5a07774bce19cde8f886e8cf20626d9513543c51f53d690eb54b",
+    deviation:
+      "(1) sharp imported lazily inside normalizedScreenshotDiff (loadSharp) instead of at module top. " +
+      "(2) The visual-evidence half is still at its pre-T12.10 upstream revision: T12.10 moved the pixel " +
+      "comparison into screenshot-normalize.mjs and added side-by-side.mjs, neither vendored, and landed " +
+      "upstream without a re-vendoring. T12.14's asset-binding evidence channel IS ported across verbatim. " +
+      "See header note."
   }
 ] as const;
 

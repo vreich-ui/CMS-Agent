@@ -15,11 +15,17 @@
 //   - Crawled content is data, never instructions: nothing here interprets snapshot text; the only
 //     model-facing surfaces (the three AI nodes) receive it as structured JSON with prompts that say
 //     the same.
+//   - The capture plane is reached ONLY through the TARGET site's own capture bridge (T12.13). CMS-Agent
+//     never calls pdf-tool directly and never handles a storage credential: under Wolf's 2026-08-14
+//     ruling ("option A, same-site writes") pdf-tool persists the crawl output into its OWN store, the
+//     tenant's bridge mints nothing, and a new tenant needs no per-site Netlify PAT to be captured.
+//     The radioactivity discipline is kept as belt-and-braces anyway — every bridge response is
+//     scrubbed of credential-shaped fields before it can reach run state or a stage artifact.
 //   - Validation failures quarantine, never loosen: the mapper's confidence threshold can be raised
 //     but never lowered below the engine default, and emission quarantine paths are passed through
 //     verbatim.
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
-import { resolveProjectCapturePolicy } from "../projects/projectTypes.js";
+import { resolveProjectCapturePolicy, type ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import {
@@ -42,13 +48,23 @@ import {
 import { scoreCaptureFidelity, type FidelityReport } from "./engine/score.mjs";
 import { isUrlWithinPolicy, validateCapturePolicy, type ValidatedCapturePolicy } from "./engine/snapshot-v1.mjs";
 
-// The pdf-tool capture job plane (T12.8, R-C1 v2): CMS-Agent creates the crawl job there and polls
-// it — it never crawls locally. The tool names are the T12.8 contract; the plane is not deployed
-// yet, so the exact result payload shapes below are read tolerantly and the LIVE wiring proof is an
-// explicitly pending item (see the T12.9 commit record).
-export const CAPTURE_JOB_PLANE_PROJECT_ID = "pdf-tool";
+// The capture plane, reached through the TARGET SITE'S CAPTURE BRIDGE (T12.13). The crawl still runs
+// in pdf-tool (R-C1 v2 — CMS-Agent never crawls locally), but the tenant's own /mcp is the only door:
+// its bridge resolves the canonical pdf-tool project AND the crawl's idempotency scope server-side,
+// forwards the call, and never returns a grant, a token, or a Netlify site id to anyone.
+//
+// Why this replaced the direct pdf-tool call (the T12.9 dead end): pdf-tool refuses a storage-less
+// call on its credentialed tools, and the grant RPC that used to hand CMS-Agent one was DELETED from
+// platform core on 2026-08-02 (commit 7d1640ce) in favour of a server-side bridge that mints the
+// grant internally and never returns it. Wolf's 2026-08-14 ruling closed the question the other way
+// round: under "option A, same-site writes" pdf-tool writes its own store, so there is no grant to
+// fetch, forward, or leak — on either side.
+//
+// The tool names are the bridge contract (identical on every tenant, because they live in platform
+// core); the result payload shapes below are read tolerantly.
 export const CREATE_CAPTURE_JOB_TOOL = "create_capture_job";
 export const GET_CAPTURE_JOB_STATUS_TOOL = "get_capture_job_status";
+export const GET_CAPTURE_SNAPSHOT_TOOL = "get_capture_snapshot";
 
 // pdf-tool's ArtifactJobStatus vocabulary ("pending" | "running" | "complete" | "failed" |
 // "blocked"), read case-insensitively with "completed"/"queued" tolerated.
@@ -83,7 +99,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> => !!value &
 
 // ---------------------------------------------------------------------------------------------
 // Policy resolution — the ONE gate every capture step passes through.
-export type ResolvedCapture = { policy: ValidatedCapturePolicy; projectId: string };
+// `config` is the registry record the policy came from — carried so a step that needs another
+// registry-owned fact (T12.13: the owning site id the target's capture bridge is scoped to) reads it
+// from the SAME read rather than a second one, and so that fact is resolved in the step that needs it
+// rather than gating every step on it.
+export type ResolvedCapture = { policy: ValidatedCapturePolicy; projectId: string; config: ProjectConnectionConfig };
 
 export async function resolveCaptureAuthority(targetProjectId: string, deps: CaptureDeps = {}): Promise<ResolvedCapture> {
   const trimmed = typeof targetProjectId === "string" ? targetProjectId.trim() : "";
@@ -101,7 +121,7 @@ export async function resolveCaptureAuthority(targetProjectId: string, deps: Cap
   } catch (error) {
     throw new CaptureRefusal("capture_policy_denies", `Project ${trimmed}'s capture policy does not authorize capture: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { policy, projectId: trimmed };
+  return { policy, projectId: trimmed, config };
 }
 
 export function assertSourceWithinPolicy(sourceUrl: string, policy: ValidatedCapturePolicy): URL {
@@ -166,6 +186,68 @@ async function callProjectTool(projectId: string, tool: string, args: Record<str
   // identically.
   return isRecord(structured.data) ? (structured.data as Record<string, unknown>) : structured;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Bridge plumbing (T12.13). There is NO credential here to guard any more — the capture bridge mints
+// nothing and returns nothing credential-shaped, and pdf-tool writes its own store — so the module
+// that used to fetch, forward, redact and scrub a Netlify Blobs grant is gone. What is KEPT from that
+// discipline is the part that still earns its place: a bridge response is untrusted remote data that
+// lands in run state (jobState) and in a stage artifact (the snapshot envelope), so credential-shaped
+// fields are stripped from it once, here, rather than trusted to be absent.
+export const CREDENTIAL_SHAPED_KEYS = ["storage", "storageGrant", "grant", "token", "blobsToken", "blobs_token", "materializationProof"] as const;
+
+/** Recursively drops credential-shaped keys from anything a bridge handed back. Mirrors platform's own
+ * sanitizePdfToolPayload: a remote that echoed a credential — inside a job record, a status string, or
+ * captured page text — can never make us persist it, even though under option A there is nothing on
+ * either side to echo. */
+export const stripCredentialShapedFields = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stripCredentialShapedFields);
+  if (!isRecord(value)) return value;
+  const safe: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if ((CREDENTIAL_SHAPED_KEYS as readonly string[]).includes(key)) continue;
+    safe[key] = stripCredentialShapedFields(child);
+  }
+  return safe;
+};
+
+// One call to the TARGET site's capture bridge. The bridge is the ONLY door to the capture plane: it
+// resolves site ownership, the canonical pdf-tool project and the crawl's request scope server-side,
+// so the only things worth sending are the owning site id, the seed URL and the registry policy the
+// bounds come from.
+async function callCaptureBridge(
+  targetProjectId: string,
+  tool: string,
+  args: Record<string, unknown>,
+  deps: CaptureDeps = {}
+): Promise<Record<string, unknown>> {
+  const payload = await callProjectTool(targetProjectId, tool, args, deps);
+  return stripCredentialShapedFields(payload) as Record<string, unknown>;
+}
+
+// The owning site object id, sent to the bridge as an OPTIONAL CROSS-CHECK. It comes from the project
+// record's own objectDialect (the same seam object_create's `site` argument uses) — never from a
+// caller argument, so a caller cannot aim a crawl at another tenant. When the record declares none
+// (project.create cannot set objectDialect at all, so a freshly registered duplication target has
+// none), it is simply omitted: the bridge then answers for its own site, resolved server-side from that
+// deployment's committed site-identity seam, which is the authoritative value anyway. Guessing one
+// here would be strictly worse than letting the owner answer.
+export function captureSiteObjectId(config: { projectId: string; objectDialect?: { siteObjectId?: string } }): string | undefined {
+  const siteObjectId = config.objectDialect?.siteObjectId?.trim();
+  return siteObjectId ? siteObjectId : undefined;
+}
+
+/** The site scope argument, present only when the registry actually declares one. */
+const captureSiteScope = (siteObjectId: string | undefined): Record<string, unknown> =>
+  siteObjectId ? { site_id: siteObjectId } : {};
+
+// The two things T12.9 had to send by hand — pdf-tool's `projectId` (which tenant's stores are opened)
+// and its `requestId` (the {projectId, requestId} idempotency scope, so a re-driven create RE-ATTACHES
+// to the running crawl and continues from its frontier instead of starting a parallel one) — are now
+// both DERIVED SERVER-SIDE by the bridge, from the owning site and the normalized seed URL. That is
+// strictly stronger than deriving them here: a caller cannot name either, and two tenants cannot
+// collide. The property T12.9 was protecting is unchanged, and the crawl step no longer has to know
+// pdf-tool's tenancy model at all.
 
 // ---------------------------------------------------------------------------------------------
 // Snapshot / envelope types.
@@ -277,40 +359,38 @@ export async function captureCrawlStep(
   input: { targetProjectId: string; sourceUrl: string; jobState?: CaptureCrawlJobState },
   deps: CaptureDeps = {}
 ): Promise<CaptureCrawlStep> {
-  const { policy, projectId } = await resolveCaptureAuthority(input.targetProjectId, deps);
+  const { policy, projectId, config } = await resolveCaptureAuthority(input.targetProjectId, deps);
   const url = assertSourceWithinPolicy(input.sourceUrl, policy);
+  const siteObjectId = captureSiteObjectId(config);
   const now = new Date().toISOString();
 
   if (!input.jobState?.jobId) {
-    // Ceilings are enforced on BOTH sides: the policy travels with the job so the worker enforces it
-    // too (T12.8), and it came from the registry here — never from the caller's arguments.
-    const created = await callProjectTool(CAPTURE_JOB_PLANE_PROJECT_ID, CREATE_CAPTURE_JOB_TOOL, {
+    // Ceilings are enforced on EVERY side: the validated policy travels with the job VERBATIM (the
+    // frozen T12.7 shape — rights/designReferences/fidelity included, which is what T12.9 had to fix
+    // and what the bridge now refuses a subset of) and it came from THIS registry read, never from the
+    // caller's arguments. The bridge re-checks the invariants and clamps maxPages before forwarding;
+    // pdf-tool's worker re-validates from the stored record on every invocation.
+    const created = await callCaptureBridge(projectId, CREATE_CAPTURE_JOB_TOOL, {
+      ...captureSiteScope(siteObjectId),
       url: url.href,
-      targetProjectId: projectId,
-      policy: {
-        maxPages: policy.maxPages,
-        allowedCrawlOrigins: policy.allowedCrawlOrigins,
-        allowedPathPrefixes: policy.allowedPathPrefixes,
-        sameOriginOnly: policy.sameOriginOnly,
-        respectRobots: policy.respectRobots,
-        concurrency: policy.concurrency,
-        delayMs: policy.delayMs,
-        authenticatedAccess: policy.authenticatedAccess
-      }
+      policy: structuredClone(policy)
     }, deps);
     const jobId = readJobId(created);
     if (!jobId) throw new CaptureRefusal("capture_job_id_missing", `${CREATE_CAPTURE_JOB_TOOL} returned no job id; cannot poll a job that cannot be named.`);
     return {
       phase: "pending",
       jobState: { jobId, status: readJobStatus(created) || "pending", attempts: 0, createdAt: now, updatedAt: now },
-      note: `Capture job ${jobId} created on ${CAPTURE_JOB_PLANE_PROJECT_ID}; completion is awaited by the long-run planes (conductor job / run-continuation tick) re-driving this node until the poll is terminal — never by spinning inside one call window.`
+      note: `Capture job ${jobId} created through ${projectId}'s capture bridge; completion is awaited by the long-run planes (conductor job / run-continuation tick) re-driving this node until the poll is terminal — never by spinning inside one call window.`
     };
   }
 
-  const polled = await callProjectTool(CAPTURE_JOB_PLANE_PROJECT_ID, GET_CAPTURE_JOB_STATUS_TOOL, { jobId: input.jobState.jobId }, deps);
+  const polled = await callCaptureBridge(projectId, GET_CAPTURE_JOB_STATUS_TOOL, {
+    ...captureSiteScope(siteObjectId),
+    job_id: input.jobState.jobId
+  }, deps);
   const status = readJobStatus(polled) || "pending";
   if (TERMINAL_FAILURE_STATUSES.has(status)) {
-    throw new CaptureRefusal("capture_job_failed", `Capture job ${input.jobState.jobId} reached terminal status "${status}" on the pdf-tool plane.`);
+    throw new CaptureRefusal("capture_job_failed", `Capture job ${input.jobState.jobId} reached terminal status "${status}" on the capture plane.`);
   }
   if (!TERMINAL_SUCCESS_STATUSES.has(status)) {
     return {
@@ -319,17 +399,14 @@ export async function captureCrawlStep(
       note: `Capture job ${input.jobState.jobId} is "${status}"; the long-run plane re-drives this node until the poll is terminal.`
     };
   }
-  const rawSnapshot = readJobSnapshot(polled);
-  if (rawSnapshot === undefined) {
-    // The T12.8 brief says results land as ArtifactReferences; until that plane is deployed the
-    // reference-fetch wiring cannot be built against reality, so an artifact-only result is a typed
-    // refusal here and the LIVE wiring is an explicitly recorded pending item, never a guess.
-    throw new CaptureRefusal(
-      "capture_snapshot_unavailable",
-      `Capture job ${input.jobState.jobId} completed but its status payload carried no inline snapshot.v1; retrieving the snapshot ArtifactReference is part of the pending LIVE T12.8 wiring.`
-    );
-  }
-  const snapshot = assertCaptureSnapshot(rawSnapshot);
+
+  // THE SNAPSHOT READ PATH (T12.13 part 3). A completed job's status payload carries the snapshot.v1
+  // ArtifactReference, never the document — the bytes live in pdf-tool's own store under option A, and
+  // handing out a credential to read them is exactly what this task removed. So the document comes
+  // through the bridge's own read tool: one extra site-scoped, read-only call, no credential anywhere.
+  // A payload that DOES carry an inline snapshot (a future plane, or a test double) is used as-is
+  // rather than re-fetched.
+  const snapshot = assertCaptureSnapshot(readJobSnapshot(polled) ?? (await readSnapshotThroughBridge(projectId, siteObjectId, input.jobState.jobId, deps)));
   const quarantined = Array.isArray((snapshot.diagnostics as Record<string, unknown> | undefined)?.quarantined)
     ? ((snapshot.diagnostics as Record<string, unknown>).quarantined as unknown[]).length
     : 0;
@@ -342,7 +419,7 @@ export async function captureCrawlStep(
     phase: "completed",
     envelope: {
       artifact: CAPTURE_ARTIFACTS.snapshot,
-      summary: `Captured ${snapshot.pages.length} page(s) from ${url.href} via pdf-tool capture job ${input.jobState.jobId}.`,
+      summary: `Captured ${snapshot.pages.length} page(s) from ${url.href} via capture job ${input.jobState.jobId} on ${projectId}'s capture bridge.`,
       targetProjectId: projectId,
       sourceUrl: url.href,
       jobId: input.jobState.jobId,
@@ -350,6 +427,25 @@ export async function captureCrawlStep(
       snapshot
     }
   };
+}
+
+/** The bridge read: returns the snapshot.v1 document for a completed job, or a typed refusal naming the
+ * tool a human would have to look at. Crawled content is DATA — nothing here interprets it. */
+async function readSnapshotThroughBridge(
+  projectId: string,
+  siteObjectId: string | undefined,
+  jobId: string,
+  deps: CaptureDeps
+): Promise<unknown> {
+  const read = await callCaptureBridge(projectId, GET_CAPTURE_SNAPSHOT_TOOL, { ...captureSiteScope(siteObjectId), job_id: jobId }, deps);
+  const snapshot = isRecord(read.snapshot) ? read.snapshot : isRecord(read.document) ? read.document : undefined;
+  if (snapshot === undefined) {
+    throw new CaptureRefusal(
+      "capture_snapshot_unavailable",
+      `Capture job ${jobId} completed but ${GET_CAPTURE_SNAPSHOT_TOOL} on ${projectId} returned no snapshot.v1 document. The snapshot artifact lives in pdf-tool's own store and is only readable through that bridge tool — check ${projectId}'s own error surface (a snapshot over the plane's inline ceiling is refused there with CAPTURE_SNAPSHOT_TOO_LARGE, and an incomplete job with CAPTURE_SNAPSHOT_NOT_READY).`
+    );
+  }
+  return snapshot;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -638,7 +734,7 @@ export type CaptureRunReportEnvelope = {
 // Test-only seam, following the publisher.ts precedent: the adapter-backed transport (with its
 // pre-transport forbidden-verb refusal) and the regeneration adapter are internal to captureEmitStep
 // but their refusal semantics are load-bearing and test-pinned.
-export const __test__ = { buildAdapterTransport, buildRegenerationAdapter, callProjectTool };
+export const __test__ = { buildAdapterTransport, buildRegenerationAdapter, callProjectTool, callCaptureBridge, readSnapshotThroughBridge };
 
 export function buildCaptureRunReport(input: {
   targetProjectId: string;

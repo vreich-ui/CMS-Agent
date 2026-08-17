@@ -26,6 +26,13 @@ export const PDF_TOOL_DEFINITION_VERSION = 4;
 // T12.9: the capture job plane's tool policies. create_capture_job is deliberately a toolPolicies
 // entry rather than an allowedTools row so the write permission is explicit and reviewable apart
 // from the safe read-only list.
+//
+// FLAGGED, NOT CHANGED (T12.13, 2026-08-17): these two rows are now UNUSED. capture.crawl reaches the
+// capture plane through the TARGET SITE's capture bridge (platform core), never through this project,
+// so CMS-Agent no longer calls pdf-tool's capture tools directly at all. The rows are harmless but they
+// are a standing direct-write permission with no consumer. Retiring them is a policy edit
+// (definitionVersion bump + re-seed of the live record), which this task deliberately does not do from
+// code — see the T12.13 brief's "precise asks".
 export const PDF_TOOL_CAPTURE_JOB_TOOL_POLICIES: ProjectConnectionConfig["toolPolicies"] = {
   create_capture_job: "allowed",
   get_capture_job_status: "allowed"

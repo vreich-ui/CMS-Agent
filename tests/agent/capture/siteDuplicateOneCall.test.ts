@@ -69,19 +69,22 @@ describe("site.duplicate — one call against an existing project (fixture end-t
       const name = request.params?.name ?? "";
       const args = request.params?.arguments ?? {};
       if (String(url).startsWith(PDF_TOOL_ENDPOINT)) {
-        if (name === "create_capture_job") {
-          createdJobs.push(args);
-          return respond(request.id, { job: { jobId: JOB_ID, status: "pending" } });
-        }
-        if (name === "get_capture_job_status") {
-          jobPolls += 1;
-          if (jobPolls < 2) return respond(request.id, { job: { jobId: JOB_ID, status: "running" } });
-          return respond(request.id, { job: { jobId: JOB_ID, status: "complete", snapshot } });
-        }
-        throw new Error(`Unexpected pdf-tool tool: ${name}`);
+        // T12.13: capture reaches the plane only through the target's own bridge, never pdf-tool.
+        throw new Error(`pdf-tool must not be called directly by the capture plane: ${name}`);
       }
       if (String(url).startsWith(TARGET_ENDPOINT)) {
         targetVerbs.push(name);
+        // T12.13: the target's capture bridge — no credential in, snapshot read back through it.
+        if (name === "create_capture_job") {
+          createdJobs.push(args);
+          return respond(request.id, { jobId: JOB_ID, status: "pending" });
+        }
+        if (name === "get_capture_job_status") {
+          jobPolls += 1;
+          if (jobPolls < 2) return respond(request.id, { jobId: JOB_ID, status: "running" });
+          return respond(request.id, { jobId: JOB_ID, status: "complete", result: { snapshotArtifact: { blobKey: `binary/capture_x/${"a".repeat(64)}.json`, sha256: "a".repeat(64), sizeBytes: 4096 }, capturedPages: 1 } });
+        }
+        if (name === "get_capture_snapshot") return respond(request.id, { jobId: JOB_ID, schemaVersion: "snapshot.v1", snapshot });
         if (name === "object_inventory" && args.object_type === "site") {
           return respond(request.id, { objects: [{ object_type: "site", object_id: "site_zb", status: "active" }] });
         }
@@ -178,14 +181,26 @@ describe("site.duplicate — one call against an existing project (fixture end-t
     expect(jobPolls).toBe(2);
 
     // VALIDATE-CLEAN DRAFTS, scored + reported — the T12.9 acceptance shape, reached from ONE call.
-    const emission = run.stageOutputs.capture_emit_live as { artifact: string; report: { createdObjects: Array<{ draftVerified: boolean }>; validationStates: Array<{ valid: boolean }>; quarantines: unknown[] } };
+    const emission = run.stageOutputs.capture_emit_live as { artifact: string; report: { createdObjects: Array<{ draftVerified: boolean }>; validationStates: Array<{ valid: boolean }>; quarantines: unknown[]; assetBindings: unknown[]; assetGaps: Array<{ why: string }>; mediaPolicy?: { mediaRetention: string; materialized: number; declined: number } } };
     expect(emission.artifact).toBe("capture_emission_run.v1");
     expect(emission.report.createdObjects.length).toBeGreaterThan(0);
     expect(emission.report.createdObjects.every((object) => object.draftVerified === true)).toBe(true);
     expect(emission.report.validationStates.every((state) => state.valid === true)).toBe(true);
-    expect(emission.report.quarantines).toEqual([]);
+    // T12.14: the ONLY quarantine permitted here is the recorded media-rights one.
+    // This fixture's project policy sets rights.media = "prohibited", so the
+    // repeated-media section_template recipe cannot bind a first-party artifact and
+    // is quarantined rather than shipped with an empty gallery — and every planned
+    // asset section is a recorded gap, never a hotlink and never a coerced field.
+    expect(emission.report.quarantines).toEqual([
+      { objectType: "section_template", reason: "asset_binding_unresolved", requestedId: expect.stringMatching(/^stpl_capture_/) }
+    ]);
+    expect(emission.report.assetBindings).toEqual([]);
+    expect(emission.report.assetGaps.length).toBeGreaterThan(0);
+    expect(emission.report.assetGaps.every((gap) => gap.why === "asset_binding_unresolved")).toBe(true);
+    expect(emission.report.mediaPolicy?.mediaRetention).toBe("prohibited");
+    expect(emission.report.mediaPolicy?.materialized).toBe(0);
     for (const verb of targetVerbs) {
-      expect(["object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
+      expect(["create_capture_job", "get_capture_job_status", "get_capture_snapshot", "object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
     }
     const report = run.stageOutputs.capture_report as { artifact: string; humanGate: { publishReachable: boolean } };
     expect(report.artifact).toBe("capture_run_report.v1");

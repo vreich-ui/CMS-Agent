@@ -268,6 +268,74 @@ async function scoreVisuals({ snapshot, mapping, previewManifest, screenshotRoot
   };
 }
 
+/**
+ * T12.14 asset-binding evidence — the 0/34 rule applied to media.
+ *
+ * The mapper now MAPS a media block instead of declining it, so the block counts
+ * toward coverage as soon as its shape is understood. That is only honest if the
+ * other half is visible too: whether the artifact actually got bound. Every
+ * planned asset section that emission did not bind is an enumerated DEFECT here,
+ * with the emitter's own reason, so a run where nothing materialized cannot read
+ * as a clean one.
+ *
+ * This is evidence accounting, NOT a rubric change — `rubric` is untouched, and
+ * an unresolvable asset also remains a mapper-recorded gap in `gapReport`.
+ */
+export const ASSET_DEFECT_CODE_UNEMITTED = 'asset_section_absent_from_emission';
+
+function plannedAssetSections(mapping) {
+  return (mapping.pages ?? []).flatMap((page) =>
+    (page.candidates ?? [])
+      .filter((candidate) => candidate.assetPlan)
+      .map((candidate) => ({
+        pageRef: page.pageRef,
+        candidateId: candidate.candidateId,
+        sectionId: candidate.section?.id ?? null,
+        sectionType: candidate.sectionType,
+        target: candidate.assetPlan.target,
+        plannedAssets: candidate.assetPlan.entries?.length ?? 0,
+      }))
+  );
+}
+
+export function assetBindingEvidence(mapping, emissionReport = null) {
+  const planned = plannedAssetSections(mapping);
+  if (planned.length === 0) return null;
+  if (!emissionReport) {
+    return {
+      plannedSections: planned.length,
+      boundSections: null,
+      defects: [],
+      defectCount: 0,
+      evidenceComplete: null,
+      reason: 'no_emission_report_supplied_binding_not_verified',
+    };
+  }
+  const bound = new Set(
+    (emissionReport.assetBindings ?? []).filter((entry) => entry.status === 'bound').map((entry) => entry.sectionId)
+  );
+  const gapBySection = new Map((emissionReport.assetGaps ?? []).map((gap) => [gap.sectionId, gap]));
+  const defects = planned
+    .filter((section) => !bound.has(section.sectionId))
+    .map((section) => {
+      const gap = gapBySection.get(section.sectionId);
+      return {
+        code: gap?.why ?? ASSET_DEFECT_CODE_UNEMITTED,
+        severity: 'defect',
+        ...section,
+        detail: gap?.missingCapability ?? 'planned asset section is absent from the emission report',
+        ...(gap?.gapId ? { gapId: gap.gapId } : {}),
+      };
+    });
+  return {
+    plannedSections: planned.length,
+    boundSections: bound.size,
+    defects,
+    defectCount: defects.length,
+    evidenceComplete: defects.length === 0,
+  };
+}
+
 export function consolidatedGapReport(mapping) {
   const entries = (mapping.pages ?? []).flatMap((page) =>
     (page.gaps ?? []).map((gap) => ({ pageRef: page.pageRef, sourceUrl: page.sourceUrl, ...clone(gap) }))
@@ -312,6 +380,7 @@ export async function scoreCaptureFidelity({
   target,
   projectPolicy = null,
   previewManifest = null,
+  emissionReport = null,
   screenshotRoot = process.cwd(),
 }) {
   if (snapshot?.schemaVersion !== 'snapshot.v1') throw new FidelityError('Scorer requires snapshot.v1.');
@@ -329,6 +398,7 @@ export async function scoreCaptureFidelity({
   const gaps = consolidatedGapReport(mapping);
   const gapsEnumerated = pages.every((page) => page.structural.allGapsEnumerated);
   const visual = await scoreVisuals({ snapshot, mapping, previewManifest, screenshotRoot });
+  const assets = assetBindingEvidence(mapping, emissionReport);
   const rubric = rubricVerdict({ pages, tokensComplete, gapsEnumerated, limits });
   return {
     schemaVersion: FIDELITY_SCHEMA_VERSION,
@@ -353,6 +423,7 @@ export async function scoreCaptureFidelity({
     limits,
     pages,
     visual,
+    ...(assets ? { assets } : {}),
     rubric,
     iterations: [],
     gapReport: gaps,

@@ -19,6 +19,9 @@ import { resolveProjectCapturePolicy } from "../../../src/agent/projects/project
 
 const SOURCE_URL = "https://www.zilbermanfilmfoundation.com/";
 const PDF_TOOL_ENDPOINT = "https://pdf-tool.example/mcp";
+// The minted site's own MCP endpoint — its capture BRIDGE is the only door to the capture plane
+// (T12.13); no storage grant is involved on either side.
+const NEW_SITE_ENDPOINT = "https://zilbermanfilmfoundation.example/mcp";
 const JOB_ID = "capture_job_genesis_0001";
 
 type RpcRequest = { id: number; method: string; params?: { name?: string; arguments?: Record<string, unknown> } };
@@ -70,6 +73,10 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // the test if any Netlify API request is ever attempted with it.
     process.env.NETLIFY_API_TOKEN = "netlify-test-token-dry-run-only";
     process.env.PLATFORM_REPO_ROOT = platformRoot;
+    // T12.13: capture_crawl calls the TARGET SITE'S OWN capture bridge, so the minted site's MCP
+    // endpoint has to be reachable for the crawl to start. Nothing about the per-site pdf-tool storage
+    // grant is required any more — that checklist item is no longer a capture blocker.
+    process.env.ZILBERMAN_MCP_ENDPOINT = NEW_SITE_ENDPOINT;
     delete process.env.SITE_GENESIS_NETLIFY_MODE; // default = dry_run
 
     vi.stubGlobal("fetch", vi.fn(async (url: string, init: { body?: string }) => {
@@ -80,9 +87,11 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
       const request = JSON.parse(init.body ?? "{}") as RpcRequest;
       if (request.method !== "tools/call") return respond(request.id, {});
       const name = request.params?.name ?? "";
-      if (String(url).startsWith(PDF_TOOL_ENDPOINT)) {
-        if (name === "create_capture_job") return respond(request.id, { job: { jobId: JOB_ID, status: "pending" } });
-        if (name === "get_capture_job_status") return respond(request.id, { job: { jobId: JOB_ID, status: "running" } });
+      // T12.13: the capture plane is the MINTED SITE'S OWN capture bridge — no credential, no
+      // pdf-tool call. pdf-tool answers nothing here, so a regression that calls it fails loudly.
+      if (String(url).startsWith(NEW_SITE_ENDPOINT)) {
+        if (name === "create_capture_job") return respond(request.id, { jobId: JOB_ID, status: "pending" });
+        if (name === "get_capture_job_status") return respond(request.id, { jobId: JOB_ID, status: "running" });
       }
       throw new Error(`Unexpected endpoint/tool: ${url} ${name}`);
     }));
@@ -198,7 +207,9 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(beforeItems.map((item) => item.id)).toContain("deploy_side_mcp_env");
     const envItemBefore = beforeItems.find((item) => item.id === "deploy_side_mcp_env")!;
     expect(envItemBefore.status).toBe("outstanding");
-    expect(envItemBefore.observed).toEqual({ endpointConfigured: false, tokenConfigured: false });
+    // The endpoint is present (the crawl's storage-grant fetch needs it — set in beforeEach); the
+    // tenant token is still missing, so the item stays outstanding and says exactly which half.
+    expect(envItemBefore.observed).toEqual({ endpointConfigured: true, tokenConfigured: false });
 
     process.env.ZILBERMAN_MCP_ENDPOINT = "https://zilbermanfilmfoundation.netlify.app/mcp";
     process.env.ZILBERMAN_MCP_TOKEN = "tenant-token";

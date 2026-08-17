@@ -25,6 +25,18 @@ const TARGET_ENDPOINT = "https://zilberman-capture.example/mcp";
 const PDF_TOOL_ENDPOINT = "https://pdf-tool.example/mcp";
 const SOURCE_URL = "https://www.zilbermanfilmfoundation.com/";
 const JOB_ID = "capture_job_zb_0001";
+const SITE_OBJECT_ID = "site_zb";
+// T12.13: the capture plane is reached ONLY through the TARGET's own capture bridge, and carries no
+// credential — pdf-tool writes its own store (Wolf, 2026-08-14, "option A, same-site writes"). This
+// harness therefore serves the three capture tools from the TARGET endpoint, REFUSES a call that
+// arrives carrying a `storage` argument (the bridge has no use for one and accepting it silently is
+// how the T12.9 dead end survived a green suite), and the pdf-tool endpoint answers NOTHING at all —
+// so a regression that calls pdf-tool directly fails loudly here.
+//
+// The credential-shaped values below are what the harness asserts NEVER appear in a persisted run: the
+// bridge echoes them back deliberately, and nothing may carry them through.
+const ECHOED_TOKEN = "nfp_mock_run_radioactive_token";
+const ECHOED_SITE_ID = "site-api-id-zilberman";
 
 const fixturePath = fileURLToPath(new URL("../../fixtures/capture/zilberman.snapshot.v1.redacted.json", import.meta.url));
 
@@ -34,16 +46,36 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
   let snapshot: Record<string, unknown>;
   let jobPolls: number;
   let createdJobs: Array<Record<string, unknown>>;
+  let polledJobs: Array<Record<string, unknown>>;
+  let snapshotReads: Array<Record<string, unknown>>;
   let targetVerbs: string[];
 
   const respond = (id: number, data: unknown) =>
     ({ ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id, result: { structuredContent: { data } } }) }) as unknown as Response;
+
+  // The real bridge's shape: it mints nothing and accepts no credential, so a call that arrives with a
+  // `storage` / `grant` / `token` argument is a defect and is refused here rather than tolerated.
+  const refuseCredential = (id: number, args: Record<string, unknown>): Response | undefined => {
+    const offending = ["storage", "grant", "token", "projectId", "requestId"].filter((key) => args[key] !== undefined);
+    if (offending.length === 0) return undefined;
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: "CAPTURE_BRIDGE_ARGUMENT_REFUSED" }], structuredContent: { error: `the capture bridge accepts no ${offending.join("/")} argument: it resolves the project and request scope server-side and needs no credential`, errorCode: "CAPTURE_BRIDGE_ARGUMENT_REFUSED" } } })
+    } as unknown as Response;
+  };
+  // Credential-shaped noise the bridge echoes back on every capture answer, so the run-record
+  // assertions below are proving something real.
+  const echoed = { storage: { siteId: ECHOED_SITE_ID, token: ECHOED_TOKEN }, token: ECHOED_TOKEN };
 
   beforeEach(async () => {
     resetRepositoryManager();
     snapshot = JSON.parse(await readFile(fixturePath, "utf8"));
     jobPolls = 0;
     createdJobs = [];
+    polledJobs = [];
+    snapshotReads = [];
     targetVerbs = [];
     process.env.PDF_TOOL_MCP_ENDPOINT = PDF_TOOL_ENDPOINT;
     process.env.PDF_TOOL_MCP_TOKEN = "pdf-tool-test-token";
@@ -55,22 +87,40 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
       const name = request.params?.name ?? "";
       const args = request.params?.arguments ?? {};
       if (String(url).startsWith(PDF_TOOL_ENDPOINT)) {
-        if (name === "create_capture_job") {
-          createdJobs.push(args);
-          return respond(request.id, { job: { jobId: JOB_ID, status: "pending" } });
-        }
-        if (name === "get_capture_job_status") {
-          jobPolls += 1;
-          // First poll: still running (the long-run plane must re-drive the node). Second: terminal.
-          if (jobPolls < 2) return respond(request.id, { job: { jobId: JOB_ID, status: "running" } });
-          return respond(request.id, { job: { jobId: JOB_ID, status: "complete", snapshot } });
-        }
-        throw new Error(`Unexpected pdf-tool tool: ${name}`);
+        // T12.13: capture never calls pdf-tool directly again. Any call here is a regression.
+        throw new Error(`pdf-tool must not be called directly by the capture plane: ${name}`);
       }
       if (String(url).startsWith(TARGET_ENDPOINT)) {
         targetVerbs.push(name);
+        if (name === "create_capture_job") {
+          const refusal = refuseCredential(request.id, args);
+          if (refusal) return refusal;
+          createdJobs.push(args);
+          return respond(request.id, { jobId: JOB_ID, status: "pending", siteId: args.site_id, effective_max_pages: 20, ...echoed });
+        }
+        if (name === "get_capture_job_status") {
+          const refusal = refuseCredential(request.id, args);
+          if (refusal) return refusal;
+          polledJobs.push(args);
+          jobPolls += 1;
+          // First poll: still running (the long-run plane must re-drive the node). Second: terminal —
+          // and a terminal status carries the snapshot ARTIFACT REFERENCE, never the document.
+          if (jobPolls < 2) return respond(request.id, { jobId: JOB_ID, status: "running", ...echoed });
+          return respond(request.id, {
+            jobId: JOB_ID,
+            status: "complete",
+            result: { snapshotArtifact: { blobKey: `binary/capture_x/${"a".repeat(64)}.json`, sha256: "a".repeat(64), sizeBytes: 4096 }, capturedPages: 1 },
+            ...echoed
+          });
+        }
+        if (name === "get_capture_snapshot") {
+          const refusal = refuseCredential(request.id, args);
+          if (refusal) return refusal;
+          snapshotReads.push(args);
+          return respond(request.id, { jobId: JOB_ID, schemaVersion: "snapshot.v1", snapshot, ...echoed });
+        }
         if (name === "object_inventory" && args.object_type === "site") {
-          return respond(request.id, { objects: [{ object_type: "site", object_id: "site_zb", status: "active" }] });
+          return respond(request.id, { objects: [{ object_type: "site", object_id: SITE_OBJECT_ID, status: "active" }] });
         }
         if (name === "object_inventory") return respond(request.id, { objects: [] });
         if (name === "object_contract") return respond(request.id, { contract: { object_type: args.object_type, creation_policy: { agents: "open" } } });
@@ -145,6 +195,30 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
     expect((createdJobs[0].policy as Record<string, unknown>).maxPages).toBe(20);
     expect((run.stageOutputs[CAPTURE_CRAWL_JOB_STAGE_KEY] as Record<string, unknown>).jobId).toBe(JOB_ID);
 
+    // T12.13 — THE PER-SITE PAT IS GONE: every capture call went to the TARGET's own bridge (the
+    // pdf-tool endpoint throws if touched) and carried NO credential and no server-resolved scope
+    // argument (the stub refuses one), so this whole run completed with nothing a per-site Netlify PAT
+    // could have been needed for.
+    for (const call of [...createdJobs, ...polledJobs, ...snapshotReads]) {
+      for (const key of ["storage", "grant", "token", "descriptor", "projectId", "requestId"]) {
+        expect(call[key]).toBeUndefined();
+      }
+    }
+    expect(polledJobs).toHaveLength(2);
+    // The snapshot came back through the bridge's read path, not inline off the status poll.
+    expect(snapshotReads).toHaveLength(1);
+    expect(snapshotReads[0].job_id).toBe(JOB_ID);
+
+    // RADIOACTIVITY DISCIPLINE, KEPT: the bridge echoed credential-shaped fields on every answer and
+    // NONE of them reached persisted run state (stage outputs, node records, warnings, errors) or any
+    // stage artifact — the whole persisted run record is searched, not a sample.
+    const persistedRun = JSON.stringify(await getRun(run.runId, store));
+    expect(persistedRun).not.toContain(ECHOED_TOKEN);
+    expect(persistedRun).not.toContain(ECHOED_SITE_ID);
+    for (const [, output] of Object.entries(run.stageOutputs)) {
+      expect(JSON.stringify(output)).not.toContain(ECHOED_TOKEN);
+    }
+
     // Deterministic stages produced REAL engine artifacts (not mock placeholders).
     const crawlOut = run.stageOutputs.capture_crawl as Record<string, unknown>;
     expect(crawlOut.artifact).toBe("capture_snapshot.v1");
@@ -170,15 +244,27 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
 
     // VALIDATE-CLEAN DRAFTS: live emission created drafts, all verified unpublished, every
     // validation clean, nothing quarantined — and no forbidden verb ever reached the wire.
-    const emission = run.stageOutputs.capture_emit_live as { artifact: string; report: { createdObjects: Array<{ draftVerified: boolean }>; validationStates: Array<{ valid: boolean }>; quarantines: unknown[] } };
+    const emission = run.stageOutputs.capture_emit_live as { artifact: string; report: { createdObjects: Array<{ draftVerified: boolean }>; validationStates: Array<{ valid: boolean }>; quarantines: unknown[]; assetBindings: unknown[]; assetGaps: Array<{ why: string }>; mediaPolicy?: { mediaRetention: string; materialized: number; declined: number } } };
     expect(emission.artifact).toBe("capture_emission_run.v1");
     expect(emission.report.createdObjects.length).toBeGreaterThan(0);
     expect(emission.report.createdObjects.every((object) => object.draftVerified === true)).toBe(true);
     expect(emission.report.validationStates.length).toBeGreaterThan(0);
     expect(emission.report.validationStates.every((state) => state.valid === true)).toBe(true);
-    expect(emission.report.quarantines).toEqual([]);
+    // T12.14: the ONLY quarantine permitted here is the recorded media-rights one.
+    // This fixture's project policy sets rights.media = "prohibited", so the
+    // repeated-media section_template recipe cannot bind a first-party artifact and
+    // is quarantined rather than shipped with an empty gallery — and every planned
+    // asset section is a recorded gap, never a hotlink and never a coerced field.
+    expect(emission.report.quarantines).toEqual([
+      { objectType: "section_template", reason: "asset_binding_unresolved", requestedId: expect.stringMatching(/^stpl_capture_/) }
+    ]);
+    expect(emission.report.assetBindings).toEqual([]);
+    expect(emission.report.assetGaps.length).toBeGreaterThan(0);
+    expect(emission.report.assetGaps.every((gap) => gap.why === "asset_binding_unresolved")).toBe(true);
+    expect(emission.report.mediaPolicy?.mediaRetention).toBe("prohibited");
+    expect(emission.report.mediaPolicy?.materialized).toBe(0);
     for (const verb of targetVerbs) {
-      expect(["object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
+      expect(["create_capture_job", "get_capture_job_status", "get_capture_snapshot", "object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
     }
 
     // Scored + reported: governed rubric verdict, gaps enumerated into the W10 evidence feed, and
