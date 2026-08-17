@@ -12,7 +12,13 @@ import type { ProjectRepository } from "../../../src/agent/repository/interfaces
 import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 
 // T12.9 ACCEPTANCE — replay of the 14 Zilberman gaps (the committed 2026-08-13 live-run palette-gap
-// report) through block_classifier's seam with a FIXTURE classifier, proving the re-validation path:
+// report) through block_classifier's seam with a FIXTURE classifier, proving the re-validation path.
+//
+// T12.14 UPDATE (2026-08-17): the deterministic mapper now BINDS media blocks instead of declining
+// them, so most of the 14 recorded gaps never reach the classifier at all — which is the
+// deterministic-first law working, not a regression. The population the model is asked to judge
+// shrank to the blocks whose evidence is genuinely textual, and the harness now also asserts that no
+// declined gap still asks for asset materialization. Proving:
 //   * suggestions are advisory; the deterministic builder (mapSnapshot's assistance path) re-runs
 //     for every one — an INVALID or UNREGISTERED type is rejected, never coerced (test-proven);
 //   * a type the PageType registry disallows on that page is refused AS A GAP, never coerced;
@@ -90,11 +96,30 @@ describe("the 14 Zilberman gaps replayed through the block_classifier re-validat
     // re-validation path must reject or filter:
     const homeDeclined = declined.find((gap) => gap.blockRef.startsWith("page_9563b8e16278"))!;
     const anyDeclined = declined.find((gap) => !gap.blockRef.startsWith("page_9563b8e16278"))!;
+    // T12.14: no gap the classifier is asked to judge still asks for asset materialization — the
+    // mapper answers that deterministically now, before any model is consulted.
+    for (const capability of [
+      "first-party artifact materialization plus a schema-safe asset field; source URLs cannot be emitted as hotlinks",
+      "materialized first-party asset references and item-level text association"
+    ]) {
+      expect(declined.some((gap) => gap.missingCapability === capability)).toBe(false);
+    }
+    // The poison target is a declined HOME block the fixture classifier does not also suggest for,
+    // so the unregistered-type case is unambiguous and does not collide with a real suggestion.
+    const poisonTarget = declined.find(
+      (gap) =>
+        gap.blockRef.startsWith("page_9563b8e16278") &&
+        gap.blockRef !== homeDeclined.blockRef &&
+        !gapReport.entries.some((entry) => entry.blockRef === gap.blockRef)
+    )!;
     const suggestions = [
       ...fixtureClassifier(gapReport.entries),
+      // 0. A VALID suggestion for a still-declined block on a STANDARD page: the builder validates
+      //    it, applies it, and the harness records the coverage delta it produced.
+      { blockRef: anyDeclined.blockRef, sectionType: "prose", rationale: "fixture classifier: textual evidence" },
       // 1. An UNREGISTERED type: the builder's SUPPORTED_SECTION_TYPES check ignores it — the block
       //    must remain a gap, never be coerced into an invented type.
-      { blockRef: anyDeclined.blockRef, sectionType: "mega_hero_3000", rationale: "poison: unregistered type" },
+      { blockRef: poisonTarget.blockRef, sectionType: "mega_hero_3000", rationale: "poison: unregistered type" },
       // 2. A suggestion for a block the mapper did NOT decline: filtered before the builder sees it.
       { blockRef: "page_9563b8e16278_block_000_not_declined", sectionType: "prose" },
       // 3. Not-a-suggestion garbage: dropped by sanitization.
@@ -120,7 +145,7 @@ describe("the 14 Zilberman gaps replayed through the block_classifier re-validat
     expect(poisoned).toBeDefined();
     const poisonedAccounting = envelope.mapping.pages
       .flatMap((page) => page.blockAccounting)
-      .find((entry) => entry.blockRef === anyDeclined.blockRef);
+      .find((entry) => entry.blockRef === poisonTarget.blockRef);
     expect(poisonedAccounting?.status).toBe("gap");
 
     // A disallowed-for-PageType suggestion on the home page is refused AS A GAP, never coerced:
@@ -134,6 +159,7 @@ describe("the 14 Zilberman gaps replayed through the block_classifier re-validat
 
     // VALID suggestions RAISE fixture coverage, with the delta recorded by the harness envelope.
     expect(assistance.applied.length).toBeGreaterThan(0);
+    expect(assistance.applied.some((entry) => entry.blockRef === anyDeclined.blockRef && entry.sectionType === "prose")).toBe(true);
     expect(delta.refined.mappedBlocks).toBe(delta.baseline.mappedBlocks + assistance.applied.length);
     expect(delta.baseline.mappedBlockCoverage).toBe(baselineCoverage.mappedBlockCoverage);
     expect(delta.delta).toBeGreaterThan(0);

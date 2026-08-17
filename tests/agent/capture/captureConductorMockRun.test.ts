@@ -235,13 +235,25 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
 
     // VALIDATE-CLEAN DRAFTS: live emission created drafts, all verified unpublished, every
     // validation clean, nothing quarantined — and no forbidden verb ever reached the wire.
-    const emission = run.stageOutputs.capture_emit_live as { artifact: string; report: { createdObjects: Array<{ draftVerified: boolean }>; validationStates: Array<{ valid: boolean }>; quarantines: unknown[] } };
+    const emission = run.stageOutputs.capture_emit_live as { artifact: string; report: { createdObjects: Array<{ draftVerified: boolean }>; validationStates: Array<{ valid: boolean }>; quarantines: unknown[]; assetBindings: unknown[]; assetGaps: Array<{ why: string }>; mediaPolicy?: { mediaRetention: string; materialized: number; declined: number } } };
     expect(emission.artifact).toBe("capture_emission_run.v1");
     expect(emission.report.createdObjects.length).toBeGreaterThan(0);
     expect(emission.report.createdObjects.every((object) => object.draftVerified === true)).toBe(true);
     expect(emission.report.validationStates.length).toBeGreaterThan(0);
     expect(emission.report.validationStates.every((state) => state.valid === true)).toBe(true);
-    expect(emission.report.quarantines).toEqual([]);
+    // T12.14: the ONLY quarantine permitted here is the recorded media-rights one.
+    // This fixture's project policy sets rights.media = "prohibited", so the
+    // repeated-media section_template recipe cannot bind a first-party artifact and
+    // is quarantined rather than shipped with an empty gallery — and every planned
+    // asset section is a recorded gap, never a hotlink and never a coerced field.
+    expect(emission.report.quarantines).toEqual([
+      { objectType: "section_template", reason: "asset_binding_unresolved", requestedId: expect.stringMatching(/^stpl_capture_/) }
+    ]);
+    expect(emission.report.assetBindings).toEqual([]);
+    expect(emission.report.assetGaps.length).toBeGreaterThan(0);
+    expect(emission.report.assetGaps.every((gap) => gap.why === "asset_binding_unresolved")).toBe(true);
+    expect(emission.report.mediaPolicy?.mediaRetention).toBe("prohibited");
+    expect(emission.report.mediaPolicy?.materialized).toBe(0);
     for (const verb of targetVerbs) {
       expect(["get_pdf_tool_storage_grant", "object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
     }

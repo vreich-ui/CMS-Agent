@@ -5,6 +5,21 @@ export const DEFAULT_FIDELITY_LIMITS: Readonly<{ structuralCoverage: number; req
 export const MAX_FIDELITY_ROUNDS: number;
 export const FIDELITY_SCHEMA_VERSION: "capture-fidelity-report.v1";
 export const PALETTE_GAP_SCHEMA_VERSION: "capture-palette-gaps.v1";
+/** T12.14 — the defect code for a planned asset section emission never mentioned. */
+export const ASSET_DEFECT_CODE_UNEMITTED: "asset_section_absent_from_emission";
+
+/**
+ * T12.14 asset-binding evidence. `evidenceComplete` is null when no emission
+ * report was supplied (binding not verified), never silently "clean".
+ */
+export type AssetBindingEvidence = {
+  plannedSections: number;
+  boundSections: number | null;
+  defects: Array<{ code: string; severity: "defect"; pageRef: string; candidateId: string; sectionId: string | null; sectionType: string; target: string; plannedAssets: number; detail: string; gapId?: string }>;
+  defectCount: number;
+  evidenceComplete: boolean | null;
+  reason?: string;
+};
 
 export type FidelityReport = {
   schemaVersion: "capture-fidelity-report.v1";
@@ -14,6 +29,8 @@ export type FidelityReport = {
   limits: Record<string, unknown>;
   pages: Array<{ pageRef: string; sourceUrl: string; structural: { sourceBlocks: number; mappedBlocks: number; mappedBlockCoverage: number; accountedBlocks: number; allGapsEnumerated: boolean; orderFidelity: number; expectedSectionIds: string[]; emittedSectionIds: string[] } }>;
   visual: { comparisons: Array<Record<string, unknown>>; aggregateScore: number | null; scoredCount: number; unavailableCount: number };
+  /** Present only when the mapping planned at least one asset section (T12.14). */
+  assets?: AssetBindingEvidence;
   rubric: {
     coverage: { score: number; mappedBlocks: number; relevantBlocks: number; minimum: number; met: boolean };
     tokensComplete: { value: boolean; required: boolean; met: boolean };
@@ -27,6 +44,7 @@ export type FidelityReport = {
 
 export function fidelityLimitsFromProject(result: unknown, target: string): Record<string, unknown>;
 export function normalizedScreenshotDiff(sourcePath: string, previewPath: string): Promise<Record<string, unknown>>;
+export function assetBindingEvidence(mapping: unknown, emissionReport?: unknown): AssetBindingEvidence | null;
 export function consolidatedGapReport(mapping: unknown): FidelityReport["gapReport"];
-export function scoreCaptureFidelity(input: { snapshot: unknown; mapping: unknown; theme: unknown; target: string; projectPolicy?: unknown; previewManifest?: unknown; screenshotRoot?: string }): Promise<FidelityReport>;
+export function scoreCaptureFidelity(input: { snapshot: unknown; mapping: unknown; theme: unknown; target: string; projectPolicy?: unknown; previewManifest?: unknown; emissionReport?: unknown; screenshotRoot?: string }): Promise<FidelityReport>;
 export function runBoundedFidelityIterations(input: Record<string, unknown>): Promise<FidelityReport>;
