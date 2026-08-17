@@ -49,8 +49,10 @@ describe("R-20: estimated vs actual cost separation", () => {
   it("a full mock run accrues $0 actual: its estimates are recorded but the budget stays untouched (F-5)", async () => {
     repositoryManager.getUsageRepository().clear();
     const executionStore = new RepositoryManager().getExecutionRepository();
-    const started = await startDryRun({ executionMode: "mock", projectId: "r20-proj", input: "Draft this", budgetUsd: 1 }, executionStore);
-    // Drive to a terminal state; with R-20 the mock estimates must not trip the $1 ceiling.
+    // The ceiling sits above the largest single-node reservation (research's own budgetUsd is $3
+    // since S1) but far below the mock ESTIMATES the run records, which is what this test measures.
+    const started = await startDryRun({ executionMode: "mock", projectId: "r20-proj", input: "Draft this", budgetUsd: 4 }, executionStore);
+    // Drive to a terminal state; with R-20 the mock estimates must not trip the $4 ceiling.
     let run = await getRun(started.runId, executionStore);
     for (let i = 0; run && i < 40 && !TERMINAL.includes(run.status); i++) {
       run = await runNextNode(started.runId, { executionRepository: executionStore });
@@ -60,7 +62,7 @@ describe("R-20: estimated vs actual cost separation", () => {
     expect(summary.estimatedCostUsdEstimate).toBeGreaterThan(0); // the estimates are still recorded and visible
     expect(summary.actualCostUsdEstimate).toBe(0);               // but no money was spent...
     expect(run!.budgetBlock).toBeUndefined();                    // ...so the ceiling was never consumed
-    const status = await getBudgetStatus({ runId: started.runId, budgetUsd: 1 });
+    const status = await getBudgetStatus({ runId: started.runId, budgetUsd: 4 });
     expect(status.spentUsdEstimate).toBe(0);
   });
 });

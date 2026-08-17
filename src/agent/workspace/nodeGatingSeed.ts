@@ -29,6 +29,10 @@ import type { SkipPredicate } from "./skipPredicates.js";
 export type NodeGatingSeedEntry = {
   skipWhen?: SkipPredicate[];
   contractPrefetch?: true;
+  // The editorial-voice prefetch (voicePrefetch.ts) — voice_<project> fetched deterministically before
+  // the agent loop. Declared here so a store overlay that rewrites the node's metadata (say, to flip
+  // approvalRequired) cannot silently switch the voice off; the seed is the floor.
+  voicePrefetch?: true;
   // Why this node carries this policy. Kept in the data, not in a comment, so it travels into the
   // audit record and into anything that renders the policy.
   rationale: string;
@@ -79,7 +83,7 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
   // target, which is already a declared dependency of brief_architect. No DAG edge is moved: see the
   // work order's re-seed section for what a full contract_intelligence reorder would additionally
   // require (publishingTail.ts declares the tail's edges as a hard invariant).
-  brief_architect: { contractPrefetch: true, rationale: "The aggression ceiling must exist before the brief that spends it is written." }
+  brief_architect: { contractPrefetch: true, voicePrefetch: true, rationale: "The aggression ceiling must exist before the brief that spends it is written; the client's editorial voice must be in hand for the same reason — the brief sets the tone guardrails every downstream writer reads." }
 };
 
 type GatedNode = Pick<WorkspaceNode, "id"> & { metadata?: Record<string, unknown> | undefined };
@@ -93,9 +97,11 @@ export function gatedMetadata(node: GatedNode): Record<string, unknown> | undefi
   const merged: Record<string, unknown> = { ...metadata };
   if (seed.skipWhen !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "skipWhen")) merged.skipWhen = seed.skipWhen;
   if (seed.contractPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "contractPrefetch")) merged.contractPrefetch = seed.contractPrefetch;
+  if (seed.voicePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "voicePrefetch")) merged.voicePrefetch = seed.voicePrefetch;
   return merged;
 }
 
 // The prefetch declaration, read through the same merge — so the executor asks one question in one
 // place rather than checking metadata here and a seed table there.
 export const declaresContractPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.contractPrefetch === true;
+export const declaresVoicePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.voicePrefetch === true;
