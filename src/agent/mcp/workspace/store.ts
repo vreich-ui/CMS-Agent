@@ -522,7 +522,13 @@ export class WorkspaceStateStore implements WorkspaceStore {
     let updated: WorkspaceNode | undefined;
     const workspaceVersion = await this.mutate((document) => {
       const existing = document.nodes.find((node) => node.id === id) ?? { ...listWorkspaceNodes()[0], id, name: id, prompt: "", schema: {}, updatedAt: now(), dependsOn: [], requiredInputs: [], produces: [] };
-      updated = { ...existing, schema, outputSchema: schema, updatedAt: now() };
+      // outputSchema is canonical. The deprecated `schema` alias is no longer written here — a record that
+      // carried both could drift (schema stale, outputSchema current) and readers that still preferred
+      // `schema` saw the old contract. normalizeNode/workspaceNodeSchema keep reading `schema` as the
+      // fallback for OLD records; dropping it on write is what stops the two from ever disagreeing.
+      const { schema: _legacySchemaAlias, ...rest } = existing;
+      void _legacySchemaAlias;
+      updated = { ...rest, outputSchema: schema, updatedAt: now() };
       document.nodes = upsertWorkspaceNode(document.nodes, updated);
     }, meta, "node.output_schema_updated", id);
     return { node: updated!, workspaceVersion };
