@@ -14,6 +14,7 @@ import { createGcsStoreClient } from "../repository/gcs/gcsStoreClient.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 import { HALTED_EXECUTION_STATUSES, type ExecutionStatus, type WorkflowExecutionRecord } from "../workspace/executionTypes.js";
+import { logProjectEnvNamesOnce, preflightDriverEnv, recordDriverEnvWarning } from "../workspace/driverEnvPreflight.js";
 // Matches workflow.run_all's advance bound; the canonical graph has 18 nodes, so this is headroom
 // for retries, never a pacing mechanism.
 const DEFAULT_MAX_STEPS = 100;
@@ -89,6 +90,8 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
 
   const executionRepository = repositoryManager.getExecutionRepository();
   const workspaceRepository = repositoryManager.getWorkspaceRepository();
+  const projectRepository = repositoryManager.getProjectRepository();
+  await logProjectEnvNamesOnce(projectRepository, process.env, log);
 
   let run: WorkflowExecutionRecord;
   if (options.resumeRunId) {
@@ -99,6 +102,17 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
   } else {
     run = await startDryRun({ projectId: options.projectId, input: options.input, executionMode: mode, budgetUsd: options.budgetUsd }, executionRepository);
     log(`Started run ${run.runId} (project ${options.projectId}, mode ${mode}, ${run.nodes.length} nodes${options.budgetUsd !== undefined ? `, budget $${options.budgetUsd}` : ""})`);
+  }
+
+  // S1 — driver env preflight: this job must not dispatch a single node for a project whose MCP
+  // endpoint env var it cannot see. Record `driver_env_missing:<VAR>` on the run once and return it
+  // untouched (outcome "stopped": resumable by a driver that can see the endpoint).
+  const preflight = await preflightDriverEnv(run, projectRepository, process.env);
+  if (!preflight.ok) {
+    run = await recordDriverEnvWarning(run, preflight.warning, executionRepository);
+    log(`Refusing to dispatch run ${run.runId}: ${preflight.warning} (this process cannot see the project's MCP endpoint env var)`);
+    const usage = await summarizeModelUsage({ runId: run.runId }, repositoryManager.getUsageRepository());
+    return { run, outcome: "stopped", steps: 0, ledger: summarizeRunCost(run, usage), plan: planRun(run) };
   }
 
   let steps = 0;
@@ -121,7 +135,7 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
     const blockedNodeId = run.approvalsRequired[0]?.nodeId ?? run.nodes.find((node) => node.status === "blocked")?.nodeId;
     if (blockedNodeId) {
       log(`Re-queuing blocked node ${blockedNodeId} with approval`);
-      run = (await retryNode(run.runId, blockedNodeId, { executionRepository, workspaceRepository, approved: true })) ?? run;
+      run = (await retryNode(run.runId, blockedNodeId, { executionRepository, workspaceRepository, approved: true, driver: "cloud_run_job" })) ?? run;
       steps += 1;
     }
   }
@@ -129,7 +143,7 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
 
   while (!HALTED_EXECUTION_STATUSES.has(run.status) && steps < maxSteps) {
     if (options.signal?.aborted) { stopped = true; break; }
-    run = await runNextNode(run.runId, { executionRepository, workspaceRepository, approved: options.approved });
+    run = await runNextNode(run.runId, { executionRepository, workspaceRepository, approved: options.approved, driver: "cloud_run_job" });
     steps += 1;
     logNodeTransitions(run);
   }

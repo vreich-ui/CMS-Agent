@@ -31,7 +31,17 @@ export type NodeToolCallRecord = { toolId: string; toolExecutionId?: string; sta
 // margin the driver provably died mid-node (the runner's own timeout would have finished it first) —
 // which is how an operator tells "stalled" from "working" instead of watching status:"running"
 // forever. A stale dispatch is reclaimed to queued on the next advance, so the run stays resumable.
-export type NodeDispatchClaim = { dispatchedAt: string; timeoutMs: number };
+export type NodeDispatchClaim = { dispatchedAt: string; timeoutMs: number; driver?: RunDriver; projectEndpointConfigured?: boolean };
+
+// S1 (chat-path, 2026-08-17) — WHICH driver dispatched a node, and whether the run's project MCP
+// endpoint was configured in that driver's environment at that moment. Four drivers advance runs
+// (the HTTP run_all/run_node loops, the HTTP retry, the scheduled continuation tick, and the Cloud
+// Run conductor job) and each runs in its own environment; a node that failed with a project
+// connection error is only diagnosable if the record says which of the four ran it and what that
+// process could see. Stamped on the in-flight claim (state.dispatch) and copied to state.lastDispatch
+// so it survives the claim's release on completion.
+export type RunDriver = "http_run_all" | "http_retry_node" | "continuation_tick" | "cloud_run_job";
+export type NodeDispatchProvenance = { dispatchedAt: string; driver: RunDriver; projectEndpointConfigured: boolean };
 
 // W4 — the audit record of a skip. Written by the executor at the moment it decides NOT to dispatch,
 // carrying the predicate that fired verbatim (it is data, so it round-trips) plus the facts it fired
@@ -58,6 +68,8 @@ export type NodeExecutionState = {
   produces?: string[];
   toolCalls?: NodeToolCallRecord[];
   dispatch?: NodeDispatchClaim;
+  // The most recent dispatch's provenance (driver + project endpoint visibility); survives completion.
+  lastDispatch?: NodeDispatchProvenance;
   // Present only on a node whose status is "skipped" (W4).
   skip?: NodeSkipRecord;
   // Set when an operator explicitly retried a node the conductor had skipped: the retry IS the
@@ -136,6 +148,10 @@ export type WorkflowExecutionRecord = {
   nodes: NodeExecutionState[];
   artifacts: ExecutionArtifact[];
   errors: string[];
+  // Run-level, non-fatal, deduplicated by value. Today: `driver_env_missing:<VAR>` written by a
+  // background driver (continuation tick / conductor job) that declined to dispatch because the
+  // run's project MCP endpoint env var was not set in its process (driverEnvPreflight.ts).
+  warnings?: string[];
   approvalsRequired: ApprovalRequired[];
   initialInput?: unknown;
   stageOutputs: Record<string, unknown>;
