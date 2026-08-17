@@ -13,6 +13,7 @@ import { repositoryManager } from "../../runtime/repositories.js";
 import { DEFAULT_EXECUTION_MODE, MAX_LIST_RUNS_LIMIT, assessRunStall, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, resetRun, retryNode, runModeSummary, runNextNode, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
 import { conductorCache, getRunContext, planRun, summarizeRunCost, RUN_CONTEXT_KEY } from "../../workspace/conductor.js";
 import { executionStatuses, type WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
+import { WorkspaceToolError } from "../../workspace/workspaceErrors.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
 import { validateOutput } from "../../execution/outputValidator.js";
 import { evaluatePublishReadiness, publishRun } from "../../workspace/publisher.js";
@@ -45,11 +46,63 @@ const HALTED_RUN_STATUSES: string[] = ["completed", "failed", "blocked", "cancel
 // driver note, and the caller re-invokes to continue (each node advance is individually persisted, so
 // stopping between nodes loses nothing). Long runs belong on the Cloud Run conductor job
 // (scripts/run-conductor-job, docs/platform/DIRECTION.md Phase 1), which has no such ceiling.
-const RUN_DRIVER_TIME_BUDGET_MS = (() => {
+//
+// S1 (chat-path, 2026-08-17): the default was 240s, which is ABOVE the ceiling every real caller of
+// this endpoint enforces — the chat client's tool-call timeout and the MCP gateway both cut the
+// connection well before that, so the caller saw a transport error while the loop kept driving the
+// run server-side, then a second call found a run mid-node with a live claim. The default is now 45s
+// and an env override is CLAMPED to that ceiling; a longer window can never be configured back in.
+// A caller may pass `budgetMs` (5s..45s) per call to trade throughput for a faster round-trip. Runs
+// that need more than one window continue on the scheduled continuation tick (runContinuation.ts),
+// which is why run_all now also reports `continued: true` when it hands a live run back.
+export const RUN_DRIVER_TIME_BUDGET_CEILING_MS = 45_000;
+export const RUN_DRIVER_TIME_BUDGET_FLOOR_MS = 5_000;
+export const RUN_DRIVER_TIME_BUDGET_MS = (() => {
   const configured = Number(process.env.RUN_DRIVER_TIME_BUDGET_MS);
-  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 240_000;
+  const requested = Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : RUN_DRIVER_TIME_BUDGET_CEILING_MS;
+  return Math.min(requested, RUN_DRIVER_TIME_BUDGET_CEILING_MS);
 })();
-const DRIVER_TIME_BUDGET_NOTE = `Driver time budget (${RUN_DRIVER_TIME_BUDGET_MS}ms) reached before the platform's request ceiling; the run's state is persisted and nothing is in flight. Call the same tool again to continue from here, or use the Cloud Run conductor job for runs longer than one request window.`;
+const driverBudgetMs = (requested?: number): number => {
+  if (requested === undefined || !Number.isFinite(requested)) return RUN_DRIVER_TIME_BUDGET_MS;
+  return Math.max(RUN_DRIVER_TIME_BUDGET_FLOOR_MS, Math.min(RUN_DRIVER_TIME_BUDGET_CEILING_MS, Math.floor(requested)));
+};
+const driverTimeBudgetNote = (budgetMs: number): string => `Driver time budget (${budgetMs}ms) reached before the caller's request ceiling; the run's state is persisted and nothing is in flight. The scheduled continuation tick advances a queued/running run on its own; call the same tool again to drive it sooner, or use the Cloud Run conductor job for runs longer than one request window.`;
+const DRIVER_TIME_BUDGET_NOTE = driverTimeBudgetNote(RUN_DRIVER_TIME_BUDGET_MS);
+
+// The compact run view workflow.run_all returns. A full run record (inputs, outputs, stageOutputs,
+// artifacts) for a 20-node run is hundreds of KB — far past what a chat tool result can carry, and
+// none of it is what the caller needs to decide the next step. workflow.get_run stays full.
+export type CompactRunView = {
+  runId: string;
+  requestId?: string;
+  projectId: string;
+  status: WorkflowExecutionRecord["status"];
+  currentNodeId?: string;
+  budget?: { budgetUsd?: number; budgetBlock?: WorkflowExecutionRecord["budgetBlock"] };
+  errors: string[];
+  approvalsRequired: WorkflowExecutionRecord["approvalsRequired"];
+  nodes: Array<{ nodeId: string; status: string; warnings?: string[]; errors?: string[]; durationMs?: number; dispatch?: unknown; lastDispatch?: unknown }>;
+};
+export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
+  runId: run.runId,
+  ...(run.requestId !== undefined ? { requestId: run.requestId } : {}),
+  projectId: run.projectId,
+  status: run.status,
+  ...(run.currentNodeId !== undefined ? { currentNodeId: run.currentNodeId } : {}),
+  ...(run.budgetUsd !== undefined || run.budgetBlock !== undefined ? { budget: { ...(run.budgetUsd !== undefined ? { budgetUsd: run.budgetUsd } : {}), ...(run.budgetBlock !== undefined ? { budgetBlock: run.budgetBlock } : {}) } } : {}),
+  errors: run.errors,
+  approvalsRequired: run.approvalsRequired,
+  nodes: run.nodes.map((node) => ({
+    nodeId: node.nodeId,
+    status: node.status,
+    ...(node.warnings !== undefined ? { warnings: node.warnings } : {}),
+    ...(node.errors !== undefined ? { errors: node.errors } : {}),
+    ...(node.durationMs !== undefined ? { durationMs: node.durationMs } : {}),
+    ...(node.dispatch !== undefined ? { dispatch: node.dispatch } : {}),
+    ...(node.lastDispatch !== undefined ? { lastDispatch: node.lastDispatch } : {})
+  }))
+});
+const RUN_LIVE_STATUSES: string[] = ["queued", "running"];
 
 const workspaceNodeImport = z.object({
   id: z.string().min(1),
@@ -151,7 +204,36 @@ const validateAgainstArticleBodyNode = (articleBody: unknown): string[] => {
 // two they are about to get, and what a mock artifact is worth.
 const EXECUTION_MODE_DESCRIPTION = "Execution mode. \"openai\" (DEFAULT) calls the configured model provider and produces real node output. \"mock\" produces deterministic placeholder output generated from each node's outputSchema — structurally valid but content-free, for cheap CI/test runs; mock artifacts must never be treated as publishable content. Every run reports its mode back on workflow.get_run / workflow.list_runs as `mode`.";
 
-const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default(DEFAULT_EXECUTION_MODE), entrypoint: z.enum(["article_body"]).optional(), articleBody: z.unknown().optional(), budgetUsd: z.number().nonnegative().optional() }).strict();
+const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default(DEFAULT_EXECUTION_MODE), entrypoint: z.enum(["article_body"]).optional(), articleBody: z.unknown().optional(), budgetUsd: z.number().nonnegative().optional(), requestId: z.string().min(1).optional() }).strict();
+
+// S1 (chat-path) — CALLER-SUPPLIED REQUEST IDS. The knowledge rule every client dialect states is
+// that request ids are supplied by the caller and never generated. A project that declares
+// objectDialect.requestIdPattern is saying its request-id form is a hard contract: start_dry_run
+// therefore REQUIRES `requestId` for such a project (request_id_required, naming the pattern) and
+// VALIDATES a supplied one (invalid_request_id, naming the pattern) before a run is minted — the same
+// point at which publish_run already rejects a malformed id, moved to the front of the run so a
+// twenty-node run cannot be built on an id its publish step will refuse. A project with no pattern
+// keeps the auto-minted join key it always had.
+//
+// A MOCK run is exempt from the REQUIREMENT (a supplied id is still validated): it is a dry-run
+// that never reaches the client and mints nothing external, so there is no client request id to
+// honour — it keeps the auto-minted join key. Live (openai) runs for a pattern project must supply.
+const REQUEST_ID_FORM = "req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case";
+async function resolveCallerRequestId(projectId: string, requestId: string | undefined, executionMode: "mock" | "openai"): Promise<string | undefined> {
+  const config = await repositoryManager.getProjectRepository().get(projectId);
+  const pattern = config?.objectDialect?.requestIdPattern;
+  if (!pattern) return requestId;
+  if (requestId === undefined) {
+    if (executionMode === "mock") return undefined;
+    throw new WorkspaceToolError("request_id_required", `Project ${projectId} requires a caller-supplied requestId matching ${pattern} (${REQUEST_ID_FORM}); request ids are never auto-generated for this project.`, { projectId, requestIdPattern: pattern });
+  }
+  let regex: RegExp;
+  try { regex = new RegExp(pattern); } catch { regex = new RegExp("^req_[a-z0-9_]+_\\d{8}_\\d{2}$"); }
+  if (!regex.test(requestId)) {
+    throw new WorkspaceToolError("invalid_request_id", `requestId "${requestId}" does not match project ${projectId}'s pattern ${pattern} (${REQUEST_ID_FORM}).`, { projectId, requestIdPattern: pattern, requestId });
+  }
+  return requestId;
+}
 const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional() }).strict();
 const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional() }).strict();
 const runIdInput = z.object({ runId: z.string().min(1) }).strict();
@@ -244,7 +326,7 @@ const articleBodyArgJsonSchema = { type: "object", description: "Client-shaped c
 const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, runId: { type: "string", minLength: 1, description: "Project what publish_payload would emit for this run, built deterministically from the run's own article_body/artifact_plan stage outputs (dry_run_publish_payload.v1). Mutually exclusive with articleBody." }, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, []);
 const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
-const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." } }, ["projectId", "input"]);
+const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." }, requestId: { type: "string", minLength: 1, description: "Caller-supplied request id for this run. REQUIRED for a live (openai) run when the project declares objectDialect.requestIdPattern (platform, dr-lurie, fernwell: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case) — the tool refuses with request_id_required/invalid_request_id naming the pattern; request ids are never auto-generated for such a run. Optional (auto-minted) for a mock dry-run or a project without a pattern; a supplied id is always validated." } }, ["projectId", "input"]);
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
 const resumeRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0, description: "Optional: raise (or set) the run's per-run cost ceiling in the same call that resumes it. Omit to resume unchanged — this is what makes the budget gate's own remedy (\"raise budgetUsd and resume\") actually reachable; previously resume_run took only runId and there was no way to raise the ceiling that blocked the run." } }, ["runId"]);
 const runNextNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
@@ -259,8 +341,8 @@ const operatorPublishDecisionJsonSchema = objectSchema({ runId: { type: "string"
 // required: [] with no runId. Each tool now advertises exactly its own Zod shape.
 const runNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
 const runUntilJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId", "nodeId"]);
-const runAllJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
-const runAllInput = z.object({ runId: z.string().min(1), approved: z.boolean().optional() }).strict();
+const runAllJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, budgetMs: { type: "number", minimum: RUN_DRIVER_TIME_BUDGET_FLOOR_MS, maximum: RUN_DRIVER_TIME_BUDGET_CEILING_MS, description: `Wall-clock budget for THIS call in ms (${RUN_DRIVER_TIME_BUDGET_FLOOR_MS}..${RUN_DRIVER_TIME_BUDGET_CEILING_MS}); default ${RUN_DRIVER_TIME_BUDGET_MS}. The loop stops dispatching when it is reached and the run continues on the scheduled continuation tick.` } }, ["runId"]);
+const runAllInput = z.object({ runId: z.string().min(1), approved: z.boolean().optional(), budgetMs: z.number().min(RUN_DRIVER_TIME_BUDGET_FLOOR_MS).max(RUN_DRIVER_TIME_BUDGET_CEILING_MS).optional() }).strict();
 
 // T5 fix 1 (2026-08-13) — the loops below stop the moment a run reports a halted status, so a run
 // sitting at the publish-approval gate could not be re-entered by calling run_all again WITH approval:
@@ -554,7 +636,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     } }),
     tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload: envelope fields (target, dryRun, builtAt) plus the articleBody against the article_body node's own outputSchema.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); const bodyErrors = parsed.success ? validateAgainstArticleBodyNode(coerceJsonObjectInput(parsed.data.payload.articleBody)) : []; const issues = [...(parsed.success ? [] : parsed.error.issues), ...bodyErrors.map((message) => ({ code: "custom", path: ["payload", "articleBody"], message }))]; return ok({ valid: issues.length === 0, issues }); } }),
     tool({ name: "repository.get_health", description: "Return safe repository health metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ health: await repositoryManager.getRepositoryHealth() }); } }),
-    tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects. Supply entrypoint 'article_body' with a valid client_object.v1 to enter the run at the publish stages without re-running ideation/research/draft nodes.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => {
+    tool({ name: "workflow.start_dry_run", description: "Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects. Supply entrypoint 'article_body' with a valid client_object.v1 to enter the run at the publish stages without re-running ideation/research/draft nodes. Live (openai) runs for projects that declare a request-id pattern (platform, dr-lurie, fernwell) REQUIRE a caller-supplied requestId (req_<flow>_<topic>_<yyyymmdd>_<nn>); the tool refuses with request_id_required / invalid_request_id otherwise. Mock dry-runs keep the auto-minted id.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => {
       const data = startDryRunInput.parse(input);
       let entrypoint: { nodeId: string; output: unknown } | undefined;
       if (data.entrypoint === "article_body" || data.articleBody !== undefined) {
@@ -580,7 +662,8 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       // in initialInput as a JSON *string*, so input_triage would consume a string where an envelope
       // belongs. That is precisely the input side of the T-3 publish path, where a "successful" run
       // carrying a stringified envelope is worse than a failed one.
-      return ok({ run: await startDryRun({ projectId: data.projectId, input: coerceJsonObjectInput(data.input), workflowId: data.workflowId, executionMode: data.executionMode, entrypoint, budgetUsd: data.budgetUsd }, executionRepository) });
+      const requestId = await resolveCallerRequestId(data.projectId, data.requestId, data.executionMode);
+      return ok({ run: await startDryRun({ projectId: data.projectId, input: coerceJsonObjectInput(data.input), workflowId: data.workflowId, executionMode: data.executionMode, entrypoint, budgetUsd: data.budgetUsd, requestId }, executionRepository) });
     } }),
     // `mode` is deliberately a TOP-LEVEL sibling of the run, not a field buried inside it: a mock run
     // emits schema-shaped placeholder artifacts that look exactly like real output, so what produced
@@ -591,7 +674,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "workflow.run_next_node", description: "Run exactly one dependency-ready Publishing Conductor node, stopping before publish-risk nodes unless approved is true.", zodSchema: runNextNodeInput, inputSchema: runNextNodeJsonSchema, execute: async (input) => { const data = runNextNodeInput.parse(input); return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); } }),
     tool({ name: "workflow.run_node", description: "Run dependency-ready nodes; when nodeId is given, advance the run until that node completes. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); if (!data.nodeId) return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS; let timedOut = false; let run = await getRun(data.runId, executionRepository); for (let i = 0; run && i < 100 && !HALTED_RUN_STATUSES.includes(run.status); i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }); const state = run.nodes.find((node) => node.nodeId === data.nodeId); if (state && state.status !== "queued" && state.status !== "running") break; } return ok({ run, ...(timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) }); } }),
     tool({ name: "workflow.run_until", description: "Run dependency-ready nodes until the named node completes, then stop. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs.", zodSchema: runUntilInput, inputSchema: runUntilJsonSchema, execute: async (input) => { const data = runUntilInput.parse(input); const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS; let timedOut = false; let run = await getRun(data.runId, executionRepository); run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved })); for (let i=0; run && i<100 && !HALTED_RUN_STATUSES.includes(run.status) && run.nodes.find((n) => n.nodeId === data.nodeId)?.status !== "completed"; i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }); if (run.nodes.find((n) => n.nodeId === data.nodeId)?.status === "completed") break; } return ok({ run, ...(timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) }); } }),
-    tool({ name: "workflow.run_all", description: "Run all dependency-ready nodes, stopping before publish-risk nodes unless explicit approval exists. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs.", zodSchema: runAllInput, inputSchema: runAllJsonSchema, execute: async (input) => { const data = runAllInput.parse(input); const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS; let timedOut = false; let run = await getRun(data.runId, executionRepository); run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved })); for (let i=0; run && i<100 && !HALTED_RUN_STATUSES.includes(run.status); i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }); } return ok({ run, ...(timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) }); } }),
+    tool({ name: "workflow.run_all", description: `Run all dependency-ready nodes, stopping before publish-risk nodes unless explicit approval exists. Drives the run for at most budgetMs (default ${RUN_DRIVER_TIME_BUDGET_MS}ms, ceiling ${RUN_DRIVER_TIME_BUDGET_CEILING_MS}ms — always below the caller's request timeout) and returns a COMPACT run view {run:{runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch}]}, driverNote?, continued} — no node inputs/outputs/stageOutputs/artifacts (use workflow.get_run for the full record). continued=true means the run is still queued/running and the scheduled continuation tick will advance it; call again to drive it sooner.`, zodSchema: runAllInput, inputSchema: runAllJsonSchema, execute: async (input) => { const data = runAllInput.parse(input); const budgetMs = driverBudgetMs(data.budgetMs); const deadline = Date.now() + budgetMs; let timedOut = false; let run = await getRun(data.runId, executionRepository); run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_run_all" })); for (let i=0; run && i<100 && !HALTED_RUN_STATUSES.includes(run.status); i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_run_all" }); } if (!run) throw new WorkspaceToolError("run_not_found", `Run ${data.runId} was not found.`, { runId: data.runId }); return ok({ run: compactRun(run), ...(timedOut ? { driverNote: driverTimeBudgetNote(budgetMs) } : {}), continued: RUN_LIVE_STATUSES.includes(run.status) }); } }),
     // R-18: pause_run reports "paused", not "blocked". "blocked" already carried two distinct meanings
     // (publish-approval hold and budget hold); overloading it with a third made an operator pause
     // unreadable. "paused" is in the executor's non-advanceable set, so pausing still stops the run.
@@ -603,7 +686,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // without a second tool. The run's own between-node gate re-evaluates the (now higher) ceiling
     // against accrued spend on the very next advance and clears budgetBlock itself once it passes.
     tool({ name: "workflow.resume_run", description: "Resume a run: status becomes \"queued\". Optionally raise (or set) budgetUsd in the same call — the reachable form of the budget gate's own \"raise budgetUsd and resume\" remedy. Node completion state is never mutated.", zodSchema: resumeRunInput, inputSchema: resumeRunJsonSchema, execute: async (input) => { const data = resumeRunInput.parse(input); return ok({ run: await updateRunStatus(data.runId, "queued", executionRepository, data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {}) ?? null }); } }),
-    tool({ name: "workflow.retry_node", description: "Reset a completed or failed node back to queued and run the next dependency-ready node.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); return ok({ run: await retryNode(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved }) ?? null }); } }),
+    tool({ name: "workflow.retry_node", description: "Reset a completed or failed node back to queued and run the next dependency-ready node.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); return ok({ run: await retryNode(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_retry_node" }) ?? null }); } }),
     // P0 §2.2 — the operator veto channel: ONE named field (run.operatorPublishDecision), ONE setter
     // (this tool), ONE reader (publishDecision.isOperatorPublishWithheld, consumed by the publish
     // gates and the executor's publish-risk dispatch guard).
