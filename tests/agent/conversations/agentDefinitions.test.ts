@@ -65,6 +65,24 @@ describe("canonical client_manager workspace definition", () => {
     expect(CLIENT_MANAGER_PROMPT).toMatch(/never authorization/i);
   });
 
+  // S1 (chat-path): rev 3 adds the production start/report rules — the brief travels verbatim, the
+  // aggression inputs and media request are carried, the request id is caller-supplied, and a
+  // blocked/failed run is reported reusable-first.
+  it("rev 3 carries the 'Starting and reporting production' rules and rev 2 is superseded", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(3);
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Starting and reporting production");
+    expect(CLIENT_MANAGER_PROMPT).toContain("pass the editor's brief verbatim as `input.instructions` — never summarise or shorten it");
+    expect(CLIENT_MANAGER_PROMPT).toContain("Set `trafficSource` and `awarenessStage` (ask if unknown)");
+    expect(CLIENT_MANAGER_PROMPT).toContain("`input.mediaRequest`");
+    expect(CLIENT_MANAGER_PROMPT).toContain("Supply `requestId` in the client's request-id form when the tool requires one.");
+    expect(CLIENT_MANAGER_PROMPT).toContain("first name what was produced and is reusable (for example a completed draft), then what failed.");
+    // Every earlier canonical text (rev 1 and rev 2) is superseded and upgradeable.
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(2);
+    for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).toContain("## Candidates in learning mode");
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).not.toContain("## Starting and reporting production");
+  });
+
   it("classifies stored prompts against the shipped canonical text", () => {
     expect(classifyConversationalAgentPrompt(CLIENT_MANAGER_PROMPT)).toBe("canonical");
     expect(classifyConversationalAgentPrompt(SUPERSEDED_CLIENT_MANAGER_PROMPTS[0])).toBe("superseded");
