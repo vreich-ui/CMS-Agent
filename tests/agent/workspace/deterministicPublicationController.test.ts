@@ -49,7 +49,7 @@ const storePublicationDecisionSchema = {
   then: { properties: { blockers: { maxItems: 0 } } }
 };
 
-const sampleBody = () => ({ slug: "governed-content-lifecycle", title: "Governed content lifecycle", nodes: [{ id: "n1", type: "paragraph", text: "Body." }] });
+const sampleBody = () => ({ slug: "governed-content-lifecycle", title: "Governed content lifecycle", nodes: [{ id: "n1", type: "paragraph", text: "Body. This paragraph exists so the fixture reads as a real article rather than a stub: it explains the claim, names the tradeoff, and gives the reader one concrete next step to take today. It is long enough to clear the readiness content floor." }] });
 
 const sampleArticleBody = (overrides: Record<string, unknown> = {}) => ({
   artifact: "client_object.v1",
