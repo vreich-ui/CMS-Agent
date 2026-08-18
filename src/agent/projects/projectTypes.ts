@@ -140,9 +140,31 @@ export type ProjectConnectionConfig = {
   // Monotonic code-definition version used to safely migrate persisted default project records.
   definitionVersion?: number;
   name: string;
-  // The MCP endpoint and bearer token are resolved from environment variables at connection time and
-  // are NEVER persisted or returned, so no project secrets are stored in workspace JSON / blobs.
+  // The bearer TOKEN is resolved from an environment variable at connection time and is NEVER
+  // persisted or returned, so no project secret is stored in workspace JSON / blobs.
+  //
+  // The ENDPOINT has two sources, in this precedence (resolveProjectConnection):
+  //   1. env[mcpEndpointEnvVar]  — the original channel; still wins whenever it is populated, so
+  //      every project registered before mcpEndpoint existed resolves EXACTLY as it did, and an
+  //      operator keeps a no-registry-write break-glass override (e.g. repointing a tenant at a new
+  //      custom domain) on a deployment they can already edit.
+  //   2. mcpEndpoint             — the endpoint stored ON the record (below).
   mcpEndpointEnvVar: string;
+  // The tenant's MCP endpoint URL stored directly on the registry record, so minting a tenant does
+  // not require hand-adding a <CLIENT>_MCP_ENDPOINT env var to this deployment (Wolf, 2026-08-18).
+  //
+  // Why this is NOT a hole in "secrets: env var NAMES over MCP, never values": an endpoint URL is
+  // not a secret — the TOKEN is, and it stays an env var NAME reference (tokenEnvVar) exactly as
+  // before. The fleet already treats these URLs as public configuration: cloudbuild.deploy.yaml
+  // carries every tenant's endpoint in plaintext --update-env-vars while every token travels
+  // through --update-secrets from Secret Manager.
+  //
+  // The original rule (commit ab700cf) rejected endpoint VALUES because a URL string can smuggle a
+  // credential — https://user:pass@host/mcp, or ?token=… — not because the endpoint itself is
+  // sensitive. That vector is closed structurally instead of by blanket refusal: projectAdmin's
+  // registryEndpointSchema accepts only https, no userinfo, no query, no fragment, so a stored
+  // endpoint is provably credential-free and therefore safe to persist AND to return to callers.
+  mcpEndpoint?: string;
   authMode: ProjectAuthMode;
   tokenEnvVar?: string;
   // Legacy allow-list. Still honored (a tool listed here resolves to "allowed"), but the three-state
@@ -193,12 +215,24 @@ export function toToolPolicyMap(
 }
 
 // Safe, caller-facing view of a project. Only non-secret metadata plus booleans indicating whether
-// the endpoint/token env vars are populated — never the endpoint value, token, or headers.
+// the endpoint/token are resolvable — never the token or headers.
 export type ProjectConnectionState = {
+  // True when an endpoint resolves from EITHER source (env var or the registry record) — the
+  // question every caller actually asks ("can this project be reached?"). For a project with no
+  // stored mcpEndpoint this is bit-for-bit the old env-only answer.
   endpointConfigured: boolean;
   tokenConfigured: boolean;
   mcpEndpointEnvVar: string;
   tokenEnvVar?: string;
+  // Which source answered, so an operator can see WHY an endpoint is (or is not) configured:
+  //   "env"      — the env var is populated and wins.
+  //   "registry" — no env value; the record's own mcpEndpoint is in use.
+  //   "unset"    — neither; the project is unreachable.
+  endpointSource: "env" | "registry" | "unset";
+  // The endpoint stored on the record, when there is one. Safe to return: it is validated
+  // credential-free at write time (https, no userinfo, no query, no fragment). The env-var VALUE is
+  // still never returned — an operator may have put anything in it.
+  mcpEndpoint?: string;
 };
 
 export type ProjectSummary = {

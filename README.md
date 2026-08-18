@@ -460,7 +460,7 @@ CMS-Agent can register external **project** MCP servers and perform primitive, g
 
 ### Registry and Dr. Lurie adapter
 
-* The project registry is defined in `src/agent/projects/projectTypes.ts` and `src/agent/projects/projectRegistry.ts`. Each project connection carries `projectId`, `name`, `mcpEndpointEnvVar`, `authMode`, `tokenEnvVar`, `allowedTools`, `contentContract`, `publishingPolicy`, and `status`.
+* The project registry is defined in `src/agent/projects/projectTypes.ts` and `src/agent/projects/projectRegistry.ts`. Each project connection carries `projectId`, `name`, `mcpEndpointEnvVar`, an optional `mcpEndpoint`, `authMode`, `tokenEnvVar`, `allowedTools`, `contentContract`, `publishingPolicy`, and `status`.
 * Connection configs are stored **through repositories** (`ProjectRepository`, backed by memory or Netlify Blobs like the other repositories), seeded from the code-defined defaults — not from hardcoded runtime state.
 * The **Dr. Lurie** project (`dr-lurie`) is defined in `src/agent/projects/drLurie/definition.ts` with `contentContract: content_source.v1` and `canonicalArticleBody: article_body.v1`.
   * Dr. Lurie is a publishing house whose CMS-Agent is the full writer + reviewer and orders artifacts, so this connection runs with **full access**: `defaultToolPolicy: "allowed"` makes every Dr. Lurie tool callable via `project.call_tool` — including publish/deploy and commerce. This is also how CMS-Agent reaches "PDF-Tool": through Dr. Lurie's brokered artifact tools (`get_pdf_tool_storage_grant` → `create_artifact_*` → `save_artifact`), not a direct connection.
@@ -473,7 +473,7 @@ CMS-Agent can register external **project** MCP servers and perform primitive, g
 
 ### Environment variables
 
-The project endpoint and bearer token are resolved from environment variables at request time and are **never persisted** to workspace JSON or Blobs, and **never returned or logged**:
+The project bearer **token** is resolved from an environment variable at request time and is **never persisted** to workspace JSON or Blobs, and **never returned or logged**. The **endpoint** may either come from the same kind of env var or be stored on the project record (`mcpEndpoint`) — an endpoint URL is not a secret:
 
 ```text
 DR_LURIE_MCP_ENDPOINT=
@@ -486,7 +486,11 @@ MONETIZER_MCP_ENDPOINT=
 MONETIZER_MCP_TOKEN=
 ```
 
-Each connection uses its own `<CLIENT>_MCP_ENDPOINT` / `<CLIENT>_MCP_TOKEN` pair (per the `project_registration.v1` naming convention). Set the values in the Netlify deployment; no existing env var is reused across connections, because each outbound MCP server has its own endpoint and bearer token. Only non-secret metadata is stored and returned. Project views expose the env var *names* plus `endpointConfigured` / `tokenConfigured` booleans — never the endpoint value, token, authorization header, cookies, or JWTs.
+Each connection uses its own `<CLIENT>_MCP_ENDPOINT` / `<CLIENT>_MCP_TOKEN` pair (per the `project_registration.v1` naming convention); no env var is reused across connections, because each outbound MCP server has its own endpoint and bearer token.
+
+**The endpoint no longer requires a deployment change per tenant** (2026-08-18). `project.create` / `project.update` accept `mcpEndpoint` — the URL itself — and store it on the project record, and `site.duplicate` genesis *derives* it from the Netlify site it just created, so minting a client sets nothing by hand. Resolution is **env var first, record second**: `<CLIENT>_MCP_ENDPOINT` still wins whenever it is populated, so every previously registered project resolves exactly as before and the deployment keeps a break-glass override. A stored endpoint is validated credential-free (https, no `user:password@`, no query, no fragment), which is why it is safe to persist and to return.
+
+The **token** is unchanged: env var NAME only, value in the deployment/secret custodian. Project views expose the env var *names*, the stored endpoint (if any), `endpointSource` (`env` | `registry` | `unset`), and `endpointConfigured` / `tokenConfigured` booleans — never an env var's value, the token, authorization header, cookies, or JWTs.
 
 ### MCP tools
 

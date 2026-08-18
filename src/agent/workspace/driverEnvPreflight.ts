@@ -8,9 +8,14 @@
 // driver simply could not see the endpoint. This module makes that a named, pre-dispatch fact:
 //
 //   preflightDriverEnv  — before a background driver advances a run for project P, ask whether P's
-//                         mcpEndpointEnvVar is set in THIS process. If not, the driver does not
-//                         dispatch; it records `driver_env_missing:<VAR>` on the run once and leaves
-//                         the run for a driver that can see the endpoint.
+//                         endpoint RESOLVES in THIS process. If not, the driver does not dispatch;
+//                         it records `driver_env_missing:<VAR>` on the run once and leaves the run
+//                         for a driver that can see the endpoint. Since 2026-08-18 a project may
+//                         carry its endpoint on its own registry record (ProjectConnectionConfig.
+//                         mcpEndpoint), which every driver reads from the same store — such a
+//                         project passes this preflight in EVERY process, which is precisely the
+//                         divergence class this module exists to catch. The env var remains the
+//                         override, and a project that relies on it is gated exactly as before.
 //   logProjectEnvNamesOnce — once per cold start, log the NAMES of the project env vars this process
 //                         can see (never their values), so a deploy's log answers "which projects
 //                         could this driver have served" without anyone opening the console.

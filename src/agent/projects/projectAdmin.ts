@@ -5,11 +5,21 @@
 // workspace MCP. Two invariants carry the security posture and are enforced here, not left to
 // callers:
 //
-//   1. Secrets can never be persisted through this API. Endpoint and token are accepted ONLY as
-//      environment-variable NAMES (validated against a strict identifier pattern), never as
-//      values. A URL or token pasted where a name belongs fails validation, so the registry
-//      physically cannot store a credential. Values are configured in Netlify env and resolved at
-//      connection time (see projectTypes.ts).
+//   1. Secrets can never be persisted through this API. The TOKEN is accepted ONLY as an
+//      environment-variable NAME (validated against a strict identifier pattern), never as a
+//      value, so the registry physically cannot store a credential; the value is configured in the
+//      deployment and resolved at connection time (see projectTypes.ts).
+//
+//      The ENDPOINT may now ALSO be supplied as a value (`mcpEndpoint`), because an endpoint URL is
+//      not a secret — the fleet already publishes every tenant's endpoint in plaintext in
+//      cloudbuild.deploy.yaml's --update-env-vars while tokens travel through --update-secrets.
+//      Hand-adding a <CLIENT>_MCP_ENDPOINT variable per tenant was a manual step with no security
+//      value (Wolf, 2026-08-18). The reason the original rule refused endpoint values — a URL can
+//      smuggle a credential (https://user:pass@host/mcp, ?token=…) — is closed structurally rather
+//      than by blanket refusal: registryEndpointSchema below accepts https only, with no userinfo,
+//      no query and no fragment, so a stored endpoint is provably credential-free.
+//      `mcpEndpointEnvVar` stays REQUIRED and still WINS when populated, so no existing project's
+//      resolution changes and the deployment keeps a break-glass override.
 //   2. Publishing stays disabled. The publishing policy is constructed server-side on create and
 //      is not patchable; enabling publish remains gated on a future explicit PUBLISH approval
 //      gate, exactly like the code-defined projects.
@@ -32,6 +42,29 @@ const ENV_VAR_NAME_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
 
 export const projectIdSchema = z.string().regex(PROJECT_ID_PATTERN, "projectId must be lowercase kebab-case (e.g. \"acme-daily\").");
 export const envVarNameSchema = z.string().regex(ENV_VAR_NAME_PATTERN, "Expected an environment variable NAME like ACME_MCP_ENDPOINT (never a URL or secret value).");
+
+// The one endpoint VALUE this API accepts, and the whole reason accepting it is safe. Every clause
+// is load-bearing:
+//   https only        — no http downgrade, no file:/data: smuggling.
+//   no userinfo       — https://user:pass@host/mcp is the classic credential-in-a-URL vector.
+//   no query/fragment — ?token=… is the other one.
+//   length cap        — a registry record is not a payload channel.
+// What survives is a plain origin+path, which is exactly what a tenant's /mcp endpoint is and
+// nothing more, so it is safe to persist AND to return in project.get / project.list.
+export const MAX_REGISTRY_ENDPOINT_LENGTH = 512;
+export const registryEndpointSchema = z.string().min(1).max(MAX_REGISTRY_ENDPOINT_LENGTH).superRefine((value, ctx) => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    ctx.addIssue({ code: "custom", message: "mcpEndpoint must be an absolute HTTPS URL (e.g. https://acme-daily.netlify.app/mcp)." });
+    return;
+  }
+  if (url.protocol !== "https:") ctx.addIssue({ code: "custom", message: "mcpEndpoint must use https." });
+  if (url.username || url.password) ctx.addIssue({ code: "custom", message: "mcpEndpoint must not embed credentials (no user:password@host) — the token is referenced by env var NAME via tokenEnvVar." });
+  if (url.search) ctx.addIssue({ code: "custom", message: "mcpEndpoint must not carry a query string — a query can smuggle a secret value into the registry." });
+  if (url.hash) ctx.addIssue({ code: "custom", message: "mcpEndpoint must not carry a fragment." });
+});
 
 // canonicalArticleBody was removed (R-23): every definition declared the identical value, making it
 // configuration that could only ever misconfigure. The canonical body contract (client_object.v1) is
@@ -91,6 +124,8 @@ export const projectCreateSchema = z.object({
   projectId: projectIdSchema,
   name: z.string().min(1).max(120),
   mcpEndpointEnvVar: envVarNameSchema,
+  // Optional endpoint VALUE stored on the record. Absent = today's behavior exactly (env var only).
+  mcpEndpoint: registryEndpointSchema.optional(),
   authMode: z.enum(projectAuthModes).default("bearer_env"),
   tokenEnvVar: envVarNameSchema.optional(),
   // Deny-all by default: remote tools must be allow-listed explicitly (or via defaultToolPolicy)
@@ -106,6 +141,8 @@ export const projectCreateSchema = z.object({
 export const projectUpdateSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   mcpEndpointEnvVar: envVarNameSchema.optional(),
+  // null CLEARS the stored endpoint (back to env-var-only resolution); omitting it leaves it as-is.
+  mcpEndpoint: registryEndpointSchema.nullable().optional(),
   authMode: z.enum(projectAuthModes).optional(),
   tokenEnvVar: envVarNameSchema.nullable().optional(),
   allowedTools: z.array(z.string().min(1).max(128)).max(64).optional(),
@@ -145,6 +182,16 @@ const DEFAULT_PUBLISHING_POLICY: ProjectPublishingPolicy = {
 
 const defaultProjectIds = (): Set<string> => new Set(defaultProjectConfigs().map((project) => project.projectId));
 
+// Enforced HERE, not only at the MCP boundary's zod parse, so no in-process caller (site genesis,
+// a future job) can put an endpoint on a record without passing the credential-free check.
+const requireCredentialFreeEndpoint = (mcpEndpoint: string | undefined) => {
+  if (mcpEndpoint === undefined) return;
+  const parsed = registryEndpointSchema.safeParse(mcpEndpoint);
+  if (!parsed.success) {
+    throw new ProjectAdminError("endpoint_not_credential_free", `mcpEndpoint is not a storable endpoint: ${parsed.error.issues.map((issue) => issue.message).join(" ")}`);
+  }
+};
+
 const requireTokenEnvVarForBearer = (authMode: string, tokenEnvVar: string | undefined) => {
   if (authMode === "bearer_env" && !tokenEnvVar) {
     throw new ProjectAdminError("token_env_var_required", "authMode \"bearer_env\" requires tokenEnvVar (the NAME of the env var holding the bearer token).");
@@ -153,6 +200,7 @@ const requireTokenEnvVarForBearer = (authMode: string, tokenEnvVar: string | und
 
 export async function createProject(repository: ProjectRepository, input: ProjectCreateInput): Promise<ProjectSummary> {
   requireTokenEnvVarForBearer(input.authMode, input.tokenEnvVar);
+  requireCredentialFreeEndpoint(input.mcpEndpoint);
   if (await repository.get(input.projectId)) {
     throw new ProjectAdminError("project_exists", `A project with id "${input.projectId}" is already registered.`);
   }
@@ -160,6 +208,7 @@ export async function createProject(repository: ProjectRepository, input: Projec
     projectId: input.projectId,
     name: input.name,
     mcpEndpointEnvVar: input.mcpEndpointEnvVar,
+    ...(input.mcpEndpoint ? { mcpEndpoint: input.mcpEndpoint } : {}),
     authMode: input.authMode,
     ...(input.tokenEnvVar ? { tokenEnvVar: input.tokenEnvVar } : {}),
     allowedTools: [...input.allowedTools],
@@ -198,11 +247,16 @@ export async function updateProject(repository: ProjectRepository, projectId: st
       ...(patch.operatorPublishDefault !== undefined ? { operatorDefault: patch.operatorPublishDefault } : {})
     }
   };
+  if (patch.mcpEndpoint !== undefined) {
+    if (patch.mcpEndpoint === null) delete next.mcpEndpoint;
+    else next.mcpEndpoint = patch.mcpEndpoint;
+  }
   if (patch.tokenEnvVar !== undefined) {
     if (patch.tokenEnvVar === null) delete next.tokenEnvVar;
     else next.tokenEnvVar = patch.tokenEnvVar;
   }
   requireTokenEnvVarForBearer(next.authMode, next.tokenEnvVar);
+  requireCredentialFreeEndpoint(next.mcpEndpoint);
   return toProjectSummary(await repository.save(next));
 }
 
@@ -222,14 +276,16 @@ export function projectRegistrationContract() {
     version: "project_registration.v1",
     purpose: "Register an external publishing client's MCP server so the workspace can test, inspect, and validate handoffs against it.",
     secretHandling: {
-      rule: "Endpoint and token are referenced by environment variable NAME only; values are configured in the Netlify deployment and are never persisted or returned.",
+      rule: "The TOKEN is referenced by environment variable NAME only; its value is configured in the deployment and is never persisted or returned. The ENDPOINT is not a secret: supply it directly as mcpEndpoint and it is stored on the record, so no per-tenant env var has to be added to this deployment. A stored endpoint is validated credential-free (https, no user:password@, no query, no fragment) and may be returned to callers; the env var's own value never is.",
       endpointEnvVarPattern: ENV_VAR_NAME_PATTERN.source,
+      endpointResolution: "env var first, record second: <CLIENT>_MCP_ENDPOINT wins whenever it is populated (unchanged behavior + a break-glass override); mcpEndpoint answers when it is not.",
       convention: "<CLIENT>_MCP_ENDPOINT and <CLIENT>_MCP_TOKEN, e.g. ACME_DAILY_MCP_ENDPOINT / ACME_DAILY_MCP_TOKEN."
     },
     fields: {
       projectId: { required: true, pattern: PROJECT_ID_PATTERN.source, example: "acme-daily" },
       name: { required: true, example: "Acme Daily" },
-      mcpEndpointEnvVar: { required: true, example: "ACME_DAILY_MCP_ENDPOINT" },
+      mcpEndpointEnvVar: { required: true, example: "ACME_DAILY_MCP_ENDPOINT", note: "Env var NAME. Still required (it is the override channel), but you no longer have to SET it if you pass mcpEndpoint." },
+      mcpEndpoint: { required: false, example: "https://acme-daily.netlify.app/mcp", note: "The endpoint URL itself, stored on the record — an endpoint is not a secret. https only, no credentials, no query, no fragment. Omit it to keep pure env-var resolution. site.duplicate genesis derives this automatically from the Netlify site it just created, so a minted tenant needs no endpoint step at all." },
       authMode: { required: false, default: "bearer_env", enum: [...projectAuthModes] },
       tokenEnvVar: { required: "when authMode is bearer_env", example: "ACME_DAILY_MCP_TOKEN" },
       allowedTools: { required: false, default: [], note: "Deny-all until remote tool names are explicitly allow-listed; project.call_tool refuses anything else." },
@@ -239,8 +295,8 @@ export function projectRegistrationContract() {
     },
     publishingPolicy: "Server-enforced: publishEnabled=true by default (go-live 2026-07-31). The per-project *_PUBLISH_ENABLED=false env flag is the operator kill-switch.",
     onboardingSteps: [
-      "1. project.create with projectId, name, mcpEndpointEnvVar (+ tokenEnvVar for bearer_env).",
-      "2. Configure the referenced environment variables in the Netlify deployment (values never pass through MCP).",
+      "1. project.create with projectId, name, mcpEndpointEnvVar (+ tokenEnvVar for bearer_env), and — recommended — mcpEndpoint, the endpoint URL itself.",
+      "2. Configure the TOKEN env var referenced by tokenEnvVar in the deployment (a secret value never passes through MCP). The endpoint needs no deployment change when mcpEndpoint was supplied; set <CLIENT>_MCP_ENDPOINT only to override it.",
       "3. project.get — connection.endpointConfigured/tokenConfigured turn true once the deploy sees the env vars.",
       "4. project.test_connection — primitive MCP initialize against the client's server.",
       "5. project.list_tools, then project.update to allow-list the safe read-only tool names.",

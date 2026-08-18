@@ -146,7 +146,7 @@ describe("project registry + Dr. Lurie definition", () => {
 
     expect(serialized).not.toContain(SECRET);
     expect(serialized).not.toContain("https://dr-lurie.example/mcp");
-    expect(summary.connection).toEqual({ endpointConfigured: true, tokenConfigured: true, mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT", tokenEnvVar: "DR_LURIE_MCP_TOKEN" });
+    expect(summary.connection).toEqual({ endpointConfigured: true, tokenConfigured: true, mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT", tokenEnvVar: "DR_LURIE_MCP_TOKEN", endpointSource: "env" });
     expect(summary.publishingPolicy.publishEnabled).toBe(true);
   });
 

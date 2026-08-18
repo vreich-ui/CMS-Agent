@@ -151,10 +151,17 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // DRY-RUN LAW: not one byte reached the Netlify API.
     expect(netlifyRequests).toEqual([]);
 
-    // ── Registration: env NAMES only, conservative seeded capture policy scoped to the source origin.
+    // ── Registration: the TOKEN by env NAME only, the ENDPOINT derived from the site just minted
+    // and stored ON the record (2026-08-18 — no <SLUG>_MCP_ENDPOINT is ever set by hand), plus the
+    // conservative seeded capture policy scoped to the source origin.
     const config = (await repositoryManager.getProjectRepository().get("zilberman"))!;
     expect(config.mcpEndpointEnvVar).toBe("ZILBERMAN_MCP_ENDPOINT");
     expect(config.tokenEnvVar).toBe("ZILBERMAN_MCP_TOKEN");
+    // Derived from the Netlify site name (dry-run reports https://<siteName>.netlify.app), not typed
+    // by anyone and not passed in by the caller: this call carried no mcpEndpoint at all.
+    expect(config.mcpEndpoint).toBe("https://zilbermanfilmfoundation.netlify.app/mcp");
+    // The registry still cannot hold a secret: the token lives behind a NAME, nothing else.
+    expect(JSON.stringify(config)).not.toContain("tenant-token");
     const policy = resolveProjectCapturePolicy(config);
     expect(policy.allowedCrawlOrigins).toEqual(["https://www.zilbermanfilmfoundation.com"]);
     expect(policy.maxPages).toBe(20);
@@ -194,7 +201,11 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(byId.get("set_admin_emails")!.detail).toContain("Until the first invite exists this is the ONLY way in");
     expect(byId.get("github_repo_binding")!.envVars).toEqual(["GITHUB_REPOSITORY", "GITHUB_BRANCH", "GITHUB_CONTENT_TOKEN", "GITHUB_COMMIT_AUTHOR_EMAIL", "GITHUB_COMMIT_AUTHOR_NAME"]);
     expect(byId.get("pdf_tool_storage_grant")!.envVars).toEqual(["PDF_TOOL_STORAGE_SITE_ID", "PDF_TOOL_STORAGE_TOKEN"]);
-    expect(byId.get("deploy_side_mcp_env")!.envVars).toEqual(["ZILBERMAN_MCP_ENDPOINT", "ZILBERMAN_MCP_TOKEN"]);
+    // THE CHECKLIST SHRANK: the endpoint item is gone — genesis registered it — and what remains is
+    // the token alone, which is irreducible because it is a secret VALUE in a custodian's keeping.
+    expect(byId.get("deploy_side_mcp_env")!.envVars).toEqual(["ZILBERMAN_MCP_TOKEN"]);
+    expect(byId.get("deploy_side_mcp_env")!.title).toContain("token only");
+    expect(byId.get("deploy_side_mcp_env")!.detail).toContain("https://zilbermanfilmfoundation.netlify.app/mcp");
     expect(byId.get("invite_first_owner")!.detail).toContain("zilbermanfilmfoundation.netlify.app/admin");
     expect(byId.get("dns")!.detail).toContain("CNAME to the generated zilbermanfilmfoundation.netlify.app");
 
@@ -203,13 +214,25 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
 
     // ── Status: outstanding human items listed; the deploy-side env item resolves LIVE.
     const before = await mcpCall("site_duplicate_status", { runId: result.runId });
-    const beforeItems = (before.structured.data as { outstandingHumanItems: Array<{ id: string; status: string; observed?: Record<string, boolean> }> }).outstandingHumanItems;
+    const beforeItems = (before.structured.data as { outstandingHumanItems: Array<{ id: string; status: string; observed?: Record<string, unknown> }> }).outstandingHumanItems;
     expect(beforeItems.map((item) => item.id)).toContain("deploy_side_mcp_env");
     const envItemBefore = beforeItems.find((item) => item.id === "deploy_side_mcp_env")!;
     expect(envItemBefore.status).toBe("outstanding");
-    // The endpoint is present (the crawl's storage-grant fetch needs it — set in beforeEach); the
-    // tenant token is still missing, so the item stays outstanding and says exactly which half.
-    expect(envItemBefore.observed).toEqual({ endpointConfigured: true, tokenConfigured: false });
+    // The endpoint is present (this test also sets the env var in beforeEach, which still WINS —
+    // that is the backwards-compatible precedence); the tenant token is still missing, so the item
+    // stays outstanding and says exactly which half.
+    expect(envItemBefore.observed).toEqual({ endpointConfigured: true, endpointSource: "env", tokenConfigured: false });
+
+    // …and with the env var REMOVED entirely, the endpoint still resolves — from the record genesis
+    // wrote. This is the whole point: a freshly minted tenant is reachable with nothing added to
+    // this deployment, and the one remaining item is the token.
+    const savedEndpointEnv = process.env.ZILBERMAN_MCP_ENDPOINT;
+    delete process.env.ZILBERMAN_MCP_ENDPOINT;
+    const envless = await mcpCall("site_duplicate_status", { runId: result.runId });
+    const envlessItem = (envless.structured.data as { outstandingHumanItems: Array<{ id: string; observed?: Record<string, unknown> }> })
+      .outstandingHumanItems.find((item) => item.id === "deploy_side_mcp_env")!;
+    expect(envlessItem.observed).toEqual({ endpointConfigured: true, endpointSource: "registry", tokenConfigured: false });
+    process.env.ZILBERMAN_MCP_ENDPOINT = savedEndpointEnv;
 
     process.env.ZILBERMAN_MCP_ENDPOINT = "https://zilbermanfilmfoundation.netlify.app/mcp";
     process.env.ZILBERMAN_MCP_TOKEN = "tenant-token";

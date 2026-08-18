@@ -74,7 +74,7 @@ describe("project.* MCP tools", () => {
     const response = await toolCall("project.get", { projectId: "dr-lurie" });
     const project = structured(response).data.project;
 
-    expect(project.connection).toEqual({ endpointConfigured: true, tokenConfigured: true, mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT", tokenEnvVar: "DR_LURIE_MCP_TOKEN" });
+    expect(project.connection).toEqual({ endpointConfigured: true, tokenConfigured: true, mcpEndpointEnvVar: "DR_LURIE_MCP_ENDPOINT", tokenEnvVar: "DR_LURIE_MCP_TOKEN", endpointSource: "env" });
     expect(JSON.stringify(project)).not.toContain(SECRET);
   });
 

@@ -93,7 +93,7 @@ export async function ensureContentItemShell(params: ContentItemShellParams, dep
 
   const attempt = async (args: Record<string, unknown>): Promise<CallToolResult> => {
     try { return await callTool(config, "object_create", args); } catch (error) {
-      return { ok: false, projectId: run.projectId, connection: { endpointConfigured: false, tokenConfigured: false, mcpEndpointEnvVar: config.mcpEndpointEnvVar }, tool: "object_create", error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, projectId: run.projectId, connection: { endpointConfigured: false, tokenConfigured: false, mcpEndpointEnvVar: config.mcpEndpointEnvVar, endpointSource: "unset" }, tool: "object_create", error: error instanceof Error ? error.message : String(error) };
     }
   };
 

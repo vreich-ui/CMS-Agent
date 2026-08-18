@@ -40,6 +40,7 @@ import { CAPTURE_CONDUCTOR_WORKFLOW_ID } from "../../workspace/captureConductorW
 import { getWorkflowDefinition } from "../../workspace/workflowRegistry.js";
 import { CAPTURE_ARTIFACTS, assertSourceWithinPolicy, resolveCaptureAuthority } from "../../capture/captureEngine.js";
 import { ProjectMcpAdapter, toConnectionState } from "../../projects/projectMcpAdapter.js";
+import { registryEndpointSchema } from "../../projects/projectAdmin.js";
 import { runSiteGenesis, type GenesisHumanChecklistItem, type SiteGenesisResult } from "../../capture/siteGenesis.js";
 import type { ExecutionRepository } from "../../repository/interfaces/ExecutionRepository.js";
 import type { ProjectRepository } from "../../repository/interfaces/ProjectRepository.js";
@@ -68,7 +69,13 @@ const KICK_MAX_STEPS = 60;
 
 const newSiteSchema = z.object({
   name: z.string().min(2).max(63),
-  netlifySiteName: z.string().min(2).max(63).optional()
+  netlifySiteName: z.string().min(2).max(63).optional(),
+  // Optional endpoint override. Omit it on the normal path: genesis DERIVES the tenant's endpoint
+  // from the Netlify site it just created and stores it on the registry record, so a minted tenant
+  // needs no <SLUG>_MCP_ENDPOINT anywhere. Validated credential-free (https, no user:password@, no
+  // query, no fragment) by the same schema project.create uses — the registry can still never hold
+  // a credential, and the TOKEN is untouched: env var NAME only, as always.
+  mcpEndpoint: registryEndpointSchema.optional()
 }).strict();
 
 const duplicateInput = z.object({
@@ -88,7 +95,8 @@ const duplicateJsonSchema = objectSchema({
   targetProjectId: { type: "string", minLength: 1, description: "Existing registered project to land the duplication in. Verified reachable (MCP initialize) and capture-authorized (registry capturePolicy; the deny-all default refuses). Mutually exclusive with newSite." },
   newSite: objectSchema({
     name: { type: "string", minLength: 2, description: "Lowercase kebab-case slug for the new tenant (repo tree sites/<name>/, registry projectId, <NAME>_MCP_* env var names)." },
-    netlifySiteName: { type: "string", minLength: 2, description: "Optional Netlify site name (the <name> in <name>.netlify.app) when it must differ from the slug." }
+    netlifySiteName: { type: "string", minLength: 2, description: "Optional Netlify site name (the <name> in <name>.netlify.app) when it must differ from the slug." },
+    mcpEndpoint: { type: "string", format: "uri", maxLength: 512, description: "Optional override for the new tenant's MCP endpoint, stored on its registry record (https, no credentials/query/fragment — an endpoint is not a secret, the token still is). OMIT IT normally: genesis derives the endpoint from the Netlify site it just creates, so no endpoint has to be set by hand anywhere. Use it only when the tenant serves /mcp from a custom domain from day one." }
   }, ["name"]),
   budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD (workflow.start_dry_run semantics). Refused as budget_exceeded when below the workflow's entry-node reservation — such a run could never dispatch its first node." },
   executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: "Passed through to the run. \"mock\" is the cheap CI/test mode; deterministic capture stages run real engine code either way." }
@@ -121,6 +129,8 @@ type DuplicationRequestRecord = {
     netlifySiteName: string;
     netlifySiteId?: string;
     envVarNames: SiteGenesisResult["envVarNames"];
+    // The endpoint genesis registered on the record (derived, or caller-supplied). Not a secret.
+    mcpEndpoint: string;
     ledger: SiteGenesisResult["ledger"];
   };
 };
@@ -182,7 +192,7 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
   return [
     tool({
       name: "site.duplicate",
-      description: "ONE CALL: duplicate a source site into a landing tenant with the capture_conductor workflow (crawl → map → theme → emit never-released drafts → score → report). With targetProjectId: verifies the existing project is reachable and capture-authorized (registry capturePolicy — the deny-all default refuses). With newSite: runs genesis first, automated to the limit of account authority (create-site scaffold via the platform seam, Netlify site + build hook + deterministic env defaults under NETLIFY_API_TOKEN — dry-run mode records instead of calling; project.create registration with env NAMES only), and returns the human checklist for everything past that limit — surfaced verbatim from the provisioning runbook, never silently skipped. Starts the run AND kicks the long-run plane in the same call (no second MCP round-trip); a pending crawl is then re-driven by the conductor job / run-continuation tick. Returns {runId, statusTool, humanChecklist}. Publish/release stay unreachable from every capture node; no secret VALUE ever transits this tool.",
+      description: "ONE CALL: duplicate a source site into a landing tenant with the capture_conductor workflow (crawl → map → theme → emit never-released drafts → score → report). With targetProjectId: verifies the existing project is reachable and capture-authorized (registry capturePolicy — the deny-all default refuses). With newSite: runs genesis first, automated to the limit of account authority (create-site scaffold via the platform seam, Netlify site + build hook + deterministic env defaults under NETLIFY_API_TOKEN — dry-run mode records instead of calling; project.create registration with the tenant's MCP endpoint DERIVED from the site just created and stored on its record — so no <SLUG>_MCP_ENDPOINT is ever set by hand — and the bearer token by env var NAME only), and returns the human checklist for everything past that limit — surfaced verbatim from the provisioning runbook, never silently skipped. Starts the run AND kicks the long-run plane in the same call (no second MCP round-trip); a pending crawl is then re-driven by the conductor job / run-continuation tick. Returns {runId, statusTool, humanChecklist}. Publish/release stay unreachable from every capture node; no secret VALUE ever transits this tool.",
       zodSchema: duplicateInput,
       inputSchema: duplicateJsonSchema,
       execute: async (input) => {
@@ -194,7 +204,7 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
         let targetProjectId: string;
         let humanChecklist: GenesisHumanChecklistItem[] = [];
         if (data.newSite) {
-          genesis = await runSiteGenesis({ name: data.newSite.name, netlifySiteName: data.newSite.netlifySiteName, sourceUrl: data.sourceUrl }, { projectRepository });
+          genesis = await runSiteGenesis({ name: data.newSite.name, netlifySiteName: data.newSite.netlifySiteName, mcpEndpoint: data.newSite.mcpEndpoint, sourceUrl: data.sourceUrl }, { projectRepository });
           targetProjectId = genesis.projectId;
           humanChecklist = genesis.humanChecklist;
         } else {
@@ -237,6 +247,7 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
               netlifySiteName: genesis.netlifySiteName,
               ...(genesis.netlifySiteId ? { netlifySiteId: genesis.netlifySiteId } : {}),
               envVarNames: genesis.envVarNames,
+              mcpEndpoint: genesis.mcpEndpoint,
               ledger: genesis.ledger
             }
           } : {})
@@ -282,7 +293,7 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
 
     tool({
       name: "site.duplicate_status",
-      description: "Observe a site.duplicate run: run state (+ stall assessment), per-node progress, spend (cost ledger + budget), the capture report references (emission plan, drafts, fidelity, gaps, terminal run report), and the outstanding human checklist items — with the deploy-side env item resolved live against this deployment's configuration (names only). Read-only.",
+      description: "Observe a site.duplicate run: run state (+ stall assessment), per-node progress, spend (cost ledger + budget), the capture report references (emission plan, drafts, fidelity, gaps, terminal run report), and the outstanding human checklist items — with the deploy-side item resolved live against the project's resolved connection (env var name + which source answers the endpoint; never a value). Read-only.",
       zodSchema: duplicateStatusInput,
       inputSchema: duplicateStatusJsonSchema,
       execute: async (input) => {
@@ -313,8 +324,11 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
         const connection = config ? toConnectionState(config) : undefined;
         const humanItems = (request?.humanChecklist ?? []).map((item) => {
           if (item.id === "deploy_side_mcp_env" && connection) {
+            // endpointConfigured is true when EITHER source resolves — the env var or the endpoint
+            // genesis stored on the record — so for a freshly minted tenant this item reduces to
+            // "is the token in place yet?". endpointSource says which answered.
             const satisfied = connection.endpointConfigured && connection.tokenConfigured;
-            return { ...item, status: satisfied ? "satisfied" : "outstanding", observed: { endpointConfigured: connection.endpointConfigured, tokenConfigured: connection.tokenConfigured } };
+            return { ...item, status: satisfied ? "satisfied" : "outstanding", observed: { endpointConfigured: connection.endpointConfigured, endpointSource: connection.endpointSource, tokenConfigured: connection.tokenConfigured } };
           }
           return { ...item, status: "outstanding" as const };
         });

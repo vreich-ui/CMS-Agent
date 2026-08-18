@@ -6,20 +6,40 @@
 import { effectiveToolPermission, toToolPolicyMap, type ProjectConnectionConfig, type ProjectConnectionState, type ToolPermission } from "./projectTypes.js";
 import { McpClientError, mcpCallTool, mcpInitialize, mcpListResources, mcpListTools, type McpClientOptions, type McpTransport } from "./mcpClient.js";
 
-// Resolve the MCP endpoint and bearer token from environment variables. Values are used only to make
-// requests and are never persisted, returned to callers, or logged.
-export type ResolvedConnection = { endpointConfigured: boolean; tokenConfigured: boolean; endpoint?: string; token?: string };
+// Resolve the MCP endpoint and bearer token for a project. The TOKEN always comes from an
+// environment variable and is never persisted, returned to callers, or logged.
+//
+// The ENDPOINT resolves ENV-FIRST, registry-second:
+//   1. env[mcpEndpointEnvVar] — whenever it is populated it wins, so every project registered
+//      before ProjectConnectionConfig.mcpEndpoint existed resolves byte-identically to before, and
+//      an operator retains a deployment-only override that needs no registry write.
+//   2. config.mcpEndpoint — the credential-free endpoint stored on the record (validated at write
+//      time by projectAdmin's registryEndpointSchema), so minting a tenant no longer requires
+//      hand-adding a <CLIENT>_MCP_ENDPOINT variable to this deployment.
+export type EndpointSource = "env" | "registry" | "unset";
+export type ResolvedConnection = { endpointConfigured: boolean; tokenConfigured: boolean; endpoint?: string; endpointSource: EndpointSource; token?: string };
 
 export function resolveProjectConnection(config: ProjectConnectionConfig, env: NodeJS.ProcessEnv = process.env): ResolvedConnection {
-  const endpoint = env[config.mcpEndpointEnvVar]?.trim() || undefined;
+  const fromEnv = env[config.mcpEndpointEnvVar]?.trim() || undefined;
+  const fromRegistry = config.mcpEndpoint?.trim() || undefined;
+  const endpoint = fromEnv ?? fromRegistry;
+  const endpointSource: EndpointSource = fromEnv ? "env" : fromRegistry ? "registry" : "unset";
   const token = config.tokenEnvVar ? (env[config.tokenEnvVar]?.trim() || undefined) : undefined;
-  return { endpointConfigured: Boolean(endpoint), tokenConfigured: Boolean(token), endpoint, token };
+  return { endpointConfigured: Boolean(endpoint), tokenConfigured: Boolean(token), endpoint, endpointSource, token };
 }
 
-// Safe, caller-facing connection view: booleans plus env var names only — never the endpoint value or token.
+// Safe, caller-facing connection view: booleans, env var names, which source answered, and the
+// stored (credential-free) endpoint when there is one — never the env var's VALUE and never the token.
 export function toConnectionState(config: ProjectConnectionConfig, env: NodeJS.ProcessEnv = process.env): ProjectConnectionState {
   const resolved = resolveProjectConnection(config, env);
-  return { endpointConfigured: resolved.endpointConfigured, tokenConfigured: resolved.tokenConfigured, mcpEndpointEnvVar: config.mcpEndpointEnvVar, tokenEnvVar: config.tokenEnvVar };
+  return {
+    endpointConfigured: resolved.endpointConfigured,
+    tokenConfigured: resolved.tokenConfigured,
+    mcpEndpointEnvVar: config.mcpEndpointEnvVar,
+    tokenEnvVar: config.tokenEnvVar,
+    endpointSource: resolved.endpointSource,
+    ...(config.mcpEndpoint ? { mcpEndpoint: config.mcpEndpoint } : {})
+  };
 }
 
 // McpClientError messages are our own safe constants; any other error (network/DNS/URL) is collapsed
@@ -97,7 +117,7 @@ export class ProjectMcpAdapter {
   private requireConnection(): ResolvedConnection | { error: string } {
     if (this.config.status === "disabled") return { error: "Project connection is disabled." };
     const resolved = resolveProjectConnection(this.config, this.env);
-    if (!resolved.endpoint) return { error: `Project MCP endpoint is not configured (${this.config.mcpEndpointEnvVar}).` };
+    if (!resolved.endpoint) return { error: `Project MCP endpoint is not configured: neither the ${this.config.mcpEndpointEnvVar} env var on this deployment nor an mcpEndpoint on the project record resolves one (set either — project.update {mcpEndpoint} needs no deploy change).` };
     return resolved;
   }
 

@@ -15,15 +15,23 @@
 //        by-hand step the T12.12 §6 analysis marked API-capable; closed here.
 //     4. Deterministic env defaults — TRACKING_PROJECT_ID=trk_<slug> (the documented convention,
 //        derived instead of human-decided; override any time in the Netlify console).
-//     5. CMS-Agent registration — project.create with <SLUG>_MCP_ENDPOINT / <SLUG>_MCP_TOKEN env
-//        NAMES (the registration contract's convention; values NEVER transit MCP) and a
-//        conservative seeded capture policy (rights all "prohibited": copy is regenerated, media is
-//        never imported — raising rights is an explicit human project.update, never a default).
+//     5. CMS-Agent registration — project.create with the <SLUG>_MCP_TOKEN env NAME (a secret value
+//        NEVER transits MCP), the tenant's MCP ENDPOINT derived from the Netlify site this run just
+//        created and stored on the record, and a conservative seeded capture policy (rights all
+//        "prohibited": copy is regenerated, media is never imported — raising rights is an explicit
+//        human project.update, never a default).
+//     6. The endpoint half of the deploy-side connection — closed here (Wolf, 2026-08-18: "setting
+//        ZILBERMAN_MCP_ENDPOINT in every new clone ... by hand does not work for me"). The endpoint
+//        is a deterministic function of the site that was just minted (https://<site>/mcp — every
+//        scaffold routes /mcp to its own mcp function, see create-site.mjs's redirects), so nobody
+//        types or sets it: it is derived and persisted on the registry record. An endpoint URL is
+//        not a secret; the TOKEN still is, and stays an env var NAME reference on the checklist.
 //   HUMAN (the checklist): NETLIFY_API_TOKEN custody itself, GitHub repo binding + content token,
 //   enabling Netlify Identity, ADMIN_EMAILS, the first-Owner sign-in, artifact ingest hosts, the
 //   pdf-tool storage grant (a new Netlify machine account — no API mints accounts), tracking sink,
 //   fleet-shared AI keys, CMS_AGENT_MCP_TOKEN (Google Secret Manager — a third system), the
-//   deploy-side <SLUG>_MCP_* values, and DNS.
+//   deploy-side <SLUG>_MCP_TOKEN value (secret custody: Secret Manager + the Cloud Run
+//   --update-secrets list; the ENDPOINT half is no longer a human step), and DNS.
 //
 // NETLIFY DRY-RUN MODE (SITE_GENESIS_NETLIFY_MODE, default "dry_run"): every Netlify API action is
 // recorded in the audit ledger with synthetic ids and NO network call — the proof mode this
@@ -88,6 +96,9 @@ export type SiteGenesisResult = {
   netlifySiteName: string;
   netlifySiteId?: string;
   envVarNames: { endpoint: string; token: string };
+  // The endpoint registered ON the record (derived from the minted site, or the caller's override).
+  // The <SLUG>_MCP_ENDPOINT env var named above stays an optional override, not a prerequisite.
+  mcpEndpoint: string;
   seededCapturePolicy: ProjectCapturePolicy;
   project: ProjectSummary;
   ledger: GenesisAction[];
@@ -98,6 +109,30 @@ const now = () => new Date().toISOString();
 
 // slug -> SCREAMING_SNAKE env prefix, matching the registration contract's <CLIENT>_MCP_* convention.
 export const envPrefixForSlug = (slug: string): string => slug.toUpperCase().replace(/-/g, "_");
+
+// The tenant's MCP endpoint, DERIVED — never typed by a human, never asked for.
+//
+// It is a deterministic function of the Netlify site genesis just created: every scaffold ships the
+// same `/mcp -> /.netlify/functions/mcp` redirect (create-site.mjs's netlify.toml template), so the
+// endpoint is simply <site origin>/mcp. Prefer the origin the Netlify API itself reported for the
+// site (ssl_url — correct even when the serving name differs from the slug, and the same field
+// create-site's --json result exposes as siteUrl); fall back to the deterministic
+// <netlifySiteName>.netlify.app when the API returned nothing usable.
+//
+// Only the ORIGIN is taken from the reported URL, so a surprising path/query/credential in an API
+// response can never end up on a registry record (projectAdmin re-validates regardless).
+export const deriveTenantMcpEndpoint = (netlifySiteName: string, reportedSiteUrl?: string): string => {
+  const reported = reportedSiteUrl?.trim();
+  if (reported) {
+    try {
+      const url = new URL(reported);
+      if (url.protocol === "https:" && !url.username && !url.password) return `${url.origin}/mcp`;
+    } catch {
+      // Unparseable — fall through to the deterministic default rather than storing garbage.
+    }
+  }
+  return `https://${netlifySiteName}.netlify.app/mcp`;
+};
 
 // The conservative seeded capture policy for a genesis target. Deliberately narrow:
 //   - only the source origin, same-origin, robots honored, single-connection polite crawl;
@@ -252,6 +287,9 @@ export function buildGenesisHumanChecklist(input: {
   envPrefix: string;
   scaffoldExecuted: boolean;
   netlifyMode: GenesisNetlifyMode;
+  // The endpoint genesis derived and stored on the registry record. Present = the endpoint half of
+  // the deploy-side connection is DONE and the checklist item shrinks to the token alone.
+  registeredMcpEndpoint?: string;
 }): GenesisHumanChecklistItem[] {
   const { slug, netlifySiteName, envPrefix } = input;
   const items: GenesisHumanChecklistItem[] = [];
@@ -340,14 +378,27 @@ export function buildGenesisHumanChecklist(input: {
       envVars: ["CMS_AGENT_MCP_TOKEN"],
       source: "T11.7 env table (AI + integrations)"
     },
-    {
-      id: "deploy_side_mcp_env",
-      title: `Set ${envPrefix}_MCP_ENDPOINT + ${envPrefix}_MCP_TOKEN on THIS CMS-Agent deployment`,
-      detail: `Registration contract step 2, verbatim: "Configure the referenced environment variables in the Netlify deployment (values never pass through MCP)." The project was registered with these env var NAMES; until the deployment sees values, project.test_connection reports the endpoint unconfigured and the run's emission stage cannot reach the new site. After setting them, complete contract steps 3–6: project.get → project.test_connection → project.list_tools + allow-list → project.validate_handoff (agent-runnable).`,
-      envVars: [`${envPrefix}_MCP_ENDPOINT`, `${envPrefix}_MCP_TOKEN`],
-      source: "project.get_registration_contract onboardingSteps 2–6",
-      verify: "project.get — connection.endpointConfigured/tokenConfigured turn true once the deploy sees the env vars."
-    },
+    input.registeredMcpEndpoint
+      ? {
+        // The endpoint half is CLOSED: genesis derived it from the site it just created and stored
+        // it on the registry record, so nothing has to be set for it on this deployment (Wolf,
+        // 2026-08-18). What is left is irreducibly a secret-custody act: the token VALUE lives in a
+        // secret store, and no endpoint-shaped derivation can produce it.
+        id: "deploy_side_mcp_env",
+        title: `Provision ${envPrefix}_MCP_TOKEN on THIS CMS-Agent deployment (the endpoint is already registered — token only)`,
+        detail: `Registration contract step 2: the ENDPOINT needed no deployment change — genesis registered it on the project record as ${input.registeredMcpEndpoint} (an endpoint URL is not a secret). Only the bearer TOKEN remains, and only because it is a secret VALUE: take the new site's MCP_HTTP_AUTH_TOKEN (auto-minted during provisioning, never printed), store it in the secret custodian, and expose it to this deployment as ${envPrefix}_MCP_TOKEN — on Cloud Run that is a Secret Manager entry plus an --update-secrets pair in cloudbuild.deploy.yaml. Then complete contract steps 3–6: project.get → project.test_connection → project.list_tools + allow-list → project.validate_handoff (agent-runnable). Setting ${envPrefix}_MCP_ENDPOINT is OPTIONAL and only ever an override (it wins over the registered value) — e.g. after moving this tenant to a custom domain; project.update {mcpEndpoint} does the same with no deploy.`,
+        envVars: [`${envPrefix}_MCP_TOKEN`],
+        source: "project.get_registration_contract onboardingSteps 2–6",
+        verify: "project.get — connection.endpointConfigured is already true (endpointSource \"registry\"); tokenConfigured turns true once the deploy sees the token."
+      }
+      : {
+        id: "deploy_side_mcp_env",
+        title: `Set ${envPrefix}_MCP_ENDPOINT + ${envPrefix}_MCP_TOKEN on THIS CMS-Agent deployment`,
+        detail: `Registration contract step 2, verbatim: "Configure the referenced environment variables in the Netlify deployment (values never pass through MCP)." No endpoint could be derived for this run, so the project was registered with env var NAMES only; until the deployment sees values, project.test_connection reports the endpoint unconfigured and the run's emission stage cannot reach the new site. After setting them, complete contract steps 3–6: project.get → project.test_connection → project.list_tools + allow-list → project.validate_handoff (agent-runnable).`,
+        envVars: [`${envPrefix}_MCP_ENDPOINT`, `${envPrefix}_MCP_TOKEN`],
+        source: "project.get_registration_contract onboardingSteps 2–6",
+        verify: "project.get — connection.endpointConfigured/tokenConfigured turn true once the deploy sees the env vars."
+      },
     {
       id: "capture_rights_review",
       title: "Capture rights were seeded CONSERVATIVE — raise only if the operator holds rights",
@@ -371,6 +422,11 @@ export type SiteGenesisInput = {
   // zilberman tree serving at zilbermanfilmfoundation.netlify.app). Defaults to the slug.
   netlifySiteName?: string;
   sourceUrl: string;
+  // OPTIONAL endpoint override for the tenant being minted — for a client that will serve its /mcp
+  // from a custom domain from day one. Omit it (the normal path): genesis DERIVES the endpoint from
+  // the Netlify site it just created, so nobody passes or sets anything. Validated credential-free
+  // by projectAdmin before it can reach a record.
+  mcpEndpoint?: string;
 };
 
 export type SiteGenesisDeps = {
@@ -432,10 +488,15 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   const netlify = new NetlifyGenesisClient(mode, token, deps.netlifyFetch);
   let siteId: string | undefined;
   let accountId: string | undefined;
+  // The site's own serving URL as Netlify reported it; the tenant's MCP endpoint is derived from it.
+  let siteUrl: string | undefined;
   if (mode === "live" && platformRoot) {
     const provision = await runCreateSiteCli(platformRoot, ["--name", slug, "--provision-only", ...(input.netlifySiteName ? ["--netlify-site-name", netlifySiteName] : [])], { passToken: true, token });
     const netlifyResult = (provision.netlify ?? null) as Record<string, unknown> | null;
     siteId = typeof netlifyResult?.siteId === "string" ? (netlifyResult.siteId as string) : undefined;
+    // create_site_result.v1's safe projection already carries the site's serving URL (ssl_url||url) —
+    // the endpoint is derived from it, so the delegated path needs no extra API call.
+    if (typeof netlifyResult?.siteUrl === "string") siteUrl = netlifyResult.siteUrl as string;
     ledger.push({
       step: "netlify_provision_delegated",
       kind: "executed",
@@ -447,6 +508,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     const site = await netlify.createSite(netlifySiteName);
     siteId = site.siteId;
     accountId = site.accountId;
+    siteUrl = site.url;
     if (mode === "dry_run") {
       // The delegated store-probe + auto-secret unit is create-site's; in dry-run it is recorded as
       // the intended follow-on rather than re-implemented (re-implementing secret minting here would
@@ -480,13 +542,17 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   }
   ledger.push(...netlify.actions);
 
-  // 3. CMS-Agent registration — the registration contract's step 1, env var NAMES only, plus the
-  // conservative seeded capture policy that authorizes exactly the requested source origin.
+  // 3. CMS-Agent registration — the registration contract's step 1: the token by env var NAME (a
+  // secret value never transits MCP), the DERIVED endpoint stored on the record so no human ever
+  // sets <SLUG>_MCP_ENDPOINT, plus the conservative seeded capture policy that authorizes exactly
+  // the requested source origin.
   const seededCapturePolicy = seededGenesisCapturePolicy(sourceOrigin);
+  const mcpEndpoint = input.mcpEndpoint?.trim() || deriveTenantMcpEndpoint(netlifySiteName, siteUrl);
   const project = await createProject(deps.projectRepository, {
     projectId: slug,
     name: slug,
     mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`,
+    mcpEndpoint,
     authMode: "bearer_env",
     tokenEnvVar: `${envPrefix}_MCP_TOKEN`,
     allowedTools: [],
@@ -500,18 +566,19 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   ledger.push({
     step: "register_project",
     kind: "executed",
-    detail: `project.create registered "${slug}" with ${envPrefix}_MCP_ENDPOINT / ${envPrefix}_MCP_TOKEN (env NAMES only — values never transit MCP) and a conservative capture policy scoped to ${sourceOrigin} (rights prohibited: copy regenerated, media never imported).`,
+    detail: `project.create registered "${slug}" with the endpoint ${mcpEndpoint} stored ON the record (${input.mcpEndpoint ? "supplied by the caller" : "derived from the minted Netlify site"} — an endpoint URL is not a secret, so no ${envPrefix}_MCP_ENDPOINT has to be set on this deployment; that env var stays an override) and the bearer token by NAME only (${envPrefix}_MCP_TOKEN — a secret value never transits MCP), plus a conservative capture policy scoped to ${sourceOrigin} (rights prohibited: copy regenerated, media never imported).`,
     at: now(),
-    data: { projectId: slug, mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`, tokenEnvVar: `${envPrefix}_MCP_TOKEN`, allowedCrawlOrigins: [sourceOrigin] }
+    data: { projectId: slug, mcpEndpoint, mcpEndpointSource: input.mcpEndpoint ? "caller_supplied" : "derived_from_netlify_site", mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`, tokenEnvVar: `${envPrefix}_MCP_TOKEN`, allowedCrawlOrigins: [sourceOrigin] }
   });
 
-  const humanChecklist = buildGenesisHumanChecklist({ slug, netlifySiteName, envPrefix, scaffoldExecuted, netlifyMode: mode });
+  const humanChecklist = buildGenesisHumanChecklist({ slug, netlifySiteName, envPrefix, scaffoldExecuted, netlifyMode: mode, registeredMcpEndpoint: mcpEndpoint });
   return {
     projectId: slug,
     netlifyMode: mode,
     netlifySiteName,
     ...(siteId ? { netlifySiteId: siteId } : {}),
     envVarNames: { endpoint: `${envPrefix}_MCP_ENDPOINT`, token: `${envPrefix}_MCP_TOKEN` },
+    mcpEndpoint,
     seededCapturePolicy,
     project,
     ledger,
