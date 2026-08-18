@@ -249,3 +249,16 @@ export async function runArticleBodyValidationLoop(output: Record<string, unknow
   };
   return { output: { ...currentOutput, body, clientValidation: record }, validation: record, warnings };
 }
+
+// S3 item 9: "the client's validator could not be reached / refused the request" is not a warning a
+// publish gate may read past — it becomes a BLOCKER on article_body's own output, which readiness
+// (article_body_blockers) then refuses. The warning stays for the run log; the blocker is what stops
+// an unjudged body from being published as if it had been judged. Copy-on-write, deduplicated.
+export const VALIDATION_UNAVAILABLE_PREFIX = "article_body_validation_unavailable";
+export function promoteValidationUnavailableToBlocker(output: unknown, warnings: readonly string[]): unknown {
+  const unavailable = warnings.filter((warning) => warning.startsWith(VALIDATION_UNAVAILABLE_PREFIX));
+  if (!unavailable.length || !isObject(output)) return output;
+  const existing = Array.isArray(output.blockers) ? output.blockers : [];
+  const added = unavailable.filter((warning) => !existing.includes(warning));
+  return added.length ? { ...output, blockers: [...existing, ...added] } : output;
+}
