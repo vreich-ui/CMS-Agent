@@ -111,6 +111,16 @@ const extractPublishPolicy = (raw: Record<string, unknown>): unknown => {
   return { ...rest, ...(truncate(note, 200) ? { note: truncate(note, 200) } : {}) };
 };
 
+// S3: platform PR #583 exposes the client ceiling at BOTH contract.aggression_ceiling and
+// contract.publish_policy.aggression_ceiling. Top-level wins when both are present; the nested one
+// is read so a contract that only carries the policy-scoped form still resolves a ceiling.
+export const extractAggressionCeiling = (raw: Record<string, unknown>): unknown => {
+  const top = pick(raw, ["aggression_ceiling", "aggressionCeiling"]);
+  if (top !== undefined) return top;
+  const policy = pick(raw, ["publish_policy", "publishPolicy"]);
+  return isObject(policy) ? pick(policy, ["aggression_ceiling", "aggressionCeiling"]) : undefined;
+};
+
 const extractWorkflowSequence = (raw: Record<string, unknown>): string[] => {
   const workflow = pick(raw, ["workflow"]);
   if (!isObject(workflow)) return [];
@@ -156,7 +166,7 @@ export function reduceContract(raw: unknown, source: ContractSource, requestedOb
     workflowSequence: extractWorkflowSequence(record),
     validationSurface: extractValidationSurface(record),
     contractSource: source,
-    ...(pick(record, ["aggression_ceiling", "aggressionCeiling"]) !== undefined ? { aggressionCeiling: pick(record, ["aggression_ceiling", "aggressionCeiling"]) } : {}),
+    ...(extractAggressionCeiling(record) !== undefined ? { aggressionCeiling: extractAggressionCeiling(record) } : {}),
     ...(Object.keys(unmapped).length ? { unmapped } : {})
   };
 }
