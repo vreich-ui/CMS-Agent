@@ -18,6 +18,7 @@
 // Board decision B2: publishRun never releases — releasing to production is a SEPARATE gate whose
 // verb must appear nowhere in this file or in any project's publish execution hook.
 
+import { readContentItemShell } from "./contentItemShell.js";
 import { validateOutput } from "../execution/outputValidator.js";
 import { getWorkspaceNode } from "./nodes.js";
 import { redactSensitiveKeys } from "../observability/redaction.js";
@@ -223,7 +224,10 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   // The hook is handed the ENVELOPE, not the unwrapped client object: its `article_body_valid` check
   // now validates against the article_body node's own outputSchema (the single authority), exactly as
   // evaluatePublishReadiness below already does, and it unwraps `.body` itself for the media check.
-  const readiness = readinessHook ? readinessHook({ articleBody: envelope, ...input.readiness }) : undefined;
+  // S3 item 7: the run's stage outputs travel with the request so the content checks can compare
+  // brief_architect's requested media with what the body delivers and propagate unwaivable upstream
+  // blockers. A caller-supplied stageOutputs (tests, replays) still wins.
+  const readiness = readinessHook ? readinessHook({ articleBody: envelope, stageOutputs: run.stageOutputs, ...input.readiness }) : undefined;
   if (readiness && readiness.status === "no_go") {
     const artifactSlot = readiness.blockers.includes("media_artifacts_verified") ? firstUnverifiedMediaSlot(body, input.readiness?.verifiedMediaRefs) : null;
     return {
@@ -255,6 +259,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
 
   // All gates passed: drive the project's sanctioned publish sequence through its own MCP tools.
   const callTool = deps.callTool ?? ((tool, args) => new ProjectMcpAdapter(config).callTool(tool, args));
+  const shell = readContentItemShell(run);
   const steps: PublishStep[] = [];
   const call = async (tool: string, args: Record<string, unknown>): Promise<unknown> => {
     const res = await callTool(tool, args);
@@ -275,6 +280,9 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
       // Per-site parameters (owning site object id, taxonomy registry, who mints the object id) come
       // from the project's own config — the hook never carries another site's identifiers.
       ...(config.objectDialect ? { objectDialect: config.objectDialect } : {}),
+      // S3 item 8: the content-item shell the conductor created before artifact_plan (if any) — the
+      // hook patches that object instead of creating a second one under the same request id.
+      ...(shell && shell.requestId === input.requestId ? { existingObjectId: shell.objectId } : {}),
       call
     });
 
@@ -291,21 +299,23 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
 // a runId (or a directly-supplied body) and runs the project's readiness hook. Returns available:false
 // with no readiness when the project has no readiness policy — the UI then shows only the generic gate.
 export async function evaluatePublishReadiness(
-  input: { projectId: string; runId?: string; articleBody?: unknown; readiness?: PublishReadinessInput },
+  input: { projectId: string; runId?: string; articleBody?: unknown; stageOutputs?: Record<string, unknown>; readiness?: PublishReadinessInput },
   deps: PublisherDeps = {}
 ): Promise<{ available: boolean; articleBodyValid: boolean; readiness: PublishReadinessResult | null }> {
   const executionRepository = deps.executionRepository ?? repositoryManager.getExecutionRepository();
   let articleBody = input.articleBody;
-  if (articleBody === undefined && input.runId) {
+  let stageOutputs: Record<string, unknown> | undefined = input.stageOutputs;
+  if ((articleBody === undefined || stageOutputs === undefined) && input.runId) {
     const run = await executionRepository.getRun(input.runId);
-    articleBody = run ? findArticleBody(run) : undefined;
+    if (articleBody === undefined) articleBody = run ? findArticleBody(run) : undefined;
+    if (stageOutputs === undefined) stageOutputs = run?.stageOutputs as Record<string, unknown> | undefined;
   }
   // Same authority as publishRun above: the node's own outputSchema. These two disagreeing is what let
   // publish_readiness report a checklist that a real pipeline output could never satisfy.
   const articleBodyValid = validateOutput(articleBody, getWorkspaceNode("article_body")?.outputSchema).ok;
   const hook = getProjectHooks(input.projectId)?.evaluatePublishReadiness;
   if (!hook) return { available: false, articleBodyValid, readiness: null };
-  return { available: true, articleBodyValid, readiness: hook({ articleBody, ...input.readiness }) };
+  return { available: true, articleBodyValid, readiness: hook({ articleBody, ...(stageOutputs ? { stageOutputs } : {}), ...input.readiness }) };
 }
 
 export const __test__ = { evaluateGates, findLockToken, firstUnverifiedMediaSlot, REQUEST_ID_PATTERN, compileRequestIdPattern, PUBLISH_GATE_NAMES };
