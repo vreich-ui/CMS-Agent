@@ -62,7 +62,7 @@ export async function executeTool(toolId: string, rawInput: unknown, context: To
   // of merely abandoning its promise while the fetch keeps running server-side.
   const controller = new AbortController();
   try {
-    const { node, skill } = await resolvePolicySubjects(context.nodeId, context.skillId);
+    const { node, skill } = await resolvePolicySubjects(context.nodeId, context.skillId, context.workflowId);
     // Fetched once, here, and handed to the handler via contextForHandler.project below — a
     // project.* handler in toolRegistry.ts reuses it instead of fetching the same project record a
     // second time (see toolTypes.ts's ToolExecutionContext.project for the reuse contract).
