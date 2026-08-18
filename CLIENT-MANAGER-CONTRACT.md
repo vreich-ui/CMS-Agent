@@ -8,6 +8,14 @@ MCP tool: **`agent_converse`** (internal dotted name `agent.converse`)
 
 This document freezes the CMS-Agent side of the Platform PF1/PF2 integration. Additive versions may be introduced later, but this version must not change incompatibly.
 
+## Surface policy
+
+- **All content is directed through a single chat surface**: the site ADMIN CHAT (platform admin-agent-chat → `client_manager`). It is the only editor surface; it owns approval, learning mode and the human record.
+- `agent_converse` is the raw single-turn primitive used BY that chat. Humans and editor-agents do not call it directly.
+- Direct CMS-Agent MCP use is for **workspace authoring only** (agent prompts, node prompts/schemas/tools/model config, projects, evaluations) — not for producing or publishing content.
+- `workflow.*` / publish tools remain callable directly for operators and tests; their descriptions carry a wrong-path notice, nothing is blocked.
+- Policy: single content surface — Wolf, 2026-08-17.
+
 ## Ownership and execution
 
 CMS-Agent owns the workspace-stored `client_manager` prompt, model selection, project-aware prompt assembly, one provider request, usage metering, and a bounded learning/audit mirror. Platform owns the authoritative `ChatDoc`, transcript trimming policy, editor visibility, tool registry, tool execution, autonomy, approval, locking, retries, and the human-facing wait state.
