@@ -277,7 +277,12 @@ export async function runDeterministicPublicationController(sources: Publication
   // The readiness function resolves the body from a runId when none is supplied; the conductor hands
   // it the in-memory article_body stage output instead, so the decision is computed from what THIS
   // dispatch is holding and no repository read can hand back a staler record.
-  const evaluated = await evaluatePublishReadiness({ projectId: sources.projectId, articleBody: sources.articleBody });
+  const evaluated = await evaluatePublishReadiness({
+    projectId: sources.projectId,
+    articleBody: sources.articleBody,
+    // S3 item 7: the readiness content checks read brief_architect.mediaSlots and upstream blockers.
+    stageOutputs: Object.fromEntries(sources.stageOutputs.map((entry) => [entry.nodeId, entry.output]))
+  });
   if (!evaluated.available || !evaluated.readiness) {
     return {
       ok: false,

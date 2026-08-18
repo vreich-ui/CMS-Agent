@@ -44,6 +44,9 @@ export type PublishExecutionContext = {
   // who mints the object id). Undefined for a project whose config declares none — a hook that
   // needs them must refuse rather than fall back to another site's identifiers.
   objectDialect?: ProjectObjectDialect;
+  // S3 item 8: an object the conductor already created for this request (the content-item shell made
+  // before artifact_plan ran). When present the hook MUST skip object_create and patch this object.
+  existingObjectId?: string;
   call: (tool: string, args: Record<string, unknown>) => Promise<unknown>; // records a step; throws on tool failure
 };
 export type PublishExecutionOutcome = {

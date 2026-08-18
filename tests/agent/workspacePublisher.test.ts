@@ -8,6 +8,10 @@ import type { CallToolResult } from "../../src/agent/projects/projectMcpAdapter.
 import type { ProjectConnectionConfig } from "../../src/agent/projects/projectTypes.js";
 import { handler } from "../../netlify/functions/mcp.mjs";
 import { resetRepositoryManager } from "../../src/agent/runtime/repositories.js";
+// S3 item 7: readiness now requires reader-visible content (article_has_content, >= 200 visible
+// chars), so the fixtures carry a realistic paragraph rather than a stub.
+const PAD = " This paragraph exists so the fixture reads as a real article rather than a stub: it explains the claim, names the tradeoff, and gives the reader one concrete next step to take today.".repeat(2);
+
 
 // R-23 — article_body emits the CLIENT-shaped envelope ({artifact, summary, clientProjectId,
 // clientObjectType, contractSource, body}), and the client's own object lives under `.body`. The
@@ -23,9 +27,9 @@ const envelope = (body: unknown) => ({
   contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-16T00:00:00.000Z" },
   body
 });
-const textBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." } }] });
-const imageBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "/media/req/x.png", alt: "x" } } }] });
-const blobMediaBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "B", media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] });
+const textBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." + PAD } }] });
+const imageBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B" + PAD, media: { type: "image", src: "/media/req/x.png", alt: "x" } } }] });
+const blobMediaBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "B" + PAD, media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] });
 const REQUEST_ID = "req_publish_test_20260716_01";
 const ENABLED_ENV = { [publishEnabledEnvVar(drLurieProjectConfig)]: "true" } as NodeJS.ProcessEnv;
 // P0 §2.1 — publishRun now refuses unless the run carries an EXPLICIT affirmative
@@ -106,8 +110,8 @@ const platformTextBody = platformEnvelope({
   title: "Live Title",
   deck: "A deck line.",
   nodes: [
-    { id: "n_1", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." } },
-    { id: "n_2", kind: "content", visibility: "public", public: { title: "Second", body: "More reader-facing body." } }
+    { id: "n_1", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." + PAD } },
+    { id: "n_2", kind: "content", visibility: "public", public: { title: "Second", body: "More reader-facing body." + PAD } }
   ]
 });
 const PLATFORM_ENABLED_ENV = { PLATFORM_PUBLISH_ENABLED: "true" } as NodeJS.ProcessEnv;
@@ -272,8 +276,9 @@ describe("live publish gates", () => {
   it("refuses to execute a body carrying media on this text-only path even when readiness is GO", async () => {
     const ctx = await seedRun(imageBody);
     const adapter = fakeCallTool();
-    // imageBody's /media/... src is not Blob-shaped, so readiness passes; execution is still text-only.
-    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+    // S3 item 7: readiness now verifies EVERY media reference (public paths included), so the caller
+    // confirms imageBody's /media/... src as materialized; execution is still text-only and refuses.
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: { ...READY, verifiedMediaRefs: ["/media/req/x.png"] } }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
     expect(result.mode).toBe("error");
     if (result.mode === "error") expect(result.error).toContain("image_media_unsupported");
     expect(adapter.calls).toHaveLength(0);
@@ -553,7 +558,7 @@ describe("D7 — the engine never writes judgements into a client object", () =>
       compliance: { ok: true },
       emotional_strategy: { arc: "calm" },
       lineage: { parent_content_id: "req_prior" },
-      nodes: [{ id: "n_1", kind: "content", visibility: "public", public: { title: "Judged Title", body: "Reader-facing body." } }]
+      nodes: [{ id: "n_1", kind: "content", visibility: "public", public: { title: "Judged Title", body: "Reader-facing body." + PAD } }]
     });
     const ctx = await seedRun(judged, "platform");
     const adapter = fakePlatformCallTool();

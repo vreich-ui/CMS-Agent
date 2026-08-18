@@ -12,6 +12,10 @@ import type { CallToolResult } from "../../../src/agent/projects/projectMcpAdapt
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 import { resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
+// S3 item 7: readiness now requires reader-visible content (article_has_content, >= 200 visible
+// chars), so the fixtures carry a realistic paragraph rather than a stub.
+const PAD = " This paragraph exists so the fixture reads as a real article rather than a stub: it explains the claim, names the tradeoff, and gives the reader one concrete next step to take today.".repeat(2);
+
 
 // P0 acceptance (§4 definition of done):
 //   (a) a controller output of {"artifact":"publication_decision.v1","summary":"Looks fine."} blocks;
@@ -28,7 +32,7 @@ const envelope = (body: unknown) => ({
   contractSource: { tool: "get_content_schema", fetchedAt: "2026-08-10T00:00:00.000Z" },
   body
 });
-const textBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." } }] });
+const textBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "Live Title", body: "Reader-facing body." + PAD } }] });
 const REQUEST_ID = "req_publish_decision_20260810_01";
 const ENABLED_ENV = { [publishEnabledEnvVar(drLurieProjectConfig)]: "true" } as NodeJS.ProcessEnv;
 const READY = {
@@ -385,4 +389,3 @@ describe("T2 — project publishingPolicy.operatorDefault applies at run creatio
     expect(explicitPolicy.operatorDecisionSource).toBeUndefined();
   });
 });
-

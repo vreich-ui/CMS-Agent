@@ -32,10 +32,16 @@ export { JUDGEMENT_SUBSTRATE_KEYS };
 const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExecutionOutcome> => {
   // a. Create the object. D2c: the server mints the id — NEVER send requested_id. The request id
   // stays run-correlation only and is never used as an object id.
-  const created = await ctx.call("object_create", { object_type: ctx.clientObjectType });
-  const mintedId = findObjectId(created);
-  if (mintedId === undefined) throw new Error("create_missing_object_id: could not resolve a server-minted object id (object_id/id) from the object_create result.");
-  const objectId = String(mintedId);
+  //    S3 item 8: a shell the conductor already created for this request is patched, not re-created.
+  let objectId: string;
+  if (ctx.existingObjectId) {
+    objectId = ctx.existingObjectId;
+  } else {
+    const created = await ctx.call("object_create", { object_type: ctx.clientObjectType });
+    const mintedId = findObjectId(created);
+    if (mintedId === undefined) throw new Error("create_missing_object_id: could not resolve a server-minted object id (object_id/id) from the object_create result.");
+    objectId = String(mintedId);
+  }
 
   // b. Checkout: take the edit lock and learn the record version the patch must expect.
   const checkout = await ctx.call("object_checkout", { object_id: objectId, ...ctx.owner });

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { evaluateDrLuriePublishReadiness } from "../../../src/agent/projects/drLurie/publishReadiness.js";
+// S3 item 7: readiness now requires reader-visible content (article_has_content, >= 200 visible
+// chars), so the fixtures carry a realistic paragraph rather than a stub.
+const PAD = " This paragraph exists so the fixture reads as a real article rather than a stub: it explains the claim, names the tradeoff, and gives the reader one concrete next step to take today.".repeat(2);
+
 
 // article_body emits the CLIENT-shaped envelope and the readiness gate validates it against that
 // node's own outputSchema, so the fixtures carry the envelope with Dr. Lurie's content_item under
@@ -12,7 +16,7 @@ const envelope = (body: unknown) => ({
   contractSource: { tool: "get_content_schema", fetchedAt: "2026-07-16T00:00:00.000Z" },
   body
 });
-const validBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." } }] });
+const validBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." + PAD } }] });
 const ready = {
   articleBody: validBody,
   taxonomy: { tags: ["science"] },
@@ -36,13 +40,14 @@ describe("Dr. Lurie publish readiness", () => {
     expect(r.status).toBe("no_go");
     expect(r.state).toBe("blocked_for_publish_execution");
     // Go-live 2026-07-31: taxonomy/approval/release/hard-constraint declarations auto-default; the
-    // only blocker left on an empty request is the missing article body itself.
-    expect(r.blockers).toEqual(["article_body_valid", "hard_content_path"]);
+    // only blockers left on an empty request are the missing article body itself (and, S3 item 7,
+    // the content floor that a missing body cannot clear).
+    expect(r.blockers).toEqual(["article_body_valid", "article_has_content", "hard_content_path"]);
     expect(r.requiredAction).toContain("Resolve:");
   });
 
   it("does not trust Blob-shaped media unless pdf-tool materialization is verified", () => {
-    const body = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", media: { type: "image", src: "image/req_x/abc.png" } } }] });
+    const body = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "Reader body." + PAD, media: { type: "image", src: "image/req_x/abc.png" } } }] });
     const unverified = evaluateDrLuriePublishReadiness({ ...ready, articleBody: body });
     expect(unverified.blockers).toContain("media_artifacts_verified");
     // Confirming the ref as materialized clears the blocker.

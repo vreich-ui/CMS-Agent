@@ -17,14 +17,15 @@ import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 import { getReducedContract } from "./contractPrefetch.js";
 import { getEditorialVoice } from "./voicePrefetch.js";
+import { CONTENT_ITEM_SHELL_FAILED_PREFIX, CONTENT_ITEM_SHELL_INPUT_KEY, ensureContentItemShell } from "./contentItemShell.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
 import { runDeterministicPublishPayload, validateClientObjectOnce, readTopLevelObjectId } from "./publishPayload.js";
-import { ENGINE_VALIDATION_POLICY, ownsValidationLoop, runArticleBodyValidationLoop, readBodyForValidation } from "./articleBodyValidation.js";
+import { ENGINE_VALIDATION_POLICY, ownsValidationLoop, promoteValidationUnavailableToBlocker, runArticleBodyValidationLoop, readBodyForValidation } from "./articleBodyValidation.js";
 import { applyRunContextEnvelope, buildRunContext } from "./runContext.js";
 import { runDeterministicPublicationController } from "./publicationController.js";
 import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
 import { buildLearningObservations } from "./learningRecord.js";
-import { buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector } from "./aggressionVector.js";
+import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
 import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
 import { getWorkflowDefinition } from "./workflowRegistry.js";
 // T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
@@ -622,6 +623,15 @@ async function projectEndpointConfiguredFor(projectId: string): Promise<boolean>
     return false;
   }
 }
+// S3 item 3: the model's own `resolved` as emitted, or undefined when absent/malformed.
+const readEmittedResolvedVector = (output: unknown): AggressionVector | undefined => {
+  const candidate = output && typeof output === "object" ? (output as Record<string, unknown>).resolved : undefined;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined;
+  const record = candidate as Record<string, unknown>;
+  if (!AGGRESSION_DIALS.every((dial) => typeof record[dial] === "number" && Number.isFinite(record[dial] as number))) return undefined;
+  return Object.fromEntries(AGGRESSION_DIALS.map((dial) => [dial, record[dial] as number])) as AggressionVector;
+};
+
 const stampDispatch = (state: NodeExecutionState, dispatchedAt: string, timeoutMs: number, driver: RunDriver, projectEndpointConfigured: boolean): void => {
   state.dispatch = { ...(state.dispatch ?? {}), dispatchedAt, timeoutMs, driver, projectEndpointConfigured };
   state.lastDispatch = { dispatchedAt, driver, projectEndpointConfigured };
@@ -863,7 +873,7 @@ async function recordTerminationObservations(run: WorkflowExecutionRecord, nodes
   }
 }
 
-// ── T7 (Wave 3, 2026-08-13) — BOUNDED CONCURRENT DISPATCH ───────────────────────────────────────
+// ── T7 (Wave 3, 2026-08-13) — BOUNDED CONCURRENT DISPATCH ───────────────────────────────────────────────────
 //
 // Evidence (run_1786557897658_elj34j, verified live 2026-08-12): the review quartet — human_texture,
 // trust_factual, emotional_resonance, reader_simulation — ran SERIALLY for ~113 seconds. None of the
@@ -1343,7 +1353,16 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       if (prefetch.ok && placementTarget) {
         aggressionResolution = resolveAggressionVector(placementTarget, prefetch.reduced);
         if (aggressionResolution.ok) {
-          state.input = { ...(state.input as Record<string, unknown>), resolvedAggression: { resolved: aggressionResolution.resolved, ceiling: aggressionResolution.ceiling, target: aggressionResolution.target } };
+          // S3 item 3: the engine-owned resolution travels under BOTH names — `resolvedAggression`
+          // (the carrier contract_intelligence's deterministic artifact already reads) and
+          // `aggressionResolution` (the shape brief_architect's prompt names: resolved + the prose
+          // basis + where the ceiling came from), so the model copies a value instead of inventing one.
+          const engineBasis = `resolved = min(ceiling, target) componentwise; ceiling from this dispatch's contract prefetch, target from placement_resolver (this run).`;
+          state.input = {
+            ...(state.input as Record<string, unknown>),
+            resolvedAggression: { resolved: aggressionResolution.resolved, ceiling: aggressionResolution.ceiling, target: aggressionResolution.target },
+            aggressionResolution: { resolved: aggressionResolution.resolved, resolvedBasis: engineBasis, ceilingSource: "contract_prefetch" }
+          };
         } else {
           state.input = { ...(state.input as Record<string, unknown>), aggressionBlocker: aggressionResolution.blocker };
           state.warnings = [...(state.warnings ?? []), aggressionResolution.blocker.code];
@@ -1379,6 +1398,25 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       const message = error instanceof Error ? error.message : String(error);
       state.warnings = [...(state.warnings ?? []), "voice_prefetch_fallback:threw"];
       state.input = { ...(state.input as Record<string, unknown>), editorialVoiceError: message };
+    }
+  }
+
+  // S3 item 8 — the content-item shell. On an object-substrate client the artifact bridge indexes
+  // media against the owning object, so artifact_plan's generation must find a content_item under the
+  // run's request id ALREADY THERE. One idempotent object_create here, right before artifact_plan
+  // dispatches, recorded in its input as `contentItemShell` (the publisher later patches that object
+  // instead of creating a second one). Best-effort: every failure is the named warning
+  // `content_item_shell_failed:<code>` on this node — never a throw, never a failed node.
+  if (nextNode.id === "artifact_plan" && (run.executionMode ?? DEFAULT_EXECUTION_MODE) !== "mock") {
+    try {
+      const shell = await ensureContentItemShell(
+        { run, prefetchedContract: run.stageOutputs.contract_intelligence && typeof run.stageOutputs.contract_intelligence === "object" ? { clientObjectType: (run.stageOutputs.contract_intelligence as Record<string, unknown>).clientObjectType } : undefined },
+        { projectRepository: repositoryManager.getProjectRepository() }
+      );
+      if (shell.ok) state.input = { ...(state.input as Record<string, unknown>), [CONTENT_ITEM_SHELL_INPUT_KEY]: shell.shell };
+      else if (!shell.skipped) state.warnings = [...(state.warnings ?? []), `${CONTENT_ITEM_SHELL_FAILED_PREFIX}${shell.code}`];
+    } catch (error) {
+      state.warnings = [...(state.warnings ?? []), `${CONTENT_ITEM_SHELL_FAILED_PREFIX}threw:${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`];
     }
   }
 
@@ -2003,6 +2041,11 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       if (loop) {
         output = loop.output;
         if (loop.warnings.length) state.warnings = [...(state.warnings ?? []), ...loop.warnings];
+        // S3 item 9: "the client's validator could not be reached / refused the request" is not a
+        // warning a publish gate may read past — it is a BLOCKER on article_body's own output, which
+        // readiness (article_body_blockers) then refuses. Warning stays for the run log; the blocker is
+        // what stops an unjudged body from being published as if it had been judged.
+        output = promoteValidationUnavailableToBlocker(output, loop.warnings);
       }
     } catch (error) {
       state.warnings = [...(state.warnings ?? []), `article_body_validation_loop_failed:${error instanceof Error ? error.message : String(error)}`];
@@ -2033,10 +2076,27 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // named as a run warning, and a run with no ceiling to clamp against is warned about LOUDLY rather
   // than passing quietly (resolvedVectorClamp.ts explains why the value is left alone in that case).
   if (mode !== "mock" && declaresResolvedVector(output, nextNode.outputSchema)) {
+    const emittedResolved = readEmittedResolvedVector(output);
+    const modelLeftItBlank = emittedResolved === undefined || AGGRESSION_DIALS.every((dial) => emittedResolved[dial] === 0);
     const clamp = applyResolvedVectorClamp(output, resolvedVectorSources, nextNode.outputSchema);
     output = clamp.output;
     if (clamp.warnings.length) state.warnings = [...(state.warnings ?? []), ...clamp.warnings];
     if (clamp.clampedDials.length) state.warnings = [...(state.warnings ?? []), `resolved_vector_clamped:${clamp.clampedDials.join(",")}`];
+    // S3 item 3: a model that emitted no `resolved` (or an all-zero placeholder) never gets to ship
+    // that. With a ceiling the clamp above already wrote the engine value; without one the engine
+    // still owns the field and writes the placement TARGET (the only vector the run holds), naming
+    // the takeover so the run shows the model did not resolve it. Wolf's ruling stands: no ceiling is
+    // still a blocker upstream (aggression_ceiling_missing) — this only stops an empty carrier from
+    // reaching draft_writer.
+    if (modelLeftItBlank) {
+      const engineValue = clamp.resolved ?? resolvedVectorSources.target;
+      if (engineValue) {
+        if (!clamp.resolved) {
+          output = { ...(output as Record<string, unknown>), resolved: engineValue, resolvedBasis: `engine-owned: no client ceiling was available in this run, so resolved = placement target (${resolvedVectorSources.targetSource ?? "placement_resolver"}) unclamped; the model emitted ${emittedResolved ? "an all-zero" : "no"} vector.` };
+        }
+        state.warnings = [...(state.warnings ?? []), "resolved_vector_engine_owned"];
+      }
+    }
   }
 
   // P0 §2.3/§2.27 — an "executed" claim from a publisher-kind node must carry go-live evidence

@@ -140,6 +140,10 @@ export const readTopLevelObjectId = (body: Record<string, unknown>): string | nu
   return undefined;
 };
 
+// S3 item 9: one warn line per process for a request-shape 400 (see below).
+let validateRequestShapeLogged = false;
+export const __resetValidateRequestShapeLog = (): void => { validateRequestShapeLogged = false; };
+
 export async function validateClientObjectOnce(params: { projectId: string; body: Record<string, unknown>; objectId?: string | number; objectType?: string }, deps: PublishPayloadDeps): Promise<PublishPayloadValidation> {
   const { patch, nodeCount } = buildArticleCandidatePatch(params.body, JUDGEMENT_SUBSTRATE_KEYS);
   const summary = describeCandidatePatch(patch, nodeCount);
@@ -156,9 +160,14 @@ export async function validateClientObjectOnce(params: { projectId: string; body
   // {object_type, object_id, candidate_patch}; a dry-run candidate that has no object_id yet is
   // validated as {object_type, body} — the client rejects candidate_patch without object_id outright
   // ("validate requires either object_id ... or body ...").
+  // S3 item 9: a candidate body goes to the client WITHOUT the workspace-only `schema_version` marker
+  // — the client's strict content_item body (additionalProperties:false) rejects it with a request
+  // 400, exactly as the publisher already learned (it drops the key before object_patch). The output
+  // envelope keeps the marker; only the validate REQUEST is stripped.
+  const { schema_version: _schemaVersion, ...candidateBody } = params.body;
   const arguments_ = {
     ...(nonEmptyString(params.objectType) ? { object_type: params.objectType } : {}),
-    ...(params.objectId === undefined ? { body: params.body } : { object_id: params.objectId, candidate_patch: patch })
+    ...(params.objectId === undefined ? { body: candidateBody } : { object_id: params.objectId, candidate_patch: patch })
   };
   // Mirrors project.call_read_tool's own handler ordering (toolRegistry.ts) exactly as contractPrefetch
   // does: the project's executable policy runs before any transport, so a client-specific block still
@@ -196,6 +205,12 @@ export async function validateClientObjectOnce(params: { projectId: string; body
   // on it. A requires-existing-object refusal keeps its precedence as a NORMAL deferral.
   const requestShape = readRequestShapeRejection(call.result);
   if (requestShape && !REQUIRES_EXISTING_OBJECT.test(rawText)) {
+    // S3 item 9: name the request the client refused, ONCE per process, so a 400 is diagnosable from
+    // the log rather than from a re-run. Argument keys plus a bounded, secret-free preview only.
+    if (!validateRequestShapeLogged) {
+      validateRequestShapeLogged = true;
+      console.warn("article_body.object_validate_request_rejected", JSON.stringify({ projectId: params.projectId, rejection: requestShape.slice(0, 300), argumentKeys: Object.keys(arguments_), request: JSON.stringify(arguments_).slice(0, 2_000) }));
+    }
     return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: `client rejected the validate REQUEST itself (HTTP 400, engine-side defect — the object was never judged): ${requestShape}` };
   }
   const parsed = parseValidateResult(call.result, summary);
