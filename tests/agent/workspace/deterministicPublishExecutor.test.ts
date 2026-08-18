@@ -261,7 +261,7 @@ const articleBodyEnvelope = () => ({
   clientProjectId: "platform",
   clientObjectType: "content_item",
   contractSource: { tool: "object_contract", fingerprint: "fp_sample" },
-  body: { slug: "engine-publish", title: "Engine publish", nodes: [{ id: "n1", public: { text: "hello" } }] }
+  body: { slug: "engine-publish", title: "Engine publish", nodes: [{ id: "n1", public: { text: "hello. This paragraph exists so the fixture reads as a real article rather than a stub: it explains the claim, names the tradeoff, and gives the reader one concrete next step to take today. It is long enough to clear the readiness content floor." } }] }
 });
 
 const enginePublishPayload = () => ({
