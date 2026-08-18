@@ -13,6 +13,7 @@
 import { validateOutput } from "../../execution/outputValidator.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
 import type { PublishReadinessCheck, PublishReadinessInput, PublishReadinessResult } from "../drLurie/publishReadiness.js";
+import { evaluateContentReadiness } from "../readinessContentChecks.js";
 
 export const PLATFORM_REQUIRED_CONTENT_PATH = "client_object.v1";
 // The per-site pdf-tool tenancy (get_pdf_tool_storage_grant) is the only sanctioned artifact path
@@ -24,18 +25,6 @@ export const PLATFORM_REQUIRED_ARTIFACT_PROTOCOL = "pdf_tool_platform_blob.v1";
 // publish_by_time dialect) and NO "unpublish" (governed removal is object_retire, a separate
 // approval-held verb, never a publish behavior).
 export const PLATFORM_RELEASE_BEHAVIORS = ["publish_now", "publish_only", "build_only"] as const;
-
-// A Blob-shaped artifact pointer that LOOKS materialized but must be proven so for this request.
-const blobShapedRef = /^(?:images?|pdfs?|documents?)\/[^\s/]+\/[^\s/]+\.[a-z0-9]{2,5}$/i;
-
-// article_body emits the CLIENT-shaped envelope; the client's own object — whose blocks carry the
-// media references this gate inspects — sits one level down under `body`.
-type ClientObject = { nodes?: Array<{ public?: { media?: { src?: unknown } } }> };
-const clientObjectOf = (envelope: unknown): ClientObject =>
-  (envelope && typeof envelope === "object" ? ((envelope as Record<string, unknown>).body as ClientObject) : undefined) ?? {};
-
-const mediaSrcsOf = (body: ClientObject): string[] =>
-  (Array.isArray(body.nodes) ? body.nodes : []).map((node) => node?.public?.media?.src).filter((src): src is string => typeof src === "string");
 
 export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): PublishReadinessResult {
   const checklist: PublishReadinessCheck[] = [];
@@ -58,14 +47,14 @@ export function evaluatePlatformPublishReadiness(input: PublishReadinessInput): 
   if (body.ok) pass("article_body_valid", "client_object.v1 valid");
   else fail("article_body_valid", "client_object.v1 valid", `invalid article body: ${body.errors.slice(0, 3).join("; ")}`);
 
-  // 2. Blob artifacts verified — no Blob-shaped media trusted unless pdf-tool materialization for
-  // THIS request is confirmed by the caller.
-  const verified = new Set((input.verifiedMediaRefs ?? []).map((ref) => String(ref)));
-  const mediaSrcs = body.ok ? mediaSrcsOf(clientObjectOf(input.articleBody)) : [];
-  const unverified = mediaSrcs.filter((src) => blobShapedRef.test(src) && !verified.has(src));
-  if (mediaSrcs.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", "no media artifacts");
-  else if (unverified.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", `${mediaSrcs.length} media reference(s) confirmed`);
-  else fail("media_artifacts_verified", "Blob artifacts verified", `unverified Blob-shaped media (pdf-tool materialization not confirmed): ${unverified.join(", ")}`);
+  // 2. Content checks shared by every client (readinessContentChecks.ts): every media reference in
+  // the body verified for THIS request (image src and pdf refs alike), reader-visible content present,
+  // no article_body-declared blockers, no unwaivable upstream blocker (aggression_ceiling_missing),
+  // and requested media actually delivered. A `fail` here is a blocker like any other.
+  for (const check of evaluateContentReadiness({ articleBody: input.articleBody, articleBodyValid: body.ok, verifiedMediaRefs: input.verifiedMediaRefs, stageOutputs: input.stageOutputs })) {
+    checklist.push(check);
+    if (check.status === "fail") blockers.push(check.key);
+  }
 
   // 3. Taxonomy resolved against the site's registry, or explicitly accepted empty. Platform's
   // registry is reachable through registry_get; unknown terms block at the client's own publish gate,

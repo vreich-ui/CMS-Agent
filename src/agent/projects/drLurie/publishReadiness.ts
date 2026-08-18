@@ -11,14 +11,11 @@
 
 import { validateOutput } from "../../execution/outputValidator.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
+import { evaluateContentReadiness } from "../readinessContentChecks.js";
 
 export const DR_LURIE_REQUIRED_CONTENT_PATH = "client_object.v1";
 export const DR_LURIE_REQUIRED_ARTIFACT_PROTOCOL = "pdf_tool_dr_lurie_blob.v1";
 export const DR_LURIE_RELEASE_BEHAVIORS = ["publish_now", "schedule", "build_only", "unpublish"] as const;
-
-// A Blob-shaped artifact pointer, e.g. image/{requestId}/{sha}.png or pdf/{requestId}/{sha}.pdf. These
-// look materialized but must be proven so (present in verifiedMediaRefs) before they can be trusted.
-const blobShapedRef = /^(?:images?|pdfs?|documents?)\/[^\s/]+\/[^\s/]+\.[a-z0-9]{2,5}$/i;
 
 export type PublishReadinessCheckStatus = "pass" | "fail" | "accepted_empty";
 export type PublishReadinessCheck = { key: string; label: string; status: PublishReadinessCheckStatus; detail?: string };
@@ -29,6 +26,10 @@ export type PublishReadinessInput = {
   // list_artifacts_for_request / verify_article_images). A Blob-shaped media src not listed here is
   // treated as unverified and blocks readiness.
   verifiedMediaRefs?: string[];
+  // The run's stage outputs (brief_architect.mediaSlots, contract_intelligence.blockers, …) so the
+  // content checks can compare requested vs delivered media and propagate unwaivable upstream
+  // blockers. Supplied by the publisher/controller when it holds the run; optional on the wire.
+  stageOutputs?: Record<string, unknown>;
   taxonomy?: { tags?: string[]; acceptedEmpty?: boolean };
   approval?: { pinned?: boolean; approvedBy?: string; approvedAt?: string };
   releaseBehavior?: string;
@@ -43,15 +44,6 @@ export type PublishReadinessResult = {
   requiredAction?: string;
   hardConstraints: { contentPath: string; artifactProtocol: string; legacyFallbacksUsed: false };
 };
-
-// The article_body node emits the CLIENT-shaped envelope; Dr. Lurie's own content_item — the thing
-// whose blocks carry media — sits one level down under `body`.
-type ClientObject = { nodes?: Array<{ public?: { media?: { src?: unknown } } }> };
-const clientObjectOf = (envelope: unknown): ClientObject =>
-  (envelope && typeof envelope === "object" ? ((envelope as Record<string, unknown>).body as ClientObject) : undefined) ?? {};
-
-const mediaSrcsOf = (body: ClientObject): string[] =>
-  (Array.isArray(body.nodes) ? body.nodes : []).map((node) => node?.public?.media?.src).filter((src): src is string => typeof src === "string");
 
 export function evaluateDrLuriePublishReadiness(input: PublishReadinessInput): PublishReadinessResult {
   const checklist: PublishReadinessCheck[] = [];
@@ -71,16 +63,15 @@ export function evaluateDrLuriePublishReadiness(input: PublishReadinessInput): P
   if (body.ok) pass("article_body_valid", "client_object.v1 valid");
   else fail("article_body_valid", "client_object.v1 valid", `invalid article body: ${body.errors.slice(0, 3).join("; ")}`);
 
-  // 2. Blob artifacts verified — no Blob-shaped media trusted unless pdf-tool materialization confirmed.
-  const verified = new Set((input.verifiedMediaRefs ?? []).map((ref) => String(ref)));
-  const mediaSrcs = body.ok ? mediaSrcsOf(clientObjectOf(input.articleBody)) : [];
-  const unverified = mediaSrcs.filter((src) => blobShapedRef.test(src) && !verified.has(src));
-  if (mediaSrcs.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", "no media artifacts");
-  else if (unverified.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", `${mediaSrcs.length} media reference(s) confirmed`);
-  else fail("media_artifacts_verified", "Blob artifacts verified", `unverified Blob-shaped media (pdf-tool materialization not confirmed): ${unverified.join(", ")}`);
+  // 2. Content checks shared by every client (readinessContentChecks.ts): every media reference in
+  // the body verified for THIS request (image src and pdf refs alike), reader-visible content present,
+  // no article_body-declared blockers, no unwaivable upstream blocker (aggression_ceiling_missing),
+  // and requested media actually delivered. A `fail` here is a blocker like any other.
+  for (const check of evaluateContentReadiness({ articleBody: input.articleBody, articleBodyValid: body.ok, verifiedMediaRefs: input.verifiedMediaRefs, stageOutputs: input.stageOutputs })) {
+    checklist.push(check);
+    if (check.status === "fail") blockers.push(check.key);
+  }
 
-  // Go-live 2026-07-31: ceremony checks auto-default so a publish request is never blocked on
-  // paperwork; an explicit contradictory declaration still fails (correctness is kept, ceremony is not).
   // 3. Taxonomy resolved, explicitly accepted empty, or auto-accepted empty when absent.
   const tags = input.taxonomy?.tags ?? [];
   if (tags.length > 0) pass("taxonomy", "Taxonomy resolved", `${tags.length} tag(s)`);
