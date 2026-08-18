@@ -378,8 +378,37 @@ const main = async () => {
     process.exit(1);
   }
 
+  // THE STORE THIS RUN IS POINTED AT — checked BEFORE anything is compared, and named in the output.
+  //
+  // 2026-08-14: `npm run store:update` was run from a laptop and reported "store matches the
+  // requested target for every pair/operation" for all five pairs. It had written nothing and could
+  // not have: this repo has no dotenv loader, so WORKSPACE_STORE was unset in the shell, the backend
+  // resolved to "memory", and MemoryWorkspaceRepository seeds itself from defaultWorkspaceNodes() —
+  // i.e. from nodes.ts. The script compared canonical to canonical and truthfully reported no drift.
+  // Production (brief_architect.updatedAt 2026-08-11T17:01:02.869Z) was untouched and still stale.
+  //
+  // A re-seed against an in-memory store is meaningless by construction, and a green "store matches"
+  // from one is WORSE than an error, because it retires the task in the operator's head. Same failure
+  // class as the continuation tick scanning an abandoned store and logging a healthy line — see
+  // docs/platform/CONTINUATION_TICK.md. Refuse instead, and say which store would have been used.
+  const backend = (process.env.WORKSPACE_STORE ?? "").trim().toLowerCase();
+  if (backend !== "blobs" && backend !== "gcs") {
+    warn(`✗ WORKSPACE_STORE is ${backend ? `"${backend}"` : "unset"}, so the repositories resolve to an in-memory store seeded from nodes.ts itself.`);
+    warn("  Comparing canonical to canonical always reports \"up to date\" and writes nothing — a false green, not a re-seed.");
+    warn("  Point this at the real store, e.g. the production execution plane:");
+    warn("    WORKSPACE_STORE=gcs GCS_BUCKET=cms-agent-503015-cms-agent-state npm run store:check");
+    warn("  (GCS needs application-default credentials: gcloud auth application-default login)");
+    process.exit(1);
+  }
+
   const { listWorkspaceNodes } = await import("../src/agent/workspace/nodes.js");
   const canonical = listWorkspaceNodes();
+
+  // Registers the GCS store factory when WORKSPACE_STORE=gcs, and fails fast on a half-configured
+  // store. Deliberately the SAME function the conductor job and the continuation tick call, so all
+  // three bind to one store or none of them do.
+  const { bootstrapWorkspaceStore } = await import("../src/agent/entrypoints/runConductorJob.js");
+  bootstrapWorkspaceStore();
 
   // Lazy, exactly like seedNodesFromWorkspace.ts: importing the live repository needs store
   // credentials this process may not have, and every pure code path above this line must be
@@ -399,7 +428,10 @@ const main = async () => {
     say(JSON.stringify({ writes: combinedWrites, refusals: combinedRefusals, upToDate: plan.upToDate, publishExecutorModeUpToDate: modeResult?.status === "up_to_date", redeployRequired: REDEPLOY_NOTE }, null, 2));
   } else {
     say(`canonical         ${canonical.length} nodes from src/agent/workspace/nodes.ts`);
-    say(`store             ${store.length} nodes from the live workspace store`);
+    // Naming the backend and bucket/store on every run is not decoration: the 2026-08-14 false green
+    // above was indistinguishable from a real "no drift" result precisely because the output never
+    // said WHICH store it had just agreed with.
+    say(`store             ${store.length} nodes from WORKSPACE_STORE=${backend}${backend === "gcs" ? ` bucket=${process.env.GCS_BUCKET}` : ` store=${process.env.NETLIFY_BLOBS_STORE_NAME ?? "cms-agent"}`}`);
     say(`allowlist         ${RESEED_ALLOWLIST.length} (nodeId, field) pair(s)${nodeId ? ` (restricted to ${nodeId})` : ""}`);
     say("");
     for (const item of plan.upToDate) say(`up to date        ${item.nodeId}.${item.field}`);

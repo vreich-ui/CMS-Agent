@@ -6,18 +6,6 @@
 [functions]
   node_bundler = "esbuild"
 
-# T5 (Wave 2b) — the run-continuation tick's schedule, declared here AS WELL AS in the function's own
-# `export const config`. run-continuation is now a v2 function, for which in-code config is the
-# documented path, so this entry is belt-and-braces only: it is what keeps the tick scheduled if the
-# platform ever fails to detect v2. Same expression in both places, so whichever one the platform
-# honours produces the same 60s tick. An operator who wants to stop the tick without a redeploy sets
-# RUN_CONTINUATION_TICK=off (the function stays deployed and returns enabled:false).
-#
-# Do NOT use this entry as a reason to make the function v1 again — see the header of
-# netlify/functions/run-continuation.mts. A v1 scheduled invocation carries no Blobs context, so the
-# tick threw MissingBlobsEnvironmentError on every one of its first 36 firings.
-[functions."run-continuation"]
-  schedule = "* * * * *"
 
 [[redirects]]
   from = "/api/agent"
