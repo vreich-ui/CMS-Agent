@@ -75,6 +75,17 @@ export function assertAssetFieldsFirstParty(value: unknown, path?: string): void
 export function buildDryRunReport(plan: EmissionPlan): { dryRun: true; plan: EmissionPlan; createdObjects: never[]; validationStates: never[]; quarantines: never[]; copyPolicy: EmissionPlan["copy"] };
 export function createMcpTransport(options?: { endpoint?: string; fetchImpl?: typeof fetch; token?: string }): EmissionTransport;
 export function createAssetProbe(options?: { fetchImpl?: typeof fetch; maxBytes?: number }): (sourceUrl: string) => Promise<Record<string, unknown>>;
+/** T12.16 — the bare MIME type: parameters stripped, lower-cased; '' when absent. */
+export function normalizeContentType(contentType: unknown): string;
+/** T12.16 — the blobKey extension for a contentType (e.g. '.jpg'), or null when none is known. */
+export function artifactExtensionForContentType(contentType: unknown): string | null;
+/**
+ * T12.16 — the artifact kind derived from the BYTES' contentType; the mapper's
+ * `kind` is only a hint about where the asset was found. null quarantines.
+ */
+export function artifactKindForContentType(contentType: unknown, kindHint?: string): "image" | "pdf" | "doc" | null;
+/** T12.16 — the deterministic `<sha256><ext>` ingest filename, or null if unsafe. */
+export function artifactFilename(sha256: string, extension?: string | null): string | null;
 export function executeEmission(input: {
   plan: EmissionPlan;
   transport: EmissionTransport;

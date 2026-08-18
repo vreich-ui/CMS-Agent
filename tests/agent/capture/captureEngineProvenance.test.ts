@@ -12,17 +12,32 @@ describe("vendored capture engine provenance", () => {
     expect(CAPTURE_ENGINE_UPSTREAM.commit).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  it("covers exactly the five vendored stage modules", () => {
-    expect(CAPTURE_ENGINE_FILES.map((entry) => entry.file).sort()).toEqual(["emit.mjs", "map.mjs", "score.mjs", "snapshot-v1.mjs", "theme.mjs"]);
+  it("covers exactly the seven vendored engine modules", () => {
+    // T12.16 added screenshot-normalize.mjs and side-by-side.mjs: score.mjs imports both since
+    // T12.10, so vendoring score.mjs without them is what left the old pin stale.
+    expect(CAPTURE_ENGINE_FILES.map((entry) => entry.file).sort()).toEqual([
+      "emit.mjs",
+      "map.mjs",
+      "score.mjs",
+      "screenshot-normalize.mjs",
+      "side-by-side.mjs",
+      "snapshot-v1.mjs",
+      "theme.mjs"
+    ]);
   });
 
   it.each(CAPTURE_ENGINE_FILES.map((entry) => [entry.file, entry] as const))("%s matches its recorded vendored hash", async (_file, entry) => {
     expect(await hashVendoredEngineFile(entry.file)).toBe(entry.vendoredSha256);
   });
 
-  it("is byte-identical to upstream everywhere except the one recorded deviation (score.mjs lazy sharp import)", () => {
+  it("is byte-identical to upstream everywhere except the one recorded deviation (screenshot-normalize.mjs lazy sharp import)", () => {
+    // Exactly ONE file may deviate, and since T12.16 it is the module that actually needs sharp —
+    // score.mjs is byte-identical to upstream again.
+    expect(CAPTURE_ENGINE_FILES.filter((entry) => entry.deviation).map((entry) => entry.file)).toEqual([
+      "screenshot-normalize.mjs"
+    ]);
     for (const entry of CAPTURE_ENGINE_FILES) {
-      if (entry.file === "score.mjs") {
+      if (entry.file === "screenshot-normalize.mjs") {
         expect(entry.deviation).toMatch(/sharp/);
         expect(entry.vendoredSha256).not.toBe(entry.upstreamSha256);
       } else {
