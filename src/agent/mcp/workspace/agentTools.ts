@@ -147,7 +147,7 @@ export function createAgentTools({ workspaceRepository, projectRepository, conve
     }),
     tool({
       name: "agent.converse",
-      description: "Execute exactly one client_manager.turn.v1 model turn. Caller tools are passed to the provider and returned as unexecuted tool calls; CMS-Agent never executes them or owns the human wait state. Duplicate conversation_id + turn_id calls replay one stored response without another provider call.",
+      description: "This is the raw single-turn primitive used BY the site admin chat; humans and editor-agents should use the admin chat, not call this directly. Execute exactly one client_manager.turn.v1 model turn. Caller tools are passed to the provider and returned as unexecuted tool calls; CMS-Agent never executes them or owns the human wait state. Duplicate conversation_id + turn_id calls replay one stored response without another provider call.",
       zodSchema: agentConverseInputSchema,
       inputSchema: agentConverseJsonSchema,
       execute: async (input) => ok(await runner.run(input))

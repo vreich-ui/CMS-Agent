@@ -117,6 +117,10 @@ npm test && npm run test:ui && npm run test:drift && npm run test:glossary && np
 
 ## Standing habits, earned the hard way
 
+0. **Single content surface (policy, Wolf, 2026-08-17).** All content is directed through the site admin
+   chat (platform admin-agent-chat → client_manager). Direct CMS-Agent MCP calls are for programming the
+   workspace (agents, nodes, prompts, schemas, tools, projects, evaluations), not for producing or publishing
+   content; workflow.*/publish tools stay callable for operators and tests and carry a wrong-path notice.
 1. **After any workspace-data fix, check whether the code-defined defaults carry the same defect.**
    Taught three times: snoocle, the 14 ungrantable `stage.save_output` grants, and the whole node set.
    A data write looks complete and the next fresh workspace undoes it.
