@@ -32,6 +32,11 @@ export type ToolExecutionContext = {
   runId: string;
   nodeId: string;
   projectId?: string;
+  // T12.15: the run's workflowId, so node resolution (toolResolver.ts's resolveNodeForExecution) can
+  // consult THIS run's registered workflow for a node the store does not hold — capture_conductor's
+  // three code-defined AI nodes. Optional: a caller with no run in hand (node.get_effective_tools,
+  // tool.get_effective_for_node) omits it and every registered workflow is searched instead.
+  workflowId?: string;
   skillId?: string;
   approvedToolIds?: string[];
   runAuthorizedTools?: string[];

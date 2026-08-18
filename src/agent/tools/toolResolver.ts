@@ -1,5 +1,6 @@
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceNode } from "../workspace/nodeTypes.js";
+import { resolveNodeForExecution } from "../workspace/nodeResolution.js";
 import type { SkillDefinition } from "../skills/skillTypes.js";
 
 import { createToolRegistry } from "./toolRegistry.js";
@@ -42,15 +43,26 @@ export function evaluateToolsForNode(
 // it once itself) skip this function's own getNode round-trip instead of re-fetching the identical
 // record. Every existing caller passes only nodeId and is unaffected — it still fetches exactly as
 // before.
+// T12.15: resolution goes through resolveNodeForExecution (store first, then the run's registered
+// workflow's canonical nodes) rather than the store alone. capture_conductor's three AI nodes are
+// code-defined and deliberately unseeded, so the store-only lookup threw `Unknown node: <id>` here for
+// every one of them — the live break behind `tool_error: Unknown node: block_classifier`. Store records
+// still win where they exist, so publishing_conductor resolves exactly as before, and an id in neither
+// the store nor any registered workflow still throws.
 export async function resolveEffectiveToolsForNode(nodeId: string, context: Partial<ToolExecutionContext> = {}, preloadedNode?: WorkspaceNode): Promise<ResolvedTool[]> {
-  const node = preloadedNode ?? await repositoryManager.getWorkspaceRepository().getNode(nodeId);
+  const node = preloadedNode ?? await resolveNodeForExecution(nodeId, undefined, context.workflowId);
   if (!node) throw new Error(`Unknown node: ${nodeId}`);
   const skills = await repositoryManager.getSkillRepository().list({ skillIds: node.assignedSkills ?? [] });
   return evaluateToolsForNode(node, skills, context);
 }
 
-export async function resolvePolicySubjects(nodeId: string, skillId?: string): Promise<{ node?: WorkspaceNode; skill?: SkillDefinition }> {
-  const node = await repositoryManager.getWorkspaceRepository().getNode(nodeId);
+// Same resolution, for the policy subjects toolExecutor evaluates on every controlled tool call. This
+// one did not throw on a miss — it returned `node: undefined`, and evaluateToolPolicy skips the
+// `node_tool_not_allowed` check when there is no node, so a capture AI node's OWN allowedTools grant
+// was not being enforced at all. Resolving the canonical definition restores that gate; a node the
+// store does hold is unaffected.
+export async function resolvePolicySubjects(nodeId: string, skillId?: string, workflowId?: string): Promise<{ node?: WorkspaceNode; skill?: SkillDefinition }> {
+  const node = await resolveNodeForExecution(nodeId, undefined, workflowId);
   const skill = skillId ? await repositoryManager.getSkillRepository().get(skillId) : undefined;
   return { node, skill };
 }

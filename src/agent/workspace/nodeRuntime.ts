@@ -10,6 +10,12 @@ import { resolveSkillsForNode } from "../skills/skillResolver.js";
 import { resolveEffectiveToolsForNode } from "../tools/toolResolver.js";
 import { DEFAULT_EXECUTION_MODE } from "./executor.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
+// T12.15: these three entry points (node.get_effective_prompt, node.prepare_execution, node.execute)
+// resolved nodes from the workspace store alone and threw `Unknown node: <id>` on a miss, which made
+// capture_conductor's three code-defined, deliberately-unseeded AI nodes unreachable. resolveNodeForExecution
+// keeps the store as the winner wherever it holds a record and falls back to the registered workflow's
+// canonical definition only when it does not — see nodeResolution.ts for the full rationale.
+import { resolveNodeForExecution } from "./nodeResolution.js";
 import type { ExecutionArtifact, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
 
 const now = () => new Date().toISOString();
@@ -106,7 +112,7 @@ export async function getNodeDetails(nodeId: string, repos = { workspaceReposito
 // own getNode round-trip. Every other caller (node.get_effective_prompt) passes only nodeId and is
 // unaffected.
 export async function getEffectivePrompt(nodeId: string, workspaceRepository = repositoryManager.getWorkspaceRepository(), preloadedNode?: WorkspaceNode) {
-  const node = preloadedNode ?? await workspaceRepository.getNode(nodeId);
+  const node = preloadedNode ?? await resolveNodeForExecution(nodeId, workspaceRepository);
   if (!node) throw new Error(`Unknown node: ${nodeId}`);
   const skills = await resolveSkillsForNode(node, repositoryManager.getSkillRepository());
   return redactSecrets({ prompt: [node.prompt, skills.instructions].filter(Boolean).join("\n\n"), nodePrompt: node.prompt, skillInstructions: skills.instructions });
@@ -118,7 +124,7 @@ export async function getEffectivePrompt(nodeId: string, workspaceRepository = r
 // four getNode calls for one node execution, three of them redundant. node.prepare_execution (the only
 // other caller) passes only data.nodeId and is unaffected: it still fetches exactly as before.
 export async function prepareNodeExecution(data: { nodeId: string; input?: unknown; dependencyOutputs?: Record<string, unknown>; modelConfig?: Record<string, unknown> }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository() }, preloadedNode?: WorkspaceNode) {
-  const node = preloadedNode ?? await repos.workspaceRepository.getNode(data.nodeId);
+  const node = preloadedNode ?? await resolveNodeForExecution(data.nodeId, repos.workspaceRepository);
   if (!node) throw new Error(`Unknown node: ${data.nodeId}`);
   const dependencyOutputs = Object.fromEntries(await Promise.all(node.dependsOn.map(async (id) => [id, data.dependencyOutputs?.[id] ?? (await repos.workspaceRepository.getStageOutput(id))?.value])));
   const missingInputs = node.dependsOn.filter((id) => dependencyOutputs[id] === undefined);
@@ -143,7 +149,7 @@ export async function prepareNodeExecution(data: { nodeId: string; input?: unkno
 
 export async function executeNode(data: { nodeId: string; input?: unknown; runId?: string; dependencyOutputs?: Record<string, unknown>; executionMode?: ExecutionMode; modelConfig?: Record<string, unknown>; promptOverride?: string; expectedWorkspaceVersion?: number }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository(), executionRepository: repositoryManager.getExecutionRepository() }) {
   if (data.expectedWorkspaceVersion !== undefined && data.expectedWorkspaceVersion !== await repos.workspaceRepository.getWorkspaceVersion()) throw new Error("stale_workspace_version");
-  const node = await repos.workspaceRepository.getNode(data.nodeId);
+  const node = await resolveNodeForExecution(data.nodeId, repos.workspaceRepository);
   if (!node) throw new Error(`Unknown node: ${data.nodeId}`);
   const inputValidation = validateAgainstNodeSchema(data.input ?? {}, node.inputSchema);
   if (!inputValidation.valid) throw new Error(`input_validation_failed: ${inputValidation.issues.join("; ")}`);
