@@ -759,10 +759,10 @@ export const publishingConductorNodes = [
       "voicePrefetch": true
     },
     "modelConfig": {
-      "maxTurns": 12,
-      "toolCallLimit": 8,
+      "maxTurns": 8,
+      "toolCallLimit": 5,
       "timeout": 240000,
-      "budgetUsd": 0.75,
+      "budgetUsd": 3,
       "maxOutputTokens": 4000,
       "retryCount": 1
     }
@@ -1079,7 +1079,9 @@ export const publishingConductorNodes = [
       "required": [
         "artifact",
         "summary",
-        "mediaSlots"
+        "mediaSlots",
+        "resolved",
+        "resolvedBasis"
       ],
       "additionalProperties": true,
       "properties": {
@@ -1119,6 +1121,44 @@ export const publishingConductorNodes = [
               }
             }
           }
+        },
+        "resolved": {
+          "type": "object",
+          "description": "The aggression vector this brief actually resolved to (0..1 per axis) — the store-truth carrier draft_writer reads. Never omitted: when no adjustment was needed, echo the placement target verbatim.",
+          "additionalProperties": false,
+          "required": [
+            "claim_strength",
+            "urgency",
+            "emotional_agitation",
+            "cta_density"
+          ],
+          "properties": {
+            "claim_strength": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "urgency": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "emotional_agitation": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "cta_density": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "resolvedBasis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One line naming what `resolved` was derived from (placement target echoed, ceiling clamp applied, editorial adjustment) so the vector is auditable."
         },
         "notes": {
           "type": "array",
@@ -1148,7 +1188,9 @@ export const publishingConductorNodes = [
       "required": [
         "artifact",
         "summary",
-        "mediaSlots"
+        "mediaSlots",
+        "resolved",
+        "resolvedBasis"
       ],
       "additionalProperties": true,
       "properties": {
@@ -1188,6 +1230,44 @@ export const publishingConductorNodes = [
               }
             }
           }
+        },
+        "resolved": {
+          "type": "object",
+          "description": "The aggression vector this brief actually resolved to (0..1 per axis) — the store-truth carrier draft_writer reads. Never omitted: when no adjustment was needed, echo the placement target verbatim.",
+          "additionalProperties": false,
+          "required": [
+            "claim_strength",
+            "urgency",
+            "emotional_agitation",
+            "cta_density"
+          ],
+          "properties": {
+            "claim_strength": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "urgency": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "emotional_agitation": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "cta_density": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "resolvedBasis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One line naming what `resolved` was derived from (placement target echoed, ceiling clamp applied, editorial adjustment) so the vector is auditable."
         },
         "notes": {
           "type": "array",
@@ -1259,7 +1339,7 @@ export const publishingConductorNodes = [
     "name": "Full Draft Writer",
     "kind": "drafting",
     "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
-    "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. When this node's input carries editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), write in that name/audience/tone/cadence, prefer its lexicon.prefer terms, avoid its lexicon.avoid terms, follow its claim_policy and cta_policy, and choose a frameworks entry (default_framework if none fits better) to shape the piece. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give — a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; blockers are explicit.\nBlocker criteria: missing brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. When this node's input carries editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable — editorialVoiceSource names which), write in that name/audience/tone/cadence, prefer its lexicon.prefer terms, avoid its lexicon.avoid terms, follow its claim_policy and cta_policy, and choose a frameworks entry (default_framework if none fits better) to shape the piece. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nAggression policy: the brief's `resolved` vector (claim_strength, urgency, emotional_agitation, cta_density; 0..1 each) sets how hard this draft pushes. If the brief carries no `resolved` vector, write to the placement target delivered in your input and record `aggression_vector_assumed` in `notes` — do not block.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give — a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; blockers are explicit.\nBlocker criteria: missing brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [

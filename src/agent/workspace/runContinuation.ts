@@ -26,6 +26,9 @@ import { isOperatorPublishWithheld } from "./publishDecision.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "./executionTypes.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
+import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
+import { repositoryManager } from "../runtime/repositories.js";
+import { logProjectEnvNamesOnce, preflightDriverEnv, recordDriverEnvWarning } from "./driverEnvPreflight.js";
 
 // The only two statuses an unattended driver may touch. Everything else is a stop somebody or
 // something put there deliberately, and a tick that "helpfully" advanced past one would be the exact
@@ -120,6 +123,11 @@ export type ContinuationTickDeps = {
   // so the tick can never acquire semantics the external path does not have. `approved` is never
   // passed — a scheduled tick has no authority to approve a publish.
   advance?: (runId: string) => Promise<WorkflowExecutionRecord>;
+  // S1 — driver env preflight. The tick refuses to dispatch a run whose project MCP endpoint env var
+  // is not set in ITS process (records `driver_env_missing:<VAR>` on the run once instead). Injected
+  // for tests; production reads the live project registry and process.env.
+  projectRepository?: ProjectRepository;
+  env?: NodeJS.ProcessEnv;
   now?: () => Date;
   timeBudgetMs?: number;
   maxRuns?: number;
@@ -134,6 +142,9 @@ export type ContinuationRunReport = {
   steps: number;
   // Named, never swallowed: one run's failure must not take the tick (or the other runs) down.
   error?: string;
+  // Set when the tick declined to dispatch because this process cannot see the run's project MCP
+  // endpoint (driver_env_missing:<VAR>). steps is 0; the run is left for a driver that can.
+  skippedReason?: string;
 };
 
 export type ContinuationTickResult = {
@@ -154,7 +165,10 @@ const DEFAULT_MAX_RUNS = 5;
 export async function runContinuationTick(deps: ContinuationTickDeps): Promise<ContinuationTickResult> {
   const clock = deps.now ?? (() => new Date());
   if (!continuationTickEnabled()) return { enabled: false, scanned: 0, verdicts: [], driven: [], timedOut: false };
-  const advance = deps.advance ?? ((runId: string) => runNextNode(runId, { executionRepository: deps.executionRepository, workspaceRepository: deps.workspaceRepository }));
+  const advance = deps.advance ?? ((runId: string) => runNextNode(runId, { executionRepository: deps.executionRepository, workspaceRepository: deps.workspaceRepository, driver: "continuation_tick" }));
+  const projectRepository = deps.projectRepository ?? repositoryManager.getProjectRepository();
+  const env = deps.env ?? process.env;
+  await logProjectEnvNamesOnce(projectRepository, env);
   const budgetMs = deps.timeBudgetMs ?? CONTINUATION_TICK_BUDGET_MS;
   const maxSteps = Math.max(1, Math.floor(deps.maxStepsPerRun ?? DEFAULT_MAX_STEPS_PER_RUN));
   const deadline = clock().getTime() + budgetMs;
@@ -173,6 +187,17 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
       // driver (an external run_all, the conductor job, an overlapping tick) may have taken the run
       // meanwhile, and the gate the executor applied one node ago may be the reason to stop now.
       let current = await deps.executionRepository.getRun(verdict.runId);
+      // Driver env preflight — BEFORE the first advance. A run this process cannot serve is not
+      // dispatched at all: the warning is recorded once and the run is left for a driver that can.
+      if (current) {
+        const preflight = await preflightDriverEnv(current, projectRepository, env);
+        if (!preflight.ok) {
+          current = await recordDriverEnvWarning(current, preflight.warning, deps.executionRepository);
+          report.skippedReason = preflight.warning;
+          report.statusAfter = current.status;
+          continue;
+        }
+      }
       while (current && decideRunContinuation(current, clock()).reenter && report.steps < maxSteps) {
         if (clock().getTime() > deadline) { timedOut = true; break; }
         current = await advance(verdict.runId);

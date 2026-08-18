@@ -95,7 +95,7 @@ The standard CMS-Agent MCP success envelope is `{ "ok": true, "data": <result> }
     "output_tokens": 30,
     "cost_usd": 0.00048
   },
-  "agent_rev": 1,
+  "agent_rev": 3,
   "model": "gpt-4.1"
 }
 ```
@@ -108,7 +108,7 @@ At least one of `assistant_text` or `tool_calls` is present. Tool arguments are 
 
 The provider system prompt order is fixed:
 
-1. canonical workspace-stored `client_manager` prompt;
+1. canonical workspace-stored `client_manager` prompt (rev 3 — adds "Starting and reporting production": brief passed verbatim as `input.instructions`, `trafficSource`/`awarenessStage`/`mediaRequest` carried, caller-supplied `requestId`, reusable-first failure reporting; rev 2 = CA6 house rules; rev 1 = CA2 seed);
 2. project knowledge from the registered project hook;
 3. project editorial voice from the registered project hook, or `null` when the project has none;
 4. caller `context` serialized as deterministic JSON between `<caller_context_json>` markers.

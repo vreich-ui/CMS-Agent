@@ -4,6 +4,7 @@ import { buildAgentModel, resolveProvider } from "../providers/providerRegistry.
 import { renderPlaybookForPrompt } from "../../improvement/playbook.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { getTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
+import { toolInputJsonSchema } from "../../tools/toolJsonSchema.js";
 import { executeTool } from "../../tools/toolExecutor.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
@@ -165,13 +166,13 @@ export class OpenAINodeRunner implements NodeRunner {
     const sdkTools = effective.map((t) => tool({
       name: t.name.replace(/[^A-Za-z0-9_-]/g, "_"),
       description: `${getTool(t.toolId)?.description ?? `Controlled CMS-Agent tool ${t.name}`} All calls are audited through ToolExecutor.`,
-      // Declared NON-strict on purpose. OpenAI rejects a strict function schema unless it sets
-      // additionalProperties:false and enumerates every property (a strict function with
-      // additionalProperties:true returns "400 Invalid schema for function ...: 'additionalProperties'
-      // is required to be supplied and to be false"). These controlled tools accept varied argument
-      // shapes and are re-validated by ToolExecutor at call time, so an open non-strict object schema
-      // is the correct declaration and keeps live (openai) execution working.
-      parameters: { type: "object", properties: {}, required: [], additionalProperties: true } as any,
+      // S1: the tool's REAL parameter schema, derived from its zod inputSchema (toolJsonSchema.ts).
+      // Until now this was the open placeholder {properties:{}, additionalProperties:true}, which
+      // told the model nothing about the argument names the strict server-side schema would then
+      // reject. Still declared NON-strict: OpenAI's strict mode demands additionalProperties:false
+      // AND every property required, which optional arguments (tool?, arguments?) cannot satisfy;
+      // ToolExecutor re-validates every call against the zod schema regardless.
+      parameters: toolInputJsonSchema(getTool(t.toolId)?.inputSchema) as any,
       strict: false,
       execute: async (args: unknown) => {
         toolCallCount += 1;

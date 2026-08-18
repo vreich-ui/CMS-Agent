@@ -71,9 +71,10 @@ describe("turn-cap exhaustion is a distinct, actionable failure", () => {
   it("passes the resolved per-node budget to the SDK — above the node's tool-call allowance", async () => {
     await executeNode({ nodeId: "research", input: {}, dependencyOutputs: RESEARCH_DEPENDENCIES, executionMode: "openai" });
     const options = runMock.mock.calls[0]?.[2] as { maxTurns: number };
-    // The node-limits audit made research's turn budget explicit: maxTurns 12 over toolCallLimit 8.
-    // The invariant stays "above the tool-call allowance"; the number is now declared, not derived.
-    expect(options.maxTurns).toBe(12);
-    expect(options.maxTurns).toBeGreaterThan(8);
+    // The node-limits audit made research's turn budget explicit; S1 (chat-path) tightened it to
+    // maxTurns 8 over toolCallLimit 5 (budgetUsd 3). The invariant stays "above the tool-call
+    // allowance"; the number is declared in nodes.ts, not derived.
+    expect(options.maxTurns).toBe(8);
+    expect(options.maxTurns).toBeGreaterThan(5);
   });
 });

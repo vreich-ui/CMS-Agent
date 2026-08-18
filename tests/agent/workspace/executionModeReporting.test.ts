@@ -77,7 +77,7 @@ describe("workflow.get_run / workflow.list_runs report the mode prominently", ()
 
   it("carries the mode on every row of the run list", async () => {
     await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {} });
-    await data("workflow.start_dry_run", { executionMode: "openai", projectId: "dr-lurie", input: {} });
+    await data("workflow.start_dry_run", { executionMode: "openai", projectId: "dr-lurie", requestId: "req_test_fixture_20260817_01", input: {} });
     const runs = (await data("workflow.list_runs", {})).runs as { mode: { live: boolean } }[];
 
     expect(runs.length).toBeGreaterThanOrEqual(2);
