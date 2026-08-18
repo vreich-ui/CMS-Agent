@@ -44,7 +44,7 @@
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { listWorkspaceNodes, validateWorkspaceGraph } from "../src/agent/workspace/nodes.js";
+import { getWorkspaceNode, listWorkspaceNodes, validateWorkspaceGraph } from "../src/agent/workspace/nodes.js";
 import { publishingTailConformanceIssues } from "../src/agent/workspace/publishingTail.js";
 import { seededSkillDefinitions } from "../src/agent/skills/seededSkills.js";
 import type { SkillDefinition } from "../src/agent/skills/skillTypes.js";
@@ -91,7 +91,13 @@ const die = (message: string, detail: string[] = []): never => {
   process.exit(1);
 };
 
-const readSource = async (from?: string): Promise<WorkspaceNode[]> => {
+// S3: `--from-canonical` feeds the generator the COMPILED canonical set (nodes.ts as built), so the
+// drift gate can run offline (`npm run nodes:check:offline`, CI): it proves nodes.ts round-trips
+// through the generator byte-for-byte — a hand-edit the generator would not reproduce fails here.
+// It does NOT prove parity with the LIVE store; `npm run nodes:check` (credentials) still does that.
+const FROM_CANONICAL_FLAG = "--from-canonical";
+const readSource = async (from?: string, fromCanonical = false): Promise<WorkspaceNode[]> => {
+  if (fromCanonical) return JSON.parse(JSON.stringify(listWorkspaceNodes())) as WorkspaceNode[];
   if (from) {
     const parsed = JSON.parse(await readFile(from, "utf8"));
     const nodes = Array.isArray(parsed) ? parsed : parsed?.data?.nodes ?? parsed?.nodes;
@@ -284,11 +290,35 @@ const refuseUnsafe = (incoming: WorkspaceNode[], allowShrink = false): void => {
   if (problems.length) die(`Refusing to re-seed ${problems.length} problem(s):`, problems);
 };
 
+// W6.5 / S3: nodes.ts references two SHARED enum property objects by identifier
+// (`TRAFFIC_SOURCE_ENUM_PROPERTY`, `AWARENESS_STAGE_ENUM_PROPERTY`, both derived from
+// aggressionVector.ts's canonical value lists) instead of inlining a copy of the enum into every
+// schema that validates the field. The store holds the inlined values (JSON has no identifiers), so
+// the renderer re-substitutes the identifier wherever a schema property deep-equals the shared
+// object. This is what lets the generator round-trip nodes.ts byte-for-byte (the offline drift gate,
+// `npm run nodes:check:offline`) and keeps a re-seed from silently forking the enum 2×N times.
+// The shared objects are read off a node that references them by identifier (brief_architect's
+// outputSchema), so nodes.ts need not export them and this list can never disagree with the file.
+const sharedProperty = (name: string): unknown => ((getWorkspaceNode("brief_architect")?.outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {})[name];
+const SHARED_SCHEMA_PROPERTIES: Array<{ identifier: string; value: unknown }> = [
+  { identifier: "TRAFFIC_SOURCE_ENUM_PROPERTY", value: sharedProperty("trafficSource") },
+  { identifier: "AWARENESS_STAGE_ENUM_PROPERTY", value: sharedProperty("awarenessStage") }
+].filter((entry) => entry.value !== undefined);
+const SHARED_PLACEHOLDER = (identifier: string): string => `__SHARED_SCHEMA_PROPERTY__${identifier}__`;
+const substituteSharedProperties = (value: unknown): unknown => {
+  for (const shared of SHARED_SCHEMA_PROPERTIES) if (JSON.stringify(value) === JSON.stringify(shared.value)) return SHARED_PLACEHOLDER(shared.identifier);
+  if (Array.isArray(value)) return value.map(substituteSharedProperties);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [key, substituteSharedProperties(child)]));
+  return value;
+};
+const restoreSharedIdentifiers = (rendered: string): string =>
+  SHARED_SCHEMA_PROPERTIES.reduce((text, shared) => text.split(JSON.stringify(SHARED_PLACEHOLDER(shared.identifier))).join(shared.identifier), rendered);
+
 const render = (nodes: WorkspaceNode[], original: string): string => {
   const open = original.indexOf(OPEN_MARKER);
   const close = original.indexOf(CLOSE_MARKER, open);
   if (open === -1 || close === -1) die("Could not find the publishingConductorNodes array literal in nodes.ts. The file's shape changed; update OPEN_MARKER / CLOSE_MARKER.");
-  const body = nodes.map((node) => JSON.stringify(orderKeys(node), null, 2).split("\n").map((line) => `  ${line}`).join("\n")).join(",\n");
+  const body = nodes.map((node) => restoreSharedIdentifiers(JSON.stringify(substituteSharedProperties(orderKeys(node)), null, 2)).split("\n").map((line) => `  ${line}`).join("\n")).join(",\n");
   return `${original.slice(0, open)}${OPEN_MARKER}\n${body}\n${original.slice(close)}`;
 };
 
@@ -323,15 +353,16 @@ const main = async () => {
   const skillsIndex = args.indexOf("--skills");
   const skillsFrom = skillsIndex === -1 ? undefined : args[skillsIndex + 1];
 
-  const source = await readSource(from);
-  say(`source            ${source.length} nodes from ${from ?? "the live workspace store"}`);
+  const fromCanonical = args.includes(FROM_CANONICAL_FLAG);
+  const source = await readSource(from, fromCanonical);
+  say(`source            ${source.length} nodes from ${fromCanonical ? "the compiled canonical set (nodes.ts)" : from ?? "the live workspace store"}`);
 
   const ordered = topologicallyOrdered(source);
   refuseUnsafe(ordered, allowShrink);
   if (allowShrink) say(`prompt guard      DISABLED via ${ALLOW_SHRINK_FLAG} — prompt shrink and canonicalRule removal were explicitly permitted for this run`);
 
   // Skills travel with the nodes that reference them, or the graph points at things that do not exist.
-  const skills = (from && !skillsFrom) ? seededSkillDefinitions : (await readSkillSource(skillsFrom)) ?? seededSkillDefinitions;
+  const skills = ((from || fromCanonical) && !skillsFrom) ? seededSkillDefinitions : (await readSkillSource(skillsFrom)) ?? seededSkillDefinitions;
   say(`skills            ${skills.length} from ${skillsFrom ?? (from ? "the current seeded set (no --skills given)" : "the live workspace store")}`);
   const integrity = skillIntegrityProblems(ordered, skills);
   if (integrity.length) die(`Refusing to re-seed — ${integrity.length} node/skill reference problem(s):`, [...new Set(integrity)]);
@@ -354,7 +385,11 @@ const main = async () => {
   for (const change of edgeChanges) say(`                  ${change}`);
   say(`publish-risk      ${ordered.filter((node) => node.riskLevel === "publish" || node.riskLevel === "admin").map((node) => node.id).join(", ")}`);
 
-  const nodesDrifted = rendered !== original;
+  // Hand-written `//` notes inside the array literal (edge-history comments next to a dependsOn) are
+  // not data the generator can reproduce; they are ignored for the drift verdict, and preserved when
+  // nothing else changed (the file is only rewritten when the DATA drifted).
+  const stripArrayComments = (text: string): string => text.split("\n").filter((line) => !/^\s*\/\//.test(line)).join("\n");
+  const nodesDrifted = stripArrayComments(rendered) !== stripArrayComments(original);
   const skillsDrifted = renderedSkills !== originalSkills;
   if (!nodesDrifted && !skillsDrifted) {
     say("nodes.ts          up to date");

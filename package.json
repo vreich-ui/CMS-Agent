@@ -14,6 +14,7 @@
     "test:nodes": "tsx scripts/seedNodesFromWorkspace.ts",
     "nodes:check": "tsx scripts/seedNodesFromWorkspace.ts",
     "nodes:update": "tsx scripts/seedNodesFromWorkspace.ts --write",
+    "nodes:check:offline": "tsx scripts/seedNodesFromWorkspace.ts --from-canonical",
     "store:check": "tsx scripts/reseedStoreFromCanonical.ts",
     "store:update": "tsx scripts/reseedStoreFromCanonical.ts --write",
     "test:glossary": "tsx scripts/generateGlossary.ts",
