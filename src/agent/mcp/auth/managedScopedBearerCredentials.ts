@@ -16,6 +16,9 @@ export type ManagedScopedBearerMetadata = {
   createdAt: string;
   netlifySiteId: string;
   netlifySiteName: string;
+  // Older v1 entries predate the activation marker and are therefore treated as active.
+  // New credentials remain pending until their site install has been verified.
+  state?: "pending" | "active";
 };
 
 type ManagedScopedBearerDocument = {
@@ -66,7 +69,8 @@ const parseDocument = (value: unknown): ManagedScopedBearerDocument => {
       typeof entry.netlifySiteId !== "string" ||
       !entry.netlifySiteId ||
       typeof entry.netlifySiteName !== "string" ||
-      !entry.netlifySiteName
+      !entry.netlifySiteName ||
+      (entry.state !== undefined && entry.state !== "pending" && entry.state !== "active")
     ) throw new Error("Managed scoped bearer registry is invalid.");
   }
   if (new Set(document.credentials.map((entry) => entry.digest)).size !== document.credentials.length) {
@@ -117,7 +121,7 @@ export class ManagedScopedBearerCredentialRepository {
   async hasProjectCredential(projectIds: readonly string[]): Promise<boolean> {
     if (projectIds.length === 0) return false;
     const { document } = await this.read();
-    return document.credentials.some((entry) => entry.projects.some((projectId) => projectIds.includes(projectId)));
+    return document.credentials.some((entry) => entry.state !== "pending" && entry.projects.some((projectId) => projectIds.includes(projectId)));
   }
 
   async mint(input: { projectId: string; toolAllowlist: string[]; netlifySiteId: string; netlifySiteName: string }): Promise<MintedManagedScopedBearer> {
@@ -132,18 +136,35 @@ export class ManagedScopedBearerCredentialRepository {
       toolAllowlist: [...input.toolAllowlist],
       createdAt: this.clock(),
       netlifySiteId: input.netlifySiteId,
-      netlifySiteName: input.netlifySiteName
+      netlifySiteName: input.netlifySiteName,
+      state: "pending"
     };
     await this.mutate((document) => ({ ...document, credentials: [...document.credentials, metadata] }));
     return { token, digest, policy: { projects: [input.projectId], toolAllowlist: [...input.toolAllowlist] } };
   }
 
-  // Rotation overlap is deliberate: mint/register first, install and verify second, retire the old
-  // digest last. A failed Netlify write therefore leaves the previously installed credential valid.
-  async retireOtherProjectCredentials(projectId: string, keepDigest: string): Promise<void> {
+  // Activation is atomic with retiring prior managed credentials. Until this runs, a pending
+  // credential can complete the verification handshake but does not supersede a legacy static
+  // credential for the project.
+  async activateAndRetireOtherProjectCredentials(projectId: string, keepDigest: string): Promise<void> {
+    if (!DIGEST.test(keepDigest)) throw new Error("Managed scoped bearer digest is invalid.");
+    await this.mutate((document) => {
+      const keep = document.credentials.find((entry) => entry.digest === keepDigest && entry.projects.includes(projectId));
+      if (!keep) throw new Error("Managed scoped bearer activation target is missing.");
+      return {
+        ...document,
+        credentials: document.credentials
+          .filter((entry) => !entry.projects.includes(projectId) || entry.digest === keepDigest)
+          .map((entry) => entry.digest === keepDigest ? { ...entry, state: "active" as const } : entry)
+      };
+    });
+  }
+
+  async revokeCredential(digest: string): Promise<void> {
+    if (!DIGEST.test(digest)) throw new Error("Managed scoped bearer digest is invalid.");
     await this.mutate((document) => ({
       ...document,
-      credentials: document.credentials.filter((entry) => !entry.projects.includes(projectId) || entry.digest === keepDigest)
+      credentials: document.credentials.filter((entry) => entry.digest !== digest)
     }));
   }
 

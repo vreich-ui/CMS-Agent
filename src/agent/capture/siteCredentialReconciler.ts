@@ -20,7 +20,7 @@ export type SiteCredentialReconcileResult = {
   errorCode?: string;
 };
 
-type CredentialRepository = Pick<ManagedScopedBearerCredentialRepository, "mint" | "retireOtherProjectCredentials">;
+type CredentialRepository = Pick<ManagedScopedBearerCredentialRepository, "mint" | "activateAndRetireOtherProjectCredentials" | "revokeCredential">;
 
 const parseBindings = (env: NodeJS.ProcessEnv): Record<string, string> => {
   const raw = env[CMS_AGENT_SITE_BINDINGS_ENV]?.trim();
@@ -62,6 +62,8 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
 
   for (const project of projects) {
     let siteName = project.clientSiteBinding?.netlifySiteName ?? bindings[project.projectId]!;
+    let mintedDigest: string | undefined;
+    let credentials: CredentialRepository | undefined;
     try {
       if (!input.apply) {
         results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "planned" });
@@ -69,22 +71,31 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
       }
       const netlify = new NetlifyGenesisClient("live", netlifyToken!, deps.netlifyFetch);
       const site = await netlify.resolveExistingSite(siteName);
-      const credentials = deps.credentialRepository ?? new ManagedScopedBearerCredentialRepository();
+      credentials = deps.credentialRepository ?? new ManagedScopedBearerCredentialRepository();
       const minted = await credentials.mint({ projectId: project.projectId, toolAllowlist: [...SITE_CLIENT_MANAGER_TOOLS], netlifySiteId: site.siteId, netlifySiteName: siteName });
+      mintedDigest = minted.digest;
       await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_ENDPOINT", publicEndpoint, { scopes: ["functions"] });
-      await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"] });
+      await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"], context: "production" });
       await verifyCmsAgentScopedCredential(publicEndpoint, minted.token, deps.credentialFetch);
       if (project.clientSiteBinding?.netlifySiteName !== siteName || project.clientSiteBinding?.netlifySiteId !== site.siteId) {
         await deps.projectRepository.save({ ...project, clientSiteBinding: { netlifySiteName: siteName, netlifySiteId: site.siteId } });
       }
-      await credentials.retireOtherProjectCredentials(project.projectId, minted.digest);
+      await credentials.activateAndRetireOtherProjectCredentials(project.projectId, minted.digest);
       results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "rotated" });
     } catch (error) {
+      let errorCode = error instanceof SiteGenesisRefusal ? error.code : "credential_reconcile_failed";
+      if (credentials && mintedDigest) {
+        try {
+          await credentials.revokeCredential(mintedDigest);
+        } catch {
+          errorCode = "credential_cleanup_failed";
+        }
+      }
       results.push({
         projectId: project.projectId,
         netlifySiteName: siteName,
         status: "failed",
-        errorCode: error instanceof SiteGenesisRefusal ? error.code : "credential_reconcile_failed"
+        errorCode
       });
     }
   }
