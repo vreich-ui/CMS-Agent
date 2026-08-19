@@ -1,0 +1,127 @@
+# Inspect — and, on request, correct — what the Cloud Run MCP plane is actually serving.
+#
+# WHY THIS EXISTS. On 2026-08-19 the same MCP session got two different builds depending on which
+# request landed where: project.* tools answered from current `main` (they returned `endpointSource`
+# and accepted `mcpEndpoint`, both introduced in 87c21af), while capture node executions failed with
+# a message 87c21af DELETED — "Project MCP endpoint is not configured (<VAR>)" — and with env-only
+# endpoint resolution. Four consecutive retries hit the old build, one hit the new. It is not the
+# Netlify plane: cms-agent.netlify.app/.netlify/functions/mcp answers 502
+# ("require() of ES Module /var/task/mcp.mts") and /mcp answers 404, so Netlify serves no MCP at all
+# and its `mcp`/`workspace-mcp` function bundles have been frozen at 2026-08-14 across every deploy
+# since. That leaves Cloud Run traffic split across revisions as the explanation, and nothing in
+# this repo could observe or correct it without a laptop that happened to have gcloud.
+#
+# `report` is READ-ONLY and safe to run at any time. `route-to-latest` is the only mutating action
+# and it does not build, deploy or change configuration — it moves 100% of traffic to the newest
+# READY revision, which is what `gcloud run deploy` does by default and what a partially-applied
+# rollout skipped. A real release still goes through scripts/deploy-mcp.sh, never a hand-written
+# `gcloud run deploy` (its --set-env-vars form has deleted the client-connection variables twice).
+#
+# SECRETS (Settings → Secrets and variables → Actions):
+#   GCP_SERVICE_ACCOUNT_KEY  service account with run.viewer for `report`, plus run.admin and
+#                            iam.serviceAccountUser for `route-to-latest`.
+# VARIABLES:
+#   GCP_PROJECT_ID (default cms-agent-503015), GCP_REGION (default us-central1),
+#   CLOUD_RUN_SERVICE (default cms-agent-mcp).
+#
+# Prefer Workload Identity Federation over a long-lived key when convenient: replace
+# `credentials_json` with `workload_identity_provider` + `service_account` and drop the secret.
+
+name: Cloud Run plane
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "report = read-only inspection. route-to-latest = send 100% of traffic to the newest ready revision."
+        required: true
+        default: report
+        type: choice
+        options:
+          - report
+          - route-to-latest
+
+concurrency:
+  group: cloud-run-plane
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plane:
+    name: ${{ inputs.action }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — required configuration is present
+        env:
+          KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          # Presence only — never the value.
+          if [ -z "${KEY}" ]; then
+            echo "::error::secret GCP_SERVICE_ACCOUNT_KEY is not set"
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Report revisions and traffic
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID || 'cms-agent-503015' }}
+          REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+          SERVICE: ${{ vars.CLOUD_RUN_SERVICE || 'cms-agent-mcp' }}
+        run: |
+          {
+            echo "## $SERVICE ($PROJECT / $REGION)"
+            echo
+            echo "### Traffic"
+            echo '```'
+            gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+              --format='table(status.traffic[].revisionName, status.traffic[].percent, status.traffic[].latestRevision, status.traffic[].tag)'
+            echo '```'
+            echo
+            echo "### Latest ready revision"
+            echo '```'
+            gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+              --format='value(status.latestReadyRevisionName)'
+            echo '```'
+            echo
+            echo "### Revisions (newest first) — image tag is the commit each was built from"
+            echo '```'
+            gcloud run revisions list --service "$SERVICE" --project "$PROJECT" --region "$REGION" \
+              --sort-by=~metadata.creationTimestamp --limit=10 \
+              --format='table(metadata.name, metadata.creationTimestamp, spec.containers[0].image)'
+            echo '```'
+            echo
+            echo "### Environment variable NAMES on the serving revision (names only, never values)"
+            echo '```'
+            gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+              --format='value(spec.template.spec.containers[0].env[].name)' | tr ';' '\n' | sort
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Route all traffic to the latest ready revision
+        if: inputs.action == 'route-to-latest'
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID || 'cms-agent-503015' }}
+          REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+          SERVICE: ${{ vars.CLOUD_RUN_SERVICE || 'cms-agent-mcp' }}
+        run: |
+          gcloud run services update-traffic "$SERVICE" \
+            --project "$PROJECT" --region "$REGION" --to-latest
+          {
+            echo
+            echo "### Traffic AFTER routing to latest"
+            echo '```'
+            gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+              --format='table(status.traffic[].revisionName, status.traffic[].percent, status.traffic[].latestRevision)'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
