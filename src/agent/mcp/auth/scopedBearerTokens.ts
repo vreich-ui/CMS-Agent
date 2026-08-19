@@ -77,3 +77,18 @@ export function validateScopedBearerTokenConfiguration(env: NodeJS.ProcessEnv = 
 
 export const findScopedBearerTokenPolicy = (token: string, env: NodeJS.ProcessEnv = process.env): ScopedBearerTokenPolicy | undefined =>
   parseScopedBearerTokenPolicies(env).get(token);
+
+// The deployment-time JSON remains a backwards-compatible break-glass path. Genesis-owned
+// credentials are resolved from the durable digest registry, which means adding or rotating a
+// client no longer requires editing one shared secret and forcing a Cloud Run revision.
+export async function findAnyScopedBearerTokenPolicy(token: string, env: NodeJS.ProcessEnv = process.env): Promise<ScopedBearerTokenPolicy | undefined> {
+  const legacy = findScopedBearerTokenPolicy(token, env);
+  const { findManagedScopedBearerTokenPolicy, hasManagedScopedBearerForProjects } = await import("./managedScopedBearerCredentials.js");
+  const managed = await findManagedScopedBearerTokenPolicy(token, env);
+  if (managed) return managed;
+  // Once genesis/reconciliation owns a project's credential, any matching legacy static-map token
+  // for that project is superseded automatically. Operators do not need to hand-edit the shared
+  // JSON immediately to make the rotation effective.
+  if (legacy && !(await hasManagedScopedBearerForProjects(legacy.projects, env))) return legacy;
+  return undefined;
+}

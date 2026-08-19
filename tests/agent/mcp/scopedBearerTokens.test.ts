@@ -120,11 +120,13 @@ describe("CA4 deploy script regression guard", () => {
     expect(script).not.toContain('/healthz');
     expect(script).toContain("MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest");
     expect(cloudBuild).toContain("MCP_SCOPED_TOKENS_JSON=mcp-scoped-tokens-json:latest");
+    expect(script).toContain("CMS_AGENT_PUBLIC_MCP_ENDPOINT=$CMS_AGENT_PUBLIC_MCP_ENDPOINT");
+    expect(cloudBuild).toContain("CMS_AGENT_PUBLIC_MCP_ENDPOINT=${_PUBLIC_MCP_ENDPOINT}");
     expect(script).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
     expect(cloudBuild).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
     expect(script).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
     expect(cloudBuild).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
-    expect(cloudBuild).toContain("for VAR in MCP_SCOPED_TOKENS_JSON DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do");
+    expect(cloudBuild).toContain("for VAR in CMS_AGENT_PUBLIC_MCP_ENDPOINT MCP_SCOPED_TOKENS_JSON DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do");
     expect(cloudBuild).not.toContain('/healthz');
   });
 

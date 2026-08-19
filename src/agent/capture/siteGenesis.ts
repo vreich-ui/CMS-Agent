@@ -29,9 +29,14 @@
 //   HUMAN (the checklist): NETLIFY_API_TOKEN custody itself, GitHub repo binding + content token,
 //   enabling Netlify Identity, ADMIN_EMAILS, the first-Owner sign-in, artifact ingest hosts, the
 //   pdf-tool storage grant (a new Netlify machine account — no API mints accounts), tracking sink,
-//   fleet-shared AI keys, CMS_AGENT_MCP_TOKEN (Google Secret Manager — a third system), the
+//   fleet-shared AI keys, the
 //   deploy-side <SLUG>_MCP_TOKEN value (secret custody: Secret Manager + the Cloud Run
 //   --update-secrets list; the ENDPOINT half is no longer a human step), and DNS.
+//
+//   GENESIS-OWNED CLIENT-MANAGER CREDENTIAL: the Platform site -> CMS-Agent bearer is minted here,
+//   stored only as a digest in the durable workspace store, installed directly in Netlify as a
+//   secret/function-only CMS_AGENT_MCP_TOKEN, verified against the public MCP endpoint, and then
+//   discarded. The raw bearer never enters MCP, the ledger, stdout, a checklist, or source control.
 //
 // NETLIFY DRY-RUN MODE (SITE_GENESIS_NETLIFY_MODE, default "dry_run"): every Netlify API action is
 // recorded in the audit ledger with synthetic ids and NO network call — the proof mode this
@@ -50,13 +55,16 @@ import { promisify } from "node:util";
 import { createProject } from "../projects/projectAdmin.js";
 import type { ProjectCapturePolicy, ProjectSummary } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
+import { ManagedScopedBearerCredentialRepository } from "../mcp/auth/managedScopedBearerCredentials.js";
 
 const execFileAsync = promisify(execFile);
 
 export const NETLIFY_API_TOKEN_ENV = "NETLIFY_API_TOKEN";
 export const PLATFORM_REPO_ROOT_ENV = "PLATFORM_REPO_ROOT";
 export const SITE_GENESIS_NETLIFY_MODE_ENV = "SITE_GENESIS_NETLIFY_MODE";
+export const CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV = "CMS_AGENT_PUBLIC_MCP_ENDPOINT";
 export const CREATE_SITE_CLI_RELATIVE_PATH = "packages/core/cli/create-site.mjs";
+export const SITE_CLIENT_MANAGER_TOOLS = ["agent_resolve", "agent_converse"] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";
 
@@ -204,6 +212,17 @@ export class NetlifyGenesisClient {
     return { siteId, accountId: typeof site.account_id === "string" ? site.account_id : undefined, url: typeof site.ssl_url === "string" ? site.ssl_url : undefined };
   }
 
+  async resolveExistingSite(siteName: string): Promise<{ siteId: string; accountId: string; url?: string }> {
+    if (this.mode === "dry_run") return { siteId: `dryrun_site_${siteName}`, accountId: `dryrun_account_${siteName}`, url: `https://${siteName}.netlify.app` };
+    const found = (await this.request("GET", `https://api.netlify.com/api/v1/sites?name=${encodeURIComponent(siteName)}`)) as unknown;
+    const site = Array.isArray(found) ? (found as Array<Record<string, unknown>>).find((candidate) => candidate.name === siteName) : undefined;
+    const siteId = typeof site?.id === "string" ? site.id : "";
+    const accountId = typeof site?.account_id === "string" ? site.account_id : "";
+    if (!siteId || !accountId) throw new SiteGenesisRefusal("netlify_site_not_found", `No existing Netlify site named "${siteName}" could be resolved; reconciliation never creates replacement sites.`);
+    this.record("netlify_resolve_site", `Resolved existing Netlify site "${siteName}".`, { siteName, siteId });
+    return { siteId, accountId, url: typeof site?.ssl_url === "string" ? site.ssl_url : undefined };
+  }
+
   async createBuildHook(siteId: string, title: string): Promise<{ hookId: string; url?: string }> {
     if (this.mode === "dry_run") {
       const hookId = `dryrun_hook_${siteId}`;
@@ -230,7 +249,13 @@ export class NetlifyGenesisClient {
   // Env-var set mirrors create-site.mjs's proven check-then-POST/PUT shape. `value` is only ever a
   // non-secret deterministic default or a capability URL flagged isSecret; the ledger records the
   // NAME, never the value.
-  async setEnvVar(accountId: string, siteId: string, key: string, value: string, { isSecret = false }: { isSecret?: boolean } = {}): Promise<void> {
+  async setEnvVar(
+    accountId: string,
+    siteId: string,
+    key: string,
+    value: string,
+    { isSecret = false, scopes = ["builds", "functions", "runtime", "post_processing"], context = "all" }: { isSecret?: boolean; scopes?: string[]; context?: string } = {}
+  ): Promise<void> {
     if (this.mode === "dry_run") {
       this.record("netlify_set_env", `DRY-RUN: would set env var ${key} on site ${siteId} (name recorded; value never logged).`, { siteId, key, isSecret });
       return;
@@ -239,7 +264,7 @@ export class NetlifyGenesisClient {
     const collectionUrl = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env?site_id=${encodeURIComponent(siteId)}`;
     const existing = await this.fetchImpl(keyUrl, { headers: { Authorization: `Bearer ${this.token}` } });
     if (!existing.ok && existing.status !== 404) throw new SiteGenesisRefusal("netlify_api_failed", `Netlify env-var lookup failed for ${key}: HTTP ${existing.status}`);
-    const variable = { key, scopes: ["builds", "functions", "runtime", "post_processing"], values: [{ value, context: "all" }], ...(isSecret ? { is_secret: true } : {}) };
+    const variable = { key, scopes, values: [{ value, context }], ...(isSecret ? { is_secret: true } : {}) };
     await this.request(existing.ok ? "PUT" : "POST", existing.ok ? keyUrl : collectionUrl, existing.ok ? variable : [variable], { redactErrorBody: true });
     this.record("netlify_set_env", `Set env var ${key} on site ${siteId} (name recorded; value never logged).`, { siteId, key, isSecret });
   }
@@ -366,17 +391,10 @@ export function buildGenesisHumanChecklist(input: {
     },
     {
       id: "fleet_shared_keys",
-      title: "Confirm the fleet-shared AI/integration values are present — reuse, never mint per-client",
-      detail: "Runbook §3 + T11.7 env table: ANTHROPIC_API_KEY, OPENAI_API_KEY, CMS_AGENT_MCP_ENDPOINT, NETLIFY_AUTH_TOKEN are fleet-shared — \"reuse the existing fleet values, never mint per-client copies.\" Verify your Netlify team's shared-env mechanism copied them; don't duplicate.",
-      envVars: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CMS_AGENT_MCP_ENDPOINT", "NETLIFY_AUTH_TOKEN"],
+      title: "Confirm the remaining fleet-shared AI/integration values are present — reuse, never mint per-client",
+      detail: "Runbook §3 + T11.7 env table: ANTHROPIC_API_KEY, OPENAI_API_KEY and NETLIFY_AUTH_TOKEN are fleet-shared — \"reuse the existing fleet values, never mint per-client copies.\" CMS_AGENT_MCP_ENDPOINT and the site's scoped CMS_AGENT_MCP_TOKEN are installed by genesis and are not human checklist items.",
+      envVars: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NETLIFY_AUTH_TOKEN"],
       source: "T11.7 env table / site-provisioning-runbook.md §3"
-    },
-    {
-      id: "cms_agent_mcp_token",
-      title: "Mint this tenant's own CMS_AGENT_MCP_TOKEN (Google Secret Manager — a third system)",
-      detail: `T11.7 env table, verbatim: "This site's OWN scoped CMS-Agent bearer — never fleet-shared and never MCP_API_TOKEN. Minted into the Secret Manager secret mcp-scoped-tokens-json, scoped to {projects: [${slug}], toolAllowlist: [agent_resolve, agent_converse]} … Store Functions-only + secret."`,
-      envVars: ["CMS_AGENT_MCP_TOKEN"],
-      source: "T11.7 env table (AI + integrations)"
     },
     input.registeredMcpEndpoint
       ? {
@@ -433,7 +451,35 @@ export type SiteGenesisDeps = {
   projectRepository: ProjectRepository;
   env?: NodeJS.ProcessEnv;
   netlifyFetch?: NetlifyFetch;
+  credentialFetch?: NetlifyFetch;
+  credentialRepository?: Pick<ManagedScopedBearerCredentialRepository, "mint" | "retireOtherProjectCredentials">;
 };
+
+export const resolveCmsAgentPublicMcpEndpoint = (env: NodeJS.ProcessEnv = process.env): string => {
+  const raw = env[CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV]?.trim();
+  if (!raw) throw new SiteGenesisRefusal("cms_agent_public_endpoint_missing", `${CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV} is required for live genesis so the generated site can be wired and its credential verified without human handling.`);
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/mcp") throw new Error("invalid");
+    return url.toString();
+  } catch {
+    throw new SiteGenesisRefusal("cms_agent_public_endpoint_invalid", `${CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV} must be a credential-free https URL whose path is exactly /mcp.`);
+  }
+};
+
+export async function verifyCmsAgentScopedCredential(endpoint: string, token: string, fetchImpl: NetlifyFetch = fetch as unknown as NetlifyFetch): Promise<void> {
+  let response: Awaited<ReturnType<NetlifyFetch>>;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "genesis-credential-check", method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "cms-agent-genesis", version: "1" } } })
+    });
+  } catch {
+    throw new SiteGenesisRefusal("cms_agent_credential_verification_failed", "The generated CMS-Agent credential could not be verified; genesis stopped without exposing it.");
+  }
+  if (!response.ok) throw new SiteGenesisRefusal("cms_agent_credential_verification_failed", `The generated CMS-Agent credential was rejected during initialize (HTTP ${response.status}); genesis stopped without exposing it.`);
+}
 
 export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisDeps): Promise<SiteGenesisResult> {
   const env = deps.env ?? process.env;
@@ -457,6 +503,9 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   }
 
   const mode = resolveGenesisNetlifyMode(env);
+  // Validate the public endpoint before genesis performs any live side effect. In dry-run mode a
+  // synthetic endpoint is sufficient because no credential is minted or sent anywhere.
+  const cmsAgentPublicMcpEndpoint = mode === "live" ? resolveCmsAgentPublicMcpEndpoint(env) : env[CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV]?.trim() || "https://cms-agent.example/mcp";
   const ledger: GenesisAction[] = [];
   const platformRoot = env[PLATFORM_REPO_ROOT_ENV]?.trim();
 
@@ -540,9 +589,41 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     await netlify.setEnvVar(envAccount, siteId, "NETLIFY_BUILD_HOOK_URL", hook.url ?? "", { isSecret: true });
     await netlify.setEnvVar(envAccount, siteId, "TRACKING_PROJECT_ID", `trk_${slug}`);
   }
+
+  // 3. Platform site -> CMS-Agent Client Manager credential. This is part of birth, not a human
+  // checklist: mint inside the process, register only its digest, install the raw value directly in
+  // Netlify, verify the CMS-Agent auth handshake, then revoke superseded managed digests. Rotation
+  // overlap means an interrupted write cannot invalidate the previously installed credential.
+  if (mode === "dry_run") {
+    const envAccount = accountId ?? `dryrun_account_${netlifySiteName}`;
+    await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_ENDPOINT", cmsAgentPublicMcpEndpoint, { scopes: ["functions"] });
+    await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_TOKEN", "", { isSecret: true, scopes: ["functions"] });
+    ledger.push({
+      step: "cms_agent_client_manager_credential",
+      kind: "dry_run",
+      detail: "DRY-RUN: would mint a per-site scoped bearer internally, persist only its digest and Client Manager policy, install CMS_AGENT_MCP_ENDPOINT plus secret/function-only CMS_AGENT_MCP_TOKEN in Netlify, verify initialize, and retire superseded managed credentials. No token would be returned or logged.",
+      at: now(),
+      data: { projectId: slug, toolAllowlist: [...SITE_CLIENT_MANAGER_TOOLS], netlifySiteId: siteId }
+    });
+  } else {
+    const envAccount = accountId ?? await netlify.getSiteAccountId(siteId);
+    const credentials = deps.credentialRepository ?? new ManagedScopedBearerCredentialRepository();
+    const minted = await credentials.mint({ projectId: slug, toolAllowlist: [...SITE_CLIENT_MANAGER_TOOLS], netlifySiteId: siteId, netlifySiteName });
+    await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_ENDPOINT", cmsAgentPublicMcpEndpoint, { scopes: ["functions"] });
+    await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"] });
+    await verifyCmsAgentScopedCredential(cmsAgentPublicMcpEndpoint, minted.token, deps.credentialFetch);
+    await credentials.retireOtherProjectCredentials(slug, minted.digest);
+    ledger.push({
+      step: "cms_agent_client_manager_credential",
+      kind: "executed",
+      detail: "Minted, installed, and verified the site's scoped Client Manager credential; only its digest and authorization policy were persisted. Superseded managed credentials were retired.",
+      at: now(),
+      data: { projectId: slug, toolAllowlist: [...SITE_CLIENT_MANAGER_TOOLS], netlifySiteId: siteId }
+    });
+  }
   ledger.push(...netlify.actions);
 
-  // 3. CMS-Agent registration — the registration contract's step 1: the token by env var NAME (a
+  // 4. CMS-Agent registration — the registration contract's step 1: the token by env var NAME (a
   // secret value never transits MCP), the DERIVED endpoint stored on the record so no human ever
   // sets <SLUG>_MCP_ENDPOINT, plus the conservative seeded capture policy that authorizes exactly
   // the requested source origin.
