@@ -123,7 +123,7 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
       humanChecklist: Array<{ id: string; title: string; detail: string; envVars?: string[] }>;
       run: { status: string; projectId: string; workflowId: string };
       kick: { stoppedBecause: string };
-      genesis: { projectId: string; netlifyMode: string; netlifySiteName: string; netlifySiteId?: string; envVarNames: { endpoint: string; token: string }; ledger: Array<{ step: string; kind: string; detail: string }> };
+      genesis: { projectId: string; netlifyMode: string; netlifySiteName: string; netlifySiteId?: string; envVarNames: { endpoint: string; token: string }; ledger: Array<{ step: string; kind: string; detail: string; data?: Record<string, unknown> }> };
     };
 
     // ── Genesis: the automatable steps all ran (or were dry-run recorded) — audited on the ledger.
@@ -138,6 +138,7 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(byStep.has("netlify_create_site:dry_run")).toBe(true);
     expect(byStep.has("netlify_build_hook:dry_run")).toBe(true);
     expect(byStep.has("register_project:executed")).toBe(true);
+    expect((byStep.get("register_project:executed") as { data?: { clientSiteBinding?: unknown } }).data?.clientSiteBinding).toEqual({ netlifySiteName: "zilbermanfilmfoundation", netlifySiteId: "dryrun_site_zilbermanfilmfoundation" });
     const envSets = result.genesis.ledger.filter((action) => action.step === "netlify_set_env" && action.kind === "dry_run");
     expect(envSets.map((action) => (action as { data?: { key?: string } }).data?.key).sort()).toEqual(["CMS_AGENT_MCP_ENDPOINT", "CMS_AGENT_MCP_TOKEN", "NETLIFY_BUILD_HOOK_URL", "TRACKING_PROJECT_ID"]);
     expect(byStep.has("cms_agent_client_manager_credential:dry_run")).toBe(true);

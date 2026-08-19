@@ -31,7 +31,7 @@ import { z } from "zod";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { defaultProjectConfigs } from "./defaultMigration.js";
 import { toProjectSummary } from "./projectRegistry.js";
-import { DEFAULT_PROJECT_CAPTURE_POLICY, projectAuthModes, projectStatuses, toolPermissions, type ProjectCapturePolicy, type ProjectConnectionConfig, type ProjectPublishingPolicy, type ProjectSummary } from "./projectTypes.js";
+import { DEFAULT_PROJECT_CAPTURE_POLICY, projectAuthModes, projectStatuses, toolPermissions, type ClientSiteBinding, type ProjectCapturePolicy, type ProjectConnectionConfig, type ProjectPublishingPolicy, type ProjectSummary } from "./projectTypes.js";
 
 // Lowercase-kebab project ids ("acme-daily"), matching the existing "dr-lurie" convention.
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -165,7 +165,12 @@ export const projectUpdateSchema = z.object({
 
 // The MCP boundary parses defaults before calling createProject. Keeping this optional also lets
 // trusted in-process callers use the same fail-closed default rather than having to duplicate it.
-export type ProjectCreateInput = Omit<z.infer<typeof projectCreateSchema>, "capturePolicy"> & { capturePolicy?: ProjectCapturePolicy };
+export type ProjectCreateInput = Omit<z.infer<typeof projectCreateSchema>, "capturePolicy"> & {
+  capturePolicy?: ProjectCapturePolicy;
+  // Trusted in-process genesis identity. Deliberately absent from projectCreateSchema so an MCP
+  // project.create call cannot hand-mark a record as a generated client site.
+  clientSiteBinding?: ClientSiteBinding;
+};
 export type ProjectUpdateInput = z.infer<typeof projectUpdateSchema>;
 
 export class ProjectAdminError extends Error {
@@ -198,14 +203,23 @@ const requireTokenEnvVarForBearer = (authMode: string, tokenEnvVar: string | und
   }
 };
 
+const requireValidClientSiteBinding = (binding: ClientSiteBinding | undefined) => {
+  if (!binding) return;
+  if (!PROJECT_ID_PATTERN.test(binding.netlifySiteName) || (binding.netlifySiteId !== undefined && (binding.netlifySiteId.length < 1 || binding.netlifySiteId.length > 256))) {
+    throw new ProjectAdminError("client_site_binding_invalid", "Client-site identity must be a valid non-secret Netlify site name and optional site id.");
+  }
+};
+
 export async function createProject(repository: ProjectRepository, input: ProjectCreateInput): Promise<ProjectSummary> {
   requireTokenEnvVarForBearer(input.authMode, input.tokenEnvVar);
   requireCredentialFreeEndpoint(input.mcpEndpoint);
+  requireValidClientSiteBinding(input.clientSiteBinding);
   if (await repository.get(input.projectId)) {
     throw new ProjectAdminError("project_exists", `A project with id "${input.projectId}" is already registered.`);
   }
   const config: ProjectConnectionConfig = {
     projectId: input.projectId,
+    ...(input.clientSiteBinding ? { clientSiteBinding: { ...input.clientSiteBinding } } : {}),
     name: input.name,
     mcpEndpointEnvVar: input.mcpEndpointEnvVar,
     ...(input.mcpEndpoint ? { mcpEndpoint: input.mcpEndpoint } : {}),

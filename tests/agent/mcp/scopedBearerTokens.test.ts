@@ -126,8 +126,21 @@ describe("CA4 deploy script regression guard", () => {
     expect(cloudBuild).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
     expect(script).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
     expect(cloudBuild).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
-    expect(cloudBuild).toContain("for VAR in CMS_AGENT_PUBLIC_MCP_ENDPOINT MCP_SCOPED_TOKENS_JSON DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do");
+    expect(script).toContain("NETLIFY_API_TOKEN=$NETLIFY_API_TOKEN_SECRET:latest");
+    expect(cloudBuild).toContain("NETLIFY_API_TOKEN=netlify-api-token:latest");
+    expect(cloudBuild).toContain("for VAR in CMS_AGENT_PUBLIC_MCP_ENDPOINT MCP_SCOPED_TOKENS_JSON NETLIFY_API_TOKEN DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do");
     expect(cloudBuild).not.toContain('/healthz');
+  });
+
+  it("configures a dedicated dry-run-first reconciler job without executing it", async () => {
+    const script = await readFile(new URL("../../../scripts/deploy-site-credential-reconciler.sh", import.meta.url), "utf8");
+    expect(script).toContain("gcloud run jobs create");
+    expect(script).toContain("gcloud run jobs update");
+    expect(script).toContain("--update-env-vars");
+    expect(script).toContain("--update-secrets");
+    expect(script).toContain("NETLIFY_API_TOKEN=$NETLIFY_API_TOKEN_SECRET:latest");
+    expect(script).toContain("src/agent/entrypoints/reconcileSiteCredentialsMain.ts");
+    expect(script).not.toContain("gcloud run jobs execute");
   });
 
   it("makes the Cloud Build health probe fail the deploy before it can report verified", async () => {

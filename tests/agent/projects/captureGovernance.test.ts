@@ -98,4 +98,11 @@ describe("project capture governance", () => {
     expect(contract.fields.capturePolicy).toMatchObject({ required: false, default: DEFAULT_PROJECT_CAPTURE_POLICY });
     expect(contract.fields.capturePolicy.note).toContain("denies all capture");
   });
+
+  it("does not let project.create hand-mark a record as a generated client site", () => {
+    expect(projectCreateSchema.safeParse({
+      ...projectInput,
+      clientSiteBinding: { netlifySiteName: "hand-marked-site" }
+    }).success).toBe(false);
+  });
 });

@@ -5,7 +5,7 @@ import { reconcileSiteClientManagerCredentials } from "../../../src/agent/captur
 
 const projectRepository = (): ProjectRepository => {
   const platform = defaultProjectConfigs().find((project) => project.projectId === "platform")!;
-  const record = { ...platform, mcpEndpoint: "https://kugel-platform.netlify.app/mcp", status: "active" as const };
+  const record = { ...platform, mcpEndpoint: "https://kugel-platform.netlify.app/mcp", clientSiteBinding: { netlifySiteName: "kugel-platform", netlifySiteId: "site_platform" }, status: "active" as const };
   return {
     list: async () => [record],
     get: async () => record,
@@ -61,5 +61,64 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
     expect(variables.map((variable: { key: string }) => variable.key).sort()).toEqual(["CMS_AGENT_MCP_ENDPOINT", "CMS_AGENT_MCP_TOKEN"]);
     expect(variables.find((variable: { key: string }) => variable.key === "CMS_AGENT_MCP_TOKEN")).toMatchObject({ is_secret: true, scopes: ["functions"], values: [{ context: "all" }] });
     expect(credentialFetch).toHaveBeenCalledOnce();
+  });
+
+  it("includes disabled marked client sites and excludes unmarked internal projects", async () => {
+    const platform = defaultProjectConfigs().find((project) => project.projectId === "platform")!;
+    const disabledClient = { ...platform, projectId: "fernwell", mcpEndpoint: "https://fernwell.netlify.app/mcp", clientSiteBinding: { netlifySiteName: "fernwell" }, status: "disabled" as const };
+    const internal = { ...platform, projectId: "pdf-tool", mcpEndpoint: "https://internal.example/mcp", status: "active" as const };
+    const results = await reconcileSiteClientManagerCredentials(
+      { apply: false },
+      { projectRepository: { ...projectRepository(), list: async () => [disabledClient, internal] } as ProjectRepository, env: {} }
+    );
+    expect(results).toEqual([{ projectId: "fernwell", netlifySiteName: "fernwell", status: "planned" }]);
+  });
+
+  it("uses an explicit backfill map for existing clients without marking internal projects", async () => {
+    const platform = defaultProjectConfigs().find((project) => project.projectId === "platform")!;
+    const existingClient = { ...platform, projectId: "dr-lurie", status: "active" as const };
+    const internal = { ...platform, projectId: "pdf-tool", status: "active" as const };
+    const results = await reconcileSiteClientManagerCredentials(
+      { apply: false },
+      {
+        projectRepository: { ...projectRepository(), list: async () => [existingClient, internal] } as ProjectRepository,
+        env: { CMS_AGENT_SITE_BINDINGS_JSON: JSON.stringify({ "dr-lurie": "drluriescience" }) }
+      }
+    );
+    expect(results).toEqual([{ projectId: "dr-lurie", netlifySiteName: "drluriescience", status: "planned" }]);
+  });
+
+  it("persists the durable binding after a mapped credential is installed and verified", async () => {
+    const platform = defaultProjectConfigs().find((project) => project.projectId === "platform")!;
+    const existingClient = { ...platform, projectId: "dr-lurie", status: "active" as const };
+    const save = vi.fn(async (value) => value);
+    const repository = { ...projectRepository(), list: async () => [existingClient], save } as ProjectRepository;
+    const netlifyFetch = vi.fn(async (url: string) => {
+      if (url.includes("/sites?name=")) return response(200, [{ id: "site_drlurie", name: "drluriescience", account_id: "acct_1", ssl_url: "https://drluriescience.netlify.app" }]);
+      if (url.includes("/env/CMS_AGENT_MCP_")) return response(404);
+      if (url.includes("/env?site_id=site_drlurie")) return response(200);
+      throw new Error(`unexpected ${url}`);
+    });
+    await reconcileSiteClientManagerCredentials(
+      { apply: true },
+      {
+        projectRepository: repository,
+        env: {
+          NETLIFY_API_TOKEN: "netlify-hidden",
+          CMS_AGENT_PUBLIC_MCP_ENDPOINT: "https://cms-agent.example/mcp",
+          CMS_AGENT_SITE_BINDINGS_JSON: JSON.stringify({ "dr-lurie": "drluriescience" })
+        },
+        netlifyFetch: netlifyFetch as never,
+        credentialFetch: vi.fn(async () => response(200)) as never,
+        credentialRepository: {
+          mint: vi.fn(async () => ({ token: "raw-token-never-reported", digest: "d".repeat(64), policy: { projects: ["dr-lurie"], toolAllowlist: ["agent_resolve", "agent_converse"] } })),
+          retireOtherProjectCredentials: vi.fn(async () => undefined)
+        }
+      }
+    );
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: "dr-lurie",
+      clientSiteBinding: { netlifySiteName: "drluriescience", netlifySiteId: "site_drlurie" }
+    }));
   });
 });
