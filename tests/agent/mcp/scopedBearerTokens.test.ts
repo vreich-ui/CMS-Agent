@@ -141,6 +141,8 @@ describe("CA4 deploy script regression guard", () => {
     expect(script).toContain("NETLIFY_API_TOKEN=$NETLIFY_API_TOKEN_SECRET:latest");
     expect(script).toContain("src/agent/entrypoints/reconcileSiteCredentialsMain.ts");
     expect(script).not.toContain("gcloud run jobs execute");
+    expect(script).toContain('if [ -z "${CMS_AGENT_SITE_BINDINGS_JSON:-}" ]; then');
+    expect(script).not.toContain('${CMS_AGENT_SITE_BINDINGS_JSON:-{}}');
   });
 
   it("makes the Cloud Build health probe fail the deploy before it can report verified", async () => {
