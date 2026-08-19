@@ -63,6 +63,7 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
   for (const project of projects) {
     let siteName = project.clientSiteBinding?.netlifySiteName ?? bindings[project.projectId]!;
     let mintedDigest: string | undefined;
+    let credentialInstalled = false;
     let credentials: CredentialRepository | undefined;
     try {
       if (!input.apply) {
@@ -76,7 +77,9 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
       mintedDigest = minted.digest;
       await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_ENDPOINT", publicEndpoint, { scopes: ["functions"] });
       await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"], context: "production" });
+      credentialInstalled = true;
       await verifyCmsAgentScopedCredential(publicEndpoint, minted.token, deps.credentialFetch);
+      await netlify.rebuildAndWaitForPublishedDeploy(site.siteId);
       if (project.clientSiteBinding?.netlifySiteName !== siteName || project.clientSiteBinding?.netlifySiteId !== site.siteId) {
         await deps.projectRepository.save({ ...project, clientSiteBinding: { netlifySiteName: siteName, netlifySiteId: site.siteId } });
       }
@@ -84,7 +87,10 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
       results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "rotated" });
     } catch (error) {
       let errorCode = error instanceof SiteGenesisRefusal ? error.code : "credential_reconcile_failed";
-      if (credentials && mintedDigest) {
+      // Before the site env write succeeds the generated digest is safe to revoke. Afterwards a
+      // timeout is ambiguous: Netlify may still publish that deploy, so the pending digest must
+      // remain recognized until a later successful retry atomically replaces it.
+      if (credentials && mintedDigest && !credentialInstalled) {
         try {
           await credentials.revokeCredential(mintedDigest);
         } catch {

@@ -37,6 +37,9 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
       if (url.includes("/sites?name=")) return response(200, [{ id: "site_platform", name: "kugel-platform", account_id: "acct_1", ssl_url: "https://kugel-platform.netlify.app" }]);
       if (url.includes("/env/CMS_AGENT_MCP_")) return response(404);
       if (url.includes("/env?site_id=site_platform")) return response(200);
+      if (url.includes("/sites/site_platform/builds?title=")) return response(200, { id: "build_1", deploy_id: "deploy_1" });
+      if (url.endsWith("/deploys/deploy_1")) return response(200, { id: "deploy_1", state: "ready" });
+      if (url.endsWith("/sites/site_platform")) return response(200, { published_deploy: { id: "deploy_1", state: "ready" } });
       throw new Error(`unexpected ${url}`);
     });
     const credentialFetch = vi.fn(async () => response(200, { jsonrpc: "2.0", id: "genesis-credential-check", result: {} }));
@@ -99,6 +102,9 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
       if (url.includes("/sites?name=")) return response(200, [{ id: "site_drlurie", name: "drluriescience", account_id: "acct_1", ssl_url: "https://drluriescience.netlify.app" }]);
       if (url.includes("/env/CMS_AGENT_MCP_")) return response(404);
       if (url.includes("/env?site_id=site_drlurie")) return response(200);
+      if (url.includes("/sites/site_drlurie/builds?title=")) return response(200, { id: "build_1", deploy_id: "deploy_1" });
+      if (url.endsWith("/deploys/deploy_1")) return response(200, { id: "deploy_1", state: "ready" });
+      if (url.endsWith("/sites/site_drlurie")) return response(200, { published_deploy: { id: "deploy_1", state: "ready" } });
       throw new Error(`unexpected ${url}`);
     });
     await reconcileSiteClientManagerCredentials(
@@ -159,5 +165,38 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
     expect(activate).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
     expect(JSON.stringify(results)).not.toContain("raw-token-never-reported");
+  });
+
+  it("keeps an installed digest pending when the production rebuild fails", async () => {
+    const netlifyFetch = vi.fn(async (url: string, init?: Record<string, unknown>) => {
+      if (url.includes("/sites?name=")) return response(200, [{ id: "site_platform", name: "kugel-platform", account_id: "acct_1" }]);
+      if (url.includes("/env/CMS_AGENT_MCP_") && !init?.method) return response(200, {});
+      if (url.includes("/env/CMS_AGENT_MCP_") && init?.method === "PUT") return response(200);
+      if (url.includes("/sites/site_platform/builds?title=")) return response(200, { id: "build_1", deploy_id: "deploy_failed" });
+      if (url.endsWith("/deploys/deploy_failed")) return response(200, { id: "deploy_failed", state: "error" });
+      throw new Error(`unexpected ${url}`);
+    });
+    const activate = vi.fn();
+    const revoke = vi.fn(async () => undefined);
+    const digest = "f".repeat(64);
+
+    const results = await reconcileSiteClientManagerCredentials(
+      { apply: true },
+      {
+        projectRepository: projectRepository(),
+        env: { NETLIFY_API_TOKEN: "netlify-hidden", CMS_AGENT_PUBLIC_MCP_ENDPOINT: "https://cms-agent.example/mcp" },
+        netlifyFetch: netlifyFetch as never,
+        credentialFetch: vi.fn(async () => response(200)) as never,
+        credentialRepository: {
+          mint: vi.fn(async () => ({ token: "raw-token-never-reported", digest, policy: { projects: ["platform"], toolAllowlist: ["agent_resolve", "agent_converse"] } })),
+          activateAndRetireOtherProjectCredentials: activate,
+          revokeCredential: revoke
+        }
+      }
+    );
+
+    expect(results).toEqual([{ projectId: "platform", netlifySiteName: "kugel-platform", status: "failed", errorCode: "netlify_build_failed" }]);
+    expect(revoke).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
   });
 });

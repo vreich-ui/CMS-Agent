@@ -60,6 +60,14 @@ endpoint shape, and the public `project.create` API do not make a project a clie
 projects remain excluded and disabled client sites remain eligible. Token values are never accepted
 as arguments.
 
+An existing site's Functions keep the environment captured by their currently published deploy.
+After installing and directly verifying a generated credential, reconciliation therefore schedules
+a fresh production build through the authenticated Netlify API and waits until that exact deploy is
+both `ready` and the site's `published_deploy`. Only then does it activate the new digest and retire
+the preceding credential. If Netlify times out after accepting the site env write, the digest stays
+pending rather than being revoked underneath a deploy that may still become live; the next
+successful reconciliation replaces all older pending/active digests atomically.
+
 The reconciler runs as the dedicated `site-credential-reconciler` Cloud Run Job configured by
 `scripts/deploy-site-credential-reconciler.sh`. The job and public service receive the standing fleet
 `NETLIFY_API_TOKEN` directly from Secret Manager as `netlify-api-token:latest`: the job needs it to
