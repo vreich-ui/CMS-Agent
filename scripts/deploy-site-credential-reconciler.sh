@@ -17,7 +17,9 @@ die() { say ""; say "✗ $*"; exit 1; }
 
 JOB="${JOB:-site-credential-reconciler}"
 NETLIFY_API_TOKEN_SECRET="${NETLIFY_API_TOKEN_SECRET:-netlify-api-token}"
-CMS_AGENT_SITE_BINDINGS_JSON="${CMS_AGENT_SITE_BINDINGS_JSON:-{}}"
+if [ -z "${CMS_AGENT_SITE_BINDINGS_JSON:-}" ]; then
+  CMS_AGENT_SITE_BINDINGS_JSON="{}"
+fi
 
 command -v gcloud >/dev/null || die "gcloud is not on PATH."
 command -v node >/dev/null || die "node is not on PATH."
