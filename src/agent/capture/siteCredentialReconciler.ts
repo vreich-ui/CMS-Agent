@@ -1,4 +1,3 @@
-import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { ManagedScopedBearerCredentialRepository } from "../mcp/auth/managedScopedBearerCredentials.js";
 import {
@@ -40,19 +39,6 @@ const parseBindings = (env: NodeJS.ProcessEnv): Record<string, string> => {
   }
 };
 
-export const netlifySiteNameForProject = (projectId: string, endpoint: string | undefined, bindings: Record<string, string>): string => {
-  if (bindings[projectId]) return bindings[projectId];
-  if (endpoint) {
-    try {
-      const hostname = new URL(endpoint).hostname.toLowerCase();
-      if (hostname.endsWith(".netlify.app")) return hostname.slice(0, -".netlify.app".length);
-    } catch {
-      // The project registry validates endpoints. Collapse any legacy malformed value below.
-    }
-  }
-  throw new SiteGenesisRefusal("netlify_site_binding_missing", `Project "${projectId}" does not use a netlify.app endpoint and has no non-secret ${CMS_AGENT_SITE_BINDINGS_ENV} entry.`);
-};
-
 export async function reconcileSiteClientManagerCredentials(input: { apply: boolean }, deps: {
   projectRepository: ProjectRepository;
   env?: NodeJS.ProcessEnv;
@@ -65,14 +51,18 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
   if (input.apply && !netlifyToken) throw new SiteGenesisRefusal("netlify_token_missing", `${NETLIFY_API_TOKEN_ENV} is required for apply; reconciliation never accepts or prints token values as arguments.`);
   const publicEndpoint = input.apply ? resolveCmsAgentPublicMcpEndpoint(env) : env[CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV]?.trim() || "https://cms-agent.example/mcp";
   const bindings = parseBindings(env);
-  const projects = (await deps.projectRepository.list()).filter((project) => project.status === "active" && project.authMode === "bearer_env");
+  // Eligibility is an explicit durable genesis marker or an explicit one-time backfill mapping,
+  // never inferred from project status, auth mode alone, or endpoint shape. Internal projects
+  // (monetizer/pdf-tool, etc.) have neither. Disabled client sites retain the marker and therefore
+  // remain eligible for credential maintenance.
+  const projects = (await deps.projectRepository.list()).filter(
+    (project) => project.authMode === "bearer_env" && (project.clientSiteBinding || bindings[project.projectId])
+  );
   const results: SiteCredentialReconcileResult[] = [];
 
   for (const project of projects) {
-    let siteName = bindings[project.projectId] ?? project.projectId;
+    let siteName = project.clientSiteBinding?.netlifySiteName ?? bindings[project.projectId]!;
     try {
-      const connection = resolveProjectConnection(project, env);
-      siteName = netlifySiteNameForProject(project.projectId, connection.endpoint, bindings);
       if (!input.apply) {
         results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "planned" });
         continue;
@@ -84,6 +74,9 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
       await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_ENDPOINT", publicEndpoint, { scopes: ["functions"] });
       await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"] });
       await verifyCmsAgentScopedCredential(publicEndpoint, minted.token, deps.credentialFetch);
+      if (project.clientSiteBinding?.netlifySiteName !== siteName || project.clientSiteBinding?.netlifySiteId !== site.siteId) {
+        await deps.projectRepository.save({ ...project, clientSiteBinding: { netlifySiteName: siteName, netlifySiteId: site.siteId } });
+      }
       await credentials.retireOtherProjectCredentials(project.projectId, minted.digest);
       results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "rotated" });
     } catch (error) {

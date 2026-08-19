@@ -43,6 +43,7 @@ die() { say ""; say "✗ $*"; exit 1; }
 SERVICE="${SERVICE:-cms-agent-mcp}"
 REPO="${REPO:-cms-agent}"
 SCOPED_TOKENS_SECRET="${MCP_SCOPED_TOKENS_SECRET:-mcp-scoped-tokens-json}"
+NETLIFY_API_TOKEN_SECRET="${NETLIFY_API_TOKEN_SECRET:-netlify-api-token}"
 IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/mcp-service:$IMAGE_TAG"
 
@@ -78,7 +79,7 @@ gcloud run deploy "$SERVICE" \
   --cpu 1 --memory 512Mi --min-instances 0 --max-instances 4 --port 8080 \
   --allow-unauthenticated \
   --update-env-vars "^|^WORKSPACE_STORE=gcs|GCS_BUCKET=$GCS_BUCKET|MCP_STATE_STORE=blobs|MCP_ALLOWED_ORIGINS=$MCP_ALLOWED_ORIGINS|CMS_AGENT_PUBLIC_MCP_ENDPOINT=$CMS_AGENT_PUBLIC_MCP_ENDPOINT|FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp" \
-  --update-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest,FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest"
+  --update-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest,FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest,NETLIFY_API_TOKEN=$NETLIFY_API_TOKEN_SECRET:latest"
 
 URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')"
 REVISION="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.latestReadyRevisionName)')"
@@ -87,9 +88,12 @@ say "Revision: $REVISION"
 say "URL     : $URL"
 
 say ""
-say "==> Environment on the serving revision (all ten expected, including the six client variables)"
-gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
-  --format='value(spec.template.spec.containers[0].env[].name)' | tr ';' '\n' | sed 's/^/  /'
+say "==> Environment on the serving revision (including client variables and genesis authority)"
+ENV_NAMES="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+  --format='value(spec.template.spec.containers[0].env[].name)' | tr ';,' '\n\n')"
+printf '%s\n' "$ENV_NAMES" | sed 's/^/  /'
+printf '%s\n' "$ENV_NAMES" | grep -qx NETLIFY_API_TOKEN \
+  || die "The serving revision is missing NETLIFY_API_TOKEN; live site genesis cannot install credentials automatically."
 
 say ""
 say "==> Health"

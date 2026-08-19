@@ -631,6 +631,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   const mcpEndpoint = input.mcpEndpoint?.trim() || deriveTenantMcpEndpoint(netlifySiteName, siteUrl);
   const project = await createProject(deps.projectRepository, {
     projectId: slug,
+    clientSiteBinding: { netlifySiteName, netlifySiteId: siteId },
     name: slug,
     mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`,
     mcpEndpoint,
@@ -649,7 +650,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     kind: "executed",
     detail: `project.create registered "${slug}" with the endpoint ${mcpEndpoint} stored ON the record (${input.mcpEndpoint ? "supplied by the caller" : "derived from the minted Netlify site"} — an endpoint URL is not a secret, so no ${envPrefix}_MCP_ENDPOINT has to be set on this deployment; that env var stays an override) and the bearer token by NAME only (${envPrefix}_MCP_TOKEN — a secret value never transits MCP), plus a conservative capture policy scoped to ${sourceOrigin} (rights prohibited: copy regenerated, media never imported).`,
     at: now(),
-    data: { projectId: slug, mcpEndpoint, mcpEndpointSource: input.mcpEndpoint ? "caller_supplied" : "derived_from_netlify_site", mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`, tokenEnvVar: `${envPrefix}_MCP_TOKEN`, allowedCrawlOrigins: [sourceOrigin] }
+    data: { projectId: slug, mcpEndpoint, mcpEndpointSource: input.mcpEndpoint ? "caller_supplied" : "derived_from_netlify_site", mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`, tokenEnvVar: `${envPrefix}_MCP_TOKEN`, clientSiteBinding: { netlifySiteName, netlifySiteId: siteId }, allowedCrawlOrigins: [sourceOrigin] }
   });
 
   const humanChecklist = buildGenesisHumanChecklist({ slug, netlifySiteName, envPrefix, scaffoldExecuted, netlifyMode: mode, registeredMcpEndpoint: mcpEndpoint });

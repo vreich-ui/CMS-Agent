@@ -62,6 +62,14 @@ export type ProjectObjectDialect = {
   voiceObjectId?: string;
 };
 
+// Durable, non-secret identity of a client site provisioned by site genesis. This is deliberately
+// separate from project status: disabling a client pauses normal work but must not hide its site
+// from credential rotation/reconciliation. Internal projects do not carry this marker.
+export type ClientSiteBinding = {
+  netlifySiteName: string;
+  netlifySiteId?: string;
+};
+
 export type ProjectPublishingPolicy = {
   // Go-live 2026-07-31 (operator decision, Wolf): publishing is enabled by default. The per-project
   // env kill-switch <CLIENT>_PUBLISH_ENABLED=false remains available to force a project off.
@@ -137,6 +145,7 @@ export function resolveProjectCapturePolicy(config: Pick<ProjectConnectionConfig
 
 export type ProjectConnectionConfig = {
   projectId: string;
+  clientSiteBinding?: ClientSiteBinding;
   // Monotonic code-definition version used to safely migrate persisted default project records.
   definitionVersion?: number;
   name: string;

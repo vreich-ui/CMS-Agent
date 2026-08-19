@@ -51,9 +51,27 @@ URL) and `NETLIFY_API_TOKEN` in its service environment. A new site automaticall
 
 Existing registered tenants use `npm run job:reconcile-site-credentials` for a safe plan and add
 `-- --apply` to rotate/install/verify them. The report contains only project ids, Netlify site names,
-statuses, and catalogued error codes. A custom-domain project whose registry endpoint does not end
-in `.netlify.app` needs a non-secret `CMS_AGENT_SITE_BINDINGS_JSON` mapping from project id to
-Netlify site name; token values are never accepted as arguments.
+statuses, and catalogued error codes. Client sites are selected only through a durable, non-secret
+genesis binding. For the existing fleet, `CMS_AGENT_SITE_BINDINGS_JSON` supplies an explicit one-time
+project-id to Netlify-site-name backfill map; a successful apply persists the binding on each project
+record. New genesis and clone runs persist the same binding at birth. Project status, bearer auth,
+endpoint shape, and the public `project.create` API do not make a project a client site; internal
+projects remain excluded and disabled client sites remain eligible. Token values are never accepted
+as arguments.
+
+The reconciler runs as the dedicated `site-credential-reconciler` Cloud Run Job configured by
+`scripts/deploy-site-credential-reconciler.sh`. The job and public service receive the standing fleet
+`NETLIFY_API_TOKEN` directly from Secret Manager as `netlify-api-token:latest`: the job needs it to
+repair existing sites, while the service needs it for future live genesis/clone calls. The script
+never executes the job automatically. Run it once without arguments, review the dry-run result, and
+only then execute it with `--args=--apply`. The existing-client binding map is non-secret; every
+minted per-site bearer remains internal to CMS-Agent and the Netlify API call.
+
+Before configuring either runtime, create `netlify-api-token` once and grant the named CMS-Agent
+service account `roles/secretmanager.secretAccessor` on that secret. The deployment script requires
+the runtime service account explicitly and checks that the secret exists, but it does not widen IAM.
+After the first successful apply persists every existing binding, later job updates may omit
+`CMS_AGENT_SITE_BINDINGS_JSON`; the script normalizes it to an empty object.
 
 The legacy JSON may still be attached with merge-style `--update-secrets`; never put bearer values
 in `--update-env-vars` and never use `--set-*` on an existing service.
