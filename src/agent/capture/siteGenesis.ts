@@ -176,7 +176,8 @@ export class NetlifyGenesisClient {
   constructor(
     private readonly mode: GenesisNetlifyMode,
     private readonly token: string,
-    private readonly fetchImpl: NetlifyFetch = fetch as unknown as NetlifyFetch
+    private readonly fetchImpl: NetlifyFetch = fetch as unknown as NetlifyFetch,
+    private readonly sleepImpl: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
   ) {}
 
   private record(step: string, detail: string, data?: Record<string, unknown>): void {
@@ -244,6 +245,46 @@ export class NetlifyGenesisClient {
     const accountId = typeof site.account_id === "string" ? site.account_id : "";
     if (!accountId) throw new SiteGenesisRefusal("netlify_api_failed", `Netlify site ${siteId} carries no account id; env vars cannot be set without one.`);
     return accountId;
+  }
+
+  // Netlify injects changed environment variables into Functions only on a new deploy. A direct
+  // credential handshake proves CMS-Agent recognizes the bearer, but the editor UI cannot use it
+  // until a fresh production deploy is both ready and actually published for the site.
+  async rebuildAndWaitForPublishedDeploy(
+    siteId: string,
+    { maxAttempts = 61, pollIntervalMs = 3_000 }: { maxAttempts?: number; pollIntervalMs?: number } = {}
+  ): Promise<{ deployId: string }> {
+    if (this.mode === "dry_run") {
+      const deployId = `dryrun_deploy_${siteId}`;
+      this.record("netlify_credential_rebuild", `DRY-RUN: would schedule and wait for a fresh published production deploy on site ${siteId} so Functions receive the generated credential.`, { siteId, deployId });
+      return { deployId };
+    }
+    const build = (await this.request(
+      "POST",
+      `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}/builds?title=${encodeURIComponent("CMS-Agent credential rotation")}`,
+      undefined,
+      { redactErrorBody: true }
+    )) as Record<string, unknown>;
+    const deployId = typeof build.deploy_id === "string" ? build.deploy_id : "";
+    if (!deployId) throw new SiteGenesisRefusal("netlify_build_failed", "Netlify scheduled the credential rebuild without returning a deploy id.");
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const deploy = (await this.request("GET", `https://api.netlify.com/api/v1/deploys/${encodeURIComponent(deployId)}`)) as Record<string, unknown>;
+      const state = typeof deploy.state === "string" ? deploy.state : "unknown";
+      if (["error", "failed", "canceled", "rejected"].includes(state)) {
+        throw new SiteGenesisRefusal("netlify_build_failed", `Netlify credential rebuild ${deployId} reached terminal state ${state}.`);
+      }
+      if (state === "ready") {
+        const site = (await this.request("GET", `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}`)) as Record<string, unknown>;
+        const published = site.published_deploy && typeof site.published_deploy === "object" ? site.published_deploy as Record<string, unknown> : undefined;
+        if (published?.id === deployId && published.state === "ready") {
+          this.record("netlify_credential_rebuild", `Published fresh production deploy ${deployId} on site ${siteId} after the credential update.`, { siteId, deployId });
+          return { deployId };
+        }
+      }
+      if (attempt + 1 < maxAttempts) await this.sleepImpl(pollIntervalMs);
+    }
+    throw new SiteGenesisRefusal("netlify_build_not_published", `Netlify credential rebuild ${deployId} did not become the published production deploy within the wait budget.`);
   }
 
   // Env-var set mirrors create-site.mjs's proven check-then-POST/PUT shape. `value` is only ever a

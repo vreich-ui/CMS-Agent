@@ -25,11 +25,13 @@ describe("NetlifyGenesisClient", () => {
     const hook = await client.createBuildHook(site.siteId, "genesis hook");
     expect(hook.hookId).toBe(`dryrun_hook_${site.siteId}`);
     await client.setEnvVar("acct", site.siteId, "TRACKING_PROJECT_ID", "trk_acme");
+    await client.rebuildAndWaitForPublishedDeploy(site.siteId);
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(client.actions.map((action) => [action.step, action.kind])).toEqual([
       ["netlify_create_site", "dry_run"],
       ["netlify_build_hook", "dry_run"],
-      ["netlify_set_env", "dry_run"]
+      ["netlify_set_env", "dry_run"],
+      ["netlify_credential_rebuild", "dry_run"]
     ]);
     // Names only, never values: the env value must not appear anywhere in the ledger.
     expect(JSON.stringify(client.actions)).not.toContain("trk_acme");
@@ -95,5 +97,28 @@ describe("NetlifyGenesisClient", () => {
     const payload = JSON.parse(put.init!.body as string);
     expect(Array.isArray(payload)).toBe(false);
     expect(payload).toMatchObject({ key: "TRACKING_PROJECT_ID" });
+  });
+
+  it("schedules an env-refresh build and waits until that exact deploy is published", async () => {
+    const calls: Call[] = [];
+    const sleep = vi.fn(async () => undefined);
+    let deployReads = 0;
+    const fetchImpl = vi.fn(async (url: string, init?: Record<string, unknown>) => {
+      calls.push({ url, init });
+      if (url.includes("/sites/site_123/builds?title=")) return jsonResponse(200, { id: "build_1", deploy_id: "deploy_1" });
+      if (url.endsWith("/deploys/deploy_1")) {
+        deployReads += 1;
+        return jsonResponse(200, { id: "deploy_1", state: deployReads === 1 ? "building" : "ready" });
+      }
+      if (url.endsWith("/sites/site_123")) return jsonResponse(200, { published_deploy: { id: "deploy_1", state: "ready" } });
+      throw new Error(`unexpected: ${url}`);
+    });
+    const client = new NetlifyGenesisClient("live", "tok_live_test", fetchImpl as never, sleep);
+
+    await expect(client.rebuildAndWaitForPublishedDeploy("site_123", { maxAttempts: 3, pollIntervalMs: 1 })).resolves.toEqual({ deployId: "deploy_1" });
+
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(calls[0]).toMatchObject({ init: { method: "POST" } });
+    expect(JSON.stringify(client.actions)).toContain("netlify_credential_rebuild");
   });
 });
