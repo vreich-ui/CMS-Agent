@@ -39,6 +39,13 @@
 // defect and a page with no scored comparison is a defect in its own right (`visual.defects`,
 // `visual.evidenceComplete`). That is evidence accounting only — `rubric` is untouched, so visual
 // evidence still explains and never authorizes.
+// T12.17 (2026-08-19) RE-VENDORED emit.mjs ALONE, from platform f2a1324. Upstream taught the
+// bounded asset probe to quarantine an asset it cannot fetch (`reason: 'asset_probe_failed'`)
+// instead of throwing past the materialization loop and refusing the whole emission — one 403 on
+// one srcset variant had been costing 11 creates and 130 media bindings. Every other vendored file
+// is unchanged at the new upstream commit, and emit.mjs stays byte-identical to upstream (no
+// deviation of its own). The srcset half of T12.17 lives in browser.mjs and pdf-tool's
+// render-service, neither of which is vendored here: the crawl runs in the pdf-tool plane.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -46,8 +53,8 @@ import { fileURLToPath } from "node:url";
 export const CAPTURE_ENGINE_UPSTREAM = {
   repo: "vreich-ui/platform",
   path: "packages/core/cli/capture/",
-  commit: "6651251467aafffdf3acc79286fb406859f43fba",
-  vendoredAt: "2026-08-18"
+  commit: "f2a132472aee2f9b67abb25bd0ba877893706bd2",
+  vendoredAt: "2026-08-19"
 } as const;
 
 export type VendoredEngineFile = {
@@ -77,8 +84,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "2bf7c256b9e0fc8f64c010b76c7bb8a7edf2c82c10f9c4385ea0dfa4105f4e36",
-    upstreamSha256: "2bf7c256b9e0fc8f64c010b76c7bb8a7edf2c82c10f9c4385ea0dfa4105f4e36"
+    vendoredSha256: "f6378e7992cf7053697dbd25761566320544ea1476c0e28cb3e9b979c3c9496b",
+    upstreamSha256: "f6378e7992cf7053697dbd25761566320544ea1476c0e28cb3e9b979c3c9496b"
   },
   {
     file: "score.mjs",
