@@ -452,7 +452,7 @@ export type SiteGenesisDeps = {
   env?: NodeJS.ProcessEnv;
   netlifyFetch?: NetlifyFetch;
   credentialFetch?: NetlifyFetch;
-  credentialRepository?: Pick<ManagedScopedBearerCredentialRepository, "mint" | "retireOtherProjectCredentials">;
+  credentialRepository?: Pick<ManagedScopedBearerCredentialRepository, "mint" | "activateAndRetireOtherProjectCredentials" | "revokeCredential">;
 };
 
 export const resolveCmsAgentPublicMcpEndpoint = (env: NodeJS.ProcessEnv = process.env): string => {
@@ -586,7 +586,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     const envAccount = accountId ?? `dryrun_account_${netlifySiteName}`;
     // NETLIFY_BUILD_HOOK_URL is a capability URL — set secret-flagged, recorded by NAME only. In
     // dry-run mode setEnvVar records the intent without a value ever existing.
-    await netlify.setEnvVar(envAccount, siteId, "NETLIFY_BUILD_HOOK_URL", hook.url ?? "", { isSecret: true });
+    await netlify.setEnvVar(envAccount, siteId, "NETLIFY_BUILD_HOOK_URL", hook.url ?? "", { isSecret: true, scopes: ["functions"], context: "production" });
     await netlify.setEnvVar(envAccount, siteId, "TRACKING_PROJECT_ID", `trk_${slug}`);
   }
 
@@ -597,7 +597,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   if (mode === "dry_run") {
     const envAccount = accountId ?? `dryrun_account_${netlifySiteName}`;
     await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_ENDPOINT", cmsAgentPublicMcpEndpoint, { scopes: ["functions"] });
-    await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_TOKEN", "", { isSecret: true, scopes: ["functions"] });
+    await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_TOKEN", "", { isSecret: true, scopes: ["functions"], context: "production" });
     ledger.push({
       step: "cms_agent_client_manager_credential",
       kind: "dry_run",
@@ -609,10 +609,19 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     const envAccount = accountId ?? await netlify.getSiteAccountId(siteId);
     const credentials = deps.credentialRepository ?? new ManagedScopedBearerCredentialRepository();
     const minted = await credentials.mint({ projectId: slug, toolAllowlist: [...SITE_CLIENT_MANAGER_TOOLS], netlifySiteId: siteId, netlifySiteName });
-    await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_ENDPOINT", cmsAgentPublicMcpEndpoint, { scopes: ["functions"] });
-    await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"] });
-    await verifyCmsAgentScopedCredential(cmsAgentPublicMcpEndpoint, minted.token, deps.credentialFetch);
-    await credentials.retireOtherProjectCredentials(slug, minted.digest);
+    try {
+      await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_ENDPOINT", cmsAgentPublicMcpEndpoint, { scopes: ["functions"] });
+      await netlify.setEnvVar(envAccount, siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"], context: "production" });
+      await verifyCmsAgentScopedCredential(cmsAgentPublicMcpEndpoint, minted.token, deps.credentialFetch);
+      await credentials.activateAndRetireOtherProjectCredentials(slug, minted.digest);
+    } catch (error) {
+      try {
+        await credentials.revokeCredential(minted.digest);
+      } catch {
+        throw new SiteGenesisRefusal("credential_cleanup_failed", "The generated CMS-Agent credential could not be installed and its pending registry entry could not be revoked. Genesis stopped without exposing it.");
+      }
+      throw error;
+    }
     ledger.push({
       step: "cms_agent_client_manager_credential",
       kind: "executed",

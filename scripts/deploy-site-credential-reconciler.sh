@@ -63,4 +63,4 @@ else
 fi
 
 say "Configured $JOB without executing it. Verify $RUNTIME_SA has Secret Manager accessor on $NETLIFY_API_TOKEN_SECRET before execution."
-say "Next: execute once without args, review the dry-run result, then execute with --args=--apply only after approval."
+say "Next: execute once without args, review the dry-run result, then execute with --args=--import,tsx,src/agent/entrypoints/reconcileSiteCredentialsMain.ts,--apply only after approval."

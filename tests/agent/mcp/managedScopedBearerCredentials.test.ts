@@ -30,10 +30,15 @@ const memoryStore = () => {
 };
 
 describe("genesis-managed scoped bearer credentials", () => {
-  it("persists only a digest, resolves the policy, and retires the overlap after verification", async () => {
+  it("keeps a new credential pending until activation, then retires the overlap atomically", async () => {
     const memory = memoryStore();
     const repository = new ManagedScopedBearerCredentialRepository(memory.store, () => "2026-08-19T12:00:00.000Z");
     const first = await repository.mint({ projectId: "dr-lurie", toolAllowlist: ["agent_resolve", "agent_converse"], netlifySiteId: "site_1", netlifySiteName: "drluriescience" });
+    expect(await repository.hasProjectCredential(["dr-lurie"])).toBe(false);
+    expect(await repository.findPolicy(first.token)).toEqual(first.policy);
+    await repository.activateAndRetireOtherProjectCredentials("dr-lurie", first.digest);
+    expect(await repository.hasProjectCredential(["dr-lurie"])).toBe(true);
+
     const second = await repository.mint({ projectId: "dr-lurie", toolAllowlist: ["agent_resolve", "agent_converse"], netlifySiteId: "site_1", netlifySiteName: "drluriescience" });
 
     const serializedBefore = JSON.stringify(memory.values.get(MANAGED_SCOPED_BEARER_REGISTRY_KEY)?.data);
@@ -42,9 +47,23 @@ describe("genesis-managed scoped bearer credentials", () => {
     expect(serializedBefore).toContain(digestScopedBearer(first.token));
     expect(await repository.findPolicy(second.token)).toEqual({ projects: ["dr-lurie"], toolAllowlist: ["agent_resolve", "agent_converse"] });
 
-    await repository.retireOtherProjectCredentials("dr-lurie", second.digest);
+    expect((await repository.listMetadata()).find((entry) => entry.digest === second.digest)?.state).toBe("pending");
+    await repository.activateAndRetireOtherProjectCredentials("dr-lurie", second.digest);
     expect(await repository.findPolicy(first.token)).toBeUndefined();
     expect(await repository.findPolicy(second.token)).toEqual(second.policy);
-    expect(await repository.listMetadata()).toHaveLength(1);
+    expect(await repository.listMetadata()).toEqual([expect.objectContaining({ digest: second.digest, state: "active" })]);
+  });
+
+  it("revokes a failed pending credential without disturbing the active credential", async () => {
+    const repository = new ManagedScopedBearerCredentialRepository(memoryStore().store);
+    const active = await repository.mint({ projectId: "platform", toolAllowlist: ["agent_resolve", "agent_converse"], netlifySiteId: "site_1", netlifySiteName: "kugel-platform" });
+    await repository.activateAndRetireOtherProjectCredentials("platform", active.digest);
+    const pending = await repository.mint({ projectId: "platform", toolAllowlist: ["agent_resolve", "agent_converse"], netlifySiteId: "site_1", netlifySiteName: "kugel-platform" });
+
+    await repository.revokeCredential(pending.digest);
+
+    expect(await repository.findPolicy(pending.token)).toBeUndefined();
+    expect(await repository.findPolicy(active.token)).toEqual(active.policy);
+    expect(await repository.hasProjectCredential(["platform"])).toBe(true);
   });
 });

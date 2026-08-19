@@ -46,8 +46,9 @@ tokens so an allowlist intended for one site cannot bypass the tool channel.
 
 Genesis requires `CMS_AGENT_PUBLIC_MCP_ENDPOINT` (the credential-free public `https://.../mcp`
 URL) and `NETLIFY_API_TOKEN` in its service environment. A new site automatically receives
-`CMS_AGENT_MCP_ENDPOINT` and secret/function-only `CMS_AGENT_MCP_TOKEN`, then genesis verifies an
-`initialize` call before retiring the preceding managed digest.
+`CMS_AGENT_MCP_ENDPOINT` and a production-context, secret/function-only `CMS_AGENT_MCP_TOKEN`.
+The new digest remains pending while genesis verifies an `initialize` call, so it cannot supersede
+the preceding credential until verification succeeds. A failed install revokes the pending digest.
 
 Existing registered tenants use `npm run job:reconcile-site-credentials` for a safe plan and add
 `-- --apply` to rotate/install/verify them. The report contains only project ids, Netlify site names,
@@ -64,8 +65,11 @@ The reconciler runs as the dedicated `site-credential-reconciler` Cloud Run Job 
 `NETLIFY_API_TOKEN` directly from Secret Manager as `netlify-api-token:latest`: the job needs it to
 repair existing sites, while the service needs it for future live genesis/clone calls. The script
 never executes the job automatically. Run it once without arguments, review the dry-run result, and
-only then execute it with `--args=--apply`. The existing-client binding map is non-secret; every
-minted per-site bearer remains internal to CMS-Agent and the Netlify API call.
+only then execute it with
+`--args=--import,tsx,src/agent/entrypoints/reconcileSiteCredentialsMain.ts,--apply`. Cloud Run
+replaces the configured argument list on an execution override, so passing only `--args=--apply`
+would drop the TypeScript entrypoint. The existing-client binding map is non-secret; every minted
+per-site bearer remains internal to CMS-Agent and the Netlify API call.
 
 Before configuring either runtime, create `netlify-api-token` once and grant the named CMS-Agent
 service account `roles/secretmanager.secretAccessor` on that secret. The deployment script requires

@@ -140,6 +140,8 @@ describe("CA4 deploy script regression guard", () => {
     expect(script).toContain("--update-secrets");
     expect(script).toContain("NETLIFY_API_TOKEN=$NETLIFY_API_TOKEN_SECRET:latest");
     expect(script).toContain("src/agent/entrypoints/reconcileSiteCredentialsMain.ts");
+    expect(script).toContain("--args=--import,tsx,src/agent/entrypoints/reconcileSiteCredentialsMain.ts,--apply");
+    expect(script).not.toContain("execute with --args=--apply");
     expect(script).not.toContain("gcloud run jobs execute");
     expect(script).toContain('if [ -z "${CMS_AGENT_SITE_BINDINGS_JSON:-}" ]; then');
     expect(script).not.toContain('${CMS_AGENT_SITE_BINDINGS_JSON:-{}}');

@@ -23,7 +23,7 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
     const mint = vi.fn();
     const results = await reconcileSiteClientManagerCredentials(
       { apply: false },
-      { projectRepository: projectRepository(), env: {}, netlifyFetch: netlifyFetch as never, credentialRepository: { mint, retireOtherProjectCredentials: vi.fn() } }
+      { projectRepository: projectRepository(), env: {}, netlifyFetch: netlifyFetch as never, credentialRepository: { mint, activateAndRetireOtherProjectCredentials: vi.fn(), revokeCredential: vi.fn() } }
     );
     expect(results).toEqual([{ projectId: "platform", netlifySiteName: "kugel-platform", status: "planned" }]);
     expect(netlifyFetch).not.toHaveBeenCalled();
@@ -41,7 +41,8 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
     });
     const credentialFetch = vi.fn(async () => response(200, { jsonrpc: "2.0", id: "genesis-credential-check", result: {} }));
     const mint = vi.fn(async () => ({ token: "raw-token-never-reported", digest: "d".repeat(64), policy: { projects: ["platform"], toolAllowlist: ["agent_resolve", "agent_converse"] } }));
-    const retire = vi.fn(async () => undefined);
+    const activate = vi.fn(async () => undefined);
+    const revoke = vi.fn(async () => undefined);
     const results = await reconcileSiteClientManagerCredentials(
       { apply: true },
       {
@@ -49,17 +50,18 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
         env: { NETLIFY_API_TOKEN: "netlify-hidden", CMS_AGENT_PUBLIC_MCP_ENDPOINT: "https://cms-agent.example/mcp" },
         netlifyFetch: netlifyFetch as never,
         credentialFetch: credentialFetch as never,
-        credentialRepository: { mint, retireOtherProjectCredentials: retire }
+        credentialRepository: { mint, activateAndRetireOtherProjectCredentials: activate, revokeCredential: revoke }
       }
     );
 
     expect(results).toEqual([{ projectId: "platform", netlifySiteName: "kugel-platform", status: "rotated" }]);
     expect(JSON.stringify(results)).not.toContain("raw-token-never-reported");
-    expect(retire).toHaveBeenCalledWith("platform", "d".repeat(64));
+    expect(activate).toHaveBeenCalledWith("platform", "d".repeat(64));
+    expect(revoke).not.toHaveBeenCalled();
     const envPosts = netlifyCalls.filter((call) => call.init?.method === "POST" && call.url.includes("/env?site_id="));
     const variables = envPosts.flatMap((call) => JSON.parse(call.init!.body as string));
     expect(variables.map((variable: { key: string }) => variable.key).sort()).toEqual(["CMS_AGENT_MCP_ENDPOINT", "CMS_AGENT_MCP_TOKEN"]);
-    expect(variables.find((variable: { key: string }) => variable.key === "CMS_AGENT_MCP_TOKEN")).toMatchObject({ is_secret: true, scopes: ["functions"], values: [{ context: "all" }] });
+    expect(variables.find((variable: { key: string }) => variable.key === "CMS_AGENT_MCP_TOKEN")).toMatchObject({ is_secret: true, scopes: ["functions"], values: [{ context: "production" }] });
     expect(credentialFetch).toHaveBeenCalledOnce();
   });
 
@@ -112,7 +114,8 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
         credentialFetch: vi.fn(async () => response(200)) as never,
         credentialRepository: {
           mint: vi.fn(async () => ({ token: "raw-token-never-reported", digest: "d".repeat(64), policy: { projects: ["dr-lurie"], toolAllowlist: ["agent_resolve", "agent_converse"] } })),
-          retireOtherProjectCredentials: vi.fn(async () => undefined)
+          activateAndRetireOtherProjectCredentials: vi.fn(async () => undefined),
+          revokeCredential: vi.fn(async () => undefined)
         }
       }
     );
@@ -120,5 +123,41 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
       projectId: "dr-lurie",
       clientSiteBinding: { netlifySiteName: "drluriescience", netlifySiteId: "site_drlurie" }
     }));
+  });
+
+  it("revokes the pending digest and leaves the project unmodified when Netlify rejects the secret write", async () => {
+    const save = vi.fn();
+    const repository = { ...projectRepository(), save } as ProjectRepository;
+    const netlifyFetch = vi.fn(async (url: string, init?: Record<string, unknown>) => {
+      if (url.includes("/sites?name=")) return response(200, [{ id: "site_platform", name: "kugel-platform", account_id: "acct_1" }]);
+      if (url.includes("/env/CMS_AGENT_MCP_ENDPOINT")) return response(200, { key: "CMS_AGENT_MCP_ENDPOINT" });
+      if (url.includes("/env/CMS_AGENT_MCP_TOKEN") && !init?.method) return response(200, { key: "CMS_AGENT_MCP_TOKEN" });
+      if (url.includes("/env/CMS_AGENT_MCP_ENDPOINT") && init?.method === "PUT") return response(200);
+      if (url.includes("/env/CMS_AGENT_MCP_TOKEN") && init?.method === "PUT") return response(422, { message: "redacted" });
+      throw new Error(`unexpected ${url}`);
+    });
+    const activate = vi.fn();
+    const revoke = vi.fn(async () => undefined);
+    const digest = "e".repeat(64);
+
+    const results = await reconcileSiteClientManagerCredentials(
+      { apply: true },
+      {
+        projectRepository: repository,
+        env: { NETLIFY_API_TOKEN: "netlify-hidden", CMS_AGENT_PUBLIC_MCP_ENDPOINT: "https://cms-agent.example/mcp" },
+        netlifyFetch: netlifyFetch as never,
+        credentialRepository: {
+          mint: vi.fn(async () => ({ token: "raw-token-never-reported", digest, policy: { projects: ["platform"], toolAllowlist: ["agent_resolve", "agent_converse"] } })),
+          activateAndRetireOtherProjectCredentials: activate,
+          revokeCredential: revoke
+        }
+      }
+    );
+
+    expect(results).toEqual([{ projectId: "platform", netlifySiteName: "kugel-platform", status: "failed", errorCode: "netlify_api_failed" }]);
+    expect(revoke).toHaveBeenCalledWith(digest);
+    expect(activate).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(JSON.stringify(results)).not.toContain("raw-token-never-reported");
   });
 });
