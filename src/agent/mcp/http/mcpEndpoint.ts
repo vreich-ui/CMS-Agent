@@ -12,7 +12,7 @@ import { McpSessionManager, negotiateProtocolVersion, type McpClientInfo } from 
 import { OAuthService } from "../auth/oauthService.js";
 import { buildWwwAuthenticate, parseBearerToken, resourceMetadataUrl } from "../auth/wwwAuthenticate.js";
 import { resolveBaseUrl } from "../auth/metadata.js";
-import { findScopedBearerTokenPolicy, type ScopedBearerTokenPolicy } from "../auth/scopedBearerTokens.js";
+import { findAnyScopedBearerTokenPolicy, type ScopedBearerTokenPolicy } from "../auth/scopedBearerTokens.js";
 
 const SESSION_HEADER = "mcp-session-id";
 const PROTOCOL_HEADER = "mcp-protocol-version";
@@ -81,7 +81,7 @@ const authenticate = async (headers: HeaderMap): Promise<AuthOutcome> => {
   const token = parseBearerToken(readHeader(headers, "authorization"));
   if (!token) return { ok: false, presentedToken: false };
   try {
-    const scopedPolicy = findScopedBearerTokenPolicy(token);
+    const scopedPolicy = await findAnyScopedBearerTokenPolicy(token);
     if (scopedPolicy) return { ok: true, scopedPolicy };
   } catch {
     // A malformed scoped-token secret must fail closed exactly like any other invalid bearer and

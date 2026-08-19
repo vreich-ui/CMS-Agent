@@ -1,8 +1,15 @@
 # Scoped MCP bearer tokens
 
-`MCP_API_TOKEN` is the existing unscoped legacy bearer path and remains unchanged. OAuth-issued
-access tokens also remain unchanged. Scoped bearer support is opt-in through the secret-backed
-`MCP_SCOPED_TOKENS_JSON` environment variable.
+`MCP_API_TOKEN` is the existing unscoped break-glass bearer path and OAuth-issued access tokens
+remain unchanged. Client-site scoped credentials are genesis-managed: the bearer is minted inside
+CMS-Agent, only its SHA-256 digest and policy are persisted in the durable workspace store, and the
+raw value is sent directly to the site's Netlify secret environment. It is never returned through
+MCP, printed, committed, or copied by an operator.
+
+`MCP_SCOPED_TOKENS_JSON` remains a deployment-time compatibility source for sites not yet migrated.
+Once the managed registry contains a credential for a project, static-map bearers for that project
+are automatically superseded. This makes a reconciler rotation effective without hand-editing the
+shared JSON or forcing another Cloud Run revision.
 
 Its secret value is a JSON object mapping each opaque bearer token to its policy:
 
@@ -25,9 +32,9 @@ An empty/unset variable disables scoped bearer support. Malformed configuration,
 or a scoped token that collides with `MCP_API_TOKEN` makes Cloud Run fail startup; the Netlify path
 fails closed without returning parser detail.
 
-Authentication precedence is deterministic: exact `MCP_API_TOKEN` first, then an exact scoped
-bearer token, then OAuth access-token verification. The legacy and OAuth paths receive the existing
-unscoped catalog and behavior unchanged.
+Authentication precedence is deterministic: exact `MCP_API_TOKEN` first, then an exact managed
+scoped bearer, then a non-superseded static scoped bearer, then OAuth access-token verification.
+The break-glass and OAuth paths receive the existing unscoped catalog and behavior unchanged.
 
 For a scoped caller, `initialize` remains available after authentication and `tools/list` exposes
 only the policy's allowed canonical tool names. `tools/call` is checked before tool dispatch: the
@@ -37,7 +44,16 @@ project list. Calls without a direct project argument are still denied unless ex
 Other workspace-wide MCP discovery methods (`prompts/*`, `resources/*`) are unavailable to scoped
 tokens so an allowlist intended for one site cannot bypass the tool channel.
 
-Deploy the JSON as a single Secret Manager secret and attach it with merge-style
-`--update-secrets`; never put bearer values in `--update-env-vars` and never use `--set-*` on an
-existing service. `MCP_SCOPED_MCP_TOKEN` and `MCP_SCOPED_PROJECT_ID` may be supplied only in the
-operator's shell to let `npm run verify:deploy` exercise a scoped `agent_resolve` call.
+Genesis requires `CMS_AGENT_PUBLIC_MCP_ENDPOINT` (the credential-free public `https://.../mcp`
+URL) and `NETLIFY_API_TOKEN` in its service environment. A new site automatically receives
+`CMS_AGENT_MCP_ENDPOINT` and secret/function-only `CMS_AGENT_MCP_TOKEN`, then genesis verifies an
+`initialize` call before retiring the preceding managed digest.
+
+Existing registered tenants use `npm run job:reconcile-site-credentials` for a safe plan and add
+`-- --apply` to rotate/install/verify them. The report contains only project ids, Netlify site names,
+statuses, and catalogued error codes. A custom-domain project whose registry endpoint does not end
+in `.netlify.app` needs a non-secret `CMS_AGENT_SITE_BINDINGS_JSON` mapping from project id to
+Netlify site name; token values are never accepted as arguments.
+
+The legacy JSON may still be attached with merge-style `--update-secrets`; never put bearer values
+in `--update-env-vars` and never use `--set-*` on an existing service.

@@ -34,6 +34,7 @@ substitutions:
   _REPO: cms-agent
   _RUNTIME_SA: cms-agent-run@cms-agent-503015.iam.gserviceaccount.com
   _GCS_BUCKET: cms-agent-503015-cms-agent-state
+  _PUBLIC_MCP_ENDPOINT: https://cms-agent-mcp-937996366809.us-central1.run.app/mcp
   # Commit-identifying and immutable. The inline config used `:latest`, which is why "which commit is
   # live?" had no answer and a stale revision could serve for hours unnoticed.
   _IMAGE: '${_DEPLOY_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/mcp-service:${SHORT_SHA}'
@@ -89,7 +90,7 @@ steps:
             --max-instances=4 \
             --allow-unauthenticated \
             --quiet \
-            --update-env-vars=WORKSPACE_STORE=gcs,MCP_STATE_STORE=blobs,GCS_BUCKET=${_GCS_BUCKET},DR_LURIE_MCP_ENDPOINT=https://drluriescience.netlify.app/mcp,PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp,PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp,FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp \
+            --update-env-vars=WORKSPACE_STORE=gcs,MCP_STATE_STORE=blobs,GCS_BUCKET=${_GCS_BUCKET},CMS_AGENT_PUBLIC_MCP_ENDPOINT=${_PUBLIC_MCP_ENDPOINT},DR_LURIE_MCP_ENDPOINT=https://drluriescience.netlify.app/mcp,PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp,PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp,FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp \
             --update-secrets=MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,MCP_SCOPED_TOKENS_JSON=mcp-scoped-tokens-json:latest,DR_LURIE_MCP_TOKEN=dr-lurie-mcp-token:latest,PDF_TOOL_MCP_TOKEN=pdf-tool-mcp-token:latest,PLATFORM_MCP_TOKEN=platform-mcp-token:latest,FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest
         }
         describe() { gcloud run services describe "${_SERVICE}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" --format "$1"; }
@@ -139,7 +140,7 @@ steps:
         echo "environment on the serving revision:"
         echo "$${ENV_NAMES}" | sed 's/^/  /'
         MISSING=""
-        for VAR in MCP_SCOPED_TOKENS_JSON DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do
+        for VAR in CMS_AGENT_PUBLIC_MCP_ENDPOINT MCP_SCOPED_TOKENS_JSON DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do
           echo "$${ENV_NAMES}" | grep -qx "$${VAR}" || MISSING="$${MISSING} $${VAR}"
         done
         if [ -n "$${MISSING}" ]; then

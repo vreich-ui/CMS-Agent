@@ -139,7 +139,8 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(byStep.has("netlify_build_hook:dry_run")).toBe(true);
     expect(byStep.has("register_project:executed")).toBe(true);
     const envSets = result.genesis.ledger.filter((action) => action.step === "netlify_set_env" && action.kind === "dry_run");
-    expect(envSets.map((action) => (action as { data?: { key?: string } }).data?.key).sort()).toEqual(["NETLIFY_BUILD_HOOK_URL", "TRACKING_PROJECT_ID"]);
+    expect(envSets.map((action) => (action as { data?: { key?: string } }).data?.key).sort()).toEqual(["CMS_AGENT_MCP_ENDPOINT", "CMS_AGENT_MCP_TOKEN", "NETLIFY_BUILD_HOOK_URL", "TRACKING_PROJECT_ID"]);
+    expect(byStep.has("cms_agent_client_manager_credential:dry_run")).toBe(true);
 
     // The scaffold subprocess really ran through the platform seam — with the seam's flags, and
     // WITHOUT the Netlify token in its environment (the scaffold half never needs account authority).
@@ -190,12 +191,13 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
       "pdf_tool_storage_grant",
       "tracking_sink",
       "fleet_shared_keys",
-      "cms_agent_mcp_token",
       "deploy_side_mcp_env",
       "capture_rights_review",
       "dns"
     ]);
     const byId = new Map(result.humanChecklist.map((item) => [item.id, item]));
+    expect(byId.has("cms_agent_mcp_token")).toBe(false);
+    expect(byId.get("fleet_shared_keys")!.envVars).not.toContain("CMS_AGENT_MCP_ENDPOINT");
     // Verbatim runbook language survives into the checklist.
     expect(byId.get("enable_netlify_identity")!.detail).toContain("Invite only — this is a workspace, not a signup page");
     expect(byId.get("set_admin_emails")!.detail).toContain("Until the first invite exists this is the ONLY way in");
