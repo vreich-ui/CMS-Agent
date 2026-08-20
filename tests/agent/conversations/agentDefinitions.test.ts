@@ -69,7 +69,7 @@ describe("canonical client_manager workspace definition", () => {
   // aggression inputs and media request are carried, the request id is caller-supplied, and a
   // blocked/failed run is reported reusable-first.
   it("rev 3 carries the 'Starting and reporting production' rules and rev 2 is superseded", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(3);
+    expect(createCanonicalClientManagerAgent().rev).toBe(4);
     expect(CLIENT_MANAGER_PROMPT).toContain("## Starting and reporting production");
     expect(CLIENT_MANAGER_PROMPT).toContain("pass the editor's brief verbatim as `input.instructions` — never summarise or shorten it");
     expect(CLIENT_MANAGER_PROMPT).toContain("Set `trafficSource` and `awarenessStage` (ask if unknown)");
@@ -77,10 +77,41 @@ describe("canonical client_manager workspace definition", () => {
     expect(CLIENT_MANAGER_PROMPT).toContain("Supply `requestId` in the client's request-id form when the tool requires one.");
     expect(CLIENT_MANAGER_PROMPT).toContain("first name what was produced and is reusable (for example a completed draft), then what failed.");
     // Every earlier canonical text (rev 1 and rev 2) is superseded and upgradeable.
-    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(2);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(3);
     for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).toContain("## Candidates in learning mode");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).not.toContain("## Starting and reporting production");
+  });
+
+  // ART — the two blocks CA6 never triaged. CA6 audited the platform prompt for DISCLOSURE risk,
+  // so its operational instructions were dropped silently: the agent reached a governed create with
+  // nothing telling it to read the contract first, and nothing telling it which path an article
+  // takes. That is what produced the content_item node-schema failure, and behind that failure the
+  // raw verb path could create AND publish an article carrying none of the judge/score substrate.
+  // These assertions are the regression wall for both. A deletion here is a live defect.
+  it("rev 4 carries read-before-you-write and the single article production path", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(4);
+
+    // Contract-first: the block platform's systemPrompt() used to send and CA6 left behind.
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Read before you write");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never guess the shape of a governed object/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/object_contract/);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/dry-run a candidate body or patch before proposing the write/i);
+    // The object-binding half of the same dropped block.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/work on THAT object unless the editor explicitly asks about another/i);
+
+    // Routing: an article has exactly one production path, and a refused direct create is the
+    // system working — never an obstacle to route around.
+    expect(CLIENT_MANAGER_PROMPT).toContain("## One production path for articles");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never hand-assembled from object writes/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/already exists/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/do not treat a refusal of a direct create as an error to work around/i);
+
+    // Still project-neutral, and rev 3 is now superseded rather than deleted.
+    expect(CLIENT_MANAGER_PROMPT).not.toMatch(/dr-lurie|fernwell|platform/i);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[2]).toContain("## Starting and reporting production");
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[2]).not.toContain("## Read before you write");
+    expect(classifyConversationalAgentPrompt(SUPERSEDED_CLIENT_MANAGER_PROMPTS[2])).toBe("superseded");
   });
 
   it("classifies stored prompts against the shipped canonical text", () => {
