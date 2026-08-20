@@ -64,7 +64,42 @@ export const PLATFORM_REPO_ROOT_ENV = "PLATFORM_REPO_ROOT";
 export const SITE_GENESIS_NETLIFY_MODE_ENV = "SITE_GENESIS_NETLIFY_MODE";
 export const CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV = "CMS_AGENT_PUBLIC_MCP_ENDPOINT";
 export const CREATE_SITE_CLI_RELATIVE_PATH = "packages/core/cli/create-site.mjs";
-export const SITE_CLIENT_MANAGER_TOOLS = ["agent_resolve", "agent_converse"] as const;
+// The EXACT CMS-Agent tool surface a tenant's admin chat needs, and nothing more — this list IS
+// the per-tenant scoped bearer's allowlist, so anything missing here is a 401 at the door and
+// anything extra is blast radius.
+//
+// Derived from Platform's callers, not from intent. Every entry below is a live
+// `ctx.cmsAgent.callTool(...)` site in platform `packages/core/server/lib/agent/tools.ts`:
+//
+//   agent_resolve             engine.ts        — resolve client_manager, every turn
+//   agent_converse            engine.ts        — the turn itself
+//   workspace_get_nodes       list_workspace_nodes
+//   workflow_start_dry_run    run_workspace_workflow      (start a run)
+//   workflow_run_all          run_workspace_workflow      (advance a run)
+//   workflow_get_run          get_workspace_run
+//   workflow_publish_readiness check_workspace_run_readiness
+//   workflow_publish_run      publish_workspace_run
+//
+// `release_workspace_run` is deliberately absent: it rides Platform's own operational bridge
+// (release_to_production + deploy_status locally), never this one.
+//
+// HISTORY — why this was wrong. The list shipped as [agent_resolve, agent_converse] when
+// admin chat could only converse. PF4 then added the three workspace-orchestration tools and
+// PF4b/D2a (2026-08-17) added readiness/publish, but this constant was never widened. Because
+// `reconcileSiteClientManagerCredentials` re-mints EVERY registered tenant from it and retires the
+// previous credential, the rotation silently narrowed tenants whose bearer had been minted by hand
+// with a wider scope — turning a working `run_workspace_workflow` into an opaque 401. Keep this in
+// lockstep with Platform's bridge; `siteGenesis.test.ts` pins it.
+export const SITE_CLIENT_MANAGER_TOOLS = [
+  "agent_resolve",
+  "agent_converse",
+  "workspace_get_nodes",
+  "workflow_start_dry_run",
+  "workflow_run_all",
+  "workflow_get_run",
+  "workflow_publish_readiness",
+  "workflow_publish_run"
+] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";
 
@@ -169,7 +204,7 @@ export const resolveGenesisNetlifyMode = (env: NodeJS.ProcessEnv = process.env):
 // intended call is recorded on the ledger with a synthetic id. In live mode the calls mirror the
 // platform CLI's proven request shapes (create-site.mjs). The bearer token is only ever placed in
 // the Authorization header; error bodies from secret-bearing writes are never echoed.
-export type NetlifyFetch = (input: string, init?: Record<string, unknown>) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown>; text?: () => Promise<string> }>;
+export type NetlifyFetch = (input: string, init?: Record<string, unknown>) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown>; text?: () => Promise<string>; headers?: { get: (name: string) => string | null } }>;
 
 export class NetlifyGenesisClient {
   readonly actions: GenesisAction[] = [];
@@ -520,6 +555,49 @@ export async function verifyCmsAgentScopedCredential(endpoint: string, token: st
     throw new SiteGenesisRefusal("cms_agent_credential_verification_failed", "The generated CMS-Agent credential could not be verified; genesis stopped without exposing it.");
   }
   if (!response.ok) throw new SiteGenesisRefusal("cms_agent_credential_verification_failed", `The generated CMS-Agent credential was rejected during initialize (HTTP ${response.status}); genesis stopped without exposing it.`);
+
+  // `initialize` is allowed for ANY scoped bearer regardless of its tool allowlist
+  // (mcpEndpoint.isScopedMessageAllowed lets the handshake through unconditionally), so a
+  // credential that cannot call a single workflow tool still passes the check above. That is how a
+  // too-narrow allowlist reached production reporting success. `tools/list` IS filtered by the
+  // allowlist (workspace/server.ts isAllowedForContext), so listing under the new token shows
+  // exactly what it may call — assert that covers the bridge.
+  //
+  // Degrades rather than blocks: the endpoint needs the Mcp-Session-Id from initialize, and a
+  // stateless deployment (or a fetch stub without headers) may not issue one. No session id, no
+  // probe — this must never turn a working genesis into a refusal over a missing header.
+  const sessionId = response.headers?.get("mcp-session-id") ?? undefined;
+  if (!sessionId) return;
+
+  let listed: Awaited<ReturnType<NetlifyFetch>>;
+  try {
+    listed = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Mcp-Session-Id": sessionId },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "genesis-scope-check", method: "tools/list", params: {} })
+    });
+  } catch {
+    return;
+  }
+  if (!listed.ok) return;
+
+  let names: string[];
+  try {
+    const payload = (await listed.json()) as { result?: { tools?: { name?: unknown }[] } };
+    const tools = payload?.result?.tools;
+    if (!Array.isArray(tools)) return;
+    names = tools.map((tool) => tool?.name).filter((name): name is string => typeof name === "string");
+  } catch {
+    return;
+  }
+
+  const missing = SITE_CLIENT_MANAGER_TOOLS.filter((tool) => !names.includes(tool));
+  if (missing.length > 0) {
+    throw new SiteGenesisRefusal(
+      "cms_agent_credential_scope_incomplete",
+      `The generated CMS-Agent credential cannot reach ${missing.join(", ")} — admin chat would fail with an opaque 401 on those tools. Genesis stopped without exposing it.`
+    );
+  }
 }
 
 export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisDeps): Promise<SiteGenesisResult> {
