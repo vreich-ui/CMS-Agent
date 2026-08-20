@@ -1,10 +1,12 @@
 import { ConnectionPanel } from "../ConnectionPanel";
 import { AppearanceSettings } from "../AppearanceSettings";
 import { UsagePanel } from "../UsagePanel";
+import { SiteCredentialsPanel } from "../SiteCredentialsPanel";
 import type { McpConnection } from "../../connection";
 import type { McpClient } from "../../mcp/client";
 import type { useWorkspace } from "../../hooks/useWorkspace";
 import type { useModelUsage } from "../../hooks/useModelUsage";
+import type { useSiteCredentials } from "../../hooks/useSiteCredentials";
 import type { useTheme } from "../../hooks/useTheme";
 import type { InitializeResult } from "../../types/workspace";
 import type { StatusMessage } from "../../status";
@@ -36,13 +38,14 @@ type Props = {
   isDeployedMode: boolean;
   workspace: ReturnType<typeof useWorkspace>;
   modelUsage: ReturnType<typeof useModelUsage>;
+  siteCredentials: ReturnType<typeof useSiteCredentials>;
   activeRunId?: string;
   theme: ReturnType<typeof useTheme>;
   onStatus: (status: StatusMessage) => void;
   onError: (error: unknown) => void;
 };
 
-export function SettingsPage({ connection, client, token, onEndpointChange, onTokenChange, onConnectionSuccess, onConnectionError, session, onLogout, isDeployedMode, workspace, modelUsage, activeRunId, theme, onStatus, onError }: Props) {
+export function SettingsPage({ connection, client, token, onEndpointChange, onTokenChange, onConnectionSuccess, onConnectionError, session, onLogout, isDeployedMode, workspace, modelUsage, siteCredentials, activeRunId, theme, onStatus, onError }: Props) {
   const exportWorkspace = async () => {
     try {
       await workspace.exportWorkspace();
@@ -64,6 +67,8 @@ export function SettingsPage({ connection, client, token, onEndpointChange, onTo
       <div className="panel-heading"><div><h2>Connection</h2><p className="muted">Cloud Run is the workspace's only MCP control plane. Override the endpoint for local dev and enter a bearer token; tokens are redacted from errors and never rendered.</p></div>{isDeployedMode && session?.email && <div className="session-card"><span>Signed in as <strong>{session.email}</strong></span><button onClick={onLogout}>Log out</button></div>}</div>
       <ConnectionPanel connection={connection} client={client} token={token} onEndpointChange={onEndpointChange} onTokenChange={onTokenChange} onConnectionSuccess={onConnectionSuccess} onConnectionError={onConnectionError} />
     </section>
+
+    <SiteCredentialsPanel siteCredentials={siteCredentials} onStatus={onStatus} onError={onError} />
 
     <AppearanceSettings preference={theme.preference} resolvedMode={theme.resolvedMode} onModeChange={theme.setMode} onAccentChange={theme.setAccent} />
 
