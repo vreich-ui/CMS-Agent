@@ -35,6 +35,14 @@ substitutions:
   _RUNTIME_SA: cms-agent-run@cms-agent-503015.iam.gserviceaccount.com
   _GCS_BUCKET: cms-agent-503015-cms-agent-state
   _PUBLIC_MCP_ENDPOINT: https://cms-agent-mcp-937996366809.us-central1.run.app/mcp
+  # EVERY Cloud Run JOB that executes workflow nodes, space separated. A job pinned by digest never
+  # moves on its own, so a plane missing from this list silently runs old code forever — which is
+  # exactly what happened: `continuation-tick` executed queued nodes every ~2 minutes from
+  # 2026-08-14 to 2026-08-20 on a pre-87c21af image, failing roughly half of all capture nodes while
+  # the service beside it succeeded. Adding a plane is one word here; forgetting one is a six-day bug.
+  # Only jobs built from THIS image belong here — a job running a different image must not be forced
+  # onto mcp-service.
+  _EXECUTOR_JOBS: continuation-tick
   # Commit-identifying and immutable. The inline config used `:latest`, which is why "which commit is
   # live?" had no answer and a stale revision could serve for hours unnoticed.
   _IMAGE: '${_DEPLOY_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/mcp-service:${SHORT_SHA}'
@@ -158,3 +166,49 @@ steps:
         curl -fsS "$${URL}/health" >/dev/null
         echo "health    : ok"
         echo "verified : $${REVISION} is serving ${_IMAGE} with all client connections present"
+
+  # A service is not the whole system. Cloud Run resolves an image reference to a DIGEST when a job is
+  # created or updated, so a job never follows a tag and never picks up a new build by itself — the
+  # only thing that moves it is an explicit update. That is why this step exists and why it runs on
+  # every push rather than being someone's checklist item.
+  #
+  # Deliberately does NOT touch the jobs' environment. Since T12.20 an executor plane needs no
+  # per-tenant configuration at all: the endpoint comes from the project record (87c21af) and the
+  # token from that record's tokenSecretRef via Secret Manager, resolved with the plane's own
+  # identity. Copying tenant variables onto each plane is the treadmill this replaced.
+  - id: sync-executor-planes
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        FAILED=""
+        for JOB in ${_EXECUTOR_JOBS}; do
+          if ! gcloud run jobs describe "$${JOB}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" >/dev/null 2>&1; then
+            # A job that does not exist is not this build's problem to fail on — the service is
+            # already deployed and healthy. Say it loudly enough to be noticed and move on.
+            echo "WARNING: executor job '$${JOB}' does not exist in ${_DEPLOY_REGION}; nothing to sync. Remove it from _EXECUTOR_JOBS or create it." >&2
+            continue
+          fi
+          echo "syncing $${JOB} -> ${_IMAGE}"
+          if ! gcloud run jobs update "$${JOB}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" --image "${_IMAGE}" --quiet; then
+            FAILED="$${FAILED} $${JOB}"
+            continue
+          fi
+          # Same discipline as the service above: "updated" and "will run this image" are different
+          # facts, and only the second one matters.
+          JOB_IMAGE="$(gcloud run jobs describe "$${JOB}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" --format 'value(spec.template.template.containers[0].image)')"
+          if [ "$${JOB_IMAGE}" != "${_IMAGE}" ]; then
+            echo "FAIL: $${JOB} reports image $${JOB_IMAGE}, not ${_IMAGE}." >&2
+            FAILED="$${FAILED} $${JOB}"
+            continue
+          fi
+          echo "verified : $${JOB} will execute ${_IMAGE}"
+        done
+        if [ -n "$${FAILED}" ]; then
+          echo "FAIL: executor planes left on a stale image:$${FAILED}" >&2
+          echo "      Those planes execute workflow nodes with code older than the service, which presents as" >&2
+          echo "      intermittent failures that look like a split rather than a stale plane." >&2
+          exit 1
+        fi
