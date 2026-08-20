@@ -1,5 +1,5 @@
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
-import { ManagedScopedBearerCredentialRepository } from "../mcp/auth/managedScopedBearerCredentials.js";
+import { ManagedScopedBearerCredentialRepository, type ManagedScopedBearerMetadata } from "../mcp/auth/managedScopedBearerCredentials.js";
 import {
   CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV,
   NETLIFY_API_TOKEN_ENV,
@@ -16,11 +16,24 @@ export const CMS_AGENT_SITE_BINDINGS_ENV = "CMS_AGENT_SITE_BINDINGS_JSON";
 export type SiteCredentialReconcileResult = {
   projectId: string;
   netlifySiteName: string;
-  status: "planned" | "rotated" | "failed";
+  status: "planned" | "current" | "rotated" | "failed";
   errorCode?: string;
 };
 
-type CredentialRepository = Pick<ManagedScopedBearerCredentialRepository, "mint" | "activateAndRetireOtherProjectCredentials" | "revokeCredential">;
+type CredentialRepository = Pick<ManagedScopedBearerCredentialRepository, "mint" | "activateAndRetireOtherProjectCredentials" | "revokeCredential" | "findActiveCredentialForProject">;
+
+// Order-independent set equality for tool allowlists. SITE_CLIENT_MANAGER_TOOLS and a stored
+// credential's toolAllowlist are both "the set of tools this bearer may call" — nothing about a
+// scoped bearer's authorization depends on array order — so an array-equality comparison here
+// would rotate (mint + rebuild) a tenant on every run purely because JSON key/array ordering
+// differs from a historical write, which defeats the whole point of the idempotency check below.
+const toolAllowlistsMatch = (a: readonly string[], b: readonly string[]): boolean => {
+  const setA = new Set(a);
+  const setB = new Set(b);
+  if (setA.size !== setB.size) return false;
+  for (const tool of setA) if (!setB.has(tool)) return false;
+  return true;
+};
 
 const parseBindings = (env: NodeJS.ProcessEnv): Record<string, string> => {
   const raw = env[CMS_AGENT_SITE_BINDINGS_ENV]?.trim();
@@ -67,12 +80,49 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
     let credentials: CredentialRepository | undefined;
     try {
       if (!input.apply) {
-        results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "planned" });
+        // A dry run never calls Netlify (it must be safe to run with no token and no network
+        // access at all), so it has no way to freshly resolve the site id the way apply does. The
+        // project's durable clientSiteBinding — written by the last successful apply — is the best
+        // stand-in available: comparing against it is what lets an operator trust the plan enough
+        // to skip a needless apply, even though a stale/never-applied binding just means the plan
+        // conservatively falls back to "planned" below.
+        // Construct the registry rather than optional-chaining `deps.credentialRepository`:
+        // production (reconcileSiteCredentialsMain) passes only a projectRepository, so an
+        // optional chain would leave `activeCredential` undefined on every real run and make the
+        // current/planned distinction inert in exactly the place an operator reads it — the plan
+        // they use to decide whether an apply (and its fleet-wide republish) is needed at all.
+        // Reading the credential registry is the same blob store the project list above already
+        // came from, so this adds no new dependency; it is still zero Netlify calls. A registry
+        // that cannot be read degrades to "planned": a dry run must never fail, and over-reporting
+        // work is the safe direction to be wrong in.
+        let activeCredential: ManagedScopedBearerMetadata | undefined;
+        try {
+          const registry = deps.credentialRepository ?? new ManagedScopedBearerCredentialRepository();
+          activeCredential = await registry.findActiveCredentialForProject(project.projectId);
+        } catch {
+          activeCredential = undefined;
+        }
+        const resolvedSiteId = project.clientSiteBinding?.netlifySiteId;
+        const isCurrent = !!activeCredential && !!resolvedSiteId && activeCredential.netlifySiteId === resolvedSiteId
+          && toolAllowlistsMatch(activeCredential.toolAllowlist, SITE_CLIENT_MANAGER_TOOLS);
+        results.push({ projectId: project.projectId, netlifySiteName: siteName, status: isCurrent ? "current" : "planned" });
         continue;
       }
       const netlify = new NetlifyGenesisClient("live", netlifyToken!, deps.netlifyFetch);
       const site = await netlify.resolveExistingSite(siteName);
       credentials = deps.credentialRepository ?? new ManagedScopedBearerCredentialRepository();
+      // Idempotency skip. Every eligible project used to be re-minted, re-installed and rebuilt on
+      // every run with no check at all — the whole fleet's production sites republished on a
+      // routine pass, which is why this job could never be scheduled or wired into deploy. If the
+      // project's active (non-pending) credential already carries the current tool allowlist and
+      // already targets the site we just resolved, there is nothing to change: skip the mint, the
+      // env write, the verification handshake, and the rebuild, and leave the existing credential
+      // (and its digest) exactly as it is.
+      const activeCredential = await credentials.findActiveCredentialForProject(project.projectId);
+      if (activeCredential && activeCredential.netlifySiteId === site.siteId && toolAllowlistsMatch(activeCredential.toolAllowlist, SITE_CLIENT_MANAGER_TOOLS)) {
+        results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "current" });
+        continue;
+      }
       const minted = await credentials.mint({ projectId: project.projectId, toolAllowlist: [...SITE_CLIENT_MANAGER_TOOLS], netlifySiteId: site.siteId, netlifySiteName: siteName });
       mintedDigest = minted.digest;
       await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_ENDPOINT", publicEndpoint, { scopes: ["functions"] });
