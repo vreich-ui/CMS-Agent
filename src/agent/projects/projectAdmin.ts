@@ -28,6 +28,7 @@
 // deleting them would only resurrect them — delete refuses with a pointer to status="disabled".
 
 import { z } from "zod";
+import { isSecretVersionRef } from "./secretManager.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { defaultProjectConfigs } from "./defaultMigration.js";
 import { toProjectSummary } from "./projectRegistry.js";
@@ -64,6 +65,22 @@ export const registryEndpointSchema = z.string().min(1).max(MAX_REGISTRY_ENDPOIN
   if (url.username || url.password) ctx.addIssue({ code: "custom", message: "mcpEndpoint must not embed credentials (no user:password@host) — the token is referenced by env var NAME via tokenEnvVar." });
   if (url.search) ctx.addIssue({ code: "custom", message: "mcpEndpoint must not carry a query string — a query can smuggle a secret value into the registry." });
   if (url.hash) ctx.addIssue({ code: "custom", message: "mcpEndpoint must not carry a fragment." });
+});
+
+// T12.20 — the TOKEN counterpart of registryEndpointSchema. A Secret Manager VERSION resource name
+// is storable for the same reason a credential-free endpoint is: it is a POINTER, and dereferencing
+// it needs roles/secretmanager.secretAccessor on the reading plane's own identity. The pattern is
+// pinned narrowly so this field cannot be turned into an arbitrary URL or a different Google API
+// path, and a value that merely LOOKS like a token is refused outright — the commonest way a
+// pointer field becomes a secret field is someone pasting the secret into it.
+export const secretVersionRefSchema = z.string().min(1).max(512).superRefine((value, ctx) => {
+  if (!isSecretVersionRef(value)) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "tokenSecretRef must be a Secret Manager version resource name, e.g. projects/my-project/secrets/tenant-acme-mcp-token/versions/latest — never the token value itself."
+    });
+  }
 });
 
 // canonicalArticleBody was removed (R-23): every definition declared the identical value, making it
@@ -128,6 +145,7 @@ export const projectCreateSchema = z.object({
   mcpEndpoint: registryEndpointSchema.optional(),
   authMode: z.enum(projectAuthModes).default("bearer_env"),
   tokenEnvVar: envVarNameSchema.optional(),
+  tokenSecretRef: secretVersionRefSchema.optional(),
   // Deny-all by default: remote tools must be allow-listed explicitly (or via defaultToolPolicy)
   // before project.call_tool will forward to them.
   allowedTools: z.array(z.string().min(1).max(128)).max(64).default([]),
@@ -145,6 +163,7 @@ export const projectUpdateSchema = z.object({
   mcpEndpoint: registryEndpointSchema.nullable().optional(),
   authMode: z.enum(projectAuthModes).optional(),
   tokenEnvVar: envVarNameSchema.nullable().optional(),
+  tokenSecretRef: secretVersionRefSchema.nullable().optional(),
   allowedTools: z.array(z.string().min(1).max(128)).max(64).optional(),
   // The three-state permission control the Access page writes. toolPolicies replaces the whole map;
   // defaultToolPolicy sets the client-wide fallback. Both are safe metadata (tool names, not secrets).
@@ -223,6 +242,7 @@ export async function createProject(repository: ProjectRepository, input: Projec
     name: input.name,
     mcpEndpointEnvVar: input.mcpEndpointEnvVar,
     ...(input.mcpEndpoint ? { mcpEndpoint: input.mcpEndpoint } : {}),
+    ...(input.tokenSecretRef ? { tokenSecretRef: input.tokenSecretRef } : {}),
     authMode: input.authMode,
     ...(input.tokenEnvVar ? { tokenEnvVar: input.tokenEnvVar } : {}),
     allowedTools: [...input.allowedTools],
@@ -261,6 +281,10 @@ export async function updateProject(repository: ProjectRepository, projectId: st
       ...(patch.operatorPublishDefault !== undefined ? { operatorDefault: patch.operatorPublishDefault } : {})
     }
   };
+  if (patch.tokenSecretRef !== undefined) {
+    if (patch.tokenSecretRef === null) delete next.tokenSecretRef;
+    else next.tokenSecretRef = patch.tokenSecretRef;
+  }
   if (patch.mcpEndpoint !== undefined) {
     if (patch.mcpEndpoint === null) delete next.mcpEndpoint;
     else next.mcpEndpoint = patch.mcpEndpoint;
@@ -293,7 +317,8 @@ export function projectRegistrationContract() {
       rule: "The TOKEN is referenced by environment variable NAME only; its value is configured in the deployment and is never persisted or returned. The ENDPOINT is not a secret: supply it directly as mcpEndpoint and it is stored on the record, so no per-tenant env var has to be added to this deployment. A stored endpoint is validated credential-free (https, no user:password@, no query, no fragment) and may be returned to callers; the env var's own value never is.",
       endpointEnvVarPattern: ENV_VAR_NAME_PATTERN.source,
       endpointResolution: "env var first, record second: <CLIENT>_MCP_ENDPOINT wins whenever it is populated (unchanged behavior + a break-glass override); mcpEndpoint answers when it is not.",
-      convention: "<CLIENT>_MCP_ENDPOINT and <CLIENT>_MCP_TOKEN, e.g. ACME_DAILY_MCP_ENDPOINT / ACME_DAILY_MCP_TOKEN."
+      tokenResolution: "env var first, record second, exactly like the endpoint: <CLIENT>_MCP_TOKEN wins whenever it is populated; otherwise tokenSecretRef is read from Secret Manager using the READING PLANE'S OWN service-account identity. tokenSecretRef holds a version resource name, never a value — dereferencing it needs roles/secretmanager.secretAccessor, granted once per plane identity rather than once per tenant. This is what lets a NEW PLANE inherit every existing tenant with no configuration: the continuation-tick job ran for six days with no tenant tokens and silently failed half of all node executions.",
+      convention: "<CLIENT>_MCP_ENDPOINT and <CLIENT>_MCP_TOKEN, e.g. ACME_DAILY_MCP_ENDPOINT / ACME_DAILY_MCP_TOKEN; the secret convention is projects/<gcp-project>/secrets/tenant-<slug>-mcp-token/versions/latest."
     },
     fields: {
       projectId: { required: true, pattern: PROJECT_ID_PATTERN.source, example: "acme-daily" },
@@ -310,7 +335,7 @@ export function projectRegistrationContract() {
     publishingPolicy: "Server-enforced: publishEnabled=true by default (go-live 2026-07-31). The per-project *_PUBLISH_ENABLED=false env flag is the operator kill-switch.",
     onboardingSteps: [
       "1. project.create with projectId, name, mcpEndpointEnvVar (+ tokenEnvVar for bearer_env), and — recommended — mcpEndpoint, the endpoint URL itself.",
-      "2. Configure the TOKEN env var referenced by tokenEnvVar in the deployment (a secret value never passes through MCP). The endpoint needs no deployment change when mcpEndpoint was supplied; set <CLIENT>_MCP_ENDPOINT only to override it.",
+      "2. Supply the TOKEN one of two ways. PREFERRED: create the secret in Secret Manager and pass tokenSecretRef — no deployment change on any plane, now or later, and a new plane inherits it automatically. ALTERNATIVE: set the env var named by tokenEnvVar on every plane that executes work (there is more than one; the continuation-tick job is easy to forget). Either way a secret VALUE never passes through MCP. The endpoint needs no deployment change when mcpEndpoint was supplied; set <CLIENT>_MCP_ENDPOINT only to override it.",
       "3. project.get — connection.endpointConfigured/tokenConfigured turn true once the deploy sees the env vars.",
       "4. project.test_connection — primitive MCP initialize against the client's server.",
       "5. project.list_tools, then project.update to allow-list the safe read-only tool names.",

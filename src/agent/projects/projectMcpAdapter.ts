@@ -4,6 +4,7 @@
 // It previously lived under projects/drLurie/, which made every generic caller appear coupled to
 // one client; projects/drLurie/adapter.ts remains as a deprecated re-export.
 import { effectiveToolPermission, toToolPolicyMap, type ProjectConnectionConfig, type ProjectConnectionState, type ToolPermission } from "./projectTypes.js";
+import { accessSecretValue, type SecretAccessDeps } from "./secretManager.js";
 import { McpClientError, mcpCallTool, mcpInitialize, mcpListResources, mcpListTools, type McpClientOptions, type McpTransport } from "./mcpClient.js";
 
 // Resolve the MCP endpoint and bearer token for a project. The TOKEN always comes from an
@@ -17,15 +18,40 @@ import { McpClientError, mcpCallTool, mcpInitialize, mcpListResources, mcpListTo
 //      time by projectAdmin's registryEndpointSchema), so minting a tenant no longer requires
 //      hand-adding a <CLIENT>_MCP_ENDPOINT variable to this deployment.
 export type EndpointSource = "env" | "registry" | "unset";
-export type ResolvedConnection = { endpointConfigured: boolean; tokenConfigured: boolean; endpoint?: string; endpointSource: EndpointSource; token?: string };
+export type TokenSource = "env" | "secret" | "unset";
+export type ResolvedConnection = { endpointConfigured: boolean; tokenConfigured: boolean; endpoint?: string; endpointSource: EndpointSource; token?: string; tokenSource: TokenSource; tokenError?: string };
 
+// SYNCHRONOUS resolution: the endpoint in full, and the token ONLY from the environment. Kept sync
+// and side-effect-free because two callers (driverEnvPreflight, the executor's dispatch stamp) ask
+// only "is this project reachable?" and must not perform a privileged Secret Manager read to answer
+// it. When the record carries a tokenSecretRef, tokenConfigured is still true here — the token IS
+// configured, it just has to be fetched — and resolveProjectConnectionWithSecrets does the fetching.
 export function resolveProjectConnection(config: ProjectConnectionConfig, env: NodeJS.ProcessEnv = process.env): ResolvedConnection {
   const fromEnv = env[config.mcpEndpointEnvVar]?.trim() || undefined;
   const fromRegistry = config.mcpEndpoint?.trim() || undefined;
   const endpoint = fromEnv ?? fromRegistry;
   const endpointSource: EndpointSource = fromEnv ? "env" : fromRegistry ? "registry" : "unset";
   const token = config.tokenEnvVar ? (env[config.tokenEnvVar]?.trim() || undefined) : undefined;
-  return { endpointConfigured: Boolean(endpoint), tokenConfigured: Boolean(token), endpoint, endpointSource, token };
+  const secretRef = config.tokenSecretRef?.trim() || undefined;
+  const tokenSource: TokenSource = token ? "env" : secretRef ? "secret" : "unset";
+  return { endpointConfigured: Boolean(endpoint), tokenConfigured: Boolean(token || secretRef), endpoint, endpointSource, token, tokenSource };
+}
+
+// ASYNC resolution — the one the transport actually uses. ENV FIRST, RECORD SECOND, exactly as the
+// endpoint resolves (T12.20): a populated token env var still wins on every plane that has one, so
+// nothing about an existing project changes, and the Secret Manager read happens only when it is
+// the answer. A failed read is reported as `tokenError` rather than thrown, so the caller can name
+// the misconfiguration instead of surfacing a bare 401 from the tenant later.
+export async function resolveProjectConnectionWithSecrets(
+  config: ProjectConnectionConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  deps: SecretAccessDeps = {}
+): Promise<ResolvedConnection> {
+  const base = resolveProjectConnection(config, env);
+  if (base.token || !config.tokenSecretRef) return base;
+  const secret = await accessSecretValue(config.tokenSecretRef, deps);
+  if (!secret.ok) return { ...base, tokenError: secret.error };
+  return { ...base, token: secret.value, tokenConfigured: true, tokenSource: "secret" };
 }
 
 // Safe, caller-facing connection view: booleans, env var names, which source answered, and the
@@ -38,7 +64,9 @@ export function toConnectionState(config: ProjectConnectionConfig, env: NodeJS.P
     mcpEndpointEnvVar: config.mcpEndpointEnvVar,
     tokenEnvVar: config.tokenEnvVar,
     endpointSource: resolved.endpointSource,
-    ...(config.mcpEndpoint ? { mcpEndpoint: config.mcpEndpoint } : {})
+    tokenSource: resolved.tokenSource,
+    ...(config.mcpEndpoint ? { mcpEndpoint: config.mcpEndpoint } : {}),
+    ...(config.tokenSecretRef ? { tokenSecretRef: config.tokenSecretRef } : {})
   };
 }
 
@@ -53,7 +81,7 @@ const sanitizeError = (error: unknown): string => {
   return `client_unreachable (${name}): failed to reach the project MCP endpoint. The endpoint/token environment variables may be unset in this deployment, the client server may be down, or the network path blocked — project.test_connection isolates which.`;
 };
 
-export type ProjectAdapterDeps = { env?: NodeJS.ProcessEnv; transport?: McpTransport };
+export type ProjectAdapterDeps = { env?: NodeJS.ProcessEnv; transport?: McpTransport; secrets?: SecretAccessDeps };
 export type SafeToolInfo = { name: string; description?: string };
 export type ConnectionTestResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; server?: { name?: string; version?: string; protocolVersion?: string }; error?: string };
 export type ListToolsResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tools: SafeToolInfo[]; allowedTools: string[]; defaultToolPolicy: ToolPermission; toolPolicies: Record<string, ToolPermission>; error?: string };
@@ -100,10 +128,12 @@ export type ReadToolCallResult = CallToolResult & { code?: "read_tool_operation_
 export class ProjectMcpAdapter {
   private readonly env: NodeJS.ProcessEnv;
   private readonly transport?: McpTransport;
+  private readonly secrets: SecretAccessDeps;
 
   constructor(private readonly config: ProjectConnectionConfig, deps: ProjectAdapterDeps = {}) {
     this.env = deps.env ?? process.env;
     this.transport = deps.transport;
+    this.secrets = deps.secrets ?? {};
   }
 
   connectionState(): ProjectConnectionState {
@@ -114,16 +144,20 @@ export class ProjectMcpAdapter {
     return { endpoint: resolved.endpoint!, token: resolved.token, transport: this.transport, signal };
   }
 
-  private requireConnection(): ResolvedConnection | { error: string } {
+  private async requireConnection(): Promise<ResolvedConnection | { error: string }> {
     if (this.config.status === "disabled") return { error: "Project connection is disabled." };
-    const resolved = resolveProjectConnection(this.config, this.env);
+    const resolved = await resolveProjectConnectionWithSecrets(this.config, this.env, this.secrets);
     if (!resolved.endpoint) return { error: `Project MCP endpoint is not configured: neither the ${this.config.mcpEndpointEnvVar} env var on this deployment nor an mcpEndpoint on the project record resolves one (set either — project.update {mcpEndpoint} needs no deploy change).` };
+    // A record that NAMES a secret but cannot produce one is a misconfiguration, and saying so here
+    // is the whole point: the alternative is a 401 from the tenant several layers later, which reads
+    // as "the token is wrong" when the truth is "this plane may not read it".
+    if (resolved.tokenError) return { error: `Project MCP token could not be resolved from ${this.config.tokenSecretRef}: ${resolved.tokenError}` };
     return resolved;
   }
 
   async testConnection(signal?: AbortSignal): Promise<ConnectionTestResult> {
     const connection = this.connectionState();
-    const resolved = this.requireConnection();
+    const resolved = await this.requireConnection();
     if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, error: resolved.error };
     try {
       const init = await mcpInitialize(this.clientOptions(resolved, signal));
@@ -138,7 +172,7 @@ export class ProjectMcpAdapter {
     const allowedTools = [...this.config.allowedTools];
     const defaultToolPolicy = this.config.defaultToolPolicy ?? "blocked";
     const toolPolicies = toToolPolicyMap(this.config);
-    const resolved = this.requireConnection();
+    const resolved = await this.requireConnection();
     if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tools: [], allowedTools, defaultToolPolicy, toolPolicies, error: resolved.error };
     try {
       const { tools } = await mcpListTools(this.clientOptions(resolved, signal));
@@ -160,7 +194,7 @@ export class ProjectMcpAdapter {
       // the Access page) before the call can run — no transport happens here.
       return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, requiresApproval: true, error: `Tool requires approval before it can run: ${name}` };
     }
-    const resolved = this.requireConnection();
+    const resolved = await this.requireConnection();
     if ("error" in resolved) return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, error: resolved.error };
     try {
       const result = await mcpCallTool(this.clientOptions(resolved, signal), name, args);
@@ -195,7 +229,7 @@ export class ProjectMcpAdapter {
 
   // Schema/contract discovery, if the remote exposes it: schema/contract-named tools and resources.
   async discoverContract(): Promise<ContractDiscoveryResult> {
-    const resolved = this.requireConnection();
+    const resolved = await this.requireConnection();
     if ("error" in resolved) return { ok: false, available: false, error: resolved.error };
     try {
       const [toolsResult, resourcesResult] = await Promise.allSettled([
@@ -212,7 +246,7 @@ export class ProjectMcpAdapter {
 
   // Dry validation call, if the remote exposes a validate tool. Always sends dryRun: true; never publishes.
   async dryValidate(payload: Record<string, unknown>): Promise<DryValidateResult> {
-    const resolved = this.requireConnection();
+    const resolved = await this.requireConnection();
     if ("error" in resolved) return { ok: false, available: false, error: resolved.error };
     try {
       const { tools } = await mcpListTools(this.clientOptions(resolved));
