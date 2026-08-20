@@ -176,6 +176,21 @@ export type ProjectConnectionConfig = {
   mcpEndpoint?: string;
   authMode: ProjectAuthMode;
   tokenEnvVar?: string;
+  // The tenant's bearer TOKEN, resolved ENV FIRST, RECORD SECOND — the same precedence mcpEndpoint
+  // above uses, and for the same reason (T12.20). This field holds a Secret Manager VERSION
+  // RESOURCE NAME, never a value:
+  //   projects/<project>/secrets/<name>/versions/<latest|N>
+  //
+  // Why a reference is not a secret: it grants nothing. Reading it requires
+  // roles/secretmanager.secretAccessor on the READING PLANE'S OWN identity — an IAM decision made
+  // once, outside this system, revocable without a registry write. That is exactly what an env var
+  // NAME has always been: a pointer whose dereference is authorized elsewhere.
+  //
+  // What it buys: a new tenant needs ONE secret created at genesis and no deployment edit anywhere,
+  // and a NEW PLANE inherits every tenant automatically. The alternative cost us a day — the
+  // continuation-tick Cloud Run job silently carried no tenant tokens and failed roughly half of all
+  // node executions while the service beside it succeeded.
+  tokenSecretRef?: string;
   // Legacy allow-list. Still honored (a tool listed here resolves to "allowed"), but the three-state
   // policy below is the richer control; toolPolicies overrides an allowedTools entry.
   allowedTools: string[];
@@ -238,10 +253,21 @@ export type ProjectConnectionState = {
   //   "registry" — no env value; the record's own mcpEndpoint is in use.
   //   "unset"    — neither; the project is unreachable.
   endpointSource: "env" | "registry" | "unset";
+  // Which source will answer for the TOKEN, mirroring endpointSource:
+  //   "env"    — the token env var is populated on this plane and wins.
+  //   "secret" — no env value; the record's tokenSecretRef will be read from Secret Manager.
+  //   "unset"  — neither; the project is called without a bearer token.
+  // NOTE this is a STATIC view: it reports which source is configured, not whether the read will
+  // succeed. Secret Manager is only contacted on an actual call, so a safe metadata view never
+  // performs a privileged read as a side effect. project.test_connection exercises the real path.
+  tokenSource: "env" | "secret" | "unset";
   // The endpoint stored on the record, when there is one. Safe to return: it is validated
   // credential-free at write time (https, no userinfo, no query, no fragment). The env-var VALUE is
   // still never returned — an operator may have put anything in it.
   mcpEndpoint?: string;
+  // The stored Secret Manager reference, when there is one. Safe to return for the same reason the
+  // env var NAME is: it is a pointer, not a credential.
+  tokenSecretRef?: string;
 };
 
 export type ProjectSummary = {
