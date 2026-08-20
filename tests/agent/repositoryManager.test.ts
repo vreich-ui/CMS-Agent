@@ -53,6 +53,9 @@ describe("RepositoryManager", () => {
     await expect(manager.getRepositoryHealth()).resolves.toEqual({
       backend: "memory",
       storageHealth: "healthy",
+      // Every field null off Cloud Run — K_REVISION/K_SERVICE are set by the runtime, the other two
+      // by the deploy. A test process has none of them, and reporting null is the honest answer.
+      build: { revision: null, service: null, gitSha: null, deployedAt: null },
       workspaceVersion: 0,
       workspace: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       execution: { backend: "memory", readable: true, writable: true, version: "memory.v1" },

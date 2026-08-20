@@ -47,9 +47,37 @@ export const repositoryConfigSchema = z.object({
 }).strict();
 
 export type RepositoryConfig = z.infer<typeof repositoryConfigSchema>;
+/** WHICH BUILD IS ANSWERING. Every field is non-secret and identifies code, never configuration.
+ *
+ *  This exists because "is the fix live?" was unanswerable from inside the system for three days.
+ *  Cloud Build reported success, `gcloud run services describe` reported the new image, the console
+ *  showed 100% traffic on the newest revision — and the behaviour on the wire was still the old
+ *  code's. Every one of those signals is about the SERVICE's desired state; none of them is the
+ *  answer to "what executed this request". Only the process can answer that, so now it does.
+ *
+ *  `revision` costs nothing to populate: Cloud Run sets K_REVISION in every container it starts, so
+ *  this identifies the exact revision that served THIS call with no deploy-time wiring at all, and
+ *  the revision maps to a commit-tagged image in the console. `gitSha`/`deployedAt` are stamped by
+ *  the deploy (SERVICE_GIT_SHA / SERVICE_DEPLOYED_AT) exactly as pdf-tool's render-service does since
+ *  T12.19; they read null until that wiring lands, which is honest rather than absent. */
+export type PlaneBuildIdentity = {
+  revision: string | null;
+  service: string | null;
+  gitSha: string | null;
+  deployedAt: string | null;
+};
+
+const planeBuildIdentity = (env: NodeJS.ProcessEnv = process.env): PlaneBuildIdentity => ({
+  revision: env.K_REVISION?.trim() || null,
+  service: env.K_SERVICE?.trim() || null,
+  gitSha: env.SERVICE_GIT_SHA?.trim() || null,
+  deployedAt: env.SERVICE_DEPLOYED_AT?.trim() || null
+});
+
 export type RepositoryHealthSummary = {
   backend: RepositoryBackend;
   storageHealth: "healthy" | "degraded";
+  build: PlaneBuildIdentity;
   workspaceVersion: number;
   workspace: RepositoryHealth;
   execution: RepositoryHealth;
@@ -156,6 +184,6 @@ export class RepositoryManager {
       this.conversationTurnRepository.health()
     ]);
     const storageHealth = [workspace, execution, artifact, learning, usage, nodeTiming, project, skill, change, evaluation, improvement, conversationTurns].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
-    return { backend: this.context.backend, storageHealth, workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, nodeTiming, project, skill, change, evaluation, improvement, conversationTurns };
+    return { backend: this.context.backend, storageHealth, build: planeBuildIdentity(), workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, nodeTiming, project, skill, change, evaluation, improvement, conversationTurns };
   }
 }
