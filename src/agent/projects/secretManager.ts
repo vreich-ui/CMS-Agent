@@ -22,11 +22,27 @@
 // run record or an error message — the failure strings below are deliberately about REACHABILITY and
 // PERMISSION, never about content.
 //
-// ZERO DEPENDENCIES, deliberately. This talks to the metadata server and the Secret Manager REST API
-// with fetch rather than pulling in @google-cloud/secret-manager, because this module has to load on
-// planes that are not Google at all (the Netlify functions) and must degrade there to "no identity
-// available" rather than to a missing native dependency. On a non-Google plane the env var path is
-// the one that answers, exactly as before.
+// HOW THE IDENTITY IS OBTAINED, and why there are two ways. The first version of this hand-rolled the
+// metadata-server call with fetch, on the reasoning that this module must also load on planes that are
+// not Google at all (the Netlify functions) and must degrade there to "no identity available" rather
+// than to a missing dependency. That reasoning still holds for Secret Manager itself — the REST call
+// below is still plain fetch, no @google-cloud/secret-manager. It did NOT hold for the token: on
+// 2026-08-20 the hand-rolled call returned HTTP 404 from both metadata hosts on revision
+// cms-agent-mcp-00132-5mq, a real Cloud Run instance whose SAME PROCESS was reading the GCS run store
+// through Application Default Credentials at that exact moment. Two mechanisms, one identity, one of
+// them working: the hand-rolled one was the broken one, and no amount of correcting its URL was going
+// to make it the trustworthy one.
+//
+// So the token now comes from google-auth-library — the library @google-cloud/storage already uses in
+// this process, on this plane, successfully. It is a transitive production dependency, so it costs no
+// new install; it is imported DYNAMICALLY so a plane that does not bundle it (a Netlify function) gets
+// a recorded attempt and falls through instead of failing to load. The hand-rolled metadata call is
+// kept as the fallback, and its failures now quote the response body, because "HTTP 404" without a
+// body is what let a wrong URL look like a missing service account for an hour.
+//
+// Injecting deps.fetchImpl selects the fallback path only. That keeps the unit tests deterministic and
+// offline: a test that hands this module a fake fetch is testing the metadata/REST wire format, and
+// must never reach for the ambient credentials of whatever machine it runs on.
 //
 // TODO (T12.21, ratified 2026-08-20): fortify. A stored secret is still a long-lived shared bearer.
 // The end state is one of:
@@ -95,6 +111,29 @@ const readJson = async (response: Response): Promise<unknown> => {
 };
 
 /**
+ * The plane's own OAuth access token via Application Default Credentials — the SAME mechanism
+ * @google-cloud/storage uses in this process to read the run store, which is what makes it the
+ * trustworthy one. Imported dynamically so a plane without the library records an attempt and falls
+ * through to the metadata call rather than failing to load this module at all.
+ */
+async function tokenViaApplicationDefaultCredentials(): Promise<{ token: string } | { error: string }> {
+  try {
+    const { GoogleAuth } = await import("google-auth-library");
+    const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+    const client = await auth.getClient();
+    const response = await client.getAccessToken();
+    const token = typeof response?.token === "string" ? response.token : "";
+    if (!token) return { error: "application default credentials: resolved, but returned no access token" };
+    return { token };
+  } catch (error) {
+    // The MESSAGE, bounded — "Could not load the default credentials" is the whole diagnosis and is
+    // not sensitive. Only the name would repeat the mistake this module was written to stop making.
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    return { error: `application default credentials: ${message.replace(/\s+/g, " ").trim().slice(0, 200)}` };
+  }
+}
+
+/**
  * The plane's own OAuth access token from the metadata server. Returns the token, or WHAT ACTUALLY
  * WENT WRONG — the first version of this returned a bare undefined and the caller turned that into a
  * confident "this plane has no Google identity", which was false and sent a diagnosis down the wrong
@@ -103,10 +142,21 @@ const readJson = async (response: Response): Promise<unknown> => {
 async function planeAccessToken(
   fetchImpl: typeof fetch,
   now: () => number,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  useAmbientCredentials: boolean
 ): Promise<{ token: string } | { error: string }> {
   if (accessTokenCache && accessTokenCache.expiresAt > now()) return { token: accessTokenCache.token };
   const attempts: string[] = [];
+
+  if (useAmbientCredentials) {
+    const ambient = await tokenViaApplicationDefaultCredentials();
+    if ("token" in ambient) {
+      accessTokenCache = { token: ambient.token, expiresAt: now() + SECRET_CACHE_TTL_MS };
+      return { token: ambient.token };
+    }
+    attempts.push(ambient.error);
+  }
+
   for (const url of metadataUrls(env)) {
     const host = new URL(url).host;
     let response: Response;
@@ -118,7 +168,15 @@ async function planeAccessToken(
       continue;
     }
     if (!response.ok) {
-      attempts.push(`${host}: HTTP ${response.status}`);
+      // The BODY of a failed metadata response is the diagnosis — the server names the path it could
+      // not find. Only ever read on a NON-ok response: a 200 body is the token itself.
+      let detail = "";
+      try {
+        detail = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 160);
+      } catch {
+        detail = "";
+      }
+      attempts.push(`${host}: HTTP ${response.status}${detail ? ` — ${detail}` : ""}`);
       continue;
     }
     const body = (await readJson(response)) as { access_token?: unknown; expires_in?: unknown } | undefined;
@@ -152,11 +210,11 @@ export async function accessSecretValue(ref: string, deps: SecretAccessDeps = {}
   const cached = secretCache.get(ref);
   if (cached && cached.expiresAt > now()) return { ok: true, value: cached.value };
 
-  const identity = await planeAccessToken(fetchImpl, now, deps.env ?? process.env);
+  const identity = await planeAccessToken(fetchImpl, now, deps.env ?? process.env, !deps.fetchImpl);
   if ("error" in identity) {
     return {
       ok: false,
-      error: `could not obtain this plane's Google identity from the metadata server (${identity.error}). If this plane genuinely is not on Google, set the token env var here instead; if it is, that is a metadata reachability problem, not a token problem.`
+      error: `could not obtain this plane's Google identity (${identity.error}) — every mechanism tried is listed, in the order it was tried. If this plane genuinely is not on Google, set the token env var here instead; if it is, that is a metadata reachability problem, not a token problem.`
     };
   }
   const accessToken = identity.token;
