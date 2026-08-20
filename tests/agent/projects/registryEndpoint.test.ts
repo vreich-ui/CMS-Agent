@@ -103,6 +103,7 @@ describe("registry-stored MCP endpoint — resolution", () => {
       mcpEndpointEnvVar: "ZILBERMAN_MCP_ENDPOINT",
       tokenEnvVar: "ZILBERMAN_MCP_TOKEN",
       endpointSource: "registry",
+      tokenSource: "unset",
       mcpEndpoint: "https://zilbermanfilmfoundation.netlify.app/mcp"
     });
   });
