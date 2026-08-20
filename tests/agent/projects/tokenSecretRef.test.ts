@@ -65,7 +65,7 @@ const stubGoogle = (options: { secretStatus?: number; metadataOk?: boolean; payl
   const fetchImpl = vi.fn(async (url: string | URL, init?: { headers?: Record<string, string> }) => {
     const href = String(url);
     calls.push(href);
-    if (href.includes("metadata.google.internal")) {
+    if (href.includes("/computeMetadata/")) {
       if (options.metadataOk === false) return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
       expect(init?.headers?.["Metadata-Flavor"]).toBe("Google");
       return { ok: true, status: 200, json: async () => ({ access_token: "ya29.plane", expires_in: 3600 }) } as unknown as Response;
@@ -150,11 +150,35 @@ describe("token resolution: env first, Secret Manager second", () => {
 });
 
 describe("failures are named, never guessed at", () => {
-  it("off-Google planes say so explicitly instead of pretending the token is wrong", async () => {
+  it("reports what the metadata server ACTUALLY did, per host — never a confident guess", async () => {
     const google = stubGoogle({ metadataOk: false });
     const result = await accessSecretValue(SECRET_REF, { fetchImpl: google.fetchImpl });
     expect(result.ok).toBe(false);
-    expect((result as { error: string }).error).toContain("no Google service-account identity");
+    const error = (result as { error: string }).error;
+    // Both documented hosts are attempted, and each is named with its own outcome. The first cut of
+    // this module collapsed all of that into "this plane has no Google identity", which was WRONG on
+    // a plane that reads GCS through the very same credential and cost an hour of misdirection.
+    expect(error).toContain("metadata.google.internal: HTTP 404");
+    expect(error).toContain("169.254.169.254: HTTP 404");
+    expect(error).toContain("metadata reachability problem, not a token problem");
+    expect(google.calls.filter((c) => c.includes("/computeMetadata/"))).toHaveLength(2);
+  });
+
+  it("falls back to the link-local address when the metadata DNS NAME does not resolve", async () => {
+    // The exact 2026-08-20 failure shape: the name is unresolvable, the address is fine.
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string | URL) => {
+      const href = String(url);
+      calls.push(href);
+      if (href.includes("metadata.google.internal")) throw Object.assign(new Error("getaddrinfo ENOTFOUND"), { name: "TypeError" });
+      if (href.includes("/computeMetadata/")) {
+        return { ok: true, status: 200, json: async () => ({ access_token: "ya29.plane", expires_in: 3600 }) } as unknown as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({ payload: { data: B64 } }) } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const result = await accessSecretValue(SECRET_REF, { fetchImpl });
+    expect(result).toEqual({ ok: true, value: SECRET_VALUE });
+    expect(calls.some((c) => c.includes("169.254.169.254"))).toBe(true);
   });
 
   it("a denied read names the IAM role that would fix it", async () => {

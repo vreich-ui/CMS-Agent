@@ -46,8 +46,19 @@ export const SECRET_VERSION_REF_RE =
 
 export const isSecretVersionRef = (value: string): boolean => SECRET_VERSION_REF_RE.test(value);
 
-const METADATA_TOKEN_URL =
-  "http://metadata.google.internal/computeMetadata/v1/instance/service-account/token";
+// Two hosts, deliberately. `metadata.google.internal` is the documented name, but it is a DNS name
+// and DNS is the part that fails: on 2026-08-20 this module reported "no Google service-account
+// identity" from a plane that demonstrably HAS one (the same process reads the GCS run store through
+// Application Default Credentials, which is metadata-server auth). The link-local address needs no
+// resolver, so trying it second turns a DNS failure into a working read instead of a wrong
+// diagnosis. GCE_METADATA_HOST is Google's own override and is honoured first when set.
+const METADATA_PATH = "/computeMetadata/v1/instance/service-account/token";
+const metadataUrls = (env: NodeJS.ProcessEnv): string[] => {
+  const override = env.GCE_METADATA_HOST?.trim();
+  return (override ? [override] : ["metadata.google.internal", "169.254.169.254"]).map(
+    (host) => `http://${host}${METADATA_PATH}`
+  );
+};
 const SECRET_ACCESS_BASE = "https://secretmanager.googleapis.com/v1/";
 
 /** How long a resolved secret is reused before it is read again. Short enough that a rotation takes
@@ -56,7 +67,7 @@ export const SECRET_CACHE_TTL_MS = 5 * 60_000;
 /** Renew the plane's access token this long before it actually expires. */
 const ACCESS_TOKEN_SAFETY_MS = 60_000;
 
-export type SecretAccessDeps = { fetchImpl?: typeof fetch; now?: () => number };
+export type SecretAccessDeps = { fetchImpl?: typeof fetch; now?: () => number; env?: NodeJS.ProcessEnv };
 export type SecretAccessResult = { ok: true; value: string } | { ok: false; error: string };
 
 type CacheEntry = { value: string; expiresAt: number };
@@ -77,22 +88,44 @@ const readJson = async (response: Response): Promise<unknown> => {
   }
 };
 
-/** The plane's own OAuth access token, from the GCE/Cloud Run metadata server. Absent off-Google. */
-async function planeAccessToken(fetchImpl: typeof fetch, now: () => number): Promise<string | undefined> {
-  if (accessTokenCache && accessTokenCache.expiresAt > now()) return accessTokenCache.token;
-  let response: Response;
-  try {
-    response = await fetchImpl(METADATA_TOKEN_URL, { headers: { "Metadata-Flavor": "Google" } });
-  } catch {
-    return undefined;
+/**
+ * The plane's own OAuth access token from the metadata server. Returns the token, or WHAT ACTUALLY
+ * WENT WRONG — the first version of this returned a bare undefined and the caller turned that into a
+ * confident "this plane has no Google identity", which was false and sent a diagnosis down the wrong
+ * path for an hour. Every attempt is reported.
+ */
+async function planeAccessToken(
+  fetchImpl: typeof fetch,
+  now: () => number,
+  env: NodeJS.ProcessEnv
+): Promise<{ token: string } | { error: string }> {
+  if (accessTokenCache && accessTokenCache.expiresAt > now()) return { token: accessTokenCache.token };
+  const attempts: string[] = [];
+  for (const url of metadataUrls(env)) {
+    const host = new URL(url).host;
+    let response: Response;
+    try {
+      response = await fetchImpl(url, { headers: { "Metadata-Flavor": "Google" } });
+    } catch (error) {
+      // The exception NAME only — a message could carry a proxy URL or an internal address.
+      attempts.push(`${host}: unreachable (${error instanceof Error ? error.name : typeof error})`);
+      continue;
+    }
+    if (!response.ok) {
+      attempts.push(`${host}: HTTP ${response.status}`);
+      continue;
+    }
+    const body = (await readJson(response)) as { access_token?: unknown; expires_in?: unknown } | undefined;
+    const token = typeof body?.access_token === "string" ? body.access_token : "";
+    if (!token) {
+      attempts.push(`${host}: responded without an access_token`);
+      continue;
+    }
+    const ttlMs = typeof body?.expires_in === "number" ? body.expires_in * 1000 : 300_000;
+    accessTokenCache = { token, expiresAt: now() + Math.max(0, ttlMs - ACCESS_TOKEN_SAFETY_MS) };
+    return { token };
   }
-  if (!response.ok) return undefined;
-  const body = (await readJson(response)) as { access_token?: unknown; expires_in?: unknown } | undefined;
-  const token = typeof body?.access_token === "string" ? body.access_token : "";
-  if (!token) return undefined;
-  const ttlMs = typeof body?.expires_in === "number" ? body.expires_in * 1000 : 300_000;
-  accessTokenCache = { token, expiresAt: now() + Math.max(0, ttlMs - ACCESS_TOKEN_SAFETY_MS) };
-  return token;
+  return { error: attempts.join("; ") || "no metadata host was tried" };
 }
 
 /**
@@ -113,14 +146,14 @@ export async function accessSecretValue(ref: string, deps: SecretAccessDeps = {}
   const cached = secretCache.get(ref);
   if (cached && cached.expiresAt > now()) return { ok: true, value: cached.value };
 
-  const accessToken = await planeAccessToken(fetchImpl, now);
-  if (!accessToken) {
+  const identity = await planeAccessToken(fetchImpl, now, deps.env ?? process.env);
+  if ("error" in identity) {
     return {
       ok: false,
-      error:
-        "this plane has no Google service-account identity (no metadata server), so a Secret Manager reference cannot be read here — set the token env var on this plane instead."
+      error: `could not obtain this plane's Google identity from the metadata server (${identity.error}). If this plane genuinely is not on Google, set the token env var here instead; if it is, that is a metadata reachability problem, not a token problem.`
     };
   }
+  const accessToken = identity.token;
 
   let response: Response;
   try {
