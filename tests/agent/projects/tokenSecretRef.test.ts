@@ -164,6 +164,15 @@ describe("failures are named, never guessed at", () => {
     expect(google.calls.filter((c) => c.includes("/computeMetadata/"))).toHaveLength(2);
   });
 
+  it("asks the metadata server for the DEFAULT service account's token, not the account list", async () => {
+    // `/instance/service-account/token` 404s on a real metadata server; the account segment is
+    // required. Getting this wrong looked exactly like "this plane has no identity".
+    const google = stubGoogle();
+    await accessSecretValue(SECRET_REF, { fetchImpl: google.fetchImpl });
+    const metadataCall = google.calls.find((c) => c.includes("/computeMetadata/"));
+    expect(metadataCall).toContain("/instance/service-account/default/token");
+  });
+
   it("falls back to the link-local address when the metadata DNS NAME does not resolve", async () => {
     // The exact 2026-08-20 failure shape: the name is unresolvable, the address is fine.
     const calls: string[] = [];

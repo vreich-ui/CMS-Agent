@@ -52,7 +52,13 @@ export const isSecretVersionRef = (value: string): boolean => SECRET_VERSION_REF
 // Application Default Credentials, which is metadata-server auth). The link-local address needs no
 // resolver, so trying it second turns a DNS failure into a working read instead of a wrong
 // diagnosis. GCE_METADATA_HOST is Google's own override and is honoured first when set.
-const METADATA_PATH = "/computeMetadata/v1/instance/service-account/token";
+// The ACCOUNT SEGMENT is not optional. `/instance/service-account/token` is a 404 on a real
+// metadata server — `/instance/service-account/` lists the accounts, and the token lives one level
+// down under a specific one, `default` being the instance's own. Omitting it produced HTTP 404 from
+// BOTH hosts on a plane that has a perfectly good identity, which is precisely why the previous
+// commit made this report the status per host instead of asserting "no identity": the honest
+// message named a 404, and a 404 is a wrong URL, not a missing service account.
+const METADATA_PATH = "/computeMetadata/v1/instance/service-account/default/token";
 const metadataUrls = (env: NodeJS.ProcessEnv): string[] => {
   const override = env.GCE_METADATA_HOST?.trim();
   return (override ? [override] : ["metadata.google.internal", "169.254.169.254"]).map(
