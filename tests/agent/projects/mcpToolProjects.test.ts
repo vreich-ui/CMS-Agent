@@ -69,7 +69,8 @@ describe("MCP tool project defaults (pdf-tool, monetizer)", () => {
           tokenEnvVar: testCase.tokenEnvVar,
           // Which SOURCE answered — a name, never a value. These default projects carry no stored
           // mcpEndpoint, so the env var still answers and the summary is otherwise unchanged.
-          endpointSource: "env"
+          endpointSource: "env",
+          tokenSource: "env"
         });
       });
 
