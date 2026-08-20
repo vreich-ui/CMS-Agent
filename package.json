@@ -21,6 +21,8 @@
     "glossary:update": "tsx scripts/generateGlossary.ts --write",
     "test:objects": "tsx scripts/generateObjectDocs.ts",
     "objects:update": "tsx scripts/generateObjectDocs.ts --write",
+    "test:scope": "tsx scripts/siteCredentialScopeLock.ts",
+    "scope:update": "tsx scripts/siteCredentialScopeLock.ts --write",
     "verify:deploy": "tsx scripts/verifyDeployment.ts",
     "learning:purge-align": "tsx scripts/purgeAlignObservations.ts",
     "deploy:mcp": "bash scripts/deploy-mcp.sh",

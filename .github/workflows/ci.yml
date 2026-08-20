@@ -8,7 +8,8 @@
 #   workspace  — typecheck (this repo's `build`) + the node test suite
 #   ui         — the ui workspace's own vitest (jsdom) + its production build
 #   drift      — the two-plane drift detector (netlify vs cloud-run MCP surface + manifest lock),
-#                plus the generated-glossary lock (docs/ui-glossary.md vs ui/src/explain.ts)
+#                the generated-glossary lock (docs/ui-glossary.md vs ui/src/explain.ts), the
+#                engine-object-docs lock, and the site-credential scope lock (SITE_CLIENT_MANAGER_TOOLS)
 #   summary    — one required-status target so branch protection needs a single check name
 #
 # No secrets are used or needed: every check runs in-process against memory repositories.
@@ -111,6 +112,17 @@ jobs:
       # generated from ui/src/objectModel.ts. Intentional changes: `npm run objects:update`, then commit.
       - name: Detect object-docs drift
         run: npm run test:objects
+      # docs/site-credential-scope-lock.json locks SITE_CLIENT_MANAGER_TOOLS (siteGenesis.ts) — the
+      # exact toolAllowlist genesis mints into every new site's scoped bearer, and the allowlist every
+      # existing tenant is re-minted from on reconciliation. This constant went stale once already:
+      # admin chat gained six workflow tools and nobody widened it, so live tenants kept 2-tool
+      # credentials and every workflow call 401'd for weeks with no signal. This cannot check the live
+      # fleet (no secrets, no network here) — it only makes a change to the constant a reviewable,
+      # failing diff instead of a silent one. Intentional scope changes: `npm run scope:update`, commit
+      # the lock, AND re-run the `site-credential-reconciler` Cloud Run Job with `--apply`, or every
+      # already-registered tenant stays on the old scope.
+      - name: Detect site-credential scope drift
+        run: npm run test:scope
 
   summary:
     name: CI

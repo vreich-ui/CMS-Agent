@@ -124,6 +124,20 @@ export class ManagedScopedBearerCredentialRepository {
     return document.credentials.some((entry) => entry.state !== "pending" && entry.projects.some((projectId) => projectIds.includes(projectId)));
   }
 
+  // Metadata-only read accessor for "is this project's credential already correct" checks (the
+  // reconciler's idempotency skip). Returning ManagedScopedBearerMetadata is safe by construction:
+  // the raw bearer is handed to the caller once, at mint, and is never itself persisted — only its
+  // SHA-256 digest is, and that digest is not practically reversible. A `pending` entry has not
+  // finished the install/verify handshake for its site and therefore is not the project's active
+  // credential; an entry with no `state` is a pre-marker v1 record and counts as active (see the
+  // comment on ManagedScopedBearerMetadata.state).
+  async findActiveCredentialForProject(projectId: string): Promise<ManagedScopedBearerMetadata | undefined> {
+    if (!PROJECT_ID.test(projectId)) return undefined;
+    const { document } = await this.read();
+    const match = document.credentials.find((entry) => entry.state !== "pending" && entry.projects.includes(projectId));
+    return match ? structuredClone(match) : undefined;
+  }
+
   async mint(input: { projectId: string; toolAllowlist: string[]; netlifySiteId: string; netlifySiteName: string }): Promise<MintedManagedScopedBearer> {
     if (!PROJECT_ID.test(input.projectId) || !uniqueValidStrings(input.toolAllowlist, TOOL_NAME) || !input.netlifySiteId || !input.netlifySiteName) {
       throw new Error("Managed scoped bearer mint input is invalid.");
