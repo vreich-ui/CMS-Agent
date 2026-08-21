@@ -139,7 +139,16 @@ async function tokenViaApplicationDefaultCredentials(): Promise<{ token: string 
  * confident "this plane has no Google identity", which was false and sent a diagnosis down the wrong
  * path for an hour. Every attempt is reported.
  */
-async function planeAccessToken(
+/**
+ * The plane's own OAuth access token from the GCE/Cloud Run metadata server.
+ *
+ * Exported so every Google API caller on this plane shares ONE implementation. There is exactly one
+ * correct metadata path (see METADATA_PATH above — the account segment is not optional), one
+ * host-fallback order, and one cache; a second hand-rolled copy is how a 404 like the one that
+ * motivated that comment gets reintroduced somewhere else. Callers get either a token or a SAFE
+ * reason string that names reachability or status only.
+ */
+export async function planeAccessToken(
   fetchImpl: typeof fetch,
   now: () => number,
   env: NodeJS.ProcessEnv,

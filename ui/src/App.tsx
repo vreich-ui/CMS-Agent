@@ -17,6 +17,7 @@ import { useProjects } from "./hooks/useProjects";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useWorkflowRun } from "./hooks/useWorkflowRun";
 import { useModelUsage } from "./hooks/useModelUsage";
+import { useSiteCredentials } from "./hooks/useSiteCredentials";
 import type { McpConnection } from "./connection";
 import { distinctRunProjectIds } from "./projects";
 import { readStorage, writeStorage } from "./storage";
@@ -53,6 +54,9 @@ function App() {
   const workspace = useWorkspace(client);
   const workflowRun = useWorkflowRun(client);
   const modelUsage = useModelUsage(client, workflowRun.currentRun?.runId, workflowRun.currentRun?.projectId ?? selectedProjectId);
+  // Fleet-wide, not project-scoped — instantiated once here (like workspace/modelUsage) rather
+  // than inside SettingsPage, so a background repair's poll survives navigating away from Settings.
+  const siteCredentials = useSiteCredentials(client);
   const accessScreen = getAccessScreen(isDeployedMode, session);
   const runProjectIds = useMemo(() => distinctRunProjectIds(workflowRun.runs), [workflowRun.runs]);
 
@@ -88,7 +92,7 @@ function App() {
       {route.page === "runs" && <RunsPage selectedProjectId={selectedProjectId} onNavigate={navigate} />}
       {route.page === "changes" && <ChangesPage client={client} selectedProjectId={selectedProjectId} onStatus={setStatus} onError={handleError} />}
       {route.page === "access" && <AccessPage client={client} projects={projects.projects} projectsError={projects.error} onRefreshProjects={() => void projects.refresh()} selectedProjectId={selectedProjectId} onStatus={setStatus} onError={handleError} />}
-      {route.page === "settings" && <SettingsPage connection={connection} client={client} token={token} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} session={isDeployedMode ? session : null} onLogout={logout} isDeployedMode={isDeployedMode} workspace={workspace} modelUsage={modelUsage} activeRunId={workflowRun.currentRun?.runId} theme={theme} onStatus={setStatus} onError={handleError} />}
+      {route.page === "settings" && <SettingsPage connection={connection} client={client} token={token} onEndpointChange={setEndpoint} onTokenChange={setToken} onConnectionSuccess={handleConnectionSuccess} onConnectionError={handleError} session={isDeployedMode ? session : null} onLogout={logout} isDeployedMode={isDeployedMode} workspace={workspace} modelUsage={modelUsage} siteCredentials={siteCredentials} activeRunId={workflowRun.currentRun?.runId} theme={theme} onStatus={setStatus} onError={handleError} />}
     </main>
   </div>;
 }

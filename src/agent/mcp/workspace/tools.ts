@@ -31,6 +31,7 @@ import { skillStatuses, type SkillDefinition } from "../../skills/skillTypes.js"
 import { listTools as listControlledTools, getTool as getControlledTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { executeTool, getToolExecution, listToolExecutions } from "../../tools/toolExecutor.js";
 import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
+import { createSiteCredentialTools } from "./siteCredentialTools.js";
 
 const emptyInput = z.object({}).strict();
 
@@ -747,6 +748,11 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "project.delete", description: "Remove an agent-registered project connection. Code-defined default projects cannot be deleted (set status to disabled instead).", zodSchema: projectDeleteInput, inputSchema: projectDeleteJsonSchema, execute: async (input) => { const data = projectDeleteInput.parse(input); return ok(await deleteProject(projectRepository, data.projectId)); } }),
     // T12.11 — the one-call composite entry point (R-C5): site.duplicate / site.duplicate_status.
     ...createSiteDuplicationTools({ executionRepository, workspaceRepository, projectRepository, usageRepository }),
+    // Operator surface over the fleet credential reconciler: plan (read-only), apply (fires the
+    // Cloud Run Job), execution_status (poll). apply/execution_status are deliberately absent from
+    // SITE_CLIENT_MANAGER_TOOLS (siteGenesis.ts) — they are operator-only and must never reach a
+    // tenant's scoped chat bearer.
+    ...createSiteCredentialTools({ projectRepository }),
     ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),

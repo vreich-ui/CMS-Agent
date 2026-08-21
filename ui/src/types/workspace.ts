@@ -361,3 +361,39 @@ export type PublishResult =
   | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; readiness?: PublishReadinessResult }
   | { published: false; mode: "blocked_for_publish_execution"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; readiness: PublishReadinessResult; blocked: PublishBlockedState }
   | { published: false; mode: "error"; gates: PublishGates; plan: PublishPlan | null; steps: PublishStep[]; error: string };
+
+// --- Site credential reconciliation (tenant scoped-bearer repair) ---------------------------
+// Every tenant site's admin chat authenticates back to CMS-Agent with a per-site scoped bearer.
+// When the tool scope changes, existing tenants keep whatever scope they were minted with until
+// this reconciler re-mints them. site_credentials_plan is a read-only dry run over every
+// registered tenant; site_credentials_apply fires the actual repair as a Cloud Run Job (long-
+// running — see useSiteCredentials) and site_credentials_execution_status polls that job's
+// execution.
+export type SiteCredentialStatus = "current" | "planned";
+
+export type SiteCredentialPlanEntry = {
+  projectId: string;
+  netlifySiteName: string;
+  status: SiteCredentialStatus;
+};
+
+export type SiteCredentialPlan = {
+  mode: "dry_run";
+  results: SiteCredentialPlanEntry[];
+  staleCount: number;
+};
+
+export type SiteCredentialApplyResult = {
+  executionName: string;
+  jobName: string;
+};
+
+// state is whatever Cloud Run Jobs reports (e.g. "ACTIVE" / "SUCCEEDED" / "FAILED") — treated as
+// an opaque string here and classified by ui/src/siteCredentials.ts, not this type.
+export type SiteCredentialExecutionStatus = {
+  state: string;
+  startedAt?: string;
+  completedAt?: string;
+  succeededCount?: number;
+  failedCount?: number;
+};
