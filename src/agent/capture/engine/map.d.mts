@@ -2,6 +2,14 @@
 export const CAPTURE_MAP_SCHEMA_VERSION: "capture-map.v1";
 export const DEFAULT_CONFIDENCE_THRESHOLD: number;
 export const CAPTURE_PAGE_TYPE_ALLOWED_SECTIONS: Record<string, Set<string> | "any">;
+/**
+ * Every section type the deterministic builder can actually BUILD — and therefore the only
+ * vocabulary a block_classifier suggestion may draw from. Exported so the node prompt is generated
+ * from it rather than restating it: the prompt listed seven types by hand while the builder grew to
+ * fourteen, so the classifier spent T12.14 through T12.22 unable to offer any of the types added
+ * after it was written.
+ */
+export const SUPPORTED_SECTION_TYPES: ReadonlySet<string>;
 
 // ─── T12.14 asset-aware mapping ─────────────────────────────────────────────
 export const CONTENT_SPLIT_MAX_IMAGES: number;

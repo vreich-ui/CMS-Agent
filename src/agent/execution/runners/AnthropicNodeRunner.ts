@@ -22,6 +22,7 @@ import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
+import { boundDependencyOutput, dependencyOutputMaxChars } from "./OpenAINodeRunner.js";
 
 const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
@@ -84,7 +85,10 @@ export class AnthropicNodeRunner implements NodeRunner {
     const playbookText = playbook ? renderPlaybookForPrompt(playbook) : "";
     const userContent = JSON.stringify(redact({
       input,
-      dependencyOutputs: Object.fromEntries(node.dependsOn.map((dependency) => [dependency, context.run.stageOutputs[dependency] ?? context.suppliedDependencies?.[dependency]])),
+      // T12.22 fleet parity: the OpenAI runner bounds these; an unbounded confluence payload hangs
+      // the same way on either provider, so the same bound applies here rather than waiting for
+      // the second incident to prove it.
+      dependencyOutputs: Object.fromEntries(node.dependsOn.map((dependency) => [dependency, boundDependencyOutput(context.run.stageOutputs[dependency] ?? context.suppliedDependencies?.[dependency], dependencyOutputMaxChars())])),
       ...(playbookText ? { playbook: playbookText } : {}),
       outputSchema: node.outputSchema
     }));

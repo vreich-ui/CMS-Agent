@@ -35,6 +35,123 @@ const toolResultMaxChars = () => {
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_TOOL_RESULT_MAX_CHARS;
 };
 
+// T12.22 — the DEPENDENCY half of the same lesson `boundToolResult` above learned.
+//
+// Tool results were capped; dependency outputs never were. That asymmetry is what hung
+// `gap_adjudicator` in a reclaim loop for a full day. It is the capture workflow's only CONFLUENCE
+// node: its single dependency is `capture_score`, whose envelope aggregates every page, every
+// visual comparison and the site-wide gap report. That whole object went into the prompt through a
+// plain JSON.stringify. The model call never returned inside its 180s timeout, the process died
+// before `delete state.dispatch` could run, the orphaned claim aged past
+// timeout + STALL_MARGIN_MS (270s), the next advance reclaimed it as `stale_dispatch_reclaimed`
+// and re-dispatched the identical oversized payload. ~248 times in 24h. Forever, by construction.
+//
+// WHY NOT A BLIND SLICE. `boundToolResult` may hand the model a `preview` string because a tool
+// result is one leaf the model asked for. A dependency output is the node's whole evidentiary
+// input; cutting it mid-token yields unparseable JSON and converts a hang into an
+// `output_validation_failed` — a different failure, not a fix. So this SHRINKS instead of cutting:
+// it repeatedly halves the largest arrays (the bulk is always evidence arrays) until the payload
+// fits, leaving every object key, every scalar and valid JSON throughout. What was dropped is
+// declared, per path, in a `__truncation` ledger the model can read and cite.
+//
+// Deliberately generous relative to a tool result: this is the node's primary input, not a lookup.
+export const DEFAULT_DEPENDENCY_OUTPUT_MAX_CHARS = 48000;
+export const dependencyOutputMaxChars = () => {
+  const configured = Number(process.env.DEPENDENCY_OUTPUT_MAX_CHARS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_DEPENDENCY_OUTPUT_MAX_CHARS;
+};
+
+const DEPENDENCY_TRUNCATION_NOTE =
+  "This dependency output was too large to deliver whole. Object keys and scalars are intact; the " +
+  "arrays listed below were shortened, keeping their leading entries. Judge from what is present " +
+  "and say plainly that your view was partial — never infer that a dropped entry did not exist, " +
+  "and never invent one.";
+
+type ArraySite = { parent: unknown[] | Record<string, unknown>; key: string | number; path: string; array: unknown[] };
+
+const collectArraySites = (value: unknown, path: string, into: ArraySite[]): void => {
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) {
+      const child = value[i];
+      if (Array.isArray(child)) into.push({ parent: value, key: i, path: `${path}[${i}]`, array: child });
+      collectArraySites(child, `${path}[${i}]`, into);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const childPath = path ? `${path}.${key}` : key;
+    if (Array.isArray(child)) into.push({ parent: value as Record<string, unknown>, key, path: childPath, array: child });
+    collectArraySites(child, childPath, into);
+  }
+};
+
+/**
+ * Shrink one dependency output to fit `maxChars` WITHOUT breaking its shape.
+ *
+ * Halves the largest array, re-measures, repeats. Every array keeps at least one element so the
+ * model can still see what the shape of a dropped entry was. Returns the value untouched when it
+ * already fits, and falls back to the tool-result bound only for a non-object payload (a giant
+ * bare string), where there is no structure to preserve in the first place.
+ */
+export const boundDependencyOutput = (value: unknown, maxChars: number): unknown => {
+  const serialized = JSON.stringify(value ?? null);
+  if (serialized.length <= maxChars) return value;
+  if (!value || typeof value !== "object") return boundToolResult(value, maxChars);
+
+  const clone = JSON.parse(serialized) as Record<string, unknown>;
+  const dropped = new Map<string, { kept: number; total: number }>();
+
+  // The ledger is part of the payload, so it has to be MEASURED as part of the payload. Shrinking
+  // against the bare clone and appending the ledger afterwards overshoots by the ledger's own size
+  // — caught by the nested-array test, which came back 4417 chars against a 4000 bound. Every pass
+  // now measures exactly what will be returned.
+  const withLedger = (): unknown =>
+    dropped.size === 0
+      ? clone
+      : {
+          ...clone,
+          __truncation: {
+            reason: "dependency_output_exceeded_prompt_bound",
+            originalChars: serialized.length,
+            maxChars,
+            note: DEPENDENCY_TRUNCATION_NOTE,
+            shortenedArrays: [...dropped.entries()]
+              .map(([path, counts]) => ({ path, kept: counts.kept, total: counts.total }))
+              .sort((a, b) => b.total - a.total)
+          }
+        };
+
+  // Bounded by construction: every pass strictly shortens the single largest array, so the loop
+  // either fits the budget or runs out of arrays it is allowed to shorten further.
+  for (let pass = 0; pass < 500; pass += 1) {
+    if (JSON.stringify(withLedger()).length <= maxChars) break;
+    const sites: ArraySite[] = [];
+    collectArraySites(clone, "", sites);
+    const shrinkable = sites.filter((site) => site.array.length > 1);
+    if (shrinkable.length === 0) break;
+    let largest = shrinkable[0];
+    let largestSize = JSON.stringify(largest.array).length;
+    for (const site of shrinkable.slice(1)) {
+      const size = JSON.stringify(site.array).length;
+      if (size > largestSize) { largest = site; largestSize = size; }
+    }
+    const total = dropped.get(largest.path)?.total ?? largest.array.length;
+    const kept = Math.max(1, Math.floor(largest.array.length / 2));
+    (largest.parent as Record<string | number, unknown>)[largest.key] = largest.array.slice(0, kept);
+    dropped.set(largest.path, { kept, total });
+  }
+
+  const bounded = withLedger();
+  // Shrinking every array to a single element can still not be enough — a payload whose bulk is one
+  // enormous scalar, or a bound smaller than the ledger itself. Say so with the tool-result bound
+  // rather than returning something over budget and calling it bounded.
+  if (JSON.stringify(bounded).length > maxChars) return boundToolResult(value, maxChars);
+  return bounded;
+};
+
 export const boundToolResult = (value: unknown, maxChars: number): unknown => {
   const serialized = JSON.stringify(value ?? null);
   if (serialized.length <= maxChars) return value;
@@ -218,7 +335,10 @@ export class OpenAINodeRunner implements NodeRunner {
     const inputRecord = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
     const deliveredDependencies = inputRecord?.dependencies && typeof inputRecord.dependencies === "object" ? (inputRecord.dependencies as Record<string, unknown>) : undefined;
     const { dependencies: _delivered, ...inputSansDependencies } = inputRecord ?? {};
-    const dependencyOutputs = Object.fromEntries(node.dependsOn.map((d) => [d, deliveredDependencies?.[d] ?? context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d]]));
+    // Each dependency is bounded INDEPENDENTLY, so one oversized confluence input cannot crowd out
+    // a small sibling the node also needs (see boundDependencyOutput).
+    const dependencyMaxChars = dependencyOutputMaxChars();
+    const dependencyOutputs = Object.fromEntries(node.dependsOn.map((d) => [d, boundDependencyOutput(deliveredDependencies?.[d] ?? context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d], dependencyMaxChars)]));
     const prompt = JSON.stringify(redact({ input: inputRecord ? inputSansDependencies : input, dependencyOutputs, ...(playbookText ? { playbook: playbookText } : {}), outputSchema: node.outputSchema }));
     // F5 (T-2, run_1785352838155_l544ye): draft_writer had NO explicit timeout, defaulted to 60s, and
     // failed with model_timeout on a large brief (300s configured live and it passed). 60s is too
@@ -280,12 +400,54 @@ export class OpenAINodeRunner implements NodeRunner {
     let turnCount = 0;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
+        // T12.22 — the timeout has to CANCEL, not just stop waiting.
+        //
+        // This raced `runOnce` against a timer and rejected with model_timeout, while `signal` came
+        // from context.signal — which the executor never supplies (executionContext.signal is
+        // optional and no caller sets it), so it was always undefined. The rejection returned
+        // control to this loop but left the underlying model request outstanding: nothing tore down
+        // the socket, the process stayed occupied, and on a large enough payload it never reached
+        // `delete state.dispatch` — leaving the orphaned dispatch claim that the reclaim loop then
+        // recycled every ~270s. Bounding the prompt above removes the usual cause; this removes the
+        // consequence, for every cause.
+        //
+        // The controller is PER ATTEMPT. A node-scoped one would stay aborted after the first
+        // timeout and make every retry fail instantly with `cancelled` — the retry budget would
+        // exist on paper only. An external context.signal (real operator cancellation) is forwarded
+        // into the same controller so both paths abort exactly one in-flight call.
+        const attemptAbort = new AbortController();
+        const forwardExternalAbort = () => attemptAbort.abort();
+        if (context.signal) {
+          if (context.signal.aborted) attemptAbort.abort();
+          else context.signal.addEventListener("abort", forwardExternalAbort, { once: true });
+        }
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
         const runOnce = run(agent, prompt, {
-          maxTurns, signal: context.signal as any,
+          maxTurns, signal: attemptAbort.signal as any,
           tracingDisabled: !tracingEnabled, traceIncludeSensitiveData: false,
           ...(tracingEnabled ? { workflowName: context.run.workflowId, traceMetadata: tracingMetadataFor(attempt) } : {})
         } as any);
-        const result: any = await Promise.race([runOnce, new Promise((_, rej) => setTimeout(() => rej(new Error("model_timeout")), timeoutMs))]);
+        let result: any;
+        try {
+          result = await Promise.race([
+            runOnce,
+            new Promise((_, rej) => {
+              timeoutHandle = setTimeout(() => {
+                // Abort FIRST so the request is actually torn down, then reject. Rejecting alone is
+                // what left the call in flight.
+                attemptAbort.abort();
+                rej(new Error("model_timeout"));
+              }, timeoutMs);
+            })
+          ]);
+        } finally {
+          // An un-cleared timer holds the event loop open for the rest of the timeout on every
+          // successful call — the same class of leak, just quieter.
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          context.signal?.removeEventListener("abort", forwardExternalAbort);
+          // The losing promise must not surface as an unhandled rejection once the race is settled.
+          void Promise.resolve(runOnce).catch(() => undefined);
+        }
         const usage = result.rawResponses?.reduce((a: any, r: any) => ({
           inputTokens: a.inputTokens + (r.usage?.inputTokens ?? r.usage?.input_tokens ?? 0),
           outputTokens: a.outputTokens + (r.usage?.outputTokens ?? r.usage?.output_tokens ?? 0),
