@@ -1,4 +1,14 @@
+import { SUPPORTED_SECTION_TYPES } from "../capture/engine/map.mjs";
 import type { WorkspaceNode } from "./nodeTypes.js";
+
+// T12.23 — the classifier's vocabulary is GENERATED from the builder, never restated beside it.
+//
+// This prompt named seven types inline: hero, lede, prose, bio, contact_form, cta_banner,
+// link_list. The deterministic builder grew past that list twice without the prompt following, so
+// the one node whose whole job is rescuing a block the mapper declined could only ever offer it the
+// same handful of shapes the mapper had already tried and rejected. Reading the set means the two
+// cannot drift again — add a builder, and the classifier can suggest it on the next deploy.
+const CLASSIFIER_VOCABULARY = [...SUPPORTED_SECTION_TYPES].sort().join(", ");
 
 // T12.9 — capture_conductor: CMS-Agent's SECOND workflow (R-C3 v2), the canonical node literal.
 //
@@ -101,7 +111,7 @@ export const captureConductorNodes = [
     name: "Block Classifier (AI judgment 1 of 3)",
     kind: "judgment",
     description: "Judges ONLY the blocks the heuristic mapper declined, proposing a governed sectionType per declined block. Suggestions are re-validated by the deterministic builder downstream — an invalid or unregistered type is rejected, never coerced.",
-    prompt: `Objective: for EACH entry in capture_map's declinedBlocks ledger (and ONLY those blocks — never re-judge a block the mapper already mapped), propose the single best governed sectionType from the mapper's own vocabulary (hero, lede, prose, bio, contact_form, cta_banner, link_list) or propose nothing when no governed type fits.\nInputs expected: capture_map's envelope (declinedBlocks with why/nearestType/missingCapability, plus the mapping for context).\nOutput required: block_classification.v1 {artifact, summary, suggestions: [{blockRef, sectionType, rationale}]}. An empty suggestions array is a valid, honest answer.\nRe-validation contract: your suggestions are ADVISORY. The deterministic builder re-validates every one (type registry, buildability, PageType allowance); an invalid or unregistered type is rejected, never coerced — so never invent a type name outside the vocabulary above and never suggest a block outside the declined ledger.\nBlocker criteria: no capture_map envelope in your input.\n${AI_SAFETY_FOOTER}`,
+    prompt: `Objective: for EACH entry in capture_map's declinedBlocks ledger (and ONLY those blocks — never re-judge a block the mapper already mapped), propose the single best governed sectionType from the mapper's own vocabulary (${CLASSIFIER_VOCABULARY}) or propose nothing when no governed type fits.\nSeveral of these are STRUCTURAL types the mapper builds from a block's recovered DOM shape (block.structure: lists, tables, quotes, question/answer pairs) rather than from its prose — faq, comparison_table, testimonial, stats, timeline, steps and checklist. Suggesting one for a block whose snapshot carries no such structure is not an error, but the builder will reject it and the block stays declined, so prefer a type the block's own evidence can actually fill.\nInputs expected: capture_map's envelope (declinedBlocks with why/nearestType/missingCapability, plus the mapping for context).\nOutput required: block_classification.v1 {artifact, summary, suggestions: [{blockRef, sectionType, rationale}]}. An empty suggestions array is a valid, honest answer.\nRe-validation contract: your suggestions are ADVISORY. The deterministic builder re-validates every one (type registry, buildability, PageType allowance); an invalid or unregistered type is rejected, never coerced — so never invent a type name outside the vocabulary above and never suggest a block outside the declined ledger.\nBlocker criteria: no capture_map envelope in your input.\n${AI_SAFETY_FOOTER}`,
     inputSchema: openInput,
     outputSchema: envelopeSchema("block_classification.v1", {
       suggestions: {

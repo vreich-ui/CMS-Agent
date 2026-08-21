@@ -46,6 +46,20 @@
 // is unchanged at the new upstream commit, and emit.mjs stays byte-identical to upstream (no
 // deviation of its own). The srcset half of T12.17 lives in browser.mjs and pdf-tool's
 // render-service, neither of which is vendored here: the crawl runs in the pdf-tool plane.
+// T12.23 (2026-08-21) RE-VENDORED map.mjs AND emit.mjs, from platform ae4b922. Upstream taught the
+// mapper to read a block's RECOVERED DOM SHAPE (`block.structure`, new in the same commit's
+// browser.mjs) instead of only its flattened text, which is what capped every clone at 10 of the
+// platform's 24 section types: faq, stats, timeline, steps, testimonial, checklist and
+// comparison_table are shapes, and the shape was being discarded at crawl time. SUPPORTED_SECTION_TYPES
+// — the vocabulary block_classifier may choose from — went from 7 to 14 with it. emit.mjs came
+// across for the recipe change in the same commit: section_template plans group by shape
+// fingerprint rather than by type name, so two different shapes of one type stop colliding on a
+// single requestedId. Both files stay byte-identical to upstream (no deviation of either own).
+//
+// The crawl half is NOT here and must not be: browser.mjs runs in the pdf-tool capture job plane
+// (pdf-tool af0a4af), the same split T12.17's srcset fix lives under. Until that plane redeploys,
+// snapshots carry no `structure` key and this mapper behaves exactly as it did before — the change
+// is additive by construction, which is why it is safe to vendor ahead of that deploy.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -74,8 +88,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "map.mjs",
-    vendoredSha256: "0aa14363ccf55784d5a49d49a45ccce86d1923ca58b260e92c252aa016c1976c",
-    upstreamSha256: "0aa14363ccf55784d5a49d49a45ccce86d1923ca58b260e92c252aa016c1976c"
+    vendoredSha256: "f6f9ce21e97ab0cf97acf91ba7490a7fc09773e8afcf606cdf1de6d892771f5c",
+    upstreamSha256: "f6f9ce21e97ab0cf97acf91ba7490a7fc09773e8afcf606cdf1de6d892771f5c"
   },
   {
     file: "theme.mjs",
@@ -84,8 +98,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "f6378e7992cf7053697dbd25761566320544ea1476c0e28cb3e9b979c3c9496b",
-    upstreamSha256: "f6378e7992cf7053697dbd25761566320544ea1476c0e28cb3e9b979c3c9496b"
+    vendoredSha256: "da228983358fcff4e51ac4364f79ee66fca4d741c2bdafdc4b42c8fa4462cd6c",
+    upstreamSha256: "da228983358fcff4e51ac4364f79ee66fca4d741c2bdafdc4b42c8fa4462cd6c"
   },
   {
     file: "score.mjs",
