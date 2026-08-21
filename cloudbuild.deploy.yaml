@@ -184,6 +184,7 @@ steps:
       - |
         set -euo pipefail
         FAILED=""
+        UNVERIFIED=""
         for JOB in ${_EXECUTOR_JOBS}; do
           if ! gcloud run jobs describe "$${JOB}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" >/dev/null 2>&1; then
             # A job that does not exist is not this build's problem to fail on — the service is
@@ -198,7 +199,31 @@ steps:
           fi
           # Same discipline as the service above: "updated" and "will run this image" are different
           # facts, and only the second one matters.
-          JOB_IMAGE="$(gcloud run jobs describe "$${JOB}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" --format 'value(spec.template.template.containers[0].image)')"
+          # READ-BACK PATH. A Cloud Run JOB nests its container two levels deeper than a SERVICE:
+          # spec.template(.spec).template(.spec).containers[] rather than the service's
+          # spec.containers[]. This read used the service-shaped path, resolved to nothing, and the
+          # comparison below then failed against an EMPTY string on 2026-08-20 build 281759b1 —
+          # printing "reports image ," and failing a build whose job update had in fact succeeded.
+          #
+          # A wrong path and a stale plane are indistinguishable when both produce "not the expected
+          # image", which is what made a green-path failure look like a real one. So: try each known
+          # shape, take the first that answers, and treat "no path answered" as its OWN error rather
+          # than reporting a stale plane that isn't stale.
+          JOB_IMAGE=""
+          for JOB_IMAGE_PATH in \
+            'spec.template.spec.template.spec.containers[0].image' \
+            'template.template.containers[0].image' \
+            'spec.template.template.containers[0].image'; do
+            JOB_IMAGE="$(gcloud run jobs describe "$${JOB}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" --format "value($${JOB_IMAGE_PATH})" 2>/dev/null || true)"
+            [ -n "$${JOB_IMAGE}" ] && break
+          done
+          if [ -z "$${JOB_IMAGE}" ]; then
+            echo "FAIL: could not READ BACK $${JOB}'s image — every known field path returned empty." >&2
+            echo "      This is a verification defect, NOT evidence of a stale plane: the update above" >&2
+            echo "      reported success. Check the shape with: gcloud run jobs describe $${JOB} --format=json" >&2
+            UNVERIFIED="$${UNVERIFIED} $${JOB}"
+            continue
+          fi
           if [ "$${JOB_IMAGE}" != "${_IMAGE}" ]; then
             echo "FAIL: $${JOB} reports image $${JOB_IMAGE}, not ${_IMAGE}." >&2
             FAILED="$${FAILED} $${JOB}"
@@ -206,9 +231,19 @@ steps:
           fi
           echo "verified : $${JOB} will execute ${_IMAGE}"
         done
+        # Two different verdicts, deliberately not merged. "Stale" is a fact about production;
+        # "unverified" is a fact about this check. Reporting the second as the first is what made
+        # build 281759b1 read as a broken fleet when the sync had actually worked.
         if [ -n "$${FAILED}" ]; then
           echo "FAIL: executor planes left on a stale image:$${FAILED}" >&2
           echo "      Those planes execute workflow nodes with code older than the service, which presents as" >&2
           echo "      intermittent failures that look like a split rather than a stale plane." >&2
+        fi
+        if [ -n "$${UNVERIFIED}" ]; then
+          echo "FAIL: could not verify what these planes will execute:$${UNVERIFIED}" >&2
+          echo "      Their update reported SUCCESS, so they are probably correct — but 'probably' is not" >&2
+          echo "      what this step exists to report. Fix the read-back, do not assume either way." >&2
+        fi
+        if [ -n "$${FAILED}$${UNVERIFIED}" ]; then
           exit 1
         fi
