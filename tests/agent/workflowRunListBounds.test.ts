@@ -23,4 +23,21 @@ describe("workflow.list_runs response bounds", () => {
     expect(summary).not.toHaveProperty("artifacts");
     expect(JSON.stringify(summary).length).toBeLessThan(4_000);
   });
+
+  it("carries the caller's requestId so a page of runs can be joined back to the requests that asked for them", () => {
+    const base: WorkflowExecutionRecord = {
+      runId: "run_join", workflowId: "publishing_conductor", projectId: "dr-lurie", status: "running",
+      startedAt: "2026-08-22T00:00:00.000Z", updatedAt: "2026-08-22T00:01:00.000Z",
+      nodes: [], artifacts: [], errors: [], approvalsRequired: [], initialInput: {}, stageOutputs: {},
+      dryRun: true, executionMode: "openai"
+    };
+
+    const withRequest = summarizeRunForList({ ...base, requestId: "req_agent_retinol_20260822_01" }) as any;
+    expect(withRequest.requestId).toBe("req_agent_retinol_20260822_01");
+
+    // Schema-additive: a run recorded before caller request ids existed must
+    // not grow a `requestId: undefined` key.
+    const withoutRequest = summarizeRunForList(base) as any;
+    expect(withoutRequest).not.toHaveProperty("requestId");
+  });
 });
