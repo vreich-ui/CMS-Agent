@@ -31,7 +31,9 @@ import { getWorkflowDefinition } from "./workflowRegistry.js";
 // T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
 // that drives runs, since they all import this module. See captureConductorWorkflow.ts.
 import "./captureConductorWorkflow.js";
+import "./cloneConductorWorkflow.js";
 import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
+import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
 import { declaresContractPrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
@@ -916,7 +918,9 @@ const DETERMINISTIC_ROUTE_METADATA_KEYS = [
   "learningRecorderDeterministic",
   // T12.9: the capture_conductor stages (captureConductorRoutes.ts). String-valued ("crawl", ...),
   // which declaresDeterministicRoute below already treats as declared.
-  "captureStageDeterministic"
+  "captureStageDeterministic",
+  // T13.1: the clone_conductor stages (cloneConductorRoutes.ts). Same string-valued declaration.
+  "cloneStageDeterministic"
 ] as const;
 const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
   DETERMINISTIC_ROUTE_METADATA_KEYS.some((key) => {
@@ -1928,6 +1932,52 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       refusal = { code: staged.code, message: staged.message };
     }
     state.warnings = [...(state.warnings ?? []), `capture_stage_deterministic_unavailable:${refusal.code}`];
+    if (((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+      const completedAt = now();
+      state.status = "blocked";
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = { error: { code: refusal.code, message: refusal.message } };
+      run.status = "blocked";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = completedAt;
+      return { run };
+    }
+    // Mock run: fall through to the MockNodeRunner placeholder below so CI traversal keeps working.
+  }
+
+  // T13.1 — the clone_conductor deterministic stages (metadata.cloneStageDeterministic;
+  // cloneConductorRoutes.ts). Same R-C3 v2 shape as the capture block just above, minus a "pending"
+  // outcome — clone never polls an external job plane, so only "completed" and "refused" exist.
+  //   completed — the ordinary deterministic completion the sibling routes above use.
+  //   refused   — typed refusal. A LIVE run BLOCKS (a model must never fabricate a mint, a theme
+  //               apply, or a restamp); a MOCK run falls through to MockNodeRunner with a run-visible
+  //               warning so CI graph traversal keeps working.
+  const cloneStage = readCloneStage(nextNode);
+  if (cloneStage) {
+    const staged = await runCloneStage({ run, node: nextNode, stage: cloneStage });
+    let refusal: { code: string; message: string } | undefined;
+    if (staged.kind === "completed") {
+      const stagedValidation = validateOutput(staged.output, nextNode.outputSchema);
+      if (stagedValidation.ok) {
+        const completedAt = now();
+        state.status = "completed";
+        state.completedAt = completedAt;
+        state.durationMs = duration(startedAt, completedAt);
+        state.output = staged.output;
+        run.stageOutputs[nextNode.id] = staged.output;
+        run.artifacts.push(buildArtifact(nextNode, staged.output));
+        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.updatedAt = completedAt;
+        run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+        // No model call happened, so no usage record is written (the R-20 rule).
+        return { run };
+      }
+      refusal = { code: "output_schema_invalid", message: `clone stage "${cloneStage}" produced an envelope its own node schema rejects: ${stagedValidation.errors[0] ?? "schema_invalid"}` };
+    } else {
+      refusal = { code: staged.code, message: staged.message };
+    }
+    state.warnings = [...(state.warnings ?? []), `clone_stage_deterministic_unavailable:${refusal.code}`];
     if (((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
       const completedAt = now();
       state.status = "blocked";

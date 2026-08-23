@@ -83,6 +83,13 @@
 //     a planned image fails to materialize. Chosen only after every named type is refused.
 // On the reference fixture: mapped coverage 52.63% -> 89.47%, gaps 14 -> 4, asset sections 7 -> 14.
 // Both files stay byte-identical to upstream.
+// T13.1 (2026-08-23) VENDORED clone.mjs — a NEW file, not a re-vendoring of one already listed above.
+// It is Side A of CLONE-ENGINE-API.md: the clone_conductor pure engine (intake / recipe validation /
+// mint plan / theme apply plan / restamp ops / run report), authored in platform alongside this task
+// rather than pulled from the CAPTURE_ENGINE_UPSTREAM.commit pin above — that pin still names the
+// commit the OTHER SEVEN files were last re-vendored at and is deliberately left untouched here,
+// because none of them were touched for this task. clone.mjs is recorded with its own hash below,
+// byte-identical to platform's packages/core/cli/capture/clone.mjs, no deviation of its own.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -142,6 +149,11 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
     file: "side-by-side.mjs",
     vendoredSha256: "73fdcbccdb330e0b5a0ca19cc5f369712dda7ab3f2cab36d199d3326e3994e74",
     upstreamSha256: "73fdcbccdb330e0b5a0ca19cc5f369712dda7ab3f2cab36d199d3326e3994e74"
+  },
+  {
+    file: "clone.mjs",
+    vendoredSha256: "d4fb43e87de7546bf629c8ff857c35ae025344e59b445db8c4ce7f453d2d82fb",
+    upstreamSha256: "d4fb43e87de7546bf629c8ff857c35ae025344e59b445db8c4ce7f453d2d82fb"
   }
 ] as const;
 
