@@ -10,6 +10,7 @@ import {
   resolveReviewTier
 } from "../../../src/agent/workspace/skipPredicates.js";
 import { NODE_GATING_SEED, declaresContractPrefetch, gatedMetadata } from "../../../src/agent/workspace/nodeGatingSeed.js";
+import { listCloneConductorNodes } from "../../../src/agent/workspace/cloneConductorNodes.js";
 import { getWorkspaceNode, listWorkspaceNodes } from "../../../src/agent/workspace/nodes.js";
 import { readContentClass, readDeclaredContentClass } from "../../../src/agent/workspace/publicationController.js";
 
@@ -166,6 +167,63 @@ describe("no_media_slots — artifact_plan's own zero-media rule, moved pre-disp
     expect(evaluateNodeSkip(node(), {})!.skip).toBe(false);
     expect(evaluateNodeSkip(node(), { stageOutputs: { brief_architect: { dryRun: true, mediaSlots: [] } } })!.skip).toBe(false);
     expect(evaluateNodeSkip(node(), { stageOutputs: { brief_architect: { artifact: "article_brief.v1", summary: "no mediaSlots key" } } })!.skip).toBe(false);
+  });
+});
+
+describe("clone_no_actionable_mismatches — recipe_designer's gate (T13.2 Defect C)", () => {
+  // The live clone run (run_1787508397978_8fyyst) warned
+  // `skip_predicate_unrecognized:clone_no_actionable_mismatches` and ran recipe_designer anyway —
+  // safe degradation, correct default, dangling reference. The node as clone_conductor declares it,
+  // so the test reads the SAME metadata the executor gates on rather than a hand-built stand-in.
+  const node = () => {
+    const designer = listCloneConductorNodes().find((candidate) => candidate.id === "recipe_designer")!;
+    return { id: designer.id, dependsOn: designer.dependsOn, metadata: designer.metadata };
+  };
+
+  const analysis = (...kinds: string[]) => ({
+    stageOutputs: {
+      layout_analyst: {
+        artifact: "clone_layout_analysis.v1",
+        mismatches: kinds.map((missingRecipeKind, index) => ({ pageRef: `page-${index}`, missingRecipeKind, rationale: "x" }))
+      }
+    }
+  });
+
+  it("declares the predicate the engine now recognizes — no unrecognized-rule warning", () => {
+    expect(node().metadata?.skipWhen).toEqual([{ when: "clone_no_actionable_mismatches" }]);
+    expect(readSkipPredicates(node().metadata).warnings).toEqual([]);
+    expect(node().dependsOn).toContain("layout_analyst");
+  });
+
+  it("skips when every mismatch is \"none\": the analyst's honest answer that NO recipe closes them is evidence against the designer, not for it", () => {
+    const verdict = evaluateNodeSkip(node(), analysis("none", "none", "none"))!;
+    expect(verdict.skip).toBe(true);
+    expect(verdict.basis).toEqual(["mismatches: 3", "actionable (section_template|template): 0"]);
+    expect(verdict.reason).toMatch(/no recipe to design/);
+  });
+
+  it("skips when the mismatch ledger is empty — the emitted structure already tracks the source", () => {
+    const verdict = evaluateNodeSkip(node(), analysis())!;
+    expect(verdict.skip).toBe(true);
+    expect(verdict.basis).toEqual(["mismatches: 0", "actionable (section_template|template): 0"]);
+  });
+
+  it("RUNS when at least one mismatch is section_template or template, however many \"none\" surround it", () => {
+    const sectionTemplate = evaluateNodeSkip(node(), analysis("none", "section_template", "none"))!;
+    expect(sectionTemplate.skip).toBe(false);
+    expect(sectionTemplate.basis).toEqual(["mismatches: 3", "actionable (section_template|template): 1"]);
+    expect(evaluateNodeSkip(node(), analysis("template"))!.skip).toBe(false);
+    expect(evaluateNodeSkip(node(), analysis("section_template", "template"))!.basis).toContain("actionable (section_template|template): 2");
+  });
+
+  it("RUNS when the analyst envelope is absent or unreadable, and never reads a mock placeholder as proof there is nothing to design", () => {
+    const absent = evaluateNodeSkip(node(), {})!;
+    expect(absent.skip).toBe(false);
+    expect(absent.basis).toContain("no layout-analysis mismatch ledger declared on any upstream envelope");
+    expect(evaluateNodeSkip(node(), { stageOutputs: { layout_analyst: { artifact: "clone_layout_analysis.v1", summary: "no mismatches key" } } })!.skip).toBe(false);
+    const placeholder = evaluateNodeSkip(node(), { stageOutputs: { layout_analyst: { dryRun: true, mismatches: [] } } })!;
+    expect(placeholder.skip).toBe(false);
+    expect(placeholder.basis).toContain("carrier: mock placeholder (dryRun) — not evidence");
   });
 });
 

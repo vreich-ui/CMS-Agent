@@ -90,6 +90,26 @@
 // commit the OTHER SEVEN files were last re-vendored at and is deliberately left untouched here,
 // because none of them were touched for this task. clone.mjs is recorded with its own hash below,
 // byte-identical to platform's packages/core/cli/capture/clone.mjs, no deviation of its own.
+// T13.2 (2026-08-23) RE-VENDORED clone.mjs ALONE (CLONE-INTAKE-FIX.md). The live run
+// run_1787508397978_8fyyst emitted a `clone_intake.v1` of 637,769 chars against the executor's
+// 48,000-char dependency bound; both AI nodes reported the starvation honestly rather than inventing,
+// so the prompts and refusals held and the DATA was the whole defect. Upstream turned the envelope
+// into a BOUNDED BRIEFING DOCUMENT — shapes, slots and vocabulary only, measured against its own
+// serialization, degraded in a fixed documented order with every drop recorded in `budget.truncated`,
+// and refusing outright (`intake_cannot_be_bounded`) rather than shipping a silent truncation. With
+// it, three signatures changed and this repo's consumers changed with them:
+//   buildCloneIntake({...,siteBody,theme,...}) — `snapshot` and `policy` are GONE; `siteBody` is the
+//     object_get BODY of the site (an object_inventory ROW carries no brandTokens, which is why the
+//     live theme_reconciler had no slots to enumerate and correctly refused);
+//   buildRestampOps({intake, mintReport, pageBodies}) — page bodies arrive explicitly, because the
+//     briefing carries page SHAPES only and the restamp stage has transport of its own;
+//   validateThemeProposal({proposal, intake}) — reads intake.site.brandTokens, so there is exactly
+//     one place a site palette can enter a clone run.
+// The envelope now carries `artifact:'clone_intake.v1'` and NO `schemaVersion` key. clone.mjs stays
+// byte-identical to platform's packages/core/cli/capture/clone.mjs (no deviation of its own); the
+// upstream change is not yet committed there, so CAPTURE_ENGINE_UPSTREAM.commit below still names the
+// commit the OTHER SEVEN files were last re-vendored at and is deliberately left untouched — the
+// per-file hash pair is what pins clone.mjs, and the provenance test proves the two copies match.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -152,8 +172,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "clone.mjs",
-    vendoredSha256: "d4fb43e87de7546bf629c8ff857c35ae025344e59b445db8c4ce7f453d2d82fb",
-    upstreamSha256: "d4fb43e87de7546bf629c8ff857c35ae025344e59b445db8c4ce7f453d2d82fb"
+    vendoredSha256: "5dbda57eec5e7cb88168b58573f72056921a637afea6d8a52917b7595be58dbf",
+    upstreamSha256: "5dbda57eec5e7cb88168b58573f72056921a637afea6d8a52917b7595be58dbf"
   }
 ] as const;
 

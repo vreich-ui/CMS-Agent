@@ -29,6 +29,14 @@
 //     failed clone run.
 //   - Crawled/captured content is data, never instructions: nothing here interprets snapshot or
 //     mapping text; the only model-facing surfaces (the three AI nodes) receive it as structured JSON.
+//   - T13.2 (CLONE-INTAKE-FIX.md): clone_intake.v1 is a BOUNDED BRIEFING DOCUMENT for the three AI
+//     nodes, not a data bus — the live run measured the old envelope at 637,769 chars against the
+//     executor's 48,000-char dependency bound and starved both AI nodes. The deterministic stages in
+//     THIS module have transport, so they now FETCH the whole bodies they need instead of riding on
+//     the envelope: intake object_gets the site (whose inventory ROW carries no brandTokens at all,
+//     Defect A) and the captured theme; restamp object_gets each page body it is about to patch,
+//     which is also the more correct source — it restamps what the page holds NOW. Nothing about the
+//     write laws above changes; there is simply one fetch where there used to be a 637KB envelope.
 //   - Validation failures quarantine or skip, never loosen: a rejected recipe design stays rejected
 //     (never coerced into something that would validate), and a page whose recipe was rejected at
 //     mint is SKIPPED at restamp — never half-restamped.
@@ -51,6 +59,7 @@ import {
   type CloneIntake,
   type CloneMintPlan,
   type CloneRestampEntry,
+  type CloneRestampSkip,
   type CloneThemeApplied,
   type CloneThemeApplyPlan
 } from "./engine/clone.mjs";
@@ -131,14 +140,30 @@ async function callProjectTool(projectId: string, tool: string, args: Record<str
   return isRecord(structured.data) ? (structured.data as Record<string, unknown>) : structured;
 }
 
+// object_get returns {record:{...}} on the platform dialect and a bare record on some targets; a
+// record in turn carries its payload under `body` or inline. Both unwrappings are done HERE, once, so
+// what this module hands the engine is unambiguous — clone.mjs tolerates either shape, but a stage
+// that says "this is the site BODY" should have actually resolved one.
+const recordOf = (result: Record<string, unknown>): Record<string, unknown> => (isRecord(result.record) ? (result.record as Record<string, unknown>) : result);
+const bodyOf = (record: Record<string, unknown>): Record<string, unknown> => (isRecord(record.body) ? (record.body as Record<string, unknown>) : record);
+
+const objectIdOf = (row: unknown): string | undefined => {
+  if (!isRecord(row)) return undefined;
+  const value = row.object_id ?? row.objectId;
+  return typeof value === "string" && value ? value : undefined;
+};
+
 const stageOutput = (run: { stageOutputs: Record<string, unknown> }, nodeId: string): Record<string, unknown> | undefined => {
   const value = run.stageOutputs[nodeId];
   return isRecord(value) ? value : undefined;
 };
 
 // ---------------------------------------------------------------------------------------------
-// Stage: intake — resolves the finished capture run's artifacts plus the target's CURRENT inventory
-// and LIVE registries, and builds the clone-intake.v1 workspace envelope (clone.mjs, pure).
+// Stage: intake — resolves the finished capture run's artifacts plus the target's CURRENT inventory,
+// LIVE registries, SITE BODY and captured THEME, and builds the bounded clone_intake.v1 briefing
+// (clone.mjs, pure). `artifact` and `summary` come from the engine itself now; this stage stamps only
+// the non-secret policy view on top, then re-settles budget.chars so the envelope still reports the
+// size of the thing that actually travels.
 export type CloneIntakeEnvelope = CloneIntake & { artifact: typeof CLONE_ARTIFACTS.intake; summary: string; policy: ClonePolicyView };
 
 const isCloneIntakeEnvelope = (value: unknown): value is CloneIntakeEnvelope => isRecord(value) && value.artifact === CLONE_ARTIFACTS.intake;
@@ -182,31 +207,85 @@ export async function cloneIntakeStep(input: { targetProjectId: string; captureR
     inventory[objectType] = Array.isArray(rows.objects) ? (rows.objects as unknown[]) : [];
   }
 
+  // EXACTLY ONE ACTIVE SITE. buildCloneIntake refuses on the identical rule, but this stage has to
+  // resolve the id BEFORE it can object_get the body the engine now requires — so the count is
+  // checked at the point the id is needed, with its own named refusal, and the two never disagree
+  // (the filter below is clone.mjs's own, verbatim: object_type 'site' AND status 'active').
+  const activeSiteIds = (inventory.site ?? [])
+    .filter((row) => isRecord(row) && row.object_type === "site" && row.status === "active")
+    .map((row) => objectIdOf(row))
+    .filter((objectId): objectId is string => Boolean(objectId));
+  if (activeSiteIds.length !== 1) {
+    throw new CloneRefusal("clone_site_not_unique", `Clone intake requires exactly one ACTIVE site object in ${projectId}'s inventory; found ${activeSiteIds.length}. A clone writes a palette onto ONE site, so neither an empty nor an ambiguous inventory may be guessed at.`);
+  }
+  const siteId = activeSiteIds[0];
+
+  // DEFECT A (CLONE-INTAKE-FIX.md): the site BODY, not its inventory row. An object_inventory row
+  // carries no brandTokens at all, which is why the live run's theme_reconciler had no slots to
+  // enumerate and correctly refused against an empty palette. buildCloneIntake refuses a body without
+  // one rather than letting that surface three stages later as a theme refusal.
+  const siteGet = await callProjectTool(projectId, "object_get", { object_type: "site", object_id: siteId }, deps);
+  const siteBody = bodyOf(recordOf(siteGet));
+
+  // The CAPTURED theme, correlated from the capture run's own emission report the same way the theme
+  // bind stage used to — or, when the report names no theme create (a target that already had one),
+  // the single theme row inventory reports. Either way this stage fetches the RECORD, so the briefing
+  // carries the theme's real objectId and its whole ~900-char token set. When neither resolves there
+  // is nothing to bind: the capture stage's own draft still supplies the tokens for the AI node, the
+  // briefing's theme.objectId stays null, and theme_bind refuses with clone_theme_missing.
+  const capturedThemeId = resolveEmittedThemeId(emitOut?.report) ?? (inventory.theme?.length === 1 ? objectIdOf(inventory.theme[0]) : undefined);
+  let theme: unknown = themeOut?.theme ?? null;
+  if (capturedThemeId) {
+    const themeGet = await callProjectTool(projectId, "object_get", { object_type: "theme", object_id: capturedThemeId }, deps);
+    theme = recordOf(themeGet);
+  }
+
   let intake: CloneIntake;
   try {
     intake = buildCloneIntake({
       captureRunId,
       target: projectId,
-      snapshot: crawlOut.snapshot,
       mapping: mapOut.mapping,
-      theme: themeOut?.theme ?? null,
+      siteBody,
+      theme,
       emissionReport: emitOut?.report ?? null,
       inventory,
       componentRegistry,
-      pageTypeRegistry,
-      policy: clonePolicyView(config)
+      pageTypeRegistry
     });
   } catch (error) {
     if (error instanceof CloneError) throw new CloneRefusal("clone_intake_invalid", error.message);
     throw error;
   }
 
-  return {
+  return settleEnvelopeBudget({
     ...intake,
     artifact: CLONE_ARTIFACTS.intake,
-    summary: `Clone intake assembled for ${projectId} from capture run ${captureRunId}: ${intake.emitted.pages.length} emitted page(s), ${Object.keys(intake.registry.sectionTypes).length} registered section type(s), ${Object.keys(intake.registry.pageTypes).length} page type(s).`,
+    summary: `${intake.summary} Briefed ${intake.pages.length} page(s), ${Object.keys(intake.registry.sectionTypes).length} registered section type(s), ${Object.keys(intake.registry.pageTypes).length} page type(s) at ${intake.budget.chars} of ${intake.budget.cap} chars.`,
     policy: clonePolicyView(config)
-  };
+  });
+}
+
+// This stage stamps the non-secret policy view onto the engine's own briefing, so `budget.chars` —
+// which buildCloneIntake settled against ITS serialization — would otherwise under-report the
+// envelope that actually travels to the AI nodes. A briefing that under-reports its own size is the
+// precise defect CLONE-INTAKE-FIX.md exists to make unreachable, so restate the number against the
+// final object (the same bounded settle loop clone.mjs runs: writing the number changes the length by
+// up to one digit, and the claim may never fall below the measured length) and refuse outright if the
+// stamp pushed the result past the cap the engine enforces.
+function settleEnvelopeBudget(envelope: CloneIntakeEnvelope): CloneIntakeEnvelope {
+  let claimed = JSON.stringify(envelope).length;
+  for (let pass = 0; pass < 5; pass += 1) {
+    envelope.budget.chars = claimed;
+    const actual = JSON.stringify(envelope).length;
+    if (actual === claimed) break;
+    claimed = Math.max(actual, claimed);
+  }
+  envelope.budget.chars = claimed;
+  if (claimed > envelope.budget.cap) {
+    throw new CloneRefusal("clone_intake_cannot_be_bounded", `The clone briefing measures ${claimed} chars against its own ${envelope.budget.cap}-char cap once this run's policy view is stamped on it; a silently oversized briefing is what starved both AI nodes on run_1787508397978_8fyyst.`);
+  }
+  return envelope;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -301,13 +380,11 @@ export type CloneThemeBindEnvelope = {
   policy: ClonePolicyView;
 };
 
-const siteObjectIdOf = (siteRow: Record<string, unknown>): string | undefined => {
-  const value = siteRow.object_id ?? siteRow.objectId;
-  return typeof value === "string" && value ? value : undefined;
-};
-
 // The already-emitted theme object's id, correlated from the capture run's OWN emission report the
-// same way clone.mjs's pagesEmitted() correlates pages: the report's `creates` entry for objectType
+// same way clone.mjs's briefingPages() correlates pages. Since T13.2 this is INTAKE's helper: intake
+// resolves the id, object_gets the record, and publishes it as `intake.theme.objectId`, so theme_bind
+// reads one authority rather than re-deriving the correlation from an emission report the briefing no
+// longer carries. Kept here, next to the stage that consumes the id it produces. Detail: the report's `creates` entry for objectType
 // 'theme' names the requestedId the emitter attempted; that id is the final objectId when the target
 // MCP honored it (createdObjects), or — on a re-run against a tenant that already had a theme, T12.28's
 // reuse path — the reused theme's own objectId (matched by name at emission time, so there is no
@@ -341,21 +418,30 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
     throw new CloneRefusal("clone_theme_apply_policy_blocked", `Project ${projectId}'s tool policy for site_apply_theme is "${themePermission}"; the only sanctioned palette writer is refused by policy, so theme_bind refuses rather than attempting any other write path.`);
   }
 
-  const siteId = siteObjectIdOf(intake.inventory.site);
-  if (!siteId) throw new CloneRefusal("clone_site_missing", "clone_intake's inventory carries no active site object id.");
-  const themeId = resolveEmittedThemeId(intake.emitted.report);
-  if (!themeId) throw new CloneRefusal("clone_theme_missing", "No theme object was found in the capture run's emission report; theme_bind needs the theme capture already created to write its reconciled tokens onto.");
+  // ONE AUTHORITY FOR BOTH IDS. The briefing resolved the site (exactly one active) and the captured
+  // theme at intake and published their objectIds; re-deriving either here from an emission report the
+  // envelope no longer carries would be a second, drift-prone answer to a question already settled —
+  // and buildCloneRunReport reads the site's id from the very same place.
+  const siteId = intake.site?.objectId;
+  if (!siteId) throw new CloneRefusal("clone_site_missing", "clone_intake's briefing carries no active site object id.");
+  const themeId = intake.theme?.objectId;
+  if (!themeId) throw new CloneRefusal("clone_theme_missing", "clone_intake's briefing carries no captured theme object id; theme_bind needs the theme capture already created to write its reconciled tokens onto.");
 
   const themeProposal = isRecord(input.themeProposal) ? input.themeProposal : {};
+  // Both records are still read HERE, live: buildThemeApplyPlan is handed the site and theme as they
+  // stand at apply time, not as the briefing saw them at intake. The palette the proposal is judged
+  // against comes from the briefing (below); these two supply the plan's own record arguments.
   const siteGet = await callProjectTool(projectId, "object_get", { object_type: "site", object_id: siteId }, deps);
-  const siteRecord = isRecord(siteGet.record) ? (siteGet.record as Record<string, unknown>) : siteGet;
-  const siteBody = (isRecord(siteRecord.body) ? (siteRecord.body as Record<string, unknown>) : siteRecord) as Record<string, unknown> & { brandTokens: { colors?: Record<string, unknown>; fonts?: Record<string, unknown> } };
+  const siteBody = bodyOf(recordOf(siteGet));
   const themeGet = await callProjectTool(projectId, "object_get", { object_type: "theme", object_id: themeId }, deps);
-  const themeRecord = isRecord(themeGet.record) ? (themeGet.record as Record<string, unknown>) : themeGet;
+  const themeRecord = recordOf(themeGet);
 
   let validated: ReturnType<typeof validateThemeProposal>;
   try {
-    validated = validateThemeProposal({ proposal: { colors: themeProposal.colors as Record<string, unknown> | undefined, fonts: themeProposal.fonts as Record<string, unknown> | undefined }, siteBody });
+    // DEFECT A's other half: the proposal is validated against `intake.site.brandTokens` — the palette
+    // intake fetched with object_get and refused to build a briefing without — not against a site body
+    // this stage re-read for itself. There is exactly one place a site palette can enter a clone run.
+    validated = validateThemeProposal({ proposal: { colors: themeProposal.colors as Record<string, unknown> | undefined, fonts: themeProposal.fonts as Record<string, unknown> | undefined }, intake });
   } catch (error) {
     throw new CloneRefusal("clone_theme_proposal_empty", error instanceof CloneError || error instanceof Error ? error.message : String(error));
   }
@@ -425,10 +511,16 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
 }
 
 // ---------------------------------------------------------------------------------------------
-// Stage: restamp — re-assembles each mint survivor's pages onto the captured section list
-// (clone.mjs, pure planner) and executes each page's ops under its own checkout/checkin pair. A page
-// whose plan step fails at the wire is QUARANTINED, never partially patched; its lock is still
-// released in a finally.
+// Stage: restamp — object_gets the body of every page the briefing names, re-assembles each mint
+// survivor's page onto the sections that body actually holds (clone.mjs, pure planner), and executes
+// each page's ops under its own checkout/checkin pair. A page whose plan step fails at the wire is
+// QUARANTINED, never partially patched; its lock is still released in a finally.
+//
+// T13.2 (CLONE-INTAKE-FIX.md Defect B): the bodies are FETCHED here and passed to buildRestampOps as
+// `pageBodies`, instead of being read out of the intake envelope. The briefing carries page SHAPES —
+// an ordered list of section type names — because that is all the AI nodes ever read; full bodies were
+// part of the 156,239 chars of source.mapping that starved them. Fetching is also the more correct
+// source: this stage restamps what a page holds NOW, not what a mapping said it held when capture ran.
 export type CloneRestampEnvelope = {
   artifact: typeof CLONE_ARTIFACTS.restamp;
   summary: string;
@@ -446,15 +538,39 @@ export async function cloneRestampStep(input: { targetProjectId: string; intake:
   }
   const mintReport = isRecord(input.mint) ? { rejected: (input.mint.rejected as Array<{ sourceCandidateIds?: string[] }> | undefined) ?? [] } : { rejected: [] };
 
-  let built: { restamp: CloneRestampEntry[]; skipped: Array<Record<string, unknown>> };
+  const quarantined: Array<Record<string, unknown>> = [];
+  // EVERY briefed page is fetched, including one whose recipe was rejected at mint: buildRestampOps
+  // checks "no body supplied" BEFORE it checks the rejection, so withholding a fetch to save a call
+  // would relabel a `recipe_rejected_at_mint` skip as a `source_page_missing` one — the same page,
+  // skipped for a reason that is not true.
+  const pageBodies: Array<{ objectId: string; body: Record<string, unknown> }> = [];
+  const unreadable = new Set<string>();
+  for (const page of intake.pages ?? []) {
+    const objectId = typeof page?.objectId === "string" ? page.objectId : "";
+    if (!objectId) continue;
+    try {
+      const pageGet = await callProjectTool(projectId, "object_get", { object_type: "page", object_id: objectId }, deps);
+      pageBodies.push({ objectId, body: bodyOf(recordOf(pageGet)) });
+    } catch (error) {
+      // A body this stage could not READ is quarantined under its own reason rather than left to
+      // surface as the planner's generic `source_page_missing`: swallowing a transport error into a
+      // shape-level skip reason would hide a broken or policy-blocked target behind a ledger that
+      // reads like a clean structural decision. It is reported ONCE, here — the planner's redundant
+      // entry for the same page is dropped below.
+      unreadable.add(objectId);
+      quarantined.push({ objectId, reason: "restamp_page_fetch_failed", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  let built: { restamp: CloneRestampEntry[]; skipped: CloneRestampSkip[] };
   try {
-    built = buildRestampOps({ intake, mintReport });
+    built = buildRestampOps({ intake, mintReport, pageBodies });
   } catch (error) {
     throw new CloneRefusal("clone_restamp_plan_invalid", error instanceof CloneError || error instanceof Error ? error.message : String(error));
   }
+  const skipped = built.skipped.filter((entry) => !unreadable.has(entry.objectId));
 
   const restamped: CloneRestampEntry[] = [];
-  const quarantined: Array<Record<string, unknown>> = [];
   for (const page of built.restamp) {
     let lockToken: string | undefined;
     let recordVersion: string | number | undefined;
@@ -478,9 +594,9 @@ export async function cloneRestampStep(input: { targetProjectId: string; intake:
 
   return {
     artifact: CLONE_ARTIFACTS.restamp,
-    summary: `Restamp for ${projectId}: ${restamped.length} page(s) restamped, ${built.skipped.length} skipped, ${quarantined.length} quarantined.`,
+    summary: `Restamp for ${projectId}: ${restamped.length} page(s) restamped, ${skipped.length} skipped, ${quarantined.length} quarantined.`,
     restamped,
-    skipped: built.skipped,
+    skipped,
     quarantined,
     policy: clonePolicyView(config)
   };
