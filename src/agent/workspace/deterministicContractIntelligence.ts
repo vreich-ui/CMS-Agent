@@ -37,10 +37,47 @@ export type ContractIntelligenceOutput = {
   taxonomy: ReducedContract["taxonomy"] & { unknownTermsBlock: boolean };
   constraints: ReducedContract["constraints"];
   publishPolicy?: unknown;
+  /** The contract's four-dial aggression ceiling, carried through when the reduction found a complete one. */
+  ceiling?: { claim_strength: number; urgency: number; emotional_agitation: number; cta_density: number };
   contract_findings: string[];
   assumptions: string[];
   blockers: string[];
   notes: string[];
+};
+
+/**
+ * The aggression ceiling, carried from the reduction rather than left to the model.
+ *
+ * WHY. The node's LIVE outputSchema (the workspace-store overlay live runs are dispatched with, not
+ * the canonical definition in nodes.ts) requires `ceiling` on any output whose `blockers` array is
+ * empty. This mapper never emitted one, so its artifact failed that check on EVERY live dispatch —
+ * `contract_intelligence_deterministic_invalid:$.ceiling is required` — and fell through to the model
+ * path this module exists to avoid. It cost the ~$0.134/run the fast path was written to save, and it
+ * left the field to a model that omitted it on 5 of 7 attempts in run_1787492010814_kxdbeb, blocking
+ * publication behind output_validation_failed each time.
+ *
+ * The value was never missing: contractReduction.ts extracts it into `reduced.aggressionCeiling`.
+ *
+ * ALL FOUR DIALS, each a finite number in 0..1, or nothing. A partial ceiling is not a ceiling, and
+ * this mapper does not decide what a missing one means: it omits the field and the artifact fails the
+ * live schema exactly as it does today, falling through to the model — whose own prompt and blocker
+ * criteria own the "an absent ceiling is a BLOCKER, never a default" judgment. That keeps this change
+ * to the case it is about (a contract that HAS a ceiling) and leaves the fast path's documented
+ * safety property intact: a mapping that cannot produce a valid artifact degrades to spending the
+ * $0.134, never to a fabricated blocker or a malformed artifact.
+ */
+export const AGGRESSION_DIALS = ["claim_strength", "urgency", "emotional_agitation", "cta_density"] as const;
+
+const readAggressionCeiling = (value: unknown): ContractIntelligenceOutput["ceiling"] => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const dials: Record<string, number> = {};
+  for (const dial of AGGRESSION_DIALS) {
+    const raw = record[dial];
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > 1) return undefined;
+    dials[dial] = raw;
+  }
+  return dials as ContractIntelligenceOutput["ceiling"];
 };
 
 const truncateForNote = (value: unknown, max = 200): string => {
@@ -100,6 +137,8 @@ export function buildDeterministicContractIntelligence(reduced: ReducedContract,
     `${blockingConstraints.length} blocking. Taxonomy unknown-terms-block: ${unknownTermsBlock}. ` +
     `Publish gated: ${publishPolicyRecord ? String(publishPolicyRecord.gated ?? "unstated") : "unstated"}.`;
 
+  const ceiling = readAggressionCeiling(reduced.aggressionCeiling);
+
   return {
     artifact: "contract_intelligence.v1",
     summary,
@@ -112,6 +151,7 @@ export function buildDeterministicContractIntelligence(reduced: ReducedContract,
     taxonomy: { ...reduced.taxonomy, unknownTermsBlock },
     constraints: reduced.constraints,
     ...(orOmit(reduced.publishPolicy) !== undefined ? { publishPolicy: reduced.publishPolicy } : {}),
+    ...(ceiling ? { ceiling } : {}),
     contract_findings,
     assumptions,
     blockers: [],

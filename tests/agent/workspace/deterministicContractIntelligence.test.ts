@@ -78,6 +78,37 @@ describe("buildDeterministicContractIntelligence (unit)", () => {
   it("never fabricates a blocker — this path only runs when the prefetch already succeeded", () => {
     expect(buildDeterministicContractIntelligence(sampleReduced(), "platform").blockers).toEqual([]);
   });
+
+  // The live outputSchema (the workspace-store overlay, not the canonical definition this file
+  // validates against) requires `ceiling` on any output with an empty `blockers` array. Emitting no
+  // ceiling is what made this mapper fail that check on every live dispatch and fall through to the
+  // model — which then omitted the field on 5 of 7 attempts. These cover the carry, its bounds, and
+  // the deliberate non-decision when the contract has no complete ceiling.
+  const CEILING = { claim_strength: 0.45, urgency: 0.1, emotional_agitation: 0.15, cta_density: 0.2 };
+
+  it("carries a complete aggression ceiling through verbatim rather than leaving it to the model", () => {
+    const output = buildDeterministicContractIntelligence(sampleReduced({ aggressionCeiling: CEILING }), "platform");
+    expect(output.ceiling).toEqual(CEILING);
+    expect(output.blockers).toEqual([]);
+  });
+
+  it("omits ceiling — and still fabricates no blocker — when the contract has none, so the artifact falls through to the model", () => {
+    const output = buildDeterministicContractIntelligence(sampleReduced(), "platform");
+    expect(output).not.toHaveProperty("ceiling");
+    expect(output.blockers).toEqual([]);
+  });
+
+  it("treats a PARTIAL or out-of-range ceiling as no ceiling — a ceiling is all four dials in 0..1 or nothing", () => {
+    const partial = buildDeterministicContractIntelligence(
+      sampleReduced({ aggressionCeiling: { claim_strength: 0.45, urgency: 0.1, emotional_agitation: 0.15 } }),
+      "platform"
+    );
+    expect(partial).not.toHaveProperty("ceiling");
+
+    for (const bad of [{ ...CEILING, urgency: 1.4 }, { ...CEILING, cta_density: -0.1 }, { ...CEILING, claim_strength: "0.45" }]) {
+      expect(buildDeterministicContractIntelligence(sampleReduced({ aggressionCeiling: bad }), "platform")).not.toHaveProperty("ceiling");
+    }
+  });
 });
 
 describe("wired into a real run: replaces the model call entirely (Session D end to end)", () => {
