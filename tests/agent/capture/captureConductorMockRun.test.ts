@@ -255,7 +255,13 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
     // repeated-media section_template recipe cannot bind a first-party artifact and
     // is quarantined rather than shipped with an empty gallery — and every planned
     // asset section is a recorded gap, never a hotlink and never a coerced field.
+    // TWO now, not one: T12.31's `composition` gives repeated mixed-content shapes a type of their
+    // own, so a second recipe has an asset-bearing blueprint. Recipes group by shape fingerprint
+    // (T12.23), so this counts distinct SHAPES, not occurrences. The guarantee is unchanged and is
+    // what this assertion is really for: with rights.media = "prohibited" an unbindable recipe is
+    // quarantined WHOLE, never shipped with an empty gallery and never hotlinked.
     expect(emission.report.quarantines).toEqual([
+      { objectType: "section_template", reason: "asset_binding_unresolved", requestedId: expect.stringMatching(/^stpl_capture_/) },
       { objectType: "section_template", reason: "asset_binding_unresolved", requestedId: expect.stringMatching(/^stpl_capture_/) }
     ]);
     expect(emission.report.assetBindings).toEqual([]);

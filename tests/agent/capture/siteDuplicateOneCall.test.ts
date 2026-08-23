@@ -191,7 +191,13 @@ describe("site.duplicate — one call against an existing project (fixture end-t
     // repeated-media section_template recipe cannot bind a first-party artifact and
     // is quarantined rather than shipped with an empty gallery — and every planned
     // asset section is a recorded gap, never a hotlink and never a coerced field.
+    // TWO now, not one: T12.31's `composition` gives repeated mixed-content shapes a type of their
+    // own, so a second recipe has an asset-bearing blueprint that cannot bind in this fixture (no
+    // artifact bridge is wired here). Recipes group by shape fingerprint (T12.23), so this counts
+    // distinct SHAPES, not occurrences. What matters is unchanged: an unbindable recipe is
+    // quarantined whole rather than shipped with an empty gallery.
     expect(emission.report.quarantines).toEqual([
+      { objectType: "section_template", reason: "asset_binding_unresolved", requestedId: expect.stringMatching(/^stpl_capture_/) },
       { objectType: "section_template", reason: "asset_binding_unresolved", requestedId: expect.stringMatching(/^stpl_capture_/) }
     ]);
     expect(emission.report.assetBindings).toEqual([]);

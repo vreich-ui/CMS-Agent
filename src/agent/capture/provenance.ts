@@ -68,6 +68,21 @@
 // nothing. Publishing stays unreachable and every op still passes object_patch's own validation;
 // the lease is released in a finally so a failed patch cannot strand a lock on a live page. An
 // empty capture refuses rather than blanking the page it would otherwise clear.
+// T12.29-T12.31 (2026-08-22) RE-VENDORED map.mjs AND emit.mjs, from platform f85fc142. Three
+// upstream changes, all aimed at the same thing — a clone that renders what the source actually had:
+//   T12.29 captured pages declare pageType 'clone' (allowedSections 'any') instead of 'home', whose
+//     six-type DTC family (C§1.1) was discarding media/content_split/brand_row from every cloned
+//     homepage. `home` itself is untouched; the emitter now sends pageType with the reuse patch, or
+//     a reused '/' keeps its old type and rejects the very imagery the patch just bound.
+//   T12.30 a gallery beyond a section's capacity is DIVIDED into consecutive sections instead of
+//     truncated with the remainder logged as a gap. Divided evenly — 9 at a cap of 8 gives 5+4, not
+//     8+1, which for a logo strip would be invalid outright.
+//   T12.31 one composable section type, `composition`, for the residue no named type can hold: a
+//     block with copy AND images, or images AND links. Closed three-kind block union, flat images
+//     array bound by the existing first-party path, image blocks addressed by index and repaired if
+//     a planned image fails to materialize. Chosen only after every named type is refused.
+// On the reference fixture: mapped coverage 52.63% -> 89.47%, gaps 14 -> 4, asset sections 7 -> 14.
+// Both files stay byte-identical to upstream.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -96,8 +111,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "map.mjs",
-    vendoredSha256: "f6f9ce21e97ab0cf97acf91ba7490a7fc09773e8afcf606cdf1de6d892771f5c",
-    upstreamSha256: "f6f9ce21e97ab0cf97acf91ba7490a7fc09773e8afcf606cdf1de6d892771f5c"
+    vendoredSha256: "2505602129f43e5660f1e2fd66e970ebc157e2fd5626a1949b3ec8627cf5ed0b",
+    upstreamSha256: "2505602129f43e5660f1e2fd66e970ebc157e2fd5626a1949b3ec8627cf5ed0b"
   },
   {
     file: "theme.mjs",
@@ -106,8 +121,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "5aeeeea4f00eae34f8468dc342ab3787fa878f711434a34108d99bf107d86e63",
-    upstreamSha256: "5aeeeea4f00eae34f8468dc342ab3787fa878f711434a34108d99bf107d86e63"
+    vendoredSha256: "77d21ba39845bcd2a6274748c0886b183d3aa428c3f5bb2c0c871956de750ea6",
+    upstreamSha256: "77d21ba39845bcd2a6274748c0886b183d3aa428c3f5bb2c0c871956de750ea6"
   },
   {
     file: "score.mjs",
