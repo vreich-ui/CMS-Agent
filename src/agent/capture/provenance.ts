@@ -60,6 +60,14 @@
 // (pdf-tool af0a4af), the same split T12.17's srcset fix lives under. Until that plane redeploys,
 // snapshots carry no `structure` key and this mapper behaves exactly as it did before — the change
 // is additive by construction, which is why it is safe to vendor ahead of that deploy.
+// T12.28 (2026-08-21) RE-VENDORED emit.mjs ALONE, from platform 04c1e383. Upstream taught the
+// emitter to REUSE: a route (or a navigation role) that already exists is patched in place through
+// checkout -> typed ops -> checkin instead of being quarantined. Before this, a live run against a
+// tenant that already had its routes produced createdObjects: 0, five route_collisions, and bound 0
+// of 132 planned media -- media binds into a page section, so a page that is never written renders
+// nothing. Publishing stays unreachable and every op still passes object_patch's own validation;
+// the lease is released in a finally so a failed patch cannot strand a lock on a live page. An
+// empty capture refuses rather than blanking the page it would otherwise clear.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -98,8 +106,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "da228983358fcff4e51ac4364f79ee66fca4d741c2bdafdc4b42c8fa4462cd6c",
-    upstreamSha256: "da228983358fcff4e51ac4364f79ee66fca4d741c2bdafdc4b42c8fa4462cd6c"
+    vendoredSha256: "5aeeeea4f00eae34f8468dc342ab3787fa878f711434a34108d99bf107d86e63",
+    upstreamSha256: "5aeeeea4f00eae34f8468dc342ab3787fa878f711434a34108d99bf107d86e63"
   },
   {
     file: "score.mjs",
