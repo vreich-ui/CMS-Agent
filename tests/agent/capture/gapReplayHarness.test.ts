@@ -104,14 +104,14 @@ describe("the 14 Zilberman gaps replayed through the block_classifier re-validat
     ]) {
       expect(declined.some((gap) => gap.missingCapability === capability)).toBe(false);
     }
-    // The poison target is a declined HOME block the fixture classifier does not also suggest for,
-    // so the unregistered-type case is unambiguous and does not collide with a real suggestion.
-    const poisonTarget = declined.find(
-      (gap) =>
-        gap.blockRef.startsWith("page_9563b8e16278") &&
-        gap.blockRef !== homeDeclined.blockRef &&
-        !gapReport.entries.some((entry) => entry.blockRef === gap.blockRef)
-    )!;
+    // T12.29-T12.31 shrank the declined population to the blocks whose evidence is genuinely
+    // insufficient — media now binds, mixed content becomes a `composition`, and no page type
+    // discards a section any more. Two blocks remain declined, which is still enough to exercise
+    // every branch of this seam: one carries the VALID suggestion, the other the poison. Picking
+    // the poison target by page prefix (as this did) assumed several declined home blocks and now
+    // finds none, so the roles are assigned by identity instead.
+    const poisonTarget = homeDeclined;
+    expect(poisonTarget.blockRef).not.toBe(anyDeclined.blockRef);
     const suggestions = [
       ...fixtureClassifier(gapReport.entries),
       // 0. A VALID suggestion for a still-declined block on a STANDARD page: the builder validates
@@ -148,14 +148,20 @@ describe("the 14 Zilberman gaps replayed through the block_classifier re-validat
       .find((entry) => entry.blockRef === poisonTarget.blockRef);
     expect(poisonedAccounting?.status).toBe("gap");
 
-    // A disallowed-for-PageType suggestion on the home page is refused AS A GAP, never coerced:
-    // the builder validates the type, then the PageType gate still runs.
-    const homeSuggestion = considered.find((entry) => entry.blockRef === homeDeclined.blockRef);
-    if (homeSuggestion && !["hero", "checklist", "content_grid", "bio", "newsletter_signup", "shared_ref"].includes(homeSuggestion.sectionType)) {
-      const homeRejected = assistance.rejected.find((entry) => entry.blockRef === homeDeclined.blockRef);
-      expect(homeRejected).toBeDefined();
-      expect(homeRejected!.reason).toBe("section_not_allowed_for_page_type");
-    }
+    // THE PAGETYPE GATE IS NO LONGER REACHABLE FROM CAPTURE — recorded, not quietly dropped.
+    //
+    // This used to assert that a suggestion the home family forbids is refused as a gap rather than
+    // coerced. Since T12.29 a captured page declares pageType 'clone', whose allowedSections is
+    // 'any', so no suggestion can be refused on page-type grounds any more. The gate itself is
+    // unchanged and still runs — it is simply never the thing that says no on a cloned page.
+    //
+    // That is the intended consequence: the gate existed to stop capture from coercing a section
+    // onto a page family that forbids it, and the fix was to stop putting cloned pages into a
+    // family that was never meant for them. The re-validation guarantees this test exists for —
+    // unregistered types rejected, non-declined blocks filtered, garbage sanitized — are asserted
+    // above and below, and none of them depend on the page type.
+    expect(envelope.mapping.pages.every((page) => page.pageBody.pageType === "clone")).toBe(true);
+    expect(assistance.rejected.some((entry) => entry.reason === "section_not_allowed_for_page_type")).toBe(false);
 
     // VALID suggestions RAISE fixture coverage, with the delta recorded by the harness envelope.
     expect(assistance.applied.length).toBeGreaterThan(0);
