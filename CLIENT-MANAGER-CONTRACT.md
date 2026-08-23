@@ -45,7 +45,7 @@ The entire request and every named nested object are strict: unknown properties 
     "approval_note": "Propose only."  // optional, 1..1000 chars
   },
   "messages": [],                      // 1..200 ChatMsg values; see below
-  "tools": [],                         // 0..64 WireTool values; see below
+  "tools": [],                         // 0..96 WireTool values; see below
   "constraints": {
     "max_tokens": 16000,               // integer 1..32000
     "timeout_ms": 90000                // integer 1000..120000
@@ -86,7 +86,7 @@ Each tool is strict:
 }
 ```
 
-The tool list is bounded to **64 tools** and **256,000 serialized JSON characters**. Context is bounded to **64,000 serialized JSON characters**. These adjacent request-limit violations are `invalid_turn_request`.
+The tool list is bounded to **96 tools** (raised from 64 in W19, 2026-08-23 — the caller's registry had reached the old ceiling with no headroom; the character bound below is unchanged and is what actually protects payload size) and **256,000 serialized JSON characters**. Context is bounded to **64,000 serialized JSON characters**. These adjacent request-limit violations are `invalid_turn_request`.
 
 ## Successful result
 

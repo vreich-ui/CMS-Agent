@@ -4,7 +4,22 @@ export const CLIENT_MANAGER_TURN_CONTRACT = "client_manager.turn.v1";
 export const MAX_TRANSCRIPT_MESSAGES = 200;
 export const MAX_TRANSCRIPT_CHARS = 256_000;
 export const MAX_CONTEXT_CHARS = 64_000;
-export const MAX_CONVERSATION_TOOLS = 64;
+/**
+ * W19 (2026-08-23, coordinated with Platform's `CMS_AGENT_BOUNDS.maxTools`):
+ * raised from 64.
+ *
+ * This was never a provider limit — Anthropic and OpenAI both accept far more
+ * — it was this contract's own guard against an unbounded wire. Platform's
+ * chat registry had grown to exactly 63 tools plus its learning-mode
+ * `present_candidates`: the old ceiling with ZERO headroom, so adding a single
+ * capability silently truncated the tool list at the caller.
+ *
+ * The bound that actually protects cost is `MAX_TOOLS_CHARS`, which is
+ * unchanged — a caller cannot use the extra slots to send a larger payload.
+ * Raising the count is backward compatible: every request that was valid at 64
+ * is still valid.
+ */
+export const MAX_CONVERSATION_TOOLS = 96;
 export const MAX_TOOLS_CHARS = 256_000;
 
 export const converseErrorCodes = [
