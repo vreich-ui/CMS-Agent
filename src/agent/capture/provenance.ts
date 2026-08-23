@@ -111,8 +111,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "map.mjs",
-    vendoredSha256: "2505602129f43e5660f1e2fd66e970ebc157e2fd5626a1949b3ec8627cf5ed0b",
-    upstreamSha256: "2505602129f43e5660f1e2fd66e970ebc157e2fd5626a1949b3ec8627cf5ed0b"
+    vendoredSha256: "ec2c0ddd1c46f83ce76a7f070ddb2483c013071d81f87f1128806844542efed4",
+    upstreamSha256: "ec2c0ddd1c46f83ce76a7f070ddb2483c013071d81f87f1128806844542efed4"
   },
   {
     file: "theme.mjs",
