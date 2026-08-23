@@ -12,10 +12,13 @@ describe("vendored capture engine provenance", () => {
     expect(CAPTURE_ENGINE_UPSTREAM.commit).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  it("covers exactly the seven vendored engine modules", () => {
+  it("covers exactly the eight vendored engine modules", () => {
     // T12.16 added screenshot-normalize.mjs and side-by-side.mjs: score.mjs imports both since
     // T12.10, so vendoring score.mjs without them is what left the old pin stale.
+    // T13.1 added clone.mjs — the clone_conductor pure engine (CLONE-ENGINE-API.md Side A), a NEW
+    // file rather than a re-vendoring of one of the other seven.
     expect(CAPTURE_ENGINE_FILES.map((entry) => entry.file).sort()).toEqual([
+      "clone.mjs",
       "emit.mjs",
       "map.mjs",
       "score.mjs",
