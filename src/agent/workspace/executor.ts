@@ -89,6 +89,13 @@ export const runModeSummary = (run: Pick<WorkflowExecutionRecord, "executionMode
 // detail read for one selected run.
 export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   runId: run.runId,
+  // The caller's join key. compactRun (workflow.run_all) has always carried it;
+  // list_runs did not, so a client holding request ids — Platform's W19
+  // editorial-request registry, which mints `req_<flow>_<topic>_<yyyymmdd>_<nn>`
+  // and passes it in as `requestId` — could not map a page of runs back to the
+  // requests it asked for without opening every run individually. Schema-additive
+  // and bounded (one short id), so PR #105's compaction contract is untouched.
+  ...(run.requestId !== undefined ? { requestId: run.requestId } : {}),
   workflowId: run.workflowId,
   projectId: run.projectId,
   status: run.status,
