@@ -67,10 +67,16 @@ export type SkipPredicate =
   // T12.9 capture_conductor — block_classifier's gate. Skip when an upstream capture-map envelope
   // POSITIVELY declares declinedBlocks as an empty array: the heuristic mapper declined nothing, so
   // there is no block for the classifier to judge. Absent/unreadable declaration runs the node.
-  | { when: "capture_no_declined_blocks"; reason?: string };
+  | { when: "capture_no_declined_blocks"; reason?: string }
+  // T13.2 clone_conductor — recipe_designer's gate. Skip when the upstream layout-analysis envelope
+  // POSITIVELY declares a mismatch ledger containing ZERO mismatches a recipe could close, i.e. none
+  // whose `missingRecipeKind` is "section_template" or "template". A mismatch marked "none" is an
+  // honest analyst answer that NO recipe closes that divergence — it is evidence against running the
+  // designer, never for it. Absent/unreadable ledger runs the node.
+  | { when: "clone_no_actionable_mismatches"; reason?: string };
 
 export type SkipPredicateKind = SkipPredicate["when"];
-export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks"];
+export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks", "clone_no_actionable_mismatches"];
 
 // ---------------------------------------------------------------------------------------------
 // REVIEW QUARTET TIERING — operator policy, decided by Wolf 2026-08-12. Three tiers:
@@ -357,6 +363,32 @@ function evaluateCaptureNoDeclinedBlocks(predicate: Extract<SkipPredicate, { whe
 }
 
 // ---------------------------------------------------------------------------------------------
+// Predicate 7 — the clone_conductor gate (T13.2). recipe_designer exists to design the recipes that
+// close layout_analyst's mismatches; when the analyst found none a recipe could close, there is
+// nothing to design. The ACTIONABLE set is exactly the two kinds a recipe is: a `section_template`
+// blueprint and a page `template`. `none` is the analyst saying no recipe closes that divergence —
+// a first-class honest answer (a missing section TYPE is code, not data), so a ledger of nothing but
+// `none` is a positive declaration that the designer has no work, not a gap to run into. Per rule 3
+// an absent or unreadable analysis envelope RUNS the node, and a mock placeholder is never evidence.
+const CLONE_ACTIONABLE_RECIPE_KINDS: readonly string[] = ["section_template", "template"];
+
+function evaluateCloneNoActionableMismatches(predicate: Extract<SkipPredicate, { when: "clone_no_actionable_mismatches" }>, context: SkipEvaluationContext): SkipVerdict {
+  const basis: string[] = [];
+  for (const carrier of carriersFor(context)) {
+    if (isPlaceholder(carrier)) { basis.push("carrier: mock placeholder (dryRun) — not evidence"); continue; }
+    if (!isObject(carrier) || !Array.isArray(carrier.mismatches)) continue;
+    const actionable = carrier.mismatches.filter((mismatch) => isObject(mismatch) && nonEmptyString(mismatch.missingRecipeKind) && CLONE_ACTIONABLE_RECIPE_KINDS.includes(normalizeToken(mismatch.missingRecipeKind)));
+    basis.push(`mismatches: ${carrier.mismatches.length}`);
+    basis.push(`actionable (section_template|template): ${actionable.length}`);
+    return actionable.length === 0
+      ? { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} skipped: layout_analyst reported ${carrier.mismatches.length} mismatch(es), none of which a section_template or template could close, so there is no recipe to design.`, basis, warnings: [] }
+      : { skip: false, predicate, reason: `${context.nodeId} runs: layout_analyst reported ${actionable.length} mismatch(es) a new recipe could close.`, basis, warnings: [] };
+  }
+  basis.push("no layout-analysis mismatch ledger declared on any upstream envelope");
+  return { skip: false, predicate, reason: `${context.nodeId} runs: no upstream clone_layout_analysis envelope declares a mismatch ledger, and an unanswered question is answered by running.`, basis, warnings: [] };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Metadata parsing. `skipWhen` accepts a single predicate or an array of them; an array means OR
 // (the first predicate that fires skips the node), which is the only composition rule worth having
 // while predicates are this few — AND would let two half-true conditions add up to a skip nobody
@@ -388,6 +420,7 @@ const evaluatePredicate = (predicate: SkipPredicate, context: SkipEvaluationCont
     case "review_tier_excludes": return evaluateReviewTierExcludes(predicate, context);
     case "capture_rights_allow_extracted_copy": return evaluateCaptureRightsAllowExtractedCopy(predicate, context);
     case "capture_no_declined_blocks": return evaluateCaptureNoDeclinedBlocks(predicate, context);
+    case "clone_no_actionable_mismatches": return evaluateCloneNoActionableMismatches(predicate, context);
     default: {
       // Unreachable through readSkipPredicates; kept because an unrecognized rule must be inert
       // rather than throwing inside a dispatch path.

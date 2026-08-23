@@ -1,49 +1,92 @@
 // Hand-written declarations for the vendored platform capture engine module (see ../provenance.ts).
+//
+// T13.2 (CLONE-INTAKE-FIX.md): `clone_intake.v1` is a BOUNDED BRIEFING DOCUMENT for the three AI
+// nodes, not a data bus. It carries shapes, slots and vocabulary — never the source snapshot, never
+// the full mapping, never full page bodies, never section-type JSON Schemas. The deterministic
+// stages have transport and `object_get` the site / theme / page bodies they need, which is why
+// `buildCloneIntake` takes `siteBody` and `theme` and `buildRestampOps` takes `pageBodies`.
 export class CloneError extends Error {}
 
-export type CloneSectionTypeSchema = Record<string, unknown> | null;
+/** What a healthy briefing lands under. NOT enforced — `budget.chars` reports the truth either way. */
+export const CLONE_INTAKE_TARGET_CHARS: 12000;
+/** Enforced. Sits well inside the executor's 48,000-char dependency bound. Over it, the documented
+ *  degradation order runs; still over it after every legal drop, buildCloneIntake THROWS. */
+export const CLONE_INTAKE_CAP_CHARS: 32000;
+
+/** One section type reduced to what a designer composing a blueprint needs: which fields the type HAS
+ *  and which of them it REQUIRES. `fields` is replaced by `fieldCount` only when step 4 of the
+ *  documented degradation order had to run (and `budget.truncated` then says so). */
+export type CloneSectionTypeContract =
+  | { fields: string[]; required: string[] }
+  | { fieldCount: number; required: string[] };
 
 export type CloneRegistry = {
-  sectionTypes: Record<string, CloneSectionTypeSchema>;
+  sectionTypes: Record<string, CloneSectionTypeContract>;
   pageTypes: Record<string, { allowed: string[] | "any"; required: string[] }>;
 };
 
-export type CloneEmittedPage = { pageRef: string; objectId: string; route: string | null; sectionTypes: string[] };
+export type CloneBrandTokens = { colors: Record<string, unknown>; fonts: Record<string, unknown> };
 
-export type CloneIntake = {
-  schemaVersion: "clone-intake.v1";
-  captureRunId: string;
-  target: string;
-  source: { snapshot: unknown; mapping: unknown; theme: unknown };
-  emitted: { report: unknown; pages: CloneEmittedPage[] };
-  inventory: {
-    page: unknown[];
-    template: unknown[];
-    section_template: unknown[];
-    theme: unknown[];
-    navigation: unknown[];
-    site: Record<string, unknown>;
-  };
-  registry: CloneRegistry;
-  policy: unknown;
+/** One briefed page: ORDERED shapes, not bodies. `candidateIds` is what makes buildRestampOps'
+ *  `recipe_rejected_at_mint` skip reachable — a design can only cite an id the briefing showed it. */
+export type CloneBriefingPage = {
+  pageRef: string;
+  objectId: string;
+  route: string | null;
+  sourceShape: string[];
+  emittedShape: string[];
+  gaps: Array<{ gapId: string | null; why: string | null; nearestType: string | null }>;
+  candidateIds: string[];
 };
 
-/** Assembles the clone workspace envelope from already-fetched pieces. Pure — every argument is a
- *  value the CALLER already fetched (an emission report, an inventory listing, a registry_get
- *  response); nothing here reaches out for anything. Throws CloneError when mapping is not a
- *  capture-map.v1 mapping, when componentRegistry reduces to zero section types, or when inventory
- *  does not carry exactly one active site row. */
+export type CloneRecipeIndexEntry = {
+  objectId: string | null;
+  name: string | null;
+  scope: string | null;
+  blueprint_type?: string | null;
+  applies_to?: unknown;
+  slot_count?: number | null;
+};
+
+/** Named drops, in the FIXED documented order. `site.brandTokens`, `theme.tokens` and
+ *  `registry.pageTypes` never appear here: they are never dropped, at any size. */
+export type CloneIntakeTruncation = { field: string; kept: number; total: number; reason: string };
+
+export type CloneIntake = {
+  artifact: "clone_intake.v1";
+  summary: string;
+  captureRunId: string;
+  target: string;
+  site: { objectId: string | null; brandTokens: CloneBrandTokens };
+  theme: { objectId: string | null; name: string | null; tokens: Record<string, unknown> };
+  registry: CloneRegistry;
+  pages: CloneBriefingPage[];
+  recipes: { section_template: CloneRecipeIndexEntry[]; template: CloneRecipeIndexEntry[] };
+  budget: { chars: number; cap: number; truncated: CloneIntakeTruncation[] };
+};
+
+/** Assembles the BOUNDED clone briefing from already-fetched pieces. Pure — every argument is a value
+ *  the CALLER already fetched (an emission report, an inventory listing, a registry_get response, the
+ *  object_get bodies of the site and the captured theme); nothing here reaches out for anything.
+ *
+ *  `siteBody` is the object_get BODY of the site, not its inventory row: an object_inventory row
+ *  carries no brandTokens, and a body without one is refused HERE rather than three stages later.
+ *  `theme` is the object_get record (or bare body) of the captured theme.
+ *
+ *  Throws CloneError when mapping is not a capture-map.v1 mapping, when componentRegistry reduces to
+ *  zero section types, when inventory does not carry exactly one active site row, when siteBody
+ *  carries no brandTokens, or when the briefing is still over cap after every documented drop
+ *  (`intake_cannot_be_bounded`). */
 export function buildCloneIntake(input: {
   captureRunId: string;
   target: string;
-  snapshot?: unknown;
   mapping: unknown;
+  siteBody: unknown;
   theme?: unknown;
   emissionReport?: unknown;
   inventory?: Partial<Record<"page" | "template" | "section_template" | "theme" | "navigation" | "site", unknown[]>>;
   componentRegistry: unknown;
   pageTypeRegistry: unknown;
-  policy?: unknown;
 }): CloneIntake;
 
 export type CloneDesignValidation =
@@ -89,11 +132,14 @@ export type CloneThemeDroppedReason = "unknown_slot" | "external_reference_forbi
 export type CloneThemeDropped = { slot: string; value: unknown; reason: CloneThemeDroppedReason };
 export type CloneThemeValidation = { applied: CloneThemeApplied; dropped: CloneThemeDropped[]; missingKeys: string[] };
 
-/** Re-validates a proposed theme token set against the site's own declared brandTokens slots.
- *  Throws CloneError when every proposed token drops (an empty write is a refusal, not a success). */
+/** Re-validates a proposed theme token set against the site's own declared slots, read from
+ *  `intake.site.brandTokens` — the briefing is the single authority on a site's palette, so a caller
+ *  cannot validate a proposal against one site and report against another. Throws CloneError when the
+ *  intake carries no site.brandTokens, and when every proposed token drops (an empty write is a
+ *  refusal, not a success). */
 export function validateThemeProposal(input: {
   proposal: { colors?: Record<string, unknown>; fonts?: Record<string, unknown> };
-  siteBody: { brandTokens: { colors?: Record<string, unknown>; fonts?: Record<string, unknown> } };
+  intake: Pick<CloneIntake, "site">;
 }): CloneThemeValidation;
 
 export type CloneThemeApplyStep = { verb: string; arguments: Record<string, unknown> };
@@ -123,13 +169,21 @@ export type CloneRestampEntry = { objectId: string; ops: CloneRestampOp[] };
 export type CloneRestampSkipReason = "source_page_missing" | "recipe_rejected_at_mint" | "would_empty_page";
 export type CloneRestampSkip = { objectId: string; reason: CloneRestampSkipReason };
 
-/** Builds the ops that restamp the site's already-emitted pages once mint has run. A page is
- *  SKIPPED — never half-restamped — when its source page is missing, its captured section list is
- *  empty, or any of its capture-map candidates depended on a recipe rejected at mint. Throws
- *  CloneError if a produced op would introduce a remote URL into an asset field. */
+/** One page body the caller fetched for restamp. A bare `{objectId, sections}` and a whole object_get
+ *  record are both accepted and unwrapped. */
+export type CloneRestampPageBody = { objectId?: string | null; object_id?: string | null; body?: unknown; sections?: unknown };
+
+/** Builds the ops that restamp the site's already-emitted pages once mint has run. The page bodies
+ *  arrive as an explicit `pageBodies` argument — the briefing carries page SHAPES only, and this
+ *  stage is deterministic engine code WITH transport, so it object_gets what it is about to patch
+ *  (which is also more correct: it restamps what the page holds NOW). A page is SKIPPED — never
+ *  half-restamped — when no body was supplied for it, when its section list is empty, or when any of
+ *  its capture-map candidates depended on a recipe rejected at mint. Throws CloneError if a produced
+ *  op would introduce a remote URL into an asset field. */
 export function buildRestampOps(input: {
-  intake: CloneIntake;
+  intake: Pick<CloneIntake, "pages">;
   mintReport: { rejected?: Array<{ sourceCandidateIds?: string[] }> };
+  pageBodies?: CloneRestampPageBody[];
 }): { restamp: CloneRestampEntry[]; skipped: CloneRestampSkip[] };
 
 export type CloneRunReport = {
@@ -143,9 +197,11 @@ export type CloneRunReport = {
 };
 
 /** Assembles the terminal clone run report. Summarizes prior stages' already-computed outcomes only
- *  — creates, changes, and publishes nothing. humanGate.publishedByThisRun is unconditionally false. */
+ *  — creates, changes, and publishes nothing. humanGate.publishedByThisRun is unconditionally false.
+ *  The site it names in the review queue is `intake.site.objectId`, the same single authority
+ *  validateThemeProposal reads its palette from. */
 export function buildCloneRunReport(input: {
-  intake: CloneIntake;
+  intake: Pick<CloneIntake, "site">;
   mintReport: { createdObjects?: Array<{ objectType: string; objectId: string }> };
   themeReport: { applied?: { colors?: Record<string, unknown>; fonts?: Record<string, unknown> } };
   restampReport: { restamp?: CloneRestampEntry[] };
