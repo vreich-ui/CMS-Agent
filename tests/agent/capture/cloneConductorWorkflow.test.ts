@@ -7,8 +7,14 @@ import { validateOutput } from "../../../src/agent/execution/outputValidator.js"
 import { __test__ } from "../../../src/agent/workspace/executor.js";
 
 // T13.1 — the clone_conductor node set's structural law (CLONE-ENGINE-API.md), mirroring
-// captureConductorWorkflow.test.ts exactly:
-//   (a) exactly THREE model-judgment nodes, matching CLONE_AI_NODE_IDS;
+// captureConductorWorkflow.test.ts in spirit, but NOT in count: capture_conductor's node set is
+// fixed at "exactly three" because it only reads; this workflow authors, and T13.4 grew it to FOUR
+// AI nodes (fit_adjudicator, judging substitutions the engine merely enumerates). The assertions
+// below are written against CLONE_AI_NODE_IDS itself and against graph SHAPE, not against a count —
+// they exist to catch a SAFETY property breaking (a node escaping deterministic-stage bookkeeping,
+// a publish verb sneaking into allowedTools, a cycle, an orphaned dependency, a second terminal
+// node), not to catch the node set legitimately growing again:
+//   (a) the AI nodes are EXACTLY CLONE_AI_NODE_IDS — whatever CLONE_AI_NODE_IDS names, today four;
 //   (b) every other node carries metadata.cloneStageDeterministic and it is a member of CLONE_STAGES;
 //   (c) no node has riskLevel publish or admin;
 //   (d) no node's allowedTools contain a publish verb;
@@ -38,7 +44,7 @@ describe("clone_conductor canonical node set", () => {
     }
   });
 
-  it("(a) has exactly three AI nodes matching CLONE_AI_NODE_IDS; (b) every other node declares a deterministic clone stage that is a member of CLONE_STAGES", () => {
+  it("(a) the AI nodes are EXACTLY CLONE_AI_NODE_IDS, whatever its size; (b) every other node declares a deterministic clone stage that is a member of CLONE_STAGES", () => {
     const aiNodes = nodes.filter((node) => !readCloneStage(node));
     expect(aiNodes.map((node) => node.id).sort()).toEqual([...CLONE_AI_NODE_IDS].sort());
     for (const node of nodes) {
@@ -65,9 +71,14 @@ describe("clone_conductor canonical node set", () => {
     }
   });
 
-  it("(c) no node has riskLevel publish or admin; (d) no node's allowedTools contain a publish verb; terminal = clone_report", () => {
+  it("(c) no node has riskLevel publish or admin; (d) no node's allowedTools contain a publish verb; clone_report is the unique terminal node", () => {
     for (const node of nodes) {
+      // Structural, not a hardcoded count: riskLevel is a closed enum, so proving membership in
+      // {read, write} IS proving "not publish, not admin" — restated explicitly below too, so this
+      // property reads directly off the assertion rather than off an inference from the allowlist.
       expect(["read", "write"]).toContain(node.riskLevel);
+      expect(node.riskLevel).not.toBe("publish");
+      expect(node.riskLevel).not.toBe("admin");
       expect(node.kind).not.toBe("publisher");
       for (const tool of node.allowedTools) {
         expect(tool).not.toBe("project.call_tool");
@@ -78,15 +89,18 @@ describe("clone_conductor canonical node set", () => {
         expect(tool).not.toBe("deploy");
       }
     }
-    const terminal = nodes[nodes.length - 1];
-    expect(terminal.id).toBe("clone_report");
-    expect(terminal.produces).toEqual(["clone_run_report.v1"]);
-    // Nothing depends on the report: the workflow ENDS at the prepared report + drafts.
-    expect(nodes.some((node) => node.dependsOn.includes("clone_report"))).toBe(false);
-    // clone_report is the UNIQUE terminal node: every other node is an ancestor of something.
+    // clone_report is the UNIQUE terminal node: every other node is an ancestor of something. This
+    // is derived structurally from the dependency graph (the set of ids nothing's dependsOn
+    // mentions) rather than assumed from array position, so inserting a node anywhere in the
+    // canonical list — as fit_adjudicator was — cannot silently stop this test from meaning what it
+    // says.
     const dependedOn = new Set(nodes.flatMap((node) => node.dependsOn));
     const terminalNodes = nodes.filter((node) => !dependedOn.has(node.id));
     expect(terminalNodes.map((node) => node.id)).toEqual(["clone_report"]);
+    const terminal = terminalNodes[0];
+    expect(terminal.produces).toEqual(["clone_run_report.v1"]);
+    // Nothing depends on the report: the workflow ENDS at the prepared report + drafts.
+    expect(nodes.some((node) => node.dependsOn.includes("clone_report"))).toBe(false);
   });
 
   it("generates schema-valid mock outputs for every clone node (mock CI traversal cannot dead-end)", () => {

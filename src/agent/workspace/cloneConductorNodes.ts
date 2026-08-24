@@ -320,6 +320,61 @@ export const cloneConductorNodes = [
     modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 120000, budgetUsd: 0.05, maxOutputTokens: 2000 }
   },
   {
+    id: "fit_adjudicator",
+    name: "Fit Adjudicator (AI judgment 4 of 4)",
+    kind: "judgment",
+    description:
+      "Chooses the stand-in when the thing the source needed cannot be used. The engine establishes what is POSSIBLE — it lists candidates and refuses cross-class swaps — and this node judges what is BEST among them, or declines. Every choice is recorded with its fidelity cost, so a compromise is always visible and never silent.",
+    prompt: `Objective: for EACH entry in the substitutions ledger carried by recipe_mint (and the font entries from theme_reconciler), choose the stand-in to use, or decline.\nWHY THIS NODE EXISTS. A clone almost never lands on a platform that has exactly the source's vocabulary, so "it did not fit" is the normal case, not the error case. Dropping the thing loses content silently; forcing it produces something wrong. Choosing the nearest honest stand-in, and SAYING what was given up, is the only option that leaves a human able to judge the result.\nEach ledger entry gives you: kind (section_type | font | recipe | page_type), wanted (what the source needed), reason (why it cannot be used), basis (why these candidates), and candidates (the registered alternatives the engine says are legal here). chosen is null on every entry — filling it is your entire job.\nCHOOSE ONLY FROM candidates. The list is not a suggestion and it is not a starting point: the engine built it from the LIVE registry and refuses cross-class swaps, so anything outside it either does not exist or would destroy a capability the source page performed. A name you invent cannot be resolved and silently drops the work.\nDECLINING IS A REAL ANSWER. Set chosen to null when no candidate preserves what the source was doing. An empty candidates array is always a decline. A weak substitute presented as a fix is worse than an honest gap, because the gap gets fixed later and the bad substitute ships.\nfidelityCost is your judgment of what was given up, and it is what a human reads first:\n  - "none"     the stand-in is equivalent for a reader; nothing was lost.\n  - "minor"    a reader would not notice, but it is not identical — a near-neighbour type, a web-safe stack standing in for a display face.\n  - "material" the page still works but visibly differs, or something the source did is now absent. Every decline is material.\nBe honest here rather than generous. An over-optimistic fidelityCost is the one output of this node that can mislead a human into shipping something they would have rejected.\nFONTS are the clearest case and the pattern for the rest: a theme token cannot load a webfont, so a named display face silently becomes whatever the browser already had. Choosing a web-safe stack that preserves the FEEL — editorial serif for an editorial serif, geometric sans for a geometric sans — is a real fix; leaving the unloadable name in place is not.\nInputs expected: clone_intake's briefing (registry, recipes) for what exists, recipe_mint's substitutions ledger, and theme_reconciler's rejectedFromDraft.\nOutput required: clone_fit_adjudication.v1 {artifact, summary, choices: [{kind, wanted, chosen, basis, fidelityCost}], declined: [...]}. Every ledger entry must appear in exactly one of choices or declined — a silently dropped entry is the failure mode this node exists to prevent.\nBlocker criteria: no recipe_mint envelope in your input. An EMPTY ledger is not a blocker — it means everything fit, which is a good run; say so and return empty arrays.\n${AI_SAFETY_FOOTER}`,
+    inputSchema: openInput,
+    outputSchema: envelopeSchema(
+      "clone_fit_adjudication.v1",
+      {
+        choices: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["kind", "wanted", "chosen", "fidelityCost"],
+            additionalProperties: true,
+            properties: {
+              kind: { enum: ["section_type", "font", "recipe", "page_type"] },
+              wanted: { type: "string", minLength: 1 },
+              chosen: { type: "string", minLength: 1 },
+              basis: { type: "string" },
+              fidelityCost: { enum: ["none", "minor", "material"] }
+            }
+          }
+        },
+        declined: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["kind", "wanted", "basis"],
+            additionalProperties: true,
+            properties: {
+              kind: { enum: ["section_type", "font", "recipe", "page_type"] },
+              wanted: { type: "string", minLength: 1 },
+              basis: { type: "string" },
+              fidelityCost: { const: "material" }
+            }
+          }
+        }
+      },
+      ["choices", "declined"]
+    ),
+    allowedTools: ["stage.get_output", "stage.list_outputs"],
+    assignedSkills: [],
+    requiredInputs: ["clone_intake", "recipe_mint"],
+    produces: ["clone_fit_adjudication.v1"],
+    riskLevel: "read",
+    dependsOn: ["clone_intake", "recipe_mint", "theme_reconciler"],
+    status: "active",
+    position: { x: 960, y: 200 },
+    updatedAt: UPDATED_AT,
+    metadata: {},
+    modelConfig: { maxTurns: 4, toolCallLimit: 3, timeout: 240000, budgetUsd: 0.5, maxOutputTokens: 8000 }
+  },
+  {
     id: "layout_restamp",
     name: "Layout Restamp (deterministic re-assembly onto minted recipes)",
     kind: "emission",
@@ -339,10 +394,10 @@ export const cloneConductorNodes = [
     ),
     allowedTools: ["clone.restamp", "stage.get_output", "stage.list_outputs"],
     assignedSkills: [],
-    requiredInputs: ["clone_intake", "recipe_mint"],
+    requiredInputs: ["clone_intake", "recipe_mint", "fit_adjudicator"],
     produces: ["clone_restamp.v1"],
     riskLevel: "write",
-    dependsOn: ["clone_intake", "recipe_mint"],
+    dependsOn: ["clone_intake", "recipe_mint", "fit_adjudicator"],
     status: "active",
     position: { x: 960, y: 0 },
     updatedAt: UPDATED_AT,
@@ -372,10 +427,10 @@ export const cloneConductorNodes = [
     ),
     allowedTools: ["stage.get_output", "stage.list_outputs", "learning.record_observation"],
     assignedSkills: [],
-    requiredInputs: ["recipe_mint", "theme_bind", "layout_restamp"],
+    requiredInputs: ["recipe_mint", "theme_bind", "layout_restamp", "fit_adjudicator"],
     produces: ["clone_run_report.v1"],
     riskLevel: "read",
-    dependsOn: ["recipe_mint", "theme_bind", "layout_restamp"],
+    dependsOn: ["recipe_mint", "theme_bind", "layout_restamp", "fit_adjudicator"],
     status: "active",
     position: { x: 1200, y: 80 },
     updatedAt: UPDATED_AT,
@@ -386,7 +441,11 @@ export const cloneConductorNodes = [
 
 // The three model-judgment node ids. Everything else completes through the deterministic clone
 // route with zero model calls; tests assert both facts, exactly as they do for capture_conductor.
-export const CLONE_AI_NODE_IDS = ["layout_analyst", "recipe_designer", "theme_reconciler"] as const;
+// FOUR model-judgment node ids, not three. capture_conductor's "exactly three" was a property of a
+// workflow that only READS; this one authors, and choosing a stand-in when the source's vocabulary
+// is not available is a judgment no rule can make — the engine can say what is legal, never what is
+// best. Everything else here still completes deterministically with zero model calls.
+export const CLONE_AI_NODE_IDS = ["layout_analyst", "recipe_designer", "theme_reconciler", "fit_adjudicator"] as const;
 
 export function listCloneConductorNodes(): WorkspaceNode[] {
   return cloneConductorNodes.map((node) => ({
