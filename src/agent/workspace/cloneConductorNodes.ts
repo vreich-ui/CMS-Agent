@@ -418,7 +418,13 @@ export const cloneConductorNodes = [
         mint: { type: "object" },
         theme: { type: "object" },
         restamp: { type: "object" },
-        capabilityBacklog: { type: "array" },
+        substitutions: { type: "array" },
+        // A MAP keyed by the missing section TYPE, not a list. groupUnmetNeedsBySectionType returns
+        // Object.fromEntries(...), because the useful question is "what is missing, and what needed
+        // it" — which is a lookup, not a sequence. This said `array` and blocked the terminal node
+        // with output_schema_invalid on the first run that reached it: eight stages of real work
+        // completed and persisted, and the summary that explains them could not be written.
+        capabilityBacklog: { type: "object" },
         reviewQueue: { type: "array" },
         humanSummary: { type: "string", minLength: 1 },
         humanGate: { type: "object" }
