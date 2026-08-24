@@ -6,6 +6,11 @@ import { SITE_CLIENT_MANAGER_TOOLS, SiteGenesisRefusal, verifyCmsAgentScopedCred
 // behind Platform's bridge, a rotation silently narrowed live tenants and admin chat's
 // run_workspace_workflow began failing with an opaque 401 that named only "wrong token" and
 // "wrong project" — neither of which was true.
+//
+// This test is the lock, and it is only as good as its list: PLATFORM_BRIDGE_CALLS has to be
+// updated by hand whenever Platform adds a bridge call. It caught nothing in the 2026-08-24
+// repeat because the new call sites (admin-request-activity.ts) were added on the Platform side
+// and nobody came back here — which is exactly the failure this comment now exists to prevent.
 describe("site client_manager scoped-token allowlist", () => {
   // Mirrors every ctx.cmsAgent.callTool(...) site in platform
   // packages/core/server/lib/agent/tools.ts, plus the two engine.ts calls.
@@ -16,8 +21,13 @@ describe("site client_manager scoped-token allowlist", () => {
     "workflow_start_dry_run",
     "workflow_run_all",
     "workflow_get_run",
+    // W19 activity card + approve button (platform admin-request-activity.ts):
+    // the cost ledger behind the ETA, and the durable operator decision the
+    // button records before it advances a run waiting at publication_controller.
+    "workflow_get_run_cost",
     "workflow_publish_readiness",
-    "workflow_publish_run"
+    "workflow_publish_run",
+    "workflow_set_operator_publish_decision"
   ];
 
   it("covers exactly Platform's bridge — no missing tool (401 at the door) and no extra (blast radius)", () => {
