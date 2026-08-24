@@ -117,12 +117,31 @@ export type CloneMintCreate = {
 export type CloneMintRejected = { kind: string; name: string | null; reason: string; detail: unknown; sourceCandidateIds?: string[] };
 export type CloneMintReused = { objectType: string; name: string | null; objectId: string | null };
 
+// T13.4 PART B — the substitution ledger vocabulary. Every `substitutions[]` array anywhere in this
+// module (validateThemeProposal's, buildRecipeMintPlan's, buildCloneRunReport's) is built exclusively
+// from this one shape via the module's own (unexported) substitutionEntry/illegalSubstitutionRejection
+// constructors, so it can never drift between kinds or call sites. `chosen` is `null` everywhere THIS
+// module produces one — nothing here is authorized to pick a candidate; that is fit_adjudicator's job
+// (PART C), and only buildCloneRunReport's own re-validated adjudication result may set it non-null.
+export type CloneSubstitutionKind = "section_type" | "font" | "recipe" | "page_type";
+export type CloneSubstitution = {
+  kind: CloneSubstitutionKind;
+  wanted: string;
+  chosen: string | null;
+  reason: string;
+  basis: string;
+  fidelityCost: "none" | "minor" | "material";
+  substitutable: boolean;
+  candidates: unknown[];
+};
+
 export type CloneMintPlan = {
   schemaVersion: "clone-mint-plan.v1";
   target: string;
   creates: CloneMintCreate[];
   rejected: CloneMintRejected[];
   reused: CloneMintReused[];
+  substitutions: CloneSubstitution[];
   forbiddenVerbs: string[];
 };
 
@@ -136,7 +155,7 @@ export function buildRecipeMintPlan(input: {
 export type CloneThemeApplied = { colors: Record<string, string>; fonts: Record<string, string> };
 export type CloneThemeDroppedReason = "unknown_slot" | "external_reference_forbidden" | "not_a_color" | "no_fallback_stack";
 export type CloneThemeDropped = { slot: string; value: unknown; reason: CloneThemeDroppedReason };
-export type CloneThemeValidation = { applied: CloneThemeApplied; dropped: CloneThemeDropped[]; missingKeys: string[] };
+export type CloneThemeValidation = { applied: CloneThemeApplied; dropped: CloneThemeDropped[]; missingKeys: string[]; substitutions: CloneSubstitution[] };
 
 /** Re-validates a proposed theme token set against the site's own declared slots, read from
  *  `intake.site.palette` — the briefing is the single authority on a site's palette, so a caller
@@ -179,24 +198,53 @@ export type CloneRestampSkip = { objectId: string; reason: CloneRestampSkipReaso
  *  record are both accepted and unwrapped. */
 export type CloneRestampPageBody = { objectId?: string | null; object_id?: string | null; body?: unknown; sections?: unknown };
 
+// T13.4 PART C — fit_adjudicator's OWN output envelope (clone_fit_adjudication.v1). Optional
+// everywhere it is accepted: every existing caller/test that omits it sees byte-identical output to
+// before this argument existed. `chosen`/`basis`/`fidelityCost` on a choice are the MODEL's claim —
+// buildRestampOps re-validates a `section_type` choice against its own candidate list before ever
+// applying it (see resolveSectionTypeSubstitutions); nothing here trusts the model directly.
+export type CloneAdjudicationChoice = { kind: CloneSubstitutionKind; wanted: string; chosen: string; basis?: string; fidelityCost?: "none" | "minor" | "material" };
+export type CloneAdjudicationDeclined = { kind: CloneSubstitutionKind; wanted: string; basis?: string; fidelityCost?: "material" };
+export type CloneAdjudication = {
+  artifact?: "clone_fit_adjudication.v1";
+  summary?: string;
+  choices?: CloneAdjudicationChoice[];
+  declined?: CloneAdjudicationDeclined[];
+};
+
+/** A ledger-shaped rejection for an adjudicated `chosen` this engine will not apply (`reason:
+ *  'substitution_not_in_candidates'`) — same CloneSubstitution shape, `chosen: null` because it was
+ *  NOT applied, with the model's rejected proposal named in `basis`. */
+export type CloneIllegalSubstitution = CloneSubstitution & { reason: "substitution_not_in_candidates" };
+
 /** Builds the ops that restamp the site's already-emitted pages once mint has run. The page bodies
  *  arrive as an explicit `pageBodies` argument — the briefing carries page SHAPES only, and this
  *  stage is deterministic engine code WITH transport, so it object_gets what it is about to patch
  *  (which is also more correct: it restamps what the page holds NOW). A page is SKIPPED — never
  *  half-restamped — when no body was supplied for it, when its section list is empty, or when any of
  *  its capture-map candidates depended on a recipe rejected at mint. Throws CloneError if a produced
- *  op would introduce a remote URL into an asset field. */
+ *  op would introduce a remote URL into an asset field.
+ *
+ *  `adjudication` (T13.4 PART C, OPTIONAL): every `choices` entry of `kind: 'section_type'` is
+ *  RE-VALIDATED against `mintReport.substitutions`' own `candidates` (never trusted from the model
+ *  directly) before a matching section's captured type is stamped with `chosen`; a choice that fails
+ *  re-validation is reported in `substitutionRejections`, never applied. `mintReport.substitutions`
+ *  MUST be carried through by the caller for this re-validation to have anything to check against —
+ *  narrowing the mint envelope down to `{rejected}` alone silently turns every choice into a
+ *  `substitution_not_in_candidates` rejection. */
 export function buildRestampOps(input: {
   intake: Pick<CloneIntake, "pages">;
-  mintReport: { rejected?: Array<{ sourceCandidateIds?: string[] }> };
+  mintReport: { rejected?: Array<{ sourceCandidateIds?: string[] }>; substitutions?: CloneSubstitution[] };
   pageBodies?: CloneRestampPageBody[];
-}): { restamp: CloneRestampEntry[]; skipped: CloneRestampSkip[] };
+  adjudication?: CloneAdjudication;
+}): { restamp: CloneRestampEntry[]; skipped: CloneRestampSkip[]; appliedSubstitutions: Array<{ wanted: string; chosen: string }>; substitutionRejections: CloneIllegalSubstitution[] };
 
 export type CloneRunReport = {
   schemaVersion: "clone-run-report.v1";
   mint: unknown;
   theme: unknown;
   restamp: unknown;
+  substitutions: CloneSubstitution[];
   capabilityBacklog: Record<string, unknown[]>;
   reviewQueue: Array<Record<string, unknown>>;
   humanGate: { publishedByThisRun: false; note: string };
@@ -205,11 +253,19 @@ export type CloneRunReport = {
 /** Assembles the terminal clone run report. Summarizes prior stages' already-computed outcomes only
  *  — creates, changes, and publishes nothing. humanGate.publishedByThisRun is unconditionally false.
  *  The site it names in the review queue is `intake.site.objectId`, the same single authority
- *  validateThemeProposal reads its palette from. */
+ *  validateThemeProposal reads its palette from.
+ *
+ *  `substitutions[]` (T13.4 PART B/C) folds `mintReport.substitutions`, `themeReport.substitutions`,
+ *  and (when `adjudication` is supplied) the RE-VALIDATED resolution of each — sourced from
+ *  `restampReport.appliedSubstitutions`/`.substitutionRejections`, never adjudication's raw claim a
+ *  second time — into ONE ledger a human reads in one place. Every field here is read from the
+ *  envelope the caller passes; narrowing `mintReport`/`restampReport` down to only the fields an
+ *  earlier caller needed (e.g. `{createdObjects}` / `{restamp}`) silently empties this ledger. */
 export function buildCloneRunReport(input: {
   intake: Pick<CloneIntake, "site">;
-  mintReport: { createdObjects?: Array<{ objectType: string; objectId: string }> };
-  themeReport: { applied?: { colors?: Record<string, unknown>; fonts?: Record<string, unknown> } };
-  restampReport: { restamp?: CloneRestampEntry[] };
+  mintReport: { createdObjects?: Array<{ objectType: string; objectId: string }>; substitutions?: CloneSubstitution[] };
+  themeReport: { applied?: { colors?: Record<string, unknown>; fonts?: Record<string, unknown> }; substitutions?: CloneSubstitution[] };
+  restampReport: { restamp?: CloneRestampEntry[]; appliedSubstitutions?: Array<{ wanted: string; chosen: string }>; substitutionRejections?: CloneIllegalSubstitution[] };
   design?: { unmetNeeds?: Array<{ sectionType?: string }> };
+  adjudication?: CloneAdjudication;
 }): CloneRunReport;

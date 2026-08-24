@@ -42,12 +42,11 @@
 //     mint is SKIPPED at restamp — never half-restamped.
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { effectiveToolPermission, type ProjectConnectionConfig, type ToolPermission } from "../projects/projectTypes.js";
-import { findLockToken } from "../projects/toolResultSearch.js";
-import { findRecordVersion } from "../projects/objectDialect.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { describeMcpErrorResult } from "./captureEngine.js";
+import { toWireArguments, fromWireResult, McpBoundaryError } from "./mcpBoundary.js";
 import {
   buildCloneIntake,
   buildCloneRunReport,
@@ -56,10 +55,13 @@ import {
   buildThemeApplyPlan,
   CloneError,
   validateThemeProposal,
+  type CloneAdjudication,
+  type CloneIllegalSubstitution,
   type CloneIntake,
   type CloneMintPlan,
   type CloneRestampEntry,
   type CloneRestampSkip,
+  type CloneSubstitution,
   type CloneThemeApplied,
   type CloneThemeApplyPlan
 } from "./engine/clone.mjs";
@@ -125,19 +127,42 @@ const clonePolicyView = (config: ProjectConnectionConfig): ClonePolicyView => ({
 // "needs_approval" gate) is likewise refused before transport, with the adapter's own error naming
 // the reason — this is what makes theme_bind's "policy blocks site_apply_theme" law hold without any
 // special-casing at the call site.
+//
+// T13.4: THE CHOKE POINT. Every argument object this module hands to the wire, and every result it
+// reads back, passes through mcpBoundary.ts's toWireArguments/fromWireResult HERE and only here — no
+// other function in this file may construct a wire argument object or read a raw wire result field.
+// A boundary refusal (a missing required field on the way out; a missing lock token on the way back)
+// is a McpBoundaryError, re-thrown here as the module's own CloneRefusal so every caller keeps
+// catching one error family regardless of which layer refused.
 async function callProjectTool(projectId: string, tool: string, args: Record<string, unknown>, deps: CloneDeps = {}): Promise<Record<string, unknown>> {
   if (FORBIDDEN_VERBS.has(tool)) throw new CloneRefusal("forbidden_verb", `Forbidden clone verb: ${tool}. object_publish / release_to_production / trigger_netlify_build / deploy are unreachable from clone_conductor.`);
   const config = await projectsOf(deps).get(projectId);
   if (!config) throw new CloneRefusal("unknown_project", `Unknown projectId: ${projectId}`);
+
+  let wireArgs: Record<string, unknown>;
+  try {
+    wireArgs = toWireArguments(tool, args);
+  } catch (error) {
+    if (error instanceof McpBoundaryError) throw new CloneRefusal("clone_wire_argument_invalid", error.message);
+    throw error;
+  }
+
   const adapter = new ProjectMcpAdapter(config);
-  const call = await adapter.callTool(tool, args);
+  const call = await adapter.callTool(tool, wireArgs);
   if (!call.ok) throw new CloneRefusal("project_tool_call_failed", `${tool} on ${projectId} failed: ${call.error ?? "unknown error"}`);
   const raw = call.result as Record<string, unknown> | undefined;
   if (isRecord(raw) && raw.isError) {
     throw new CloneRefusal("project_tool_call_failed", `${tool} on ${projectId} returned an MCP error result: ${describeMcpErrorResult(raw)}`);
   }
   const structured = isRecord(raw) && isRecord(raw.structuredContent) ? (raw.structuredContent as Record<string, unknown>) : (isRecord(raw) ? raw : {});
-  return isRecord(structured.data) ? (structured.data as Record<string, unknown>) : structured;
+  const unwrapped = isRecord(structured.data) ? (structured.data as Record<string, unknown>) : structured;
+
+  try {
+    return fromWireResult(tool, unwrapped);
+  } catch (error) {
+    if (error instanceof McpBoundaryError) throw new CloneRefusal("clone_wire_result_invalid", error.message);
+    throw error;
+  }
 }
 
 // object_get returns {record:{...}} on the platform dialect and a bare record on some targets; a
@@ -203,7 +228,7 @@ export async function cloneIntakeStep(input: { targetProjectId: string; captureR
   const pageTypeRegistry = await callProjectTool(projectId, "registry_get", { registry: "page_type" }, deps);
   const inventory: Record<string, unknown[]> = {};
   for (const objectType of INVENTORY_TYPES) {
-    const rows = await callProjectTool(projectId, "object_inventory", { object_type: objectType }, deps);
+    const rows = await callProjectTool(projectId, "object_inventory", { objectType }, deps);
     inventory[objectType] = Array.isArray(rows.objects) ? (rows.objects as unknown[]) : [];
   }
 
@@ -224,7 +249,7 @@ export async function cloneIntakeStep(input: { targetProjectId: string; captureR
   // carries no brandTokens at all, which is why the live run's theme_reconciler had no slots to
   // enumerate and correctly refused against an empty palette. buildCloneIntake refuses a body without
   // one rather than letting that surface three stages later as a theme refusal.
-  const siteGet = await callProjectTool(projectId, "object_get", { object_type: "site", object_id: siteId }, deps);
+  const siteGet = await callProjectTool(projectId, "object_get", { objectType: "site", objectId: siteId }, deps);
   const siteBody = bodyOf(recordOf(siteGet));
 
   // The CAPTURED theme, correlated from the capture run's own emission report the same way the theme
@@ -236,7 +261,7 @@ export async function cloneIntakeStep(input: { targetProjectId: string; captureR
   const capturedThemeId = resolveEmittedThemeId(emitOut?.report) ?? (inventory.theme?.length === 1 ? objectIdOf(inventory.theme[0]) : undefined);
   let theme: unknown = themeOut?.theme ?? null;
   if (capturedThemeId) {
-    const themeGet = await callProjectTool(projectId, "object_get", { object_type: "theme", object_id: capturedThemeId }, deps);
+    const themeGet = await callProjectTool(projectId, "object_get", { objectType: "theme", objectId: capturedThemeId }, deps);
     theme = recordOf(themeGet);
   }
 
@@ -300,6 +325,13 @@ export type CloneMintEnvelope = {
   applied: CloneMintCreatedRow[];
   rejected: Array<Record<string, unknown>>;
   reused: Array<Record<string, unknown>>;
+  // T13.4 PART B/C: surfaced at the TOP LEVEL, mirroring `applied`/`rejected`/`reused` (all already
+  // lifted out of `plan` for callers), because cloneRestampStep and buildCloneReportStep both read
+  // `mint.substitutions` — restamp's resolveSectionTypeSubstitutions re-validates fit_adjudicator's
+  // choices against exactly this list, and a caller that narrows the mint envelope down to
+  // `{rejected}` alone (as cloneRestampStep once did) silently turns every valid choice into a
+  // `substitution_not_in_candidates` rejection, because there is nothing left to check it against.
+  substitutions: CloneSubstitution[];
   policy: ClonePolicyView;
 };
 
@@ -329,7 +361,13 @@ export async function cloneMintStep(input: { targetProjectId: string; intake: un
   const rejected: Array<Record<string, unknown>> = [...plan.rejected];
   for (const create of plan.creates) {
     try {
-      const result = await callProjectTool(projectId, create.verb, { object_type: create.objectType, requested_id: create.requestedId, body: create.body }, deps);
+      // T13.4-SPEC.md's non-naming sibling defect: object_create REQUIRES `site`
+      // (required: ["object_type","site","body"]) and the mint plan (engine/clone.mjs, out of this
+      // module's scope) never emitted one — a body the platform itself validates as eligible:true
+      // was rejected 400: Invalid request fields. `intake.site.objectId` is the one authority for
+      // this run's site (the same id theme_bind and buildCloneRunReport both read); toWireArguments
+      // now refuses BEFORE any wire call if it is ever absent, rather than producing an invalid call.
+      const result = await callProjectTool(projectId, create.verb, { objectType: create.objectType, requestedId: create.requestedId, body: create.body, site: intake.site?.objectId }, deps);
       const record = isRecord(result.record) ? (result.record as Record<string, unknown>) : result;
       const objectId = typeof record.object_id === "string" ? record.object_id : create.requestedId;
       const publication = isRecord(record.publication) ? (record.publication as Record<string, unknown>) : undefined;
@@ -354,6 +392,7 @@ export async function cloneMintStep(input: { targetProjectId: string; intake: un
     applied,
     rejected,
     reused: plan.reused,
+    substitutions: plan.substitutions,
     policy: clonePolicyView(config)
   };
 }
@@ -376,6 +415,10 @@ export type CloneThemeBindEnvelope = {
   dropped: Array<Record<string, unknown>>;
   before: Record<string, unknown>;
   after: CloneThemeApplied;
+  // T13.4 PART B/C: validateThemeProposal's own font substitution ledger, unnarrowed — buildCloneReportStep
+  // already passes this WHOLE envelope as buildCloneRunReport's `themeReport`, so this field is what
+  // makes `themeReport.substitutions` (font-kind ledger entries) actually reach the final report.
+  substitutions: CloneSubstitution[];
   published: false;
   policy: ClonePolicyView;
 };
@@ -431,9 +474,9 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
   // Both records are still read HERE, live: buildThemeApplyPlan is handed the site and theme as they
   // stand at apply time, not as the briefing saw them at intake. The palette the proposal is judged
   // against comes from the briefing (below); these two supply the plan's own record arguments.
-  const siteGet = await callProjectTool(projectId, "object_get", { object_type: "site", object_id: siteId }, deps);
+  const siteGet = await callProjectTool(projectId, "object_get", { objectType: "site", objectId: siteId }, deps);
   const siteBody = bodyOf(recordOf(siteGet));
-  const themeGet = await callProjectTool(projectId, "object_get", { object_type: "theme", object_id: themeId }, deps);
+  const themeGet = await callProjectTool(projectId, "object_get", { objectType: "theme", objectId: themeId }, deps);
   const themeRecord = recordOf(themeGet);
 
   let validated: ReturnType<typeof validateThemeProposal>;
@@ -479,19 +522,30 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
         args.expected_record_version = held?.recordVersion;
       }
       const result = await callProjectTool(projectId, step.verb, args, deps);
+      // T13.4 LOCK-LEAK FIX. Registration is the very next statement after the wire call returns —
+      // nothing computed here can throw before openLocks.set runs. This is what makes the release in
+      // `finally` below not depend on any LATER step succeeding: callProjectTool already guarantees
+      // (via mcpBoundary's fromWireResult) that a successful object_checkout's result carries
+      // `lockToken`, in whichever casing the platform used — or callProjectTool has already thrown
+      // and this line never runs, in which case the platform never confirmed a lock and there is
+      // nothing to leak. The historical bug was the other order: the OLD code called a tolerant
+      // reader that only recognized `lock_token`, found nothing for a real `lockToken` response, and
+      // threw BEFORE ever calling openLocks.set — so a lock that genuinely existed server-side was
+      // never tracked here to be released. There is no window between "checkout returned" and "this
+      // map knows about it" any more.
       if (step.verb === "object_checkout" && objectType && typeof args.object_id === "string") {
-        const lockToken = findLockToken(result);
-        if (!lockToken) throw new CloneRefusal("clone_theme_apply_checkout_failed", `object_checkout(${objectType}) returned no lock_token.`);
-        openLocks.set(objectType, { objectId: args.object_id, lockToken, recordVersion: findRecordVersion(result) });
+        openLocks.set(objectType, { objectId: args.object_id, lockToken: result.lockToken as string, recordVersion: result.recordVersion as string | number | undefined });
       }
       if (step.verb === "object_checkin" && objectType) openLocks.delete(objectType);
     }
   } finally {
     // Belt-and-braces: release any lock this run still holds, even on an error/refusal thrown
-    // mid-sequence — a leaked site or theme lock is worse than a failed clone run.
+    // mid-sequence — a leaked site or theme lock is worse than a failed clone run. Iterating
+    // `openLocks` itself (rather than re-deriving from `plan.steps`) is what makes this release NOT
+    // depend on any prior step other than the checkout that put the entry there.
     for (const [objectType, held] of openLocks) {
       try {
-        await callProjectTool(projectId, "object_checkin", { object_type: objectType, object_id: held.objectId, lock_token: held.lockToken }, deps);
+        await callProjectTool(projectId, "object_checkin", { objectType, objectId: held.objectId, lockToken: held.lockToken }, deps);
       } catch { /* best-effort; the lease expires naturally */ }
     }
   }
@@ -505,6 +559,7 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
     dropped: validated.dropped,
     before: (siteBody.brandTokens ?? {}) as Record<string, unknown>,
     after: validated.applied,
+    substitutions: validated.substitutions,
     published: false,
     policy: clonePolicyView(config)
   };
@@ -527,16 +582,38 @@ export type CloneRestampEnvelope = {
   restamped: CloneRestampEntry[];
   skipped: Array<Record<string, unknown>>;
   quarantined: Array<Record<string, unknown>>;
+  // T13.4 PART C: buildRestampOps' own re-validated resolution of the adjudicator's section_type
+  // choices — the GROUND TRUTH of what this run actually resolved (never adjudication's raw claim).
+  // buildCloneReportStep reads both to fold the ledger into the final report; dropping either here
+  // (the same "narrow the envelope to what one caller needed" mistake that dropped `substitutions`
+  // below) would silently empty the report's substitutions ledger for section_type entries.
+  appliedSubstitutions: Array<{ wanted: string; chosen: string }>;
+  substitutionRejections: CloneIllegalSubstitution[];
   policy: ClonePolicyView;
 };
 
-export async function cloneRestampStep(input: { targetProjectId: string; intake: unknown; mint: unknown }, deps: CloneDeps = {}): Promise<CloneRestampEnvelope> {
+export async function cloneRestampStep(
+  input: { targetProjectId: string; intake: unknown; mint: unknown; adjudication?: unknown },
+  deps: CloneDeps = {}
+): Promise<CloneRestampEnvelope> {
   const { projectId, config } = await resolveCloneAuthority(input.targetProjectId, deps);
   const intake = assertCloneIntakeEnvelope(input.intake);
   if (intake.target !== projectId) {
     throw new CloneRefusal("clone_target_mismatch", `clone_intake was built for target "${intake.target}", not this run's own target "${projectId}".`);
   }
-  const mintReport = isRecord(input.mint) ? { rejected: (input.mint.rejected as Array<{ sourceCandidateIds?: string[] }> | undefined) ?? [] } : { rejected: [] };
+  // T13.4 PART C — THE SUBTLE NARROWING BUG: this used to read `{ rejected: input.mint.rejected }`
+  // alone. buildRestampOps' resolveSectionTypeSubstitutions re-validates a fit_adjudicator choice
+  // against `mintReport.substitutions`' own `candidates` — drop `substitutions` here and every
+  // choice, however legitimate, fails re-validation as `substitution_not_in_candidates` because there
+  // is nothing left to check it against. Both fields are read off `input.mint` (CloneMintEnvelope),
+  // which now surfaces `substitutions` at the top level for exactly this reason.
+  const mintReport = isRecord(input.mint)
+    ? {
+        rejected: (input.mint.rejected as Array<{ sourceCandidateIds?: string[] }> | undefined) ?? [],
+        substitutions: (input.mint.substitutions as CloneSubstitution[] | undefined) ?? []
+      }
+    : { rejected: [], substitutions: [] };
+  const adjudication = isRecord(input.adjudication) ? (input.adjudication as CloneAdjudication) : undefined;
 
   const quarantined: Array<Record<string, unknown>> = [];
   // EVERY briefed page is fetched, including one whose recipe was rejected at mint: buildRestampOps
@@ -549,7 +626,7 @@ export async function cloneRestampStep(input: { targetProjectId: string; intake:
     const objectId = typeof page?.objectId === "string" ? page.objectId : "";
     if (!objectId) continue;
     try {
-      const pageGet = await callProjectTool(projectId, "object_get", { object_type: "page", object_id: objectId }, deps);
+      const pageGet = await callProjectTool(projectId, "object_get", { objectType: "page", objectId }, deps);
       pageBodies.push({ objectId, body: bodyOf(recordOf(pageGet)) });
     } catch (error) {
       // A body this stage could not READ is quarantined under its own reason rather than left to
@@ -562,9 +639,9 @@ export async function cloneRestampStep(input: { targetProjectId: string; intake:
     }
   }
 
-  let built: { restamp: CloneRestampEntry[]; skipped: CloneRestampSkip[] };
+  let built: { restamp: CloneRestampEntry[]; skipped: CloneRestampSkip[]; appliedSubstitutions: Array<{ wanted: string; chosen: string }>; substitutionRejections: CloneIllegalSubstitution[] };
   try {
-    built = buildRestampOps({ intake, mintReport, pageBodies });
+    built = buildRestampOps({ intake, mintReport, pageBodies, adjudication });
   } catch (error) {
     throw new CloneRefusal("clone_restamp_plan_invalid", error instanceof CloneError || error instanceof Error ? error.message : String(error));
   }
@@ -575,18 +652,22 @@ export async function cloneRestampStep(input: { targetProjectId: string; intake:
     let lockToken: string | undefined;
     let recordVersion: string | number | undefined;
     try {
-      const checkout = await callProjectTool(projectId, "object_checkout", { object_type: "page", object_id: page.objectId }, deps);
-      lockToken = findLockToken(checkout);
-      recordVersion = findRecordVersion(checkout);
-      if (!lockToken) throw new CloneRefusal("clone_restamp_checkout_failed", `object_checkout(page ${page.objectId}) returned no lock_token.`);
-      await callProjectTool(projectId, "object_patch", { object_type: "page", object_id: page.objectId, lock_token: lockToken, expected_record_version: recordVersion, ops: page.ops }, deps);
+      const checkout = await callProjectTool(projectId, "object_checkout", { objectType: "page", objectId: page.objectId }, deps);
+      // T13.4 LOCK-LEAK FIX: assigned as the very next statement after the wire call returns, from
+      // the canonical field callProjectTool/fromWireResult already guarantees is present for a
+      // successful checkout (in whichever casing the platform used) — see the identical comment in
+      // cloneThemeBindStep above. `lockToken` stays `undefined` only when the checkout call itself
+      // threw, in which case there is genuinely no server-side lock for `finally` to release.
+      lockToken = checkout.lockToken as string;
+      recordVersion = checkout.recordVersion as string | number | undefined;
+      await callProjectTool(projectId, "object_patch", { objectType: "page", objectId: page.objectId, lockToken, expectedRecordVersion: recordVersion, ops: page.ops }, deps);
       restamped.push(page);
     } catch (error) {
       quarantined.push({ objectId: page.objectId, reason: "restamp_patch_failed", detail: error instanceof Error ? error.message : String(error) });
     } finally {
       if (lockToken) {
         try {
-          await callProjectTool(projectId, "object_checkin", { object_type: "page", object_id: page.objectId, lock_token: lockToken }, deps);
+          await callProjectTool(projectId, "object_checkin", { objectType: "page", objectId: page.objectId, lockToken }, deps);
         } catch { /* best-effort; the lease expires naturally */ }
       }
     }
@@ -598,6 +679,8 @@ export async function cloneRestampStep(input: { targetProjectId: string; intake:
     restamped,
     skipped,
     quarantined,
+    appliedSubstitutions: built.appliedSubstitutions,
+    substitutionRejections: built.substitutionRejections,
     policy: clonePolicyView(config)
   };
 }
@@ -610,6 +693,11 @@ export type CloneRunReportEnvelope = {
   mint: unknown;
   theme: unknown;
   restamp: unknown;
+  // T13.4 PART B/C: the whole-run substitution ledger, folding mint's/theme's own entries with
+  // fit_adjudicator's RE-VALIDATED resolution (never its raw claim) — see buildCloneRunReport's own
+  // doc comment. Surfaced here as its own top-level field, never buried inside `mint`/`theme`/
+  // `restamp`, exactly as PART B item 4 requires.
+  substitutions: CloneSubstitution[];
   capabilityBacklog: Record<string, unknown[]>;
   reviewQueue: Array<Record<string, unknown>>;
   humanSummary: string;
@@ -622,15 +710,25 @@ export function buildCloneReportStep(input: {
   themeBind: CloneThemeBindEnvelope;
   restamp: CloneRestampEnvelope;
   design?: Record<string, unknown>;
+  adjudication?: unknown;
 }): CloneRunReportEnvelope {
+  const adjudication = isRecord(input.adjudication) ? (input.adjudication as CloneAdjudication) : undefined;
   let report: ReturnType<typeof buildCloneRunReport>;
   try {
     report = buildCloneRunReport({
       intake: input.intake,
-      mintReport: { createdObjects: input.mint.applied },
+      // T13.4 PART C — THE SAME NARROWING BUG, a second site: this used to read
+      // `{ createdObjects: input.mint.applied }` alone, which drops `mint.substitutions` just as
+      // cloneRestampStep's own narrowing did (see the comment there) — and `{ restamp:
+      // input.restamp.restamped }` alone, which drops restamp's `appliedSubstitutions` /
+      // `substitutionRejections`, the GROUND TRUTH of what this run actually resolved that
+      // buildCloneRunReport needs to fold the ledger correctly. `themeReport: input.themeBind` was
+      // already the whole envelope (unnarrowed) and stays that way.
+      mintReport: { createdObjects: input.mint.applied, substitutions: input.mint.substitutions },
       themeReport: input.themeBind,
-      restampReport: { restamp: input.restamp.restamped },
-      design: input.design ?? {}
+      restampReport: { restamp: input.restamp.restamped, appliedSubstitutions: input.restamp.appliedSubstitutions, substitutionRejections: input.restamp.substitutionRejections },
+      design: input.design ?? {},
+      adjudication
     });
   } catch (error) {
     throw new CloneRefusal("clone_report_invalid", error instanceof CloneError || error instanceof Error ? error.message : String(error));
@@ -644,6 +742,7 @@ export function buildCloneReportStep(input: {
     mint: report.mint,
     theme: report.theme,
     restamp: report.restamp,
+    substitutions: report.substitutions,
     capabilityBacklog: report.capabilityBacklog,
     reviewQueue: report.reviewQueue,
     humanSummary,

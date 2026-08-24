@@ -197,8 +197,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "clone.mjs",
-    vendoredSha256: "6de08a64db185d37232cf7ac197ef40f410ea7be89161ccc74963ab0a95f549e",
-    upstreamSha256: "6de08a64db185d37232cf7ac197ef40f410ea7be89161ccc74963ab0a95f549e"
+    vendoredSha256: "54f8f1d08bdb66027fc063e6519777117cf94173ae8035eb98a309986767fdcf",
+    upstreamSha256: "54f8f1d08bdb66027fc063e6519777117cf94173ae8035eb98a309986767fdcf"
   }
 ] as const;
 

@@ -105,7 +105,13 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         if (isOutcome(intake)) return intake;
         const mint = envelopeOf(run, "recipe_mint", CLONE_ARTIFACTS.mint);
         if (isOutcome(mint)) return mint;
-        const envelope = await cloneRestampStep({ targetProjectId, intake, mint });
+        // T13.4 PART C: fit_adjudicator is a pure AI node (no cloneStageDeterministic, no route of
+        // its own — read the same way `design`/`themeProposal` are, below) sitting between
+        // recipe_mint and layout_restamp in the graph. Its output is OPTIONAL here for the identical
+        // reason it is optional on cloneRestampStep/buildRestampOps: a run that predates this node,
+        // or a mock traversal that never populated it, must still restamp byte-identically to before.
+        const adjudication = stageOutput(run, "fit_adjudicator");
+        const envelope = await cloneRestampStep({ targetProjectId, intake, mint, adjudication });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "report": {
@@ -118,12 +124,16 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         const restamp = envelopeOf(run, "layout_restamp", CLONE_ARTIFACTS.restamp);
         if (isOutcome(restamp)) return restamp;
         const design = stageOutput(run, "recipe_designer");
+        // Same dependency, read the same way, for the report's own (separate, re-validated-nothing)
+        // informational relay of non-section_type choices — see buildCloneRunReport's doc comment.
+        const adjudication = stageOutput(run, "fit_adjudicator");
         const output = buildCloneReportStep({
           intake: intake as unknown as CloneIntakeEnvelope,
           mint: mint as unknown as CloneMintEnvelope,
           themeBind: themeBind as unknown as CloneThemeBindEnvelope,
           restamp: restamp as unknown as CloneRestampEnvelope,
-          design
+          design,
+          adjudication
         });
         return { kind: "completed", output: output as unknown as Record<string, unknown> };
       }
