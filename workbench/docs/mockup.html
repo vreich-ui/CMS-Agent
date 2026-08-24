@@ -1,0 +1,1081 @@
+<title>Conductor Workbench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --bg:#f2efe8; --panel:#faf8f3; --panel2:#edeae1; --panel3:#e2ded0; --line:#dcd6c6; --line2:#c3bca8;
+    --ink:#23262e; --muted:#686e7d; --faint:#989eab;
+    --acc:#a86b1c; --acc-dim:#b98f4d; --acc-soft:#f2e7cf;
+    --ok:#2e7d4f; --run:#2f6db3; --bad:#b3403a; --paused:#7d5bb5;
+    --cell-ok:#8dbf9e; --cell-gate:#dcaf5e; --cell-bad:#d38077;
+    --shadow:0 14px 40px #00000022;
+    --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#101319; --panel:#151a23; --panel2:#1b212d; --panel3:#212939; --line:#262e3d; --line2:#344057;
+      --ink:#d7dce5; --muted:#8a94a6; --faint:#5b6373;
+      --acc:#e2a44a; --acc-dim:#8a6528; --acc-soft:#2b2415;
+      --ok:#57b380; --run:#6aa3e0; --bad:#e0706a; --paused:#b48ede;
+      --cell-ok:#2e5b43; --cell-gate:#8a6528; --cell-bad:#8a3f3b;
+      --shadow:0 14px 40px #000000aa;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#101319; --panel:#151a23; --panel2:#1b212d; --panel3:#212939; --line:#262e3d; --line2:#344057;
+    --ink:#d7dce5; --muted:#8a94a6; --faint:#5b6373;
+    --acc:#e2a44a; --acc-dim:#8a6528; --acc-soft:#2b2415;
+    --ok:#57b380; --run:#6aa3e0; --bad:#e0706a; --paused:#b48ede;
+    --cell-ok:#2e5b43; --cell-gate:#8a6528; --cell-bad:#8a3f3b;
+    --shadow:0 14px 40px #000000aa;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:13.5px; line-height:1.5; -webkit-font-smoothing:antialiased;}
+  button{font:inherit; color:inherit; background:none; border:none; cursor:pointer; padding:0;}
+  .mono{font-family:var(--mono);}
+  .num{font-variant-numeric:tabular-nums;}
+  svg.ic{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round;}
+
+  /* ---------- top bar ---------- */
+  .topbar{display:flex; align-items:center; gap:14px; padding:0 16px; height:48px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:40;}
+  .wordmark{font-family:'Spectral',Georgia,serif; font-weight:600; font-size:17px; color:var(--acc); white-space:nowrap;}
+  .wordmark small{color:var(--faint); font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; display:block; line-height:1; margin-top:-2px;}
+  nav.main{display:flex; gap:2px; margin-left:8px;}
+  nav.main button{padding:6px 12px; border-radius:6px; color:var(--muted); font-weight:500;}
+  nav.main button:hover{color:var(--ink); background:var(--panel2);}
+  nav.main button.on{color:var(--ink); background:var(--panel3);}
+  nav.main button:focus-visible,.wfsel:focus-visible,.kbd:focus-visible{outline:2px solid var(--acc); outline-offset:2px;}
+  .wfsel{margin-left:auto; display:flex; align-items:center; gap:8px; border:1px solid var(--line2); background:var(--panel2); border-radius:7px; padding:5px 12px; color:var(--ink);}
+  .wfsel .fn{font-weight:600; display:flex; align-items:center; gap:7px;}
+  .wfsel .car{color:var(--faint); font-size:10px;}
+  .runchip{display:flex; align-items:center; gap:8px; border:1px solid var(--acc-dim); background:var(--acc-soft); border-radius:7px; padding:5px 11px; font-family:var(--mono); font-size:11.5px; color:var(--acc);}
+  .runchip .x{color:var(--faint); margin-left:2px;}
+  .kbd{border:1px solid var(--line2); border-radius:5px; padding:2px 7px; font-family:var(--mono); font-size:11px; color:var(--muted); background:var(--panel2);}
+  .wfmenu{position:absolute; top:44px; right:0; background:var(--panel2); border:1px solid var(--line2); border-radius:9px; padding:6px; min-width:330px; box-shadow:var(--shadow); display:none; z-index:60;}
+  .wfmenu.open{display:block;}
+  .wfmenu button{display:flex; width:100%; gap:11px; padding:9px 10px; border-radius:6px; text-align:left; align-items:flex-start;}
+  .wfmenu button:hover{background:var(--panel3);}
+  .wfmenu svg.ic{margin-top:2px; color:var(--acc);}
+  .wfmenu .t{font-weight:600;}
+  .wfmenu .sub{color:var(--faint); font-size:11.5px; display:block;}
+  .wfmenu .n{margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--faint); white-space:nowrap;}
+  .wfmenu button.dis{opacity:.5; cursor:default;}
+
+  /* ---------- generic ---------- */
+  .dot{width:8px;height:8px;border-radius:99px;flex:none; background:var(--faint);}
+  .dot.completed{background:var(--ok);} .dot.running{background:var(--run); box-shadow:0 0 0 3px #6aa3e030;}
+  .dot.blocked{background:var(--acc);} .dot.failed{background:var(--bad);}
+  .dot.queued{background:var(--faint); opacity:.55;} .dot.cancelled{background:var(--faint);}
+  .dot.paused{background:var(--paused);}
+  .chip{display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10.5px; letter-spacing:.04em; border:1px solid var(--line2); border-radius:99px; padding:2px 9px; color:var(--muted); white-space:nowrap;}
+  .chip.completed{color:var(--ok);} .chip.blocked{color:var(--acc);}
+  .chip.failed{color:var(--bad);} .chip.running{color:var(--run);}
+  .chip.cancelled{color:var(--faint);} .chip.paused{color:var(--paused);}
+  .risk{font-family:var(--mono); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; border-radius:4px; padding:1px 6px;}
+  .risk.read{background:color-mix(in srgb,var(--ok) 12%,transparent); color:var(--ok);}
+  .risk.write{background:color-mix(in srgb,var(--run) 12%,transparent); color:var(--run);}
+  .risk.publish{background:color-mix(in srgb,var(--acc) 15%,transparent); color:var(--acc);}
+  .lbl{font-family:var(--mono); font-size:10px; letter-spacing:.13em; text-transform:uppercase; color:var(--faint);}
+  .screen{display:none;} .screen.on{display:block;}
+  .btn{border:1px solid var(--line2); background:var(--panel2); border-radius:7px; padding:6px 13px; color:var(--ink); font-weight:500; font-size:12.5px;}
+  .btn:hover{border-color:var(--acc-dim); color:var(--acc);}
+  .btn.pri{background:var(--acc-soft); border-color:var(--acc-dim); color:var(--acc);}
+  .btn.danger:hover{border-color:var(--bad); color:var(--bad);}
+  .btn:disabled{opacity:.4; cursor:default;}
+  .btn:focus-visible{outline:2px solid var(--acc); outline-offset:2px;}
+  .note{color:var(--faint); font-size:11.5px; font-family:var(--mono); margin-top:10px;}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:12px;}
+  .card .lbl{display:block; margin-bottom:8px;}
+  .kv{display:grid; grid-template-columns:170px 1fr; gap:6px 16px; font-size:13px;}
+  .kv .k{color:var(--faint);}
+  .meter{height:6px; border-radius:99px; background:var(--panel3); overflow:hidden; margin:5px 0 2px;}
+  .meter i{display:block; height:100%; background:var(--acc); border-radius:99px; min-width:2px;}
+
+  /* ---------- workbench ---------- */
+  .bench{display:grid; grid-template-columns:248px 1fr 296px; height:calc(100vh - 48px); min-height:540px;}
+  @media(max-width:1020px){.bench{grid-template-columns:220px 1fr;} .dock{display:none;}}
+  .rail{border-right:1px solid var(--line); overflow-y:auto; padding:10px 8px 30px; background:var(--panel);}
+  .rail .modebar{display:flex; gap:4px; margin:2px 4px 12px; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:3px;}
+  .rail .modebar button{flex:1; padding:5px 0; border-radius:6px; color:var(--muted); font-weight:500; font-size:12.5px;}
+  .rail .modebar button.on{background:var(--panel3); color:var(--ink);}
+  .phase{margin:14px 6px 5px; display:flex; align-items:center; gap:8px;}
+  .phase::after{content:""; flex:1; height:1px; background:var(--line);}
+  .phase .lbl{color:var(--acc-dim);}
+  .nrow{display:flex; align-items:center; gap:9px; width:100%; padding:6px 9px; border-radius:7px; text-align:left; color:var(--ink); border:1px solid transparent;}
+  .nrow:hover{background:var(--panel2);}
+  .nrow.sel{background:var(--panel3); border-color:var(--line2);}
+  .nrow.cur{border-color:var(--acc-dim);}
+  .nrow .nm{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px;}
+  .nrow .fan{font-family:var(--mono); font-size:9.5px; color:var(--faint);}
+  .nrow.dim{opacity:.38;}
+  .railfoot{margin:16px 6px 0; display:flex; flex-direction:column; gap:8px;}
+  .railfoot label{display:flex; gap:8px; align-items:center; color:var(--muted); font-size:12px; cursor:pointer;}
+  .railfoot .ghost{border:1px dashed var(--line2); border-radius:7px; padding:6px 10px; color:var(--muted); font-size:12px; text-align:center;}
+  .railfoot .ghost:hover{color:var(--ink); border-color:var(--acc-dim);}
+  .center{overflow-y:auto; padding:18px 22px 60px;}
+  .nhead{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px;}
+  .nhead h2{font-size:19px; margin:0; font-weight:600;}
+  .nhead .id{font-family:var(--mono); font-size:11.5px; color:var(--faint);}
+  .ndesc{color:var(--muted); margin:2px 0 14px; max-width:70ch;}
+  .tabs{display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:16px; flex-wrap:wrap;}
+  .tabs button{padding:7px 13px; color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-1px; font-weight:500;}
+  .tabs button:hover{color:var(--ink);}
+  .tabs button.on{color:var(--acc); border-bottom-color:var(--acc);}
+  .promptbox{font-family:var(--mono); font-size:12px; line-height:1.65; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:14px 16px; white-space:pre-wrap; max-height:260px; overflow:auto;}
+  .editnote{display:flex; align-items:center; gap:8px; margin-top:10px; color:var(--muted); font-size:12px; flex-wrap:wrap;}
+  .pin{font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; border-radius:4px; padding:2px 7px;}
+  .pin.live{background:color-mix(in srgb,var(--ok) 12%,transparent); color:var(--ok);}
+  .pin.pinned{background:color-mix(in srgb,var(--bad) 10%,transparent); color:var(--bad);}
+  .toolrow{display:flex; justify-content:space-between; gap:10px; padding:8px 4px; border-bottom:1px solid var(--line); align-items:center;}
+  .toolrow:last-child{border-bottom:0;}
+  .toolrow .tn{font-family:var(--mono); font-size:12px;}
+  .toolrow .td{color:var(--faint); font-size:12px; flex:1; margin-left:10px;}
+  .tcalls{display:flex; flex-direction:column; gap:6px;}
+  .tcall{display:flex; gap:10px; align-items:baseline; font-family:var(--mono); font-size:11.5px; background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:7px 11px;}
+  .tcall .ok{color:var(--ok);}
+  .schemabox{font-family:var(--mono); font-size:11.5px; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:12px 14px; white-space:pre; overflow-x:auto; color:var(--muted); line-height:1.6;}
+  .histrow{display:flex; gap:12px; padding:9px 4px; border-bottom:1px solid var(--line); align-items:baseline;}
+  .histrow:last-child{border-bottom:0;}
+  .histrow .when{font-family:var(--mono); font-size:11px; color:var(--faint); width:110px; flex:none;}
+  .histrow .what{flex:1;}
+  .histrow .act{color:var(--acc); font-size:12px;}
+  .dock{border-left:1px solid var(--line); overflow-y:auto; padding:14px; background:var(--panel); display:flex; flex-direction:column; gap:12px;}
+  .dock .card{margin-bottom:0; background:var(--panel2);}
+  .ctl{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+  .ctl .btn{text-align:center; padding:7px 4px; font-size:12px;}
+  .gate{border:1px solid var(--acc-dim); background:var(--acc-soft); border-radius:10px; padding:13px 14px;}
+  .gate .lbl{color:var(--acc); display:block; margin-bottom:6px;}
+  .gate p{margin:0 0 10px; font-size:12.5px; color:var(--ink);}
+  .gate .btn{margin-right:6px; margin-bottom:6px;}
+  .prog{height:5px; border-radius:99px; background:var(--panel3); overflow:hidden; margin:8px 0 4px;}
+  .prog i{display:block; height:100%; background:var(--acc); border-radius:99px;}
+  .tl{display:flex; align-items:flex-end; gap:2px; height:44px; margin-top:8px;}
+  .tl i{flex:1; background:var(--line2); border-radius:2px 2px 0 0; min-height:3px;}
+  .tl i.hot{background:var(--acc);}
+  .dockstat{display:flex; justify-content:space-between; font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:4px;}
+
+  /* ---------- pages ---------- */
+  .pagewrap{max-width:1180px; margin:0 auto; padding:30px 24px 80px;}
+  .pagehead{display:flex; align-items:baseline; gap:16px; margin-bottom:6px; flex-wrap:wrap;}
+  .pagehead h1{font-family:'Spectral',Georgia,serif; font-weight:600; font-size:27px; margin:0;}
+  .pagehead .sub{color:var(--muted);}
+  .cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px; margin-top:20px;}
+  .wfcard{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px; display:flex; flex-direction:column; gap:10px;}
+  .wfcard .ttl{display:flex; align-items:center; gap:10px;}
+  .wfcard .ttl svg.ic{width:20px;height:20px;color:var(--acc);}
+  .wfcard h3{margin:0; font-size:16.5px;}
+  .wfcard .desc{color:var(--muted); font-size:13px; min-height:38px;}
+  .wfcard .stats{display:flex; gap:14px; font-family:var(--mono); font-size:11px; color:var(--faint); flex-wrap:wrap; align-items:center;}
+  .wfcard .foot{display:flex; gap:8px; margin-top:4px;}
+  .wfcard.planned{border-style:dashed; opacity:.65;}
+  .subtabs{display:flex; gap:2px; border-bottom:1px solid var(--line); margin:18px 0 16px; flex-wrap:wrap;}
+  .subtabs button{padding:7px 14px; color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-1px; font-weight:500;}
+  .subtabs button.on{color:var(--acc); border-bottom-color:var(--acc);}
+  .filters{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;}
+  .filters select{background:var(--panel2); color:var(--ink); border:1px solid var(--line2); border-radius:7px; padding:5px 9px; font:inherit; font-size:12.5px;}
+  table.runs{width:100%; border-collapse:collapse; font-size:12.5px;}
+  .tblwrap{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel);}
+  table.runs th{font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); text-align:left; padding:10px 14px; border-bottom:1px solid var(--line2); font-weight:500; white-space:nowrap;}
+  table.runs td{padding:9px 14px; border-bottom:1px solid var(--line); white-space:nowrap;}
+  table.runs tr:last-child td{border-bottom:0;}
+  table.runs tbody tr{cursor:pointer;}
+  table.runs tbody tr:hover td{background:var(--panel2);}
+  .livecards{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:12px;}
+  .livecard{background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:15px 17px;}
+  .livecard .top{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+  .grid{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:14px;}
+  .grid table{border-collapse:separate; border-spacing:3px; font-family:var(--mono); font-size:10.5px;}
+  .grid th{color:var(--faint); font-weight:400; text-align:left; padding:2px 8px 6px 0; white-space:nowrap;}
+  .grid thead th{text-align:center; padding:0 2px 8px; color:var(--muted); writing-mode:vertical-rl; transform:rotate(180deg); height:86px;}
+  .cell{width:26px; height:17px; border-radius:4px; background:var(--panel3); display:block;}
+  .cell.completed{background:var(--cell-ok);} .cell.blocked{background:var(--cell-gate);} .cell.failed{background:var(--cell-bad);}
+  .cell.queued{background:var(--panel3);}
+
+  /* ---------- learning ---------- */
+  .fly{display:flex; gap:8px; align-items:stretch; flex-wrap:wrap; margin:6px 0 18px;}
+  .fstage{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:11px 14px; min-width:118px; flex:1; cursor:pointer; position:relative;}
+  .fstage:hover{border-color:var(--acc-dim);}
+  .fstage .lbl{display:block; margin-bottom:4px;}
+  .fstage .big{font-family:var(--mono); font-size:19px; font-weight:500;}
+  .fstage .big.zero{color:var(--faint);}
+  .fstage .hint{color:var(--faint); font-size:10.5px; line-height:1.35; display:block; margin-top:3px;}
+  .fstage .arrow{position:absolute; right:-11px; top:50%; transform:translateY(-50%); color:var(--faint); z-index:2; font-size:12px;}
+  .obsrow{display:flex; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line); align-items:flex-start;}
+  .obsrow:last-child{border-bottom:0;}
+  .obsrow .when{font-family:var(--mono); font-size:10.5px; color:var(--faint); width:64px; flex:none; padding-top:2px;}
+  .obsrow .txt{flex:1; font-size:12.8px;}
+  .obsrow .txt .tag{font-family:var(--mono); font-size:10px; color:var(--acc); margin-right:8px;}
+  .obsrow .acts{display:flex; gap:5px; flex-direction:column; align-items:stretch;}
+  .obsrow .acts .btn{padding:3px 10px; font-size:11px; text-align:center;}
+  .cmp{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;}
+  @media(max-width:760px){.cmp{grid-template-columns:1fr;}}
+  .cand{background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:16px 18px; display:flex; flex-direction:column; gap:10px;}
+  .cand.win{border-color:var(--ok);}
+  .cand .who{display:flex; justify-content:space-between; align-items:center;}
+  .cand .body{font-size:13.5px; line-height:1.6; min-height:120px;}
+  .cand .imgph{height:150px; border-radius:8px; border:1px solid var(--line);}
+  .cand .tpl{border:1px solid var(--line); border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:6px; min-height:150px; background:var(--bg);}
+  .cand .tpl i{display:block; border-radius:4px; background:var(--panel3);}
+  .cmpbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;}
+  .cmpbar .spacer{flex:1;}
+  .verdicts{display:flex; gap:8px; justify-content:center; margin:4px 0 10px;}
+  .verdicts .btn{min-width:110px; text-align:center;}
+  .diffline{font-family:var(--mono); font-size:11.5px; padding:2px 8px; border-radius:4px;}
+  .diffline.add{background:color-mix(in srgb,var(--ok) 12%,transparent); color:var(--ok);}
+  .diffline.del{background:color-mix(in srgb,var(--bad) 10%,transparent); color:var(--bad); text-decoration:line-through;}
+  .spark{display:flex; align-items:flex-end; gap:2px; height:30px;}
+  .spark i{width:7px; background:var(--line2); border-radius:2px 2px 0 0;}
+  .spark i.hi{background:var(--acc);}
+  .regverdict{font-family:var(--mono); font-size:10.5px; border-radius:99px; padding:2px 10px;}
+  .regverdict.held{background:color-mix(in srgb,var(--acc) 15%,transparent); color:var(--acc);}
+  .regverdict.baseline{background:var(--panel3); color:var(--muted);}
+
+  /* ---------- registry ---------- */
+  .reggrid{display:grid; grid-template-columns:190px 1fr; gap:22px; margin-top:18px;}
+  @media(max-width:820px){.reggrid{grid-template-columns:1fr;}}
+  .regnav{display:flex; flex-direction:column; gap:2px; position:sticky; top:64px; align-self:start;}
+  .regnav button{text-align:left; padding:7px 11px; border-radius:7px; color:var(--muted); font-weight:500;}
+  .regnav button.on{background:var(--panel3); color:var(--ink);}
+  .regnav button:hover{color:var(--ink);}
+  .projcard{background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:15px 18px; margin-bottom:12px;}
+  .projcard .top{display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap;}
+  .projcard h3{margin:0; font-size:15px;}
+  .okmark{font-family:var(--mono); font-size:10.5px; color:var(--ok);}
+  .badmark{font-family:var(--mono); font-size:10.5px; color:var(--bad);}
+  .polbar{display:flex; height:8px; border-radius:99px; overflow:hidden; margin:8px 0 4px; background:var(--panel3);}
+  .polbar i{display:block; height:100%;}
+  .polbar .a{background:var(--cell-ok);} .polbar .n{background:var(--cell-gate);} .polbar .b{background:var(--cell-bad);}
+  .pollegend{display:flex; gap:14px; font-family:var(--mono); font-size:10px; color:var(--faint); align-items:center; flex-wrap:wrap;}
+  .keyrow{display:grid; grid-template-columns:1fr auto auto; gap:12px; align-items:center; padding:9px 4px; border-bottom:1px solid var(--line); font-family:var(--mono); font-size:12px;}
+  .keyrow:last-child{border-bottom:0;}
+  .keyrow .src{color:var(--faint); font-size:10.5px;}
+
+  /* ---------- modal / palette / toast ---------- */
+  .scrim{position:fixed; inset:0; background:#00000066; display:none; z-index:80; align-items:flex-start; justify-content:center; padding-top:9vh;}
+  .scrim.open{display:flex;}
+  .modal{background:var(--panel2); border:1px solid var(--line2); border-radius:14px; width:min(520px,92vw); padding:22px 24px; box-shadow:var(--shadow); max-height:80vh; overflow-y:auto;}
+  .modal h3{margin:0 0 4px; font-size:17px;}
+  .modal .sub{color:var(--muted); font-size:12.5px; margin-bottom:16px;}
+  .field{margin-bottom:13px;}
+  .field label{display:block; margin-bottom:5px;}
+  .field select,.field input,.field textarea{width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line2); border-radius:8px; padding:8px 11px; font:inherit; font-size:13px;}
+  .field textarea{font-family:var(--mono); font-size:12px; min-height:70px; resize:vertical;}
+  .seg{display:flex; gap:4px; background:var(--bg); border:1px solid var(--line2); border-radius:8px; padding:3px;}
+  .seg button{flex:1; padding:6px 0; border-radius:6px; color:var(--muted); font-size:12.5px;}
+  .seg button.on{background:var(--panel3); color:var(--ink);}
+  .modal .foot{display:flex; justify-content:space-between; align-items:center; margin-top:18px;}
+  .valnote{font-family:var(--mono); font-size:10.5px; color:var(--ok);}
+  .palette{background:var(--panel2); border:1px solid var(--line2); border-radius:12px; width:min(560px,92vw); box-shadow:var(--shadow); overflow:hidden;}
+  .palette input{width:100%; background:transparent; border:none; outline:none; color:var(--ink); font:inherit; font-size:15px; padding:15px 18px; border-bottom:1px solid var(--line);}
+  .palette .res{max-height:320px; overflow-y:auto; padding:6px;}
+  .palette .res button{display:flex; width:100%; gap:10px; align-items:center; padding:8px 12px; border-radius:7px; text-align:left;}
+  .palette .res button:hover,.palette .res button.hi{background:var(--panel3);}
+  .palette .res .kind{font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); width:64px; flex:none;}
+  #toasts{position:fixed; bottom:18px; right:18px; display:flex; flex-direction:column; gap:8px; z-index:120;}
+  .toast{background:var(--panel2); border:1px solid var(--line2); border-left:3px solid var(--acc); border-radius:9px; padding:10px 14px; font-size:12.5px; box-shadow:var(--shadow); max-width:340px; animation:tin .18s ease;}
+  .toast .mono{color:var(--acc); font-size:11px;}
+  @keyframes tin{from{transform:translateY(8px); opacity:0}}
+  @media (prefers-reduced-motion:reduce){.toast{animation:none}}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="ic-pub"><path d="M13.5 2.5c-4 0-8 3-9.5 8l-1.5 3 3-1.5c5-1.5 8-5.5 8-9.5z"/><path d="M4.5 11.5l5-5"/></g>
+    <g id="ic-clone"><rect x="2.5" y="2.5" width="8" height="8" rx="1.2"/><rect x="5.5" y="5.5" width="8" height="8" rx="1.2"/></g>
+    <g id="ic-capture"><path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11"/><circle cx="8" cy="8" r="2.4"/></g>
+    <g id="ic-charity"><path d="M8 13.2C4.2 10.4 2.7 8.5 2.7 6.4 2.7 4.7 4 3.4 5.7 3.4c1 0 1.8.5 2.3 1.2.5-.7 1.3-1.2 2.3-1.2 1.7 0 3 1.3 3 3 0 2.1-1.5 4-5.3 6.8z"/></g>
+  </defs>
+</svg>
+
+<div class="topbar">
+  <div class="wordmark">Conductor<small>agent workspace</small></div>
+  <nav class="main" id="mainnav">
+    <button data-s="library">Workflows</button>
+    <button data-s="bench" class="on">Workbench</button>
+    <button data-s="runs">Runs</button>
+    <button data-s="learning">Learning</button>
+    <button data-s="registry">Registry</button>
+  </nav>
+  <div style="position:relative; margin-left:auto; display:flex; gap:10px; align-items:center;">
+    <div class="runchip" id="runchip" style="display:none;"></div>
+    <button class="wfsel" id="wfsel" aria-haspopup="true"><span class="lbl">workflow</span><span class="fn" id="wfname"></span><span class="car">▾</span></button>
+    <div class="wfmenu" id="wfmenu"></div>
+    <button class="kbd" id="themebtn" title="Theme: auto → light → dark">◐</button>
+    <button class="kbd" id="kbtn" title="Command palette">⌘K</button>
+  </div>
+</div>
+
+<section class="screen on" id="s-bench">
+  <div class="bench">
+    <aside class="rail">
+      <div class="modebar" role="tablist">
+        <button id="mode-build">Build</button>
+        <button id="mode-run" class="on">Run</button>
+      </div>
+      <div id="rail"></div>
+      <div class="railfoot">
+        <label id="unengrow" style="display:none;"><input type="checkbox" id="showuneng" checked> show unengaged nodes</label>
+        <button class="ghost" onclick="toast('Graph overlay','constellation as a map — one keystroke (G), never the home screen')">⌗ graph overlay</button>
+      </div>
+    </aside>
+    <main class="center" id="center"></main>
+    <aside class="dock" id="dock"></aside>
+  </div>
+</section>
+
+<section class="screen" id="s-library">
+  <div class="pagewrap">
+    <div class="pagehead"><h1>Workflows</h1><span class="sub">function-based conductors — clients bind at run start, not here</span></div>
+    <div class="cards" id="libcards"></div>
+  </div>
+</section>
+
+<section class="screen" id="s-runs">
+  <div class="pagewrap">
+    <div class="pagehead"><h1>Runs</h1><span class="sub">monitor · history · cross-run analysis</span></div>
+    <div class="subtabs" id="runtabs">
+      <button data-t="live" class="on">Live</button>
+      <button data-t="history">History</button>
+      <button data-t="grid">Grid</button>
+    </div>
+    <div id="runbody"></div>
+  </div>
+</section>
+
+<section class="screen" id="s-learning">
+  <div class="pagewrap">
+    <div class="pagehead"><h1>Learning</h1><span class="sub">the improvement flywheel — visibility above, capture below</span></div>
+    <div class="subtabs" id="lrntabs">
+      <button data-t="fly" class="on">Flywheel</button>
+      <button data-t="obs">Observations</button>
+      <button data-t="pb">Playbooks</button>
+      <button data-t="cmp">Compare</button>
+      <button data-t="eval">Evaluate</button>
+      <button data-t="opt">Optimizer</button>
+      <button data-t="ds">Datasets</button>
+    </div>
+    <div id="lrnbody"></div>
+  </div>
+</section>
+
+<section class="screen" id="s-registry">
+  <div class="pagewrap">
+    <div class="pagehead"><h1>Registry</h1><span class="sub">projects · keys · tools · skills · agents · usage</span></div>
+    <div class="reggrid">
+      <nav class="regnav" id="regnav">
+        <button data-r="projects" class="on">Projects &amp; connections</button>
+        <button data-r="keys">Keys &amp; auth</button>
+        <button data-r="tools">Tool registry</button>
+        <button data-r="skills">Skills library</button>
+        <button data-r="agents">Agents</button>
+        <button data-r="usage">Usage &amp; budgets</button>
+      </nav>
+      <div id="regbody"></div>
+    </div>
+  </div>
+</section>
+
+<div class="scrim" id="startmodal">
+  <div class="modal">
+    <h3>Start run</h3>
+    <div class="sub">The only place a client enters the picture. Every knob, no hidden defaults.</div>
+    <div class="field"><label class="lbl">workflow</label><select id="sm-wf"></select></div>
+    <div class="field"><label class="lbl">project (client)</label><select id="sm-proj"></select></div>
+    <div class="field"><label class="lbl">execution</label>
+      <div class="seg" id="sm-exec"><button class="on">mock (free, shape test)</button><button>openai (live model)</button></div>
+    </div>
+    <div class="field"><label class="lbl">mode</label>
+      <div class="seg" id="sm-dry"><button class="on">dry run</button><button>live</button></div>
+    </div>
+    <div class="field"><label class="lbl">budget usd</label><input value="10" id="sm-budget"></div>
+    <div class="field"><label class="lbl">brief / input</label><textarea>Draft a DTC science explainer on retinol alternatives for sensitive skin.</textarea></div>
+    <div class="foot">
+      <span class="valnote">✓ input validates against input_triage schema</span>
+      <span>
+        <button class="btn" onclick="closeModals()">Cancel</button>
+        <button class="btn pri" onclick="startRunFromModal()">Start run</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="palscrim">
+  <div class="palette">
+    <input id="palinput" placeholder="Jump to node, run, workflow, project, learning…" autocomplete="off">
+    <div class="res" id="palres"></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+/* ============ DATA (from the live workspace, 24 Aug 2026) ============ */
+const WORKFLOWS = {
+  publishing_conductor: {
+    name:'Publishing conductor', fn:'DTC publishing specialist', icon:'ic-pub',
+    short:'Strategy → research → draft → review → gated publish',
+    desc:'23-node article production line: strategy → research → draft → four-way review → build → gated publish → learning.',
+    phases:[
+      ['Intake',['input_triage']],
+      ['Strategy',['placement_resolver','topic_opportunity','monetization_strategy','reader_insight']],
+      ['Research',['research','objection_mapping','narrative_movement','angle_strategy']],
+      ['Planning',['brief_architect','contract_intelligence']],
+      ['Drafting',['draft_writer']],
+      ['Review',['human_texture','trust_factual','emotional_resonance','reader_simulation','review_aggregator']],
+      ['Build',['article_body','artifact_plan','publish_payload']],
+      ['Publish',['publication_controller','publish_executor']],
+      ['Learning',['learning_recorder']]
+    ]
+  },
+  clone_conductor: {
+    name:'Clone conductor', fn:'Site cloning & template generation specialist', icon:'ic-clone',
+    short:'Capture → recipes → theme bind → restamp',
+    desc:'8-node pipeline: intake a capture, analyse layout, design & mint recipes, reconcile and bind theme, restamp pages, report.',
+    phases:[
+      ['Intake & analysis',['clone_intake','layout_analyst']],
+      ['Recipes',['recipe_designer','recipe_mint']],
+      ['Theme',['theme_reconciler','theme_bind']],
+      ['Restamp & report',['layout_restamp','clone_report']]
+    ]
+  },
+  capture_conductor: {
+    name:'Capture conductor', fn:'Site capture & fidelity specialist', icon:'ic-capture',
+    short:'Crawl → map → theme → emit → score',
+    desc:'11-node pipeline: crawl → map → classify → refine → theme → dry emit → regenerate copy → live emit → score → adjudicate → report.',
+    phases:[
+      ['Crawl & map',['capture_crawl','capture_map','block_classifier','capture_map_refine']],
+      ['Theme & emit',['capture_theme','capture_emit_dry','copy_regenerator','capture_emit_live']],
+      ['Score & report',['capture_score','gap_adjudicator','capture_report']]
+    ]
+  }
+};
+const NODES = {
+  input_triage:{name:'CMS Input Triage',kind:'intake',risk:'read',fan:0,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Classifies the operator brief and routes it into the pipeline.'},
+  placement_resolver:{name:'Placement Resolver',kind:'strategy',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Resolves where the piece lives on the target property.'},
+  topic_opportunity:{name:'Topic Opportunity Agent',kind:'strategy',risk:'read',fan:2,tools:['stage.get_output','stage.list_outputs'],skills:[],desc:'Scores the topic against audience opportunity.'},
+  monetization_strategy:{name:'Monetization Strategy Agent',kind:'strategy',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs','project.call_read_tool'],skills:[],desc:'Reads monetizer signals; shapes commercial direction.'},
+  reader_insight:{name:'Reader Insight Agent',kind:'strategy',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Models the reader: awareness stage, objections, stakes.'},
+  research:{name:'Research Agent',kind:'research',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs','web.search','web.fetch'],skills:['web_research'],desc:'Primary-source research with citations.'},
+  objection_mapping:{name:'Objection Mapping Agent',kind:'strategy',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Maps reader objections to evidence.'},
+  narrative_movement:{name:'Narrative Movement Agent',kind:'strategy',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Designs the movement of the piece.'},
+  angle_strategy:{name:'Angle Strategist',kind:'strategy',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Chooses the angle that carries the narrative.'},
+  brief_architect:{name:'Brief Architect',kind:'planning',risk:'read',fan:7,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Fuses seven upstream outputs into the production brief.'},
+  contract_intelligence:{name:'Contract Intelligence Agent',kind:'research',risk:'write',fan:1,tools:['workspace.get_node','stage.get_output','stage.save_output','stage.list_outputs','project.call_tool','project.call_read_tool'],skills:['contract_intelligence'],desc:'Fetches the target client’s live object contract; the only source of truth for shape, ids, media paths and gates.'},
+  draft_writer:{name:'Full Draft Writer',kind:'drafting',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:['editorial_craft'],desc:'Writes the full draft from the brief.',model:{maxTurns:4,toolCallLimit:2,timeout:'300s',budgetUsd:0.5,maxOutputTokens:8000,retryCount:1},prompt:'You are the Full Draft Writer for a governed content pipeline.\n\nWrite the complete draft from the brief produced by brief_architect. Honor the client’s voice record and the editorial_craft skill: calm authority, evidence-aware, no hype, low-pressure next steps.\n\nNever expose internal strategy labels, prompts, or scoring in reader-visible copy. Produce draft.v1 matching the output schema…'},
+  human_texture:{name:'Human Texture Editor',kind:'review',risk:'read',fan:1,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:['editorial_review'],desc:'Removes machine cadence; adds human texture.'},
+  trust_factual:{name:'Trust / Factual Editor',kind:'review',risk:'read',fan:2,tools:['workspace.get_node','stage.get_output','stage.list_outputs','web.fetch'],skills:['factual_review','source_verification'],desc:'Verifies claims; blocks unsupported assertions.'},
+  emotional_resonance:{name:'Emotional Resonance Evaluator',kind:'review',risk:'read',fan:4,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Scores resonance against the reader model.'},
+  reader_simulation:{name:'Reader Simulation',kind:'review',risk:'read',fan:4,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Simulates the modelled reader through the draft.'},
+  review_aggregator:{name:'Review Aggregator',kind:'review',risk:'read',fan:4,tools:['workspace.get_node','stage.get_output','stage.list_outputs'],skills:[],desc:'Merges the four review verdicts into one instruction set.'},
+  article_body:{name:'Article Body Builder',kind:'builder',risk:'write',fan:5,tools:['workspace.get_node','stage.get_output','stage.save_output','stage.list_outputs','project.call_tool','project.call_read_tool'],skills:['article_body_builder'],desc:'Builds the governed client_object.v1 body.'},
+  artifact_plan:{name:'Artifact Planning Agent',kind:'adapter',risk:'write',fan:1,tools:['workspace.get_node','stage.get_output','stage.save_output','stage.list_outputs','project.call_tool','project.call_read_tool'],skills:['artifact_handling'],desc:'Plans media artifacts for the piece.'},
+  publish_payload:{name:'Publish Payload Builder',kind:'adapter',risk:'write',fan:2,tools:['stage.get_output','stage.save_output','project.call_tool','project.call_read_tool'],skills:[],desc:'Assembles the validated publish payload.'},
+  publication_controller:{name:'Publication Controller',kind:'controller',risk:'publish',fan:1,tools:['workspace.get_node','stage.get_output','stage.save_output','stage.list_outputs','project.call_tool'],skills:['publication_readiness'],desc:'The gate. Assembles readiness evidence and awaits the operator publish decision.'},
+  publish_executor:{name:'Publish Executor',kind:'publisher',risk:'publish',fan:1,tools:['workspace.get_node','stage.get_output','stage.save_output','stage.list_outputs','project.call_tool','project.call_read_tool'],skills:[],desc:'Executes the approved publish against the client MCP.'},
+  learning_recorder:{name:'Learning Recorder',kind:'learning',risk:'write',fan:2,tools:['stage.list_outputs','learning.record_observation'],skills:['learning_observation'],desc:'Records reusable observations from the run.'},
+  clone_intake:{name:'Clone Intake',kind:'intake',risk:'read',fan:0,tools:['clone.intake'],skills:[],desc:'Assembles the bounded clone briefing from the capture run.'},
+  layout_analyst:{name:'Layout Analyst',kind:'strategy',risk:'read',fan:1,tools:['stage.get_output','stage.list_outputs'],skills:[],desc:'Analyses captured page shapes.'},
+  recipe_designer:{name:'Recipe Designer',kind:'strategy',risk:'read',fan:1,tools:['stage.get_output','stage.list_outputs'],skills:[],desc:'Designs section-template / template recipes.'},
+  recipe_mint:{name:'Recipe Mint',kind:'builder',risk:'write',fan:1,tools:['clone.mint'],skills:[],desc:'Re-validates designs against live registries; mints draft recipes.'},
+  theme_reconciler:{name:'Theme Reconciler',kind:'strategy',risk:'read',fan:1,tools:['stage.get_output'],skills:[],desc:'Reconciles captured theme tokens with site brand tokens.'},
+  theme_bind:{name:'Theme Bind',kind:'controller',risk:'publish',fan:1,tools:['clone.theme_bind'],skills:[],desc:'The only sanctioned palette writer — exact replace via site_apply_theme, refuses partial coverage (theme_not_total).'},
+  layout_restamp:{name:'Layout Restamp',kind:'builder',risk:'write',fan:2,tools:['clone.restamp'],skills:[],desc:'Re-assembles captured pages onto minted recipes.'},
+  clone_report:{name:'Clone Report',kind:'review',risk:'read',fan:2,tools:['stage.list_outputs'],skills:[],desc:'Summarises the clone run: minted, skipped, quarantined.'},
+  capture_crawl:{name:'Capture Crawl',kind:'intake',risk:'write',fan:0,tools:['capture.crawl'],skills:[],desc:'Crawls the source under the project capture policy.'},
+  capture_map:{name:'Capture Map',kind:'strategy',risk:'read',fan:1,tools:['capture.map'],skills:[],desc:'Deterministic mapping into governed candidates.'},
+  block_classifier:{name:'Block Classifier',kind:'strategy',risk:'read',fan:1,tools:['stage.get_output'],skills:[],desc:'Suggests block types for unmapped regions.'},
+  capture_map_refine:{name:'Map Refine',kind:'strategy',risk:'read',fan:2,tools:['capture.map'],skills:[],desc:'Re-maps with sanitized suggestions.'},
+  capture_theme:{name:'Capture Theme',kind:'strategy',risk:'read',fan:1,tools:['capture.theme'],skills:[],desc:'Bounded theme quantization from computed styles.'},
+  capture_emit_dry:{name:'Emit (dry)',kind:'adapter',risk:'read',fan:2,tools:['capture.emit'],skills:[],desc:'Dry-run emission plan, no MCP calls.'},
+  copy_regenerator:{name:'Copy Regenerator',kind:'drafting',risk:'read',fan:1,tools:['stage.get_output'],skills:['editorial_craft'],desc:'Regenerates copy where rights prohibit extraction.'},
+  capture_emit_live:{name:'Emit (live)',kind:'publisher',risk:'publish',fan:2,tools:['capture.emit'],skills:[],desc:'Executes the plan as never-released drafts; forbidden verbs refused.'},
+  capture_score:{name:'Capture Score',kind:'review',risk:'read',fan:1,tools:['capture.score'],skills:[],desc:'Deterministic fidelity scoring against the rubric.'},
+  gap_adjudicator:{name:'Gap Adjudicator',kind:'review',risk:'read',fan:1,tools:['stage.get_output'],skills:[],desc:'Adjudicates the consolidated gap report.'},
+  capture_report:{name:'Capture Report',kind:'review',risk:'read',fan:2,tools:['stage.list_outputs'],skills:[],desc:'Final capture report.'}
+};
+const PROJECTS = [
+  {id:'dr-lurie',name:'Dr. Lurie',ok:true,pol:{a:18,n:1,b:15}},
+  {id:'zilberman',name:'Zilberman Film Foundation',ok:true,pol:{a:24,n:0,b:1}},
+  {id:'platform',name:'Platform',ok:true,pol:{a:31,n:6,b:0}},
+  {id:'pdf-tool',name:'PDF Tool',ok:true,pol:{a:10,n:0,b:1}},
+  {id:'fernwell',name:'Fernwell',ok:true,disabled:true,pol:{a:7,n:0,b:1}},
+  {id:'monetizer',name:'Monetizer',ok:false,pol:{a:6,n:0,b:1}}
+];
+const RUNS = [
+  {id:'run_1787572511291_qmw645',wf:'clone_conductor',proj:'zilberman',status:'blocked',cur:'theme_bind',started:'24 Aug 11:55',dur:'6m 12s',cost:3.18,budget:25,exec:'openai',dry:true,err:0,done:5},
+  {id:'run_1787567811920_hevotl',wf:'publishing_conductor',proj:'dr-lurie',status:'completed',cur:null,started:'24 Aug 10:36',dur:'41m 08s',cost:6.94,budget:10,exec:'openai',dry:true,err:0,done:23},
+  {id:'run_1787567551705_e1qp0l',wf:'clone_conductor',proj:'zilberman',status:'blocked',cur:'theme_bind',started:'24 Aug 10:32',dur:'5m 51s',cost:3.02,budget:25,exec:'openai',dry:true,err:0,done:5},
+  {id:'run_1787508397978_8fyyst',wf:'clone_conductor',proj:'zilberman',status:'blocked',cur:'theme_bind',started:'23 Aug 18:06',dur:'6m 40s',cost:3.31,budget:25,exec:'openai',dry:true,err:0,done:5},
+  {id:'run_1787503522535_8lj04d',wf:'clone_conductor',proj:'zilberman',status:'failed',cur:'layout_analyst',started:'23 Aug 16:45',dur:'1m 04s',cost:0.42,budget:25,exec:'openai',dry:true,err:2,done:1},
+  {id:'run_1787503507240_hytb76',wf:'clone_conductor',proj:'zilberman',status:'cancelled',cur:'clone_intake',started:'23 Aug 16:45',dur:'12s',cost:0,budget:null,exec:'mock',dry:true,err:0,done:0},
+  {id:'run_1787497206104_nckgkv',wf:'capture_conductor',proj:'zilberman',status:'completed',cur:null,started:'23 Aug 15:00',dur:'18m 22s',cost:4.10,budget:25,exec:'openai',dry:true,err:0,done:11},
+  {id:'run_1787492010814_kxdbeb',wf:'publishing_conductor',proj:'dr-lurie',status:'blocked',cur:'publish_executor',started:'23 Aug 13:33',dur:'44m 01s',cost:7.21,budget:null,exec:'openai',dry:true,err:0,done:21},
+  {id:'run_1787472547111_vzovz4',wf:'publishing_conductor',proj:'dr-lurie',status:'blocked',cur:'publication_controller',started:'23 Aug 08:09',dur:'39m 45s',cost:6.55,budget:null,exec:'openai',dry:true,err:0,done:20},
+  {id:'run_1787408495018_e97wrk',wf:'publishing_conductor',proj:'dr-lurie',status:'failed',cur:'reader_simulation',started:'22 Aug 14:21',dur:'22m 10s',cost:3.87,budget:null,exec:'openai',dry:true,err:1,done:14},
+  {id:'run_1787328818436_0ur63y',wf:'publishing_conductor',proj:'dr-lurie',status:'failed',cur:'article_body',started:'21 Aug 16:13',dur:'35m 02s',cost:5.60,budget:null,exec:'openai',dry:true,err:1,done:17},
+  {id:'run_1787328002801_lr3n7y',wf:'capture_conductor',proj:'zilberman',status:'completed',cur:null,started:'21 Aug 16:00',dur:'17m 44s',cost:3.95,budget:null,exec:'openai',dry:true,err:0,done:11},
+  {id:'run_1787325491908_55h9ce',wf:'publishing_conductor',proj:'dr-lurie',status:'blocked',cur:'publication_controller',started:'21 Aug 15:18',dur:'38m 30s',cost:6.12,budget:null,exec:'openai',dry:true,err:0,done:20},
+  {id:'run_1787317168383_2lmevm',wf:'capture_conductor',proj:'zilberman',status:'completed',cur:null,started:'21 Aug 12:59',dur:'16m 58s',cost:3.71,budget:null,exec:'openai',dry:true,err:0,done:11},
+  {id:'run_1787240541149_c8p8zi',wf:'capture_conductor',proj:'zilberman',status:'blocked',cur:'capture_emit_live',started:'20 Aug 15:42',dur:'12m 05s',cost:2.88,budget:25,exec:'openai',dry:true,err:0,done:7}
+];
+const TOOLS = [
+  ['workspace.get_node','read','none','Get one workspace node.'],
+  ['stage.get_output','read','none','Get stage output.'],
+  ['stage.save_output','write','workspace_write','Save stage output.'],
+  ['web.search','read','external_read','Provider-backed web search.'],
+  ['web.fetch','read','external_read','Fetch text from a validated public URL.'],
+  ['project.call_read_tool','read','external_read','Read-only call on a project MCP; fixed allowlist.'],
+  ['project.call_tool','write','external_write','Guarded project MCP write.'],
+  ['clone.theme_bind','write','external_write','Only sanctioned palette writer; exact replace or refuse.'],
+  ['capture.emit','write','external_write','Emission as never-released drafts; forbidden verbs refused.'],
+  ['learning.record_observation','write','workspace_write','Record observation, provenance from execution context.']
+];
+const SKILLS = ['editorial_craft','editorial_review','contract_intelligence','factual_review','source_verification','web_research','article_body_builder','artifact_handling','publication_readiness','learning_observation','seo_review','article_structuring'];
+
+/* --- learning stores (real, 24 Aug 2026) --- */
+const OBS = [
+  {id:'…fnhzuq / …6s5jpn',when:'12 Aug',node:'publish_executor',run:'…ev9goe',txt:'Publish failed with create_missing_object_id: executor parses result.object_id but the platform returns it at structuredContent.record.object_id. Fix the id extraction in the publish sequencer. Also: release_to_production returned 504 after the build hook already fired — the idempotency_key pattern is mandatory.'},
+  {id:'…5jmns6',when:'11 Aug',node:'publish_executor',run:'…ev9goe',txt:'Correctly blocked before mutation: publication_controller said GO but operatorPublishDecision was null, approvalMatched=false — no side effects attempted. Improvement candidate: ensure intended publish runs carry operatorPublishDecision:"approved" in executor run context.'},
+  {id:'…9ovgu8',when:'4 Aug',node:'publish_executor',run:'…tqjk1o',txt:'End-to-end conductor → publish_payload → object_create → object_publish → release_to_production confirmed on a real live run for platform. productionConfirmed:true.'},
+  {id:'…5a68d0',when:'30 Jul',node:'learning_recorder',run:'…l544ye',txt:'Workflow blocked in dry-run before publish-risk publication_controller — expected under dryRun:true. Improvement: surface the approval gate earlier. Unresolved: authorized approver process.'},
+  {id:'…ul6nga',when:'22 Jul',node:null,run:null,txt:'Dr. Lurie articles are functional blocks, not blobs: one node per persuasion beat, private.strategy from the 12-value enum, private.intent from 5. Node ids opaque — never hook/cta/offer in the id.'},
+  {id:'…m3nk4t',when:'22 Jul',node:null,run:null,txt:'Media reference flip (was a build-breaker): rendered image src MUST be the public /img/{req}/{sha} path; a raw blobKey in any renderable field is a write-blocker and 404s the Astro build.'},
+  {id:'…3sydm5',when:'22 Jul',node:null,run:null,txt:'publish ≠ release: object_publish commits dark ([skip netlify], free, invisible). release_to_production is the ONLY sanctioned build trigger — batch publishes, release ONCE per run, poll deploy_status until productionConfirmed:true.'},
+  {id:'…ylbhsw',when:'22 Jul',node:null,run:null,txt:'TWO grammars: the agent authors article_body.v1 (plain-string bodies) while the client stores content_item.v1 (strict zod). At the mapping: drop schema_version, hoist root slug/title/taxonomy/seo, carry per-node strategy into private.'}
+];
+const RUBRICS = [
+  {node:'contract_intelligence',crit:7,top:'contract_fidelity ×3 · severity mapping ×2.5 · no_invented_client_rules ×2',score:0.484,verdict:'held'},
+  {node:'research',crit:7,top:'primary sources · citation sufficiency · claim support',score:null,verdict:null},
+  {node:'article_body',crit:9,top:'contract adherence · block strategy · media path correctness',score:null,verdict:null},
+  {node:'publish_payload',crit:7,top:'payload validity · gate separation · id conventions',score:null,verdict:null},
+  {node:'artifact_plan',crit:6,top:'artifact coverage · reference integrity',score:null,verdict:null}
+];
+const DATASETS = [
+  ['ds_…ugd98n','contract_intelligence',4,'10 Aug','frozen replay — distinct subjects, post P1 dedup fix'],
+  ['ds_…thqdgr','contract_intelligence',3,'3 Aug','REAL champions only (Session B follow-up)'],
+  ['ds_…c5gnyl','publish_payload',5,'3 Aug','frozen replay (Session B)'],
+  ['ds_…am32rx','article_body',6,'3 Aug','frozen replay (Session B)'],
+  ['ds_…5baov9','research',6,'3 Aug','frozen replay (Session B)'],
+  ['ds_…9a01hb','contract_intelligence',4,'3 Aug','frozen replay (Session B)']
+];
+const CMP_QUEUE = [
+  {kind:'text',node:'draft_writer',brief:'Intro paragraph — retinol alternatives for sensitive skin (req_agent_niacinamide_barrier_after40 family)',champ:'A',
+   a:'If retinol leaves your skin red and flaking, you are not doing it wrong — your barrier is telling you something. After 40, the skin\'s tolerance for aggressive actives narrows, and the good news is that the alternatives are no longer second-best.',
+   b:'Retinol is the gold standard — but gold standards assume an average skin, and yours may not be average. For sensitive skin past 40, three well-studied alternatives now deliver comparable resurfacing evidence without the irritation tax.'},
+  {kind:'template',node:'article_body',brief:'Article card template — related-reading block',champ:'B',
+   a:'img-top',b:'img-left'},
+  {kind:'image',node:'artifact_plan',brief:'Hero direction — calm clinical vs warm lifestyle',champ:'A',
+   a:'linear-gradient(135deg,#7fa8c9,#c9d8e6)',b:'linear-gradient(135deg,#d9a05b,#e8cba8)'}
+];
+
+/* ============ STATE ============ */
+let S = { screen:'bench', wf:'publishing_conductor', mode:'run', runId:'run_1787492010814_kxdbeb', node:'publish_executor', tab:'thisrun', runtab:'live', reg:'projects', lrn:'fly', showUneng:true };
+let pairsDone=0, cmpIdx=0, blind=true;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const ic = id => `<svg class="ic" aria-hidden="true"><use href="#${id}"/></svg>`;
+function toast(title,body){ const t=document.createElement('div'); t.className='toast'; t.innerHTML='<div>'+esc(title)+'</div>'+(body?'<div class="mono">'+esc(body)+'</div>':''); $('toasts').appendChild(t); setTimeout(()=>t.remove(),3800); }
+
+function orderedNodes(wf){ return WORKFLOWS[wf].phases.flatMap(p=>p[1]); }
+function runOf(id){ return RUNS.find(r=>r.id===id); }
+function nodeRunStatus(run,nid){
+  const order=orderedNodes(run.wf); const i=order.indexOf(nid);
+  if(run.status==='completed') return 'completed';
+  const ci=order.indexOf(run.cur);
+  if(i<ci) return 'completed';
+  if(i===ci) return run.status==='failed'?'failed':(run.status==='cancelled'?'cancelled':(run.status==='running'?'running':'blocked'));
+  return 'queued';
+}
+
+/* ============ THEME ============ */
+let themePref='auto'; try{ themePref=localStorage.getItem('cw-theme')||'auto'; }catch(e){}
+function applyTheme(){
+  const r=document.documentElement;
+  if(themePref==='auto') r.removeAttribute('data-theme'); else r.setAttribute('data-theme',themePref);
+  $('themebtn').textContent = themePref==='auto'?'◐':(themePref==='light'?'☀':'☾');
+  $('themebtn').title = 'Theme: '+themePref+' (click to cycle)';
+}
+$('themebtn').onclick=()=>{ themePref = themePref==='auto'?'light':(themePref==='light'?'dark':'auto'); try{localStorage.setItem('cw-theme',themePref);}catch(e){} applyTheme(); };
+
+/* ============ NAV ============ */
+function setScreen(s){ S.screen=s; document.querySelectorAll('#mainnav button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));
+  ['bench','library','runs','learning','registry'].forEach(x=>$('s-'+x).classList.toggle('on',x===s)); renderAll(); }
+$('mainnav').addEventListener('click',e=>{ const b=e.target.closest('button'); if(b) setScreen(b.dataset.s); });
+$('wfsel').onclick = ()=> $('wfmenu').classList.toggle('open');
+document.addEventListener('click',e=>{ if(!e.target.closest('#wfsel')&&!e.target.closest('#wfmenu')) $('wfmenu').classList.remove('open'); });
+function renderWfMenu(){
+  $('wfmenu').innerHTML = Object.entries(WORKFLOWS).map(([id,w])=>
+    `<button onclick="pickWf('${id}')">${ic(w.icon)}<span><span class="t">${w.name}</span><span class="sub">${w.short}</span></span><span class="n">${orderedNodes(id).length} nodes</span></button>`).join('')
+    + `<button class="dis">${ic('ic-charity')}<span><span class="t">Foundation-charity conductor</span><span class="sub">foundation &amp; charity publishing — planned</span></span></button>`;
+  $('wfname').innerHTML = ic(WORKFLOWS[S.wf].icon)+' '+WORKFLOWS[S.wf].name;
+}
+function pickWf(id){ S.wf=id; S.node=orderedNodes(id)[0]; if(S.runId && runOf(S.runId).wf!==id){ S.runId=null; S.mode='build'; S.tab='prompt'; } $('wfmenu').classList.remove('open'); renderAll(); }
+function bindRun(id){ const r=runOf(id); S.wf=r.wf; S.runId=id; S.mode='run'; S.node=r.cur||orderedNodes(r.wf).slice(-1)[0]; S.tab='thisrun'; setScreen('bench'); }
+function unbindRun(){ S.runId=null; S.mode='build'; S.tab='prompt'; renderAll(); }
+
+/* ============ WORKBENCH ============ */
+$('mode-build').onclick=()=>{ S.mode='build'; S.tab='prompt'; renderAll(); };
+$('mode-run').onclick=()=>{ if(!S.runId){ const r=RUNS.find(r=>r.wf===S.wf); if(r){S.runId=r.id; S.node=r.cur||S.node;} } if(S.runId){S.mode='run'; S.tab='thisrun';} renderAll(); };
+
+function renderRail(){
+  const run = S.mode==='run'&&S.runId?runOf(S.runId):null;
+  $('mode-build').classList.toggle('on',S.mode==='build');
+  $('mode-run').classList.toggle('on',S.mode==='run');
+  $('unengrow').style.display = run?'flex':'none';
+  let html='';
+  WORKFLOWS[S.wf].phases.forEach(([ph,nids])=>{
+    const rows = nids.map(nid=>{
+      const n=NODES[nid]; const st = run?nodeRunStatus(run,nid):null;
+      const dim = run && st==='queued';
+      if(dim && !S.showUneng) return '';
+      return `<button class="nrow ${S.node===nid?'sel':''} ${run&&run.cur===nid?'cur':''} ${dim?'dim':''}" onclick="selNode('${nid}')">
+        <span class="dot ${st||''}"></span><span class="nm">${nid}</span>${n.fan>1?`<span class="fan">⇐${n.fan}</span>`:''}
+        ${n.risk==='publish'?'<span class="risk publish">P</span>':''}</button>`;
+    }).join('');
+    if(rows) html+=`<div class="phase"><span class="lbl">${ph}</span></div>${rows}`;
+  });
+  $('rail').innerHTML=html;
+}
+function selNode(nid){ S.node=nid; renderCenter(); renderRail(); }
+$('showuneng').onchange=e=>{ S.showUneng=e.target.checked; renderRail(); };
+
+const TABDEFS = [['thisrun','This run'],['prompt','Prompt'],['tools','Tools'],['skills','Skills'],['schemas','Schemas'],['model','Model & limits'],['deps','Dependencies'],['history','History'],['learn','Learning']];
+function renderCenter(){
+  const n=NODES[S.node]; const run=S.mode==='run'&&S.runId?runOf(S.runId):null;
+  const tabs = TABDEFS.filter(t=>t[0]!=='thisrun'||run);
+  if(!tabs.find(t=>t[0]===S.tab)) S.tab = run?'thisrun':'prompt';
+  let body='';
+  const st = run?nodeRunStatus(run,S.node):null;
+  if(S.tab==='thisrun'){
+    body = st==='queued'
+      ? `<div class="card"><span class="lbl">this run</span><p style="color:var(--muted);margin:0">Not engaged in ${run.id.slice(-10)} — upstream stopped at <span class="mono">${run.cur}</span>. Dimmed in the rail.</p></div>`
+      : `<div class="card"><span class="lbl">execution record · ${run.id.slice(-10)} · ${run.proj}</span>
+          <div class="kv">
+            <span class="k">status</span><span><span class="chip ${st}"><span class="dot ${st}"></span>${st}</span></span>
+            <span class="k">input</span><span>✓ valid against input schema · <button class="btn" style="padding:2px 9px;font-size:11.5px" onclick="toast('Input viewer','full validated input JSON, node_validate_input')">view</button></span>
+            <span class="k">effective prompt</span><span>resolved with skill + playbook overlays · <button class="btn" style="padding:2px 9px;font-size:11.5px" onclick="toast('Effective prompt','node_get_effective_prompt — the prompt as the model actually received it')">view</button></span>
+            <span class="k">duration · cost</span><span class="num">${st==='completed'?'74s · $0.31':'11.2s · $0.04 (until stop)'}</span>
+          </div></div>
+        <div class="card"><span class="lbl">tool calls</span><div class="tcalls">
+          <div class="tcall"><span class="ok">✓</span><span>stage.get_output</span><span style="color:var(--faint)">publish_payload.v1 · 41ms</span></div>
+          <div class="tcall"><span class="ok">✓</span><span>project.call_tool → object_validate</span><span style="color:var(--faint)">dr-lurie · 890ms</span></div>
+        </div></div>
+        ${st==='blocked'?`<div class="card" style="border-color:var(--acc-dim)"><span class="lbl" style="color:var(--acc)">gate</span><p style="margin:0 0 8px">Readiness evidence assembled. Awaiting the operator publish decision — see the run dock.</p></div>`:''}
+        ${st==='failed'?`<div class="card" style="border-color:color-mix(in srgb,var(--bad) 40%,transparent)"><span class="lbl" style="color:var(--bad)">error</span><p class="mono" style="font-size:12px;margin:0">output failed schema validation: required field "verdict" missing — retry with edits, or inspect the effective prompt.</p></div>`:''}
+        <div class="card"><span class="lbl">output</span><div class="promptbox" style="max-height:130px">{ "readiness": { "checksPassed": 9, "checksFailed": 0, "artifacts": 2, "decision": "awaiting_operator" } … }</div>
+        <div class="editnote">
+          <button class="btn" onclick="toast('Approved','feedback_record kind:approve — counts toward the 500-example SFT threshold')">✓ Approve output</button>
+          <button class="btn" onclick="toast('Rejected','feedback_record kind:reject')">✗ Reject</button>
+          <button class="btn" onclick="toast('Edit & approve','your edit becomes an SFT example (dataset.export_sft)')">✎ Edit &amp; approve</button>
+          <button class="btn" onclick="toast('Observation','learning_record_observation — provenance stamped from this run/node')">+ Record observation</button>
+        </div>
+        <div class="editnote"><button class="btn" onclick="S.tab='prompt';renderCenter()">Edit prompt</button><button class="btn pri" onclick="toast('Retry node','workflow_retry_node — re-executes with your store edits applied')">↻ Retry this node</button></div></div>`;
+  }
+  if(S.tab==='prompt'){
+    body = `<div class="card"><span class="lbl">stored prompt <span class="pin live">live — applies next run</span> · state: diverged from canonical</span>
+      <div class="promptbox" contenteditable="true" spellcheck="false">${esc(n.prompt||('You are the '+n.name+' in the '+WORKFLOWS[S.wf].name.toLowerCase()+'.\n\n'+n.desc+'\n\nRead upstream stage outputs, honor the client contract, produce output matching the declared schema…'))}</div>
+      <div class="editnote"><button class="btn pri" onclick="toast('Saved','workspace_update_node_prompt → change recorded in History')">Save</button><button class="btn" onclick="toast('Diff vs canonical','changes_compare against the shipped prompt text')">Diff vs canonical</button><button class="btn" onclick="toast('Effective preview','node_get_effective_prompt — skill + playbook injection resolved')">Preview effective</button><button class="btn" onclick="toast('Counterfactual replay','optimizer_run_trial — replay this edit against the frozen dataset, side-by-side with score delta, before it touches a live run')">⇄ Replay vs dataset</button></div></div>`;
+  }
+  if(S.tab==='tools'){
+    body = `<div class="card"><span class="lbl">allowed tools <span class="pin live">live</span></span>` +
+      n.tools.map(t=>{const reg=TOOLS.find(x=>x[0]===t); return `<div class="toolrow"><span class="tn">${t}</span><span class="td">${reg?reg[3]:''}</span><span class="risk ${reg?reg[1]:'read'}">${reg?reg[1]:'read'}</span><button class="btn danger" style="padding:2px 9px;font-size:11px" onclick="toast('Remove tool','workspace_update_node_tools')">remove</button></div>`;}).join('') +
+      `<div class="editnote"><button class="btn" onclick="toast('Add tool','picker over the controlled tool registry, risk badges inline')">+ add from registry</button></div></div>`;
+  }
+  if(S.tab==='skills'){
+    body = `<div class="card"><span class="lbl">assigned skills <span class="pin live">live</span></span>` +
+      (n.skills.length? n.skills.map(s=>`<div class="toolrow"><span class="tn">${s}</span><span class="td">v1.0.0 · active</span><button class="btn" style="padding:2px 9px;font-size:11px" onclick="toast('Open skill','skills library → ${s}')">open</button></div>`).join('') : '<p style="color:var(--faint);margin:0">none assigned</p>') +
+      `<div class="editnote"><button class="btn" onclick="toast('Effective skills','skill_resolve_for_node — what actually applies at run time')">view effective resolution</button></div></div>`;
+  }
+  if(S.tab==='schemas'){
+    body = `<div class="card"><span class="lbl">input schema <span class="pin live">live</span></span><div class="schemabox">{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": { … }
+}</div></div>
+    <div class="card"><span class="lbl">output schema <span class="pin live">live</span> · produces ${S.node}.v1</span><div class="schemabox">{
+  "type": "object",
+  "required": [ … ],
+  "properties": { … }
+}</div><div class="editnote"><button class="btn pri" onclick="toast('Validate','workspace_validate_node before save — refusals you can predict cost nothing')">Validate & save</button></div></div>`;
+  }
+  if(S.tab==='model'){
+    const m = n.model||{maxTurns:4,toolCallLimit:2,timeout:'300s',budgetUsd:0.5,maxOutputTokens:8000,retryCount:1};
+    body = `<div class="card"><span class="lbl">model & limits <span class="pin live">live</span></span><div class="kv num">
+      <span class="k">budget usd</span><span>${m.budgetUsd}</span>
+      <span class="k">max turns</span><span>${m.maxTurns}</span>
+      <span class="k">tool call limit</span><span>${m.toolCallLimit}</span>
+      <span class="k">timeout</span><span>${m.timeout}</span>
+      <span class="k">max output tokens</span><span>${m.maxOutputTokens}</span>
+      <span class="k">retry count</span><span>${m.retryCount}</span>
+    </div><div class="editnote"><button class="btn pri" onclick="toast('Saved','workspace_update_node_model_config')">Save</button></div></div>
+    <div class="card"><span class="lbl">model ladder</span><p style="color:var(--muted);font-size:12.5px;margin:0">No model-attributed eval results yet — run evaluations with subject-model attribution and the ladder will recommend the cheapest model that holds quality (threshold 0.7, min 3 samples). Recommendation applies with one click, reversible in History.</p></div>`;
+  }
+  if(S.tab==='deps'){
+    body = `<div class="card"><span class="lbl">dependencies <span class="pin pinned">pinned to seed</span></span>
+      <p style="color:var(--muted);font-size:12.5px">Topology — edges, risk level, new nodes — is pinned to the canonical definitions. Changing it requires <span class="mono">npm run nodes:update</span> + redeploy; the store overlay does not carry it. This tab tells you that instead of pretending.</p>
+      <div class="kv"><span class="k">depends on</span><span class="mono" style="font-size:12px">${(n.fan?'⇐ '+n.fan+' upstream node'+(n.fan>1?'s':''):'entry node')}</span>
+      <span class="k">risk level</span><span><span class="risk ${n.risk}">${n.risk}</span></span>
+      <span class="k">kind</span><span class="mono" style="font-size:12px">${n.kind}</span></div></div>`;
+  }
+  if(S.tab==='history'){
+    body = `<div class="card"><span class="lbl">change history · this node</span>
+      <div class="histrow"><span class="when">21 Aug 14:34</span><span class="what">prompt edited — tightened schema-adherence clause</span><button class="act" onclick="toast('Diff','changes_compare rev 6 → 7')">diff</button><button class="act" onclick="toast('Restore','changes_restore — every experiment reversible')">restore</button></div>
+      <div class="histrow"><span class="when">18 Aug 09:12</span><span class="what">model config — budget 0.35 → 0.50</span><button class="act" onclick="toast('Diff','changes_compare')">diff</button><button class="act" onclick="toast('Restore','changes_restore')">restore</button></div>
+      <div class="histrow"><span class="when">31 Jul 10:14</span><span class="what">skills — assigned editorial_craft</span><button class="act" onclick="toast('Diff','changes_compare')">diff</button><button class="act" onclick="toast('Restore','changes_restore')">restore</button></div>
+      <p class="note">optimizer promotions land here too — attributed to the trial that earned them, with the score delta</p></div>`;
+  }
+  if(S.tab==='learn'){
+    const rub = RUBRICS.find(r=>r.node===S.node);
+    const obsHere = OBS.filter(o=>o.node===S.node);
+    body = `<div class="card"><span class="lbl">playbook · injected lessons <span class="pin live">live — part of the effective prompt</span></span>
+      ${S.node==='publish_executor'
+        ? `<div class="histrow"><span class="when" style="width:auto">lesson</span><span class="what">Parse the created object id from <span class="mono">structuredContent.record.object_id</span>, not <span class="mono">result.object_id</span>; use idempotency_key on release calls. <span class="lbl" style="letter-spacing:.04em">from obs …6s5jpn</span></span><button class="act" onclick="toast('Remove lesson','playbook_apply_delta')">remove</button></div>
+           <p class="note">1 lesson · 214 / 2000 token budget · rendered into the prompt injection (example of the curated state)</p>`
+        : `<p style="color:var(--muted);font-size:12.5px;margin:0 0 8px">No curated playbook yet for this node. ${obsHere.length? obsHere.length+' observation(s) mention it — curate below.':'Observations feed this: curate one from the Learning surface.'}</p>`}
+      <div class="editnote"><button class="btn" onclick="toast('Playbook','playbook_get — curated budgeted lessons + the rendered injection')">view rendered injection</button><button class="btn" onclick="S.lrn='obs';setScreen('learning')">open observations</button></div></div>
+    <div class="card"><span class="lbl">evaluation</span>
+      ${rub? `<div class="kv"><span class="k">rubric</span><span>${rub.crit} weighted criteria · ${rub.top}</span>
+        <span class="k">last regression</span><span>${rub.verdict? `<span class="regverdict held">held</span> mean <span class="num">${rub.score}</span> vs threshold 0.85 · 4 replay cases`:'no regression baseline yet'}</span></div>
+        <div class="editnote"><button class="btn" onclick="S.lrn='eval';setScreen('learning')">open rubric</button><button class="btn pri" onclick="toast('Run regression','evaluation_run_regression against the frozen replay dataset')">run regression</button></div>`
+        : `<p style="color:var(--muted);font-size:12.5px;margin:0 0 8px">No rubric for this node yet.</p><div class="editnote"><button class="btn" onclick="toast('Create rubric','evaluation_create_rubric — weighted criteria, versioned')">create rubric</button></div>`}</div>
+    <div class="card"><span class="lbl">fine-tune readiness</span>
+      <div class="kv num"><span class="k">approved examples</span><span>0 / 500</span></div><div class="meter"><i style="width:1%"></i></div>
+      <div class="kv num" style="margin-top:8px"><span class="k">preference pairs</span><span>${pairsDone} / 200</span></div><div class="meter"><i style="width:${Math.max(1,pairsDone/2)}%"></i></div>
+      <p class="note">filled by Approve / Edit&amp;approve on outputs and by Compare verdicts — dataset_finetune_readiness</p></div>
+    ${obsHere.length? `<div class="card"><span class="lbl">observations mentioning this node</span>${obsHere.map(o=>`<div class="obsrow"><span class="when">${o.when}</span><span class="txt">${esc(o.txt.slice(0,180))}…</span></div>`).join('')}</div>`:''}`;
+  }
+  $('center').innerHTML = `
+    <div class="nhead"><h2>${n.name}</h2><span class="id">${S.node}</span><span class="risk ${n.risk}">${n.risk}</span>${run&&run.cur===S.node?'<span class="chip '+run.status+'">run stopped here</span>':''}</div>
+    <p class="ndesc">${n.desc}</p>
+    <div class="tabs">${tabs.map(t=>`<button class="${S.tab===t[0]?'on':''}" onclick="S.tab='${t[0]}';renderCenter()">${t[1]}</button>`).join('')}</div>
+    ${body}
+    <p class="note">mockup — every action names the existing backend verb it maps to; no new server work required</p>`;
+}
+
+function renderDock(){
+  const run = S.runId?runOf(S.runId):null;
+  if(S.mode==='build'||!run){
+    $('dock').innerHTML = `<div class="card"><span class="lbl">build mode</span><p style="color:var(--muted);font-size:12.5px;margin:0 0 12px">No run bound. Edits save to the store and apply to the next run of ${WORKFLOWS[S.wf].name.toLowerCase()}.</p>
+      <button class="btn pri" style="width:100%" onclick="openStart()">▸ Start run…</button></div>
+      <div class="card"><span class="lbl">recent runs · this workflow</span>${RUNS.filter(r=>r.wf===S.wf).slice(0,4).map(r=>`<button class="nrow" onclick="bindRun('${r.id}')"><span class="dot ${r.status}"></span><span class="nm mono" style="font-size:11px">…${r.id.slice(-6)} · ${r.proj}</span><span class="fan">${r.started.split(' ').slice(0,2).join(' ')}</span></button>`).join('')}</div>`;
+    return;
+  }
+  const total = orderedNodes(run.wf).length;
+  const durBars = orderedNodes(run.wf).map((nid,i)=>{const st=nodeRunStatus(run,nid); const h= st==='queued'?4:8+((i*37)%30); return `<i style="height:${h}px" class="${run.cur===nid?'hot':''}" title="${nid}"></i>`;}).join('');
+  $('dock').innerHTML = `
+    <div class="card"><span class="lbl">bound run</span>
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="mono" style="font-size:11.5px">…${run.id.slice(-10)}</span><span class="chip ${run.status}"><span class="dot ${run.status}"></span>${run.status}</span></div>
+      <div class="kv" style="margin-top:8px;grid-template-columns:90px 1fr;font-size:12px">
+        <span class="k">project</span><span>${run.proj}</span>
+        <span class="k">mode</span><span class="mono" style="font-size:11px">${run.dry?'dry':'live'} · ${run.exec}</span>
+        <span class="k">progress</span><span class="num">${run.done}/${total} nodes</span>
+        <span class="k">cost</span><span class="num">$${run.cost.toFixed(2)}${run.budget?' / $'+run.budget:''}</span>
+      </div>
+      <div class="prog"><i style="width:${Math.round(100*run.done/total)}%"></i></div>
+      <button class="btn" style="width:100%;margin-top:6px" onclick="unbindRun()">unbind · back to build</button></div>
+    <div class="card"><span class="lbl">controls</span><div class="ctl">
+      ${run.status==='paused'?`<button class="btn pri" onclick="rc('resume')">Resume</button>`:`<button class="btn" onclick="rc('pause')" ${['completed','failed','cancelled'].includes(run.status)?'disabled':''}>Pause</button>`}
+      <button class="btn" onclick="rc('run_next_node')" ${['completed','cancelled'].includes(run.status)?'disabled':''}>Run next</button>
+      <button class="btn" onclick="rc('run_until')" ${['completed','cancelled'].includes(run.status)?'disabled':''}>Run until…</button>
+      <button class="btn" onclick="rc('retry_node')" ${run.cur?'':'disabled'}>Retry node</button>
+      <button class="btn danger" onclick="rc('cancel')" ${['completed','failed','cancelled'].includes(run.status)?'disabled':''}>Cancel</button>
+      <button class="btn" onclick="rc('reset')">Reset</button>
+    </div></div>
+    ${run.status==='blocked'?`<div class="gate"><span class="lbl">⛔ gate · ${run.cur}</span>
+      <p>${run.cur==='theme_bind'?'Exact-replace theme apply awaits confirmation — proposal must cover every declared color key (theme_not_total refused otherwise).':'Readiness evidence assembled. Publish requires the operator decision.'}</p>
+      <button class="btn pri" onclick="gateGo(true)">Approve & resume</button><button class="btn" onclick="gateGo(false)">Decline</button><button class="btn" onclick="toast('Readiness','workflow_publish_readiness — the evidence, not a vibe')">View readiness</button></div>`:''}
+    ${run.status==='failed'?`<div class="card" style="border-color:color-mix(in srgb,var(--bad) 40%,transparent)"><span class="lbl" style="color:var(--bad)">errors (${run.err})</span><p class="mono" style="font-size:11.5px;margin:0">${run.cur}: output schema validation failed</p></div>`:''}
+    <div class="card"><span class="lbl">timeline · duration per node</span><div class="tl">${durBars}</div>
+      <div class="dockstat"><span>${run.started}</span><span>${run.dur}</span></div></div>`;
+}
+function rc(verb){
+  const run=runOf(S.runId);
+  const map={pause:'workflow_pause_run',resume:'workflow_resume_run',cancel:'workflow_cancel_run',reset:'workflow_reset_run',retry_node:'workflow_retry_node',run_next_node:'workflow_run_next_node',run_until:'workflow_run_until'};
+  if(verb==='pause'){run.status='paused';} if(verb==='resume'){run.status='running';}
+  if(verb==='cancel'){run.status='cancelled';}
+  toast(verb.replace(/_/g,' '), map[verb]+' → '+S.runId.slice(-10));
+  renderAll();
+}
+function gateGo(ok){ const run=runOf(S.runId); toast(ok?'Approved':'Declined','workflow_set_operator_publish_decision'); if(ok){run.status='running';} renderAll(); }
+
+/* ============ LIBRARY ============ */
+function renderLibrary(){
+  const cards = Object.entries(WORKFLOWS).map(([id,w])=>{
+    const rs = RUNS.filter(r=>r.wf===id); const last=rs[0];
+    const active = rs.filter(r=>['running','paused','blocked'].includes(r.status)).length;
+    return `<div class="wfcard"><div class="ttl">${ic(w.icon)}<h3>${w.name}</h3></div><span class="lbl">${w.fn}</span>
+      <p class="desc">${w.desc}</p>
+      <div class="stats"><span>${orderedNodes(id).length} nodes</span><span>${active} needing attention</span><span>last: <span class="chip ${last.status}" style="padding:1px 7px">${last.status}</span></span></div>
+      <div class="foot"><button class="btn" onclick="S.wf='${id}';S.mode='build';S.runId=null;S.node=orderedNodes('${id}')[0];S.tab='prompt';setScreen('bench')">Open workbench</button>
+      <button class="btn pri" onclick="S.wf='${id}';openStart()">Start run</button></div></div>`;
+  }).join('');
+  $('libcards').innerHTML = cards + `<div class="wfcard planned"><div class="ttl">${ic('ic-charity')}<h3>Foundation-charity conductor</h3></div><span class="lbl">foundation &amp; charity publishing specialist</span><p class="desc">Planned. The rail's phase grouping is data-driven — it absorbs a new conductor without UI work.</p><div class="stats"><span>— nodes</span></div></div>`;
+}
+
+/* ============ RUNS ============ */
+$('runtabs').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return; S.runtab=b.dataset.t; document.querySelectorAll('#runtabs button').forEach(x=>x.classList.toggle('on',x===b)); renderRuns(); });
+let filt={wf:'',proj:'',status:''};
+function renderRuns(){
+  const el=$('runbody');
+  if(S.runtab==='live'){
+    const live = RUNS.filter(r=>['running','paused','blocked'].includes(r.status));
+    el.innerHTML = `<div class="livecards">${live.map(r=>`<div class="livecard">
+      <div class="top"><span class="mono" style="font-size:11.5px">…${r.id.slice(-10)}</span><span class="chip ${r.status}"><span class="dot ${r.status}"></span>${r.status}</span></div>
+      <div style="font-weight:600;display:flex;align-items:center;gap:7px">${ic(WORKFLOWS[r.wf].icon)}${WORKFLOWS[r.wf].name} <span style="color:var(--faint);font-weight:400">· ${r.proj}</span></div>
+      <div class="kv" style="grid-template-columns:80px 1fr;font-size:12px;margin:8px 0"><span class="k">stopped at</span><span class="mono" style="font-size:11.5px">${r.cur}</span><span class="k">progress</span><span class="num">${r.done}/${orderedNodes(r.wf).length} · $${r.cost.toFixed(2)}</span></div>
+      <button class="btn pri" onclick="bindRun('${r.id}')">Open in workbench →</button></div>`).join('')}</div>
+      <p class="note">a "running" row whose driver died would carry a stalled badge here — the list API already computes it</p>`;
+  }
+  if(S.runtab==='history'){
+    const rows = RUNS.filter(r=>(!filt.wf||r.wf===filt.wf)&&(!filt.proj||r.proj===filt.proj)&&(!filt.status||r.status===filt.status));
+    el.innerHTML = `<div class="filters">
+        <select onchange="filt.wf=this.value;renderRuns()"><option value="">workflow: all</option>${Object.entries(WORKFLOWS).map(([id,w])=>`<option value="${id}" ${filt.wf===id?'selected':''}>${w.name}</option>`).join('')}</select>
+        <select onchange="filt.proj=this.value;renderRuns()"><option value="">project: all</option>${PROJECTS.map(p=>`<option ${filt.proj===p.id?'selected':''} value="${p.id}">${p.name}</option>`).join('')}</select>
+        <select onchange="filt.status=this.value;renderRuns()"><option value="">status: all</option>${['completed','blocked','failed','cancelled'].map(s=>`<option ${filt.status===s?'selected':''}>${s}</option>`).join('')}</select>
+      </div>
+      <div class="tblwrap"><table class="runs"><thead><tr><th>run</th><th>workflow</th><th>project</th><th>mode</th><th>status</th><th>stopped at</th><th>started</th><th>duration</th><th>cost</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr onclick="bindRun('${r.id}')"><td class="mono">…${r.id.slice(-10)}</td><td>${WORKFLOWS[r.wf].name}</td><td>${r.proj}</td><td class="mono" style="font-size:10.5px">${r.dry?'dry':'live'} · ${r.exec}</td><td><span class="chip ${r.status}"><span class="dot ${r.status}"></span>${r.status}</span></td><td class="mono" style="font-size:11px">${r.cur||'—'}</td><td class="num">${r.started}</td><td class="num">${r.dur}</td><td class="num">$${r.cost.toFixed(2)}</td></tr>`).join('')}</tbody></table></div>
+      <p class="note">any row opens that run in the workbench, statuses worn by the node rail</p>`;
+  }
+  if(S.runtab==='grid'){
+    const wf = filt.wf||'publishing_conductor';
+    const runs = RUNS.filter(r=>r.wf===wf).slice(0,8).reverse();
+    const order = orderedNodes(wf);
+    el.innerHTML = `<div class="filters"><select onchange="filt.wf=this.value;renderRuns()">${Object.entries(WORKFLOWS).map(([id,w])=>`<option value="${id}" ${wf===id?'selected':''}>${w.name}</option>`).join('')}</select></div>
+      <div class="grid"><table><thead><tr><th></th>${runs.map(r=>`<th>${r.started}</th>`).join('')}</tr></thead><tbody>
+      ${order.map(nid=>`<tr><th>${nid}</th>${runs.map(r=>{const st=nodeRunStatus(r,nid);return `<td><button class="cell ${st}" title="${nid} · ${st} · ${r.id.slice(-6)}" onclick="bindRun('${r.id}')"></button></td>`;}).join('')}</tr>`).join('')}
+      </tbody></table></div>
+      <p class="note">Airflow's grid view: runs as columns, nodes as rows — regressions become visible at a glance. Regression-gate verdicts (Learning → Evaluate) will annotate these columns.</p>`;
+  }
+}
+
+/* ============ LEARNING ============ */
+$('lrntabs').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return; S.lrn=b.dataset.t; renderLearning(); });
+function fstage(label,val,hint,go,arrow=true){
+  const zero = val==='0'||val==='0 / 500'||val==='—';
+  return `<button class="fstage" onclick="${go}"><span class="lbl">${label}</span><span class="big ${zero?'zero':''} num">${val}</span><span class="hint">${hint}</span>${arrow?'<span class="arrow">→</span>':''}</button>`;
+}
+function renderLearning(){
+  document.querySelectorAll('#lrntabs button').forEach(x=>x.classList.toggle('on',x.dataset.t===S.lrn));
+  const el=$('lrnbody');
+  if(S.lrn==='fly'){
+    el.innerHTML = `
+      <div class="fly">
+        ${fstage('Observe','10','lessons recorded — by runs and by you',"S.lrn='obs';renderLearning()")}
+        ${fstage('Curate','0','playbooks — observations distilled into injected lessons',"S.lrn='pb';renderLearning()")}
+        ${fstage('Evaluate','5','rubrics · weighted criteria per node',"S.lrn='eval';renderLearning()")}
+        ${fstage('Compare','—','your pairwise verdicts — A/B on outputs',"S.lrn='cmp';renderLearning()")}
+        ${fstage('Trial','2','regression reports · gate held at 0.484 / 0.85',"S.lrn='eval';renderLearning()")}
+        ${fstage('Promote','0','optimizer promotions → node change history',"S.lrn='opt';renderLearning()")}
+        ${fstage('Tune','0 / 500','SFT examples · '+pairsDone+' / 200 preference pairs',"S.lrn='ds';renderLearning()",false)}
+      </div>
+      <div class="card"><span class="lbl">how learning changes the workflow — three paths, all inspectable</span>
+        <div class="kv" style="grid-template-columns:210px 1fr">
+          <span class="k">playbook → effective prompt</span><span>Curated lessons are rendered into the node's prompt at run time. See the injection in any node's <b>Learning</b> tab; diff stored vs effective in <b>Prompt</b>.</span>
+          <span class="k">promotion → node definition</span><span>A promoted variant lands in the store — it appears in the node's <b>History</b> as a diffable, restorable change, attributed to the trial that earned it.</span>
+          <span class="k">model ladder → cost/quality</span><span>With model-attributed eval results, the ladder recommends the cheapest model that holds quality — shown in <b>Model &amp; limits</b>, applied with one click.</span>
+        </div></div>
+      <div class="card"><span class="lbl">the finding</span>
+        <p style="margin:0;color:var(--muted)">The backend flywheel is complete; every human stage is empty — 10 observations but 0 curated, 0 feedback records, 0/200 preference pairs. The capture surfaces on this screen exist to change that: your judgment is the fuel.</p></div>
+      <p class="note">learning_list_observations · playbook_get/curate · evaluation_* · optimizer_* · dataset_* · feedback_record · feedback_ingest_monetizer</p>`;
+  }
+  if(S.lrn==='obs'){
+    el.innerHTML = `<div class="card"><span class="lbl">observation feed · 10 active · newest first</span>
+      ${OBS.map(o=>`<div class="obsrow"><span class="when">${o.when}</span>
+        <span class="txt">${o.node?`<span class="tag">${o.node}</span>`:''}${o.run?`<span class="tag">${o.run}</span>`:'<span class="tag">operator</span>'}${esc(o.txt)}</span>
+        <span class="acts"><button class="btn" onclick="toast('Curate','playbook_curate → distilled into a budgeted lesson on the relevant node')">curate →</button><button class="btn" onclick="toast('Archive','learning_archive_observation (soft delete)')">archive</button></span></div>`).join('')}
+      <p class="note">curation is a judgment call — this feed makes it a ten-second one. playbook_migrate_observations batches the backlog.</p></div>`;
+  }
+  if(S.lrn==='pb'){
+    el.innerHTML = `<div class="card"><span class="lbl">playbooks · curated, budgeted lessons per node</span>
+      <div class="toolrow"><span class="tn">publish_executor</span><span class="td">1 lesson (example of curated state) · 214 / 2000 token budget · from obs …6s5jpn</span><button class="btn" style="padding:2px 9px;font-size:11px" onclick="toast('Rendered injection','playbook_get — exactly what the node receives, verbatim')">view injection</button></div>
+      <div class="toolrow"><span class="tn">draft_writer</span><span class="td">no playbook yet</span><button class="btn" style="padding:2px 9px;font-size:11px" onclick="S.lrn='obs';renderLearning()">curate from feed</button></div>
+      <div class="toolrow"><span class="tn">contract_intelligence</span><span class="td">no playbook yet — 4 policy observations are candidates (two grammars, media flip, taxonomy, publish≠release)</span><button class="btn" style="padding:2px 9px;font-size:11px" onclick="S.lrn='obs';renderLearning()">curate from feed</button></div>
+      <p class="note">a lesson is part of the node's effective prompt — provenance links each lesson back to the observation it came from; deltas are reversible (playbook_apply_delta)</p></div>`;
+  }
+  if(S.lrn==='cmp'){
+    const c = CMP_QUEUE[cmpIdx % CMP_QUEUE.length];
+    const badge = s => blind? '' : (c.champ===s?'<span class="chip completed">champion</span>':'<span class="chip">challenger</span>');
+    const bodyFor = (s,val)=>{
+      if(c.kind==='text') return `<div class="body">${esc(val)}</div>`;
+      if(c.kind==='image') return `<div class="imgph" style="background:${val}"></div>`;
+      return val==='img-top'
+        ? `<div class="tpl"><i style="height:56px"></i><i style="height:12px;width:70%"></i><i style="height:8px;width:90%"></i><i style="height:8px;width:60%"></i><i style="height:10px;width:34%;background:var(--acc-dim)"></i></div>`
+        : `<div class="tpl" style="flex-direction:row;gap:10px"><i style="width:42%;height:100%"></i><span style="display:flex;flex-direction:column;gap:6px;flex:1"><i style="height:12px;width:80%"></i><i style="height:8px"></i><i style="height:8px;width:70%"></i><i style="height:10px;width:44%;background:var(--acc-dim)"></i></span></div>`;
+    };
+    el.innerHTML = `
+      <div class="cmpbar">
+        <span class="lbl">pair ${ (cmpIdx % CMP_QUEUE.length)+1 } · ${c.node} · ${c.kind}</span>
+        <span class="spacer"></span>
+        <label style="display:flex;gap:7px;align-items:center;color:var(--muted);font-size:12px;cursor:pointer"><input type="checkbox" ${blind?'checked':''} onchange="blind=this.checked;renderLearning()"> blind mode (hide champion)</label>
+        <span class="chip num">${pairsDone} / 200 preference pairs</span>
+      </div>
+      <div class="card" style="margin-bottom:14px"><span class="lbl">brief</span><span style="font-size:13px">${esc(c.brief)}</span></div>
+      <div class="cmp">
+        <div class="cand"><div class="who"><span class="lbl">candidate A · key 1</span>${badge('A')}</div>${bodyFor('A',c.a)}</div>
+        <div class="cand"><div class="who"><span class="lbl">candidate B · key 2</span>${badge('B')}</div>${bodyFor('B',c.b)}</div>
+      </div>
+      <div class="verdicts">
+        <button class="btn pri" onclick="verdict('A')">A is better (1)</button>
+        <button class="btn pri" onclick="verdict('B')">B is better (2)</button>
+        <button class="btn" onclick="verdict('tie')">Tie (0)</button>
+        <button class="btn danger" onclick="verdict('bad')">Both bad (x)</button>
+      </div>
+      <p class="note" style="text-align:center">every verdict → feedback_record + a preference pair toward dataset.export_preferences · sources: optimizer trials, learning-mode candidates, any two run outputs</p>`;
+  }
+  if(S.lrn==='eval'){
+    el.innerHTML = `<div class="card"><span class="lbl">rubrics · 5 active</span>
+      ${RUBRICS.map(r=>`<div class="toolrow"><span class="tn">${r.node}</span><span class="td">${r.crit} weighted criteria — ${r.top}</span>
+        ${r.verdict?`<span class="regverdict held">held · ${r.score}</span>`:'<span class="regverdict baseline">no baseline</span>'}
+        <button class="btn" style="padding:2px 9px;font-size:11px" onclick="toast('Rubric editor','evaluation_update_rubric — versioned, restorable (evaluation_restore_rubric_version)')">edit</button></div>`).join('')}</div>
+    <div class="card"><span class="lbl">regression watchboard · contract_intelligence</span>
+      <div style="display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap">
+        <div><div class="spark">${[.48,.48,.48,.48].map(v=>`<i style="height:${v*100*0.3}px" class="hi"></i>`).join('')}<i style="height:${.85*30}px" title="threshold"></i></div>
+        <span class="note" style="margin-top:4px">mean 0.484 · threshold 0.85 · 4 replay cases · verdict <span class="regverdict held">held</span></span></div>
+        <div style="flex:1;min-width:220px;color:var(--muted);font-size:12.5px">Baseline set 3 Aug, re-run 4 Aug: no movement. The gate is honest — this node needs prompt work (or its rubric recalibrated), and the next trial will show against exactly these cases.</div>
+        <button class="btn pri" onclick="toast('Run regression','evaluation_run_regression — compares against the stored baseline, verdict improved / held / regressed')">run regression now</button>
+      </div>
+      <p class="note">a regressed verdict flags like failing CI — here, on the Runs grid column, and on the node's Learning tab</p></div>`;
+  }
+  if(S.lrn==='opt'){
+    el.innerHTML = `<div class="card"><span class="lbl">optimizer · draft_writer</span>
+      <p style="color:var(--muted);font-size:12.5px;margin:0 0 10px">No proposals or trials yet. Model ladder: "no model-attributed eval results yet — run evaluations with subject model attribution first" (threshold 0.7, min 3 samples).</p>
+      <div class="editnote"><button class="btn pri" onclick="toast('Analyze','optimizer_analyze — mines observations, feedback and eval results for improvement candidates')">analyze node</button><button class="btn" onclick="toast('Propose','optimizer_propose — a prompt variant with rationale, shown as a diff')">propose variant</button></div></div>
+    <div class="card" style="border-style:dashed"><span class="lbl">what a live proposal looks like (example)</span>
+      <div class="kv" style="grid-template-columns:130px 1fr">
+        <span class="k">proposal</span><span>draft_writer / prompt v8-candidate — "tighten schema adherence, name the output contract explicitly"</span>
+        <span class="k">diff</span><span><span class="diffline del">Produce draft.v1 matching the output schema…</span><br><span class="diffline add">Produce draft.v1. Before returning, verify every required field against the output schema; name any field you cannot fill rather than omitting it.</span></span>
+        <span class="k">trial</span><span class="num">vs frozen replay ds_…am32rx · mean 0.71 → 0.79 (+0.08) · 6/6 cases scored</span>
+        <span class="k">gates</span><span>regression <span class="regverdict baseline">improved</span> · your Compare verdicts 4–1 for challenger</span>
+      </div>
+      <div class="editnote"><button class="btn pri" onclick="toast('Promote','optimizer_promote — lands in the store; appears in node History with the trial attribution')">promote</button><button class="btn" onclick="toast('Auto-promote','optimizer_auto_promote — only when trial + regression + preference gates all pass')">enable auto-promote</button><button class="btn" onclick="toast('Shadow','champion/challenger — the variant rides along on real runs, outputs queue into Compare')">run as shadow</button></div></div>`;
+  }
+  if(S.lrn==='ds'){
+    el.innerHTML = `<div class="card"><span class="lbl">frozen replay datasets · 6</span>
+      ${DATASETS.map(d=>`<div class="toolrow"><span class="tn">${d[0]}</span><span class="td">${d[1]} · ${d[2]} cases · ${d[3]} — ${d[4]}</span><button class="btn" style="padding:2px 9px;font-size:11px" onclick="toast('Replay','the counterfactual harness: any prompt edit can be trialed against these cases before touching a live run')">replay against</button></div>`).join('')}</div>
+    <div class="card"><span class="lbl">fine-tune flywheel · draft_writer</span>
+      <div class="kv num"><span class="k">approved SFT examples</span><span>0 / 500</span></div><div class="meter"><i style="width:1%"></i></div>
+      <div class="kv num" style="margin-top:8px"><span class="k">decisive preference pairs</span><span>${pairsDone} / 200</span></div><div class="meter"><i style="width:${Math.max(1,pairsDone/2)}%"></i></div>
+      <p style="color:var(--muted);font-size:12.5px;margin:10px 0 0">Recommendation: insufficient_data — "evaluate node outputs and run pairwise trials first." Approve / Edit&amp;approve fills the first meter; Compare fills the second. When both fill: dataset_export_sft + dataset_export_preferences. Report-only — never launches a job.</p></div>
+    <div class="card"><span class="lbl">outcome join</span><p style="color:var(--muted);font-size:12.5px;margin:0">feedback_ingest_monetizer ties revenue and engagement back to the runs and nodes that produced each piece — the only feedback that arrives without costing you a click. Shown here and on run analysis once flowing.</p></div>`;
+  }
+}
+function verdict(v){
+  pairsDone++; cmpIdx++;
+  const c = CMP_QUEUE[(cmpIdx-1)%CMP_QUEUE.length];
+  toast('Verdict: '+(v==='A'||v==='B'?v+' preferred':v),'feedback_record + preference pair · '+pairsDone+'/200 · '+(blind?('champion was '+c.champ):''));
+  renderLearning();
+}
+
+/* ============ REGISTRY ============ */
+$('regnav').addEventListener('click',e=>{const b=e.target.closest('button'); if(!b)return; S.reg=b.dataset.r; document.querySelectorAll('#regnav button').forEach(x=>x.classList.toggle('on',x===b)); renderReg();});
+function renderReg(){
+  const el=$('regbody');
+  if(S.reg==='projects'){
+    el.innerHTML = PROJECTS.map(p=>{const tot=p.pol.a+p.pol.n+p.pol.b; return `<div class="projcard">
+      <div class="top"><h3>${p.name}</h3><span class="mono" style="font-size:10.5px;color:var(--faint)">${p.id}</span>${p.disabled?'<span class="chip cancelled">disabled</span>':''}<span style="margin-left:auto" class="${p.ok?'okmark':'badmark'}">${p.ok?'● endpoint + token configured':'○ endpoint unset'}</span></div>
+      <div class="polbar"><i class="a" style="width:${100*p.pol.a/tot}%"></i><i class="n" style="width:${100*p.pol.n/tot}%"></i><i class="b" style="width:${100*p.pol.b/tot}%"></i></div>
+      <div class="pollegend"><span>${p.pol.a} allowed</span><span>${p.pol.n} needs approval</span><span>${p.pol.b} blocked</span>
+      <button class="btn" style="margin-left:auto;padding:3px 10px;font-size:11px" onclick="toast('Test connection','project_test_connection → ${p.id}')">test connection</button></div></div>`;}).join('') +
+      `<p class="note">tool-policy matrix rendered as a scannable bar, not JSON — click through for the full grid</p>`;
+  }
+  if(S.reg==='keys'){
+    el.innerHTML = `<div class="projcard"><div class="top"><h3>Keys & auth</h3></div>
+      <p style="color:var(--muted);font-size:12.5px;margin:0 0 10px">Keys live in env vars and secret managers — the UI shows presence and source, never values. Rotation is a runbook, not an input field.</p>
+      ${[['DR_LURIE_MCP_TOKEN','env','set'],['ZILBERMAN_MCP_TOKEN','gcloud secret · zilberman-mcp-token/latest','set'],['PLATFORM_MCP_TOKEN','env','set'],['PDF_TOOL_MCP_TOKEN','env','set'],['FERNWELL_MCP_TOKEN','env','set'],['MONETIZER_MCP_TOKEN','—','unset'],['WEB_PROVIDER','env','set'],['OPENAI_API_KEY','env','set']].map(([k,src,st])=>`<div class="keyrow"><span>${k}</span><span class="src">${src}</span><span class="${st==='set'?'okmark':'badmark'}">${st==='set'?'● set':'○ unset — monetizer runs will refuse'}</span></div>`).join('')}</div>`;
+  }
+  if(S.reg==='tools'){
+    el.innerHTML = `<div class="projcard"><div class="top"><h3>Controlled tool registry</h3><span class="mono" style="font-size:10.5px;color:var(--faint)">42 tools</span></div>
+      ${TOOLS.map(([t,r,se,d])=>`<div class="toolrow"><span class="tn">${t}</span><span class="td">${d}</span><span class="mono" style="font-size:9.5px;color:var(--faint)">${se}</span><span class="risk ${r}">${r}</span></div>`).join('')}</div>`;
+  }
+  if(S.reg==='skills'){
+    el.innerHTML = `<div class="projcard"><div class="top"><h3>Skills library</h3><span class="mono" style="font-size:10.5px;color:var(--faint)">12 active</span></div>
+      ${SKILLS.map(s=>`<div class="toolrow"><span class="tn">${s}</span><span class="td">v1.0.0 · assigned to ${({editorial_craft:'draft_writer, copy_regenerator +1',contract_intelligence:'contract_intelligence',factual_review:'trust_factual'})[s]||'—'}</span><button class="btn" style="padding:2px 9px;font-size:11px" onclick="toast('Skill versions','skill_list_versions · skill_restore_version — every edit reversible')">versions</button></div>`).join('')}</div>`;
+  }
+  if(S.reg==='agents'){
+    el.innerHTML = `<div class="projcard"><div class="top"><h3>Client Manager</h3><span class="mono" style="font-size:10.5px;color:var(--faint)">agt_client_manager · rev 7</span><span class="chip completed" style="margin-left:auto">active</span></div>
+      <div class="kv" style="font-size:12.5px"><span class="k">role</span><span>client_manager — the editors' admin-chat agent (their surface, not this one)</span>
+      <span class="k">model</span><span class="mono" style="font-size:11.5px">openai · gpt-4.1 · 90s · 16k out</span>
+      <span class="k">prompt</span><span>diverged from canonical · <button class="btn" style="padding:2px 9px;font-size:11px" onclick="toast('Agent prompt','agent_get / agent_update — same editor pattern as nodes')">edit</button></span>
+      <span class="k">skills</span><span class="mono" style="font-size:11.5px">editorial_craft · editorial_review</span></div></div>`;
+  }
+  if(S.reg==='usage'){
+    el.innerHTML = `<div class="projcard"><div class="top"><h3>Usage & budgets</h3></div>
+      <div class="kv num" style="font-size:13px"><span class="k">this week</span><span>$47.86 across 15 runs</span>
+      <span class="k">publishing_conductor</span><span>$36.29 · avg $6.05/run</span>
+      <span class="k">clone_conductor</span><span>$9.93 · avg $2.48/run</span>
+      <span class="k">capture_conductor</span><span>$14.64 · avg $3.66/run</span></div>
+      <p class="note">usage_get_summary · usage_get_budget_status — per workflow and per project</p></div>`;
+  }
+}
+
+/* ============ START RUN ============ */
+function openStart(){ $('sm-wf').innerHTML=Object.entries(WORKFLOWS).map(([id,w])=>`<option value="${id}" ${S.wf===id?'selected':''}>${w.name}</option>`).join('');
+  $('sm-proj').innerHTML=PROJECTS.filter(p=>!p.disabled).map(p=>`<option value="${p.id}">${p.name}${p.ok?'':' — endpoint unset ⚠'}</option>`).join('');
+  $('startmodal').classList.add('open'); }
+function closeModals(){ document.querySelectorAll('.scrim').forEach(s=>s.classList.remove('open')); }
+document.querySelectorAll('.seg').forEach(seg=>seg.addEventListener('click',e=>{const b=e.target.closest('button'); if(!b)return; seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));}));
+function startRunFromModal(){
+  const wf=$('sm-wf').value, proj=$('sm-proj').value;
+  const id='run_'+Date.now()+'_mock';
+  RUNS.unshift({id,wf,proj,status:'running',cur:orderedNodes(wf)[0],started:'now',dur:'0s',cost:0,budget:parseFloat($('sm-budget').value)||null,exec:'mock',dry:true,err:0,done:0});
+  closeModals(); toast('Run started','workflow_start_dry_run → '+id.slice(-10)); bindRun(id);
+}
+document.querySelectorAll('.scrim').forEach(s=>s.addEventListener('click',e=>{ if(e.target===s) closeModals(); }));
+
+/* ============ COMMAND PALETTE ============ */
+const PAL = [];
+Object.keys(NODES).forEach(n=>PAL.push({kind:'node',label:n,go:()=>{ for(const [id] of Object.entries(WORKFLOWS)) if(orderedNodes(id).includes(n)){S.wf=id;break;} S.node=n; setScreen('bench'); }}));
+RUNS.forEach(r=>PAL.push({kind:'run',label:'…'+r.id.slice(-10)+' · '+r.proj+' · '+r.status,go:()=>bindRun(r.id)}));
+Object.entries(WORKFLOWS).forEach(([id,w])=>PAL.push({kind:'workflow',label:w.name,go:()=>{pickWf(id); setScreen('bench');}}));
+PROJECTS.forEach(p=>PAL.push({kind:'project',label:p.name,go:()=>{S.reg='projects'; setScreen('registry');}}));
+[['screen','Runs → history',()=>{S.runtab='history';setScreen('runs');}],['screen','Runs → grid',()=>{S.runtab='grid';setScreen('runs');}],
+ ['screen','Learning → flywheel',()=>{S.lrn='fly';setScreen('learning');}],['screen','Learning → compare (A/B)',()=>{S.lrn='cmp';setScreen('learning');}],
+ ['screen','Learning → observations',()=>{S.lrn='obs';setScreen('learning');}],['screen','Registry → keys',()=>{S.reg='keys';setScreen('registry');}],
+ ['action','Start run…',openStart]].forEach(([k,l,g])=>PAL.push({kind:k,label:l,go:g}));
+let palHi=0, palRes=[];
+function openPal(){ $('palscrim').classList.add('open'); $('palinput').value=''; palHi=0; palRes=renderPal(''); $('palinput').focus(); }
+function renderPal(q){ const rs=PAL.filter(p=>p.label.toLowerCase().includes(q.toLowerCase())).slice(0,12);
+  $('palres').innerHTML = rs.map((r,i)=>`<button class="${i===palHi?'hi':''}"><span class="kind">${r.kind}</span><span>${r.label}</span></button>`).join('');
+  Array.from($('palres').children).forEach((b,i)=>b.onclick=()=>{closeModals(); rs[i].go();});
+  return rs; }
+$('palinput').addEventListener('input',e=>{ palHi=0; palRes=renderPal(e.target.value); });
+$('palinput').addEventListener('keydown',e=>{
+  const rs = palRes.length?palRes:renderPal($('palinput').value);
+  if(e.key==='ArrowDown'){palHi=Math.min(palHi+1,rs.length-1); renderPal($('palinput').value); e.preventDefault();}
+  if(e.key==='ArrowUp'){palHi=Math.max(palHi-1,0); renderPal($('palinput').value); e.preventDefault();}
+  if(e.key==='Enter'&&rs[palHi]){closeModals(); rs[palHi].go();}
+  if(e.key==='Escape') closeModals();
+});
+$('kbtn').onclick=openPal;
+document.addEventListener('keydown',e=>{
+  const typing = /input|textarea/i.test(document.activeElement.tagName)||document.activeElement.isContentEditable;
+  if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault(); openPal(); return;}
+  if(e.key==='Escape'){ closeModals(); return; }
+  if(typing) return;
+  if(S.screen==='learning'&&S.lrn==='cmp'){
+    if(e.key==='1') verdict('A'); if(e.key==='2') verdict('B');
+    if(e.key==='0') verdict('tie'); if(e.key==='x') verdict('bad');
+  }
+  if(e.key==='g') toast('Graph overlay','the constellation as a map — press again to dismiss (mockup)');
+});
+
+/* ============ RENDER ============ */
+function renderRunChip(){
+  const c=$('runchip');
+  if(S.runId&&S.screen==='bench'&&S.mode==='run'){ const r=runOf(S.runId);
+    c.style.display='flex'; c.innerHTML=`<span class="dot ${r.status}"></span> …${r.id.slice(-10)} · ${r.proj} · ${r.dry?'dry':'live'} <button class="x" onclick="unbindRun()" title="unbind">✕</button>`;
+  } else c.style.display='none';
+}
+function renderAll(){ renderWfMenu(); renderRunChip();
+  if(S.screen==='bench'){ renderRail(); renderCenter(); renderDock(); }
+  if(S.screen==='library') renderLibrary();
+  if(S.screen==='runs') renderRuns();
+  if(S.screen==='learning') renderLearning();
+  if(S.screen==='registry') renderReg();
+}
+applyTheme(); renderAll();
+</script>

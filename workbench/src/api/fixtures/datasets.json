@@ -1,0 +1,44 @@
+[
+  {
+    "id": "ds_1786383065058_ugd98n",
+    "node": "contract_intelligence",
+    "cases": 4,
+    "when": "10 Aug",
+    "note": "contract_intelligence frozen replay \u2014 2026-08-10 rebuild (distinct subjects, post P1 dedup fix)"
+  },
+  {
+    "id": "ds_1785777163498_thqdgr",
+    "node": "contract_intelligence",
+    "cases": 3,
+    "when": "3 Aug",
+    "note": "contract_intelligence REAL champions only \u2014 2026-08-03 (Session B follow-up)"
+  },
+  {
+    "id": "ds_1785772114313_c5gnyl",
+    "node": "publish_payload",
+    "cases": 5,
+    "when": "3 Aug",
+    "note": "publish_payload frozen replay \u2014 2026-08-03 (Session B)"
+  },
+  {
+    "id": "ds_1785772112692_am32rx",
+    "node": "article_body",
+    "cases": 6,
+    "when": "3 Aug",
+    "note": "article_body frozen replay \u2014 2026-08-03 (Session B)"
+  },
+  {
+    "id": "ds_1785772111182_5baov9",
+    "node": "research",
+    "cases": 6,
+    "when": "3 Aug",
+    "note": "research frozen replay \u2014 2026-08-03 (Session B)"
+  },
+  {
+    "id": "ds_1785772079588_9a01hb",
+    "node": "contract_intelligence",
+    "cases": 4,
+    "when": "3 Aug",
+    "note": "contract_intelligence frozen replay \u2014 2026-08-03 (Session B)"
+  }
+]

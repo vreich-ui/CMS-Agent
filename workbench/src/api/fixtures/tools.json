@@ -1,0 +1,254 @@
+[
+  {
+    "id": "workspace.get_node",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Get one workspace node."
+  },
+  {
+    "id": "workspace.get_nodes",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "List workspace nodes."
+  },
+  {
+    "id": "workspace.get_graph",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Get workspace graph."
+  },
+  {
+    "id": "stage.get_output",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Get stage output."
+  },
+  {
+    "id": "stage.list_outputs",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "List stage output summaries (id, stage, createdAt, size, short preview) \u2014 never full values. Fetch a specific full value with stage.get_output."
+  },
+  {
+    "id": "stage.save_output",
+    "risk": "write",
+    "sideEffect": "workspace_write",
+    "desc": "Save stage output."
+  },
+  {
+    "id": "learning.list_observations",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "List observations."
+  },
+  {
+    "id": "learning.record_observation",
+    "risk": "write",
+    "sideEffect": "workspace_write",
+    "desc": "Record observation. Stamped with the recording run/node's id. Extra fields (e.g. an echoed nodeId/runId) are ignored, not rejected \u2014 provenance always comes from the execution context."
+  },
+  {
+    "id": "web.fetch",
+    "risk": "read",
+    "sideEffect": "external_read",
+    "desc": "Fetch text from a validated public URL."
+  },
+  {
+    "id": "web.search",
+    "risk": "read",
+    "sideEffect": "external_read",
+    "desc": "Provider-backed web search."
+  },
+  {
+    "id": "file.list",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Workspace-managed file operation backed by artifacts."
+  },
+  {
+    "id": "file.get_metadata",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Workspace-managed file operation backed by artifacts."
+  },
+  {
+    "id": "file.read_text",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Workspace-managed file operation backed by artifacts."
+  },
+  {
+    "id": "file.save_text",
+    "risk": "write",
+    "sideEffect": "workspace_write",
+    "desc": "Workspace-managed file operation backed by artifacts."
+  },
+  {
+    "id": "file.delete",
+    "risk": "write",
+    "sideEffect": "workspace_write",
+    "desc": "Workspace-managed file operation backed by artifacts."
+  },
+  {
+    "id": "artifact.list",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Run artifact operation."
+  },
+  {
+    "id": "artifact.get",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Run artifact operation."
+  },
+  {
+    "id": "artifact.save_json",
+    "risk": "write",
+    "sideEffect": "workspace_write",
+    "desc": "Run artifact operation."
+  },
+  {
+    "id": "artifact.save_text",
+    "risk": "write",
+    "sideEffect": "workspace_write",
+    "desc": "Run artifact operation."
+  },
+  {
+    "id": "blob.list",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Safe logical blob operation restricted by configured prefixes."
+  },
+  {
+    "id": "blob.get_json",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Safe logical blob operation restricted by configured prefixes."
+  },
+  {
+    "id": "blob.put_json",
+    "risk": "write",
+    "sideEffect": "workspace_write",
+    "desc": "Safe logical blob operation restricted by configured prefixes."
+  },
+  {
+    "id": "blob.delete",
+    "risk": "write",
+    "sideEffect": "workspace_write",
+    "desc": "Safe logical blob operation restricted by configured prefixes."
+  },
+  {
+    "id": "project.list",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "List projects."
+  },
+  {
+    "id": "project.get",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Get project."
+  },
+  {
+    "id": "project.test_connection",
+    "risk": "read",
+    "sideEffect": "external_read",
+    "desc": "Guarded project MCP operation."
+  },
+  {
+    "id": "project.list_tools",
+    "risk": "read",
+    "sideEffect": "external_read",
+    "desc": "Guarded project MCP operation."
+  },
+  {
+    "id": "project.call_tool",
+    "risk": "write",
+    "sideEffect": "external_write",
+    "desc": "Guarded project MCP operation."
+  },
+  {
+    "id": "project.call_read_tool",
+    "risk": "read",
+    "sideEffect": "external_read",
+    "desc": "Call a read-only tool on a registered project MCP server, without approval. Permitted operations are a fixed, server-side allowlist (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping, list_sources, list_connections, search_offers, performance, demand_signals, explain_decision) \u2014 never caller-supplied; anything else is refused before any transport with code \"read_tool_operation_not_permitted\". Still honors the project's own toolPolicies/defaultToolPolicy and the executable project policy (legacy artifact fallback blocks) \u2014 a project can still block a read op. Use project.call_tool for writes."
+  },
+  {
+    "id": "repository.get_health",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Repository health."
+  },
+  {
+    "id": "usage.get_summary",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Usage summary."
+  },
+  {
+    "id": "usage.get_budget_status",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Budget status."
+  },
+  {
+    "id": "capture.crawl",
+    "risk": "write",
+    "sideEffect": "external_write",
+    "desc": "Create or poll the capture job for a source URL under the target project's capture policy (registry-resolved, deny-all default), through the TARGET SITE's own capture bridge. Without jobId: creates the job and returns {phase:'pending', jobState}. With jobId: polls once \u2014 'pending' until terminal, then {phase:'completed', envelope} carrying the snapshot.v1, read back through the bridge's get_capture_snapshot."
+  },
+  {
+    "id": "capture.map",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Deterministic heuristic mapping of a snapshot.v1 into governed candidates + the declined-block ledger (vendored platform map.mjs)."
+  },
+  {
+    "id": "capture.theme",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Deterministic bounded theme quantization from a snapshot.v1's computed styles (vendored platform theme.mjs)."
+  },
+  {
+    "id": "capture.emit",
+    "risk": "write",
+    "sideEffect": "external_write",
+    "desc": "Deterministic capture emission (vendored platform emit.mjs). Default is the DRY-RUN plan (no MCP call). live:true executes the plan against the target project's governed verbs as NEVER-RELEASED DRAFTS."
+  },
+  {
+    "id": "capture.score",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Deterministic capture fidelity scoring (vendored platform score.mjs): mapped-block coverage against the project's rubric, theme completeness, gap enumeration, consolidated gap report."
+  },
+  {
+    "id": "clone.intake",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Assembles the BOUNDED clone briefing the judgment nodes read: live component/page-type registries, brandTokens, captured theme tokens, per-page shape records, existing recipe summaries."
+  },
+  {
+    "id": "clone.mint",
+    "risk": "write",
+    "sideEffect": "external_write",
+    "desc": "Re-validates recipe_designer's section_template/template designs against the target's LIVE component and page-type registries and creates the survivors as governed DRAFT recipes, reuse-first."
+  },
+  {
+    "id": "clone.theme_bind",
+    "risk": "write",
+    "sideEffect": "external_write",
+    "desc": "Writes theme_reconciler's reconciled tokens onto the capture run's own theme object, then applies that theme to the site through site_apply_theme under a site checkout \u2014 the ONLY sanctioned palette writer. Exact-replace only; refuses partial coverage (theme_not_total)."
+  },
+  {
+    "id": "clone.restamp",
+    "risk": "write",
+    "sideEffect": "external_write",
+    "desc": "Re-assembles each mint survivor's captured pages onto its recipe through object_checkout -> object_patch(upsert_section) -> object_checkin, preserving every bound asset reference byte-identical."
+  },
+  {
+    "id": "monetize.ev_floor",
+    "risk": "read",
+    "sideEffect": "none",
+    "desc": "Deterministic EV-floor arithmetic for an offer: floorUsd = the run's REAL accrued cost x floorMultiplier; expectedValueUsd = payoutUsd x conversionRate x estimatedVolume when supplied; meetsFloor compares the two. Never invents a run cost, a payout, or a conversion estimate."
+  }
+]

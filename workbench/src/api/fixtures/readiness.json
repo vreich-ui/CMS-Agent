@@ -1,0 +1,7 @@
+{
+  "approvedExamples": 1,
+  "approvedThreshold": 500,
+  "preferencePairs": 0,
+  "pairThreshold": 200,
+  "recommendation": "Accumulating: 1/500 approved examples, 0/200 preference pairs. Keep running + evaluating."
+}

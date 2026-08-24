@@ -1,0 +1,21 @@
+{
+  "name": "conductor-workbench-broker",
+  "version": "1.0.0",
+  "description": "Auth + MCP credential broker for the Conductor Workbench SPA (WP-04)",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsc -w -p tsconfig.json & node --watch dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test dist/*.test.js",
+    "hash": "npm run build --silent && node dist/password.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.7.5"
+  }
+}

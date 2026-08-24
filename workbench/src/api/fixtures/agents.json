@@ -1,0 +1,14 @@
+[
+  {
+    "id": "agt_client_manager",
+    "name": "Client Manager",
+    "role": "client_manager",
+    "model": "gpt-4.1",
+    "promptState": "diverged",
+    "skills": [
+      "editorial_craft",
+      "editorial_review"
+    ],
+    "rev": 7
+  }
+]

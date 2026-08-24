@@ -1,0 +1,42 @@
+  :root{
+    --bg:#f2efe8; --panel:#faf8f3; --panel2:#edeae1; --panel3:#e2ded0; --line:#dcd6c6; --line2:#c3bca8;
+    --ink:#23262e; --muted:#5c616e; --faint:#989eab;
+    --acc:#a86b1c; --acc-dim:#b98f4d; --acc-soft:#f2e7cf;
+    /* WCAG-review fix (a11y S2): --acc/--ok as small text fail 4.5:1 in light
+       mode on every panel tier (verified — see A11Y-REVIEW.md's contrast
+       table); --acc-ink/--ok-ink are darkened text-only variants used
+       exactly where those two colors are read as text on a tinted badge
+       background (.risk.publish, .pin.live). Dark mode's own --acc/--ok
+       already clear 4.5:1, so there they're aliased straight back. */
+    --acc-ink:#865616; --ok-ink:#297047;
+    --ok:#2e7d4f; --run:#2f6db3; --bad:#b3403a; --paused:#7d5bb5;
+    /* WCAG-review fix (a11y S3): grid-cell / policy-bar fills reuse the
+       same semantic colors as everywhere else in the app instead of a
+       separate pastel trio — verified 3:1+ against --panel3 in both
+       themes, and it reads as one consistent color language rather than
+       a second, weaker one. */
+    --cell-ok:var(--ok); --cell-gate:var(--acc); --cell-bad:var(--bad);
+    --shadow:0 14px 40px #00000022;
+    --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#101319; --panel:#151a23; --panel2:#1b212d; --panel3:#212939; --line:#262e3d; --line2:#344057;
+      --ink:#d7dce5; --muted:#8a94a6; --faint:#5b6373;
+      --acc:#e2a44a; --acc-dim:#8a6528; --acc-soft:#2b2415;
+      --acc-ink:var(--acc); --ok-ink:var(--ok);
+      --ok:#57b380; --run:#6aa3e0; --bad:#e0706a; --paused:#b48ede;
+      --cell-ok:var(--ok); --cell-gate:var(--acc); --cell-bad:var(--bad);
+      --shadow:0 14px 40px #000000aa;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#101319; --panel:#151a23; --panel2:#1b212d; --panel3:#212939; --line:#262e3d; --line2:#344057;
+    --ink:#d7dce5; --muted:#8a94a6; --faint:#5b6373;
+    --acc:#e2a44a; --acc-dim:#8a6528; --acc-soft:#2b2415;
+    --acc-ink:var(--acc); --ok-ink:var(--ok);
+    --ok:#57b380; --run:#6aa3e0; --bad:#e0706a; --paused:#b48ede;
+    --cell-ok:var(--ok); --cell-gate:var(--acc); --cell-bad:var(--bad);
+    --shadow:0 14px 40px #000000aa;
+  }

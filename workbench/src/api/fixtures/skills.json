@@ -1,0 +1,83 @@
+[
+  {
+    "id": "article_body_builder",
+    "version": "1.0.0",
+    "assignedTo": []
+  },
+  {
+    "id": "article_structuring",
+    "version": "1.0.0",
+    "assignedTo": [
+      "brief_architect"
+    ]
+  },
+  {
+    "id": "artifact_handling",
+    "version": "1.0.0",
+    "assignedTo": []
+  },
+  {
+    "id": "contract_intelligence",
+    "version": "1.0.0",
+    "assignedTo": [
+      "article_body",
+      "artifact_plan",
+      "contract_intelligence",
+      "publish_payload"
+    ]
+  },
+  {
+    "id": "editorial_craft",
+    "version": "1.0.0",
+    "assignedTo": [
+      "brief_architect",
+      "copy_regenerator",
+      "draft_writer",
+      "emotional_resonance",
+      "human_texture"
+    ]
+  },
+  {
+    "id": "editorial_review",
+    "version": "1.0.0",
+    "assignedTo": []
+  },
+  {
+    "id": "factual_review",
+    "version": "1.0.0",
+    "assignedTo": [
+      "trust_factual"
+    ]
+  },
+  {
+    "id": "learning_observation",
+    "version": "1.0.0",
+    "assignedTo": []
+  },
+  {
+    "id": "publication_readiness",
+    "version": "1.0.0",
+    "assignedTo": []
+  },
+  {
+    "id": "seo_review",
+    "version": "1.0.0",
+    "assignedTo": [
+      "topic_opportunity"
+    ]
+  },
+  {
+    "id": "source_verification",
+    "version": "1.0.0",
+    "assignedTo": [
+      "trust_factual"
+    ]
+  },
+  {
+    "id": "web_research",
+    "version": "1.0.0",
+    "assignedTo": [
+      "research"
+    ]
+  }
+]

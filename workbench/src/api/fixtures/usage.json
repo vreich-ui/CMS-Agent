@@ -1,0 +1,21 @@
+{
+  "weekTotal": 67.7263,
+  "runCount": 49,
+  "byWorkflow": [
+    {
+      "wf": "publishing_conductor",
+      "total": 58.6656,
+      "avgPerRun": 2.0952
+    },
+    {
+      "wf": "clone_conductor",
+      "total": 0.9192,
+      "avgPerRun": 0.1532
+    },
+    {
+      "wf": "capture_conductor",
+      "total": 1.0993,
+      "avgPerRun": 0.0733
+    }
+  ]
+}
