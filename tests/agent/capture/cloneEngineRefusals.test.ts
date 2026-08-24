@@ -9,7 +9,7 @@ import {
 import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { ProjectRepository } from "../../../src/agent/repository/interfaces/ProjectRepository.js";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
-import { createProject, projectCreateSchema } from "../../../src/agent/projects/projectAdmin.js";
+import { createProject, projectCreateSchema, updateProject } from "../../../src/agent/projects/projectAdmin.js";
 
 // T13.1 — the clone_conductor write laws that HARD RULES calls out by name, tested directly against
 // cloneEngine.ts (mirroring the capture engine's own unit-level refusal coverage):
@@ -43,6 +43,14 @@ const SITE_ID = "site_x";
 const THEME_ID = "thm_capture_x";
 const CAPTURE_RUN_ID = "run_capture_1";
 
+// T13.3(d) — copied from OpenAINodeRunner.ts line 16 (and the identical line in
+// AnthropicNodeRunner.ts) — the executor's per-node prompt redactor. Any key at any depth of a
+// node's input matching this pattern has its value silently replaced with "[REDACTED]" before the
+// model ever sees it. `cloneIntakeStep` stamps a NON-SECRET POLICY VIEW (clonePolicyView,
+// cloneEngine.ts) on top of the engine's own clone.mjs briefing — a surface clone.mjs's own guard
+// test (clone.test.mjs) never sees — so it needs this check run against it separately.
+const REDACTOR_KEY_RE = /api[_-]?key|authorization|bearer|jwt|cookie|token|secret|blob.*credential/i;
+
 type RpcRequest = { id: number; method: string; params?: { name?: string; arguments?: Record<string, unknown> } };
 type WireCall = { name: string; args: Record<string, unknown> };
 
@@ -55,15 +63,20 @@ const SITE_BRAND_TOKENS = {
 };
 
 // The T13.2 briefing shape: shapes, slots and vocabulary, with the site's palette and the captured
-// theme's tokens resolved ONCE at intake. No `schemaVersion`, no `source`, no `emitted`, no full page
+// theme's palette resolved ONCE at intake. No `schemaVersion`, no `source`, no `emitted`, no full page
 // bodies — the deterministic stages fetch what they need.
+// T13.3: the briefing fields are `site.palette`/`theme.palette`, not `site.brandTokens`/
+// `theme.tokens` — the executor's per-node prompt redactor (`/token/i`, OpenAINodeRunner.ts) matched
+// both old names and silently replaced the whole palette with "[REDACTED]" before a model saw it.
+// The real platform fields these are read FROM (siteBody.brandTokens, theme body.tokens — see the
+// object_get mocks below) are unchanged; only the outgoing briefing key names moved.
 const briefing = (overrides: Record<string, unknown> = {}) => ({
   artifact: "clone_intake.v1",
   summary: "Bounded clone briefing for the fixture target.",
   captureRunId: CAPTURE_RUN_ID,
   target: TARGET,
-  site: { objectId: SITE_ID, brandTokens: SITE_BRAND_TOKENS },
-  theme: { objectId: THEME_ID, name: "Captured theme", tokens: { colors: {}, fonts: {} } },
+  site: { objectId: SITE_ID, palette: SITE_BRAND_TOKENS },
+  theme: { objectId: THEME_ID, name: "Captured theme", palette: { colors: {}, fonts: {} } },
   registry: { sectionTypes: {}, pageTypes: {} },
   pages: [],
   recipes: { section_template: [], template: [] },
@@ -142,7 +155,7 @@ describe("clone_conductor theme_bind totality refusal", () => {
   });
 
   it("refuses when the briefing carries no captured theme objectId — the palette is never written blind", async () => {
-    const intake = briefing({ theme: { objectId: null, name: null, tokens: { colors: {}, fonts: {} } } });
+    const intake = briefing({ theme: { objectId: null, name: null, palette: { colors: {}, fonts: {} } } });
     await expect(cloneThemeBindStep({ targetProjectId: TARGET, intake, themeProposal: { colors: {}, fonts: {} } })).rejects.toMatchObject({ code: "clone_theme_missing" });
     expect(calledVerbs).toEqual([]);
   });
@@ -253,9 +266,10 @@ describe("clone_conductor intake fetches the site and theme bodies", () => {
     ]);
     // Defect A: the site's palette comes from the object_get BODY. An object_inventory row has none,
     // which is what left the live run's theme_reconciler with no slots to enumerate.
-    expect(envelope.site).toEqual({ objectId: SITE_ID, brandTokens: SITE_BRAND_TOKENS });
+    // T13.3: the briefing key is `palette`, not `brandTokens` — see the comment above `briefing()`.
+    expect(envelope.site).toEqual({ objectId: SITE_ID, palette: SITE_BRAND_TOKENS });
     expect(envelope.theme.objectId).toBe(THEME_ID);
-    expect(envelope.theme.tokens).toEqual({ colors: { "brand-primary": "#111111" }, fonts: { body: "Inter, sans-serif" } });
+    expect(envelope.theme.palette).toEqual({ colors: { "brand-primary": "#111111" }, fonts: { body: "Inter, sans-serif" } });
     expect(envelope.pages).toEqual([
       { pageRef: "page_home", objectId: "pg_home", route: "/", sourceShape: ["hero"], emittedShape: ["hero"], gaps: [], candidateIds: ["cand_1"] }
     ]);
@@ -301,6 +315,70 @@ describe("clone_conductor intake fetches the site and theme bodies", () => {
     ];
     const envelope = await cloneIntakeStep({ targetProjectId: INTAKE_TARGET, captureRunId: CAPTURE_RUN_ID }, executionDeps());
     expect(envelope.site.objectId).toBe(SITE_ID);
+  });
+
+  it("(policy, T13.3d) the intake STAGE's own policy.toolPolicies carries no key colliding with the credential redactor", async () => {
+    // clonePolicyView (cloneEngine.ts) stamps this project's EFFECTIVE tool-permission map onto the
+    // envelope; it is a surface clone.mjs's own briefing (and clone.mjs's own guard test) never sees,
+    // so it needs checking separately. A realistic project's toolPolicies: every remote verb this
+    // workflow's own stages call (registry_get, object_inventory/get/checkout/checkin/patch/create/
+    // validate, the FORBIDDEN_VERBS, site_apply_theme) plus a broad sample of the platform's wider
+    // remote tool surface a real project might also gate (commerce/membership/PDF/media tools) — tool
+    // NAMES are fine to appear here; it is the KEYS of this map the redactor would ever act on.
+    const REALISTIC_TOOL_POLICIES: Record<string, "allowed" | "blocked" | "needs_approval"> = {
+      registry_get: "allowed",
+      object_inventory: "allowed",
+      object_get: "allowed",
+      object_checkout: "allowed",
+      object_checkin: "allowed",
+      object_patch: "allowed",
+      object_create: "allowed",
+      object_create_variant: "allowed",
+      object_validate: "allowed",
+      object_list: "allowed",
+      object_contract: "allowed",
+      object_discard: "allowed",
+      object_refresh_lock: "allowed",
+      object_retire: "blocked",
+      object_review_decide: "needs_approval",
+      object_submit_review: "allowed",
+      object_instantiate_template: "allowed",
+      object_instantiate_section_template: "allowed",
+      object_publish: "blocked",
+      release_to_production: "blocked",
+      trigger_netlify_build: "blocked",
+      deploy: "blocked",
+      site_apply_theme: "allowed",
+      commerce_orders: "allowed",
+      product_set_price: "needs_approval",
+      order_reissue: "needs_approval",
+      ownership_transfer: "blocked",
+      membership_policy_get: "allowed",
+      membership_policy_set: "needs_approval",
+      membership_contract: "allowed",
+      invitation_resend: "allowed",
+      invitation_revoke: "needs_approval",
+      publish_pdf_template: "blocked",
+      validate_pdf_template: "allowed",
+      create_pdf_template: "allowed",
+      delete_pdf_template: "blocked",
+      search_artifacts: "allowed",
+      search_images: "allowed",
+      set_image_model_policy: "allowed",
+      set_image_search_policy: "allowed",
+      update_image_search_candidate: "allowed",
+      registry_search: "allowed",
+      ping: "allowed"
+    };
+    await updateProject(repositoryManager.getProjectRepository(), INTAKE_TARGET, { toolPolicies: REALISTIC_TOOL_POLICIES });
+
+    const envelope = await cloneIntakeStep({ targetProjectId: INTAKE_TARGET, captureRunId: CAPTURE_RUN_ID }, executionDeps());
+
+    // Sanity: the fixture actually landed, so a passing assertion below means something.
+    expect(Object.keys(envelope.policy.toolPolicies).length).toBe(Object.keys(REALISTIC_TOOL_POLICIES).length);
+
+    const offenders = Object.keys(envelope.policy.toolPolicies).filter((key) => REDACTOR_KEY_RE.test(key));
+    expect(offenders, `policy.toolPolicies key(s) collide with the executor credential redactor and would reach the model as "[REDACTED]": ${offenders.join(", ")}`).toEqual([]);
   });
 });
 

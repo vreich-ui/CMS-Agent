@@ -25,7 +25,13 @@ export type CloneRegistry = {
   pageTypes: Record<string, { allowed: string[] | "any"; required: string[] }>;
 };
 
-export type CloneBrandTokens = { colors: Record<string, unknown>; fonts: Record<string, unknown> };
+// T13.3: renamed from CloneBrandTokens. The briefing calls this field `palette`, not
+// `brandTokens`/`tokens` — the executor's per-node prompt redactor
+// (OpenAINodeRunner.ts/AnthropicNodeRunner.ts, `/token/i`) replaces any key matching that pattern
+// with "[REDACTED]" before the model ever sees it, and `brandTokens`/`tokens` both matched, so
+// theme_reconciler's whole palette silently blanked. The real platform field this is read FROM
+// (siteBody.brandTokens / theme body.tokens) is unchanged — only the outgoing briefing key names.
+export type ClonePalette = { colors: Record<string, unknown>; fonts: Record<string, unknown> };
 
 /** One briefed page: ORDERED shapes, not bodies. `candidateIds` is what makes buildRestampOps'
  *  `recipe_rejected_at_mint` skip reachable — a design can only cite an id the briefing showed it. */
@@ -48,7 +54,7 @@ export type CloneRecipeIndexEntry = {
   slot_count?: number | null;
 };
 
-/** Named drops, in the FIXED documented order. `site.brandTokens`, `theme.tokens` and
+/** Named drops, in the FIXED documented order. `site.palette`, `theme.palette` and
  *  `registry.pageTypes` never appear here: they are never dropped, at any size. */
 export type CloneIntakeTruncation = { field: string; kept: number; total: number; reason: string };
 
@@ -57,8 +63,8 @@ export type CloneIntake = {
   summary: string;
   captureRunId: string;
   target: string;
-  site: { objectId: string | null; brandTokens: CloneBrandTokens };
-  theme: { objectId: string | null; name: string | null; tokens: Record<string, unknown> };
+  site: { objectId: string | null; palette: ClonePalette };
+  theme: { objectId: string | null; name: string | null; palette: Record<string, unknown> };
   registry: CloneRegistry;
   pages: CloneBriefingPage[];
   recipes: { section_template: CloneRecipeIndexEntry[]; template: CloneRecipeIndexEntry[] };
@@ -133,9 +139,9 @@ export type CloneThemeDropped = { slot: string; value: unknown; reason: CloneThe
 export type CloneThemeValidation = { applied: CloneThemeApplied; dropped: CloneThemeDropped[]; missingKeys: string[] };
 
 /** Re-validates a proposed theme token set against the site's own declared slots, read from
- *  `intake.site.brandTokens` — the briefing is the single authority on a site's palette, so a caller
+ *  `intake.site.palette` — the briefing is the single authority on a site's palette, so a caller
  *  cannot validate a proposal against one site and report against another. Throws CloneError when the
- *  intake carries no site.brandTokens, and when every proposed token drops (an empty write is a
+ *  intake carries no site.palette, and when every proposed token drops (an empty write is a
  *  refusal, not a success). */
 export function validateThemeProposal(input: {
   proposal: { colors?: Record<string, unknown>; fonts?: Record<string, unknown> };
