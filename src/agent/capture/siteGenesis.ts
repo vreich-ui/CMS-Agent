@@ -89,7 +89,19 @@ export const CREATE_SITE_CLI_RELATIVE_PATH = "packages/core/cli/create-site.mjs"
 // `reconcileSiteClientManagerCredentials` re-mints EVERY registered tenant from it and retires the
 // previous credential, the rotation silently narrowed tenants whose bearer had been minted by hand
 // with a wider scope — turning a working `run_workspace_workflow` into an opaque 401. Keep this in
-// lockstep with Platform's bridge; `siteGenesis.test.ts` pins it.
+// lockstep with Platform's bridge; `siteClientManagerScope.test.ts` pins it.
+//
+// IT HAPPENED AGAIN (2026-08-24). Platform's W19 approve button — the control on the activity card
+// that clears a run waiting at `publication_controller` — calls `workflow_set_operator_publish_decision`
+// and `workflow_get_run_cost` from `admin-request-activity.ts`. Neither was here, so both were
+// refused at the door with the same opaque 401, and the operator spent the afternoon rotating a
+// credential that was never wrong. Note what did NOT help: editing `MCP_SCOPED_TOKENS_JSON`.
+// A managed credential SUPERSEDES the static map for its projects
+// (`findAnyScopedBearerTokenPolicy`), so for any genesis-owned tenant the env JSON is dead config —
+// this constant is the only lever, and widening it requires a reconcile to re-mint.
+//
+// The rule this keeps re-teaching: adding a `ctx.cmsAgent.callTool(...)` anywhere in Platform is
+// half a change. The other half is here.
 export const SITE_CLIENT_MANAGER_TOOLS = [
   "agent_resolve",
   "agent_converse",
@@ -97,8 +109,10 @@ export const SITE_CLIENT_MANAGER_TOOLS = [
   "workflow_start_dry_run",
   "workflow_run_all",
   "workflow_get_run",
+  "workflow_get_run_cost",
   "workflow_publish_readiness",
-  "workflow_publish_run"
+  "workflow_publish_run",
+  "workflow_set_operator_publish_decision"
 ] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";
