@@ -110,6 +110,31 @@
 // upstream change is not yet committed there, so CAPTURE_ENGINE_UPSTREAM.commit below still names the
 // commit the OTHER SEVEN files were last re-vendored at and is deliberately left untouched — the
 // per-file hash pair is what pins clone.mjs, and the provenance test proves the two copies match.
+// T13.3 (2026-08-24) RE-VENDORED clone.mjs ALONE — two seam fixes:
+//   (1) appliesTo/applies_to mismatch. run_1787567551705_e1qp0l's recipe_designer emitted
+//     `applies_to` (per its own outputSchema at the time) into `validateTemplateDesign`, which only
+//     ever read `appliesTo`; a good template design was rejected `malformed_design` for a spelling
+//     mismatch unrelated to its content. `validateTemplateDesign` is now a TOLERANT READER: it
+//     accepts either `appliesTo` or `applies_to` on input (preferring `appliesTo` when both are
+//     present and non-empty), and normalizes to `appliesTo` alone — the one canonical name that was
+//     always written to the platform (`row?.body?.appliesTo`). Nothing about what gets WRITTEN
+//     changed. cloneConductorNodes.ts's recipe_designer node was corrected to emit `appliesTo`.
+//   (2) the credential redactor ate the palette. OpenAINodeRunner.ts/AnthropicNodeRunner.ts's
+//     per-node prompt redactor (`/token/i`, among other patterns) silently replaces any input key
+//     matching it with "[REDACTED]" before a model sees it — `site.brandTokens` and `theme.tokens`
+//     both matched, so theme_reconciler's whole palette arrived as the literal string "[REDACTED]"
+//     and it correctly, uselessly, refused. THE REDACTOR ITSELF IS UNTOUCHED (it is a global
+//     security control, not a bug). Instead the briefing's own field names were changed to not
+//     collide: `site.brandTokens` -> `site.palette`, `theme.tokens` -> `theme.palette` (same
+//     {colors, fonts} shape). Every downstream reader inside clone.mjs (`validateThemeProposal`)
+//     follows. The value actually WRITTEN to the platform is unchanged: `set_theme_fields` still
+//     writes `tokens`, `site_apply_theme` still drives the real `brandTokens` field — only the
+//     briefing's own vocabulary changed. A guard test in clone.test.mjs now walks every key at every
+//     depth of a realistic buildCloneIntake() result and asserts none collides with the redactor's
+//     pattern, so this class of defect cannot silently ship again.
+// clone.mjs stays byte-identical to platform's packages/core/cli/capture/clone.mjs (no deviation of
+// its own); CAPTURE_ENGINE_UPSTREAM.commit below is still deliberately left untouched, for the same
+// reason T13.2 left it untouched — the per-file hash pair is what pins clone.mjs.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -172,8 +197,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "clone.mjs",
-    vendoredSha256: "5dbda57eec5e7cb88168b58573f72056921a637afea6d8a52917b7595be58dbf",
-    upstreamSha256: "5dbda57eec5e7cb88168b58573f72056921a637afea6d8a52917b7595be58dbf"
+    vendoredSha256: "6de08a64db185d37232cf7ac197ef40f410ea7be89161ccc74963ab0a95f549e",
+    upstreamSha256: "6de08a64db185d37232cf7ac197ef40f410ea7be89161ccc74963ab0a95f549e"
   }
 ] as const;
 
