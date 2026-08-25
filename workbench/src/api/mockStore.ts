@@ -8,7 +8,7 @@
 // ../types.ts objects. client.ts's MOCK_HANDLERS wrap these straight into
 // the same one-level-deep envelope a live call would (`{ nodes: [...] }`,
 // `{ runs: [...], page: {...} }`, …), and verbs.ts runs that through the
-// exact adapter the Netlify transport uses. That symmetry — raw fixture in,
+// exact adapter the Cloud Run transport uses. That symmetry — raw fixture in,
 // same adapter, same UI shape out — is what makes the fixture-mode
 // Playwright suite a real regression net for the live mapping, not a check
 // against a parallel fiction. See fixtures/README.md.

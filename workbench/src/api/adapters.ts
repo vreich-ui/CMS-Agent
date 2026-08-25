@@ -11,7 +11,7 @@
 //
 // This is the ONE place either transport's shape-mapping happens. Fixture
 // mode reads a raw fixture (api/fixtures/*.json, itself a verbatim capture)
-// and calls the same to<Entity>() the Netlify transport calls on a live
+// and calls the same to<Entity>() the Cloud Run transport calls on a live
 // response — see client.ts's MOCK_HANDLERS and verbs.ts. That symmetry is
 // the whole point: the 46 existing fixture-mode Playwright specs exercise
 // this exact mapping, not a parallel fiction.
