@@ -89,7 +89,7 @@ export function HistoryTab({ nodeId }: { nodeId: string }) {
     setNextConfirmTrigger(triggerEl);
     setRestoring(entry.id);
     try {
-      await changesRestore({ nodeId, changeId: entry.id });
+      await changesRestore({ nodeId, revisionId: entry.id });
 
       if (entry.source === 'local') {
         applyRestoredValue(entry, qc, nodeId);

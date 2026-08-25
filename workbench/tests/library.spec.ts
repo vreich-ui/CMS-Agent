@@ -1,9 +1,11 @@
 import { expect, test } from '@playwright/test';
 
-// WP-15 — Workflows library screen. Fixtures carry 39 real runs (not the
-// mockup's 15) and clone_conductor has 9 live nodes (not the mockup's 8,
-// because of fit_adjudicator) — see api/fixtures/README.md. This spec
-// asserts the real numbers, not the mockup's hand-drawn ones.
+// WP-15 — Workflows library screen. Fixtures carry 55 real runs (not the
+// mockup's 15 — workbench-verb-fixes recaptured the full live run history,
+// minus independent_node/trial rows) and clone_conductor has 9 live nodes
+// (not the mockup's 8, because of fit_adjudicator) — see
+// api/fixtures/README.md. This spec asserts the real numbers, not the
+// mockup's hand-drawn ones.
 
 function cardFor(page: import('@playwright/test').Page, name: string) {
   return page.locator('.cards .wfcard').filter({ has: page.locator('h3', { hasText: name }) });
@@ -43,10 +45,10 @@ test('library screen renders workflow cards from live data, both themes', async 
   await expect(clone.locator('.stats span').nth(0)).toHaveText('9 nodes');
   await expect(capture.locator('.stats span').nth(0)).toHaveText('11 nodes');
 
-  // "needing attention" / "last" reflect the real 39-run fixture set.
-  await expect(pub.locator('.stats span').nth(1)).toHaveText('9 needing attention');
+  // "needing attention" / "last" reflect the real 55-run fixture set.
+  await expect(pub.locator('.stats span').nth(1)).toHaveText('13 needing attention');
   await expect(clone.locator('.stats span').nth(1)).toHaveText('4 needing attention');
-  await expect(capture.locator('.stats span').nth(1)).toHaveText('5 needing attention');
+  await expect(capture.locator('.stats span').nth(1)).toHaveText('7 needing attention');
 
   await expect(pub.locator('.stats .chip')).toHaveText('blocked');
   await expect(clone.locator('.stats .chip')).toHaveText('blocked');

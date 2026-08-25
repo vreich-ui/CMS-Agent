@@ -67,6 +67,14 @@ export interface WorkflowNode {
   desc: string;
   model?: ModelConfig;
   prompt?: string;
+  // --- Additive (workbench-verb-fixes, live-mapping pass). Carried straight
+  // from the live node record (`produces`/`requiredInputs`/`status`/
+  // `updatedAt`) with no fixture-derived equivalent before now — see
+  // api/adapters.ts's toNode() and fixtures/README.md.
+  produces?: string[];
+  requiredInputs?: string[];
+  status?: string;
+  updatedAt?: string;
 }
 
 export interface ToolPolicyCounts {
@@ -103,6 +111,9 @@ export interface Run {
   err: number;
   done: number;
   stall?: boolean;
+  // --- Additive (workbench-verb-fixes). requestId is the caller-supplied
+  // id a run was started with — live-carried, no prior fixture equivalent.
+  requestId?: string;
 }
 
 export interface ToolDef {
@@ -110,6 +121,11 @@ export interface ToolDef {
   risk: Risk;
   sideEffect: string;
   desc: string;
+  // --- Additive (workbench-verb-fixes) — live tool_list carries these too.
+  name?: string;
+  category?: string;
+  requiresApproval?: boolean;
+  enabled?: boolean;
 }
 
 export interface Observation {
@@ -152,6 +168,10 @@ export interface Skill {
   id: string;
   version: string;
   assignedTo: string[];
+  // --- Additive (workbench-verb-fixes) — live skill_list carries these too.
+  name?: string;
+  description?: string;
+  status?: string;
 }
 
 export interface Agent {
@@ -162,6 +182,9 @@ export interface Agent {
   promptState: string;
   skills: string[];
   rev: number;
+  // --- Additive (workbench-verb-fixes) — live agent_list carries these too.
+  status?: string;
+  updatedAt?: string;
 }
 
 export interface WorkflowUsage {

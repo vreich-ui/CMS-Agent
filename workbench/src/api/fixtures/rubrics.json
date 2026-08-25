@@ -1,37 +1,322 @@
-[
-  {
-    "node": "contract_intelligence",
-    "crit": 7,
-    "top": "contract_fidelity \u00d73 \u00b7 severity_enforced_live_mapping \u00d72.5 \u00b7 no_invented_client_rules \u00d72",
-    "score": 0.484,
-    "verdict": "held"
-  },
-  {
-    "node": "research",
-    "crit": 7,
-    "top": "citation_integrity \u00d72 \u00b7 per_claim_support \u00d71.8 \u00b7 source_authority \u00d71.5",
-    "score": null,
-    "verdict": null
-  },
-  {
-    "node": "article_body",
-    "crit": 9,
-    "top": "client_schema_compliance \u00d73 \u00b7 private_annotations_populated \u00d72.75 \u00b7 media_safety \u00d72.75",
-    "score": null,
-    "verdict": null
-  },
-  {
-    "node": "publish_payload",
-    "crit": 7,
-    "top": "gates_preserved \u00d73 \u00b7 body_fidelity \u00d72.5 \u00b7 artifact_form_and_provenance \u00d72.25",
-    "score": null,
-    "verdict": null
-  },
-  {
-    "node": "artifact_plan",
-    "crit": 6,
-    "top": "materialization_verification \u00d73 \u00b7 zero_media_shortcut_used_correctly \u00d72.5 \u00b7 request_id_confirmed \u00d72.5",
-    "score": null,
-    "verdict": null
-  }
-]
+{
+  "_comment": "Verbatim evaluation_list_rubrics envelope with each criterion.guidance (long-form scoring rationale, several KB each) and each rubric.metadata (authoring narrative) dropped to keep this fixture a reasonable size. Every field toRubric()/the UI reads \u2014 nodeId, name, description, status, passThreshold, rubricId, createdAt, updatedAt, and each criterion id/name/description/weight/scaleMax/criticalMin \u2014 is untouched. See fixtures/README.md.",
+  "rubrics": [
+    {
+      "nodeId": "contract_intelligence",
+      "name": "contract_intelligence.v1 \u2014 Contract Fidelity Rubric (DRAFT)",
+      "description": "Scores a contract_intelligence.v1 artifact on whether it is a faithful, provenanced, non-inventive carry-through of the client's fetched publishing contract. Every criterion binds to a field that actually exists in the node's output schema (artifact, summary, clientProjectId, clientObjectType, contractSource, bodySchema, idConventions, mediaConvention, mediaPolicy, taxonomy, constraints[], publishPolicy, contract_findings[], assumptions[], blockers[], notes[]). This rubric is the quality half of any cost change to this node: it is designed so that a cheaper or partly deterministic implementation cannot look cheaper-and-equal while quietly softening a client rule.",
+      "status": "active",
+      "criteria": [
+        {
+          "id": "contract_fidelity",
+          "name": "Contract fidelity \u2014 declared rules reproduced, not rewritten",
+          "description": "Every rule, field, pattern, literal and constraint the contract declares is reproduced in the output as the contract states it. Structural payloads (bodySchema) are carried whole; rules are carried in the contract's own vocabulary and literals, not paraphrased into cleaner-reading prose, not generalized, not re-ordered into a narrative that loses a clause.",
+          "weight": 3,
+          "scaleMax": 10
+        },
+        {
+          "id": "severity_enforced_live_mapping",
+          "name": "Severity and enforcedLive carried through without downgrade",
+          "description": "Each entry in constraints[] carries both the severity the contract assigned and whether it is enforced live, unchanged. A rule the contract declares blocking is never presented as advisory, warning, optional, best-practice or 'should' \u2014 in constraints[], in summary, or in contract_findings.",
+          "weight": 2.5,
+          "scaleMax": 10
+        },
+        {
+          "id": "no_invented_client_rules",
+          "name": "No invented client rules",
+          "description": "Nothing appears in the output that the contract did not declare. Plausible-sounding CMS, SEO or editorial conventions the contract never stated are the exact failure this hunts \u2014 they are more dangerous than omissions because they read as authoritative and downstream nodes obey them.",
+          "weight": 2,
+          "scaleMax": 10
+        },
+        {
+          "id": "contract_source_provenance",
+          "name": "contractSource provenance \u2014 traceable, current, non-placeholder",
+          "description": "contractSource identifies the tool the contract came from and when it was fetched, and the asserted rules are traceable to that fetch. Missing or hollow provenance is a hard failure: downstream cannot prove the contract was read rather than remembered.",
+          "weight": 1.5,
+          "scaleMax": 5,
+          "criticalMin": 0
+        },
+        {
+          "id": "no_cross_project_conventions",
+          "name": "No cross-project or workspace-local conventions",
+          "description": "The output describes THIS client only. Rules remembered from another client, from a previously-served brand, or from the workspace's own house schema and habits must not appear. clientProjectId must be the run's registered client, carried from input, never a remembered one.",
+          "weight": 1.5,
+          "scaleMax": 5
+        },
+        {
+          "id": "unknown_field_surfacing",
+          "name": "Unknown and unmapped contract fields surfaced explicitly",
+          "description": "Contract content the node did not recognize or map \u2014 including anything the deterministic reduction preserved in its unmapped bucket \u2014 is surfaced explicitly as unknown/unmapped rather than dropped silently or guessed at.",
+          "weight": 1,
+          "scaleMax": 5
+        },
+        {
+          "id": "blocker_and_degradation_honesty",
+          "name": "Blocker honesty \u2014 failed or partial fetch is declared, not papered over",
+          "description": "When the contract could not be fetched, the client is unreachable, the object type is unsupported, clientProjectId is missing, or the contract declares something the workspace cannot satisfy, the output raises it in blockers[] instead of emitting a confident, complete-looking contract. Conversely, the output does not claim blockers it cannot support.",
+          "weight": 1,
+          "scaleMax": 5
+        }
+      ],
+      "passThreshold": 0.85,
+      "rubricId": "rubric_1785773022345_jzc74l",
+      "createdAt": "2026-08-03T16:03:42.345Z",
+      "updatedAt": "2026-08-05T12:42:01.341Z"
+    },
+    {
+      "nodeId": "research",
+      "name": "research_brief.v1 \u2014 Evidence Integrity Rubric (draft)",
+      "description": "Scores the `research` node's research_brief.v1 output on whether the evidence it hands to downstream editorial nodes is actually load-bearing: sources proportionate to claim stakes, every substantive claim individually attributed, attributions that hold up, currency appropriate to the topic, real disagreement preserved rather than flattened, explicit claim-risk flags, and coverage of the reader decision the article must serve without silent gaps. Built to be the quality half of cost-optimization comparisons on this node \u2014 the failure modes it hunts (dropped browsing, hallucinated or vague attribution, bibliography-instead-of-per-claim sourcing, false consensus) are precisely what a cheaper model or a tighter tool budget erodes first.",
+      "status": "active",
+      "criteria": [
+        {
+          "id": "per_claim_support",
+          "name": "Per-Claim Attribution",
+          "description": "Each substantive factual claim in the brief carries its own named source at the point the claim is made, rather than the brief presenting assertions alongside a detached source list. Judged over the claim-bearing entries in `notes[]` and any factual assertion in `summary`.",
+          "weight": 1.8,
+          "scaleMax": 5
+        },
+        {
+          "id": "citation_integrity",
+          "name": "Attribution Integrity (sources say what they are said to say)",
+          "description": "Cited sources are represented accurately and within their actual scope \u2014 no misattribution, no inflation of a source's authority or specificity, no claim stretched beyond what the cited material supports. Misattribution scores worse than an honest 'unsourced'.",
+          "weight": 2,
+          "scaleMax": 5,
+          "criticalMin": 2
+        },
+        {
+          "id": "source_authority",
+          "name": "Source Authority Proportionate to Stakes",
+          "description": "The evidence tier matches what the claim is being asked to bear. For health, medical, safety, regulatory, or financial claims, primary literature, recognized bodies, regulators, and standards outrank vendor pages, content marketing, listicles, and SEO blogs. For product or operational claims, the source-owner's own contract/docs is the authoritative tier.",
+          "weight": 1.5,
+          "scaleMax": 5
+        },
+        {
+          "id": "claim_risk_flagging",
+          "name": "Evidence Separation and Claim-Risk Flags",
+          "description": "The brief separates sourced fact from interpretation from uncertainty from unsupported assertion, and explicitly flags claims the downstream draft should soften, scope, or drop \u2014 with the safer wording or the missing evidence named.",
+          "weight": 1.3,
+          "scaleMax": 5
+        },
+        {
+          "id": "recency_currency",
+          "name": "Currency Appropriate to the Topic",
+          "description": "Sources are current enough for how fast the topic moves, and their vintage is visible. A superseded guideline, deprecated standard, or stale product behavior presented as current is a failure regardless of how well it is cited.",
+          "weight": 1.2,
+          "scaleMax": 5
+        },
+        {
+          "id": "disagreement_surfaced",
+          "name": "Genuine Disagreement and Uncertainty Preserved",
+          "description": "Where credible expert opinion actually diverges, or where evidence is thin, contested, or mixed, the brief states the divergence and who holds which position \u2014 instead of collapsing it into a single confident consensus line for the draft to repeat.",
+          "weight": 1,
+          "scaleMax": 5
+        },
+        {
+          "id": "brief_coverage",
+          "name": "Coverage of the Downstream Decision, Gaps Declared",
+          "description": "The brief actually covers what the brief/draft nodes need to write the article \u2014 the reader decision it must serve, the material claims, practical implications, and constraints \u2014 and any area it could not cover is stated as an explicit gap or blocker rather than silently omitted.",
+          "weight": 1.2,
+          "scaleMax": 5
+        }
+      ],
+      "passThreshold": 0.78,
+      "rubricId": "rubric_1785773086490_hmrj61",
+      "createdAt": "2026-08-03T16:04:46.490Z",
+      "updatedAt": "2026-08-05T12:42:02.809Z"
+    },
+    {
+      "nodeId": "article_body",
+      "name": "article_body \u2014 client object build quality (DRAFT v1)",
+      "description": "Scores one client_object.v1 envelope emitted by the article_body builder: whether the body is shaped to the client's own fetched contract, whether contract-declared private annotations are actually populated on every node, whether media references are safe and current-request, whether client validation is reported honestly, whether the piece reads as one deliberate article grounded in the approved upstream editorial decisions, and whether missing inputs produce explicit blockers instead of invented values. Designed as the quality half of cost-optimization comparisons: a cheaper model must hold or improve this verdict.",
+      "status": "active",
+      "criteria": [
+        {
+          "id": "client_schema_compliance",
+          "name": "Client-schema compliance of body",
+          "description": "body is shaped to the client's own declared contract: the contract's root field names and nesting, opaque node ids matching the contract's id pattern, no undeclared/workspace-only keys when the contract is strict, and every enum-valued field carrying a value drawn from the contract's own declared enum rather than an invented, pluralized, or approximated one.",
+          "weight": 3,
+          "scaleMax": 10
+        },
+        {
+          "id": "private_annotations_populated",
+          "name": "Private annotations populated on every node",
+          "description": "The contract-declared per-node private annotation fields (e.g. private.strategy, private.intent, plus the contract's free-text notes field) are actually present and non-empty on EVERY emitted node, with enum values from the contract's own enums and a one-sentence reason in the notes field. This is a known live gap \u2014 an entire historical run emitted every node with private absent.",
+          "weight": 2.75,
+          "scaleMax": 5
+        },
+        {
+          "id": "media_safety",
+          "name": "Media reference safety and presence",
+          "description": "Every media reference in body is a verified current-request artifact expressed in the form the contract demands for that field (rendered fields get the client's public serving path, raw reference fields get the artifact key), and artifactReferences plus mediaPathConvention corroborate it. Pattern validity is not proof of provenance. As of Wolf's 2026-08-05 ruling, images are a DEFAULT REQUIREMENT for most articles \u2014 a text-only piece must earn that as a stated, specific exception, not merely note that nothing upstream requested media.",
+          "weight": 2.75,
+          "scaleMax": 5
+        },
+        {
+          "id": "grounding_in_approved_review",
+          "name": "Grounding in approved upstream editorial output",
+          "description": "The body executes the approved review/aggregation decisions and the chosen angle and narrative arc, rather than re-litigating them, silently dropping required elements, or substituting a fresh editorial plan of the node's own.",
+          "weight": 1.75,
+          "scaleMax": 10
+        },
+        {
+          "id": "editorial_coherence",
+          "name": "Editorial coherence as one deliberate piece",
+          "description": "The reader-visible copy reads as a single article with one voice, one through-line, and real transitions \u2014 not as independently generated sections stapled together.",
+          "weight": 1.75,
+          "scaleMax": 10
+        },
+        {
+          "id": "honest_client_validation",
+          "name": "Honest client-validation status",
+          "description": "clientValidation truthfully reports the CLIENT's own validator result \u2014 the tool used, whether it was reached, the verdict, and the client's own issue text \u2014 including when the verdict is failure or a deferral because the object does not yet exist.",
+          "weight": 1.5,
+          "scaleMax": 5
+        },
+        {
+          "id": "explicit_blockers_over_invented_data",
+          "name": "Explicit blockers instead of invented data",
+          "description": "When a contract-required field, a taxonomy term, a media artifact, a client identity, a link, or a fact is missing, the node blocks and names the gap in blockers/assumptions rather than emitting a plausible-looking invented value.",
+          "weight": 1.5,
+          "scaleMax": 5
+        },
+        {
+          "id": "no_workflow_language_reader_visible",
+          "name": "No workflow language in reader-visible text",
+          "description": "Reader-visible strings carry no pipeline, agent, prompt, scoring, or internal-process vocabulary; internal reasoning lives only in the contract's designated private/internal fields.",
+          "weight": 1,
+          "scaleMax": 5
+        },
+        {
+          "id": "envelope_provenance_integrity",
+          "name": "Envelope provenance and contract sourcing",
+          "description": "The output envelope is exactly the node's declared shape and carries real contract provenance: artifact equals the schema's required constant, contractSource records how and when the client contract was fetched, and clientProjectId/clientObjectType are carried through unchanged and consistently with contractSource and with the body's own shape.",
+          "weight": 1.25,
+          "scaleMax": 5
+        }
+      ],
+      "passThreshold": 0.85,
+      "rubricId": "rubric_1785773157410_dajinj",
+      "createdAt": "2026-08-03T16:05:57.410Z",
+      "updatedAt": "2026-08-05T12:43:05.036Z"
+    },
+    {
+      "nodeId": "publish_payload",
+      "name": "publish_payload \u2014 dry-run publish candidate integrity (DRAFT)",
+      "description": "Scores a single `dry_run_publish_payload.v1` output from the publishing_conductor `publish_payload` node. This node is an adapter: it assembles the client-shaped publish candidate from the approved `article_body` output plus `artifact_plan`, and it must build without publishing. The rubric is deliberately a conformance rubric, not a quality rubric \u2014 every criterion binds to a declared field of the node's output schema (artifact, dryRun, clientProjectId, clientObjectType, contractSource, clientObject, requestId, clientValidation, artifactProtocol, artifactReferences, artifactHandling.legacyFallbacksUsed, validationAssumptions, blockers, notes) or to a declared policy in the node prompt. It is the quality half of any future cost reduction on this node: a cheaper model that still holds these scores is an optimization; one that drops them is a downgrade.",
+      "status": "active",
+      "criteria": [
+        {
+          "id": "gates_preserved",
+          "name": "Publish gates preserved and honestly reported",
+          "description": "The payload keeps every approval/readiness gate intact: dryRun is literally true, artifact is exactly the declared artifact id, the client's own validator verdict is reported as it actually came back, and blockers are stated explicitly rather than softened, deferred to prose, or pre-satisfied.",
+          "weight": 3,
+          "scaleMax": 5
+        },
+        {
+          "id": "body_fidelity",
+          "name": "Exact mapping from the approved article_body",
+          "description": "clientObject is a faithful transformation of the client-shaped body approved upstream by article_body \u2014 a shape/field mapping only. Content added, rewritten, trimmed, reordered, or paraphrased at this node is a failure regardless of whether it reads better.",
+          "weight": 2.5,
+          "scaleMax": 5
+        },
+        {
+          "id": "artifact_form_and_provenance",
+          "name": "Artifact keys vs public serving paths, correctly placed and correctly severed",
+          "description": "Every media reference sits in the form its target field demands \u2014 public serving path in rendered fields, raw artifact key only in the contract's designated reference fields \u2014 carries current-request verification evidence, and artifactProtocol/artifactHandling report the client's protocol truthfully.",
+          "weight": 2.25,
+          "scaleMax": 5
+        },
+        {
+          "id": "no_side_effects",
+          "name": "Builds, does not publish \u2014 no client state mutated",
+          "description": "Every client interaction evidenced in the output is read-only. The node must not have created, patched, checked out, published, released, or triggered a build on any client object, and must not claim to have done so.",
+          "weight": 1.25,
+          "scaleMax": 5,
+          "criticalMin": 0
+        },
+        {
+          "id": "identifier_conformance",
+          "name": "Identifiers follow the contract's declared form and refer to the right things",
+          "description": "clientProjectId, clientObjectType, requestId, slug and any object/draft id follow the client contract's declared conventions and point at the correct entities for THIS request; where a safe id cannot be derived, it is omitted with a stated reason rather than invented.",
+          "weight": 1.5,
+          "scaleMax": 5
+        },
+        {
+          "id": "no_workspace_fields",
+          "name": "No workspace-only fields cross into the client payload",
+          "description": "clientObject contains only fields the client's fetched contract declares. Internal workflow scaffolding must stay out of the object that a publisher would send.",
+          "weight": 1.5,
+          "scaleMax": 5
+        },
+        {
+          "id": "contract_provenance",
+          "name": "Contract provenance is recorded and governs the payload",
+          "description": "contractSource shows the client's own contract was actually fetched for this object type, with enough detail to audit it, and that contract \u2014 not a workspace-local schema \u2014 governed the payload's shape.",
+          "weight": 1.5,
+          "scaleMax": 5
+        }
+      ],
+      "passThreshold": 0.85,
+      "rubricId": "rubric_1785773218400_ajar9a",
+      "createdAt": "2026-08-03T16:06:58.400Z",
+      "updatedAt": "2026-08-05T12:42:03.558Z"
+    },
+    {
+      "nodeId": "artifact_plan",
+      "name": "artifact_plan.v1 \u2014 Media Verification & Cost-Shortcut Integrity Rubric (DRAFT)",
+      "description": "Scores an artifact_plan.v1 output: whether every media slot marked verified is actually backed by current-request verification evidence, whether the request id was confirmed against the client's own convention before any write (a real production incident \u2014 an orphaned artifact \u2014 happened exactly this way), whether the node's zero-media cost shortcut is taken only when genuinely warranted, and whether capability/budget limits are honestly reported rather than silently worked around. This node had no rubric before this revision despite being 12.9% of measured spend \u2014 the fifth rubric closes that gap.",
+      "status": "active",
+      "criteria": [
+        {
+          "id": "materialization_verification",
+          "name": "Verified media is actually verified, not pattern-matched",
+          "description": "Every slot marked has_trusted_artifact carries real verification evidence \u2014 matching key, digest, content type, size and timestamp for the CURRENT request \u2014 in its verification field. A pattern-valid key is never proof.",
+          "weight": 3,
+          "scaleMax": 5,
+          "criticalMin": 0
+        },
+        {
+          "id": "request_id_confirmed",
+          "name": "Request id confirmed against the client's own convention before any write",
+          "description": "requestId is derived from the CLIENT's declared id convention (requestIdConvention) and confirmed acceptable to the client (requestIdConfirmedByClient) before any artifact is materialized under it. Grounded in a real incident: a permissive id accepted by the artifact generator but rejected by the client's own index produced an orphaned artifact the client could never list, reconcile, or delete.",
+          "weight": 2.5,
+          "scaleMax": 5,
+          "criticalMin": 0
+        },
+        {
+          "id": "no_legacy_fallback_or_fabricated_reference",
+          "name": "Only the client's declared protocol, for this request",
+          "description": "Every artifact reference came from the client's declared artifact protocol, materialized for the current request. No repo paths, remote URLs, data URIs, hand-authored keys, direct-save fallbacks, or references copied from another request or slug.",
+          "weight": 2,
+          "scaleMax": 5
+        },
+        {
+          "id": "honest_blocking_over_fabrication",
+          "name": "Blocks on denied capability, timeout, or over-budget \u2014 never invents a pointer",
+          "description": "When a required capability is denied by project policy, approval times out, or media exceeds the client's budget under a blocking rule, the node names the specific condition in blockers[] / requiredArtifactCapabilities and marks the slot blocked, rather than inventing a pointer or silently proceeding.",
+          "weight": 2,
+          "scaleMax": 5
+        },
+        {
+          "id": "zero_media_shortcut_used_correctly",
+          "name": "The cost shortcut fires only when genuinely warranted",
+          "description": "The zero-media shortcut (empty media_slots, no tool calls) is taken ONLY when the input body genuinely declares no media needs, and is NOT skipped \u2014 burning tool calls to prove an absence \u2014 when it is. This is the direct cost/quality tension for this specific node: its own historical $1.95/386K-token blowout was caused by NOT taking this shortcut on a text-only article.",
+          "weight": 2.5,
+          "scaleMax": 5
+        },
+        {
+          "id": "budget_and_capability_honesty",
+          "name": "Media budget and format decisions follow the client's stated policy",
+          "description": "Over-budget media is flagged or blocked per the client's own declared rule, never silently shipped oversize or silently downgraded without note.",
+          "weight": 1,
+          "scaleMax": 5
+        }
+      ],
+      "passThreshold": 0.85,
+      "rubricId": "rubric_1785836840912_r5dx1h",
+      "createdAt": "2026-08-04T09:47:20.912Z",
+      "updatedAt": "2026-08-05T12:42:04.794Z"
+    }
+  ]
+}

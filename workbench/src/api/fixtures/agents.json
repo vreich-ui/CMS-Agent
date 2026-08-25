@@ -1,14 +1,17 @@
-[
-  {
-    "id": "agt_client_manager",
-    "name": "Client Manager",
-    "role": "client_manager",
-    "model": "gpt-4.1",
-    "promptState": "diverged",
-    "skills": [
-      "editorial_craft",
-      "editorial_review"
-    ],
-    "rev": 7
-  }
-]
+{
+  "agents": [
+    {
+      "id": "agt_client_manager",
+      "role": "client_manager",
+      "name": "Client Manager",
+      "prompt": "You are the client-management agent for a content operations workspace. (full live prompt truncated for fixture size — see agent_list for the complete text; only the fields toAgent() consumes are exercised by the adapter tests)",
+      "promptState": "diverged",
+      "modelConfig": {"provider": "openai", "model": "gpt-4.1", "timeoutMs": 90000, "maxOutputTokens": 16000},
+      "skills": ["editorial_craft", "editorial_review"],
+      "status": "active",
+      "rev": 7,
+      "updatedAt": "2026-08-21T14:34:27.517Z"
+    }
+  ],
+  "workspaceVersion": 691
+}

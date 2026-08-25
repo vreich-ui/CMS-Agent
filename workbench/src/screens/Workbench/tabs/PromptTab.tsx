@@ -17,7 +17,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useSkills } from '../../../api/hooks';
 import { ActionCancelledError } from '../../../api/confirmAction';
 import { IS_READ_ONLY } from '../../../api/client';
-import { changesCompare, workspaceUpdateNodePrompt } from '../../../api/verbs';
+import { workspaceUpdateNodePrompt } from '../../../api/verbs';
 import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
 import { Btn, Card } from '../../../components/primitives';
 import { toast } from '../../../components/Toasts';
@@ -81,12 +81,12 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
 
-  // changes_compare always reports an empty diff in fixture mode (see
-  // Shared.tsx) — still called for real, once per node, so the architecture
-  // is right even though the local diff below is what actually renders.
-  useEffect(() => {
-    changesCompare({ nodeId }).catch(() => undefined);
-  }, [nodeId]);
+  // No live warm-up call here: changes_compare's real schema takes two
+  // revision ids (fromRevisionId/toRevisionId), and this tab has neither —
+  // only a nodeId. The previous `changesCompare({ nodeId })` prefetch could
+  // never succeed against the live schema and its result was discarded
+  // either way (`.catch(() => undefined)`, no `.then`); removed rather than
+  // fired as a doomed call. The local diff below is what actually renders.
 
   const dirty = text !== storedPrompt;
 

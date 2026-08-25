@@ -60,11 +60,16 @@ export function useOutputSchema(nodeId: string | null | undefined, options?: Opt
   });
 }
 
-export function useRunContext(runId: string | null | undefined, options?: Options<verbs.RunContext | null>) {
+/** Live schema requires both `runId` and `projectId` — see verbs.ts. */
+export function useRunContext(
+  runId: string | null | undefined,
+  projectId: string | null | undefined,
+  options?: Options<verbs.RunContext | null>,
+) {
   return useQuery({
-    queryKey: ['runContext', runId],
-    queryFn: () => verbs.workflowGetRunContext({ runId: runId as string }),
-    enabled: Boolean(runId),
+    queryKey: ['runContext', runId, projectId],
+    queryFn: () => verbs.workflowGetRunContext({ runId: runId as string, projectId: projectId as string }),
+    enabled: Boolean(runId) && Boolean(projectId),
     ...options,
   });
 }

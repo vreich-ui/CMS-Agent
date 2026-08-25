@@ -1,63 +1,74 @@
-# Fixture provenance (WP-02)
+# Fixture provenance (workbench-verb-fixes)
 
-Captured 24 Aug 2026 against the live `CMS_Agent` MCP workspace. Every file below is
-live-data-first; the mockup (`spec/mockup.html` script block) is used only where noted,
-strictly for presentation fields the live API does not carry.
+Recaptured 25 Aug 2026 against the live `CMS_Agent` MCP workspace, replacing the WP-02
+fixture set below. The WP-02 fixtures were captured live but then **reshaped to match
+the app's UI types** (`../types.ts`) and, for clone/capture nodes, backfilled from
+`spec/mockup.html` where `workspace_get_node` returned nothing. That reshaping was the
+bug: the UI's `types.ts`/mapping code was written against the *reshaped* field names, so
+loading real data through the Netlify transport rendered blank (empty risk badges, empty
+tool/skill lists, missing descriptions) because the real live field names never matched.
 
-| File | Live verb(s) | Records | Mockup-sourced fields / fallback |
+Every file below is now the **raw verb response payload, verbatim** — the `data` field
+of a live tool result, including its one-level wrapper key (e.g. `{nodes:[...]}`,
+`{runs:[...],page:{...}}`) — with no reshaping to UI field names and no mockup
+backfill. All mapping from these raw shapes to `../types.ts` happens in exactly one
+place, `api/adapters.ts`'s `to<Entity>()` functions, and **both** transports (this
+fixture mode, via `client.ts`'s `MOCK_HANDLERS` + `mockStore.ts`, and the live Netlify
+transport) call the same adapter from `api/verbs.ts` — so this fixture set is a real
+regression net for the live mapping, not a check against a parallel fiction. A few
+fixtures are trimmed for size (verbose per-attempt telemetry, long instruction text) —
+noted per file below; every field an adapter actually reads is kept verbatim.
+
+| File | Live verb(s) | Records | Notes |
 |---|---|---|---|
-| `workflows.json` | `workspace_get_graph`, `workspace_get_nodes`, `workflow_list_runs` (node order for clone/capture, since those two workflows' nodes are absent from `workspace_get_graph`) | 3 workflows | `icon`, `short`, `desc` marketing copy and phase **labels** are from the mockup (API carries no display copy). Node membership/order is live. |
-| `nodes.json` | `workspace_get_graph`/`workspace_get_nodes` (23 publishing_conductor nodes, incl. `prompt`, `model`) + mockup fallback for the 19 mockup-known clone/capture nodes (name/kind/risk/tools/skills/desc/fan — **not resolvable live**, `workspace_get_node` returns `null` for every clone/capture id) | 43 nodes | Fallback: all clone_conductor and capture_conductor node facts are mockup-sourced (labelled below). `fit_adjudicator` has **no** source at all — id and position come from live run data only; kind/risk/fan/tools/skills are `null`/`[]`, not invented. |
-| `projects.json` | `project_list` | 6 | `pol` counts are tallied live from each project's `toolPolicies`, not copied from the mockup — see disagreements below. |
-| `runs.json` | `workflow_list_runs` (list) + `workflow_get_run_cost` (per-run `totalCostUsdEstimate`, called once per run — the list endpoint carries no cost field) | 39 (of 60 total; the `independent_node` regression-trial row was excluded as not a real workflow run) | None. `started`/`dur` are derived from live `startedAt`/`updatedAt` (UTC). |
-| `tools.json` | `tool_list` | 42 | None — full live registry, not the mockup's 10-tool excerpt. |
-| `skills.json` | `skill_list` (id/version) + live `assignedSkills` on each node (`assignedTo`, richer shape used per the task's preference) | 12 | None for the 12 skill ids/versions (live matches mockup's set exactly). `assignedTo` is live and disagrees substantially with the mockup — see below. |
-| `observations.json` | `learning_list_observations` | 10 | None. Mockup showed only 8 (truncated ids, missing one record — see below). |
-| `rubrics.json` | `evaluation_list_rubrics` (criteria/weights) + `evaluation_list_regression_reports` (score/verdict, newest report per node) | 5 | None. Only `contract_intelligence` has a regression report; the other 4 nodes' `score`/`verdict` are `null` because no report exists yet (matches mockup's nulls). |
-| `datasets.json` | `dataset_list` | 6 | `note` uses the live `name` field (the API's `note`/description field is `null` on every dataset; `name` is the closest live equivalent and carries the same content the mockup showed as `note`). |
-| `comparePairs.json` | none — **mockup `CMP_QUEUE` verbatim**, reshaped to `{kind,node,brief,champ,a,b}` | 3 | Entirely mockup-sourced/illustrative, as instructed. No live "compare queue" verb exists on this MCP surface. |
-| `usage.json` | `usage_get_summary` (unfiltered, and once per `workflowId`) + `workflow_list_runs` (`page.matchedCount` per workflow, for `avgPerRun`) | 3 workflows | `weekTotal` is the **all-time** total cost (`costUsdEstimate` from the unfiltered summary), not a rolling 7-day figure — `usage_get_summary` has no time-window default and none was specified; labelled here as a fallback interpretation of the mockup's `weekTotal` key. `runCount` = sum of the 3 workflows' live run counts (49); note the unfiltered grand total ($67.73) exceeds the 3 workflows' summed totals ($60.68) because it also includes non-workflow usage (regression-trial/`independent_node` runs, `improvement_judge`). |
-| `readiness.json` | `dataset_finetune_readiness` (`nodeId: contract_intelligence`) | 1 | None. `recommendation` uses the API's full `reason` string (more informative than the bare `recommendation` enum value `"accumulate"`, which is folded into the sentence). |
-| `agents.json` | `agent_list` | 1 | None. Only one agent is currently defined workspace-wide (`agt_client_manager`); the mockup did not model this store at all. |
+| `nodes.json` | `workspace_get_nodes` (`{nodes:[...]}`, no arguments — the schema takes none) | 23 | **Only `publishing_conductor`'s nodes.** `workspace_get_node(s)`/`workspace_get_graph` return nothing for clone_conductor/capture_conductor node ids, live, full stop — not a fixture gap. `toNode()` maps `riskLevel`→risk, `allowedTools`→tools, `assignedSkills`→skills, `description`→desc, `dependsOn.length`→fan. |
+| `workflowCatalog.ts` | none — **not a fixture, not fetched.** A `.ts` module (not JSON) holding the 3 conductor workflows' display copy (icon/short/desc) and phase groupings, the same content the old `workflows.json` held. HANDOFF has no "list workflows" verb; this is app config. Every node id listed in every phase array *was* cross-checked against live data — publishing_conductor's 23 against `workspace_get_nodes`, clone/capture's 20 against node ids observed in real `workflow_list_runs` histories (their only live trace, since the workspace verbs above never return them). |
+| `projects.json` | `project_list` (`{projects:[...]}`) | 6 | Verbatim. `toProject()` derives `ok` from `connection.endpointConfigured && connection.tokenConfigured` (live carries no single flag) and tallies `pol.{a,n,b}` from `toolPolicies`' values. |
+| `runs.json` | `workflow_list_runs` (`{runs:[...],page:{...}}`, `limit:100`) | 55 (of 66 total; 11 `independent_node`/`trial_reg_*`/`node_run_*` rows excluded as regression-trial/single-node runs, not real workflow runs — same exclusion the WP-02 README documented) | The **full** real run history, not a curated subset, so count-derived UI text (Library screen's per-workflow "needing attention") matches live truth. Each row's `nodes[]` trimmed to `{nodeId,status}` (dropping `warnings`/`lastDispatch`/`produces`/`durationMs`/`skip` — verbose per-attempt telemetry `toRun()` never reads) and `mode` trimmed to `{executionMode}` (dropping its long notice string). `toRun()` maps `runId`→id, `workflowId`→wf, `projectId`→proj, `currentNodeId`→cur (falling back to the first non-completed/non-skipped node when absent, as on `workflow_get_run`'s single-run object), `nodes.filter(completed).length`→done, `errors.length`→err. |
+| `runCosts.json` | `workflow_get_run_cost({runId}).ledger` — per-run, **not bulk** | 9 of 55 | Cost is a single-run detail lookup live, never a bulk one — the app itself only ever fetches it for the one bound run (`workflowGetRun` in verbs.ts). A `runId` absent here has no fixture cost data; `toRun()` reports `cost:0`/`budget:null` for it, the type's own "nothing spent yet" default, never a fabricated figure. `plan` (the resume/reuse recommendation) is dropped — no adapter reads it. |
+| `tools.json` | `tool_list` (`{tools:[...]}`) | 42 | Verbatim. `toToolDef()` maps `toolId`→id, `description`→desc, `riskLevel`→risk. |
+| `skills.json` | `skill_list` (`{skills:[...]}`) | 12 | Verbatim fields kept; `examples`/`preconditions`/`completionCriteria`/`blockerCriteria`/`memoryPolicy`/`toolPolicy` stripped per skill (not read by any adapter or UI tab) and the two longest `instructions` texts (`contract_intelligence`, `editorial_craft`) shortened — both trims are size-only, every field `toSkill()` reads (`skillId`, `version`, `name`, `description`, `status`) is untouched. `assignedTo` has no live field at all — `verbs.ts`'s `skillList()` derives it from `workspace_get_nodes`' `assignedSkills` via `adapters.assignedSkillsByNode()`. |
+| `observations.json` | `learning_list_observations` (`{observations:[...]}`) | 11 | Verbatim. `toObservation()` maps `observation`→txt, `nodeId`→node, `runId`→run, `createdAt`→when (short date). |
+| `rubrics.json` | `evaluation_list_rubrics` (`{rubrics:[...]}`) | 5 | Verbatim fields kept; each criterion's `guidance` and each rubric's `metadata` dropped (size only — not read by `toRubric()`). `crit`←criteria.length, `top`←the highest-`weight` criterion's name (both derived, live has no single "headline criterion" field). |
+| `regressionReports.json` | `evaluation_list_regression_reports` (`{reports:[...]}`) | 2 (both `contract_intelligence` — the only node with any regression history) | Verbatim. Composed with `rubrics.json` in `evaluationListRubrics()` (verbs.ts): the newest report per node (by `createdAt`) supplies `score`/`verdict`; a node with none gets `null` for both, not a guess. |
+| `datasets.json` | `dataset_list` (`{datasets:[...]}`) | 6 | Each `cases[]` item trimmed to `{caseId,nodeId}` (the full live case objects are large; `toDataset()` only ever reads `cases.length`). `note`←`name` (live's own `note`/description field is `null` on every dataset). |
+| `usage.json` | `usage_get_summary` (unfiltered, and once per known workflow) + `workflow_list_runs({workflowId,limit:1}).page.matchedCount` (per workflow, for `avgPerRun`'s denominator) | 3 workflows | Composed fixture — live has no single verb with a per-workflow cost breakdown; `verbs.ts`'s `usageGetSummary()` makes the same multi-call composition against live. `weekTotal` is actually the **all-time** total (`usage_get_summary` has no rolling time window) — `UsageTab.tsx` already labels it "all-time total" honestly. |
+| `readiness.json` | `dataset_finetune_readiness` (`{readiness:{...}}`, `nodeId: contract_intelligence`) | 1 | Verbatim. `recommendation` uses the live `reason` field (a fuller sentence than the bare `recommendation` enum, which it folds in) when present. |
+| `agents.json` | `agent_list` (`{agents:[...]}`) | 1 | Only one agent is currently defined workspace-wide. Its `prompt` (a long multi-paragraph system prompt) is truncated with an explanatory note — no adapter or UI tab reads agent prompt text; every field `toAgent()` reads (`id`,`name`,`role`,`modelConfig.model`,`promptState`,`skills`,`rev`,`status`,`updatedAt`) is untouched. |
+| `comparePairs.json` | none — **illustrative, not live**, unchanged from WP-02 | 3 | No live "compare queue" verb exists on this MCP surface — left as-is per instruction. |
 
-## Where the live workspace disagrees with the mockup
+## The clone/capture node gap is real, not a fixture limitation
 
-1. **clone_conductor has 9 live nodes, not 8.** A node called `fit_adjudicator`
-   (produces `clone_fit_adjudication.v1`) runs between `theme_bind` and `layout_restamp`
-   in every live clone run. It is absent from the mockup's `NODES`/`WORKFLOWS.clone_conductor`
-   and from `workspace_get_node` (returns `null`) — it only exists in `workflow_list_runs`
-   run histories and `usage_get_summary`'s `byNode` breakdown.
-2. **clone_conductor and capture_conductor nodes are invisible to `workspace_get_graph` /
-   `workspace_get_nodes` / `workspace_get_node`.** Those three tools return **only** the
-   23 `publishing_conductor` nodes, even though clone/capture workflows run live today
-   (a clone run fired minutes before this capture, 24 Aug 14:36 UTC). Their topology,
-   tool/skill/risk facts had to come from the mockup or from run-history inference.
-3. **Skill assignment on publishing_conductor nodes is substantially different live.**
-   Per live `assignedSkills`: `topic_opportunity`→`seo_review`, `brief_architect`→
-   `article_structuring`+`editorial_craft`, `human_texture`/`emotional_resonance`→
-   `editorial_craft` (mockup said `editorial_review`/none), and `contract_intelligence`,
-   `artifact_plan`, `article_body`, `publish_payload` **all** carry the `contract_intelligence`
-   skill live. Conversely, `article_body_builder`, `artifact_handling`, `editorial_review`,
-   `publication_readiness` and `learning_observation` are registered skills (`skill_list`)
-   but are **assigned to zero nodes** in the live graph, despite the mockup showing them
-   each on one node.
-4. **Project tool-policy counts disagree for 4 of 6 projects.** Only `dr-lurie`
-   (18/1/15) and `platform` (31/6/0) match the mockup exactly. Live counts: `zilberman`
-   a:25/n:0/**b:0** (mockup: 24/0/1), `pdf-tool` a:10/n:0/**b:0** (mockup: 10/0/1),
-   `fernwell` a:7/n:0/**b:0** (mockup: 7/0/1), `monetizer` a:6/n:0/**b:0** (mockup: 6/0/1).
-   None of the live `toolPolicies` on these 4 projects contain a single `"blocked"` entry.
-5. **`tool_list` has 42 controlled tools, not 10.** The mockup's `TOOLS` array was a
-   curated excerpt; the live registry includes full `file.*`, `artifact.*`, `blob.*`,
-   `project.*`, `capture.*`, `clone.*`, `repository.*` and `usage.*` families.
-6. **`learning_list_observations` has 10 records, not 8** — the mockup's `OBS` array
-   omits `learning_1784723853122_3r68f3` (22 Jul, Dr. Lurie taxonomy registry rules) and
-   uses shortened/truncated ids throughout; this fixture uses full live ids.
-7. **Only one agent exists** (`agt_client_manager`, `promptState: "diverged"` from its
-   shipped canonical text) — the mockup did not model an agents store, so there is nothing
-   to disagree with, but it's worth flagging that the workspace runs a single conversational
-   agent today, not a roster.
+`workspace_get_graph` / `workspace_get_nodes` / `workspace_get_node` only ever return
+`publishing_conductor`'s 23 nodes, live — confirmed by calling each directly during this
+recapture. Clone/capture node ids (`clone_intake`, `theme_bind`, `fit_adjudicator`,
+`capture_crawl`, …) exist only as strings inside `workflow_list_runs` run histories and
+`workflowCatalog.ts`'s phase arrays — there is no live source for their name / kind /
+risk / tools / skills / prompt / model, so `nodes.json` does not, and cannot, include
+them. The UI's existing empty states carry this honestly: `workspaceGetNode()` returns
+`null` for any of them and `Center.tsx` renders a "not found" card naming the verb that
+came back empty, rather than a synthesized placeholder. This also means the command
+palette's node index (built from `workspace_get_nodes`) can only ever jump to
+publishing_conductor nodes — see `tests/palette.spec.ts`.
+
+## Where the recapture disagrees with the WP-02 (reshaped) fixture set
+
+1. **`nodes.json` is 23 records, not 43.** WP-02 filled the 20 clone/capture ids in from
+   `spec/mockup.html` (a fabrication this task removed) — see the gap note above.
+2. **`runs.json` is 55 records, not 39**, and is the full live run history rather than a
+   curated subset — several tests' hardcoded counts (Library screen's "needing
+   attention" totals, the flywheel's observation count) were updated to match.
+3. **A handful of hardcoded run ids in the test suite drifted from live reality** between
+   WP-02's capture and this one (runs that were `blocked` on a gate 24 Aug have since
+   resumed/progressed) — `tests/runcontrol.spec.ts`'s `publication_controller` gate-panel
+   case now binds a different, still-live-accurate run (`run_1787472547111_vzovz4`)
+   rather than keeping a stale id or fabricating a scenario the fixture never captured.
+4. **`skills.json`/`rubrics.json`/`datasets.json` are trimmed for size** (see the table
+   above) — WP-02's fixtures were not, because they were pre-shrunk by the mockup-shaped
+   reshaping this task removed.
 
 ## Scratch files
-All intermediate `_*.py` / `_*.json` / `_*.jsonl` build scripts used to assemble these
-fixtures from raw tool output have been deleted; only the 13 fixture JSON files and this
-README remain in this directory.
+All intermediate build scripts used to assemble these fixtures from raw tool output were
+written to `/tmp` (per the task's scratch-work constraint) and are not part of this
+directory; only the fixture JSON files, `workflowCatalog.ts` (in `api/`, not here), and
+this README remain.

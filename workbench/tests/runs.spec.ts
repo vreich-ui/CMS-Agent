@@ -5,6 +5,13 @@ import { expect, test, type Page } from '@playwright/test';
 // the page, rather than hardcoded — so the test stays correct if the
 // fixture data changes, and genuinely exercises the screen's own filtering
 // / grid logic rather than a copy of it.
+//
+// workbench-verb-fixes: fixtures/runs.json is now a RAW live capture
+// (`{runs:[...], page:{...}}`, live field names) rather than a pre-adapted
+// flat array — loadRuns() below runs it through the real api/adapters.ts
+// toRun(), the same function verbs.ts calls for both transports, so this
+// stays "ground truth read the way the app itself reads it" rather than a
+// second, parallel reshaping.
 
 interface FixtureRun {
   id: string;
@@ -22,8 +29,9 @@ interface FixtureRun {
 
 async function loadRuns(page: Page): Promise<FixtureRun[]> {
   return page.evaluate(async () => {
-    const mod = (await import('/src/api/fixtures/runs.json')) as { default: FixtureRun[] };
-    return mod.default;
+    const raw = (await import('/src/api/fixtures/runs.json')) as { default: { runs: unknown[] } };
+    const { toRun } = await import('/src/api/adapters.ts');
+    return raw.default.runs.map((r) => toRun(r as Parameters<typeof toRun>[0]));
   });
 }
 
@@ -109,11 +117,17 @@ test('Runs: History filters compose and a row binds the run + stopped node', asy
   await page.locator('.filters select').nth(2).selectOption('');
   await expect(rows).toHaveCount(runs.length, { timeout: 10_000 });
 
-  const firstRun = runs[0];
-  const expectedNode = firstRun.cur ?? ''; // first fixture run is not completed, so cur is set
+  // workbench-verb-fixes: runs[0] (the real newest run) happens to be a
+  // completed capture_conductor run today, so `cur` is null there — pick
+  // the first row (in the same fixture/table order) that actually has a
+  // stopped node to bind, rather than assuming index 0 always does.
+  const rowIdx = runs.findIndex((r) => r.cur !== null);
+  expect(rowIdx).toBeGreaterThanOrEqual(0);
+  const firstRun = runs[rowIdx];
+  const expectedNode = firstRun.cur ?? '';
   expect(expectedNode).not.toBe('');
 
-  const firstRow = rows.first();
+  const firstRow = rows.nth(rowIdx);
   await expect(firstRow.locator('td').first()).toContainText(firstRun.id.slice(-10));
   await firstRow.click();
 
@@ -132,10 +146,10 @@ test('Runs: Grid renders the publishing_conductor matrix and a cell binds', asyn
 
   const runs = await loadRuns(page);
   const workflows = await page.evaluate(async () => {
-    const mod = (await import('/src/api/fixtures/workflows.json')) as {
-      default: Record<string, { phases: Array<[string, string[]]> }>;
+    const mod = (await import('/src/api/workflowCatalog.ts')) as {
+      WORKFLOW_CATALOG: Record<string, { phases: Array<[string, string[]]> }>;
     };
-    return mod.default;
+    return mod.WORKFLOW_CATALOG;
   });
   const pubOrder = workflows.publishing_conductor.phases.flatMap(([, ids]) => ids);
   const pubRuns = runs.filter((r) => r.wf === 'publishing_conductor');
