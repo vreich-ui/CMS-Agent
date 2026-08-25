@@ -115,23 +115,26 @@ test('workbench: rail, tabs, dock render correctly across nodes, themes and mode
   // No run bound yet — clicking Run auto-binds the workflow's most recent
   // run, but that read depends on a runs query keyed to the new workflow
   // that may not have resolved the instant the workflow switch renders;
-  // retry the click until a run is actually bound (This run tab present).
+  // retry the click until a run is actually bound (the dock's "bound run"
+  // panel present). workbench-verb-fixes: workspace_get_node never returns
+  // a clone_conductor node live (see fixtures/README.md) — the run's own
+  // stopped node has no resolvable record, so `.tabs` (which needs the node
+  // to load first) never renders here; the dock panel doesn't need node
+  // data, so it's the honest thing to gate this retry on instead.
   await expect(async () => {
     await page.locator('#mode-run').click();
-    await expect(page.locator('.tabs button', { hasText: 'This run' })).toBeVisible({ timeout: 500 });
+    await expect(page.locator('.dock .card', { hasText: 'bound run' })).toBeVisible({ timeout: 500 });
   }).toPass({ timeout: 8000 });
 
+  // The rail still renders clone_conductor's 9 nodes (from the workflow
+  // catalog + this run's own per-node statuses — never workspace_get_node),
+  // and clicking one still updates `node` — but the center pane shows the
+  // same honest "not found" card as clone_report above, for every
+  // clone_conductor node, not a synthesized Prompt/Tools/Model view.
   await page.locator('.rail .nrow', { hasText: 'theme_bind' }).click();
-  await expect(page.locator('.nhead h2')).toHaveText('Theme Bind');
-  await expect(page.locator('.nhead .id')).toHaveText('theme_bind');
-  await expect(page.locator('.nhead .risk')).toHaveText('publish');
-  await expect(page.locator('.tabs button')).toHaveCount(9);
-  await cycleAllTabs(page);
-
-  // Dependencies tab: the re-seed sentence, verbatim.
-  await page.locator('.tabs button', { hasText: 'Dependencies' }).click();
-  await expect(page.locator('.center .pin.pinned')).toHaveText('pinned to seed');
-  await expect(page.locator('.center')).toContainText('npm run nodes:update');
+  await expect(page.locator('.center .lbl', { hasText: 'not found' })).toBeVisible();
+  await expect(page.locator('.center')).toContainText('theme_bind could not be resolved');
+  await expect(page.locator('.tabs')).toHaveCount(0);
 
   // --- Build mode: the dock's "▸ Start run…" opens the start-run modal
   // (WP-22 — see tests/runcontrol.spec.ts for the modal's own behaviour) ---

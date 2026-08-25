@@ -240,7 +240,13 @@ test.describe('gate panel', () => {
     await expect(page.locator('#toasts')).toContainText('workflow_set_operator_publish_decision');
 
     // --- publication_controller: prepares a recommendation, never publishes itself ---
-    await bindRunDirectly(page, 'run_1787578716097_4t7uo1', 'publishing_conductor', 'publication_controller');
+    // workbench-verb-fixes: run_1787578716097_4t7uo1 (used here pre-refactor)
+    // has since progressed live — its real currentNodeId is publish_executor
+    // now, not publication_controller — so this uses a different real run
+    // (run_1787472547111_vzovz4) whose live currentNodeId genuinely is
+    // publication_controller/blocked, rather than keeping a stale id or
+    // synthesizing a scenario the fixture never actually captured.
+    await bindRunDirectly(page, 'run_1787472547111_vzovz4', 'publishing_conductor', 'publication_controller');
     await expect(page.locator('.dock .gate .lbl')).toHaveText('⛔ gate · publication_controller');
     await expect(page.locator('.dock .gate')).toContainText('it never publishes');
     await expect(page.locator('.dock .gate')).not.toContainText('expected to publish live content');

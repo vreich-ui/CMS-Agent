@@ -1,93 +1,10 @@
-[
-  {
-    "id": "dr-lurie",
-    "name": "Dr. Lurie",
-    "ok": true,
-    "pol": {
-      "a": 18,
-      "n": 1,
-      "b": 15
-    },
-    "endpoint": "https://drluriescience.netlify.app/mcp",
-    "endpointEnvVar": "DR_LURIE_MCP_ENDPOINT",
-    "tokenEnvVar": "DR_LURIE_MCP_TOKEN",
-    "endpointSource": "env",
-    "tokenSource": "env"
-  },
-  {
-    "id": "zilberman",
-    "name": "Zilberman Film Foundation",
-    "ok": true,
-    "pol": {
-      "a": 25,
-      "n": 0,
-      "b": 0
-    },
-    "endpoint": "https://zilbermanfilmfoundation.netlify.app/mcp",
-    "endpointEnvVar": "ZILBERMAN_MCP_ENDPOINT",
-    "tokenEnvVar": "ZILBERMAN_MCP_TOKEN",
-    "endpointSource": "env",
-    "tokenSource": "env"
-  },
-  {
-    "id": "platform",
-    "name": "Platform",
-    "ok": true,
-    "pol": {
-      "a": 31,
-      "n": 6,
-      "b": 0
-    },
-    "endpoint": null,
-    "endpointEnvVar": "PLATFORM_MCP_ENDPOINT",
-    "tokenEnvVar": "PLATFORM_MCP_TOKEN",
-    "endpointSource": "env",
-    "tokenSource": "env"
-  },
-  {
-    "id": "pdf-tool",
-    "name": "PDF Tool",
-    "ok": true,
-    "pol": {
-      "a": 10,
-      "n": 0,
-      "b": 0
-    },
-    "endpoint": "https://pdf-x.netlify.app/mcp",
-    "endpointEnvVar": "PDF_TOOL_MCP_ENDPOINT",
-    "tokenEnvVar": "PDF_TOOL_MCP_TOKEN",
-    "endpointSource": "env",
-    "tokenSource": "env"
-  },
-  {
-    "id": "fernwell",
-    "name": "Fernwell",
-    "ok": true,
-    "pol": {
-      "a": 7,
-      "n": 0,
-      "b": 0
-    },
-    "endpoint": null,
-    "endpointEnvVar": "FERNWELL_MCP_ENDPOINT",
-    "tokenEnvVar": "FERNWELL_MCP_TOKEN",
-    "endpointSource": "env",
-    "tokenSource": "env",
-    "disabled": true
-  },
-  {
-    "id": "monetizer",
-    "name": "Monetizer",
-    "ok": false,
-    "pol": {
-      "a": 6,
-      "n": 0,
-      "b": 0
-    },
-    "endpoint": null,
-    "endpointEnvVar": "MONETIZER_MCP_ENDPOINT",
-    "tokenEnvVar": "MONETIZER_MCP_TOKEN",
-    "endpointSource": "unset",
-    "tokenSource": "unset"
-  }
-]
+{
+  "projects": [
+    {"projectId":"dr-lurie","name":"Dr. Lurie","authMode":"bearer_env","allowedTools":["ping","registry_get","object_inventory","object_contract","get_pdf_tool_storage_grant","create_artifact_from_url","create_artifact_upload_intent","save_artifact","get_artifact_metadata","search_artifacts","list_artifacts_for_request","list_artifacts_by_request","list_artifacts_by_kind","restore_artifact","soft_delete_artifact","verify_article_images","migrate_artifact_indexes","reconcile_artifact_indexes"],"defaultToolPolicy":"allowed","toolPolicies":{"ping":"allowed","registry_get":"allowed","object_inventory":"allowed","object_contract":"allowed","get_pdf_tool_storage_grant":"allowed","create_artifact_from_url":"allowed","create_artifact_upload_intent":"allowed","save_artifact":"allowed","get_artifact_metadata":"allowed","search_artifacts":"allowed","list_artifacts_for_request":"allowed","list_artifacts_by_request":"allowed","list_artifacts_by_kind":"allowed","restore_artifact":"allowed","soft_delete_artifact":"allowed","verify_article_images":"allowed","migrate_artifact_indexes":"allowed","reconcile_artifact_indexes":"allowed","object_get":"allowed","object_list":"allowed","object_validate":"allowed","object_checkout":"allowed","object_checkin":"allowed","object_refresh_lock":"allowed","object_patch":"allowed","object_create":"allowed","object_create_variant":"allowed","object_discard":"allowed","object_publish":"allowed","release_to_production":"allowed","deploy_status":"allowed","object_retire":"needs_approval","object_review_decide":"needs_approval","site_apply_theme":"needs_approval","object_instantiate_template":"needs_approval","object_instantiate_section_template":"needs_approval","wipe_blob_stores":"needs_approval","save_json_blob_create_request":"blocked","save_json_blob_create_article_draft":"blocked","save_json_blob_checkout_request":"blocked","save_json_blob_patch_canonical_input":"blocked","save_json_blob_publish_by_time":"blocked","save_json_blob_checkin_request":"blocked","reader_insight_update_output":"blocked","reader_insight_mark_complete":"blocked","research_update_output":"blocked","research_mark_complete":"blocked","angle_update_output":"blocked","angle_mark_complete":"blocked","draft_update_output":"blocked","final_article_update_output":"blocked","final_article_mark_complete":"blocked"},"contentContract":{"contentContract":"content_source.v1"},"capturePolicy":{"maxPages":0,"allowedCrawlOrigins":[],"allowedPathPrefixes":[],"sameOriginOnly":true,"respectRobots":true,"concurrency":1,"delayMs":1500,"authenticatedAccess":"prohibited","rights":{"content":"prohibited","media":"prohibited"},"designReferences":[],"fidelity":{"mode":"source_faithful","sourceDesignTreatment":"source_content_and_design"}},"publishingPolicy":{"publishEnabled":true,"requiresExplicitPublish":false,"description":"Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off.","operatorDefault":"approved"},"status":"active","connection":{"endpointConfigured":true,"tokenConfigured":true,"mcpEndpointEnvVar":"DR_LURIE_MCP_ENDPOINT","tokenEnvVar":"DR_LURIE_MCP_TOKEN","endpointSource":"env","tokenSource":"env","mcpEndpoint":"https://drluriescience.netlify.app/mcp"}},
+    {"projectId":"fernwell","name":"Fernwell","authMode":"bearer_env","allowedTools":["ping","registry_get","object_inventory","object_contract","object_get","object_list","object_validate"],"defaultToolPolicy":"blocked","toolPolicies":{"ping":"allowed","registry_get":"allowed","object_inventory":"allowed","object_contract":"allowed","object_get":"allowed","object_list":"allowed","object_validate":"allowed"},"contentContract":{"contentContract":"content_source.v1"},"capturePolicy":{"maxPages":0,"allowedCrawlOrigins":[],"allowedPathPrefixes":[],"sameOriginOnly":true,"respectRobots":true,"concurrency":1,"delayMs":1500,"authenticatedAccess":"prohibited","rights":{"content":"prohibited","media":"prohibited"},"designReferences":[],"fidelity":{"mode":"source_faithful","sourceDesignTreatment":"source_content_and_design"}},"publishingPolicy":{"publishEnabled":true,"requiresExplicitPublish":false,"description":"Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off.","operatorDefault":"approved"},"status":"disabled","connection":{"endpointConfigured":true,"tokenConfigured":true,"mcpEndpointEnvVar":"FERNWELL_MCP_ENDPOINT","tokenEnvVar":"FERNWELL_MCP_TOKEN","endpointSource":"env","tokenSource":"env"}},
+    {"projectId":"monetizer","name":"Monetizer","authMode":"bearer_env","allowedTools":["list_sources","list_connections","search_offers","performance","demand_signals","explain_decision"],"defaultToolPolicy":"blocked","toolPolicies":{"list_sources":"allowed","list_connections":"allowed","search_offers":"allowed","performance":"allowed","demand_signals":"allowed","explain_decision":"allowed"},"contentContract":{"contentContract":"content_source.v1"},"capturePolicy":{"maxPages":0,"allowedCrawlOrigins":[],"allowedPathPrefixes":[],"sameOriginOnly":true,"respectRobots":true,"concurrency":1,"delayMs":1500,"authenticatedAccess":"prohibited","rights":{"content":"prohibited","media":"prohibited"},"designReferences":[],"fidelity":{"mode":"source_faithful","sourceDesignTreatment":"source_content_and_design"}},"publishingPolicy":{"publishEnabled":true,"requiresExplicitPublish":false,"description":"Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off."},"status":"active","connection":{"endpointConfigured":false,"tokenConfigured":false,"mcpEndpointEnvVar":"MONETIZER_MCP_ENDPOINT","tokenEnvVar":"MONETIZER_MCP_TOKEN","endpointSource":"unset","tokenSource":"unset"}},
+    {"projectId":"pdf-tool","name":"PDF Tool","authMode":"bearer_env","allowedTools":["list_pdf_templates","get_pdf_template","get_agent_artifact_job_status","get_agent_artifact_by_filename","get_agent_artifact_by_slot","get_image_search_policy","get_image_search_bank","get_image_search_job_status"],"defaultToolPolicy":"blocked","toolPolicies":{"list_pdf_templates":"allowed","get_pdf_template":"allowed","get_agent_artifact_job_status":"allowed","get_agent_artifact_by_filename":"allowed","get_agent_artifact_by_slot":"allowed","get_image_search_policy":"allowed","get_image_search_bank":"allowed","get_image_search_job_status":"allowed","create_capture_job":"allowed","get_capture_job_status":"allowed"},"contentContract":{"contentContract":"content_source.v1"},"capturePolicy":{"maxPages":0,"allowedCrawlOrigins":[],"allowedPathPrefixes":[],"sameOriginOnly":true,"respectRobots":true,"concurrency":1,"delayMs":1500,"authenticatedAccess":"prohibited","rights":{"content":"prohibited","media":"prohibited"},"designReferences":[],"fidelity":{"mode":"source_faithful","sourceDesignTreatment":"source_content_and_design"}},"publishingPolicy":{"publishEnabled":true,"requiresExplicitPublish":false,"description":"Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off."},"status":"active","connection":{"endpointConfigured":true,"tokenConfigured":true,"mcpEndpointEnvVar":"PDF_TOOL_MCP_ENDPOINT","tokenEnvVar":"PDF_TOOL_MCP_TOKEN","endpointSource":"env","tokenSource":"env","mcpEndpoint":"https://pdf-x.netlify.app/mcp"}},
+    {"projectId":"platform","name":"Platform","authMode":"bearer_env","allowedTools":["create_agent_artifact_job"],"defaultToolPolicy":"allowed","toolPolicies":{"create_agent_artifact_job":"allowed","ping":"allowed","registry_get":"allowed","object_contract":"allowed","object_inventory":"allowed","object_get":"allowed","object_list":"allowed","object_validate":"allowed","deploy_status":"allowed","trigger_netlify_build":"allowed","get_pdf_tool_storage_grant":"allowed","create_artifact_from_url":"allowed","create_artifact_upload_intent":"allowed","save_artifact":"allowed","get_artifact_metadata":"allowed","search_artifacts":"allowed","list_artifacts_for_request":"allowed","list_artifacts_by_request":"allowed","list_artifacts_by_kind":"allowed","restore_artifact":"allowed","soft_delete_artifact":"allowed","object_checkout":"allowed","object_checkin":"allowed","object_refresh_lock":"allowed","object_patch":"allowed","object_create":"allowed","object_discard":"allowed","object_create_variant":"allowed","object_submit_review":"allowed","object_publish":"allowed","release_to_production":"allowed","object_retire":"needs_approval","object_review_decide":"needs_approval","site_apply_theme":"needs_approval","object_instantiate_template":"needs_approval","object_instantiate_section_template":"needs_approval","wipe_blob_stores":"needs_approval"},"contentContract":{"contentContract":"content_source.v1"},"capturePolicy":{"maxPages":0,"allowedCrawlOrigins":[],"allowedPathPrefixes":[],"sameOriginOnly":true,"respectRobots":true,"concurrency":1,"delayMs":1500,"authenticatedAccess":"prohibited","rights":{"content":"prohibited","media":"prohibited"},"designReferences":[],"fidelity":{"mode":"source_faithful","sourceDesignTreatment":"source_content_and_design"}},"publishingPolicy":{"publishEnabled":true,"requiresExplicitPublish":false,"description":"Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off.","operatorDefault":"approved"},"status":"active","connection":{"endpointConfigured":true,"tokenConfigured":true,"mcpEndpointEnvVar":"PLATFORM_MCP_ENDPOINT","tokenEnvVar":"PLATFORM_MCP_TOKEN","endpointSource":"env","tokenSource":"env"}},
+    {"projectId":"zilberman","name":"Zilberman Film Foundation","authMode":"bearer_env","allowedTools":[],"defaultToolPolicy":"blocked","toolPolicies":{"ping":"allowed","registry_get":"allowed","object_contract":"allowed","object_inventory":"allowed","object_get":"allowed","object_list":"allowed","object_validate":"allowed","object_checkout":"allowed","object_checkin":"allowed","object_refresh_lock":"allowed","object_patch":"allowed","object_create":"allowed","object_discard":"allowed","create_capture_job":"allowed","get_capture_job_status":"allowed","get_capture_snapshot":"allowed","create_artifact_from_url":"allowed","create_artifact_upload_intent":"allowed","save_artifact":"allowed","get_artifact_metadata":"allowed","search_artifacts":"allowed","list_artifacts_for_request":"allowed","list_artifacts_by_request":"allowed","list_artifacts_by_kind":"allowed","site_apply_theme":"allowed","object_publish":"allowed","release_to_production":"allowed"},"contentContract":{"contentContract":"content_source.v1"},"capturePolicy":{"maxPages":20,"allowedCrawlOrigins":["https://www.zilbermanfilmfoundation.com"],"allowedPathPrefixes":["/"],"sameOriginOnly":true,"respectRobots":true,"concurrency":1,"delayMs":1500,"authenticatedAccess":"prohibited","rights":{"content":"retain_allowed_origin_content","media":"retain_referenced_allowed_origin_media"},"designReferences":[{"origin":"https://prconsulting.net","purpose":"design_inspiration_only","crawlAllowed":false,"contentReuse":"prohibited","mediaReuse":"prohibited"}],"fidelity":{"mode":"design_inspired","sourceDesignTreatment":"source_content_with_design_inspiration_only"}},"publishingPolicy":{"publishEnabled":true,"requiresExplicitPublish":false,"description":"Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off.","operatorDefault":"approved"},"status":"active","connection":{"endpointConfigured":true,"tokenConfigured":true,"mcpEndpointEnvVar":"ZILBERMAN_MCP_ENDPOINT","tokenEnvVar":"ZILBERMAN_MCP_TOKEN","endpointSource":"env","tokenSource":"env","mcpEndpoint":"https://zilbermanfilmfoundation.netlify.app/mcp","tokenSecretRef":"projects/cms-agent-503015/secrets/zilberman-mcp-token/versions/latest"}}
+  ]
+}

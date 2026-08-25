@@ -1,83 +1,16 @@
-[
-  {
-    "id": "article_body_builder",
-    "version": "1.0.0",
-    "assignedTo": []
-  },
-  {
-    "id": "article_structuring",
-    "version": "1.0.0",
-    "assignedTo": [
-      "brief_architect"
-    ]
-  },
-  {
-    "id": "artifact_handling",
-    "version": "1.0.0",
-    "assignedTo": []
-  },
-  {
-    "id": "contract_intelligence",
-    "version": "1.0.0",
-    "assignedTo": [
-      "article_body",
-      "artifact_plan",
-      "contract_intelligence",
-      "publish_payload"
-    ]
-  },
-  {
-    "id": "editorial_craft",
-    "version": "1.0.0",
-    "assignedTo": [
-      "brief_architect",
-      "copy_regenerator",
-      "draft_writer",
-      "emotional_resonance",
-      "human_texture"
-    ]
-  },
-  {
-    "id": "editorial_review",
-    "version": "1.0.0",
-    "assignedTo": []
-  },
-  {
-    "id": "factual_review",
-    "version": "1.0.0",
-    "assignedTo": [
-      "trust_factual"
-    ]
-  },
-  {
-    "id": "learning_observation",
-    "version": "1.0.0",
-    "assignedTo": []
-  },
-  {
-    "id": "publication_readiness",
-    "version": "1.0.0",
-    "assignedTo": []
-  },
-  {
-    "id": "seo_review",
-    "version": "1.0.0",
-    "assignedTo": [
-      "topic_opportunity"
-    ]
-  },
-  {
-    "id": "source_verification",
-    "version": "1.0.0",
-    "assignedTo": [
-      "trust_factual"
-    ]
-  },
-  {
-    "id": "web_research",
-    "version": "1.0.0",
-    "assignedTo": [
-      "research"
-    ]
-  }
-]
+{
+  "skills": [
+    {"skillId":"article_body_builder","name":"Client object builder","description":"Build content blocks for the client_object.v1 envelope.","version":"1.0.0","status":"active","instructions":"Create content nodes that satisfy the shared client_object.v1 contract (one client object plus its provenance; the body inside it is governed by the client's own fetched contract).","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object","additionalProperties":false,"properties":{"result":{"type":"string"},"artifacts":{"type":"array","items":{"type":"string"}}},"required":["result","artifacts"]},"allowedTools":[],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-07-31T10:14:27.329Z"},
+    {"skillId":"article_structuring","name":"Article structuring","description":"Create a clear article outline and section flow.","version":"1.0.0","status":"active","instructions":"Transform the brief into a logical article structure with headings, key points, and artifacts.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object"},"allowedTools":[],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-07-26T13:08:14.641Z"},
+    {"skillId":"artifact_handling","name":"Artifact handling","description":"Track required and produced workflow artifacts.","version":"1.0.0","status":"active","instructions":"Validate artifact references, naming, and handoff readiness.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object","additionalProperties":false,"properties":{"result":{"type":"string"},"artifacts":{"type":"array","items":{"type":"string"}}},"required":["result","artifacts"]},"allowedTools":[],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"},
+    {"skillId":"contract_intelligence","name":"Client contract intelligence","description":"Treat the target client's live object contract as the only source of truth for content shape, ids, media paths, taxonomy and publish gates. Works for any client a workflow encounters.","version":"1.0.0","status":"active","instructions":"Never shape client content from memory, from a workspace-local schema, or from another client's conventions. Fetch the target client's contract for the requested object type at runtime and obey what it returns.","inputSchema":{"type":"object","additionalProperties":true,"properties":{"brief":{"type":"string"},"clientProjectId":{"type":"string"},"clientObjectType":{"type":"string"},"project_context":{"type":"object"}}},"outputSchema":{"type":"object"},"allowedTools":["project.call_read_tool","project.call_tool"],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{"clientAgnostic":true},"createdAt":"2026-07-31T09:32:07.889Z","updatedAt":"2026-07-31T09:32:17.793Z"},
+    {"skillId":"editorial_craft","name":"Editorial craft","description":"Client-neutral editorial craft for evidence-aware, reader-first, conversion-aware content: calm authority, practical specificity, low-pressure next steps, no hype. Voice and brand direction come from the target client's own record, never from this skill.","version":"1.0.0","status":"active","instructions":"Write for a smart reader who wants calm authority, not a lecture.","inputSchema":{"additionalProperties":true,"properties":{"audience":{"type":"string"},"brief":{"type":"string"},"draft":{"type":"string"}},"type":"object"},"outputSchema":{"type":"object"},"allowedTools":[],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{"clientAgnostic":true},"createdAt":"2026-07-31T09:32:24.171Z","updatedAt":"2026-07-31T09:32:37.416Z"},
+    {"skillId":"editorial_review","name":"Editorial review","description":"Review tone, clarity, grammar, and audience fit.","version":"1.0.0","status":"active","instructions":"Edit for readability, consistency, style, and brand-neutral editorial quality.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object","additionalProperties":false,"properties":{"result":{"type":"string"},"artifacts":{"type":"array","items":{"type":"string"}}},"required":["result","artifacts"]},"allowedTools":[],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"},
+    {"skillId":"factual_review","name":"Factual review","description":"Identify factual risks and unsupported claims.","version":"1.0.0","status":"active","instructions":"Check assertions, dates, names, and numbers; block when material claims lack support.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object"},"allowedTools":["web.fetch"],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-07-26T13:08:16.597Z"},
+    {"skillId":"learning_observation","name":"Learning observation","description":"Capture reusable lessons from workflow outcomes.","version":"1.0.0","status":"active","instructions":"Record non-sensitive observations suitable for future workspace learning loops.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object","additionalProperties":false,"properties":{"result":{"type":"string"},"artifacts":{"type":"array","items":{"type":"string"}}},"required":["result","artifacts"]},"allowedTools":["learning.record_observation"],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"write","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"},
+    {"skillId":"publication_readiness","name":"Publication readiness","description":"Assess whether content is ready for dry-run handoff or publishing approval.","version":"1.0.0","status":"active","instructions":"Confirm criteria, risks, artifacts, and explicit dry-run/publish state before handoff.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object","additionalProperties":false,"properties":{"result":{"type":"string"},"artifacts":{"type":"array","items":{"type":"string"}}},"required":["result","artifacts"]},"allowedTools":[],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"write","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"},
+    {"skillId":"seo_review","name":"SEO review","description":"Review search intent, metadata, headings, and internal-link opportunities.","version":"1.0.0","status":"active","instructions":"Recommend SEO improvements without keyword stuffing or publication-specific assumptions.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object"},"allowedTools":[],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-07-26T13:08:11.490Z"},
+    {"skillId":"source_verification","name":"Source verification","description":"Check source credibility and citation sufficiency.","version":"1.0.0","status":"active","instructions":"Verify claims against authoritative sources and flag weak, stale, or unsupported references.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object"},"allowedTools":["web.fetch"],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-07-26T13:08:17.891Z"},
+    {"skillId":"web_research","name":"Web research","description":"Gather current background information with citations.","version":"1.0.0","status":"active","instructions":"Research the brief, prefer primary sources, capture concise findings with source URLs.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"brief":{"type":"string","minLength":1}},"required":["brief"]},"outputSchema":{"type":"object"},"allowedTools":["web.search","web.fetch"],"requiredArtifacts":[],"producedArtifacts":[],"riskLevel":"read","metadata":{},"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-07-26T13:08:13.314Z"}
+  ]
+}

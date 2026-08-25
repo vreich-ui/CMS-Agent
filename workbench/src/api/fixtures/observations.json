@@ -1,72 +1,15 @@
-[
-  {
-    "id": "learning_1786523281456_6s5jpn",
-    "when": "12 Aug",
-    "node": "publish_executor",
-    "run": "run_1786468126136_ev9goe",
-    "txt": "Publish of run run_1786468126136_ev9goe succeeded via manual lifecycle after workflow_publish_run aborted with create_missing_object_id: the executor parses object_create's result at result.object_id/id but the platform returns the id at structuredContent.record.object_id (also duplicated as a JSON string in content[0].text). Fix the id extraction in the publish sequencer. Full lifecycle create\u2192checkout\u2192validate\u2192patch\u2192validate\u2192publish\u2192checkin completed clean; publish commit 0a5b3c5f7293da4d7d86b53fd0d7aa032fffbc9a released and productionConfirmed:true at 08:26:21Z. Second finding: release_to_production through project.call_tool returned HTTP 504 after the build hook had already fired \u2014 the idempotency_key pattern is mandatory for this call."
-  },
-  {
-    "id": "learning_1786522607871_fnhzuq",
-    "when": "12 Aug",
-    "node": null,
-    "run": null,
-    "txt": "Live publish failed for platform request req_publish_governed_content_object_lifecycle_20260811_01: create_missing_object_id: could not resolve a server-minted object id (object_id/id) from the object_create result."
-  },
-  {
-    "id": "learning_1786471786167_5jmns6",
-    "when": "11 Aug",
-    "node": "learning_recorder",
-    "run": "run_1786468126136_ev9goe",
-    "txt": "Publish workflow correctly blocked before mutation because the required durable operator gate was absent, despite publication_controller returning a correctness GO and client validation eligibility. publication_controller decision was go with no blockers for platform/content_item object req_agent_governed_content_object_lifecycle_checklist_20260811_01 and required publish_executor to verify operatorPublishDecision exactly equals approved. publish_executor status was blocked with operatorPublishDecisionObserved null, approvalMatched=false, and no publish/release/build/upload/verifications attempted. No side effects were performed; terminal outcome is an authorization block rather than a rendering, artifact, validation, contract, release, or deploy failure. Improvement candidate: ensure intended publish runs provide operatorPublishDecision:\"approved\" in executor run context, distinct from standing go-live authorization notes. Unresolved question: whether the missing operatorPublishDecision was operator omission, orchestration/context propagation issue, or intentional safety hold."
-  },
-  {
-    "id": "learning_1785849102472_9ovgu8",
-    "when": "4 Aug",
-    "node": "publish_executor",
-    "run": "run_1785842430906_tqjk1o",
-    "txt": "Session C batch publish: content_item req_agent_governed_content_lifecycle_gates_agent_workflows_20260804_01 (slug governed-content-lifecycle-gates-agent-workflows) published and released to production successfully, zero media, clientValidation.valid=true, no held-back items. Confirms the end-to-end conductor -> publish_payload -> object_create -> object_publish -> release_to_production path works on a real, live, paid run for the platform project post go-live posture. Article path /governed-content-lifecycle-gates-agent-workflows, commit e614cd46ea4c4bc5f3ba7e0bef1c9e4d3d085c26, productionConfirmed true."
-  },
-  {
-    "id": "learning_1785401174556_5a68d0",
-    "when": "30 Jul",
-    "node": "learning_recorder",
-    "run": "run_1785352838155_l544ye",
-    "txt": "Publication workflow blocked in dry-run mode before publish-risk publication_controller stage; explicit approval required before any publishing side effect. Dependency publication_controller present. No rendering/artifact failure evidence besides intentional dry-run block. Improvement: surface approval gate earlier. Assumption: expected behavior under dryRun=true. Unresolved: authorized approver/process for publication approval."
-  },
-  {
-    "id": "learning_1784723856257_ul6nga",
-    "when": "22 Jul",
-    "node": null,
-    "run": null,
-    "txt": "Dr. Lurie articles are functional blocks, not blobs (\u00a75.3): one node per persuasion/education beat, each content node tags private.strategy from the 12-value enum (hook\u00b7agitation\u00b7context\u00b7explanation\u00b7proof\u00b7example\u00b7comparison\u00b7myth\u00b7step\u00b7recommendation\u00b7resolution\u00b7summary) and private.intent from 5 (educate\u00b7persuade\u00b7reassure\u00b7convert\u00b7navigate). Offers/CTAs are kind:action nodes, not a strategy value. Node ids are opaque lowercase n_[a-z0-9]+ and must never contain hook/agitation/cta/advert/offer. Live reference: req_agent_niacinamide_barrier_after40 \u2014 7 nodes, hook\u2192context\u2192explanation\u2192proof\u2192myth\u2192step\u2192summary."
-  },
-  {
-    "id": "learning_1784723853122_3r68f3",
-    "when": "22 Jul",
-    "node": null,
-    "run": null,
-    "txt": "Dr. Lurie taxonomy is an agent-editable registry (tax_drlurie, creation_policy.agents:open). body.taxonomy.category/tags must resolve to ACTIVE terms (unknown terms block write). When a term is missing: prefer an existing term, else extend the registry yourself \u2014 object_checkout tax_drlurie + object_patch add_term {kind:'category'|'tag', term:{slug,label}} (term_id t_* minted from slug). Never remove terms to clean up \u2014 deprecate_term with merged_into (an active in-kind term, no cycles). reactivate_term is inverse-only (agent_authored:false) \u2014 never hand-author it."
-  },
-  {
-    "id": "learning_1784723849767_m3nk4t",
-    "when": "22 Jul",
-    "node": null,
-    "run": null,
-    "txt": "Dr. Lurie media reference flip (\u00a76.3, was a build-breaker): a rendered image src MUST be the PUBLIC path /img/{req}/{sha}.ext (or /pdf/{req}/{sha}.pdf). The raw Major-Key blobKey (image/{req}/{sha}.ext) belongs ONLY in *AssetRef / artifact_ref carrier fields \u2014 a raw blobKey in any renderable field is a write-blocker (render_image_ref, blocks_write, enforced_live) and 404s/breaks the Astro build. Also blocked in media.src: data: URIs and src/assets repo paths; remote https warns. A PDF can never be the hero. Artifacts are trusted per request id only."
-  },
-  {
-    "id": "learning_1784723846431_3sydm5",
-    "when": "22 Jul",
-    "node": null,
-    "run": null,
-    "txt": "Dr. Lurie publish\u2260release (INTERIM policy \u00a77): object_publish commits the content_item JSON to main with a [skip netlify] marker \u2014 free, invisible, no deploy. release_to_production is the ONLY sanctioned production build trigger and ships every accumulated dark commit at once. Rule: batch many publishes, release ONCE per run. Never use trigger_netlify_build (excluded from the agent allowlist). First release_to_production usually returns build_not_confirmed_live \u2014 poll deploy_status until deployStatus:ready AND productionConfirmed:true; do not re-release."
-  },
-  {
-    "id": "learning_1784723843029_ylbhsw",
-    "when": "22 Jul",
-    "node": null,
-    "run": null,
-    "txt": "Dr. Lurie publishing (v2 policy, 2026-07-22): TWO grammars. The agent authors article_body.v1 (CMS-Agent minimal grammar, plain-string bodies only) and the client stores content_item.v1 (zod .strict(), required slug/title/nodes, NO schema_version, supports string | rich_text.v1). At the object_create/object_patch mapping: DROP schema_version, root slug/title/deck/description/taxonomy/seo/image/editorial at the body, carry per-node strategy into private.strategy/intent. Verified: article_body.validate accepts only string bodies; object_validate accepted the same content as rich_text.v1."
-  }
-]
+{
+  "observations": [
+    {"id":"learning_1784723843029_ylbhsw","observation":"Dr. Lurie publishing (v2 policy, 2026-07-22): TWO grammars. The agent authors article_body.v1 (CMS-Agent minimal grammar, plain-string bodies only) and the client stores content_item.v1 (zod .strict(), required slug/title/nodes, NO schema_version, supports string | rich_text.v1). At the object_create/object_patch mapping: DROP schema_version, root slug/title/deck/description/taxonomy/seo/image/editorial at the body, carry per-node strategy into private.strategy/intent. Verified: article_body.validate accepts only string bodies; object_validate accepted the same content as rich_text.v1.","createdAt":"2026-07-22T12:37:23.029Z"},
+    {"id":"learning_1784723846431_3sydm5","observation":"Dr. Lurie publish≠release (INTERIM policy §7): object_publish commits the content_item JSON to main with a [skip netlify] marker — free, invisible, no deploy. release_to_production is the ONLY sanctioned production build trigger and ships every accumulated dark commit at once. Rule: batch many publishes, release ONCE per run. Never use trigger_netlify_build (excluded from the agent allowlist). First release_to_production usually returns build_not_confirmed_live — poll deploy_status until deployStatus:ready AND productionConfirmed:true; do not re-release.","createdAt":"2026-07-22T12:37:26.431Z"},
+    {"id":"learning_1784723849767_m3nk4t","observation":"Dr. Lurie media reference flip (§6.3, was a build-breaker): a rendered image src MUST be the PUBLIC path /img/{req}/{sha}.ext (or /pdf/{req}/{sha}.pdf). The raw Major-Key blobKey (image/{req}/{sha}.ext) belongs ONLY in *AssetRef / artifact_ref carrier fields — a raw blobKey in any renderable field is a write-blocker (render_image_ref, blocks_write, enforced_live) and 404s/breaks the Astro build. Also blocked in media.src: data: URIs and src/assets repo paths; remote https warns. A PDF can never be the hero. Artifacts are trusted per request id only.","createdAt":"2026-07-22T12:37:29.767Z"},
+    {"id":"learning_1784723853122_3r68f3","observation":"Dr. Lurie taxonomy is an agent-editable registry (tax_drlurie, creation_policy.agents:open). body.taxonomy.category/tags must resolve to ACTIVE terms (unknown terms block write). When a term is missing: prefer an existing term, else extend the registry yourself — object_checkout tax_drlurie + object_patch add_term {kind:'category'|'tag', term:{slug,label}} (term_id t_* minted from slug). Never remove terms to clean up — deprecate_term with merged_into (an active in-kind term, no cycles). reactivate_term is inverse-only (agent_authored:false) — never hand-author it.","createdAt":"2026-07-22T12:37:33.122Z"},
+    {"id":"learning_1784723856257_ul6nga","observation":"Dr. Lurie articles are functional blocks, not blobs (§5.3): one node per persuasion/education beat, each content node tags private.strategy from the 12-value enum (hook·agitation·context·explanation·proof·example·comparison·myth·step·recommendation·resolution·summary) and private.intent from 5 (educate·persuade·reassure·convert·navigate). Offers/CTAs are kind:action nodes, not a strategy value. Node ids are opaque lowercase n_[a-z0-9]+ and must never contain hook/agitation/cta/advert/offer. Live reference: req_agent_niacinamide_barrier_after40 — 7 nodes, hook→context→explanation→proof→myth→step→summary.","createdAt":"2026-07-22T12:37:36.257Z"},
+    {"id":"learning_1785401174556_5a68d0","observation":"Publication workflow blocked in dry-run mode before publish-risk publication_controller stage; explicit approval required before any publishing side effect. Dependency publication_controller present. No rendering/artifact failure evidence besides intentional dry-run block. Improvement: surface approval gate earlier. Assumption: expected behavior under dryRun=true. Unresolved: authorized approver/process for publication approval.","runId":"run_1785352838155_l544ye","nodeId":"learning_recorder","createdAt":"2026-07-30T08:46:14.557Z"},
+    {"id":"learning_1785849102472_9ovgu8","observation":"Session C batch publish: content_item req_agent_governed_content_lifecycle_gates_agent_workflows_20260804_01 (slug governed-content-lifecycle-gates-agent-workflows) published and released to production successfully, zero media, clientValidation.valid=true, no held-back items. Confirms the end-to-end conductor -> publish_payload -> object_create -> object_publish -> release_to_production path works on a real, live, paid run for the platform project post go-live posture. Article path /governed-content-lifecycle-gates-agent-workflows, commit e614cd46ea4c4bc5f3ba7e0bef1c9e4d3d085c26, productionConfirmed true.","runId":"run_1785842430906_tqjk1o","nodeId":"publish_executor","createdAt":"2026-08-04T13:11:42.472Z"},
+    {"id":"learning_1786471786167_5jmns6","observation":"Publish workflow correctly blocked before mutation because the required durable operator gate was absent, despite publication_controller returning a correctness GO and client validation eligibility. publication_controller decision was go with no blockers for platform/content_item object req_agent_governed_content_object_lifecycle_checklist_20260811_01 and required publish_executor to verify operatorPublishDecision exactly equals approved. publish_executor status was blocked with operatorPublishDecisionObserved null, approvalMatched=false, and no publish/release/build/upload/verifications attempted. No side effects were performed; terminal outcome is an authorization block rather than a rendering, artifact, validation, contract, release, or deploy failure. Improvement candidate: ensure intended publish runs provide operatorPublishDecision:\"approved\" in executor run context, distinct from standing go-live authorization notes. Unresolved question: whether the missing operatorPublishDecision was operator omission, orchestration/context propagation issue, or intentional safety hold.","metadata":{"nodeId":"learning_recorder","runId":"run_1786468126136_ev9goe"},"runId":"run_1786468126136_ev9goe","nodeId":"learning_recorder","createdAt":"2026-08-11T18:09:46.167Z"},
+    {"id":"learning_1786522607871_fnhzuq","observation":"Live publish failed for platform request req_publish_governed_content_object_lifecycle_20260811_01: create_missing_object_id: could not resolve a server-minted object id (object_id/id) from the object_create result.","metadata":{"type":"publish_failed","projectId":"platform","requestId":"req_publish_governed_content_object_lifecycle_20260811_01","runId":"run_1786468126136_ev9goe"},"createdAt":"2026-08-12T08:16:47.871Z"},
+    {"id":"learning_1786523281456_6s5jpn","observation":"Publish of run run_1786468126136_ev9goe succeeded via manual lifecycle after workflow_publish_run aborted with create_missing_object_id: the executor parses object_create's result at result.object_id/id but the platform returns the id at structuredContent.record.object_id (also duplicated as a JSON string in content[0].text). Fix the id extraction in the publish sequencer. Full lifecycle create→checkout→validate→patch→validate→publish→checkin completed clean; publish commit 0a5b3c5f7293da4d7d86b53fd0d7aa032fffbc9a released and productionConfirmed:true at 08:26:21Z. Second finding: release_to_production through project.call_tool returned HTTP 504 after the build hook had already fired — the idempotency_key pattern is mandatory for this call.","metadata":{"failureType":"create_missing_object_id","publishCommit":"0a5b3c5f7293da4d7d86b53fd0d7aa032fffbc9a","objectId":"req_agent_governed_content_object_lifecycle_checklist_20260811_01","nodeId":"publish_executor","runId":"run_1786468126136_ev9goe"},"runId":"run_1786468126136_ev9goe","nodeId":"publish_executor","createdAt":"2026-08-12T08:28:01.456Z"},
+    {"id":"learning_1787656906884_19anps","observation":"Live publish failed for dr-lurie request req_test_lorem_20260825_01: create_missing_object_id: could not resolve the object id (object_id/id) from the object_create result.","metadata":{"type":"publish_failed","projectId":"dr-lurie","requestId":"req_test_lorem_20260825_01","runId":"run_1787656120374_18bobg"},"createdAt":"2026-08-25T11:21:46.884Z"}
+  ]
+}

@@ -52,7 +52,7 @@ async function jumpTo(page: Page, query: string): Promise<StoreSnapshot> {
 }
 
 test.describe('command palette', () => {
-  test('⌘K opens from anywhere; ≤3 keystrokes + Enter reaches three different nodes, including one in a non-active workflow', async ({
+  test('⌘K opens from anywhere; ≤3 keystrokes + Enter reaches two nodes, and a workflow jump switches workflow honestly', async ({
     page,
   }) => {
     await page.goto('/');
@@ -69,29 +69,39 @@ test.describe('command palette', () => {
     expect(s1.screen).toBe('bench');
     await expect(page.locator('.nhead .id')).toHaveText('draft_writer');
 
-    // fit_adjudicator — 3 keystrokes, lives in clone_conductor (not active) —
-    // the palette must switch workflows to land on it.
-    const s2 = await jumpTo(page, 'fad');
-    expect(s2.node).toBe('fit_adjudicator');
-    expect(s2.wf).toBe('clone_conductor');
+    // objection_mapping — 3 keystrokes, another node in the same workflow.
+    // workbench-verb-fixes: workspace_get_node(s) only ever returns
+    // publishing_conductor's 23 nodes live (clone/capture nodes are
+    // genuinely invisible to it — see fixtures/README.md), so the node
+    // index the palette searches only ever has these 23 rows; a 3-keystroke
+    // jump to a *node* in a non-active workflow is no longer something this
+    // screen can honestly do.
+    const s2 = await jumpTo(page, 'obj');
+    expect(s2.node).toBe('objection_mapping');
+    expect(s2.wf).toBe('publishing_conductor');
     expect(s2.screen).toBe('bench');
-    await expect(page.locator('.nhead .id')).toHaveText('fit_adjudicator');
-    await expect(page.locator('#wfsel')).toContainText('Clone conductor');
+    await expect(page.locator('.nhead .id')).toHaveText('objection_mapping');
 
-    // capture_score — 3 keystrokes, lives in capture_conductor (not active
-    // either, and different from the previous jump's workflow too).
+    // "Clone conductor" — a *workflow*-kind entry (never removed by the
+    // live-mapping pass; only node-kind entries lost clone/capture rows).
+    // Selecting it switches to clone_conductor and its catalog-listed first
+    // node id (clone_intake) — a real workflow switch — but that node has
+    // no live record, so the center pane shows the same honest "not found"
+    // card GraphOverlay/DepsTab already show for clone/capture nodes,
+    // rather than silently inventing one.
     await openPalette(page);
-    await page.keyboard.type('csc');
-    await expect(page.locator('#palres button').first()).toHaveText(/capture_score$/);
+    await page.keyboard.type('clo');
+    await expect(page.locator('#palres button').first()).toHaveText(/Clone conductor$/);
     await page.screenshot({ path: 'shots/palette.png', fullPage: true }); // the palette itself, mid-search
     await page.keyboard.press('Enter');
     await expect(page.locator('.scrim.open .palette')).toHaveCount(0);
     const s3 = await readStore(page);
-    expect(s3.node).toBe('capture_score');
-    expect(s3.wf).toBe('capture_conductor');
+    expect(s3.wf).toBe('clone_conductor');
+    expect(s3.node).toBe('clone_intake');
     expect(s3.screen).toBe('bench');
-    await expect(page.locator('.nhead .id')).toHaveText('capture_score');
-    await expect(page.locator('#wfsel')).toContainText('Capture conductor');
+    await expect(page.locator('#wfsel')).toContainText('Clone conductor');
+    await expect(page.locator('.center .card .lbl')).toHaveText('not found');
+    await expect(page.locator('.center .card')).toContainText('clone_intake');
   });
 
   test('rows show the .kind label; arrows move the highlight; Escape and scrim click close without navigating', async ({ page }) => {
@@ -99,22 +109,29 @@ test.describe('command palette', () => {
     await expect(page.locator('.topbar')).toBeVisible();
     const before = await readStore(page);
 
+    // workbench-verb-fixes: the node index only ever has publishing_conductor's
+    // 23 live nodes now (see the other test's comment) — 'cap' used to match
+    // three capture_conductor nodes that no longer exist there; 'pub' matches
+    // three real publishing_conductor nodes instead (a node's own KIND_BONUS
+    // outranks the "Publishing conductor" workflow entry at equal match
+    // tier), shortest-label-first: publish_payload(15) < publish_executor(16)
+    // < publication_controller(22).
     await openPalette(page);
-    await page.keyboard.type('cap');
+    await page.keyboard.type('pub');
     const rows = page.locator('#palres button');
     await expect(rows.first()).toBeVisible();
     await expect(rows.first().locator('.kind')).toHaveText('node');
-    await expect(rows.first()).toHaveText(/capture_map$/);
+    await expect(rows.first()).toHaveText(/publish_payload$/);
     await expect(rows.first()).toHaveClass(/hi/);
 
-    // capture_map(0) -> ArrowDown x2 -> capture_score(2) -> ArrowUp x1 -> capture_crawl(1)
+    // publish_payload(0) -> ArrowDown x2 -> publication_controller(2) -> ArrowUp x1 -> publish_executor(1)
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowDown');
     await expect(rows.nth(2)).toHaveClass(/hi/);
-    await expect(rows.nth(2)).toHaveText(/capture_score$/);
+    await expect(rows.nth(2)).toHaveText(/publication_controller$/);
     await page.keyboard.press('ArrowUp');
     await expect(rows.nth(1)).toHaveClass(/hi/);
-    await expect(rows.nth(1)).toHaveText(/capture_crawl$/);
+    await expect(rows.nth(1)).toHaveText(/publish_executor$/);
 
     // Escape closes without changing the selected node.
     await page.keyboard.press('Escape');
@@ -123,17 +140,17 @@ test.describe('command palette', () => {
 
     // Scrim click also closes without navigating.
     await openPalette(page);
-    await page.keyboard.type('cap');
+    await page.keyboard.type('pub');
     await page.mouse.click(4, 4); // outside the centered .palette panel
     await expect(page.locator('.scrim.open .palette')).toHaveCount(0);
     expect((await readStore(page)).node).toBe(before.node);
 
     // Enter on the highlighted row does navigate.
     await openPalette(page);
-    await page.keyboard.type('cap');
+    await page.keyboard.type('pub');
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
-    expect((await readStore(page)).node).toBe('capture_crawl');
+    expect((await readStore(page)).node).toBe('publish_executor');
   });
 
   test('does not open while typing in a real field', async ({ page }) => {

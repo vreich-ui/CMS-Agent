@@ -1,21 +1,31 @@
 {
-  "weekTotal": 67.7263,
-  "runCount": 49,
-  "byWorkflow": [
-    {
-      "wf": "publishing_conductor",
-      "total": 58.6656,
-      "avgPerRun": 2.0952
+  "_comment": "Composed fixture: usage_get_summary carries no per-workflow breakdown (byModel/byNode/byProject only), so the UI's byWorkflow figure requires one usage_get_summary({workflowId}) call per known workflow plus one workflow_list_runs({workflowId}) call per workflow for its run count. `overall` and each entry under `byWorkflowId` are each verbatim `summary` payloads from their own live usage_get_summary call; `runCounts` are each verbatim `page.matchedCount` from their own live workflow_list_runs call. See fixtures/README.md.",
+  "overall": {
+    "inputTokens": 11667741, "outputTokens": 900531, "totalTokens": 12568272, "reasoningTokens": 0,
+    "costUsdEstimate": 71.196399, "recordCount": 673,
+    "totalInputTokens": 11667741, "totalOutputTokens": 900531, "totalReasoningTokens": 0,
+    "totalCostUsdEstimate": 71.196399, "actualCostUsdEstimate": 70.547279, "estimatedCostUsdEstimate": 0.64912
+  },
+  "byWorkflowId": {
+    "publishing_conductor": {
+      "inputTokens": 7574335, "outputTokens": 850041, "totalTokens": 8424376, "reasoningTokens": 0,
+      "costUsdEstimate": 60.996785, "recordCount": 474,
+      "totalCostUsdEstimate": 60.996785
     },
-    {
-      "wf": "clone_conductor",
-      "total": 0.9192,
-      "avgPerRun": 0.1532
+    "clone_conductor": {
+      "inputTokens": 116457, "outputTokens": 11232, "totalTokens": 127689, "reasoningTokens": 0,
+      "costUsdEstimate": 0.919245, "recordCount": 13,
+      "totalCostUsdEstimate": 0.919245
     },
-    {
-      "wf": "capture_conductor",
-      "total": 1.0993,
-      "avgPerRun": 0.0733
+    "capture_conductor": {
+      "inputTokens": 187581, "outputTokens": 11186, "totalTokens": 198767, "reasoningTokens": 0,
+      "costUsdEstimate": 1.273485, "recordCount": 14,
+      "totalCostUsdEstimate": 1.273485
     }
-  ]
+  },
+  "runCounts": {
+    "publishing_conductor": 31,
+    "clone_conductor": 6,
+    "capture_conductor": 18
+  }
 }

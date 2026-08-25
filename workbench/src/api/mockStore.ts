@@ -1,147 +1,111 @@
-// In-memory mutable layer over the WP-02 fixtures. Loaded once per page load;
-// mutating verbs (in fixture mode, see client.ts) act on this copy so later
-// work packages have something honest to optimistically update against.
+// In-memory mutable layer over the raw-fixture set (workbench-verb-fixes).
+// Loaded once per page load; mutating verbs (in fixture mode, see client.ts)
+// act on this copy so later work packages have something honest to
+// optimistically update against.
+//
+// Everything here holds and returns RAW live-shaped data (the same shapes
+// api/adapters.ts's `to<Entity>()` functions accept) — never UI-shape
+// ../types.ts objects. client.ts's MOCK_HANDLERS wrap these straight into
+// the same one-level-deep envelope a live call would (`{ nodes: [...] }`,
+// `{ runs: [...], page: {...} }`, …), and verbs.ts runs that through the
+// exact adapter the Netlify transport uses. That symmetry — raw fixture in,
+// same adapter, same UI shape out — is what makes the fixture-mode
+// Playwright suite a real regression net for the live mapping, not a check
+// against a parallel fiction. See fixtures/README.md.
 //
 // Everything here is synchronous — client.ts adds the artificial network
 // delay, this module just owns the data.
 
-import workflowsJson from './fixtures/workflows.json';
 import nodesJson from './fixtures/nodes.json';
 import projectsJson from './fixtures/projects.json';
 import runsJson from './fixtures/runs.json';
+import runCostsJson from './fixtures/runCosts.json';
 import toolsJson from './fixtures/tools.json';
 import skillsJson from './fixtures/skills.json';
 import observationsJson from './fixtures/observations.json';
 import rubricsJson from './fixtures/rubrics.json';
+import regressionReportsJson from './fixtures/regressionReports.json';
 import datasetsJson from './fixtures/datasets.json';
 import comparePairsJson from './fixtures/comparePairs.json';
 import usageJson from './fixtures/usage.json';
 import readinessJson from './fixtures/readiness.json';
 import agentsJson from './fixtures/agents.json';
-
+import { WORKFLOW_CATALOG } from './workflowCatalog';
 import type {
-  Agent,
-  ComparePair,
-  Dataset,
-  FinetuneReadiness,
-  ModelConfig,
-  Observation,
-  Project,
-  Risk,
-  Rubric,
-  Run,
-  RunStatus,
-  Skill,
-  ToolDef,
-  UsageSummary,
-  Workflow,
-  WorkflowNode,
-} from '../types';
+  RawAgent,
+  RawDataset,
+  RawFinetuneReadiness,
+  RawObservation,
+  RawProject,
+  RawRegressionReport,
+  RawRubric,
+  RawRun,
+  RawRunCostLedger,
+  RawSkill,
+  RawToolDef,
+  RawUsageSummary,
+  RawWorkflowNode,
+} from './adapters';
+import type { ComparePair, Run, Workflow } from '../types';
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-// The fixture JSON's shape is not quite `WorkflowNode`/`ModelConfig` at the
-// type level, in two ways that are real (not just TS tuple-inference noise):
-//   1. `model.timeout` is a raw millisecond number live, while ModelConfig
-//      (fixed by the mockup's shape — see spec/mockup.html) expects a string
-//      like "90s", and live models carry no `retryCount` at all.
-//   2. `fit_adjudicator` (the one node absent from `workspace_get_node` live —
-//      see fixtures/README.md) has `kind`/`risk`/`fan` all `null`, not the
-//      non-null values WorkflowNode requires.
-// Both are normalized here at load time rather than by loosening the shared
-// type contract.
-
-interface RawModelConfig {
-  maxTurns: number;
-  toolCallLimit: number;
-  timeout: number | string;
-  budgetUsd: number;
-  maxOutputTokens: number;
-  retryCount?: number;
-}
-
-interface RawWorkflowNode {
-  id: string;
-  name: string;
-  kind: string | null;
-  risk: string | null;
-  fan: number | null;
-  tools: string[];
-  skills: string[];
-  desc: string;
-  model?: RawModelConfig;
-  prompt?: string;
-}
-
-function normalizeModel(raw: RawModelConfig | undefined): ModelConfig | undefined {
-  if (!raw) return undefined;
-  return {
-    maxTurns: raw.maxTurns,
-    toolCallLimit: raw.toolCallLimit,
-    timeout: typeof raw.timeout === 'number' ? `${Math.round(raw.timeout / 1000)}s` : raw.timeout,
-    budgetUsd: raw.budgetUsd,
-    maxOutputTokens: raw.maxOutputTokens,
-    retryCount: raw.retryCount ?? 0,
-  };
-}
-
-/** `risk: null` (fit_adjudicator only) defaults to the safest value, not the loosest. */
-function normalizeNode(raw: RawWorkflowNode): WorkflowNode {
-  return {
-    id: raw.id,
-    name: raw.name,
-    kind: raw.kind ?? 'unknown',
-    risk: (raw.risk as Risk | null) ?? 'read',
-    fan: raw.fan ?? 0,
-    tools: raw.tools,
-    skills: raw.skills,
-    desc: raw.desc,
-    model: normalizeModel(raw.model),
-    prompt: raw.prompt,
-  };
-}
-
 export interface RunFilter {
   workflowId?: string;
   projectId?: string;
-  status?: RunStatus;
+  status?: string;
   limit?: number;
 }
 
 class MockStore {
   private workflows: Record<string, Workflow>;
-  private nodes: Record<string, WorkflowNode>;
-  private projects: Project[];
-  private runs: Run[];
-  private tools: ToolDef[];
-  private skills: Skill[];
-  private observations: Observation[];
-  private rubrics: Rubric[];
-  private datasets: Dataset[];
+  private nodes: RawWorkflowNode[];
+  private projects: RawProject[];
+  private runs: RawRun[];
+  /** runId -> ledger, from fixtures/runCosts.json (a subset — see its own
+   *  `_comment`) overlaid with any test-applied override (see updateRun()). */
+  private costLedgers: Map<string, RawRunCostLedger>;
+  private costOverrides: Map<string, Partial<RawRunCostLedger>>;
+  private tools: RawToolDef[];
+  private skills: RawSkill[];
+  private observations: RawObservation[];
+  private rubrics: RawRubric[];
+  private regressionReports: RawRegressionReport[];
+  private datasets: RawDataset[];
   private comparePairs: ComparePair[];
-  private usage: UsageSummary;
-  private readiness: FinetuneReadiness;
-  private agents: Agent[];
-  /** nodeId -> workflowId, built from each workflow's phases. */
+  private usageOverall: RawUsageSummary;
+  private usageByWorkflowId: Record<string, RawUsageSummary>;
+  private readiness: RawFinetuneReadiness;
+  private agents: RawAgent[];
+  /** nodeId -> workflowId, built from each workflow's phases (mockup-config,
+   *  not live — see workflowCatalog.ts). Used only to let the mock filter
+   *  workspace_get_nodes / dataset stage listings by workflow the same way
+   *  verbs.ts does client-side for the live transport. */
   private nodeWorkflow: Map<string, string>;
 
   constructor() {
-    this.workflows = clone(workflowsJson as unknown as Record<string, Workflow>);
-    const rawNodes = nodesJson as unknown as Record<string, RawWorkflowNode>;
-    this.nodes = Object.fromEntries(Object.entries(rawNodes).map(([id, n]) => [id, normalizeNode(n)]));
-    this.projects = clone(projectsJson as Project[]);
-    this.runs = clone(runsJson as Run[]);
-    this.tools = clone(toolsJson as ToolDef[]);
-    this.skills = clone(skillsJson as Skill[]);
-    this.observations = clone(observationsJson as Observation[]);
-    this.rubrics = clone(rubricsJson as Rubric[]);
-    this.datasets = clone(datasetsJson as Dataset[]);
+    this.workflows = WORKFLOW_CATALOG;
+    this.nodes = clone((nodesJson as unknown as { nodes: RawWorkflowNode[] }).nodes);
+    this.projects = clone((projectsJson as unknown as { projects: RawProject[] }).projects);
+    this.runs = clone((runsJson as unknown as { runs: RawRun[] }).runs);
+    this.costLedgers = new Map(
+      Object.entries(clone((runCostsJson as unknown as { byRunId: Record<string, RawRunCostLedger> }).byRunId)),
+    );
+    this.costOverrides = new Map();
+    this.tools = clone((toolsJson as unknown as { tools: RawToolDef[] }).tools);
+    this.skills = clone((skillsJson as unknown as { skills: RawSkill[] }).skills);
+    this.observations = clone((observationsJson as unknown as { observations: RawObservation[] }).observations);
+    this.rubrics = clone((rubricsJson as unknown as { rubrics: RawRubric[] }).rubrics);
+    this.regressionReports = clone((regressionReportsJson as unknown as { reports: RawRegressionReport[] }).reports);
+    this.datasets = clone((datasetsJson as unknown as { datasets: RawDataset[] }).datasets);
     this.comparePairs = clone(comparePairsJson as ComparePair[]);
-    this.usage = clone(usageJson as UsageSummary);
-    this.readiness = clone(readinessJson as FinetuneReadiness);
-    this.agents = clone(agentsJson as Agent[]);
+    const usage = usageJson as { overall: RawUsageSummary; byWorkflowId: Record<string, RawUsageSummary> };
+    this.usageOverall = clone(usage.overall);
+    this.usageByWorkflowId = clone(usage.byWorkflowId);
+    this.readiness = clone((readinessJson as unknown as { readiness: RawFinetuneReadiness }).readiness);
+    this.agents = clone((agentsJson as unknown as { agents: RawAgent[] }).agents);
 
     this.nodeWorkflow = new Map();
     for (const wf of Object.values(this.workflows)) {
@@ -151,7 +115,7 @@ class MockStore {
     }
   }
 
-  // --- workspace / nodes ---------------------------------------------------
+  // --- workflow catalog (config, not live — see workflowCatalog.ts) --------
 
   getWorkflows(): Workflow[] {
     return Object.values(this.workflows);
@@ -165,158 +129,201 @@ class MockStore {
     return this.nodeWorkflow.get(nodeId);
   }
 
-  getNodes(workflowId?: string): WorkflowNode[] {
-    const all = Object.values(this.nodes);
-    if (!workflowId) return all;
-    return all.filter((n) => this.nodeWorkflow.get(n.id) === workflowId);
+  // --- workspace / nodes ---------------------------------------------------
+
+  getNodes(workflowId?: string): RawWorkflowNode[] {
+    if (!workflowId) return this.nodes;
+    return this.nodes.filter((n) => this.nodeWorkflow.get(n.id) === workflowId);
   }
 
-  getNode(nodeId: string): WorkflowNode | undefined {
-    return this.nodes[nodeId];
+  getNode(nodeId: string): RawWorkflowNode | undefined {
+    return this.nodes.find((n) => n.id === nodeId);
   }
 
-  updateNode(nodeId: string, patch: Partial<WorkflowNode>): WorkflowNode | undefined {
-    const existing = this.nodes[nodeId];
-    if (!existing) return undefined;
-    const updated = { ...existing, ...patch, id: existing.id };
-    this.nodes[nodeId] = updated;
-    return updated;
+  updateNode(nodeId: string, patch: Partial<RawWorkflowNode>): RawWorkflowNode | undefined {
+    const idx = this.nodes.findIndex((n) => n.id === nodeId);
+    if (idx === -1) return undefined;
+    this.nodes[idx] = { ...this.nodes[idx], ...patch, id: this.nodes[idx].id };
+    return this.nodes[idx];
   }
 
   // --- projects / registry --------------------------------------------------
 
-  getProjects(): Project[] {
+  getProjects(): RawProject[] {
     return this.projects;
   }
 
-  getProject(id: string): Project | undefined {
-    return this.projects.find((p) => p.id === id);
+  getProject(id: string): RawProject | undefined {
+    return this.projects.find((p) => p.projectId === id);
   }
 
-  getTools(): ToolDef[] {
+  getTools(): RawToolDef[] {
     return this.tools;
   }
 
-  getTool(id: string): ToolDef | undefined {
-    return this.tools.find((t) => t.id === id);
+  getTool(id: string): RawToolDef | undefined {
+    return this.tools.find((t) => t.toolId === id);
   }
 
-  getSkills(): Skill[] {
+  getSkills(): RawSkill[] {
     return this.skills;
   }
 
-  getSkill(id: string): Skill | undefined {
-    return this.skills.find((s) => s.id === id);
+  getSkill(id: string): RawSkill | undefined {
+    return this.skills.find((s) => s.skillId === id);
   }
 
-  updateSkill(id: string, patch: Partial<Skill>): Skill | undefined {
-    const idx = this.skills.findIndex((s) => s.id === id);
+  updateSkill(id: string, patch: Partial<RawSkill>): RawSkill | undefined {
+    const idx = this.skills.findIndex((s) => s.skillId === id);
     if (idx === -1) return undefined;
-    this.skills[idx] = { ...this.skills[idx], ...patch, id: this.skills[idx].id };
+    this.skills[idx] = { ...this.skills[idx], ...patch, skillId: this.skills[idx].skillId };
     return this.skills[idx];
   }
 
-  assignSkill(nodeId: string, skillId: string): Skill | undefined {
+  assignSkill(nodeId: string, skillId: string): RawSkill | undefined {
     const skill = this.getSkill(skillId);
     if (!skill) return undefined;
-    if (!skill.assignedTo.includes(nodeId)) skill.assignedTo = [...skill.assignedTo, nodeId];
     const node = this.getNode(nodeId);
-    if (node && !node.skills.includes(skillId)) {
-      this.updateNode(nodeId, { skills: [...node.skills, skillId] });
+    if (node && !node.assignedSkills.includes(skillId)) {
+      this.updateNode(nodeId, { assignedSkills: [...node.assignedSkills, skillId] });
     }
     return skill;
   }
 
-  unassignSkill(nodeId: string, skillId: string): Skill | undefined {
+  unassignSkill(nodeId: string, skillId: string): RawSkill | undefined {
     const skill = this.getSkill(skillId);
     if (!skill) return undefined;
-    skill.assignedTo = skill.assignedTo.filter((n) => n !== nodeId);
     const node = this.getNode(nodeId);
     if (node) {
-      this.updateNode(nodeId, { skills: node.skills.filter((s) => s !== skillId) });
+      this.updateNode(nodeId, { assignedSkills: node.assignedSkills.filter((s) => s !== skillId) });
     }
     return skill;
   }
 
-  getAgents(): Agent[] {
+  /** skillId -> node ids that assign it — the live source for Skill.assignedTo. */
+  assignedToFor(skillId: string): string[] {
+    return this.nodes.filter((n) => n.assignedSkills.includes(skillId)).map((n) => n.id);
+  }
+
+  getAgents(): RawAgent[] {
     return this.agents;
   }
 
-  getAgent(id: string): Agent | undefined {
+  getAgent(id: string): RawAgent | undefined {
     return this.agents.find((a) => a.id === id);
   }
 
   // --- runs ------------------------------------------------------------------
 
-  getRuns(filter: RunFilter = {}): Run[] {
+  getRuns(filter: RunFilter = {}): RawRun[] {
     let out = this.runs;
-    if (filter.workflowId) out = out.filter((r) => r.wf === filter.workflowId);
-    if (filter.projectId) out = out.filter((r) => r.proj === filter.projectId);
+    if (filter.workflowId) out = out.filter((r) => r.workflowId === filter.workflowId);
+    if (filter.projectId) out = out.filter((r) => r.projectId === filter.projectId);
     if (filter.status) out = out.filter((r) => r.status === filter.status);
     if (filter.limit) out = out.slice(0, filter.limit);
     return out;
   }
 
-  getRun(id: string): Run | undefined {
-    return this.runs.find((r) => r.id === id);
+  getRun(id: string): RawRun | undefined {
+    return this.runs.find((r) => r.runId === id);
   }
 
-  updateRun(id: string, patch: Partial<Run>): Run | undefined {
-    const idx = this.runs.findIndex((r) => r.id === id);
+  /** Raw-field patch, used by the mutating-verb mock handlers. */
+  updateRunRaw(id: string, patch: Partial<RawRun>): RawRun | undefined {
+    const idx = this.runs.findIndex((r) => r.runId === id);
     if (idx === -1) return undefined;
-    this.runs[idx] = { ...this.runs[idx], ...patch, id: this.runs[idx].id };
+    this.runs[idx] = { ...this.runs[idx], ...patch, runId: this.runs[idx].runId };
     return this.runs[idx];
   }
 
+  /**
+   * UI-shape (`Partial<Run>`) compat entry point — `runcontrol.spec.ts`
+   * calls this directly (`mockStore.updateRun(id, {cost, budget})`) to
+   * synthesize an over-budget scenario. `cost`/`budget` have no home on the
+   * raw run row itself (see toRun()'s doc comment — they only ever come
+   * from a separate cost-ledger lookup), so those two keys go into
+   * `costOverrides` instead of the row; every other key here has a direct
+   * raw-field equivalent.
+   */
+  updateRun(id: string, patch: Partial<Run>): RawRun | undefined {
+    const rawPatch: Partial<RawRun> = {};
+    if (patch.status !== undefined) rawPatch.status = patch.status;
+    if (patch.cur !== undefined) rawPatch.currentNodeId = patch.cur;
+    if (patch.dry !== undefined) rawPatch.dryRun = patch.dry;
+    if (patch.requestId !== undefined) rawPatch.requestId = patch.requestId;
+    if (patch.cost !== undefined || patch.budget !== undefined) {
+      const existing = this.costOverrides.get(id) ?? {};
+      this.costOverrides.set(id, {
+        ...existing,
+        runId: id,
+        totalCostUsdEstimate: patch.cost ?? existing.totalCostUsdEstimate ?? 0,
+        budget: patch.budget !== undefined ? { budgetUsd: patch.budget } : existing.budget,
+      });
+    }
+    return Object.keys(rawPatch).length ? this.updateRunRaw(id, rawPatch) : this.getRun(id);
+  }
+
   /** Adds a brand-new run (used by workflow_start_dry_run in mock mode). */
-  addRun(run: Run): Run {
+  addRun(run: RawRun): RawRun {
     this.runs = [run, ...this.runs];
     return run;
   }
 
-  // --- learning / evaluation / datasets --------------------------------------
-
-  getObservations(nodeId?: string): Observation[] {
-    if (!nodeId) return this.observations;
-    return this.observations.filter((o) => o.node === nodeId);
+  getCostLedger(runId: string): RawRunCostLedger | undefined {
+    const base = this.costLedgers.get(runId);
+    const override = this.costOverrides.get(runId);
+    if (!base && !override) return undefined;
+    return { runId, totalCostUsdEstimate: 0, ...base, ...override };
   }
 
-  addObservation(obs: Observation): Observation {
+  // --- learning / evaluation / datasets --------------------------------------
+
+  getObservations(nodeId?: string): RawObservation[] {
+    if (!nodeId) return this.observations;
+    return this.observations.filter((o) => o.nodeId === nodeId);
+  }
+
+  addObservation(obs: RawObservation): RawObservation {
     this.observations = [obs, ...this.observations];
     return obs;
   }
 
-  archiveObservation(id: string): Observation | undefined {
+  archiveObservation(id: string): RawObservation | undefined {
     const obs = this.observations.find((o) => o.id === id);
     if (!obs) return undefined;
     this.observations = this.observations.filter((o) => o.id !== id);
     return obs;
   }
 
-  getRubrics(): Rubric[] {
+  getRubrics(): RawRubric[] {
     return this.rubrics;
   }
 
-  getRubric(nodeId: string): Rubric | undefined {
-    return this.rubrics.find((r) => r.node === nodeId);
+  getRubric(nodeId: string): RawRubric | undefined {
+    return this.rubrics.find((r) => r.nodeId === nodeId);
   }
 
-  updateRubric(nodeId: string, patch: Partial<Rubric>): Rubric | undefined {
-    const idx = this.rubrics.findIndex((r) => r.node === nodeId);
+  updateRubric(nodeId: string, patch: Partial<RawRubric>): RawRubric | undefined {
+    const idx = this.rubrics.findIndex((r) => r.nodeId === nodeId);
     if (idx === -1) return undefined;
-    this.rubrics[idx] = { ...this.rubrics[idx], ...patch, node: this.rubrics[idx].node };
+    this.rubrics[idx] = { ...this.rubrics[idx], ...patch, nodeId: this.rubrics[idx].nodeId };
     return this.rubrics[idx];
   }
 
-  getDatasets(): Dataset[] {
+  getRegressionReports(nodeId?: string): RawRegressionReport[] {
+    if (!nodeId) return this.regressionReports;
+    return this.regressionReports.filter((r) => r.nodeId === nodeId);
+  }
+
+  getDatasets(): RawDataset[] {
     return this.datasets;
   }
 
-  getDataset(id: string): Dataset | undefined {
-    return this.datasets.find((d) => d.id === id);
+  getDataset(id: string): RawDataset | undefined {
+    return this.datasets.find((d) => d.datasetId === id);
   }
 
-  addDataset(ds: Dataset): Dataset {
+  addDataset(ds: RawDataset): RawDataset {
     this.datasets = [ds, ...this.datasets];
     return ds;
   }
@@ -325,16 +332,20 @@ class MockStore {
     return this.comparePairs;
   }
 
-  getUsage(): UsageSummary {
-    return this.usage;
+  getUsageOverall(): RawUsageSummary {
+    return this.usageOverall;
   }
 
-  getReadiness(): FinetuneReadiness {
+  getUsageByWorkflow(workflowId: string): RawUsageSummary | undefined {
+    return this.usageByWorkflowId[workflowId];
+  }
+
+  getReadiness(): RawFinetuneReadiness {
     return this.readiness;
   }
 
   /** Compare (A/B) verdicts nudge finetune readiness — Phase 5 wires the UI. */
-  recordPreferencePair(): FinetuneReadiness {
+  recordPreferencePair(): RawFinetuneReadiness {
     this.readiness = { ...this.readiness, preferencePairs: this.readiness.preferencePairs + 1 };
     return this.readiness;
   }

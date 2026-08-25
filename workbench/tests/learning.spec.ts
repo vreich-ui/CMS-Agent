@@ -31,12 +31,12 @@ test.describe('Learning', () => {
   test('all seven tabs render in both themes; flywheel counts match fixture data', async ({ page }) => {
     await gotoLearning(page);
 
-    // Flywheel — real fixture counts (10 observations, 5 rubrics; see
+    // Flywheel — real fixture counts (11 observations, 5 rubrics; see
     // api/fixtures/README.md), Curate starts at 0 since nothing has been
     // curated yet this session.
     const stages = page.locator('.fly .fstage');
     await expect(stages).toHaveCount(7);
-    await expect(stages.filter({ hasText: 'Observe' }).locator('.big')).toHaveText('10');
+    await expect(stages.filter({ hasText: 'Observe' }).locator('.big')).toHaveText('11');
     await expect(stages.filter({ hasText: 'Curate' }).locator('.big')).toHaveText('0');
     await expect(stages.filter({ hasText: 'Curate' }).locator('.big')).toHaveClass(/zero/);
     await expect(stages.filter({ hasText: 'Evaluate' }).locator('.big')).toHaveText('5');

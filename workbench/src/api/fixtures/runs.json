@@ -1,587 +1,5068 @@
-[
-  {
-    "id": "run_1787582215829_u5rncz",
-    "wf": "clone_conductor",
-    "proj": "zilberman",
-    "status": "blocked",
-    "cur": "clone_report",
-    "started": "24 Aug 14:36",
-    "dur": "2m 11s",
-    "cost": 0.1804,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 8
-  },
-  {
-    "id": "run_1787578716097_4t7uo1",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "blocked",
-    "cur": "publication_controller",
-    "started": "24 Aug 13:38",
-    "dur": "4m 34s",
-    "cost": 0.7371,
-    "budget": null,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 20
-  },
-  {
-    "id": "run_1787572511291_qmw645",
-    "wf": "clone_conductor",
-    "proj": "zilberman",
-    "status": "blocked",
-    "cur": "theme_bind",
-    "started": "24 Aug 11:55",
-    "dur": "1m 03s",
-    "cost": 0.137,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 5
-  },
-  {
-    "id": "run_1787567811920_hevotl",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "completed",
-    "cur": null,
-    "started": "24 Aug 10:36",
-    "dur": "0m 36s",
-    "cost": 0,
-    "budget": 10,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 23
-  },
-  {
-    "id": "run_1787567551705_e1qp0l",
-    "wf": "clone_conductor",
-    "proj": "zilberman",
-    "status": "blocked",
-    "cur": "theme_bind",
-    "started": "24 Aug 10:32",
-    "dur": "1m 03s",
-    "cost": 0.1489,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 5
-  },
-  {
-    "id": "run_1787508397978_8fyyst",
-    "wf": "clone_conductor",
-    "proj": "zilberman",
-    "status": "blocked",
-    "cur": "theme_bind",
-    "started": "23 Aug 18:06",
-    "dur": "1m 18s",
-    "cost": 0.453,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 5
-  },
-  {
-    "id": "run_1787503522535_8lj04d",
-    "wf": "clone_conductor",
-    "proj": "zilberman",
-    "status": "failed",
-    "cur": "layout_analyst",
-    "started": "23 Aug 16:45",
-    "dur": "0m 19s",
-    "cost": 0,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 2,
-    "done": 1
-  },
-  {
-    "id": "run_1787503507240_hytb76",
-    "wf": "clone_conductor",
-    "proj": "zilberman",
-    "status": "cancelled",
-    "cur": "clone_intake",
-    "started": "23 Aug 16:45",
-    "dur": "0m 10s",
-    "cost": 0,
-    "budget": null,
-    "exec": "mock",
-    "dry": true,
-    "err": 0,
-    "done": 0
-  },
-  {
-    "id": "run_1787497206104_nckgkv",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "completed",
-    "cur": null,
-    "started": "23 Aug 15:00",
-    "dur": "5m 47s",
-    "cost": 0.1044,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 10
-  },
-  {
-    "id": "run_1787492010814_kxdbeb",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "blocked",
-    "cur": "publish_executor",
-    "started": "23 Aug 13:33",
-    "dur": "172m 53s",
-    "cost": 7.573,
-    "budget": null,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 21
-  },
-  {
-    "id": "run_1787472547111_vzovz4",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "blocked",
-    "cur": "publication_controller",
-    "started": "23 Aug 08:09",
-    "dur": "9m 59s",
-    "cost": 1.1387,
-    "budget": null,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 20
-  },
-  {
-    "id": "run_1787408495018_e97wrk",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "failed",
-    "cur": "reader_simulation",
-    "started": "22 Aug 14:21",
-    "dur": "7m 00s",
-    "cost": 1.6476,
-    "budget": null,
-    "exec": "openai",
-    "dry": true,
-    "err": 1,
-    "done": 14
-  },
-  {
-    "id": "run_1787328818436_0ur63y",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "failed",
-    "cur": "article_body",
-    "started": "21 Aug 16:13",
-    "dur": "7m 41s",
-    "cost": 1.4116,
-    "budget": null,
-    "exec": "openai",
-    "dry": true,
-    "err": 1,
-    "done": 17
-  },
-  {
-    "id": "run_1787328002801_lr3n7y",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "completed",
-    "cur": null,
-    "started": "21 Aug 16:00",
-    "dur": "4m 25s",
-    "cost": 0.1441,
-    "budget": null,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 10
-  },
-  {
-    "id": "run_1787325491908_55h9ce",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "blocked",
-    "cur": "publication_controller",
-    "started": "21 Aug 15:18",
-    "dur": "7m 37s",
-    "cost": 1.7233,
-    "budget": null,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 21
-  },
-  {
-    "id": "run_1787317168383_2lmevm",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "completed",
-    "cur": null,
-    "started": "21 Aug 12:59",
-    "dur": "4m 52s",
-    "cost": 0.138,
-    "budget": null,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 10
-  },
-  {
-    "id": "run_1787240541149_c8p8zi",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "blocked",
-    "cur": "capture_emit_live",
-    "started": "20 Aug 15:42",
-    "dur": "3m 08s",
-    "cost": 0.1574,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 6
-  },
-  {
-    "id": "run_1787239457923_a3gmas",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "blocked",
-    "cur": "capture_crawl",
-    "started": "20 Aug 15:24",
-    "dur": "1m 40s",
-    "cost": 0,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 0
-  },
-  {
-    "id": "run_1787232489292_37x7hu",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "cancelled",
-    "cur": "capture_crawl",
-    "started": "20 Aug 13:28",
-    "dur": "3m 18s",
-    "cost": 0,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 0
-  },
-  {
-    "id": "run_1787147242624_q54lv8",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "cancelled",
-    "cur": "gap_adjudicator",
-    "started": "19 Aug 13:47",
-    "dur": "1413m 47s",
-    "cost": 0.1725,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 7
-  },
-  {
-    "id": "run_1787060978987_06v19b",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "cancelled",
-    "cur": "gap_adjudicator",
-    "started": "18 Aug 13:49",
-    "dur": "1433m 41s",
-    "cost": 0.1575,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 8
-  },
-  {
-    "id": "run_1787054978582_2o5xu5",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "completed",
-    "cur": null,
-    "started": "18 Aug 12:09",
-    "dur": "23m 01s",
-    "cost": 0.2253,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 10
-  },
-  {
-    "id": "run_1787050326311_pfcmda",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "cancelled",
-    "cur": "block_classifier",
-    "started": "18 Aug 10:52",
-    "dur": "119m 01s",
-    "cost": 0,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 2
-  },
-  {
-    "id": "run_1787050030246_seiux3",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "blocked",
-    "cur": "capture_crawl",
-    "started": "18 Aug 10:47",
-    "dur": "3m 48s",
-    "cost": 0,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 0
-  },
-  {
-    "id": "run_1787049998199_o0xjcw",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "cancelled",
-    "cur": "capture_crawl",
-    "started": "18 Aug 10:46",
-    "dur": "0m 18s",
-    "cost": 0,
-    "budget": null,
-    "exec": "mock",
-    "dry": true,
-    "err": 0,
-    "done": 0
-  },
-  {
-    "id": "run_1786988934342_jlbqn1",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "cancelled",
-    "cur": "block_classifier",
-    "started": "17 Aug 17:48",
-    "dur": "1018m 07s",
-    "cost": 0,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 2
-  },
-  {
-    "id": "run_1786988863244_3gy54r",
-    "wf": "capture_conductor",
-    "proj": "zilberman",
-    "status": "blocked",
-    "cur": "capture_crawl",
-    "started": "17 Aug 17:47",
-    "dur": "0m 00s",
-    "cost": 0,
-    "budget": 25,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 0
-  },
-  {
-    "id": "run_1786980384617_beq2ny",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "blocked",
-    "cur": "publication_controller",
-    "started": "17 Aug 15:26",
-    "dur": "5508m 02s",
-    "cost": 2.998,
-    "budget": 7.5,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 21
-  },
-  {
-    "id": "run_1786970270844_pmoodj",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "failed",
-    "cur": "input_triage",
-    "started": "17 Aug 12:37",
-    "dur": "0m 30s",
-    "cost": 0,
-    "budget": 8,
-    "exec": "openai",
-    "dry": true,
-    "err": 2,
-    "done": 0
-  },
-  {
-    "id": "run_1786969449203_qsnifw",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "failed",
-    "cur": "artifact_plan",
-    "started": "17 Aug 12:24",
-    "dur": "10m 52s",
-    "cost": 2.2169,
-    "budget": 6,
-    "exec": "openai",
-    "dry": true,
-    "err": 1,
-    "done": 17
-  },
-  {
-    "id": "run_1786969425799_03xk65",
-    "wf": "publishing_conductor",
-    "proj": "dr-lurie",
-    "status": "failed",
-    "cur": "brief_architect",
-    "started": "17 Aug 12:23",
-    "dur": "13m 06s",
-    "cost": 2.7251,
-    "budget": 6,
-    "exec": "openai",
-    "dry": true,
-    "err": 1,
-    "done": 20
-  },
-  {
-    "id": "run_1786965304795_ifxxvk",
-    "wf": "capture_conductor",
-    "proj": "platform",
-    "status": "blocked",
-    "cur": "capture_crawl",
-    "started": "17 Aug 11:15",
-    "dur": "0m 02s",
-    "cost": 0,
-    "budget": 10,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 0
-  },
-  {
-    "id": "run_1786690830195_jcluq8",
-    "wf": "publishing_conductor",
-    "proj": "platform",
-    "status": "blocked",
-    "cur": "publication_controller",
-    "started": "14 Aug 07:00",
-    "dur": "12m 06s",
-    "cost": 1.833,
-    "budget": 6,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 19
-  },
-  {
-    "id": "run_1786643067132_ln2nc9",
-    "wf": "publishing_conductor",
-    "proj": "platform",
-    "status": "blocked",
-    "cur": "publication_controller",
-    "started": "13 Aug 17:44",
-    "dur": "11m 05s",
-    "cost": 1.0943,
-    "budget": 5,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 19
-  },
-  {
-    "id": "run_1786557897658_elj34j",
-    "wf": "publishing_conductor",
-    "proj": "platform",
-    "status": "completed",
-    "cur": null,
-    "started": "12 Aug 18:04",
-    "dur": "2165m 44s",
-    "cost": 1.2736,
-    "budget": 6,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 20
-  },
-  {
-    "id": "run_1786555553280_r7a4fd",
-    "wf": "publishing_conductor",
-    "proj": "platform",
-    "status": "blocked",
-    "cur": "publish_executor",
-    "started": "12 Aug 17:25",
-    "dur": "12m 50s",
-    "cost": 1.2431,
-    "budget": 5,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 19
-  },
-  {
-    "id": "run_1786549907145_hf4wgb",
-    "wf": "publishing_conductor",
-    "proj": "platform",
-    "status": "blocked",
-    "cur": "publish_executor",
-    "started": "12 Aug 15:51",
-    "dur": "18m 55s",
-    "cost": 1.7312,
-    "budget": 5,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 21
-  },
-  {
-    "id": "run_1786468126136_ev9goe",
-    "wf": "publishing_conductor",
-    "proj": "platform",
-    "status": "completed",
-    "cur": null,
-    "started": "11 Aug 17:08",
-    "dur": "907m 49s",
-    "cost": 5.557,
-    "budget": 7,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 23
-  },
-  {
-    "id": "run_1785842430906_tqjk1o",
-    "wf": "publishing_conductor",
-    "proj": "platform",
-    "status": "cancelled",
-    "cur": "publish_payload",
-    "started": "4 Aug 11:20",
-    "dur": "8807m 14s",
-    "cost": 0,
-    "budget": 3.5,
-    "exec": "openai",
-    "dry": true,
-    "err": 0,
-    "done": 18
+{
+  "_comment": "Raw live capture: workflow_list_runs({limit:100}) on 2026-08-25, filtered to drop the 11 independent_node/trial_reg_*/node_run_* rows (regression-trial and single-node runs, not real workflow runs -- same exclusion the old fixture README documented). All 55 remaining rows are the FULL real run history (31 publishing_conductor, 18 capture_conductor, 6 clone_conductor) so count-derived UI text (e.g. per-workflow \"needing attention\" totals) matches live truth. Each row's `nodes[]` is trimmed to {nodeId,status} only (dropping warnings/lastDispatch/produces/durationMs/skip detail -- verbose per-attempt telemetry not read by any adapter) and `mode` is trimmed to {executionMode} (dropping its long human-readable notice string) -- every field actually consumed by api/adapters.ts's toRun() is kept verbatim. See fixtures/README.md.",
+  "runs": [
+    {
+      "runId": "run_1787660289228_5ypfpm",
+      "requestId": "req_1787660289228_nxt86f",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "completed",
+      "startedAt": "2026-08-25T12:18:09.228Z",
+      "updatedAt": "2026-08-25T12:23:34.226Z",
+      "completedAt": "2026-08-25T12:23:34.226Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 66,
+      "budgetUsd": 25,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "project_policy_default",
+      "nodeCount": 11,
+      "artifactCount": 10,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "completed"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787660274949_aj8i22",
+      "requestId": "req_1787660274949_pemu0f",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "capture_crawl",
+      "startedAt": "2026-08-25T12:17:54.949Z",
+      "updatedAt": "2026-08-25T12:17:59.068Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 2,
+      "budgetUsd": 25,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "project_policy_default",
+      "nodeCount": 11,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "queued"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787658091131_cv41es",
+      "requestId": "req_fwconcern_obscurefolkingskincare_20240711_01",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "blocked",
+      "currentNodeId": "publish_executor",
+      "startedAt": "2026-08-25T11:41:31.132Z",
+      "updatedAt": "2026-08-25T11:56:50.385Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 34,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "explicit",
+      "nodeCount": 23,
+      "artifactCount": 22,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787656120374_18bobg",
+      "requestId": "req_test_lorem_20260825_01",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "blocked",
+      "currentNodeId": "publish_executor",
+      "startedAt": "2026-08-25T11:08:40.374Z",
+      "updatedAt": "2026-08-25T11:21:04.388Z",
+      "completedAt": "2026-08-25T11:12:01.202Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 9,
+      "budgetUsd": 2,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "explicit",
+      "nodeCount": 23,
+      "artifactCount": 5,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787655709652_4k1z56",
+      "requestId": "req_sys_test_publish_20240711_02",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "blocked",
+      "currentNodeId": "publish_executor",
+      "startedAt": "2026-08-25T11:01:49.652Z",
+      "updatedAt": "2026-08-25T11:08:59.213Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 34,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "explicit",
+      "nodeCount": 23,
+      "artifactCount": 22,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787655233171_y4w8z5",
+      "requestId": "req_1787655233171_eo55v3",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "capture_emit_live",
+      "startedAt": "2026-08-25T10:53:53.171Z",
+      "updatedAt": "2026-08-25T10:57:27.729Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 73,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 6,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787582215829_u5rncz",
+      "requestId": "req_1787582215829_wrluks",
+      "workflowId": "clone_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "clone_report",
+      "startedAt": "2026-08-24T14:36:55.829Z",
+      "updatedAt": "2026-08-24T14:39:07.619Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 11,
+      "budgetUsd": 25,
+      "nodeCount": 9,
+      "artifactCount": 8,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "clone_intake",
+          "status": "completed"
+        },
+        {
+          "nodeId": "layout_analyst",
+          "status": "completed"
+        },
+        {
+          "nodeId": "recipe_designer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "recipe_mint",
+          "status": "completed"
+        },
+        {
+          "nodeId": "theme_reconciler",
+          "status": "completed"
+        },
+        {
+          "nodeId": "theme_bind",
+          "status": "completed"
+        },
+        {
+          "nodeId": "fit_adjudicator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "layout_restamp",
+          "status": "completed"
+        },
+        {
+          "nodeId": "clone_report",
+          "status": "blocked"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787578716097_4t7uo1",
+      "requestId": "req_test_publish_20240711_01",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "blocked",
+      "currentNodeId": "publish_executor",
+      "startedAt": "2026-08-24T13:38:36.097Z",
+      "updatedAt": "2026-08-24T21:12:19.658Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 34,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "explicit",
+      "nodeCount": 23,
+      "artifactCount": 22,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787572511291_qmw645",
+      "requestId": "req_1787572511291_cwp8g9",
+      "workflowId": "clone_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "theme_bind",
+      "startedAt": "2026-08-24T11:55:11.291Z",
+      "updatedAt": "2026-08-24T11:56:14.492Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 7,
+      "budgetUsd": 25,
+      "nodeCount": 8,
+      "artifactCount": 5,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "clone_intake",
+          "status": "completed"
+        },
+        {
+          "nodeId": "layout_analyst",
+          "status": "completed"
+        },
+        {
+          "nodeId": "recipe_designer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "recipe_mint",
+          "status": "completed"
+        },
+        {
+          "nodeId": "theme_reconciler",
+          "status": "completed"
+        },
+        {
+          "nodeId": "theme_bind",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "layout_restamp",
+          "status": "queued"
+        },
+        {
+          "nodeId": "clone_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787567811920_hevotl",
+      "requestId": "req_test_fixture_20260824_01",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "completed",
+      "startedAt": "2026-08-24T10:36:51.921Z",
+      "updatedAt": "2026-08-24T10:37:28.828Z",
+      "completedAt": "2026-08-24T10:37:28.828Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 7,
+      "budgetUsd": 10,
+      "nodeCount": 23,
+      "artifactCount": 5,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "completed"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787567551705_e1qp0l",
+      "requestId": "req_1787567551705_q458mt",
+      "workflowId": "clone_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "theme_bind",
+      "startedAt": "2026-08-24T10:32:31.706Z",
+      "updatedAt": "2026-08-24T10:33:34.831Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 7,
+      "budgetUsd": 25,
+      "nodeCount": 8,
+      "artifactCount": 5,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "clone_intake",
+          "status": "completed"
+        },
+        {
+          "nodeId": "layout_analyst",
+          "status": "completed"
+        },
+        {
+          "nodeId": "recipe_designer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "recipe_mint",
+          "status": "completed"
+        },
+        {
+          "nodeId": "theme_reconciler",
+          "status": "completed"
+        },
+        {
+          "nodeId": "theme_bind",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "layout_restamp",
+          "status": "queued"
+        },
+        {
+          "nodeId": "clone_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787508397978_8fyyst",
+      "requestId": "req_1787508397978_da4gow",
+      "workflowId": "clone_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "theme_bind",
+      "startedAt": "2026-08-23T18:06:37.978Z",
+      "updatedAt": "2026-08-23T18:07:56.794Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 7,
+      "budgetUsd": 25,
+      "nodeCount": 8,
+      "artifactCount": 5,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "clone_intake",
+          "status": "completed"
+        },
+        {
+          "nodeId": "layout_analyst",
+          "status": "completed"
+        },
+        {
+          "nodeId": "recipe_designer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "recipe_mint",
+          "status": "completed"
+        },
+        {
+          "nodeId": "theme_reconciler",
+          "status": "completed"
+        },
+        {
+          "nodeId": "theme_bind",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "layout_restamp",
+          "status": "queued"
+        },
+        {
+          "nodeId": "clone_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787503522535_8lj04d",
+      "requestId": "req_1787503522535_yr1hpz",
+      "workflowId": "clone_conductor",
+      "projectId": "zilberman",
+      "status": "failed",
+      "currentNodeId": "layout_analyst",
+      "startedAt": "2026-08-23T16:45:22.535Z",
+      "updatedAt": "2026-08-23T16:45:42.298Z",
+      "errors": [
+        "layout_analyst:model_error",
+        "theme_reconciler:model_error"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 3,
+      "budgetUsd": 25,
+      "nodeCount": 8,
+      "artifactCount": 1,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "clone_intake",
+          "status": "completed"
+        },
+        {
+          "nodeId": "layout_analyst",
+          "status": "failed"
+        },
+        {
+          "nodeId": "recipe_designer",
+          "status": "queued"
+        },
+        {
+          "nodeId": "recipe_mint",
+          "status": "queued"
+        },
+        {
+          "nodeId": "theme_reconciler",
+          "status": "failed"
+        },
+        {
+          "nodeId": "theme_bind",
+          "status": "queued"
+        },
+        {
+          "nodeId": "layout_restamp",
+          "status": "queued"
+        },
+        {
+          "nodeId": "clone_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787503507240_hytb76",
+      "requestId": "req_1787503507240_sk6eps",
+      "workflowId": "clone_conductor",
+      "projectId": "zilberman",
+      "status": "cancelled",
+      "currentNodeId": "clone_intake",
+      "startedAt": "2026-08-23T16:45:07.240Z",
+      "updatedAt": "2026-08-23T16:45:18.221Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "mock",
+      "rev": 1,
+      "nodeCount": 8,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "mock"
+      },
+      "nodes": [
+        {
+          "nodeId": "clone_intake",
+          "status": "queued"
+        },
+        {
+          "nodeId": "layout_analyst",
+          "status": "queued"
+        },
+        {
+          "nodeId": "recipe_designer",
+          "status": "queued"
+        },
+        {
+          "nodeId": "recipe_mint",
+          "status": "queued"
+        },
+        {
+          "nodeId": "theme_reconciler",
+          "status": "queued"
+        },
+        {
+          "nodeId": "theme_bind",
+          "status": "queued"
+        },
+        {
+          "nodeId": "layout_restamp",
+          "status": "queued"
+        },
+        {
+          "nodeId": "clone_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787497206104_nckgkv",
+      "requestId": "req_1787497206104_vmg2bj",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "completed",
+      "startedAt": "2026-08-23T15:00:06.104Z",
+      "updatedAt": "2026-08-23T15:05:53.924Z",
+      "completedAt": "2026-08-23T15:05:53.924Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 45,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 10,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "completed"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787492010814_kxdbeb",
+      "requestId": "req_fw_ingredient_obscure_20240711_02",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "blocked",
+      "currentNodeId": "publish_executor",
+      "startedAt": "2026-08-23T13:33:30.815Z",
+      "updatedAt": "2026-08-23T16:26:24.573Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 95,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "explicit",
+      "nodeCount": 23,
+      "artifactCount": 22,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787472547111_vzovz4",
+      "requestId": "req_fw_ingredient_obscure_20240711_01",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "blocked",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-08-23T08:09:07.111Z",
+      "updatedAt": "2026-08-23T08:19:06.675Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 31,
+      "nodeCount": 23,
+      "artifactCount": 21,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-08-23T08:19:05.967Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787408495018_e97wrk",
+      "requestId": "req_agent_obscure_skincare_ingredients_folk_medicine_20260822_01",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "failed",
+      "currentNodeId": "reader_simulation",
+      "startedAt": "2026-08-22T14:21:35.018Z",
+      "updatedAt": "2026-08-22T14:28:35.940Z",
+      "errors": [
+        "reader_simulation:model_error"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 21,
+      "nodeCount": 23,
+      "artifactCount": 14,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "failed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "queued"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "queued"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787328818436_0ur63y",
+      "requestId": "req_agent_vitamin_c_serum_brown_safe_or_not_20260821_01",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "failed",
+      "currentNodeId": "article_body",
+      "startedAt": "2026-08-21T16:13:38.437Z",
+      "updatedAt": "2026-08-21T16:21:20.054Z",
+      "errors": [
+        "article_body:output_validation_failed"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 28,
+      "nodeCount": 23,
+      "artifactCount": 17,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "failed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787328002801_lr3n7y",
+      "requestId": "req_1787328002801_pdznnx",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "completed",
+      "startedAt": "2026-08-21T16:00:02.801Z",
+      "updatedAt": "2026-08-21T16:04:27.816Z",
+      "completedAt": "2026-08-21T16:04:27.816Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 16,
+      "nodeCount": 11,
+      "artifactCount": 10,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "completed"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787325491908_55h9ce",
+      "requestId": "req_agent_vitamin_c_serum_brown_safe_or_not_20260821_01",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "blocked",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-08-21T15:18:11.908Z",
+      "updatedAt": "2026-08-21T15:25:49.550Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 32,
+      "nodeCount": 23,
+      "artifactCount": 22,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-08-21T15:25:48.488Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787317168383_2lmevm",
+      "requestId": "req_1787317168383_vvfy2b",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "completed",
+      "startedAt": "2026-08-21T12:59:28.383Z",
+      "updatedAt": "2026-08-21T13:04:21.081Z",
+      "completedAt": "2026-08-21T13:04:21.081Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 68,
+      "nodeCount": 11,
+      "artifactCount": 10,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "completed"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787240541149_c8p8zi",
+      "requestId": "req_1787240541149_rydx3o",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "capture_emit_live",
+      "startedAt": "2026-08-20T15:42:21.150Z",
+      "updatedAt": "2026-08-20T15:45:29.644Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 11,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 6,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787239457923_a3gmas",
+      "requestId": "req_1787239457923_yvxjb3",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "capture_crawl",
+      "startedAt": "2026-08-20T15:24:17.923Z",
+      "updatedAt": "2026-08-20T15:25:58.331Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 3,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "queued"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787232489292_37x7hu",
+      "requestId": "req_1787232489292_f0kj1u",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "cancelled",
+      "currentNodeId": "capture_crawl",
+      "startedAt": "2026-08-20T13:28:09.292Z",
+      "updatedAt": "2026-08-20T13:31:27.579Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 4,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "queued"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787147242624_q54lv8",
+      "requestId": "req_1787147242624_kpcieu",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "cancelled",
+      "currentNodeId": "gap_adjudicator",
+      "startedAt": "2026-08-19T13:47:22.624Z",
+      "updatedAt": "2026-08-20T13:21:09.794Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 269,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 7,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "completed"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "running"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787060978987_06v19b",
+      "requestId": "req_1787060978987_r5f150",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "cancelled",
+      "currentNodeId": "gap_adjudicator",
+      "startedAt": "2026-08-18T13:49:38.987Z",
+      "updatedAt": "2026-08-19T13:43:20.080Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 49,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 8,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "completed"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "running"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787054978582_2o5xu5",
+      "requestId": "req_1787054978582_8y84kq",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "completed",
+      "startedAt": "2026-08-18T12:09:38.582Z",
+      "updatedAt": "2026-08-18T12:32:40.347Z",
+      "completedAt": "2026-08-18T12:32:40.347Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 25,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 10,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "completed"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "completed"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787050326311_pfcmda",
+      "requestId": "req_1787050326311_6r4kl3",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "cancelled",
+      "currentNodeId": "block_classifier",
+      "startedAt": "2026-08-18T10:52:06.311Z",
+      "updatedAt": "2026-08-18T12:51:07.739Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 28,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 2,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "running"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787050030246_seiux3",
+      "requestId": "req_1787050030246_vzw7eb",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "capture_crawl",
+      "startedAt": "2026-08-18T10:47:10.246Z",
+      "updatedAt": "2026-08-18T10:50:58.628Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 5,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "queued"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1787049998199_o0xjcw",
+      "requestId": "req_1787049998199_x3ywde",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "cancelled",
+      "currentNodeId": "capture_crawl",
+      "startedAt": "2026-08-18T10:46:38.199Z",
+      "updatedAt": "2026-08-18T10:46:56.468Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "mock",
+      "rev": 1,
+      "nodeCount": 11,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "mock"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "queued"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786988934342_jlbqn1",
+      "requestId": "req_1786988934342_g6pzbh",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "cancelled",
+      "currentNodeId": "block_classifier",
+      "startedAt": "2026-08-17T17:48:54.342Z",
+      "updatedAt": "2026-08-18T10:47:01.823Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 187,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 2,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "completed"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "completed"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "running"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786988863244_3gy54r",
+      "requestId": "req_1786988863244_tw3jij",
+      "workflowId": "capture_conductor",
+      "projectId": "zilberman",
+      "status": "blocked",
+      "currentNodeId": "capture_crawl",
+      "startedAt": "2026-08-17T17:47:43.244Z",
+      "updatedAt": "2026-08-17T17:47:44.043Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 2,
+      "budgetUsd": 25,
+      "nodeCount": 11,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "queued"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786980384617_beq2ny",
+      "requestId": "req_1786980384617_0a71xt",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "blocked",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-08-17T15:26:24.617Z",
+      "updatedAt": "2026-08-21T11:14:27.077Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 45,
+      "budgetUsd": 7.5,
+      "nodeCount": 23,
+      "artifactCount": 22,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-08-17T15:34:39.999Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786970270844_pmoodj",
+      "requestId": "req_1786970270844_0q7lse",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "failed",
+      "currentNodeId": "input_triage",
+      "startedAt": "2026-08-17T12:37:50.844Z",
+      "updatedAt": "2026-08-17T12:38:21.429Z",
+      "errors": [
+        "input_triage:model_error",
+        "input_triage:model_error"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 5,
+      "budgetUsd": 8,
+      "nodeCount": 23,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "failed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "queued"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "queued"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "queued"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "queued"
+        },
+        {
+          "nodeId": "research",
+          "status": "queued"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "queued"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "queued"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "queued"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "queued"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "queued"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "queued"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "queued"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "queued"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "queued"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "queued"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "queued"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786969449203_qsnifw",
+      "requestId": "req_1786969449203_tjq11w",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "failed",
+      "currentNodeId": "artifact_plan",
+      "startedAt": "2026-08-17T12:24:09.203Z",
+      "updatedAt": "2026-08-17T12:35:01.428Z",
+      "errors": [
+        "artifact_plan:model_error"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 29,
+      "budgetUsd": 6,
+      "nodeCount": 23,
+      "artifactCount": 17,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "failed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786969425799_03xk65",
+      "requestId": "req_1786969425799_bowdb0",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "failed",
+      "currentNodeId": "brief_architect",
+      "startedAt": "2026-08-17T12:23:45.799Z",
+      "updatedAt": "2026-08-17T12:36:51.992Z",
+      "errors": [
+        "brief_architect:model_error"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 40,
+      "budgetUsd": 6,
+      "nodeCount": 23,
+      "artifactCount": 21,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-08-17T12:34:50.534Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "failed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786965304795_ifxxvk",
+      "requestId": "req_1786965304795_momuji",
+      "workflowId": "capture_conductor",
+      "projectId": "platform",
+      "status": "blocked",
+      "currentNodeId": "capture_crawl",
+      "startedAt": "2026-08-17T11:15:04.795Z",
+      "updatedAt": "2026-08-17T11:15:07.353Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 2,
+      "budgetUsd": 10,
+      "nodeCount": 11,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "capture_crawl",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "capture_map",
+          "status": "queued"
+        },
+        {
+          "nodeId": "block_classifier",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_map_refine",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_theme",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_dry",
+          "status": "queued"
+        },
+        {
+          "nodeId": "copy_regenerator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_emit_live",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_score",
+          "status": "queued"
+        },
+        {
+          "nodeId": "gap_adjudicator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "capture_report",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786690830195_jcluq8",
+      "requestId": "req_1786690830195_6cxpxz",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "blocked",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-08-14T07:00:30.195Z",
+      "updatedAt": "2026-08-14T07:12:37.173Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 35,
+      "budgetUsd": 6,
+      "nodeCount": 23,
+      "artifactCount": 20,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-08-14T07:05:29.017Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786643067132_ln2nc9",
+      "requestId": "req_1786643067132_kt6s0c",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "blocked",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-08-13T17:44:27.132Z",
+      "updatedAt": "2026-08-13T17:55:32.790Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 34,
+      "budgetUsd": 5,
+      "nodeCount": 23,
+      "artifactCount": 20,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-08-13T17:55:31.290Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786557897658_elj34j",
+      "requestId": "req_1786557897658_2t4hs1",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "completed",
+      "startedAt": "2026-08-12T18:04:57.658Z",
+      "updatedAt": "2026-08-14T06:10:42.043Z",
+      "completedAt": "2026-08-14T06:10:42.043Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 43,
+      "budgetUsd": 6,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "explicit",
+      "nodeCount": 23,
+      "artifactCount": 20,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "completed"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786555553280_r7a4fd",
+      "requestId": "req_1786555553280_iej85m",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "blocked",
+      "currentNodeId": "publish_executor",
+      "startedAt": "2026-08-12T17:25:53.280Z",
+      "updatedAt": "2026-08-12T17:38:43.946Z",
+      "completedAt": "2026-08-12T17:37:32.119Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 41,
+      "budgetUsd": 5,
+      "nodeCount": 23,
+      "artifactCount": 20,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786549907145_hf4wgb",
+      "requestId": "req_1786549907146_jgh3va",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "blocked",
+      "currentNodeId": "publish_executor",
+      "startedAt": "2026-08-12T15:51:47.146Z",
+      "updatedAt": "2026-08-12T16:10:43.046Z",
+      "completedAt": "2026-08-12T16:09:08.500Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 49,
+      "budgetUsd": 5,
+      "nodeCount": 23,
+      "artifactCount": 22,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "skipped"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1786468126136_ev9goe",
+      "requestId": "req_1786468126136_09jdbq",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "completed",
+      "startedAt": "2026-08-11T17:08:46.136Z",
+      "updatedAt": "2026-08-12T08:16:35.872Z",
+      "completedAt": "2026-08-11T18:09:56.620Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 66,
+      "budgetUsd": 7,
+      "operatorPublishDecision": "approved",
+      "operatorDecisionSource": "explicit",
+      "nodeCount": 23,
+      "artifactCount": 23,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "placement_resolver",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "monetization_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "completed"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785842430906_tqjk1o",
+      "requestId": "req_1785842430906_nser80",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "cancelled",
+      "currentNodeId": "publish_payload",
+      "startedAt": "2026-08-04T11:20:30.907Z",
+      "updatedAt": "2026-08-10T14:07:45.200Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 44,
+      "budgetUsd": 3.5,
+      "nodeCount": 21,
+      "artifactCount": 18,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785435947311_jl8hl4",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "failed",
+      "currentNodeId": "publish_payload",
+      "startedAt": "2026-07-30T18:25:47.311Z",
+      "updatedAt": "2026-07-31T10:35:16.754Z",
+      "errors": [
+        "learning_recorder:budget_exceeded",
+        "publish_payload:budget_exceeded"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 21,
+      "budgetUsd": 6,
+      "nodeCount": 21,
+      "artifactCount": 17,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "failed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "failed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785405350649_9u5mjz",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "cancelled",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-07-30T09:55:50.649Z",
+      "updatedAt": "2026-07-31T10:12:53.168Z",
+      "errors": [
+        "learning_recorder:budget_exceeded"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 24,
+      "budgetUsd": 7,
+      "nodeCount": 21,
+      "artifactCount": 18,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Next dependency-ready node publication_controller is publish-risk; the run cannot advance without explicit approval. Nothing has been attempted and no publication has been performed.",
+          "requestedAt": "2026-07-30T12:29:30.132Z",
+          "pending": true
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "failed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785352838155_l544ye",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "cancelled",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-07-29T19:20:38.155Z",
+      "updatedAt": "2026-07-31T10:12:45.008Z",
+      "errors": [
+        "draft_writer:model_timeout",
+        "learning_recorder:model_timeout"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 25,
+      "budgetUsd": 6,
+      "nodeCount": 21,
+      "artifactCount": 19,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-07-30T08:39:47.929Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "failed"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785340011864_qpyjr0",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "blocked",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-07-29T15:46:51.864Z",
+      "updatedAt": "2026-08-14T06:10:59.859Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 29,
+      "budgetUsd": 5,
+      "nodeCount": 21,
+      "artifactCount": 19,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-07-29T16:03:33.854Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785247255518_sdkyvv",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "cancelled",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-07-28T14:00:55.518Z",
+      "updatedAt": "2026-07-31T10:12:38.407Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "mock",
+      "rev": 20,
+      "budgetUsd": 1,
+      "nodeCount": 21,
+      "artifactCount": 19,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-07-28T14:02:19.856Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "mock"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "contract_intelligence",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "artifact_plan",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_executor",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785239615150_2w13m9",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "cancelled",
+      "currentNodeId": "input_triage",
+      "startedAt": "2026-07-28T11:53:35.150Z",
+      "updatedAt": "2026-07-28T11:54:03.839Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "mock",
+      "rev": 1,
+      "budgetUsd": 1,
+      "nodeCount": 18,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "mock"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "queued"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "queued"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "queued"
+        },
+        {
+          "nodeId": "research",
+          "status": "queued"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "queued"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "queued"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "queued"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "queued"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "queued"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "queued"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "queued"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "queued"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "queued"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785235767862_uvjm83",
+      "workflowId": "publishing_conductor",
+      "projectId": "dr-lurie",
+      "status": "cancelled",
+      "currentNodeId": "research",
+      "startedAt": "2026-07-28T10:49:27.862Z",
+      "updatedAt": "2026-07-28T12:11:54.391Z",
+      "errors": [
+        "research:model_error",
+        "research:model_error"
+      ],
+      "dryRun": true,
+      "executionMode": "openai",
+      "rev": 7,
+      "nodeCount": 18,
+      "artifactCount": 3,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "openai"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "failed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "queued"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "queued"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "queued"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "queued"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "queued"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "queued"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "queued"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "queued"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "queued"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785230104649_mghqfa",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "cancelled",
+      "currentNodeId": "publication_controller",
+      "startedAt": "2026-07-28T09:15:04.649Z",
+      "updatedAt": "2026-07-28T12:12:00.644Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "mock",
+      "rev": 3,
+      "budgetUsd": 1,
+      "nodeCount": 18,
+      "artifactCount": 3,
+      "approvalsRequired": [
+        {
+          "nodeId": "publication_controller",
+          "type": "approval_required",
+          "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+          "requestedAt": "2026-07-28T09:15:24.888Z"
+        }
+      ],
+      "mode": {
+        "executionMode": "mock"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "blocked"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785230085598_aoqksa",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "cancelled",
+      "currentNodeId": "input_triage",
+      "startedAt": "2026-07-28T09:14:45.598Z",
+      "updatedAt": "2026-07-28T12:12:08.387Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "mock",
+      "rev": 1,
+      "budgetUsd": 1,
+      "nodeCount": 18,
+      "artifactCount": 0,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "mock"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "queued"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "queued"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "queued"
+        },
+        {
+          "nodeId": "research",
+          "status": "queued"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "queued"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "queued"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "queued"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "queued"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "queued"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "queued"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "queued"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "queued"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "queued"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "queued"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    },
+    {
+      "runId": "run_1785154072610_3tmmv9",
+      "workflowId": "publishing_conductor",
+      "projectId": "platform",
+      "status": "cancelled",
+      "currentNodeId": "publish_payload",
+      "startedAt": "2026-07-27T12:07:52.610Z",
+      "updatedAt": "2026-07-28T12:12:13.032Z",
+      "errors": [],
+      "dryRun": true,
+      "executionMode": "mock",
+      "rev": 18,
+      "budgetUsd": 1,
+      "nodeCount": 18,
+      "artifactCount": 15,
+      "approvalsRequired": [],
+      "mode": {
+        "executionMode": "mock"
+      },
+      "nodes": [
+        {
+          "nodeId": "input_triage",
+          "status": "completed"
+        },
+        {
+          "nodeId": "topic_opportunity",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_insight",
+          "status": "completed"
+        },
+        {
+          "nodeId": "research",
+          "status": "completed"
+        },
+        {
+          "nodeId": "objection_mapping",
+          "status": "completed"
+        },
+        {
+          "nodeId": "narrative_movement",
+          "status": "completed"
+        },
+        {
+          "nodeId": "angle_strategy",
+          "status": "completed"
+        },
+        {
+          "nodeId": "brief_architect",
+          "status": "completed"
+        },
+        {
+          "nodeId": "draft_writer",
+          "status": "completed"
+        },
+        {
+          "nodeId": "human_texture",
+          "status": "completed"
+        },
+        {
+          "nodeId": "trust_factual",
+          "status": "completed"
+        },
+        {
+          "nodeId": "emotional_resonance",
+          "status": "completed"
+        },
+        {
+          "nodeId": "reader_simulation",
+          "status": "completed"
+        },
+        {
+          "nodeId": "review_aggregator",
+          "status": "completed"
+        },
+        {
+          "nodeId": "article_body",
+          "status": "completed"
+        },
+        {
+          "nodeId": "publish_payload",
+          "status": "queued"
+        },
+        {
+          "nodeId": "publication_controller",
+          "status": "queued"
+        },
+        {
+          "nodeId": "learning_recorder",
+          "status": "queued"
+        }
+      ]
+    }
+  ],
+  "page": {
+    "limit": 55,
+    "matchedCount": 55,
+    "hasMore": false
   }
-]
+}

@@ -1,7 +1,11 @@
 {
-  "approvedExamples": 1,
-  "approvedThreshold": 500,
-  "preferencePairs": 0,
-  "pairThreshold": 200,
-  "recommendation": "Accumulating: 1/500 approved examples, 0/200 preference pairs. Keep running + evaluating."
+  "readiness": {
+    "nodeId": "contract_intelligence",
+    "approvedExamples": 1,
+    "preferencePairs": 0,
+    "meanScore": 0.5302,
+    "thresholds": {"minExamples": 500, "minPreferencePairs": 200},
+    "recommendation": "accumulate",
+    "reason": "Accumulating: 1/500 approved examples, 0/200 preference pairs. Keep running + evaluating."
+  }
 }

@@ -1,0 +1,38 @@
+{
+  "reports": [
+    {
+      "reportId": "reg_1785836863636_2vz3x9",
+      "nodeId": "contract_intelligence",
+      "datasetId": "ds_1785772079588_9a01hb",
+      "rubricId": "rubric_1785773022345_jzc74l",
+      "executionMode": "mock",
+      "cases": [
+        {"caseId": "case_1785772079588_e1qusp", "runId": "trial_reg_1785836863636_2vz3x9_case_1785772079588_e1qusp", "status": "completed", "evalId": "eval_1785836866284_w5n5b0", "normalizedScore": 0.484, "pass": false},
+        {"caseId": "case_1785772079588_t3bipg", "runId": "trial_reg_1785836863636_2vz3x9_case_1785772079588_t3bipg", "status": "completed", "evalId": "eval_1785836868383_qf0586", "normalizedScore": 0.484, "pass": false},
+        {"caseId": "case_1785772079588_t59i7r", "runId": "trial_reg_1785836863636_2vz3x9_case_1785772079588_t59i7r", "status": "completed", "evalId": "eval_1785836870672_a2470v", "normalizedScore": 0.484, "pass": false},
+        {"caseId": "case_1785772079588_r9zvrg", "runId": "trial_reg_1785836863636_2vz3x9_case_1785772079588_r9zvrg", "status": "completed", "evalId": "eval_1785836872734_otebdb", "normalizedScore": 0.484, "pass": false}
+      ],
+      "summary": {"casesTotal": 4, "casesScored": 4, "casesFailed": 0, "casesPassed": 0, "passRate": 0, "meanScore": 0.484, "threshold": 0.85},
+      "baseline": {"reportId": "reg_1785773255851_5ivneg", "meanScore": 0.484, "passRate": 0, "createdAt": "2026-08-03T16:07:45.797Z"},
+      "verdict": "held",
+      "delta": {"meanScore": 0, "passRate": 0},
+      "createdAt": "2026-08-04T09:47:52.922Z"
+    },
+    {
+      "reportId": "reg_1785773255851_5ivneg",
+      "nodeId": "contract_intelligence",
+      "datasetId": "ds_1785772079588_9a01hb",
+      "rubricId": "rubric_1785773022345_jzc74l",
+      "executionMode": "mock",
+      "cases": [
+        {"caseId": "case_1785772079588_e1qusp", "runId": "trial_reg_1785773255851_5ivneg_case_1785772079588_e1qusp", "status": "completed", "evalId": "eval_1785773258826_dlnw69", "normalizedScore": 0.484, "pass": false},
+        {"caseId": "case_1785772079588_t3bipg", "runId": "trial_reg_1785773255851_5ivneg_case_1785772079588_t3bipg", "status": "completed", "evalId": "eval_1785773261074_mmk2sd", "normalizedScore": 0.484, "pass": false},
+        {"caseId": "case_1785772079588_t59i7r", "runId": "trial_reg_1785773255851_5ivneg_case_1785772079588_t59i7r", "status": "completed", "evalId": "eval_1785773263305_ickqcq", "normalizedScore": 0.484, "pass": false},
+        {"caseId": "case_1785772079588_r9zvrg", "runId": "trial_reg_1785773255851_5ivneg_case_1785772079588_r9zvrg", "status": "completed", "evalId": "eval_1785773265672_jtczfm", "normalizedScore": 0.484, "pass": false}
+      ],
+      "summary": {"casesTotal": 4, "casesScored": 4, "casesFailed": 0, "casesPassed": 0, "passRate": 0, "meanScore": 0.484, "threshold": 0.85},
+      "verdict": "baseline_set",
+      "createdAt": "2026-08-03T16:07:45.797Z"
+    }
+  ]
+}

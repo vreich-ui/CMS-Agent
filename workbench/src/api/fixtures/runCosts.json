@@ -1,0 +1,126 @@
+{
+  "_comment": "Raw live captures of workflow_get_run_cost({runId}).ledger for a subset of runs (not all 55 in runs.json -- cost is a per-run detail lookup the live API only makes for one run at a time, not bulk; the app itself only ever fetches it for the single bound run, via workflowGetRun -> toRun(raw, cost)). A runId absent here has no fixture cost data; toRun() reports cost 0 / budget null for it, same as a real cold cache -- not a fabricated figure. See fixtures/README.md.",
+  "byRunId": {
+    "run_1787567811920_hevotl": {
+      "runId": "run_1787567811920_hevotl",
+      "status": "completed",
+      "totalInputTokens": 0,
+      "totalOutputTokens": 0,
+      "totalTokens": 0,
+      "totalCostUsdEstimate": 0,
+      "budget": {
+        "budgetUsd": 10,
+        "spentUsdEstimate": 0,
+        "remainingUsdEstimate": 10,
+        "percentUsed": 0,
+        "overBudget": false,
+        "status": "ok",
+        "blocked": false
+      }
+    },
+    "run_1787503522535_8lj04d": {
+      "runId": "run_1787503522535_8lj04d",
+      "status": "failed",
+      "totalInputTokens": 0,
+      "totalOutputTokens": 0,
+      "totalTokens": 0,
+      "totalCostUsdEstimate": 0,
+      "budget": {
+        "budgetUsd": 25,
+        "spentUsdEstimate": 0,
+        "remainingUsdEstimate": 25,
+        "percentUsed": 0,
+        "overBudget": false,
+        "status": "ok",
+        "blocked": false
+      }
+    },
+    "run_1787408495018_e97wrk": {
+      "runId": "run_1787408495018_e97wrk",
+      "status": "failed",
+      "totalInputTokens": 184387,
+      "totalOutputTokens": 24189,
+      "totalTokens": 208576,
+      "totalCostUsdEstimate": 1.647605,
+      "mostExpensiveNodeId": "research"
+    },
+    "run_1787660274949_aj8i22": {
+      "runId": "run_1787660274949_aj8i22",
+      "status": "blocked",
+      "totalInputTokens": 0,
+      "totalOutputTokens": 0,
+      "totalTokens": 0,
+      "totalCostUsdEstimate": 0,
+      "budget": {
+        "budgetUsd": 25,
+        "spentUsdEstimate": 0,
+        "remainingUsdEstimate": 25,
+        "percentUsed": 0,
+        "overBudget": false,
+        "status": "ok",
+        "blocked": false
+      }
+    },
+    "run_1787658091131_cv41es": {
+      "runId": "run_1787658091131_cv41es",
+      "status": "blocked",
+      "totalInputTokens": 137813,
+      "totalOutputTokens": 25335,
+      "totalTokens": 163148,
+      "totalCostUsdEstimate": 1.449115,
+      "mostExpensiveNodeId": "research"
+    },
+    "run_1787503507240_hytb76": {
+      "runId": "run_1787503507240_hytb76",
+      "status": "cancelled",
+      "totalInputTokens": 0,
+      "totalOutputTokens": 0,
+      "totalTokens": 0,
+      "totalCostUsdEstimate": 0
+    },
+    "run_1787232489292_37x7hu": {
+      "runId": "run_1787232489292_37x7hu",
+      "status": "cancelled",
+      "totalInputTokens": 0,
+      "totalOutputTokens": 0,
+      "totalTokens": 0,
+      "totalCostUsdEstimate": 0,
+      "budget": {
+        "budgetUsd": 25,
+        "spentUsdEstimate": 0,
+        "remainingUsdEstimate": 25,
+        "percentUsed": 0,
+        "overBudget": false,
+        "status": "ok",
+        "blocked": false
+      }
+    },
+    "run_1787660289228_5ypfpm": {
+      "runId": "run_1787660289228_5ypfpm",
+      "status": "completed",
+      "totalInputTokens": 17100,
+      "totalOutputTokens": 1320,
+      "totalTokens": 18420,
+      "totalCostUsdEstimate": 0.1251,
+      "mostExpensiveNodeId": "gap_adjudicator",
+      "budget": {
+        "budgetUsd": 25,
+        "spentUsdEstimate": 0.1251,
+        "remainingUsdEstimate": 24.8749,
+        "percentUsed": 0.5,
+        "overBudget": false,
+        "status": "ok",
+        "blocked": false
+      }
+    },
+    "run_1787492010814_kxdbeb": {
+      "runId": "run_1787492010814_kxdbeb",
+      "status": "blocked",
+      "totalInputTokens": 606961,
+      "totalOutputTokens": 151272,
+      "totalTokens": 758233,
+      "totalCostUsdEstimate": 7.572965,
+      "mostExpensiveNodeId": "contract_intelligence"
+    }
+  }
+}

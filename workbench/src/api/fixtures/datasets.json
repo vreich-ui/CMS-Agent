@@ -1,44 +1,170 @@
-[
-  {
-    "id": "ds_1786383065058_ugd98n",
-    "node": "contract_intelligence",
-    "cases": 4,
-    "when": "10 Aug",
-    "note": "contract_intelligence frozen replay \u2014 2026-08-10 rebuild (distinct subjects, post P1 dedup fix)"
-  },
-  {
-    "id": "ds_1785777163498_thqdgr",
-    "node": "contract_intelligence",
-    "cases": 3,
-    "when": "3 Aug",
-    "note": "contract_intelligence REAL champions only \u2014 2026-08-03 (Session B follow-up)"
-  },
-  {
-    "id": "ds_1785772114313_c5gnyl",
-    "node": "publish_payload",
-    "cases": 5,
-    "when": "3 Aug",
-    "note": "publish_payload frozen replay \u2014 2026-08-03 (Session B)"
-  },
-  {
-    "id": "ds_1785772112692_am32rx",
-    "node": "article_body",
-    "cases": 6,
-    "when": "3 Aug",
-    "note": "article_body frozen replay \u2014 2026-08-03 (Session B)"
-  },
-  {
-    "id": "ds_1785772111182_5baov9",
-    "node": "research",
-    "cases": 6,
-    "when": "3 Aug",
-    "note": "research frozen replay \u2014 2026-08-03 (Session B)"
-  },
-  {
-    "id": "ds_1785772079588_9a01hb",
-    "node": "contract_intelligence",
-    "cases": 4,
-    "when": "3 Aug",
-    "note": "contract_intelligence frozen replay \u2014 2026-08-03 (Session B)"
-  }
-]
+{
+  "_comment": "Verbatim dataset_list envelope; each case object trimmed to {caseId,nodeId} only (live cases carry a full dependencyOutputs replay payload per case, tens of KB each) so this fixture stays a reasonable size \u2014 the array LENGTH (what toDataset actually reads) is untouched and correct per dataset. See fixtures/README.md.",
+  "datasets": [
+    {
+      "datasetId": "ds_1786383065058_ugd98n",
+      "nodeId": "contract_intelligence",
+      "name": "contract_intelligence frozen replay \u2014 2026-08-10 rebuild (distinct subjects, post P1 dedup fix)",
+      "cases": [
+        {
+          "caseId": "case_1786383065054_6lnqu0",
+          "nodeId": "contract_intelligence"
+        },
+        {
+          "caseId": "case_1786383065057_0fnx3f",
+          "nodeId": "contract_intelligence"
+        },
+        {
+          "caseId": "case_1786383065058_0j8sys",
+          "nodeId": "contract_intelligence"
+        },
+        {
+          "caseId": "case_1786383065058_wl4jkm",
+          "nodeId": "contract_intelligence"
+        }
+      ],
+      "metadata": {
+        "distinctSubjects": 4,
+        "duplicateSubjects": 0,
+        "degenerate": false
+      },
+      "createdAt": "2026-08-10T17:31:05.058Z"
+    },
+    {
+      "datasetId": "ds_1785777163498_thqdgr",
+      "nodeId": "contract_intelligence",
+      "name": "contract_intelligence REAL champions only \u2014 2026-08-03 (Session B follow-up)",
+      "cases": [
+        {
+          "caseId": "case_1785777163497_1bsc9y",
+          "nodeId": "contract_intelligence"
+        },
+        {
+          "caseId": "case_1785777163497_aie7us",
+          "nodeId": "contract_intelligence"
+        },
+        {
+          "caseId": "case_1785777163498_3nzueu",
+          "nodeId": "contract_intelligence"
+        }
+      ],
+      "createdAt": "2026-08-03T17:12:43.498Z"
+    },
+    {
+      "datasetId": "ds_1785772114313_c5gnyl",
+      "nodeId": "publish_payload",
+      "name": "publish_payload frozen replay \u2014 2026-08-03 (Session B)",
+      "cases": [
+        {
+          "caseId": "case_1785772114313_o58sci",
+          "nodeId": "publish_payload"
+        },
+        {
+          "caseId": "case_1785772114313_ne4307",
+          "nodeId": "publish_payload"
+        },
+        {
+          "caseId": "case_1785772114313_3eg1ed",
+          "nodeId": "publish_payload"
+        },
+        {
+          "caseId": "case_1785772114313_sq7at9",
+          "nodeId": "publish_payload"
+        },
+        {
+          "caseId": "case_1785772114313_2f9sbl",
+          "nodeId": "publish_payload"
+        }
+      ],
+      "createdAt": "2026-08-03T15:48:34.313Z"
+    },
+    {
+      "datasetId": "ds_1785772112692_am32rx",
+      "nodeId": "article_body",
+      "name": "article_body frozen replay \u2014 2026-08-03 (Session B)",
+      "cases": [
+        {
+          "caseId": "case_1785772112692_7nus1g",
+          "nodeId": "article_body"
+        },
+        {
+          "caseId": "case_1785772112692_zviae3",
+          "nodeId": "article_body"
+        },
+        {
+          "caseId": "case_1785772112692_j2gma5",
+          "nodeId": "article_body"
+        },
+        {
+          "caseId": "case_1785772112692_phl6fb",
+          "nodeId": "article_body"
+        },
+        {
+          "caseId": "case_1785772112692_dw88gl",
+          "nodeId": "article_body"
+        },
+        {
+          "caseId": "case_1785772112692_g9y3f9",
+          "nodeId": "article_body"
+        }
+      ],
+      "createdAt": "2026-08-03T15:48:32.692Z"
+    },
+    {
+      "datasetId": "ds_1785772111182_5baov9",
+      "nodeId": "research",
+      "name": "research frozen replay \u2014 2026-08-03 (Session B)",
+      "cases": [
+        {
+          "caseId": "case_1785772111182_zst5ew",
+          "nodeId": "research"
+        },
+        {
+          "caseId": "case_1785772111182_nkvvlf",
+          "nodeId": "research"
+        },
+        {
+          "caseId": "case_1785772111182_bu37u4",
+          "nodeId": "research"
+        },
+        {
+          "caseId": "case_1785772111182_9skear",
+          "nodeId": "research"
+        },
+        {
+          "caseId": "case_1785772111182_i0rd83",
+          "nodeId": "research"
+        },
+        {
+          "caseId": "case_1785772111182_m3taj6",
+          "nodeId": "research"
+        }
+      ],
+      "createdAt": "2026-08-03T15:48:31.183Z"
+    },
+    {
+      "datasetId": "ds_1785772079588_9a01hb",
+      "nodeId": "contract_intelligence",
+      "name": "contract_intelligence frozen replay \u2014 2026-08-03 (Session B)",
+      "cases": [
+        {
+          "caseId": "case_1785772079588_e1qusp",
+          "nodeId": "contract_intelligence"
+        },
+        {
+          "caseId": "case_1785772079588_t3bipg",
+          "nodeId": "contract_intelligence"
+        },
+        {
+          "caseId": "case_1785772079588_t59i7r",
+          "nodeId": "contract_intelligence"
+        },
+        {
+          "caseId": "case_1785772079588_r9zvrg",
+          "nodeId": "contract_intelligence"
+        }
+      ],
+      "createdAt": "2026-08-03T15:47:59.588Z"
+    }
+  ]
+}
