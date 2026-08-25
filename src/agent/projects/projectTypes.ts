@@ -87,6 +87,20 @@ export type ProjectPublishingPolicy = {
   // with operatorDecisionSource "project_policy_default" so a receipt can never be misread as
   // explicit operator sign-off (see publishDecision.ts describeOperatorDecisionSource).
   operatorDefault?: "approved" | "require_explicit";
+  // W7 (2026-08-25, run_1787655709652_4k1z56): node ids whose blockers this project wants treated as
+  // HARD blocks even though the engine classifies them EDITORIAL (blockerClassification.ts). The
+  // engine's default is that a review node's taste verdict is advisory — recorded on the decision,
+  // never gating — because the owner's standing directive is that agents publish freely and a human
+  // intervenes only when an authorized admin/owner says so. A tenant that wants its own stricter bar
+  // (say, a client who insists brief_architect's sign-off is a real gate) names those sources here.
+  //
+  // PROMOTION ONLY, by construction: classifyBlockerSource consults this list only for sources it has
+  // already classified editorial, so nothing in it can demote an INTEGRITY source to advisory. A
+  // project can make its gate stricter than the engine's, never looser. Absent (the case for every
+  // project today) means the engine's classification stands unmodified. Server-controlled like every
+  // other publishingPolicy field except operatorDefault: it is declared in the project's definition,
+  // not patchable through project.update.
+  hardBlockerSources?: string[];
 };
 
 // Capture is intentionally governed per project. A missing policy resolves to the deny-all value

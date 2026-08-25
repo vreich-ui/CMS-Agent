@@ -129,16 +129,23 @@ describe("W6.1 — blocker propagation as a rule", () => {
     expect(collected.map((entry) => entry.nodeId)).toEqual(["contract_intelligence", "monetization_strategy", "artifact_plan"]);
   });
 
-  it("cannot emit \"go\" while an unwaived upstream blocker exists — even on a GO readiness verdict", () => {
+  it("cannot emit \"go\" while an unwaived INTEGRITY upstream blocker exists — even on a GO readiness verdict", () => {
     const decision = buildPublicationDecision({ readiness: goReadiness(), clientProjectId: "platform", contentClass: DEFAULT_CONTENT_CLASS, upstreamBlockers: collectSourcedBlockers(upstream) });
 
     expect(goReadiness().status).toBe("go");
     expect(decision.decision).toBe("blocked");
     expect(decision.waivedBlockers).toEqual([]);
+    // W7 (2026-08-25) changed this expectation on purpose. contract_intelligence (we do not know what a
+    // valid object IS) and artifact_plan (an artifact was never materialized) are INTEGRITY and still
+    // hard-block. monetization_strategy is EDITORIAL — a commercial preference about what the piece
+    // should sell — so its EV-floor blocker is now recorded as an advisory instead of gating. It is
+    // demoted, NOT dropped: the assertion below proves it is still in the record with its rationale.
     expect(decision.blockers).toEqual([
       "contract_intelligence: aggression_ceiling_missing: the client contract declares no aggression_ceiling.",
-      "monetization_strategy: ev_floor: expected value does not clear the EV floor for this run.",
       "artifact_plan: artifact_unverified: hero image was never materialized for this request."
+    ]);
+    expect(decision.advisories).toEqual([
+      { nodeId: "monetization_strategy", blocker: "ev_floor: expected value does not clear the EV floor for this run.", class: "editorial", rationale: expect.stringContaining("commercial preference") }
     ]);
     // And the publish gate refuses it, which is the whole point of the propagation rule.
     expect(readPublicationDecision(decision).authorized).toBe(false);
@@ -175,7 +182,11 @@ describe("W6.1 — blocker propagation as a rule", () => {
   it("waives nothing for content that is not own-property, whatever the blocker says", () => {
     const partition = partitionBlockers(collectSourcedBlockers(upstream), DEFAULT_CONTENT_CLASS);
     expect(partition.waived).toEqual([]);
-    expect(partition.blocking).toHaveLength(3);
+    // W7: the waiver still waives nothing off own-property content. The three blockers now split by
+    // SOURCE instead — two integrity nodes block, the one editorial node advises — which is a different
+    // axis from the waiver and must not be confused with it.
+    expect(partition.blocking.map((entry) => entry.nodeId)).toEqual(["contract_intelligence", "artifact_plan"]);
+    expect(partition.advisory.map((entry) => entry.nodeId)).toEqual(["monetization_strategy"]);
   });
 
   it("does not waive a blocker that merely mentions monetization or aggression in passing", () => {
@@ -186,8 +197,13 @@ describe("W6.1 — blocker propagation as a rule", () => {
       ],
       OWN_PROPERTY_CONTENT_CLASS
     );
+    // The WAIVER is what this scenario pins, and it still refuses to fire on either wording — neither
+    // blocker is recorded under the standing rule. W7 then classifies both sources as editorial, so they
+    // land in `advisory`; what matters here is that `waived` stays empty, because a waiver and a class
+    // demotion are different claims with different audit trails.
     expect(partition.waived).toEqual([]);
-    expect(partition.blocking).toHaveLength(2);
+    expect(partition.blocking).toEqual([]);
+    expect(partition.advisory.map((entry) => entry.nodeId)).toEqual(["monetization_strategy", "draft_writer"]);
   });
 });
 
