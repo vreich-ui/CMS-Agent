@@ -15,6 +15,9 @@ import { postRunReflectionEnabled, reflectAfterRun } from "../improvement/reflec
 import { autoPromoteEnabled, autoPromoteProposals } from "../improvement/autoPromote.js";
 import type { OptimizerDeps } from "../improvement/optimizer.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
+import { conductorCache } from "./conductor.js";
+import { clientAuthFailedError, preflightDriverAuth, resolveProjectCredentialName } from "./driverEnvPreflight.js";
+import { mintPublishRequestId } from "./publishRequestId.js";
 import { getReducedContract } from "./contractPrefetch.js";
 import { getEditorialVoice } from "./voicePrefetch.js";
 import { CONTENT_ITEM_SHELL_FAILED_PREFIX, CONTENT_ITEM_SHELL_INPUT_KEY, ensureContentItemShell } from "./contentItemShell.js";
@@ -26,7 +29,7 @@ import { runDeterministicPublicationController } from "./publicationController.j
 import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
 import { buildLearningObservations } from "./learningRecord.js";
 import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
-import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
+import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishApproved, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
 import { getWorkflowDefinition } from "./workflowRegistry.js";
 // T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
 // that drives runs, since they all import this module. See captureConductorWorkflow.ts.
@@ -495,6 +498,31 @@ const isPublishRisk = (node: WorkspaceNode): boolean => node.riskLevel === "publ
 const isPublishExecutorNode = (node: WorkspaceNode): boolean => node.kind === "publisher";
 const isConcurrencyConflict = (error: unknown): error is RunConcurrencyError => error instanceof RunConcurrencyError;
 
+// T5 (autonomous-publish) — ONE APPROVAL, NOT TWO.
+//
+// Publishing was gated twice by two mechanisms that did not know about each other. The DURABLE gate
+// is run.operatorPublishDecision — the operator's recorded decision, set explicitly via
+// workflow.set_operator_publish_decision or standing from the project's publishingPolicy.
+// operatorDefault, and the thing publish evidence is matched against. The DRIVER gate was a per-call
+// `approved: true` flag on run_all / retry_node, which no scheduled driver has any way to supply:
+// the continuation tick and the Cloud Run conductor job just advance runs.
+//
+// The result was a run that had been approved — durably, on the record, by a real operator or a
+// standing project policy — sitting at the publish gate forever, because the tick that would advance
+// it could not re-assert an approval that was already given. Every automatic path stopped there and
+// a human had to re-approve something already approved, which is precisely the approval click this
+// workstream exists to remove.
+//
+// So the durable decision satisfies the driver gate. It does NOT satisfy anything else:
+//   - "withheld" still blocks every publish-risk node, by its own independent check. The veto is not
+//     a value this function can outvote.
+//   - No decision and no project default still blocks. Absence never authorizes.
+//   - publish_executor still needs an explicit publication_controller "go" ON TOP of this. The
+//     two-precondition read (controller go + operator approved) is untouched — this collapses the
+//     duplicate operator gate, not the controller's.
+const publishAdvanceApproved = (run: Pick<WorkflowExecutionRecord, "operatorPublishDecision">, options: RunAdvanceOptions): boolean =>
+  options.approved === true || isOperatorPublishApproved(run);
+
 // R-18 — look-ahead publish-gate visibility.
 //
 // The gate itself always worked: attempt a publish-risk node without approval and the run goes "blocked"
@@ -729,6 +757,12 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
   return withRunLock(runId, async () => {
     const existing = await store.getRun(runId);
     if (!existing) throw new Error(`Unknown run: ${runId}`);
+    // T3: a reset re-runs the whole workflow, so nothing memoized for this run may survive it. The
+    // run-scoped cache holds deterministic client reads (the reduced object contract, the editorial
+    // voice, the run context bundle); keeping them across a reset means a reset performed precisely
+    // BECAUSE a client read went wrong replays that same read. Dropping them costs one cheap
+    // re-fetch per key and is the only thing that makes a reset a real do-over.
+    conductorCache.invalidateRun(runId);
     // Rebuild from the run's own starting shape, including a late-stage entrypoint, so reset restores
     // the seeded state it began with rather than a full ideation-to-publish run.
     const nodes = await resolveConductorNodes(undefined, existing.workflowId);
@@ -1079,7 +1113,7 @@ async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: Work
   reconciled.status = halted ? halted.status : "running";
   reconciled.currentNodeId = halted ? halted.nodeId : findNextRunnableNode(reconciled, nodes)?.id;
   if (reconciled.budgetBlock) reconciled.budgetBlock = undefined;
-  markPendingPublishApproval(reconciled, nodes, options.approved === true);
+  markPendingPublishApproval(reconciled, nodes, publishAdvanceApproved(reconciled, options));
   reconciled.updatedAt = now();
   const saved = await store.saveRun(reconciled);
   // Side effects after the durable commit, in canonical order, non-authoritative — same posture and same
@@ -1102,11 +1136,14 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     // hand, because resume_run re-queues the RUN while the executor schedules only queued NODES: the
     // gate-blocked node stayed "blocked", nothing was runnable, and the run fell straight into the
     // completed branch below (which is T5 fix 2's defect). Approval is the whole remedy for THIS
-    // blocker, so an approved advance may clear it — and nothing else. Every other halt returns
+    // blocker, so an approved advance may clear it — and nothing else. "Approved" here now means the
+    // per-call flag OR the operator's durable decision (publishAdvanceApproved), so a plain tick from
+    // a scheduled driver carries an already-approved run through the gate instead of parking it for a
+    // human to re-approve what they already approved. Every other halt returns
     // untouched below: budget, operator veto, a non-affirmative controller decision, a failed node, an
     // operator pause or cancel. The requeue happens before the halted-status return so one
     // workflow.run_all call carries the run through the gate instead of stopping at it.
-    if (options.approved === true && isApprovalGateOnlyBlock(run)) {
+    if (publishAdvanceApproved(run, options) && isApprovalGateOnlyBlock(run)) {
       for (const blockedNode of approvalGateOnlyBlockedNodes(run)) requeueGateBlockedNode(run, blockedNode);
       run.status = "queued";
       run.updatedAt = now();
@@ -1227,7 +1264,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       if (prepared.run.budgetBlock) prepared.run.budgetBlock = undefined;
       // R-18: record (or clear) a look-ahead publish-approval hold before the state is committed, so the
       // hold is durable and visible on the very next read rather than only after another advance attempt.
-      markPendingPublishApproval(prepared.run, nodes, options.approved === true);
+      markPendingPublishApproval(prepared.run, nodes, publishAdvanceApproved(prepared.run, options));
       const saved = await store.saveRun(prepared.run);
       // Side effects (usage telemetry, workspace stage-output mirror) run only after the state
       // transition is durably committed, so a discarded attempt on a CAS conflict leaves no phantom
@@ -1254,6 +1291,37 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
 }
 
 type PreparedNode = { run: WorkflowExecutionRecord; commit?: () => Promise<void> };
+
+// T2 — ABORT THE RUN, DO NOT DEGRADE IT.
+//
+// The conductor is built to degrade gracefully: a deterministic read that fails hands the node a
+// named `prefetchError`, the node writes its own blocker, the artifact stays schema-valid and the run
+// carries on. That is right for a transient outage and catastrophically wrong for an auth failure,
+// which is exactly what run_1787658091131_cv41es demonstrated three times at ~$1.45 apiece: the very
+// first client call was refused, every later node dutifully produced an empty-but-schema-valid
+// artifact carrying blockers[], the run reported `completed`, and nothing about it could ever be
+// published. Graceful degradation converted an unrecoverable, instantly-diagnosable configuration
+// error into a full-price run whose failure was only legible by reading blockers[] on an artifact
+// nobody had reason to open.
+//
+// So a client-auth failure ends the run at the node that found it: node `failed`, run `failed`, the
+// error named on both, and nothing downstream dispatched. Callers pass the node's own startedAt so
+// the record shows the real duration rather than a zero-length event.
+const failNodeOnClientAuth = (run: WorkflowExecutionRecord, state: NodeExecutionState, nodeId: string, startedAt: string, code: string, message: string): WorkflowExecutionRecord => {
+  const completedAt = now();
+  state.status = "failed";
+  state.startedAt = state.startedAt ?? startedAt;
+  state.completedAt = completedAt;
+  state.durationMs = duration(state.startedAt ?? startedAt, completedAt);
+  state.errors = [code, message];
+  state.output = { error: { code, message } };
+  delete state.dispatch;
+  run.status = "failed";
+  run.currentNodeId = nodeId;
+  run.errors = [...run.errors, `${nodeId}:${code}`];
+  run.updatedAt = completedAt;
+  return run;
+};
 
 async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode: WorkspaceNode, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions, claim = false): Promise<PreparedNode> {
   let run = initialRun;
@@ -1309,6 +1377,32 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       // both read state.warnings, so a gated run is legible without opening each node.
       state.warnings = [...(state.warnings ?? []), `node_skipped:${verdict.predicate?.when ?? "predicate"}`];
       delete state.dispatch;
+      // T4 — AUTHOR THE PUBLISH ID AT THE MOMENT THE RUN LOSES ITS ONLY SOURCE FOR ONE.
+      //
+      // artifact_plan is the sole author of the publish request id, and a skipped node writes no
+      // stage output. So the instant this predicate fires on a text-only run, the run becomes
+      // structurally incapable of publishing — and says nothing about it until publish_executor
+      // refuses with publish_request_id_absent, after a passed controller, a recorded approval and
+      // five green publisher gates. Authoring here closes that gap at its source rather than
+      // teaching the publisher to invent one.
+      //
+      // Narrow on purpose: only artifact_plan, only the no_media_slots predicate (a node skipped for
+      // any other reason is not the publish id's author), and only when the run has no id already —
+      // an operator-supplied one is never overwritten, and an artifact_plan that really ran still
+      // outranks this via buildRunContext's precedence, which is untouched.
+      if (nextNode.id === "artifact_plan" && verdict.predicate?.when === "no_media_slots" && !(typeof run.publishRequestId === "string" && run.publishRequestId.trim())) {
+        const config = await repositoryManager.getProjectRepository().get(run.projectId).catch(() => undefined);
+        const minted = mintPublishRequestId({ runId: run.runId, initialInput: run.initialInput, config });
+        if (minted.ok) {
+          run.publishRequestId = minted.requestId;
+          state.warnings = [...(state.warnings ?? []), `publish_request_id_authored:${minted.requestId}`];
+        } else {
+          // No id rather than a wrong one: publish_request_id_absent remains the correct outcome for
+          // a project whose declared pattern this cannot satisfy, and now it is visible here instead
+          // of only at the very end of the run.
+          state.warnings = [...(state.warnings ?? []), `publish_request_id_not_authored:${minted.reason}`];
+        }
+      }
       run.status = "running";
       run.updatedAt = completedAt;
       run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
@@ -1368,6 +1462,15 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       deterministicPrefetch = prefetch;
       state.input = { ...(state.input as Record<string, unknown>), ...(prefetch.ok ? { prefetchedContract: prefetch.reduced } : { prefetchError: prefetch.error }) };
       if (!prefetch.ok) state.warnings = [...(state.warnings ?? []), `contract_prefetch_failed:${prefetch.code ?? "unknown"}`];
+      // T2: the ONE prefetch failure that is not a degradation. Every other cause leaves the node
+      // able to do something useful with `prefetchError`; a refused credential leaves it able to
+      // produce only expensive emptiness, and leaves every node after it the same way. Live runs
+      // only — a mock run reaches no client and its placeholders are the point.
+      if (!prefetch.ok && prefetch.authFailed && ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+        const credential = await resolveProjectCredentialName(run.projectId, repositoryManager.getProjectRepository());
+        const code = clientAuthFailedError(credential);
+        return { run: failNodeOnClientAuth(run, state, nextNode.id, startedAt, code, `Project "${run.projectId}" refused this driver's credential with HTTP ${prefetch.httpStatus ?? "401/403"} while fetching its object contract, so ${nextNode.id} could not read the client and no node after it could either. The run is stopped here rather than continuing to produce artifacts nothing can publish. Sync ${credential} for this plane and retry the run. Underlying error: ${prefetch.error}`) };
+      }
       const placementTarget = prefetch.ok ? readPlacementTarget(run.stageOutputs.placement_resolver) : undefined;
       if (prefetch.ok && placementTarget) {
         aggressionResolution = resolveAggressionVector(placementTarget, prefetch.reduced);
@@ -1597,7 +1700,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   //      is refused by readPublicationDecision anyway (dryRun marker), so mock CI traversal keeps
   //      working while a live publisher node can never dispatch without an explicit go.
   const operatorVeto = isPublishRisk(nextNode) && isOperatorPublishWithheld(run);
-  const approvalMissing = isPublishRisk(nextNode) && options.approved !== true;
+  const approvalMissing = isPublishRisk(nextNode) && !publishAdvanceApproved(run, options);
   const liveRun = ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock";
   const controllerDecision = isPublishExecutorNode(nextNode) && liveRun ? readPublicationDecision(findPublicationDecision(run)) : undefined;
   const publishRefusals: string[] = [
@@ -2033,6 +2136,43 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     // Mock run: fall through to the MockNodeRunner placeholder below so CI traversal keeps working.
   }
 
+  // T1 — AUTHENTICATED PREFLIGHT, IMMEDIATELY BEFORE THE FIRST PAID DISPATCH.
+  //
+  // Everything above this line is free: deterministic stages, skip predicates, prefetches. Everything
+  // below it costs money. This is therefore the one place where "can this driver actually read the
+  // client?" can be asked with a definite answer and nothing yet spent — and it is placed in the
+  // executor rather than in each driver's own entry so all four planes (run_all, retry, continuation
+  // tick, Cloud Run conductor job) are gated by one check instead of three-and-a-half.
+  //
+  // The endpoint-only preflight the background drivers already run cannot answer it: an endpoint that
+  // resolves plus a token that is stale, absent, or unreadable by THIS plane looks identical to a
+  // healthy driver until the first client call, several paid nodes later. That is precisely how three
+  // runs each burned ~$1.45 producing artifacts no one could publish.
+  //
+  // Refusal is a FAILED run naming the credential — not a warning, not a degraded continue. A wrong
+  // credential does not heal on the next tick, and a run that continues past it can only manufacture
+  // expensive emptiness. Non-credential failures (unreachable, slow, policy-blocked) are explicitly
+  // NOT refused here; see preflightDriverAuth.
+  if (claim) {
+    const authPreflight = await preflightDriverAuth(run, repositoryManager.getProjectRepository());
+    if (!authPreflight.ok) {
+      const completedAt = now();
+      state.status = "failed";
+      state.startedAt = state.startedAt ?? startedAt;
+      state.completedAt = completedAt;
+      state.durationMs = duration(state.startedAt ?? startedAt, completedAt);
+      state.errors = [authPreflight.error, authPreflight.detail];
+      state.output = { error: { code: authPreflight.error, message: authPreflight.detail } };
+      delete state.dispatch;
+      run.status = "failed";
+      run.currentNodeId = nextNode.id;
+      run.errors = [...run.errors, `${nextNode.id}:${authPreflight.error}`];
+      run.updatedAt = completedAt;
+      // No usage record: no model call happened, so the R-20 $0 rule applies.
+      return { run };
+    }
+  }
+
   // Dispatch claim (the ~300s silent-death fix): persist "this node is in flight, with this timeout"
   // BEFORE the model loop starts, so the run record can distinguish a live execution from a dead
   // driver at any moment (assessRunStall) and a successor advance can reclaim a stale claim instead
@@ -2139,6 +2279,15 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       if (loop) {
         output = loop.output;
         if (loop.warnings.length) state.warnings = [...(state.warnings ?? []), ...loop.warnings];
+        // T2: the client refused this driver's credential rather than the body. Promoting that to a
+        // blocker (below) would leave the node `completed` carrying an unjudged body — the precise
+        // shape that made the doomed runs look successful. Nothing downstream can validate, patch or
+        // publish against a client that will not authenticate us, so the run stops here instead.
+        if (loop.authFailure) {
+          const credential = await resolveProjectCredentialName(run.projectId, repositoryManager.getProjectRepository());
+          const code = clientAuthFailedError(credential);
+          return { run: failNodeOnClientAuth(run, state, nextNode.id, startedAt, code, `Project "${run.projectId}" refused this driver's credential with HTTP ${loop.authFailure.httpStatus ?? "401/403"} when ${nextNode.id} asked it to validate the body, so the body was never judged and nothing downstream could publish it. The run is stopped rather than completing with an unjudged artifact. Sync ${credential} for this plane and retry the run. Underlying error: ${loop.authFailure.error}`) };
+        }
         // S3 item 9: "the client's validator could not be reached / refused the request" is not a
         // warning a publish gate may read past — it is a BLOCKER on article_body's own output, which
         // readiness (article_body_blockers) then refuses. Warning stays for the run log; the blocker is
@@ -2321,6 +2470,13 @@ export async function setOperatorPublishDecision(runId: string, decision: "appro
 export async function retryNode(runId: string, nodeId: string | undefined, options: RunAdvanceOptions = {}): Promise<WorkflowExecutionRecord | undefined> {
   const store = options.executionRepository ?? repositoryManager.getExecutionRepository();
   return withRunLock(runId, async () => {
+    // T3: an operator retries a node to make a DIFFERENT attempt happen — most often after fixing
+    // the very thing the node tripped over (a rotated client token, a restored endpoint, a project
+    // policy). Run-scoped memoization is per (runId, key) and would otherwise hand the retry the
+    // same stored read the first attempt used, making the control silently inert. Dropped here
+    // rather than in the MCP tool so every driver that retries — the HTTP tool, the Cloud Run
+    // conductor job's gate-clearing retry — gets the same do-over.
+    conductorCache.invalidateRun(runId);
     for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
       const run = await store.getRun(runId);
       if (!run) return undefined;

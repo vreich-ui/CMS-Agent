@@ -156,11 +156,17 @@ export type WorkflowExecutionRecord = {
   // publish_request_id_absent, which is exactly what run_1787656120374_18bobg (dr-lurie) did with a
   // controller "go", an operator "approved" and all five publisher gates passing.
   //
-  // WHO WRITES IT: workflow.start_dry_run, and only workflow.start_dry_run, after validating the
-  // supplied id against the project's declared objectDialect.requestIdPattern (see
-  // resolvePublishRequestId in mcp/workspace/tools.ts — a malformed id is refused before the run is
-  // created). workflow.reset_run carries it across a reset, because a reset retries the SAME publish
-  // request, not a new one.
+  // WHO WRITES IT: two writers, and only two.
+  //   1. workflow.start_dry_run, after validating the supplied id against the project's declared
+  //      objectDialect.requestIdPattern (see resolvePublishRequestId in mcp/workspace/tools.ts — a
+  //      malformed id is refused before the run is created).
+  //   2. T4 — the conductor, at the exact moment artifact_plan SKIPS on no_media_slots. A text-only
+  //      run skips its only author by design and would otherwise hit the same publish_request_id_absent
+  //      dead end a seeded run hits, for the same structural reason. The authored id carries the flow
+  //      segment `conductor` so it is distinguishable from an operator's, is proven against the
+  //      project's own pattern before it is stored, and never overwrites an id already on the run.
+  // workflow.reset_run carries it across a reset, because a reset retries the SAME publish request,
+  // not a new one.
   // WHO READS IT: buildRunContext, and only buildRunContext, as the FALLBACK behind
   // stageOutputs.artifact_plan.requestId — so a run that really authored an id always wins, and the
   // stored one is what a seeded run has instead. Everything downstream (publish_payload's
@@ -168,7 +174,9 @@ export type WorkflowExecutionRecord = {
   // needs no knowledge of this field at all: there is one lift point, not one per consumer.
   //
   // Optional by design: absent means the run has no publish id and publish_executor's refusal stands
-  // exactly as before. An absent id is never minted, defaulted, or inherited from `requestId`.
+  // exactly as before. It is never defaulted, and never inherited from `requestId` — that field is the
+  // platform/workspace join key, and stamping it on a live client object would be worse than not
+  // publishing. The single authoring path is writer (2) above, at one predicate, on one node.
   publishRequestId?: string;
   status: ExecutionStatus;
   currentNodeId?: string;

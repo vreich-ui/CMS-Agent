@@ -101,6 +101,54 @@ describe("getReducedContract (F1 deterministic contract prefetch)", () => {
     if (result.ok) expect(result.reduced.clientObjectType).toBe("page");
   });
 
+  // T3 (autonomous-publish): the run-scoped cache used to memoize a FAILED prefetch as eagerly as a
+  // successful one, so one transient client failure was replayed for every remaining node in the run
+  // — the failure mode behind the doomed runs, where a single 401 at contract_intelligence became a
+  // whole run's worth of empty-but-schema-valid artifacts. Only success is cacheable now.
+  it("does not cache a failed fetch — a later call in the same run reaches the client again and succeeds", async () => {
+    const projectRepository = new MemoryProjectRepository();
+    const cache = new RunScopedCache();
+    let attempt = 0;
+    remoteFetch.mockImplementation(async () => {
+      attempt += 1;
+      if (attempt === 1) return { ok: false, status: 401, text: async () => "unauthorized", json: async () => ({}) } as unknown as Response;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jsonrpc: "2.0", id: 1, result: { structuredContent: { contract: { object_type: "content_item", body_schema: { type: "object", required: ["slug"] }, constraints: [] } } } })
+      } as unknown as Response;
+    });
+
+    const first = await getReducedContract({ runId: "run-prefetch-t3", projectId: "dr-lurie" }, { projectRepository, cache });
+    expect(first.ok).toBe(false);
+
+    const second = await getReducedContract({ runId: "run-prefetch-t3", projectId: "dr-lurie" }, { projectRepository, cache });
+    expect(second.ok).toBe(true);
+    expect(remoteFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("still caches a successful fetch after an earlier failure in the same run", async () => {
+    const projectRepository = new MemoryProjectRepository();
+    const cache = new RunScopedCache();
+    let attempt = 0;
+    remoteFetch.mockImplementation(async () => {
+      attempt += 1;
+      if (attempt === 1) return { ok: false, status: 503, text: async () => "unavailable", json: async () => ({}) } as unknown as Response;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jsonrpc: "2.0", id: 1, result: { structuredContent: { contract: { object_type: "content_item", body_schema: { type: "object", required: ["slug"] }, constraints: [] } } } })
+      } as unknown as Response;
+    });
+
+    await getReducedContract({ runId: "run-prefetch-t3b", projectId: "dr-lurie" }, { projectRepository, cache });
+    await getReducedContract({ runId: "run-prefetch-t3b", projectId: "dr-lurie" }, { projectRepository, cache });
+    await getReducedContract({ runId: "run-prefetch-t3b", projectId: "dr-lurie" }, { projectRepository, cache });
+
+    // one failure + one success; the third call is served from cache
+    expect(remoteFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("still honors the project's own executable policy block before any transport", async () => {
     // save_json_blob_* names are blocked by dr-lurie's executable policy; object_contract itself is
     // not, so this exercises the same policy hook a real block would use without depending on one.

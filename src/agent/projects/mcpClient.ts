@@ -35,12 +35,24 @@ export type McpClientOptions = {
 
 export type RemoteTool = { name: string; description?: string; inputSchema?: unknown };
 
+// `code` is the JSON-RPC error code when the remote answered with one. `httpStatus` is the transport
+// status when the request never got as far as a JSON-RPC body — the only place a 401/403 is visible,
+// and the fact T1/T2 turn into a named `driver_auth_failed:<ENV_VAR>` instead of a generic client
+// outage. Both stay optional: an error raised for any other reason carries neither, exactly as before.
 export class McpClientError extends Error {
-  constructor(message: string, public readonly code?: number) {
+  constructor(message: string, public readonly code?: number, public readonly httpStatus?: number) {
     super(message);
     this.name = "McpClientError";
   }
 }
+
+// A transport status that means "this caller is not authenticated/authorized for this server" —
+// as opposed to every other failure, which says nothing about the credential. Kept here, beside the
+// only place the status is produced, so both the preflight and the in-node fail-fast read the same
+// definition.
+export const isAuthStatus = (status: number | undefined): boolean => status === 401 || status === 403;
+
+export const isMcpAuthFailure = (error: unknown): boolean => error instanceof McpClientError && isAuthStatus(error.httpStatus);
 
 type JsonRpcResponse<T> = { jsonrpc: "2.0"; id: number | string | null; result?: T; error?: { code: number; message: string; data?: unknown } };
 
@@ -99,7 +111,7 @@ async function rpc<T>(options: McpClientOptions, method: string, params?: Record
     signal: options.signal
   });
 
-  if (!response.ok) throw new McpClientError(`MCP request failed with HTTP ${response.status}.`);
+  if (!response.ok) throw new McpClientError(`MCP request failed with HTTP ${response.status}.`, undefined, response.status);
 
   const payload = await readPayload<T>(response, id);
   // The remote error message is untrusted text (it may echo the bearer token or a credential-bearing

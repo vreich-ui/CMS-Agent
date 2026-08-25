@@ -324,7 +324,11 @@ describe("wired into a real run: replaces the model call entirely", () => {
     expect(state.warnings ?? []).toContainEqual(expect.stringContaining("publish_payload_deterministic_unavailable:contract_source_absent"));
     expect(state.status).not.toBe("completed");
     expect(advanced).toBeDefined();
-    expect(remoteFetch).not.toHaveBeenCalled();
+    // T1: reaching the MODEL path now costs exactly one client call first — the authenticated
+    // registry_get preflight that proves this driver can read the client before anything is spent.
+    // No publish-shaped call was made, which is what this test is actually about.
+    const toolNames = remoteFetch.mock.calls.map((call) => (JSON.parse((call[1] as { body: string }).body) as { params?: { name?: string } }).params?.name);
+    expect(toolNames).toEqual(["registry_get"]);
   });
 });
 

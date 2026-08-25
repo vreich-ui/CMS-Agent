@@ -207,8 +207,11 @@ describe("wired into a real run: the refusal costs nothing", () => {
 
     expect(state.warnings ?? []).toContainEqual(expect.stringContaining("publish_executor_deterministic_unavailable:gate_passed_execution_not_deterministic"));
     expect(state.status).not.toBe("completed");
-    // Still no client call: the fall-through is to the MODEL path, which has no provider in this env.
-    expect(remoteFetch).not.toHaveBeenCalled();
+    // T1: the fall-through is to the MODEL path, and a paid dispatch is now preceded by exactly one
+    // authenticated registry_get preflight. No PUBLISH call was made — the point of this assertion.
+    expect(remoteFetch).toHaveBeenCalledTimes(1);
+    const preflight = JSON.parse((remoteFetch.mock.calls[0]![1] as { body: string }).body) as { params?: { name?: string } };
+    expect(preflight.params?.name).toBe("registry_get");
   });
 
   // T4: the same refusal, on the node that opted all the way in to EXECUTION. A closed gate must cost

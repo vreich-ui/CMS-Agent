@@ -3049,7 +3049,8 @@ export const publishingConductorNodes = [
       "type": "object",
       "required": [
         "artifact",
-        "summary"
+        "summary",
+        "decision"
       ],
       "additionalProperties": true,
       "properties": {
@@ -3060,10 +3061,48 @@ export const publishingConductorNodes = [
           "type": "string",
           "minLength": 1
         },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "go",
+            "no_go",
+            "blocked"
+          ],
+          "description": "The single field the engine's P0 publish gate reads. Only an exact \"go\" authorizes a publish; absence, hedging, or any other value refuses by default (see src/agent/workspace/publishDecision.ts)."
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Must be empty or omitted when decision is \"go\"; must name each open blocker otherwise."
+        },
+        "nextAction": {
+          "type": "string",
+          "description": "The exact next step a future publish executor would take."
+        },
         "notes": {
           "type": "array",
           "items": {
             "type": "string"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "go"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "maxItems": 0
           }
         }
       }
@@ -3087,7 +3126,8 @@ export const publishingConductorNodes = [
       "type": "object",
       "required": [
         "artifact",
-        "summary"
+        "summary",
+        "decision"
       ],
       "additionalProperties": true,
       "properties": {
@@ -3098,10 +3138,48 @@ export const publishingConductorNodes = [
           "type": "string",
           "minLength": 1
         },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "go",
+            "no_go",
+            "blocked"
+          ],
+          "description": "The single field the engine's P0 publish gate reads. Only an exact \"go\" authorizes a publish; absence, hedging, or any other value refuses by default (see src/agent/workspace/publishDecision.ts)."
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Must be empty or omitted when decision is \"go\"; must name each open blocker otherwise."
+        },
+        "nextAction": {
+          "type": "string",
+          "description": "The exact next step a future publish executor would take."
+        },
         "notes": {
           "type": "array",
           "items": {
             "type": "string"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "go"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "maxItems": 0
           }
         }
       }

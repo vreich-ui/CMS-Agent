@@ -20,7 +20,13 @@ import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepo
 import { conductorCache, type RunScopedCache } from "./conductor.js";
 import { reduceContract, type ReducedContract } from "./contractReduction.js";
 
-export type ContractPrefetchResult = { ok: true; reduced: ReducedContract } | { ok: false; error: string; code?: "prefetch_object_type_unresolved" };
+// T2: `authFailed` separates "the client rejected THIS driver's credential" from every other reason a
+// prefetch can fail. The distinction is load-bearing: every other failure is a degradation the node
+// is designed to work around (it receives `prefetchError` and emits its own blocker), whereas an auth
+// failure means nothing downstream in this run can read or write the client at all — so continuing
+// can only manufacture an expensive, unpublishable artifact.
+export type ContractPrefetchFailure = { ok: false; error: string; code?: "prefetch_object_type_unresolved"; authFailed?: true; httpStatus?: number };
+export type ContractPrefetchResult = { ok: true; reduced: ReducedContract } | ContractPrefetchFailure;
 export type ContractPrefetchParams = { runId: string; projectId: string; requestedObjectType?: string };
 export type ContractPrefetchDeps = { projectRepository: ProjectRepository; cache?: RunScopedCache; workspaceRepository?: WorkspaceRepository };
 
@@ -56,6 +62,10 @@ function extractContractPayload(result: unknown): unknown {
 export async function getReducedContract(params: ContractPrefetchParams, deps: ContractPrefetchDeps): Promise<ContractPrefetchResult> {
   const cache = deps.cache ?? conductorCache;
   const cacheKey = `contract:${params.projectId}:${params.requestedObjectType ?? "(default)"}`;
+  // T3: only a SUCCESSFUL prefetch is memoized for the life of the run. A failure — an expired
+  // token, a timed-out client, an unresolved object type an operator can fix mid-run — is returned
+  // to this caller and re-attempted by the next one, instead of being replayed from cache for every
+  // remaining node in the run (including after workflow.retry_node).
   return cache.getOrLoad(params.runId, cacheKey, async (): Promise<ContractPrefetchResult> => {
     const config = await deps.projectRepository.get(params.projectId);
     if (!config) return { ok: false, error: `Unknown projectId: ${params.projectId}` };
@@ -92,7 +102,10 @@ export async function getReducedContract(params: ContractPrefetchParams, deps: C
     } finally {
       clearTimeout(timer);
     }
-    if (!call.ok) return { ok: false, error: call.error ?? `object_contract failed for project ${params.projectId}` };
+    if (!call.ok) {
+      const error = call.error ?? `object_contract failed for project ${params.projectId}`;
+      return { ok: false, error, ...(call.authFailed ? { authFailed: true as const, httpStatus: call.httpStatus } : {}) };
+    }
     const raw = extractContractPayload(call.result);
     // §2.21: a stable content hash of the RAW payload, computed before any reduction — this is what
     // makes a contract that changed between fetch and publish detectable, and is the cache key below.
@@ -106,5 +119,5 @@ export async function getReducedContract(params: ContractPrefetchParams, deps: C
       await deps.workspaceRepository.putReducedContractCacheEntry({ projectId: params.projectId, objectType, fingerprint, reduced }).catch(() => undefined);
     }
     return { ok: true, reduced };
-  });
+  }, { shouldCache: (result) => result.ok });
 }

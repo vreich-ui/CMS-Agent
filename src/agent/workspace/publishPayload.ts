@@ -40,6 +40,15 @@ export type PublishPayloadValidation = {
   candidate_patch_summary?: string;
   deferred?: string;
   error?: string;
+  // T2: the client answered 401/403 — this driver's credential for the project is not accepted. Kept
+  // distinct from every other `error` because the two demand opposite responses: an ordinary
+  // validation outage is a blocker on this body (the run may still be salvageable, and the operator
+  // may publish later), while an auth failure means no node in this run can reach the client at all,
+  // so the run must stop rather than spend the rest of its budget producing an unpublishable
+  // artifact. Never set for a `deferred` verdict — a client refusing to validate an object that does
+  // not exist yet has spoken, and is answering correctly.
+  authFailed?: true;
+  httpStatus?: number;
 };
 
 export type PublishPayloadOutput = {
@@ -193,6 +202,10 @@ export async function validateClientObjectOnce(params: { projectId: string; body
     // candidate for an object nobody has created — a deferral, and attempted:true, because the call
     // was made and the client did speak.
     if (REQUIRES_EXISTING_OBJECT.test(message)) return { attempted: true, tool: "object_validate", valid: false, issues: [message], candidate_patch_summary: summary, deferred: "requires_existing_object" };
+    // Checked AFTER the deferral above, deliberately: a requires-existing-object refusal is a real
+    // answer from an authenticated client and keeps its precedence. A 401/403 cannot produce that
+    // message, so the ordering costs nothing and removes any chance of shadowing a normal outcome.
+    if (call.authFailed) return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: message, authFailed: true, ...(call.httpStatus !== undefined ? { httpStatus: call.httpStatus } : {}) };
     return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: message };
   }
   const rawText = JSON.stringify(call.result ?? null);
