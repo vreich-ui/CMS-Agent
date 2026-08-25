@@ -1,0 +1,37 @@
+[
+  {
+    "node": "contract_intelligence",
+    "crit": 7,
+    "top": "contract_fidelity \u00d73 \u00b7 severity_enforced_live_mapping \u00d72.5 \u00b7 no_invented_client_rules \u00d72",
+    "score": 0.484,
+    "verdict": "held"
+  },
+  {
+    "node": "research",
+    "crit": 7,
+    "top": "citation_integrity \u00d72 \u00b7 per_claim_support \u00d71.8 \u00b7 source_authority \u00d71.5",
+    "score": null,
+    "verdict": null
+  },
+  {
+    "node": "article_body",
+    "crit": 9,
+    "top": "client_schema_compliance \u00d73 \u00b7 private_annotations_populated \u00d72.75 \u00b7 media_safety \u00d72.75",
+    "score": null,
+    "verdict": null
+  },
+  {
+    "node": "publish_payload",
+    "crit": 7,
+    "top": "gates_preserved \u00d73 \u00b7 body_fidelity \u00d72.5 \u00b7 artifact_form_and_provenance \u00d72.25",
+    "score": null,
+    "verdict": null
+  },
+  {
+    "node": "artifact_plan",
+    "crit": 6,
+    "top": "materialization_verification \u00d73 \u00b7 zero_media_shortcut_used_correctly \u00d72.5 \u00b7 request_id_confirmed \u00d72.5",
+    "score": null,
+    "verdict": null
+  }
+]

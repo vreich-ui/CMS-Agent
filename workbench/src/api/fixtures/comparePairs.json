@@ -1,0 +1,26 @@
+[
+  {
+    "kind": "text",
+    "node": "draft_writer",
+    "brief": "Intro paragraph — retinol alternatives for sensitive skin (req_agent_niacinamide_barrier_after40 family)",
+    "champ": "A",
+    "a": "If retinol leaves your skin red and flaking, you are not doing it wrong — your barrier is telling you something. After 40, the skin's tolerance for aggressive actives narrows, and the good news is that the alternatives are no longer second-best.",
+    "b": "Retinol is the gold standard — but gold standards assume an average skin, and yours may not be average. For sensitive skin past 40, three well-studied alternatives now deliver comparable resurfacing evidence without the irritation tax."
+  },
+  {
+    "kind": "template",
+    "node": "article_body",
+    "brief": "Article card template — related-reading block",
+    "champ": "B",
+    "a": "img-top",
+    "b": "img-left"
+  },
+  {
+    "kind": "image",
+    "node": "artifact_plan",
+    "brief": "Hero direction — calm clinical vs warm lifestyle",
+    "champ": "A",
+    "a": "linear-gradient(135deg,#7fa8c9,#c9d8e6)",
+    "b": "linear-gradient(135deg,#d9a05b,#e8cba8)"
+  }
+]

@@ -1,0 +1,333 @@
+<title>The Conductor Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --bg:#f7f5f0; --panel:#efece4; --panel2:#e9e5da; --line:#ddd7c9; --line2:#ccc5b4;
+    --ink:#22262e; --muted:#6d7280; --faint:#9a9eab;
+    --accent:#a86b1c; --accent-ink:#8a5716; --accent-soft:#f0e2c8;
+    --ok:#2e7d4f; --warn:#b0731f; --bad:#b3403a; --run:#2f6db3; --gate:#8a5716;
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+    --disp:'Spectral',Georgia,serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#12151c; --panel:#181d27; --panel2:#1e2431; --line:#272e3c; --line2:#333c4e;
+      --ink:#d6dbe4; --muted:#8b95a7; --faint:#5d6577;
+      --accent:#e2a44a; --accent-ink:#e8b264; --accent-soft:#2c2618;
+      --ok:#57b380; --warn:#e2a44a; --bad:#e07068; --run:#6aa3e0; --gate:#e2a44a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12151c; --panel:#181d27; --panel2:#1e2431; --line:#272e3c; --line2:#333c4e;
+    --ink:#d6dbe4; --muted:#8b95a7; --faint:#5d6577;
+    --accent:#e2a44a; --accent-ink:#e8b264; --accent-soft:#2c2618;
+    --ok:#57b380; --warn:#e2a44a; --bad:#e07068; --run:#6aa3e0; --gate:#e2a44a;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:16px; line-height:1.65; margin:0; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1060px; margin:0 auto; padding:0 28px 120px;}
+  .col{max-width:70ch; margin:0 auto;}
+  header.hero{padding:84px 0 40px; border-bottom:1px solid var(--line); margin-bottom:56px;}
+  .eyebrow{font-family:var(--mono); font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin:0 0 14px;}
+  h1{font-family:var(--disp); font-weight:600; font-size:clamp(34px,5vw,52px); line-height:1.12; margin:0 0 18px; text-wrap:balance;}
+  .lede{font-size:19px; line-height:1.6; color:var(--muted); max-width:62ch; margin:0;}
+  .meta{display:flex; gap:22px; flex-wrap:wrap; margin-top:26px; font-family:var(--mono); font-size:12px; color:var(--faint);}
+  .meta b{color:var(--muted); font-weight:500;}
+  h2{font-family:var(--disp); font-weight:600; font-size:29px; line-height:1.2; margin:72px 0 6px; text-wrap:balance;}
+  h3{font-family:var(--sans); font-weight:600; font-size:17.5px; margin:40px 0 10px;}
+  h2 + .sub{margin:0 0 22px; color:var(--muted); font-size:15.5px;}
+  p{margin:0 0 18px;}
+  a{color:var(--accent-ink); text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--accent) 45%, transparent); text-underline-offset:3px;}
+  a:hover{text-decoration-color:var(--accent);}
+  code,.id{font-family:var(--mono); font-size:.86em; background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:1px 5px; white-space:nowrap;}
+  strong{font-weight:600;}
+  .breakout{max-width:1004px; margin:30px auto;}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:22px 24px;}
+  .panel h4{margin:0 0 8px; font-size:14px; font-weight:600;}
+  .cap{font-family:var(--mono); font-size:11.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); margin:34px 0 10px;}
+  table{border-collapse:collapse; width:100%; font-size:14.5px;}
+  .tblwrap{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel);}
+  th{font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); text-align:left; font-weight:500; padding:12px 16px; border-bottom:1px solid var(--line2);}
+  td{padding:12px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+  tr:last-child td{border-bottom:0;}
+  td:first-child{white-space:nowrap; font-weight:600;}
+  .num{font-variant-numeric:tabular-nums;}
+  /* wireframe */
+  .wire{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; font-family:var(--mono); font-size:11px; color:var(--muted);}
+  .wire .bar{display:flex; gap:8px; align-items:center; background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:8px 12px; margin-bottom:10px;}
+  .wire .bar .pill{border:1px solid var(--line2); border-radius:99px; padding:2px 10px; background:var(--bg);}
+  .wire .bar .pill.acc{border-color:var(--accent); color:var(--accent-ink);}
+  .wire .cols{display:grid; grid-template-columns:220px 1fr 250px; gap:10px; min-height:330px;}
+  @media(max-width:760px){.wire .cols{grid-template-columns:1fr;}}
+  .wire .pane{background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:10px 12px; display:flex; flex-direction:column; gap:6px;}
+  .wire .pane .ph{color:var(--faint); letter-spacing:.1em; text-transform:uppercase; font-size:10px; margin-bottom:2px;}
+  .wire .node{display:flex; align-items:center; gap:7px; padding:3px 8px; border-radius:5px; background:var(--bg); border:1px solid var(--line);}
+  .wire .node.dim{opacity:.42;}
+  .wire .node.cur{border-color:var(--accent); color:var(--accent-ink);}
+  .dot{width:7px; height:7px; border-radius:99px; background:var(--faint); flex:none;}
+  .dot.ok{background:var(--ok);} .dot.run{background:var(--run);} .dot.gate{background:var(--gate);} .dot.bad{background:var(--bad);} .dot.q{background:var(--faint); opacity:.5;}
+  .wire .tabs{display:flex; gap:4px; flex-wrap:wrap; margin-bottom:6px;}
+  .wire .tabs span{border:1px solid var(--line); border-radius:5px; padding:2px 8px; background:var(--bg);}
+  .wire .tabs span.on{border-color:var(--accent); color:var(--accent-ink);}
+  .wire .blk{background:var(--bg); border:1px dashed var(--line2); border-radius:6px; padding:8px 10px; color:var(--faint);}
+  .wire .btns{display:flex; gap:5px; flex-wrap:wrap;}
+  .wire .btns span{border:1px solid var(--line2); border-radius:5px; padding:2px 8px; background:var(--bg);}
+  .wire .btns span.go{border-color:var(--ok); color:var(--ok);}
+  .wire .btns span.stop{border-color:var(--bad); color:var(--bad);}
+  .legend{display:flex; gap:18px; flex-wrap:wrap; font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:12px; align-items:center;}
+  .legend span{display:inline-flex; align-items:center; gap:6px;}
+  /* principle list */
+  .prin{display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px; margin:26px 0;}
+  .prin .panel{padding:18px 20px;}
+  .prin p{margin:0; font-size:14.5px; color:var(--muted);}
+  .prin h4{font-size:15px;}
+  ol.phased{padding-left:0; list-style:none; counter-reset:ph; margin:24px 0;}
+  ol.phased li{counter-increment:ph; padding:16px 0 16px 58px; position:relative; border-top:1px solid var(--line);}
+  ol.phased li:last-child{border-bottom:1px solid var(--line);}
+  ol.phased li::before{content:counter(ph,decimal-leading-zero); position:absolute; left:0; top:16px; font-family:var(--mono); font-size:13px; color:var(--accent);}
+  ol.phased b{display:block; margin-bottom:3px;}
+  ol.phased span{color:var(--muted); font-size:15px;}
+  .foot{margin-top:80px; border-top:1px solid var(--line); padding-top:22px; font-size:13.5px; color:var(--faint);}
+  ul{margin:0 0 18px; padding-left:22px;}
+  li{margin-bottom:8px;}
+</style>
+
+<div class="wrap">
+<header class="hero">
+  <p class="eyebrow">CMS Agent Workspace · UI redesign proposal</p>
+  <h1>From constellation to workbench</h1>
+  <p class="lede">A single-operator console for building, testing, and improving agent workflows — where the run is the unit of work, node attributes are the center of the screen, and the graph is a map rather than a menu.</p>
+  <div class="meta">
+    <span><b>Prepared for</b> Wolf</span>
+    <span><b>Date</b> 24 Aug 2026</span>
+    <span><b>Grounded in</b> live workspace v630 · 3 conductors · 6 projects · 15 runs · 10 observations · 5 rubrics · 6 replay datasets</span>
+  </div>
+</header>
+
+<div class="col">
+
+<h2>How I understand the task</h2>
+<p class="sub">What the UI must become, restated — and checked against the live system.</p>
+
+<p>You are the only user of this surface. It is not an editor's tool and not a client's tool — it is the <strong>operator's workbench</strong> for a fleet of function-based agent workflows. Today that fleet is already real: I inspected the live workspace and found three conductors — <code>publishing_conductor</code> (23 nodes, the DTC publishing specialist), <code>clone_conductor</code> (8 nodes, site cloning &amp; template generation), and <code>capture_conductor</code> (11 nodes) — with a foundation-charity publishing workflow planned. Clients are <em>projects</em> (<code>dr-lurie</code>, <code>zilberman</code>, <code>fernwell</code>, <code>monetizer</code>…) and a run binds a workflow to a project at start time. The current UI inverts this: the constellation graph sits at the center acting as a node picker, node attributes are peripheral, and client selection is entangled with workflow selection.</p>
+
+<p>The redesign therefore has five jobs:</p>
+<ul>
+  <li><strong>Put node substance at the center.</strong> Prompt, tools, skills, schemas, model config, dependencies — inspectable and editable as the main content of the screen, not a side drawer.</li>
+  <li><strong>Make runs first-class.</strong> See what's running now, start runs (dry or live, mock or model), pause / resume / cancel / retry / run-until, and open any historical run in the workbench for analysis.</li>
+  <li><strong>Reorganize node presentation around execution order</strong>, not spatial constellation position — with nodes that a given run never engaged greyed out or hidden.</li>
+  <li><strong>Decouple client from workflow.</strong> Workflows are function-based; the client is a parameter of a run and a filter for analysis, never a mode the whole UI lives in.</li>
+  <li><strong>Tidy the rest:</strong> auth &amp; key management in one deliberate place, legacy pieces removed, everything reachable fast for a single expert operator.</li>
+</ul>
+
+<p>Two findings from the live data sharpened the design more than anything else:</p>
+
+<p><strong>Finding one — your runs mostly stop at gates, so triage is the primary screen.</strong> Of the last 15 runs, seven are <code>blocked</code> (at <code>theme_bind</code>, <code>publication_controller</code>, <code>publish_executor</code>, <code>capture_emit_live</code>), three <code>failed</code> (at <code>layout_analyst</code>, <code>reader_simulation</code>, <code>article_body</code>), one cancelled, four completed. The most valuable pixel in this UI is not a node picker — it is the answer to <em>"where did this run stop, why, and what do I do about it?"</em> The design treats the blocked-at-a-gate state as a first-class object with its own panel, not as an error.</p>
+
+<p><strong>Finding two — the system already distinguishes live-editable attributes from seed-pinned topology.</strong> Run metadata states it plainly: prompt, schemas, tools, skills and model config are overlaid from the workspace store (your edits apply to the next run immediately), while topology — edges, risk levels, new nodes — is pinned to canonical definitions and needs a re-seed (<code>nodes:update</code>) plus redeploy. A UI that pretends everything is equally editable will lie to you. The node editor below marks every field as <em>live</em> or <em>pinned</em>, and pinned fields explain what a change actually requires.</p>
+
+<h2>Design principles</h2>
+<p class="sub">Six commitments that every screen decision below follows from.</p>
+
+<div class="breakout"><div class="prin">
+  <div class="panel"><h4>The run is the unit of work</h4><p>Building, testing and analyzing all happen in one room — the workbench — in two modes: <em>Build</em> (no run bound, you edit definitions) and <em>Run</em> (a run is bound, nodes wear its statuses). Same layout, same muscle memory.</p></div>
+  <div class="panel"><h4>The graph is a map, not a menu</h4><p>The constellation survives as an optional overlay for structural understanding. Primary navigation is an ordered node rail grouped by pipeline phase — the "common order pattern" you described.</p></div>
+  <div class="panel"><h4>Client is a parameter</h4><p>You pick a project when you start a run, and you filter by project when you analyze. Nothing else in the UI is client-scoped. Workflow selection lists functions, never clients.</p></div>
+  <div class="panel"><h4>Tell the truth about editability</h4><p>Live-editable fields save to the store and apply on the next run. Pinned fields (dependencies, risk level, topology) are shown read-only with the exact re-seed step a change requires.</p></div>
+  <div class="panel"><h4>Gates and risk are visible form</h4><p>Approval gates, risk levels (<code>read</code> / <code>write</code> / <code>publish</code>) and tool side-effects are encoded in shape and color everywhere they appear — a publish-risk node never looks like a read-risk node.</p></div>
+  <div class="panel"><h4>Single-operator density</h4><p>No onboarding chrome, no role management. Dense tables, keyboard-first, a command palette (⌘K) that jumps to any node, run, workflow, project or setting by name.</p></div>
+</div></div>
+
+<h2>Patterns worth stealing</h2>
+<p class="sub">You asked not to reinvent the wheel. These are the wheels, and what each one drives here.</p>
+
+<div class="breakout"><div class="tblwrap"><table>
+  <tr><th>Source</th><th>Pattern</th><th>Where it lands in this design</th></tr>
+  <tr><td><a href="https://docs.n8n.io/workflows/executions/debug/">n8n</a></td><td>"Debug in editor" — load a past execution's data into the editor; partial re-runs from a chosen node; <a href="https://docs.n8n.io/data/data-pinning/">pinned / mock data</a>.</td><td>Opening a run from history loads it into the workbench (Run mode). <code>workflow_retry_node</code> / <code>run_until</code> map to partial re-runs; <code>mock</code> execution mode is your data-pinning equivalent, surfaced as a start-run option.</td></tr>
+  <tr><td><a href="https://github.com/langchain-ai/langgraph-studio">LangGraph Studio</a></td><td>Graph + thread view side by side; select a step to see state; edit a prompt and fork the run from that point.</td><td>The node rail + run inspector split. "Edit prompt → retry node" is a two-click loop: the inspector links straight to the editor tab, and the run dock offers retry-from-here.</td></tr>
+  <tr><td>Temporal UI</td><td>Run-centric list with status filters; event history per run; explicit cancel/terminate semantics; stalled-worker visibility.</td><td>The Runs surface: live strip with the <code>stall</code> flag your API already returns, status-filtered history, and unambiguous run controls with distinct pause / cancel / reset verbs.</td></tr>
+  <tr><td>Airflow</td><td>Grid view — a runs × tasks matrix that makes cross-run regressions readable at a glance; graph view demoted to secondary.</td><td>The Runs surface's Grid tab: recent runs of one workflow as columns, nodes as rows, status-colored cells. This is your "analyze runs which are in progress or finished" view when the question spans runs.</td></tr>
+  <tr><td>Dagster / Prefect</td><td>Launchpad (structured run-config form before launch); duration timeline per run; cost surfaced next to outcome.</td><td>The Start Run modal (project, dry/live, mock/model, budget USD, request id, brief) validated against node input schemas before launch; per-run Gantt from the <code>startedAt/durationMs</code> data every run already carries; <code>workflow_get_run_cost</code> shown beside status.</td></tr>
+</table></div></div>
+
+<h2>Information architecture</h2>
+<p class="sub">Five surfaces, one palette. Everything else is a panel inside one of these.</p>
+
+<div class="breakout"><div class="wire" role="img" aria-label="Information architecture diagram: four top-level surfaces">
+  <div class="bar"><span class="pill acc">⌘K anywhere</span><span>jump to node · run · workflow · project · setting</span></div>
+  <div class="cols" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); min-height:0;">
+    <div class="pane"><span class="ph">1 · Workflows</span><span class="blk">Library of conductors: status, node count, active runs, last outcome. Entry: Open workbench · Start run.</span></div>
+    <div class="pane"><span class="ph">2 · Workbench</span><span class="blk">The main room. Node rail + editor/inspector + run dock. Build mode ↔ Run mode.</span></div>
+    <div class="pane"><span class="ph">3 · Runs</span><span class="blk">Live strip + filterable history + grid view. Row click → opens that run in the workbench.</span></div>
+    <div class="pane"><span class="ph">4 · Learning</span><span class="blk">The flywheel: observations → playbooks → compare (A/B) → evaluate → optimizer → datasets.</span></div>
+    <div class="pane"><span class="ph">5 · Registry</span><span class="blk">Projects &amp; connections · Keys · Tool registry · Skills · Agents · Usage &amp; budgets.</span></div>
+  </div>
+</div></div>
+
+<p>Workflow switching lives in the top bar as a plain switcher listing functions — <em>Publishing conductor · Clone conductor · Capture conductor · Foundation-charity (planned)</em>. No client appears there. The top bar also carries the bound-run chip when the workbench is in Run mode, so you always know which run's reality you are looking at.</p>
+
+<h2>The workbench</h2>
+<p class="sub">Where you will spend ninety percent of your time. Three panes, two modes.</p>
+
+<div class="breakout"><div class="wire" role="img" aria-label="Workbench wireframe: node rail, editor, run dock">
+  <div class="bar">
+    <span class="pill acc">Publishing conductor</span>
+    <span class="pill">Run mode</span>
+    <span class="pill">run_…8fyyst · dr-lurie · dry · blocked</span>
+    <span style="margin-left:auto">⌘K</span>
+  </div>
+  <div class="cols">
+    <div class="pane">
+      <span class="ph">Node rail · execution order</span>
+      <span class="ph" style="color:var(--accent)">Intake &amp; strategy</span>
+      <div class="node"><span class="dot ok"></span>input_triage</div>
+      <div class="node"><span class="dot ok"></span>topic_opportunity</div>
+      <div class="node dim"><span class="dot q"></span>monetization_strategy</div>
+      <span class="ph" style="color:var(--accent)">Draft &amp; review</span>
+      <div class="node"><span class="dot ok"></span>draft_writer</div>
+      <div class="node"><span class="dot ok"></span>review_aggregator</div>
+      <span class="ph" style="color:var(--accent)">Build &amp; publish</span>
+      <div class="node"><span class="dot ok"></span>article_body</div>
+      <div class="node cur"><span class="dot gate"></span>publication_controller ⛔</div>
+      <div class="node dim"><span class="dot q"></span>publish_executor</div>
+      <div class="node dim"><span class="dot q"></span>learning_recorder</div>
+      <span class="ph" style="margin-top:6px">◻ show unengaged · ⌗ graph overlay</span>
+    </div>
+    <div class="pane">
+      <span class="ph">Center · inspector / editor</span>
+      <div class="tabs"><span class="on">This run</span><span>Prompt</span><span>Tools</span><span>Skills</span><span>Schemas</span><span>Model</span><span>History</span></div>
+      <div class="blk">publication_controller · blocked · gate: operator publish decision<br>input ✓ valid · effective prompt (resolved) · tool calls: 2 · $0.04 · 11.2s</div>
+      <div class="blk">output preview · readiness report · artifacts (2)</div>
+      <div class="blk">↳ Edit prompt → retry this node</div>
+    </div>
+    <div class="pane">
+      <span class="ph">Run dock</span>
+      <div class="blk">dry run · openai · budget $10 · spent $3.42 · 14/23 nodes</div>
+      <div class="btns"><span class="go">Resume</span><span>Run next</span><span>Run until…</span><span>Retry node</span><span class="stop">Cancel</span><span>Reset</span></div>
+      <span class="ph">Gate</span>
+      <div class="blk">⛔ publication_controller awaits operator decision → Approve publish · Decline · View readiness</div>
+      <span class="ph">Timeline</span>
+      <div class="blk">▁▂▂▅▂▃▇▃▂▁ node durations · cost per node</div>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="dot ok"></span>completed</span>
+    <span><span class="dot run"></span>running</span>
+    <span><span class="dot gate"></span>blocked at gate</span>
+    <span><span class="dot bad"></span>failed</span>
+    <span><span class="dot q"></span>queued / unengaged (dimmed)</span>
+  </div>
+</div></div>
+
+<h3>The node rail</h3>
+<p>Topologically ordered, grouped by phase — for the publishing conductor: <em>Intake → Strategy → Research → Planning → Drafting → Review → Build → Publish → Learning</em>, derived from the node <code>kind</code> field the store already carries. In Run mode each node wears the run's status dot; nodes the run never engaged are dimmed (with a toggle to hide them outright), so a finished or in-flight run reads as a clean strip of what actually happened. Fan-in is annotated inline (e.g. <code>brief_architect</code> shows "⇐ 7 inputs") rather than drawn — the full graph is one keystroke away as an overlay, which is where the constellation's genuinely good representation earns its keep without owning the screen.</p>
+
+<h3>The center: editor and inspector, one surface</h3>
+<p>Selecting a node fills the center with tabs. In Build mode the first tab is <strong>Prompt</strong>; in Run mode the first tab is <strong>This run</strong> — the node's execution record for the bound run: validated input, effective prompt as resolved (<code>node_get_effective_prompt</code>), tool calls with results, duration, cost, retries, output with schema validation, produced artifacts. The remaining tabs are identical in both modes:</p>
+<ul>
+  <li><strong>Prompt</strong> — the stored prompt with a diff against the shipped canonical text (the store already reports <code>promptState: diverged</code>), live-editable.</li>
+  <li><strong>Tools</strong> — allowed tools with risk and side-effect badges pulled from the tool registry; add/remove is live-editable; approval-requiring tools visibly flagged.</li>
+  <li><strong>Skills</strong> — assigned skills with effective resolution (<code>skill_resolve_for_node</code>) and links into the skills library.</li>
+  <li><strong>Schemas</strong> — input/output JSON Schema editors with validate-before-save (<code>workspace_validate_node</code>).</li>
+  <li><strong>Model &amp; limits</strong> — budget USD, max turns, tool-call limit, timeout, retry count, max output tokens.</li>
+  <li><strong>Dependencies</strong> — <em>pinned</em>: shown read-only with the note "topology changes require re-seed (<code>nodes:update</code>) + redeploy".</li>
+  <li><strong>History</strong> — the change feed for this node (<code>changes_list</code> / <code>changes_compare</code> / <code>changes_restore</code>): every edit, diffable and restorable. This is your improvement-adjustment loop's safety net.</li>
+  <li><strong>Learning</strong> — what the workspace has learned about this node and what it is doing with it: injected playbook lessons with provenance, observations that mention the node, its rubric and score trend, live optimizer proposals, and its fine-tune readiness. The per-node window into the loop described in the learning section below.</li>
+</ul>
+
+<h3>The run dock</h3>
+<p>The right-hand dock exists only when a run is bound (or being started). Every control maps one-to-one onto a verb the backend already exposes — no new server work: start dry run, run all, run next node, run until a chosen node, pause, resume, cancel, reset, retry node. Beside the controls: live cost against budget, node progress, the error list, and — critically — the <strong>gate panel</strong>. When a run is blocked, the gate panel names the gate, shows the readiness evidence (<code>workflow_publish_readiness</code>), and offers the operator decision (<code>workflow_set_operator_publish_decision</code>) inline. Blocked stops being a dead status and becomes a work queue of one.</p>
+
+<h3>The edit-and-retry loop</h3>
+<p>The whole point of the workbench is the tight loop LangGraph Studio proved out: run → inspect the node that disappointed → edit its prompt/tools/schema → <strong>retry that node in place</strong> → compare. The inspector's "This run" tab links directly to the editor tabs, and the dock's Retry node re-executes with your edits (the store overlay guarantees they apply). The History tab means every experiment is reversible.</p>
+
+<h2>The Runs surface</h2>
+<p class="sub">Monitor, history, and cross-run analysis.</p>
+
+<p>Three tabs. <strong>Live</strong>: currently running and paused runs as cards — workflow, project, current node, progress, cost, and the stall flag your list API already computes (a "running" run whose driver died shows as stalled, with a nudge to reset or resume). <strong>History</strong>: the full table — run id, workflow, project, mode (dry/live · mock/model), status, started, duration, cost, error count — filterable by workflow, project, status, date, mode. Any row opens that run in the workbench. <strong>Grid</strong>: pick one workflow; recent runs become columns, nodes become rows, each cell a status chip. Ten runs of the publishing conductor side by side make "reader_simulation started failing on Thursday" visible in a way no single-run view can.</p>
+
+<h2>Starting a run</h2>
+<p class="sub">The launchpad — where the client enters the picture, and nowhere before.</p>
+
+<p>Start run (from the library, the workbench, or ⌘K) opens a modal: workflow (preselected), <strong>project</strong> (the client binding — with connection health shown inline so you never launch against an unconfigured endpoint), execution mode (<code>mock</code> for free pipeline-shape tests, <code>openai</code> for live model output), dry run vs live, budget USD, request id, and the brief/input — validated against the entry node's input schema before the button enables. One modal, every knob, no hidden defaults.</p>
+
+<h2>The learning loop, made visible</h2>
+<p class="sub">The workspace already learns. The UI's job is to show it, steer it, and feed it.</p>
+
+<p>I inspected the improvement subsystem, and it is more complete than the first draft of this proposal assumed. The backend already implements a full flywheel: <strong>observations</strong> (ten recorded — operational truths like "publish ≠ release, batch publishes and release once", the media-reference flip that was a build-breaker, the two-grammar mapping for Dr. Lurie, plus run diagnostics from <code>learning_recorder</code> and post-mortem lessons like the <code>create_missing_object_id</code> fix); <strong>ACE playbooks</strong> — curated, budgeted lessons per node, rendered into a prompt injection; <strong>evaluation rubrics</strong> (five active, weighted criteria, e.g. <code>contract_intelligence</code> scored on contract fidelity ×3, no-invented-rules ×2); <strong>frozen replay datasets</strong> (six); <strong>regression gates</strong> with baselines and verdicts (contract_intelligence currently <em>held</em> at 0.484 mean against a 0.85 threshold); an <strong>optimizer</strong> that proposes variants, runs trials against replays, promotes winners, and recommends a cost-aware model ladder; <strong>feedback records</strong> (approve / reject / edit / outcome, including monetizer revenue ingest); and a <strong>fine-tune readiness</strong> report (thresholds: 500 approved examples, 200 preference pairs).</p>
+
+<p><strong>The finding that shapes everything here: the flywheel is complete on the backend and empty at every human stage.</strong> Ten observations, but zero curated into playbooks. Rubrics exist, but the model ladder says "no model-attributed eval results yet." Zero feedback records, 0/200 preference pairs, 0/500 approved examples. That is not a backend gap — it is a capture-surface gap. So the learning UI has two halves: <em>visibility</em> (how is it learning, what has it changed) and <em>capture</em> (make your judgment cheap to record, because your judgment is the fuel).</p>
+
+<h3>How learning actually changes the workflow — three paths, all inspectable</h3>
+<p>Your "I'd like to see how it affects the workflow" has a precise answer in this system, and the UI shows each path where it lands:</p>
+<ul>
+  <li><strong>Playbook injection → effective prompt.</strong> Curated lessons are rendered into the node's prompt at run time. The node editor's Prompt tab already shows stored-vs-effective; the Learning tab shows exactly which lessons are injected, at what budget, with provenance back to the observation each came from.</li>
+  <li><strong>Optimizer promotion → node definition change.</strong> A promoted prompt variant or model-config change lands in the store, so it appears in the node's History tab as a diffable, restorable change — attributed to the trial that earned it, with its score delta.</li>
+  <li><strong>Model ladder → cost/quality recommendation.</strong> Once eval results carry model attribution, the ladder recommends cheaper models where quality holds; shown in Model &amp; limits with the evidence, applied with one click, reversible like any change.</li>
+</ul>
+
+<h3>The Learning surface</h3>
+<p>A fifth top-level surface, opening on the <strong>flywheel</strong>: the loop drawn as stages with live counts — observe → curate → evaluate → propose → trial → promote → regression-gate → dataset → tune — each stage clickable, each empty stage saying plainly what feeds it. Subtabs:</p>
+<ul>
+  <li><strong>Observations</strong> — the feed, filterable by node and run, with one-click <em>curate into playbook</em> (<code>playbook_curate</code> / <code>playbook_migrate_observations</code>) and archive. Curation is a judgment call; the UI makes it a ten-second one.</li>
+  <li><strong>Playbooks</strong> — per node: the curated lessons, their token budget, the rendered injection ("this is what the node actually receives"), and delta history.</li>
+  <li><strong>Compare</strong> — your split-screen suggestion, specified below.</li>
+  <li><strong>Evaluate</strong> — rubric editor (weighted criteria, versioned, restorable), results, and the regression watchboard: score sparkline per node, baseline markers, held/regressed verdicts flagged like failing CI.</li>
+  <li><strong>Optimizer</strong> — per node: proposals with prompt diffs, trials scored against frozen replays, promote / auto-promote gates, model-ladder recommendation.</li>
+  <li><strong>Datasets</strong> — frozen replays, SFT and preference exports, and the fine-tune readiness meters (0/500 · 0/200 today — the meters themselves are the motivation to use the capture surfaces).</li>
+</ul>
+
+<h3>Capture interfaces — Compare, and four more worth having</h3>
+<p><strong>Split-screen Compare (your suggestion, and the right one to build first).</strong> Two candidates side by side — draft text, hero image, template, payload — same brief, pick <em>A / B / tie / both bad</em>, keyboard-first (1 / 2 / 0 / x), optional <em>blind mode</em> that hides which side is the current champion so the judgment is unbiased. Every verdict writes a feedback record and a preference pair, counting visibly toward the 200-pair fine-tune threshold. This is the Chatbot-Arena / RLHF pairwise pattern, and it is the highest-signal-per-second interface a single expert operator can have. Sources of pairs: optimizer trials (champion vs challenger on the same replay case), learning-mode candidate sets, or any two run outputs you select from history.</p>
+<ul>
+  <li><strong>Annotation queue</strong> (LangSmith's pattern): recent node outputs, one at a time, against the node's rubric — approve / reject / edit-and-approve. Edits become SFT examples; the 500-example meter fills as a by-product of QA you'd want to do anyway.</li>
+  <li><strong>Counterfactual replay</strong>: from any node inspector — edit the prompt, replay against the frozen dataset (<code>optimizer_run_trial</code>), and see old vs new outputs side by side with the score delta before promoting. The edit-and-retry loop, but against six known cases instead of one live run.</li>
+  <li><strong>Champion / challenger shadow</strong>: a proposed variant rides along on real runs without affecting them; its outputs queue into Compare. Promotion happens only after your verdicts and the regression gate agree.</li>
+  <li><strong>Outcome join</strong>: <code>feedback_ingest_monetizer</code> ties revenue and engagement back to the runs and nodes that produced the piece — the only feedback signal that arrives without costing you a click, shown on the flywheel and in run analysis.</li>
+</ul>
+
+<h2>Registry &amp; settings</h2>
+<p class="sub">One deliberate home for everything that isn't a node or a run.</p>
+
+<div class="breakout"><div class="tblwrap"><table>
+  <tr><th>Section</th><th>Contents</th></tr>
+  <tr><td>Projects &amp; connections</td><td>Each client project: endpoint + token status (configured / unset, and which env var), test-connection button, capture policy summary, publishing policy, and the tool-policy matrix (allowed / needs-approval / blocked) rendered as a scannable grid rather than JSON.</td></tr>
+  <tr><td>Keys &amp; auth</td><td>The honest version of key management for this architecture: keys live in env vars and secret managers, never in the UI. This screen shows every expected variable, whether it is set, its source (env / secret ref), and what breaks when it is missing. Rotation is a runbook link, not an input field — the UI never sees or stores a secret value.</td></tr>
+  <tr><td>Tool registry</td><td>All controlled tools with risk, side-effect, approval and timeout columns; per-tool enable/disable.</td></tr>
+  <tr><td>Skills library</td><td>Skills with versions, assignments (which nodes use each), edit with version history and restore.</td></tr>
+  <tr><td>Conversational agents</td><td>The <code>client_manager</code> and future agents: prompt (with canonical-diff state), model config, skills.</td></tr>
+  <tr><td>Usage &amp; budgets</td><td>Spend summaries and budget status across runs, by workflow and by project.</td></tr>
+</table></div></div>
+
+<h3>Legacy removal</h3>
+<p>Explicitly retired in this design: the constellation as home screen and node picker (demoted to overlay); client selection as a global mode / workflow-selection dimension; any editor-facing chrome that leaked into the operator surface (the admin-chat path for editors remains its own surface, untouched); duplicate or dead panels that grew around the constellation. The command palette replaces most of the navigation the constellation was doing.</p>
+
+<h2>Architecture &amp; migration</h2>
+<p class="sub">Design now, move hosting later — the two don't conflict.</p>
+
+<p>Everything above is a thin client over the MCP/HTTP surface the workspace already exposes; I deliberately mapped every UI capability onto existing verbs, and found no screen that needs new backend work to reach usefulness. That has a pleasant consequence for the Netlify → Google Cloud question: the UI should be a static SPA (or a small Cloud Run service) talking to the same endpoints, so moving it is a redeploy, not a redesign. My suggestion: build the new workbench as a fresh front end against the existing API from day one, host it wherever is fastest today, and fold it into the g-cloud project when consolidation becomes the priority. Nothing in this proposal creates Netlify coupling.</p>
+
+<ol class="phased">
+  <li><b>Workbench, read-only + Runs</b><span>Node rail, inspector with "This run", run history and live strip, open-run-from-history. Highest analysis value, zero write risk. This alone replaces the constellation's daily job.</span></li>
+  <li><b>Run control + gates</b><span>Start-run modal, pause/resume/cancel/reset/retry/run-until, the gate panel with operator decisions. The UI becomes the place runs are driven from.</span></li>
+  <li><b>Node editing + history</b><span>All editor tabs with live/pinned truth-telling, validate-before-save, change history with diff and restore. The improvement loop closes.</span></li>
+  <li><b>Registry + legacy removal</b><span>Projects, keys, tools, skills, agents, usage; retire the old surfaces; grid view; command palette polish.</span></li>
+  <li><b>Learning surfaces</b><span>Flywheel overview, observations → playbook curation, Compare (A/B) with preference capture, annotation queue, evaluate + regression watchboard, optimizer trials and promotion. Ordered last only because it builds on the workbench and runs surfaces — the capture interfaces are small once those exist.</span></li>
+</ol>
+
+<h2>Open questions</h2>
+<ul>
+  <li><strong>Foundation-charity conductor:</strong> when its node set firms up, does it share the publishing phases or need its own grouping vocabulary? The rail's phase grouping is data-driven (<code>kind</code>), so it should absorb it — worth confirming.</li>
+  <li><strong>Approvals beyond publish:</strong> tool-level <code>needs_approval</code> policies exist per project — should those surface in the same gate panel, or stay a registry concern until one actually fires mid-run?</li>
+  <li><strong>Blind-mode default in Compare:</strong> should champion identity be hidden by default (less bias) or shown (faster context)? I'd start blind with a reveal-after-verdict.</li>
+  <li><strong>Constellation metrics:</strong> the attention/metrics endpoints suggest the constellation was also doing health visualization. If so, that job moves to the library cards and the grid view — confirm nothing else depended on it.</li>
+</ul>
+
+<div class="foot">
+  <p>Companion piece: the interactive mockup — the workbench, runs surface, library and registry as a clickable dark-console prototype populated with your real node and run data. Pattern sources: <a href="https://docs.n8n.io/workflows/executions/debug/">n8n debug-and-re-run</a>, <a href="https://docs.n8n.io/data/data-pinning/">n8n data pinning</a>, <a href="https://docs.n8n.io/workflows/executions/manual-partial-and-production-executions/">n8n partial executions</a>, <a href="https://github.com/langchain-ai/langgraph-studio">LangGraph Studio</a>.</p>
+</div>
+
+</div>
+</div>

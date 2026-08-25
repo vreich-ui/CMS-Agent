@@ -1,0 +1,93 @@
+[
+  {
+    "id": "dr-lurie",
+    "name": "Dr. Lurie",
+    "ok": true,
+    "pol": {
+      "a": 18,
+      "n": 1,
+      "b": 15
+    },
+    "endpoint": "https://drluriescience.netlify.app/mcp",
+    "endpointEnvVar": "DR_LURIE_MCP_ENDPOINT",
+    "tokenEnvVar": "DR_LURIE_MCP_TOKEN",
+    "endpointSource": "env",
+    "tokenSource": "env"
+  },
+  {
+    "id": "zilberman",
+    "name": "Zilberman Film Foundation",
+    "ok": true,
+    "pol": {
+      "a": 25,
+      "n": 0,
+      "b": 0
+    },
+    "endpoint": "https://zilbermanfilmfoundation.netlify.app/mcp",
+    "endpointEnvVar": "ZILBERMAN_MCP_ENDPOINT",
+    "tokenEnvVar": "ZILBERMAN_MCP_TOKEN",
+    "endpointSource": "env",
+    "tokenSource": "env"
+  },
+  {
+    "id": "platform",
+    "name": "Platform",
+    "ok": true,
+    "pol": {
+      "a": 31,
+      "n": 6,
+      "b": 0
+    },
+    "endpoint": null,
+    "endpointEnvVar": "PLATFORM_MCP_ENDPOINT",
+    "tokenEnvVar": "PLATFORM_MCP_TOKEN",
+    "endpointSource": "env",
+    "tokenSource": "env"
+  },
+  {
+    "id": "pdf-tool",
+    "name": "PDF Tool",
+    "ok": true,
+    "pol": {
+      "a": 10,
+      "n": 0,
+      "b": 0
+    },
+    "endpoint": "https://pdf-x.netlify.app/mcp",
+    "endpointEnvVar": "PDF_TOOL_MCP_ENDPOINT",
+    "tokenEnvVar": "PDF_TOOL_MCP_TOKEN",
+    "endpointSource": "env",
+    "tokenSource": "env"
+  },
+  {
+    "id": "fernwell",
+    "name": "Fernwell",
+    "ok": true,
+    "pol": {
+      "a": 7,
+      "n": 0,
+      "b": 0
+    },
+    "endpoint": null,
+    "endpointEnvVar": "FERNWELL_MCP_ENDPOINT",
+    "tokenEnvVar": "FERNWELL_MCP_TOKEN",
+    "endpointSource": "env",
+    "tokenSource": "env",
+    "disabled": true
+  },
+  {
+    "id": "monetizer",
+    "name": "Monetizer",
+    "ok": false,
+    "pol": {
+      "a": 6,
+      "n": 0,
+      "b": 0
+    },
+    "endpoint": null,
+    "endpointEnvVar": "MONETIZER_MCP_ENDPOINT",
+    "tokenEnvVar": "MONETIZER_MCP_TOKEN",
+    "endpointSource": "unset",
+    "tokenSource": "unset"
+  }
+]

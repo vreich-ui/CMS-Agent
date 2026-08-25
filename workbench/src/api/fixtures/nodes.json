@@ -1,0 +1,795 @@
+{
+  "input_triage": {
+    "id": "input_triage",
+    "name": "CMS Input Triage",
+    "kind": "intake",
+    "risk": "read",
+    "fan": 0,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.1,
+      "maxOutputTokens": 2000
+    },
+    "prompt": "Objective: Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.\nInputs expected: user request and any supplied content_source.v1 envelope; the run envelope may also declare trafficSource and awarenessStage.\nOutput required: produce content_source.v1 with concise rationale, assumptions, and unresolved questions, plus two required fields that placement_resolver depends on downstream: trafficSource and awarenessStage. Determine trafficSource and awarenessStage from the run envelope (its trafficSource/awarenessStage fields) when present; when absent, infer them from the source content and request context and state the basis for the inference in your rationale or notes. Never omit trafficSource or awarenessStage from the output \u2014 placement_resolver blocks the run outright if either is missing.\nCompletion criteria: required inputs are addressed, output matches the node schemas (including trafficSource and awarenessStage), dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, a requested side effect outside this node's policy, or an inability to determine trafficSource or awarenessStage from either the envelope or the source content.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "placement_resolver": {
+    "id": "placement_resolver",
+    "name": "Placement Resolver",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Compute the aggression TARGET vector \u2014 claim_strength, urgency, emotional_agitation, cta_density on a 0-1 scale \u2014 deterministically from the request's traffic source and awareness stage. The target is computed by engine code, never hand-set; the resolved vector applied downstream is min(client ceiling, target) componentwise.",
+    "model": {
+      "maxTurns": 2,
+      "toolCallLimit": 1,
+      "timeout": 60000,
+      "budgetUsd": 0.05,
+      "maxOutputTokens": 1500
+    },
+    "prompt": "Objective: Establish the aggression TARGET vector for this placement \u2014 four dials (claim_strength, urgency, emotional_agitation, cta_density), each 0-1 \u2014 from the request's trafficSource and awarenessStage.\nInputs expected: input_triage (the content_source.v1 envelope; trafficSource and awarenessStage are read from it or from the run's initial input).\nDeterminism policy: the target is COMPUTED by the engine's deterministic mapping (aggressionVector.ts), which runs before any model turn and normally completes this node without one. Never invent, adjust, or hand-set a dial value; never resolve against a client ceiling here \u2014 resolution (min(ceiling, target) componentwise) happens where the client contract is available, and an absent ceiling is a blocker there, not a default.\nOutput required: produce placement_resolution.v1 with trafficSource and awarenessStage echoed, target carrying the four dials as numbers 0-1, and rationale naming the mapping applied.\nCompletion criteria: the target reflects the deterministic mapping for the declared traffic source and awareness stage; the scale is 0-1; rationale is explicit.\nBlocker criteria: trafficSource or awarenessStage missing from the request \u2014 a target must never be guessed from content alone.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "topic_opportunity": {
+    "id": "topic_opportunity",
+    "name": "Topic Opportunity Agent",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 2,
+    "tools": [
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [
+      "seo_review"
+    ],
+    "desc": "Assess topic viability, audience value, search/editorial opportunity, and recommended positioning.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.1,
+      "maxOutputTokens": 2500
+    },
+    "prompt": "Objective: Decide whether the request should become an article, page section, content update, product/resource support asset, or no-build recommendation for the target client.\nInputs expected: input_triage, placement_resolver (the resolved aggression target for this placement), plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce topic_opportunity.v1 with recommended content route, reader value, business value, SEO/search intent notes when relevant, evidence depth needed, and cost path.\nAggression policy: placement_resolver names the target claim_strength/urgency/emotional_agitation/cta_density for this placement, computed from traffic source and awareness stage. Route recommendations should be consistent with that target \u2014 do not recommend a route that would require exceeding it.\nCost policy: choose the smallest workflow that can satisfy the request safely. Recommend deep research only for current, comparative, regulatory, source-sensitive, or claim-heavy work; a client whose domain needs a stricter evidence bar (health, finance, legal) declares it in its own record. Recommend skipping redundant strategy passes when the request is simple.\nNext-step policy: prefer content that moves a reader toward a useful next step: related reading, newsletter, routine decision, product/resource consideration, or trust-building.\nClient policy: this node serves any registered client. clientProjectId names the target; the client's voice, audience, and commercial direction come from the client's own record and the run's inputs, never from this prompt. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nCompletion criteria: the route, audience value, evidence need, and blockers are explicit.\nBlocker criteria: unclear target, missing or unresolvable target client, unsafe request, no viable reader value, missing critical input, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "monetization_strategy": {
+    "id": "monetization_strategy",
+    "name": "Monetization Strategy Agent",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs",
+      "project.call_read_tool"
+    ],
+    "skills": [],
+    "desc": "Select the commercial offer (or an explicit no-offer decision) for the piece BEFORE the brief is written, using the monetizer project's live offer data reached read-only at runtime.",
+    "model": {
+      "maxTurns": 8,
+      "toolCallLimit": 3,
+      "timeout": 120000,
+      "budgetUsd": 0.3,
+      "maxOutputTokens": 3000
+    },
+    "prompt": "Objective: Decide what this piece is monetizing before the brief exists: select one offer from the monetizer project's live data, or decide explicitly that no offer fits, and say why.\nInputs expected: topic_opportunity (the recommended route and audience/business value), plus clientProjectId (the run's registered client) delivered in this node's input.\nOffer policy: reach the monetizer project read-only through project.call_read_tool to list and inspect candidate offers. Prefer offers matching the topic's commercial intent and the client's audience; an unmatched topic gets selectedOffer null with the gap named in offerRationale rather than a forced fit. Never invent an offer, a payout, or a merchant that the monetizer's own data does not carry.\nEV floor policy (cluster level): commercialIntent alone is not a pass/fail gate \u2014 every piece must clear an explicit expected-value floor, reported in evFloor. Compute expectedValue = expectedCommission x assumedConversionRate x expectedMonthlyTraffic. The floor passes at this article's own level (floorPassed=true) when expectedValue clears estimatedRunCost plus margin (margin.kind=multiplier applied to estimatedRunCost, or margin.kind=absolute added to it \u2014 state which and why). Evaluate the floor at CLUSTER level, not only per-article:\n- Clears on its own: clusterRole=\"money_page\", floorPassed=true, supportingFor=null, verdict=\"pass\".\n- Does not clear on its own but is a declared supporting asset of a money-page article that itself clears the floor: clusterRole=\"supporting_asset\", supportingFor=<that money page's id>, floorPassed=false, verdict=\"pass_via_cluster\" \u2014 name the money page and its own passing math in rationale. Do not claim pass_via_cluster without a real, checkable supportingFor id.\n- Does not clear on its own and has no such declared relationship: clusterRole=\"unattached\", verdict=\"block\" \u2014 say so plainly in offerRationale/commercialIntent; do not force an offer or a favorable intent label to dodge the floor.\nEstimate discipline: every number in evFloor must name its basis via estimateBasis. Use \"monetizer_data\" only for figures actually pulled from a live monetizer query this run via project.call_read_tool; otherwise use \"stated_assumption\" (or \"mixed\" when combining) and spell out the assumption and its source in rationale. Never fabricate false precision \u2014 a made-up conversion rate to three decimal places is worse than a round, labeled guess. While the monetizer project MCP connection is down or unreachable, treat all evFloor inputs as estimates and label them as such throughout (estimateBasis, rationale, and notes) rather than presenting them as measured data. Fail fast on a dead connection: if the monetizer connection is unconfigured/unreachable, or the FIRST project.call_read_tool attempt against it fails with a validation, permission, or not-permitted error, do not retry and do not try alternate monetizer operations \u2014 proceed immediately to emitting the full output with stated assumptions, estimateBasis=\"stated_assumption\", and the failed connection named plainly in rationale. Burning the tool budget probing a dead connection and emitting nothing is a worse failure than a clearly labeled estimate.\nOutput required: produce monetization_strategy.v1 with selectedOffer (the chosen offer's identifying fields as the monetizer returns them, or null), offerRationale (why this offer, or why none), commercialIntent (the piece's commercial posture, e.g. transactional, commercial, supporting, none), and evFloor (the structured EV assessment defined above \u2014 always populated, even for a null selectedOffer or a block verdict).\nCompletion criteria: the brief architect can aim the brief at a named offer or a named no-offer decision without re-doing this selection; assumptions and blockers are explicit; the EV floor verdict is defensible from the numbers and basis given.\nBlocker criteria: missing topic_opportunity, missing or unresolvable target client, or the monetizer project bei\u2026[truncated in fixture]"
+  },
+  "reader_insight": {
+    "id": "reader_insight",
+    "name": "Reader Insight Agent",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Define reader needs, motivations, sophistication, pains, desired outcomes, and decision context.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.1,
+      "maxOutputTokens": 2500
+    },
+    "prompt": "Objective: Define reader needs, motivations, sophistication, pains, desired outcomes, and decision context.\nInputs expected: topic_opportunity.\nOutput required: produce reader_insight.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "research": {
+    "id": "research",
+    "name": "Research Agent",
+    "kind": "research",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs",
+      "web.search",
+      "web.fetch"
+    ],
+    "skills": [
+      "web_research"
+    ],
+    "desc": "Gather source-backed claims, evidence, examples, constraints, and open questions for the article.",
+    "model": {
+      "maxTurns": 8,
+      "toolCallLimit": 5,
+      "timeout": 240000,
+      "budgetUsd": 3,
+      "maxOutputTokens": 4000,
+      "retryCount": 1
+    },
+    "prompt": "Objective: Gather only the evidence needed to support the article's material claims, reader decisions, and the trust standard the target client's content must meet.\nInputs expected: reader_insight, plus clientProjectId (the run's registered client) delivered in this node's input.\nOutput required: produce research_brief.v1 with sourced facts, practical implications, claim risk notes, open questions, and source references.\nCost policy: do not browse by default. Use web.search/web.fetch only for claims that are current, comparative, regulatory, or otherwise source-sensitive; a client whose domain needs a stricter evidence bar declares it in its own record. Prefer primary, authoritative, or source-owner pages when available. Stop once reliable evidence covers the decision the article must help the reader make. Extract what you need from each fetched page as soon as you read it \u2014 quote the finding with its source \u2014 instead of re-fetching or carrying whole pages forward; every retained page is re-sent on each of your subsequent turns.\nEvidence policy: separate sourced facts, interpretation, uncertainty, and unsupported claims. Flag claims that should be softened or removed.\nCompletion criteria: required inputs are addressed, sources are concise and relevant, output matches schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unavailable evidence for important claims, unsupported certainty on high-stakes claims, contradictory instructions, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "objection_mapping": {
+    "id": "objection_mapping",
+    "name": "Objection Mapping Agent",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Map reader objections, skepticism, points of confusion, and trust gaps to address in the narrative.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.15,
+      "maxOutputTokens": 3000
+    },
+    "prompt": "Objective: Map reader objections, skepticism, points of confusion, and trust gaps to address in the narrative.\nInputs expected: research.\nOutput required: produce objection_map.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "narrative_movement": {
+    "id": "narrative_movement",
+    "name": "Narrative Movement Agent",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Design the article's reader journey, section movement, stakes, transitions, and resolution arc.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.15,
+      "maxOutputTokens": 3500
+    },
+    "prompt": "Objective: Design the article's reader journey, section movement, stakes, transitions, and resolution arc.\nInputs expected: objection_mapping.\nOutput required: produce narrative_movement.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "angle_strategy": {
+    "id": "angle_strategy",
+    "name": "Angle Strategist",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Select the strongest angle, promise, tension, differentiation, and external five-stage angle mapping.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 90000,
+      "budgetUsd": 0.15,
+      "maxOutputTokens": 3000
+    },
+    "prompt": "Objective: Select the strongest angle, promise, tension, differentiation, and external five-stage angle mapping.\nInputs expected: narrative_movement.\nOutput required: produce angle_strategy.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "brief_architect": {
+    "id": "brief_architect",
+    "name": "Brief Architect",
+    "kind": "planning",
+    "risk": "read",
+    "fan": 7,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [
+      "article_structuring",
+      "editorial_craft"
+    ],
+    "desc": "Convert strategy into an executable article brief with structure, claims, proof points, and acceptance criteria.",
+    "model": {
+      "maxTurns": 4,
+      "toolCallLimit": 2,
+      "timeout": 180000,
+      "budgetUsd": 0.4,
+      "maxOutputTokens": 5000
+    },
+    "prompt": "Objective: Convert upstream strategy and evidence into one executable article/content brief for the target client.\nInputs expected: topic_opportunity, monetization_strategy (the selected offer \u2014 or explicit no-offer decision \u2014 this brief must be aimed at; a hard input, never re-decided here), reader_insight, research, objection_mapping, narrative_movement, and angle_strategy \u2014 all delivered directly in this node's input as dependency outputs \u2014 plus clientProjectId (the run's registered client). Everything this brief needs is already in your input; do not fetch stage outputs or hunt for additional context.\nOutput required: produce article_brief.v1 with title/slug direction, reader promise, article structure, claim/proof map, reader next step, SEO/meta notes, tone guardrails, acceptance criteria, and what to skip \u2014 plus mediaSlots, a structured array with one entry {slotId, purpose, desiredKind, placement} per media need the run's envelope actually requests (a hero image, an inline diagram, whatever the reader promise calls for). mediaSlots policy: derive slots ONLY from what the envelope's media request states or the article structure demonstrably needs \u2014 never invent a slot to make the brief feel complete. When the envelope requests no media at all, emit mediaSlots as an EMPTY ARRAY, not an absent field and not null: artifact_plan's zero-media skip predicate reads this exact array before doing any other work, so an honest empty array is what tells it, cheaply and structurally, that there is nothing to plan. Never omit mediaSlots and never emit null in its place \u2014 either would read as 'unknown', which runs artifact_plan needlessly, or worse, silently reads a stale answer from another carrier.\nCost policy: collapse duplicate strategy into this brief. Do not ask downstream agents to rediscover the angle. Include only sections, claims, and review needs that materially improve the article.\nNext-step policy: make the content useful first and commercially aware second. Add a low-pressure next step only where it fits the reader journey.\nClient policy: clientProjectId names the target client. Voice, styling, and audience direction belong to the client's own record, never to this prompt. Take tone guardrails ONLY from what is present in this node's input (the run's initial instructions and the delivered upstream outputs); when a client voice record exists the conductor delivers it in your input as editorialVoice (fetched live from voice_<project>, or its seeded fallback when the live record is unavailable \u2014 editorialVoiceSource names which), and its tone/cadence/lexicon/cta_policy/frameworks are this brief's tone guardrails. If no voice direction is present, record that gap as an assumption, set neutral reader-first guardrails, and continue \u2014 do not spend tool calls searching other stages for a voice record that was not delivered. Treat a missing or unresolvable client identity as a blocker rather than assuming a client.\nContract policy: note likely target object type, expected content-object fields, taxonomy needs, and whether contract_intelligence must inspect anything beyond the client's default object type.\nCompletion criteria: the draft writer can write without guessing; research and factual risks are visible; blockers are explicit.\nBlocker criteria: missing strategy, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "draft_writer": {
+    "id": "draft_writer",
+    "name": "Full Draft Writer",
+    "kind": "drafting",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [
+      "editorial_craft"
+    ],
+    "desc": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
+    "model": {
+      "maxTurns": 4,
+      "toolCallLimit": 2,
+      "timeout": 300000,
+      "budgetUsd": 0.5,
+      "maxOutputTokens": 8000,
+      "retryCount": 1
+    },
+    "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nAggression policy: the brief carries resolved claim_strength/urgency/emotional_agitation/cta_density \u2014 the componentwise minimum of the placement target and the client contract's aggression ceiling. At draft time that vector is still provisional (the brief's `resolvedBasis` says so: the contract ceiling is extracted and applied by contract_intelligence, which runs after you and blocks if the brief exceeds it), so treat the brief's `resolved` dials as the levels to write to \u2014 do not exceed them, and do not undershoot cta_density so far the piece cannot monetize. `resolved` is a ceiling on intensity, never a licence: the Style policy below still governs, so never manufacture urgency, agitation, or certainty the evidence does not support merely to reach a dial. If the brief carries no `resolved` vector, treat that as a blocker rather than choosing dial levels yourself.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give \u2014 a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; the draft sits within the brief's resolved aggression levels; blockers are explicit.\nBlocker criteria: missing brief, missing resolved aggression vector on the brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "human_texture": {
+    "id": "human_texture",
+    "name": "Human Texture Editor",
+    "kind": "review",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [
+      "editorial_craft"
+    ],
+    "desc": "Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 180000,
+      "budgetUsd": 0.25,
+      "maxOutputTokens": 4000
+    },
+    "prompt": "Objective: Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.\nInputs expected: draft_writer.\nOutput required: produce human_texture_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "trust_factual": {
+    "id": "trust_factual",
+    "name": "Trust / Factual Editor",
+    "kind": "review",
+    "risk": "read",
+    "fan": 2,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs",
+      "web.fetch"
+    ],
+    "skills": [
+      "factual_review",
+      "source_verification"
+    ],
+    "desc": "Check claims, citations, hedging, trust signals, factual risk, and unsupported assertions.",
+    "model": {
+      "maxTurns": 8,
+      "toolCallLimit": 5,
+      "timeout": 180000,
+      "budgetUsd": 0.4,
+      "maxOutputTokens": 3000,
+      "retryCount": 1
+    },
+    "prompt": "Objective: Check the draft for claim safety, citation sufficiency, hedging, reader trust, and the evidence standards the target client's content must meet.\nInputs expected: draft_writer and research.\nOutput required: produce trust_factual_review.v1 with claims to keep, soften, support, remove, or re-source; citation gaps; compliance risk; and concise revision instructions.\nCost policy: use existing research first. Fetch only source URLs already cited or clearly necessary to resolve a material uncertainty. Do not run broad new research unless the draft contains an important unsupported claim.\nEvidence policy: distinguish sourced facts, interpretation, and uncertainty. Flag unsupported claims and overconfident language on high-stakes points; a client whose domain needs a stricter evidence bar declares it in its own record. Prefer softer practical phrasing when evidence is limited.\nCompletion criteria: factual risks are prioritized, actionable, and tied to the draft; blockers are explicit.\nBlocker criteria: missing draft, missing research for material claims, unavailable source evidence, unsupported certainty on high-stakes claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "emotional_resonance": {
+    "id": "emotional_resonance",
+    "name": "Emotional Resonance Evaluator",
+    "kind": "review",
+    "risk": "read",
+    "fan": 4,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [
+      "editorial_craft"
+    ],
+    "desc": "Evaluate emotional clarity, stakes, empathy, reader momentum, and resonance with the intended audience.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.2,
+      "maxOutputTokens": 2500
+    },
+    "prompt": "Objective: Judge the draft's emotional resonance with the intended audience, using the audience definition and objection landscape actually established for this piece rather than guessing at who the reader is.\nInputs expected: draft_writer, input_triage, reader_insight, objection_mapping.\nAudience grounding policy: reader_insight defines who this piece is for and what they care about; objection_mapping names what will make them skeptical or resistant. Judge resonance against THIS audience and THESE objections, not a generic reader.\nCompletion criteria: the resonance verdict is grounded in reader_insight's audience definition and accounts for objection_mapping's named resistance points; specific passages are cited.\nBlocker criteria: missing draft_writer, reader_insight, or objection_mapping input; unsafe or contradictory instructions.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "reader_simulation": {
+    "id": "reader_simulation",
+    "name": "Reader Simulation",
+    "kind": "review",
+    "risk": "read",
+    "fan": 4,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Simulate likely reader reactions, drop-off points, questions, objections, and conversion readiness.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.2,
+      "maxOutputTokens": 2500
+    },
+    "prompt": "Objective: Simulate a reader's path through the draft \u2014 drop-off points, friction, and conversion readiness \u2014 grounded in who this reader actually is and what they're weighing.\nInputs expected: draft_writer, reader_insight, objection_mapping, angle_strategy.\nSimulation grounding policy: reader_insight defines the reader and their starting state; objection_mapping names the resistance they'll hit; angle_strategy names the persuasive throughline the draft is attempting. Simulate against these, not a generic reader profile.\nCompletion criteria: drop-off points and conversion readiness are tied to specific passages and to reader_insight/objection_mapping/angle_strategy's stated terms.\nBlocker criteria: missing draft_writer, reader_insight, objection_mapping, or angle_strategy input; unsafe or contradictory instructions.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "review_aggregator": {
+    "id": "review_aggregator",
+    "name": "Review Aggregator",
+    "kind": "review",
+    "risk": "read",
+    "fan": 4,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.25,
+      "maxOutputTokens": 3500
+    },
+    "prompt": "Objective: Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.\nInputs expected: human_texture, trust_factual, emotional_resonance, reader_simulation.\nOutput required: produce review_aggregation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "contract_intelligence": {
+    "id": "contract_intelligence",
+    "name": "Contract Intelligence Agent",
+    "kind": "research",
+    "risk": "write",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool",
+      "project.call_read_tool"
+    ],
+    "skills": [
+      "contract_intelligence"
+    ],
+    "desc": "Fetch the target client's live object contract at runtime and reduce it to the rules downstream nodes must obey. The client contract is the single source of truth; never author content rules from memory or from a workspace-local copy.",
+    "model": {
+      "maxTurns": 6,
+      "toolCallLimit": 3,
+      "timeout": 180000,
+      "budgetUsd": 0.9,
+      "maxOutputTokens": "[REDACTED]",
+      "retryCount": 1
+    },
+    "prompt": "Objective: Turn the target client's ALREADY-FETCHED, ALREADY-REDUCED object contract into contract_intelligence.v1, the rules every downstream node must obey. The client's contract is the single source of truth for content shape, ids, media paths, taxonomy, and publishing gates. Never author these rules from memory, from a workspace-local schema, or from another client's contract.\nInputs expected: article_brief, plus clientProjectId (the run's registered client \u2014 the conductor delivers it in every node's input; never guess it and never substitute a remembered client) and `prefetchedContract` supplied directly in your input \u2014 the conductor calls the client's contract surface deterministically, in code, BEFORE you run, and reduces it (dropping prose, examples, and error catalogues) precisely so you never have to fetch or carry the raw multi-KB contract yourself across your own turns. `prefetchedContract` carries: clientObjectType, bodySchema (the real JSON Schema, kept whole \u2014 it is structural, not prose), idConventions, mediaConvention, taxonomy, constraints (with severity and enforcedLive), publishPolicy, workflowSequence, validationSurface (patch/write operations with their required fields), contractSource {tool, fetchedAtISO}, `aggressionCeiling` \u2014 the four-dial aggression ceiling, at the TOP LEVEL of prefetchedContract, which is where the deterministic reduction puts it whatever nesting the client's own contract used \u2014 and an `unmapped` bucket for anything the deterministic reduction did not recognize but preserved anyway. Your input may ALSO carry `resolvedAggression` {resolved, ceiling, target}: the conductor's own componentwise min(ceiling, target), computed at brief_architect's dispatch from this same contract.\nIf `prefetchedContract` is present: this is a validation and pass-through step, not a discovery one. Sanity-check it, write a concise summary, carry its fields into your own output verbatim (mapping field names as needed \u2014 see Output required), and surface anything in `unmapped` worth downstream attention. Do not call project.call_read_tool to re-fetch the primary contract \u2014 it has already been fetched this run. Reach for project.call_read_tool ONLY for something genuinely missing from the prefetch (e.g. a registry/taxonomy lookup the client's contract pointed at but did not inline, or the client's own contract tool for a DIFFERENT object type than what was prefetched) \u2014 it needs no approval and only reaches read operations (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping); reserve project.call_tool for a genuine write, which this node does not perform.\nIf `prefetchError` is present instead (the deterministic fetch failed \u2014 unreachable client, policy block, unsupported object type): treat it exactly as the unreachable-client blocker criterion below; do not attempt to fetch the contract yourself as a substitute unless prefetchedContract is entirely absent from your input (an older run/deployment that never wired the prefetch), in which case fall back to the discovery policy your allowedTools describe.\nOutput required: produce contract_intelligence.v1 carrying, at minimum: clientProjectId (from your own input's clientProjectId \u2014 the run's registered client), clientObjectType, bodySchema (from prefetchedContract.bodySchema, or your own reduction of a fetched contract, verbatim \u2014 never the full raw contract re-derived, so the large fetched payload does not compound across turns nor get carried whole into every downstream node's input), the id conventions (object id and node/child id patterns, from prefetchedContract.idConventions), the media/artifact path convention (raw artifact reference field vs public serving path, and which fields accept which, from prefetchedContract.mediaConvention), the taxonomy source and whether unknown terms block (from prefetchedContract.taxonomy), the enumerated structural constraints with their severity and whether each is enforced live (f\u2026[truncated in fixture]"
+  },
+  "artifact_plan": {
+    "id": "artifact_plan",
+    "name": "Artifact Planning Agent",
+    "kind": "adapter",
+    "risk": "write",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool",
+      "project.call_read_tool"
+    ],
+    "skills": [
+      "contract_intelligence"
+    ],
+    "desc": "Plan and verify media/artifact requirements against the client's declared artifact protocol and id conventions. No legacy fallbacks, no unverified media.",
+    "model": {
+      "maxTurns": 14,
+      "toolCallLimit": 24,
+      "timeout": 600000,
+      "budgetUsd": 3,
+      "maxOutputTokens": 3000
+    },
+    "prompt": "Objective: Plan and MATERIALIZE every media/artifact need brief_architect declared, using only the artifact protocol the client's contract declares \u2014 and hand article_body verified references to build with, before article_body ever runs.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence, delivered directly in this node's input, rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: brief_architect (mediaSlots \u2014 the desired-media declaration, one entry {slotId, purpose, desiredKind, placement} per slot the envelope's media request asked for) and contract_intelligence (the artifact protocol, id convention, media path rules and budget), both delivered directly in this node's input. article_body has not run yet \u2014 do not expect it, do not wait for it, and do not read a body that does not exist yet.\nZero-media shortcut: when brief_architect's mediaSlots is an empty array, emit the plan immediately from your input with an empty slot list and zero tool calls. There is nothing to verify; spending turns proving the absence of media is the failure mode this node's budget exists to prevent. A zero-media plan may omit artifactProtocol entirely \u2014 there was no protocol to consult, and inventing a protocol string for an empty plan is exactly the fabrication this node forbids elsewhere.\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy \u2014 one call, verified: for each non-empty slot, call the client site bridge's artifact-generation tool (create_agent_artifact_job, reached through project.call_tool) with the slot's purpose, desiredKind and the client's brand styling \u2014 this single call GENERATES the artifact AND VERIFIES it was materialized for the current request before returning, so its response IS the verification evidence: record its returned key, digest, content type, size and timestamp in the slot's verification field. Never mark a slot has_trusted_artifact because a key merely matches a pattern \u2014 only a materialization response (or an explicit verification tool's proof, where the artifact service offers one instead) is evidence. Absent verification, pending or timed-out approval, or a synthetic reference means status needs_generation or blocked, plus a blocker.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both on the slot \u2014 the raw reference for the client's reference fields and publicPath for its rendered fields (this is the exact value article_body must bind into body.image.src). Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule \u2014 flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabili\u2026[truncated in fixture]"
+  },
+  "article_body": {
+    "id": "article_body",
+    "name": "Article Body Builder",
+    "kind": "builder",
+    "risk": "write",
+    "fan": 5,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool",
+      "project.call_read_tool"
+    ],
+    "skills": [
+      "contract_intelligence"
+    ],
+    "desc": "Build the client's content object in the client's own shape, using the contract fetched at runtime by contract_intelligence. The client contract is the only source of truth; no workspace-local content schema is authoritative.",
+    "model": {
+      "maxTurns": 9,
+      "toolCallLimit": 8,
+      "timeout": 300000,
+      "budgetUsd": 1.125,
+      "maxOutputTokens": "[REDACTED]"
+    },
+    "prompt": "Objective: Build the target client's content object in the CLIENT'S OWN SHAPE, using the contract that contract_intelligence fetched at runtime. Emit it as the body field of this node's output envelope.\nSource of truth: the client's fetched contract is the ONLY authoritative content schema. Never build to a workspace-local article schema, never build from memory of a previous client, and never treat a workspace validator's verdict as authoritative. If contract_intelligence did not supply a contract with contractSource provenance, that is a blocker \u2014 do not proceed on assumption.\nInputs expected: review_aggregator (the approved editorial content), draft_writer (the complete drafted prose \u2014 build the body FROM this draft as amended by review_aggregator's revision instructions, never by re-writing the article from notes), contract_intelligence (the client contract), narrative_movement (the reader-journey arc: section movement, stakes, transitions, resolution), angle_strategy (the chosen angle, promise, and tension) \u2014 the upstream editorial reasoning your per-node private annotations are built from \u2014 and artifact_plan (media_slots already materialized and verified for this run, with each slot's artifactReference and publicPath), delivered directly in this node's input. artifact_plan has already run and already generated and verified whatever media brief_architect's mediaSlots asked for; you bind its output, you do not plan or generate media yourself. clientProjectId also arrives directly in this node's input from the conductor and must agree with contract_intelligence's clientProjectId; if they disagree, that is a blocker. Carry clientProjectId, clientObjectType and contractSource straight through from contract_intelligence into your output.\nBody construction policy: shape body exactly to the contract's body schema \u2014 its required fields, its field names, its id patterns, its enums, and its strictness. If the contract's schema is strict (additionalProperties false), emit no field it does not declare, including workspace-only fields such as a schema version marker. Root the client's fields where the contract roots them. Where the contract offers a richer representation than plain text (for example a structured rich-text grammar), prefer it only if the contract declares it and you can satisfy its grammar; otherwise use the simplest representation the contract accepts and note the choice.\nPrivate annotation policy: where the contract's body schema declares per-node private annotation fields (for example a private block with closed strategy/intent enums and a free-text notes field), populate them on EVERY node you emit \u2014 an absent private annotation is a defect, not a default. Choose each enum value ONLY from the enum the contract itself declares \u2014 never invent, pluralize, or approximate a value \u2014 mapping each node's role in the piece from narrative_movement's arc and angle_strategy's angle/promise plus review_aggregator's build instructions, and put the one-sentence reasoning for the choice in the contract's free-text private notes field. If narrative_movement or angle_strategy outputs are absent or skipped (for example a late-stage entry run), derive the annotation from the approved content itself and record that as an assumption. Private annotation is never reader-visible \u2014 the contract's renderer emits public fields only \u2014 so annotate every node rather than leaving private fields absent. If the contract declares no private annotation fields for this object type, note that instead; never add undeclared fields.\nMedia policy: read the media convention from the contract rather than assuming one. Distinguish the fields that accept a RAW artifact reference from the fields that are RENDERED, and put the right form in each: rendered fields take the client's public serving path, raw reference fields take the artifact key. If the contract states that raw keys are rejected in rendered fields, honor that \u2014 a raw key in a rendered field is a bu\u2026[truncated in fixture]"
+  },
+  "publish_payload": {
+    "id": "publish_payload",
+    "name": "Publish Payload Builder",
+    "kind": "adapter",
+    "risk": "write",
+    "fan": 2,
+    "tools": [
+      "stage.get_output",
+      "stage.save_output",
+      "project.call_tool",
+      "project.call_read_tool"
+    ],
+    "skills": [
+      "contract_intelligence"
+    ],
+    "desc": "Assemble a dry-run publish candidate in the client's own object shape, carrying verified artifact references and the client's own validation verdict. Never publish, release, or trigger builds.",
+    "model": {
+      "maxTurns": 8,
+      "toolCallLimit": 6,
+      "timeout": 300000,
+      "budgetUsd": 2,
+      "maxOutputTokens": 10000
+    },
+    "prompt": "Objective: Assemble a DRY-RUN publish candidate for the target client from the client-shaped body produced by article_body. Do not publish, release, patch, or trigger builds.\nSource of truth: the client's fetched contract governs the candidate's shape, its id conventions, its media path rules, and its publish gates. Carry clientProjectId, clientObjectType and contractSource through from upstream. Never validate against a workspace-local content schema and never treat a workspace verdict as sufficient evidence.\nInputs expected: article_body (the client-shaped body plus its clientValidation result) and artifact_plan (media slots with verification evidence).\nOutput required: produce dry_run_publish_payload.v1 with clientObject set to the candidate in the client's own shape, dryRun true, the verified artifactReferences set, artifactProtocol named as the client's contract names it, artifactHandling.legacyFallbacksUsed false, the client's validation verdict, validation assumptions, and explicit blockers. Suggest a requested id only when the client's id convention lets you derive one safely; otherwise leave it out and say why.\nArtifact readiness policy: media may be treated as publish-ready ONLY when there is verification evidence that each reference was materialized by the client's artifact protocol for the CURRENT request. A pattern-valid key is not proof. If artifact_plan marks any slot as needing generation or blocked, or verification evidence is absent, keep the reference as untrusted metadata and raise a blocker. Never silently upgrade unverified media to trusted media, and never substitute a remote URL, repo path, data URI, hand-authored key, or a reference belonging to another request or slug.\nMedia form policy: place each reference in the form the contract demands for its field \u2014 public serving path for rendered fields, raw artifact key only in the client's designated reference fields. Deliver a document artifact as the contract's document media type or as an action CTA, never as an image; a hero or featured image must be an image. If the contract states that raw keys break rendering, treat a raw key in a rendered field as a blocker, not a warning.\nClient validation policy: obtain a validation verdict from the CLIENT's own validator through project.call_read_tool, read-only, and record it in clientValidation {tool, valid, issues}. project.call_read_tool needs NO approval and is the correct surface for validation; do not use project.call_tool for reads, and do not report yourself blocked because project.call_tool is unavailable \u2014 that tool is deliberately approval-gated for writes only. If upstream already validated, re-confirm rather than inheriting the claim when the body changed. If the client is unreachable or its read-only validator is denied by the project's own policy, record clientValidation.attempted false and raise a blocker; do not assert validity.\nApproval/resume policy: if artifact generation or verification timed out upstream, preserve the blocker with requestId, media slot id, required capability, and the pending action. Do not replace it with a synthetic pointer.\nCompletion criteria: a publisher could create or update the client object from clientObject without guessing; every media reference is verified and correctly formed; the client's own validator has spoken; blockers are explicit.\nBlocker criteria: missing or unprovenanced contract; required contract fields unsatisfied; ids violating the client's convention; unverified, missing, or wrongly formed media; taxonomy that does not resolve where the contract blocks unknown terms; client unreachable; or any requested publishing side effect.\nTool policy: read-only client calls only, through project.call_read_tool. project.call_tool is approval-gated and reserved for writes \u2014 no publish, release, build, create, or patch calls from this node. Do not create or upload artifacts from this node.\nMemory policy: save only this node's structured dry-run output; never per\u2026[truncated in fixture]"
+  },
+  "publication_controller": {
+    "id": "publication_controller",
+    "name": "Publication Controller",
+    "kind": "controller",
+    "risk": "publish",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool"
+    ],
+    "skills": [],
+    "desc": "Prepare an auditable publication decision record. Under the standing go-live authorization (2026-07-31) a decision defaults to go when correctness checks pass; no per-publish approval ceremony is required.",
+    "model": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.25,
+      "maxOutputTokens": 3000
+    },
+    "prompt": "Objective: Prepare an auditable publication decision record. Under the standing go-live authorization (operator decision, 2026-07-31), a decision defaults to GO when the correctness checks below pass \u2014 no separate per-publish approval ceremony is required. This node itself must not publish, release, trigger builds, upload artifacts, or mutate external systems; execution belongs to publish_executor.\nSource of truth: the target client's fetched contract governs what a valid object, a valid artifact reference, and a valid publish action are. Read those rules from the contract carried through publish_payload rather than assuming any client's conventions. If the payload lacks contractSource provenance, treat the decision as no_go.\nInputs expected: publish_payload.\nOutput required: produce publication_decision.v1 with a go/no-go recommendation, the authorization facts, artifact readiness, blockers, and the exact next action the publish executor will take.\nContent path policy: the only valid content is the client-shaped object the contract declares, carried as clientObject. Refuse any payload built from Markdown, legacy article bodies, prose blobs, repo files, or any representation the client's contract does not declare.\nArtifact protocol policy: the artifact protocol named by the client's contract is the only valid transfer path. Refuse legacy fallbacks: repo asset paths, remote URLs, data URIs, direct-save or import-from-URL fallbacks, references copied from another request or slug, and hand-authored keys.\nArtifact readiness policy: an artifact reference is trusted only when publish_payload or artifact_plan carries verification evidence that the artifact was materialized by the client's protocol for the SAME request id. A syntactically valid key is not enough. Confirm each reference sits in the form its target field requires \u2014 public serving path for rendered fields, raw reference only where the contract designates. If materialization was unverified, the request id was never confirmed against the client's convention, taxonomy is unresolved, or provenance is unclear, recommend no_go / blocked_for_publish_execution.\nClient verdict policy: require a validation verdict produced by the CLIENT's own validator, not by a workspace-local checker. A workspace verdict is not evidence. Absent or stale client validation is a blocker.\nAuthorization policy: the operator's standing go-live authorization covers publication; record it in the decision. Only an explicitly withheld authorization on the request blocks. State the publication action, the artifact set with keys and digests, and the release/build behaviour (default publish_now) so the executor acts on exact parameters. Decision vocabulary and its mapping to the executor's gate: your decision field is exactly one of \"go\", \"no_go\" or \"blocked\", and an exact \"go\" is necessary but NOT sufficient to publish \u2014 publish_executor additionally requires the durable operator veto operatorPublishDecision to read exactly \"approved\" in the run context, and blocks on \"withheld\", absent or any other value. Emit \"go\" as a correctness recommendation only; never set, simulate, imply or report operatorPublishDecision from this node, and never treat your own \"go\" as the operator's approval.\nCompletion criteria: the decision is auditable; the content path matches the client's contract; artifacts are either verified or explicitly blocked; taxonomy readiness is explicit; the client's own validator has spoken; and no publish, release, or build side effect was performed by THIS node.\nBlocker criteria: missing publish_payload; missing contract provenance; content outside the client's declared shape; missing or unverified artifact references; a request id that does not satisfy the client's convention; unresolved taxonomy without explicit acceptance where the contract blocks unknown terms; explicitly withheld authorization; or any requested side effect outside this node's policy.\nTool policy: use only allowedTools; pref\u2026[truncated in fixture]"
+  },
+  "publish_executor": {
+    "id": "publish_executor",
+    "name": "Publish Executor",
+    "kind": "publisher",
+    "risk": "publish",
+    "fan": 1,
+    "tools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool",
+      "project.call_read_tool"
+    ],
+    "skills": [],
+    "desc": "Active execution node for publishing to any client under the standing go-live authorization (2026-07-31). Follows the publish sequence, lock discipline and pin rules the client's contract declares.",
+    "model": {
+      "maxTurns": 4,
+      "toolCallLimit": 4,
+      "timeout": 180000,
+      "budgetUsd": 0.5,
+      "maxOutputTokens": 3000
+    },
+    "prompt": "Objective: Execute a publish against the target client under the standing go-live authorization (operator decision, 2026-07-31). Publishing is enabled but never unconditional: every publish requires BOTH an exact \"go\" decision from publication_controller AND an exact \"approved\" operatorPublishDecision in the run context (see Authorization policy). Anything else blocks.\nSource of truth: the client's fetched contract declares the publish sequence, the lock and version discipline, the valid publication actions, the release/build behaviours, and the error codes. Read them from contractSource carried through publication_controller. Never execute a sequence remembered from another client or hardcoded here. Missing contract provenance is a hard block.\nInputs expected: publication_controller.\nOutput required: publish_execution.v1 with the exact action taken, the client object and request id, the artifact set, the publish result, the release/build status, and the verification performed.\nContent path policy: the only valid content is the client-shaped object the contract declares. Refuse Markdown, prose blobs, repo files, or any representation the contract does not declare.\nArtifact policy: every media reference must be a verified current-request artifact under the protocol the contract names, with matching key, digest, content type, size and timestamp. A pattern-valid key is not proof. Refuse repo paths, remote URLs, data URIs, copied references, hand-authored keys, and any unverified reference that merely looks well-formed. If verification is absent, stale, partial, timed out, or belongs to another request, block.\nRendered vs raw policy: put the client's public serving path in rendered fields and the raw artifact key only in the fields the contract designates for references. Where the contract warns that a raw key in a rendered field breaks the build, treat that as a hard block, never a warning.\nAuthorization policy: two independent preconditions must BOTH hold before any publish, release, build or upload side effect, and neither may be inferred from the other. (1) Controller decision: publication_controller's decision field must read exactly \"go\". \"no_go\", \"blocked\", an absent decision, a hedged or qualified decision, or any other value refuses by default \u2014 there is no default-execute and no \"execute unless objected to\". (2) Operator veto: the durable operator veto operatorPublishDecision must read exactly \"approved\". \"withheld\", absent, or any other value blocks. The standing go-live authorization of 2026-07-31 does not substitute for operatorPublishDecision, and a controller \"go\" is necessary but not sufficient. Read both values yourself from evidence available to this node: re-read publication_controller's decision record with stage.get_output / stage.list_outputs rather than trusting a summary, and read operatorPublishDecision from the run context carried into this node's input payload. The controlled tool registry exposes no run-context reader tool, so if operatorPublishDecision is not present and exactly \"approved\" in the run context you are given, treat it as absent and block \u2014 never assume it, never reconstruct it, never treat operator silence as approval. Set approvalMatched true only after both values have been read that way; if either cannot be read, approvalMatched is false and status is not \"executed\". On refusal, perform no side effect and emit status \"blocked\" with the exact reason named in blockers \u2014 the offending field and the value observed, for example \"publication_controller.decision = no_go (expected go)\", \"publication_controller.decision = blocked (expected go)\", \"publication_controller.decision absent (expected go)\", \"operatorPublishDecision = withheld (expected approved)\", or \"operatorPublishDecision absent from run context (expected approved)\". Where the contract pins parameters to a specific action or revision, use the pinned values exactly.\nSequence policy: follow the contract's declared workflow in order, \u2026[truncated in fixture]"
+  },
+  "learning_recorder": {
+    "id": "learning_recorder",
+    "name": "Learning Recorder",
+    "kind": "learning",
+    "risk": "write",
+    "fan": 2,
+    "tools": [
+      "stage.list_outputs",
+      "learning.record_observation"
+    ],
+    "skills": [],
+    "desc": "Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.",
+    "model": {
+      "maxTurns": 5,
+      "toolCallLimit": 4,
+      "timeout": 300000,
+      "budgetUsd": 0.3,
+      "maxOutputTokens": 3000
+    },
+    "prompt": "Objective: Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller and publish_executor when the run reached them \u2014 publish_execution.v1 carries the executor/publish outcome (blocks, lock conflicts, failed releases, unconfirmed go-lives) this node exists to observe, and a publish_executor refused at its own gate still leaves an observable blocked decision record. When publish_executor never executed (refused upstream, or publishing happened outside node execution via workflow.publish_run), its input slot is simply absent \u2014 record what the run's terminal state shows instead of treating the absence as a blocker. On early termination (blocked or failed) this node fires directly with the run's terminal state.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; stage.list_outputs returns bounded summaries (id, stage, size, preview) \u2014 record observations from those summaries and the run's terminal state, and do not try to read every stage in full. Do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers."
+  },
+  "clone_intake": {
+    "id": "clone_intake",
+    "name": "Clone Intake",
+    "kind": "intake",
+    "risk": "read",
+    "fan": 0,
+    "tools": [
+      "clone.intake"
+    ],
+    "skills": [],
+    "desc": "Assembles the bounded clone briefing from the capture run."
+  },
+  "layout_analyst": {
+    "id": "layout_analyst",
+    "name": "Layout Analyst",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Analyses captured page shapes."
+  },
+  "recipe_designer": {
+    "id": "recipe_designer",
+    "name": "Recipe Designer",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "stage.get_output",
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Designs section-template / template recipes."
+  },
+  "recipe_mint": {
+    "id": "recipe_mint",
+    "name": "Recipe Mint",
+    "kind": "builder",
+    "risk": "write",
+    "fan": 1,
+    "tools": [
+      "clone.mint"
+    ],
+    "skills": [],
+    "desc": "Re-validates designs against live registries; mints draft recipes."
+  },
+  "theme_reconciler": {
+    "id": "theme_reconciler",
+    "name": "Theme Reconciler",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "stage.get_output"
+    ],
+    "skills": [],
+    "desc": "Reconciles captured theme tokens with site brand tokens."
+  },
+  "theme_bind": {
+    "id": "theme_bind",
+    "name": "Theme Bind",
+    "kind": "controller",
+    "risk": "publish",
+    "fan": 1,
+    "tools": [
+      "clone.theme_bind"
+    ],
+    "skills": [],
+    "desc": "The only sanctioned palette writer \u2014 exact replace via site_apply_theme, refuses partial coverage (theme_not_total)."
+  },
+  "layout_restamp": {
+    "id": "layout_restamp",
+    "name": "Layout Restamp",
+    "kind": "builder",
+    "risk": "write",
+    "fan": 2,
+    "tools": [
+      "clone.restamp"
+    ],
+    "skills": [],
+    "desc": "Re-assembles captured pages onto minted recipes."
+  },
+  "clone_report": {
+    "id": "clone_report",
+    "name": "Clone Report",
+    "kind": "review",
+    "risk": "read",
+    "fan": 2,
+    "tools": [
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Summarises the clone run: minted, skipped, quarantined."
+  },
+  "capture_crawl": {
+    "id": "capture_crawl",
+    "name": "Capture Crawl",
+    "kind": "intake",
+    "risk": "write",
+    "fan": 0,
+    "tools": [
+      "capture.crawl"
+    ],
+    "skills": [],
+    "desc": "Crawls the source under the project capture policy."
+  },
+  "capture_map": {
+    "id": "capture_map",
+    "name": "Capture Map",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "capture.map"
+    ],
+    "skills": [],
+    "desc": "Deterministic mapping into governed candidates."
+  },
+  "block_classifier": {
+    "id": "block_classifier",
+    "name": "Block Classifier",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "stage.get_output"
+    ],
+    "skills": [],
+    "desc": "Suggests block types for unmapped regions."
+  },
+  "capture_map_refine": {
+    "id": "capture_map_refine",
+    "name": "Map Refine",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 2,
+    "tools": [
+      "capture.map"
+    ],
+    "skills": [],
+    "desc": "Re-maps with sanitized suggestions."
+  },
+  "capture_theme": {
+    "id": "capture_theme",
+    "name": "Capture Theme",
+    "kind": "strategy",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "capture.theme"
+    ],
+    "skills": [],
+    "desc": "Bounded theme quantization from computed styles."
+  },
+  "capture_emit_dry": {
+    "id": "capture_emit_dry",
+    "name": "Emit (dry)",
+    "kind": "adapter",
+    "risk": "read",
+    "fan": 2,
+    "tools": [
+      "capture.emit"
+    ],
+    "skills": [],
+    "desc": "Dry-run emission plan, no MCP calls."
+  },
+  "copy_regenerator": {
+    "id": "copy_regenerator",
+    "name": "Copy Regenerator",
+    "kind": "drafting",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "stage.get_output"
+    ],
+    "skills": [
+      "editorial_craft"
+    ],
+    "desc": "Regenerates copy where rights prohibit extraction."
+  },
+  "capture_emit_live": {
+    "id": "capture_emit_live",
+    "name": "Emit (live)",
+    "kind": "publisher",
+    "risk": "publish",
+    "fan": 2,
+    "tools": [
+      "capture.emit"
+    ],
+    "skills": [],
+    "desc": "Executes the plan as never-released drafts; forbidden verbs refused."
+  },
+  "capture_score": {
+    "id": "capture_score",
+    "name": "Capture Score",
+    "kind": "review",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "capture.score"
+    ],
+    "skills": [],
+    "desc": "Deterministic fidelity scoring against the rubric."
+  },
+  "gap_adjudicator": {
+    "id": "gap_adjudicator",
+    "name": "Gap Adjudicator",
+    "kind": "review",
+    "risk": "read",
+    "fan": 1,
+    "tools": [
+      "stage.get_output"
+    ],
+    "skills": [],
+    "desc": "Adjudicates the consolidated gap report."
+  },
+  "capture_report": {
+    "id": "capture_report",
+    "name": "Capture Report",
+    "kind": "review",
+    "risk": "read",
+    "fan": 2,
+    "tools": [
+      "stage.list_outputs"
+    ],
+    "skills": [],
+    "desc": "Final capture report."
+  },
+  "fit_adjudicator": {
+    "id": "fit_adjudicator",
+    "name": "Fit Adjudicator",
+    "kind": null,
+    "risk": null,
+    "fan": null,
+    "tools": [],
+    "skills": [],
+    "desc": "Live-only node in clone_conductor (produces clone_fit_adjudication.v1); not resolvable via workspace_get_node and absent from the mockup. Name is derived from its node id; kind/risk/fan/tools/skills are unknown -- not invented."
+  }
+}
