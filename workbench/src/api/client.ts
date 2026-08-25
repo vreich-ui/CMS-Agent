@@ -32,11 +32,23 @@ const explicitMock = rawEnv.VITE_MOCK as string | undefined;
 const explicitReadOnly = rawEnv.VITE_READ_ONLY as string | undefined;
 
 /**
+ * Third transport, alongside fixtures and the workbench-broker network
+ * path: set by the Netlify build (see netlify.toml) when this app is
+ * served at /workbench on the existing cms-agent.netlify.app site. It
+ * talks to that site's own Netlify Identity + `/api/workspace-mcp` broker
+ * (netlify/functions/workspace-mcp.mts) — the same broker `ui/` already
+ * uses — instead of `workbench-broker/`, which is not deployed here. See
+ * the "Netlify Identity transport" section below.
+ */
+export const IS_NETLIFY_TRANSPORT: boolean = (rawEnv.VITE_MCP_TRANSPORT as string | undefined) === 'netlify';
+
+/**
  * Fixture mode. Explicit `VITE_MOCK=1` always wins; explicit `VITE_MOCK=0`
  * always forces network mode. Left unset, mock mode is the default whenever
- * no broker base URL is configured, so `npm run dev` works with zero config.
+ * no broker base URL is configured and the Netlify transport isn't
+ * selected, so `npm run dev` works with zero config.
  */
-export const IS_MOCK: boolean = explicitMock === '1' || (explicitMock === undefined && !API_BASE);
+export const IS_MOCK: boolean = explicitMock === '1' || (explicitMock === undefined && !API_BASE && !IS_NETLIFY_TRANSPORT);
 
 /**
  * Read-only defaults ON, so a misconfigured deploy is safe rather than
@@ -45,8 +57,13 @@ export const IS_MOCK: boolean = explicitMock === '1' || (explicitMock === undefi
  *   - fixture mode, where every mutation lands in the in-memory `mockStore`
  *     and there is nothing real to protect. Keeping it on there would make the
  *     app undemonstrable without a broker.
- * Against a live broker this flag is advisory UI state only — the broker
- * enforces its own `READ_ONLY` server-side and returns 403 regardless.
+ * Against the workbench-broker network path this flag is advisory UI state
+ * only — that broker enforces its own `READ_ONLY` server-side and returns
+ * 403 regardless. `/api/workspace-mcp` (the Netlify transport) has no such
+ * flag at all — an authorized admin's mutation calls genuinely reach the
+ * live workspace — so this client-side default is the only thing standing
+ * between that transport and production mutations on first deploy; it is
+ * enforced before any call leaves the browser, in confirmAction.ts.
  */
 export const IS_READ_ONLY: boolean = explicitReadOnly === '0' ? false : !IS_MOCK;
 
@@ -196,6 +213,9 @@ export async function callVerb<T>(verb: string, args?: object): Promise<T> {
   if (IS_MOCK) {
     return callVerbMock<T>(verb, (args ?? {}) as Args);
   }
+  if (IS_NETLIFY_TRANSPORT) {
+    return callVerbNetlify<T>(verb, args);
+  }
   return callVerbNetwork<T>(verb, args);
 }
 
@@ -234,6 +254,155 @@ async function callVerbNetwork<T>(verb: string, args?: object): Promise<T> {
   return parsed.data;
 }
 
+// --- Netlify Identity transport -----------------------------------------------
+// Talks directly to the existing site's own broker
+// (netlify/functions/workspace-mcp.mts) and its Netlify Identity session
+// check (netlify/functions/session.mts) — the exact same two endpoints
+// `ui/` uses (see ui/src/mcp/client.ts and ui/src/hooks/useIdentitySession.ts).
+// `workbench-broker/` is not part of this deploy. The browser holds only
+// the Netlify Identity JWT, obtained from the widget the same way `ui/`
+// does; the workspace MCP bearer token is injected server-side by
+// workspace-mcp.mts and never reaches this code.
+
+type NetlifyIdentityUser = {
+  email?: string;
+  token?: { access_token?: string };
+  jwt?: () => Promise<string>;
+};
+
+type NetlifyIdentityWidget = {
+  init: () => void;
+  open: (tab?: 'login' | 'signup') => void;
+  close?: () => void;
+  currentUser: () => NetlifyIdentityUser | null;
+  on: (event: 'init' | 'login' | 'logout', callback: (user?: NetlifyIdentityUser) => void) => void;
+  logout: () => void;
+};
+
+declare global {
+  interface Window {
+    netlifyIdentity?: NetlifyIdentityWidget;
+  }
+}
+
+async function getIdentityAccessToken(): Promise<string | undefined> {
+  const user = window.netlifyIdentity?.currentUser() ?? null;
+  if (!user) return undefined;
+  if (typeof user.jwt === 'function') return user.jwt();
+  return user.token?.access_token;
+}
+
+function netlifyErrorMessage(error: unknown): string | undefined {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return undefined;
+}
+
+interface NetlifyMcpResponse<T> {
+  result?: { structuredContent?: { ok: boolean; data?: T; error?: unknown } };
+  error?: { message: string; data?: unknown };
+}
+
+async function callVerbNetlify<T>(verb: string, args?: object): Promise<T> {
+  let token: string | undefined;
+  try {
+    token = await getIdentityAccessToken();
+  } catch {
+    throw new AuthError(verb, 'Unable to verify the Netlify Identity session.');
+  }
+  if (!token) {
+    throw new AuthError(verb, 'Sign in with Netlify Identity to call this action.');
+  }
+
+  let res: Response;
+  try {
+    res = await fetch('/api/workspace-mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'tools/call',
+        params: { name: verb, arguments: args ?? {} },
+      }),
+    });
+  } catch (err) {
+    throw new NetworkError(verb, err instanceof Error ? err.message : 'The network request failed.');
+  }
+
+  let payload: NetlifyMcpResponse<T> | null = null;
+  try {
+    payload = (await res.json()) as NetlifyMcpResponse<T>;
+  } catch {
+    payload = null;
+  }
+
+  // adminSession.ts's adminSessionErrorResponse — logged-out (401) or
+  // logged-in-but-not-an-admin (403) — both carry the server's own
+  // `error.message` and both should send the operator back to the sign-in
+  // screen (via AuthError -> App.tsx's handleQueryError ->
+  // LoginGate.tsx's reportAuthExpired) rather than reading as a generic
+  // failure toast, or (for 403) as this transport's absent read-only mode.
+  if (res.status === 401 || res.status === 403) {
+    throw new AuthError(verb, netlifyErrorMessage(payload?.error) ?? `Netlify Identity session rejected (HTTP ${res.status}).`);
+  }
+  if (!payload) {
+    throw new NetworkError(verb, `The broker returned an unreadable response (status ${res.status}).`);
+  }
+  if (payload.error) {
+    throw new McpError('mcp_error', payload.error.message, verb);
+  }
+  const structured = payload.result?.structuredContent;
+  if (!structured || structured.ok !== true) {
+    throw new McpError('mcp_error', netlifyErrorMessage(structured?.error) ?? 'MCP tool returned an error.', verb);
+  }
+  return structured.data as T;
+}
+
+function loginNetlify(): Promise<SessionInfo> {
+  return new Promise((resolve, reject) => {
+    const identity = window.netlifyIdentity;
+    if (!identity) {
+      reject(new AuthError('login', 'Netlify Identity widget is not loaded.'));
+      return;
+    }
+    identity.on('login', () => {
+      identity.close?.();
+      getSessionNetlify().then(resolve, reject);
+    });
+    identity.open('login');
+  });
+}
+
+async function getSessionNetlify(): Promise<SessionInfo> {
+  let token: string | undefined;
+  try {
+    token = await getIdentityAccessToken();
+  } catch {
+    return { authenticated: false, readOnly: IS_READ_ONLY };
+  }
+  // No identity user at all: unauthenticated, full stop — never fall back
+  // to fixtures, which would show stale mock data dressed as live.
+  if (!token) return { authenticated: false, readOnly: IS_READ_ONLY };
+
+  let res: Response;
+  try {
+    res = await fetch('/api/session', { headers: { Authorization: `Bearer ${token}` } });
+  } catch (err) {
+    throw new NetworkError('session', err instanceof Error ? err.message : 'The network request failed.');
+  }
+  const body = (await res.json().catch(() => null)) as
+    | { authenticated?: boolean; authorized?: boolean; email?: string; error?: { code: string; message: string } }
+    | null;
+  if (!body || !body.authenticated || !body.authorized) {
+    return { authenticated: false, readOnly: IS_READ_ONLY };
+  }
+  return { authenticated: true, operator: body.email, readOnly: IS_READ_ONLY };
+}
+
 // --- session ----------------------------------------------------------------
 
 export interface SessionInfo {
@@ -247,6 +416,9 @@ export async function getSession(): Promise<SessionInfo> {
   if (IS_MOCK) {
     await delay(MOCK_DELAY_MS);
     return { authenticated: true, operator: 'mock-operator', readOnly: IS_READ_ONLY, workspace: { version: 1, ok: true } };
+  }
+  if (IS_NETLIFY_TRANSPORT) {
+    return getSessionNetlify();
   }
   let res: Response;
   try {
@@ -265,6 +437,13 @@ export async function login(password: string): Promise<SessionInfo> {
     await delay(MOCK_DELAY_MS);
     if (!password) throw new AuthError('login', 'Password is required.');
     return { authenticated: true, operator: 'mock-operator', readOnly: IS_READ_ONLY, workspace: { version: 1, ok: true } };
+  }
+  if (IS_NETLIFY_TRANSPORT) {
+    // Netlify Identity, not a password — the `password` argument is never
+    // read or forwarded. It exists only so LoginGate.tsx's shared
+    // submitLogin() can call this the same way for both transports; the
+    // identity widget itself collects credentials, never this app.
+    return loginNetlify();
   }
   let res: Response;
   try {
@@ -288,6 +467,10 @@ export async function login(password: string): Promise<SessionInfo> {
 export async function logout(): Promise<void> {
   if (IS_MOCK) {
     await delay(MOCK_DELAY_MS);
+    return;
+  }
+  if (IS_NETLIFY_TRANSPORT) {
+    window.netlifyIdentity?.logout();
     return;
   }
   await fetch(`${API_BASE}/api/logout`, { method: 'POST', credentials: 'include' }).catch(() => undefined);

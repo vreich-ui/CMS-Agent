@@ -10,6 +10,13 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Same script the root app (ui/index.html) loads. Only used when this
+         build's VITE_MCP_TRANSPORT is "netlify" (see src/api/client.ts) —
+         fixture-mode dev never touches window.netlifyIdentity, and every
+         access to it elsewhere in this app is optional-chained, so a failed
+         or blocked load here (offline dev, ad blocker) never breaks the
+         page, it just leaves that transport unusable, same as today. -->
+    <script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
