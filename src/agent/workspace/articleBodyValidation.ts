@@ -90,6 +90,13 @@ export type ArticleBodyLoopResult = {
   validation: ArticleBodyValidationRecord;
   // Run-visible facts, in the executor's existing `state.warnings` convention (code:detail).
   warnings: string[];
+  // T2: set only when the client rejected this driver's CREDENTIAL (401/403) rather than the body.
+  // The loop deliberately does not fold this into `warnings`: a warning — even one promoted to a
+  // blocker — still leaves the node `completed`, and "completed with an empty-but-schema-valid
+  // artifact carrying blockers[]" is the exact shape that let three doomed runs spend their whole
+  // budget after the very first client call had already made publication impossible. The executor
+  // reads this field to fail the node and abort the run instead.
+  authFailure?: { error: string; httpStatus?: number };
 };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -240,6 +247,10 @@ export async function runArticleBodyValidationLoop(output: Record<string, unknow
   const boundedExhaustion = outcome === "invalid" && (revalidations >= MAX_ENGINE_REVALIDATION_CYCLES || revisionTurns >= MAX_ENGINE_REVISION_TURNS);
   if (outcome === "invalid") warnings.push(boundedExhaustion ? "article_body_validation_loop_exhausted" : "article_body_validation_invalid");
   if (outcome === "unavailable") warnings.push(`article_body_validation_unavailable:${validation.error ?? "unknown"}`);
+  // An auth failure is reported alongside the ordinary "unavailable" warning, not instead of it: the
+  // run log should still read the same as any other validation outage, and the caller gets the one
+  // extra fact that changes what it must do about it.
+  const authFailure = validation.authFailed ? { error: validation.error ?? "client rejected this driver's credential", ...(validation.httpStatus !== undefined ? { httpStatus: validation.httpStatus } : {}) } : undefined;
 
   const record: ArticleBodyValidationRecord = {
     ...validation,
@@ -247,7 +258,7 @@ export async function runArticleBodyValidationLoop(output: Record<string, unknow
     bodyFingerprint: stableHash(body),
     engineLoop: { revalidations, revisionTurns, mechanicalFixes, outcome, boundedExhaustion }
   };
-  return { output: { ...currentOutput, body, clientValidation: record }, validation: record, warnings };
+  return { output: { ...currentOutput, body, clientValidation: record }, validation: record, warnings, ...(authFailure ? { authFailure } : {}) };
 }
 
 // S3 item 9: "the client's validator could not be reached / refused the request" is not a warning a

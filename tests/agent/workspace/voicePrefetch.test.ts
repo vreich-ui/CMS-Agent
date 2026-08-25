@@ -153,6 +153,76 @@ describe("getEditorialVoice (voice prefetch)", () => {
     expect(sentBody.params?.arguments).toMatchObject({ object_type: "editorial_voice", object_id: "voice_drlurie_variant" });
   });
 
+  // T10 (verified against dr-lurie's live voice_drlurie object, 2026-08-25). A real object_get answers
+  // with the whole RECORD — object_id, object_type, status, version, publication, history, review —
+  // and the editorial voice sits under `body`. The extractor stopped at the record, isVoiceBody said
+  // no, and every live fetch degraded to the seed with voice_object_invalid. dr-lurie's real
+  // editorial voice, authored and published on 2026-08-05, had never reached a single run.
+  //
+  // Invisible precisely because the fallback works: runs completed, articles read plausibly, and the
+  // only trace was a per-node warning on a path whose entire design promise is that it degrades
+  // quietly.
+  const liveRecordEnvelope = (body: unknown) => ({
+    record: {
+      object_id: "voice_drlurie",
+      object_type: "editorial_voice",
+      schema_version: "editorial_voice.v1",
+      site: "site_drlurie",
+      status: "active",
+      version: 6,
+      content_revision: 1,
+      body,
+      publication: { published_time: "2026-08-05T16:34:29.470Z" },
+      history: [{ at: "2026-08-05T16:28:17.034Z", action: "create" }],
+      review: { state: "approved", decisions: [] }
+    }
+  });
+
+  it("unwraps the live object RECORD to its body instead of falling back", async () => {
+    remoteFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { method: string };
+      const result = request.method === "tools/call" ? { structuredContent: liveRecordEnvelope(LIVE_VOICE_BODY) } : {};
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
+    });
+
+    const projectRepository = new MemoryProjectRepository();
+    const result = await getEditorialVoice({ runId: "run-voice-record", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
+
+    expect(result.source).toBe("live");
+    expect(result.warningCode).toBeUndefined();
+    expect(result.voice).toEqual(LIVE_VOICE_BODY);
+  });
+
+  it("unwraps the same record shape when it arrives only as a content[] text block", async () => {
+    remoteFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { method: string };
+      const result = request.method === "tools/call" ? { content: [{ type: "text", text: JSON.stringify(liveRecordEnvelope(LIVE_VOICE_BODY).record) }] } : {};
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
+    });
+
+    const projectRepository = new MemoryProjectRepository();
+    const result = await getEditorialVoice({ runId: "run-voice-record-text", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
+
+    expect(result.source).toBe("live");
+    expect(result.voice).toEqual(LIVE_VOICE_BODY);
+  });
+
+  // The descent is by SHAPE, so a record whose body is genuinely not a voice still degrades loudly
+  // rather than handing a node something unusable.
+  it("still falls back when the record's body is not a voice", async () => {
+    remoteFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { method: string };
+      const result = request.method === "tools/call" ? { structuredContent: liveRecordEnvelope({ some: "unexpected shape" }) } : {};
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
+    });
+
+    const projectRepository = new MemoryProjectRepository();
+    const result = await getEditorialVoice({ runId: "run-voice-record-bad", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
+
+    expect(result.source).toBe("fallback");
+    expect(result.warningCode).toBe("voice_object_invalid");
+  });
+
   it("still honors the project's own executable policy block before any transport", async () => {
     const projectRepository = new MemoryProjectRepository();
     const project = await projectRepository.get("dr-lurie");

@@ -34,6 +34,31 @@ describe("RunScopedCache", () => {
     expect(cache.has("run_a", "k")).toBe(true);
   });
 
+  // T3 (autonomous-publish): a caller whose result type distinguishes success from failure passes
+  // shouldCache so a failed load is never memoized for the life of the run.
+  it("does not store a value shouldCache rejects, and re-runs the loader next time", async () => {
+    const cache = new RunScopedCache();
+    let attempt = 0;
+    const loader = vi.fn(async () => ({ ok: ++attempt > 2 }));
+    const shouldCache = (value: { ok: boolean }) => value.ok;
+
+    expect(await cache.getOrLoad("run_c", "k", loader, { shouldCache })).toEqual({ ok: false });
+    expect(cache.has("run_c", "k")).toBe(false);
+    expect(await cache.getOrLoad("run_c", "k", loader, { shouldCache })).toEqual({ ok: false });
+    expect(await cache.getOrLoad("run_c", "k", loader, { shouldCache })).toEqual({ ok: true });
+    expect(cache.has("run_c", "k")).toBe(true);
+    await cache.getOrLoad("run_c", "k", loader, { shouldCache });
+    expect(loader).toHaveBeenCalledTimes(3);
+  });
+
+  it("caches unconditionally when no shouldCache predicate is supplied", async () => {
+    const cache = new RunScopedCache();
+    const loader = vi.fn(async () => ({ ok: false }));
+    await cache.getOrLoad("run_d", "k", loader);
+    await cache.getOrLoad("run_d", "k", loader);
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
   it("keys per run and supports invalidate/clear", async () => {
     const cache = new RunScopedCache();
     const loader = vi.fn(async () => 1);

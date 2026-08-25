@@ -56,22 +56,45 @@ const VOICE_PREFETCH_TIMEOUT_MS = 15_000;
 // extractContractPayload): prefer structuredContent (checking a couple of plausible nesting keys, then
 // the structured value itself), and parse the content[] text block only when structuredContent is
 // entirely absent. Never assumed beyond what THIS call actually returned.
+// T10 — THE UNWRAP THAT WAS MISSING, AND WHY NOBODY SAW IT.
+//
+// The nesting keys above get to the object RECORD. A live object_get answers with the full record —
+// object_id, object_type, status, version, publication, history, review, and the editorial voice
+// itself under `body`. isVoiceBody() is then asked whether that record is a voice body; it is not,
+// so every live fetch degraded to the seeded fallback with voice_object_invalid, and dr-lurie's real
+// editorial voice — authored, reviewed and published on 2026-08-05 — has never reached a single run.
+//
+// The failure was invisible precisely because the fallback works: runs completed, articles read
+// plausibly, and the only trace was a per-node warning on a path whose whole design promise is that
+// it degrades quietly. Verified against the live object 2026-08-25: structuredContent.record.body
+// satisfies isVoiceBody, structuredContent.record does not.
+//
+// So the descent is by SHAPE, not by a memorised path: take the container, and if it is not itself a
+// voice body but carries an object-shaped `body`, that is the voice. A server that returns the body
+// unwrapped (the shape the tests have always stubbed) is unaffected, and neither shape has to be
+// declared the canonical one.
+const descendToVoiceBody = (candidate: unknown): unknown => {
+  if (!isObject(candidate)) return candidate;
+  if (isVoiceBody(candidate)) return candidate;
+  return isObject(candidate.body) ? candidate.body : candidate;
+};
+
 function extractVoicePayload(result: unknown): unknown {
   if (!isObject(result)) return result;
   const structured = result.structuredContent;
   if (isObject(structured)) {
-    if (isObject(structured.object)) return structured.object;
-    if (isObject(structured.record)) return structured.record;
-    return structured;
+    if (isObject(structured.object)) return descendToVoiceBody(structured.object);
+    if (isObject(structured.record)) return descendToVoiceBody(structured.record);
+    return descendToVoiceBody(structured);
   }
   const content = result.content;
   if (Array.isArray(content)) {
     const text = content.find((block): block is { text: string } => isObject(block) && typeof block.text === "string")?.text;
     if (typeof text === "string") {
-      try { return JSON.parse(text); } catch { return text; }
+      try { return descendToVoiceBody(JSON.parse(text)); } catch { return text; }
     }
   }
-  return result;
+  return descendToVoiceBody(result);
 }
 
 // Shape check against the live editorial_voice contract's required fields (see projectHooks.ts /

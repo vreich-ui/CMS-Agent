@@ -5,7 +5,7 @@
 // one client; projects/drLurie/adapter.ts remains as a deprecated re-export.
 import { effectiveToolPermission, toToolPolicyMap, type ProjectConnectionConfig, type ProjectConnectionState, type ToolPermission } from "./projectTypes.js";
 import { accessSecretValue, type SecretAccessDeps } from "./secretManager.js";
-import { McpClientError, mcpCallTool, mcpInitialize, mcpListResources, mcpListTools, type McpClientOptions, type McpTransport } from "./mcpClient.js";
+import { McpClientError, isMcpAuthFailure, mcpCallTool, mcpInitialize, mcpListResources, mcpListTools, type McpClientOptions, type McpTransport } from "./mcpClient.js";
 
 // Resolve the MCP endpoint and bearer token for a project. The TOKEN always comes from an
 // environment variable and is never persisted, returned to callers, or logged.
@@ -81,13 +81,27 @@ const sanitizeError = (error: unknown): string => {
   return `client_unreachable (${name}): failed to reach the project MCP endpoint. The endpoint/token environment variables may be unset in this deployment, the client server may be down, or the network path blocked — project.test_connection isolates which.`;
 };
 
+// T1/T2: a client that answered 401/403 is a DIFFERENT fact from a client that could not be reached,
+// and the two used to arrive at callers as the same opaque `error` string. An auth failure is the
+// deployment's fault (a token this plane cannot see, or a stale one), it will not clear by itself,
+// and it must never be absorbed into a "degraded but continue" path — so it is carried out of the
+// adapter as a flag rather than left to be pattern-matched out of prose.
+export const isProjectAuthFailure = isMcpAuthFailure;
+
+const describeFailure = (error: unknown): { error: string; authFailed?: true; httpStatus?: number } => {
+  const message = sanitizeError(error);
+  if (!(error instanceof McpClientError)) return { error: message };
+  if (!isMcpAuthFailure(error)) return { error: message, ...(error.httpStatus !== undefined ? { httpStatus: error.httpStatus } : {}) };
+  return { error: message, authFailed: true, httpStatus: error.httpStatus };
+};
+
 export type ProjectAdapterDeps = { env?: NodeJS.ProcessEnv; transport?: McpTransport; secrets?: SecretAccessDeps };
 export type SafeToolInfo = { name: string; description?: string };
-export type ConnectionTestResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; server?: { name?: string; version?: string; protocolVersion?: string }; error?: string };
+export type ConnectionTestResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; server?: { name?: string; version?: string; protocolVersion?: string }; error?: string; authFailed?: true; httpStatus?: number };
 export type ListToolsResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tools: SafeToolInfo[]; allowedTools: string[]; defaultToolPolicy: ToolPermission; toolPolicies: Record<string, ToolPermission>; error?: string };
 export type ContractDiscoveryResult = { ok: boolean; available: boolean; schemaTools?: string[]; resources?: string[]; error?: string };
 export type DryValidateResult = { ok: boolean; available: boolean; toolName?: string; result?: unknown; error?: string };
-export type CallToolResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tool: string; permission?: ToolPermission; requiresApproval?: boolean; result?: unknown; error?: string };
+export type CallToolResult = { ok: boolean; projectId: string; connection: ProjectConnectionState; tool: string; permission?: ToolPermission; requiresApproval?: boolean; result?: unknown; error?: string; authFailed?: true; httpStatus?: number };
 
 // project.call_tool covers BOTH read-only contract discovery (object_contract, registry_get, ...)
 // AND external writes (publishing), and is approval-gated because of the write half — correctly.
@@ -163,7 +177,7 @@ export class ProjectMcpAdapter {
       const init = await mcpInitialize(this.clientOptions(resolved, signal));
       return { ok: true, projectId: this.config.projectId, connection, server: { name: init.serverInfo?.name, version: init.serverInfo?.version, protocolVersion: init.protocolVersion } };
     } catch (error) {
-      return { ok: false, projectId: this.config.projectId, connection, error: sanitizeError(error) };
+      return { ok: false, projectId: this.config.projectId, connection, ...describeFailure(error) };
     }
   }
 
@@ -200,7 +214,7 @@ export class ProjectMcpAdapter {
       const result = await mcpCallTool(this.clientOptions(resolved, signal), name, args);
       return { ok: true, projectId: this.config.projectId, connection, tool: name, permission, result };
     } catch (error) {
-      return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, error: sanitizeError(error) };
+      return { ok: false, projectId: this.config.projectId, connection, tool: name, permission, ...describeFailure(error) };
     }
   }
 

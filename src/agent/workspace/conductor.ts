@@ -19,13 +19,25 @@ import type { ExecutionStatus, WorkflowExecutionRecord } from "./executionTypes.
 
 // Per-run memoization keyed by (runId, resourceKey). A loader runs at most once per key per run; the
 // value is reused for the life of the run. Run ids are unique, so entries never collide across runs.
+//
+// T3 (autonomous-publish, run_1787658091131_cv41es): "at most once per run" was unconditional, so a
+// FAILED load was memoized exactly as eagerly as a successful one. A prefetch that failed for a
+// transient reason — an expired client token later refreshed, a 15s timeout on a cold remote, a
+// blocked-then-unblocked policy — poisoned the rest of the run: every later dispatch, including an
+// operator's explicit workflow.retry_node, replayed the stored failure without ever touching the
+// client again. Callers whose result type distinguishes success from failure pass `shouldCache` so
+// only the successful value is stored; a failure is returned to THIS caller and re-attempted by the
+// next one. Callers that omit it keep the previous unconditional behavior.
+export type GetOrLoadOptions<T> = { shouldCache?: (value: T) => boolean };
+
 export class RunScopedCache {
   private readonly cache = new Map<string, Map<string, unknown>>();
 
-  async getOrLoad<T>(runId: string, key: string, loader: () => Promise<T> | T): Promise<T> {
+  async getOrLoad<T>(runId: string, key: string, loader: () => Promise<T> | T, options: GetOrLoadOptions<T> = {}): Promise<T> {
     const existing = this.cache.get(runId);
     if (existing && existing.has(key)) return existing.get(key) as T;
     const value = await loader();
+    if (options.shouldCache && !options.shouldCache(value)) return value;
     // Re-read after the await: a concurrent first-load for the same run may have created the inner
     // map (or the same key) meanwhile. Reuse it instead of clobbering, and prefer an already-stored
     // value so concurrent loads converge (the cached reads are run-invariant).
