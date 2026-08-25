@@ -655,6 +655,14 @@ const nodeTimeoutMs = (node: WorkspaceNode): number => {
   return typeof timeout === "number" && Number.isFinite(timeout) ? timeout : 120_000;
 };
 
+// T14.4 — a deterministic capture/clone stage is NOT a fast local computation. capture_emit_live
+// probes and ingests every asset on the target site and then walks creates/reuses over the project
+// MCP; on zilberman that is 100-200s of real network work. The model default (120_000) would let the
+// stall assessor call such a stage dead while it is still working, so the claim these stages publish
+// gets a floor. A node that configures a LONGER timeout keeps it.
+const DETERMINISTIC_STAGE_MIN_TIMEOUT_MS = 300_000;
+const deterministicStageTimeoutMs = (node: WorkspaceNode): number => Math.max(nodeTimeoutMs(node), DETERMINISTIC_STAGE_MIN_TIMEOUT_MS);
+
 const nodeBudgetUsdOf = (node: WorkspaceNode): number | undefined => {
   const merged = { ...(node.modelConfig ?? {}), ...(node.executionConfig ?? {}) } as Record<string, unknown>;
   return typeof merged.budgetUsd === "number" && Number.isFinite(merged.budgetUsd) ? merged.budgetUsd : undefined;
@@ -1882,6 +1890,28 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     state.warnings = [...(state.warnings ?? []), `learning_recorder_deterministic_unavailable:${observationsValidation.errors[0] ?? "schema_invalid"}`];
   }
 
+  // T14.4 — DISPATCH CLAIM FOR THE LONG DETERMINISTIC STAGES.
+  //
+  // The model path's claim (further down, "the ~300s silent-death fix") sits AFTER the two branches
+  // below, so it never protected them. A capture/clone stage is deterministic but not quick, and while
+  // it runs the record shows the node "running" with NO dispatch — which assessRunStall reads as an
+  // idle driver, so runContinuation re-enters the SAME node while the first pass is still in flight.
+  // The two passes then collide on the TARGET's locks: pass A holds an object_checkout lease, pass B
+  // asks for the same object and gets HTTP 423, surfacing as capture_emission_refused while pass A
+  // quietly finishes its writes. That is exactly run_1787655233171_y4w8z5 — capture_emit_live recorded
+  // "blocked ... 423" at 10:57:27, and zilberman's four pages carry updated_at 10:58:18-10:58:46, from
+  // the pass that was still running after the run had been declared blocked.
+  //
+  // So the claim is stamped BEFORE the stage runs, for exactly the stages that reach the network.
+  // state.status/startedAt are already "running" by this point, which is what assessRunStall matches
+  // on together with the dispatch stamp. Every terminal path out of both branches deletes it again
+  // (the capture "pending" re-queue already did), so no branch can leave a lease-shaped ghost behind.
+  if (claim && (readCaptureStage(nextNode) !== undefined || readCloneStage(nextNode) !== undefined)) {
+    stampDispatch(state, startedAt, deterministicStageTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
+    run = await store.saveRun(run);
+    state = stateById(run).get(nextNode.id) as NodeExecutionState;
+  }
+
   // T12.9 — the capture_conductor deterministic stages (metadata.captureStageDeterministic; R-C3 v2:
   // build in code, validate against the node's OWN outputSchema, complete with no model call — the
   // R-20 $0 rule applies, so no usage record is written on the deterministic path). Three outcomes:
@@ -1916,6 +1946,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       if (stagedValidation.ok) {
         const completedAt = now();
         state.status = "completed";
+        delete state.dispatch;  // T14.4: terminal — the claim this stage published goes with it.
         state.completedAt = completedAt;
         state.durationMs = duration(startedAt, completedAt);
         state.output = staged.output;
@@ -1935,6 +1966,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     if (((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
       const completedAt = now();
       state.status = "blocked";
+      delete state.dispatch;  // T14.4: terminal — the claim this stage published goes with it.
       state.completedAt = completedAt;
       state.durationMs = duration(startedAt, completedAt);
       state.output = { error: { code: refusal.code, message: refusal.message } };
@@ -1962,6 +1994,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       if (stagedValidation.ok) {
         const completedAt = now();
         state.status = "completed";
+        delete state.dispatch;  // T14.4: terminal — the claim this stage published goes with it.
         state.completedAt = completedAt;
         state.durationMs = duration(startedAt, completedAt);
         state.output = staged.output;
@@ -1981,6 +2014,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     if (((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
       const completedAt = now();
       state.status = "blocked";
+      delete state.dispatch;  // T14.4: terminal — the claim this stage published goes with it.
       state.completedAt = completedAt;
       state.durationMs = duration(startedAt, completedAt);
       state.output = { error: { code: refusal.code, message: refusal.message } };
