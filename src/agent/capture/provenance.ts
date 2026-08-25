@@ -159,6 +159,19 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
+// T14.5 (2026-08-25) VENDORED publish.mjs — a NEW file, like clone.mjs before it, authored in
+// platform (78e67f0) alongside this task rather than pulled from the CAPTURE_ENGINE_UPSTREAM.commit
+// pin above, which still names the commit the other files were last re-vendored at and is left
+// untouched. Wolf's ruling: "this is agentic CMS -- human review and check and if needed edit
+// published content, but it needs to be assumed that the human is not involved." publish.mjs is the
+// ONE module in this engine where `object_publish` and `release_to_production` are reachable;
+// emit.mjs's forbidden-verb set is NOT relaxed, because an emission walks crawled third-party content
+// through creates, patches and asset ingestion and nothing in that walk may reach production
+// mid-write. `trigger_netlify_build` and `deploy` stay unreachable from every capture path including
+// this one. The gate that remains is not a human: an object publishes when the emission's OWN
+// validation of it passed and nothing quarantined it, and everything withheld is named with a reason.
+// Byte-identical to platform's packages/core/cli/capture/publish.mjs, no deviation of its own.
+
 export const CAPTURE_ENGINE_UPSTREAM = {
   repo: "vreich-ui/platform",
   path: "packages/core/cli/capture/",
@@ -219,6 +232,11 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
     file: "clone.mjs",
     vendoredSha256: "54f8f1d08bdb66027fc063e6519777117cf94173ae8035eb98a309986767fdcf",
     upstreamSha256: "54f8f1d08bdb66027fc063e6519777117cf94173ae8035eb98a309986767fdcf"
+  },
+  {
+    file: "publish.mjs",
+    vendoredSha256: "7a946cfd3fd483cadc5637e2ee4261e4cc66126eb9db17c43db9f90d9141cd01",
+    upstreamSha256: "7a946cfd3fd483cadc5637e2ee4261e4cc66126eb9db17c43db9f90d9141cd01"
   }
 ] as const;
 

@@ -46,6 +46,13 @@ import {
   type EmissionTransport
 } from "./engine/emit.mjs";
 import { scoreCaptureFidelity, type FidelityReport } from "./engine/score.mjs";
+import {
+  buildPublishPlan,
+  executePublish,
+  PUBLISH_FORBIDDEN_VERBS,
+  type PublishPlan,
+  type PublishRun
+} from "./engine/publish.mjs";
 import { isUrlWithinPolicy, validateCapturePolicy, type ValidatedCapturePolicy } from "./engine/snapshot-v1.mjs";
 
 // The capture plane, reached through the TARGET SITE'S CAPTURE BRIDGE (T12.13). The crawl still runs
@@ -82,6 +89,7 @@ export const CAPTURE_ARTIFACTS = {
   emissionRun: "capture_emission_run.v1",
   fidelity: "capture_fidelity.v1",
   adjudication: "gap_adjudication.v1",
+  publishRun: "capture_publish_run.v1",
   report: "capture_run_report.v1"
 } as const;
 
@@ -781,6 +789,104 @@ export async function captureScoreStep(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Stage: publish (T14.5 — capture's terminal act against the live site).
+//
+// Wolf, 2026-08-25: "this is agentic CMS -- human review and check and if needed edit published
+// content, but it needs to be assumed that the human is not involved." So this stage is on by
+// default and asks nobody. What it does NOT do is publish blind:
+//
+//   * the transport is built HERE, not reused from captureEmitStep. The emitter's transport bans
+//     object_publish and release_to_production and keeps banning them — an emission walks crawled
+//     third-party content through creates, patches and asset ingestion, and a bug or a hostile source
+//     anywhere in that walk must not reach production mid-write. Publishing is a separate stage
+//     reading a FINISHED emission's own record.
+//   * `trigger_netlify_build` and `deploy` stay banned even here. A build is something
+//     release_to_production decides to do, never something capture asks for directly.
+//   * an object publishes when the emission's own validation of it passed and nothing quarantined
+//     it. That is the machine checking its own work, not a human gate: shipping output the engine
+//     already flagged as broken would put a defect live and then ask a human to find it.
+//   * the project's publishingPolicy still governs. publishEnabled:false, or an operator's explicit
+//     veto through workflow.set_operator_publish_decision, refuses this stage — the default is
+//     "publish", never "publish regardless".
+export type CapturePublishEnvelope = {
+  artifact: typeof CAPTURE_ARTIFACTS.publishRun;
+  summary: string;
+  targetProjectId: string;
+  plan: PublishPlan;
+  run: PublishRun;
+  policy: CapturePolicyView;
+};
+
+const buildPublishTransport = (projectId: string, deps: CaptureDeps): EmissionTransport => ({
+  async call(verb: string, args: Record<string, unknown>) {
+    // Enforced pre-transport, exactly as the emitter does it: the two build verbs are unreachable
+    // from capture no matter which stage is asking.
+    if (PUBLISH_FORBIDDEN_VERBS.has(verb)) throw new EmissionError(`Forbidden publish verb: ${verb}`);
+    return callProjectTool(projectId, verb, args, deps);
+  }
+});
+
+export async function capturePublishStep(
+  input: { targetProjectId: string; emission: unknown },
+  deps: CaptureDeps = {}
+): Promise<CapturePublishEnvelope> {
+  const { policy, projectId, config } = await resolveCaptureAuthority(input.targetProjectId, deps);
+
+  // The project's own publishing policy is the authority, and it is read BEFORE any plan is built.
+  // publishEnabled:false is a deliberate operator setting (there is a per-project *_PUBLISH_ENABLED
+  // env flag behind it) and it means this stage does nothing at all.
+  const publishing = isRecord(config?.publishingPolicy) ? config.publishingPolicy : undefined;
+  if (publishing?.publishEnabled === false) {
+    throw new CaptureRefusal(
+      "capture_publish_disabled",
+      `Project "${projectId}" has publishingPolicy.publishEnabled = false; capture does not publish for it. Nothing was published and nothing was released.`
+    );
+  }
+
+  const emission = isRecord(input.emission) ? input.emission : undefined;
+  const report = emission && isRecord(emission.report) ? emission.report : undefined;
+  if (!report) {
+    throw new CaptureRefusal(
+      "capture_publish_emission_missing",
+      "The publish stage needs the live emission's report; a plan may never be built from anything else."
+    );
+  }
+  // A DRY emission wrote nothing. Publishing off it would publish whatever the site happened to hold.
+  if (emission?.live !== true) {
+    throw new CaptureRefusal(
+      "capture_publish_emission_not_live",
+      "The emission upstream of this stage was a dry run, so nothing was written; there is nothing to publish."
+    );
+  }
+
+  let plan: PublishPlan;
+  try {
+    plan = buildPublishPlan({ report, target: projectId });
+  } catch (error) {
+    throw new CaptureRefusal("capture_publish_plan_invalid", error instanceof Error ? error.message : String(error));
+  }
+
+  let run: PublishRun;
+  try {
+    run = await executePublish({ plan, transport: buildPublishTransport(projectId, deps) });
+  } catch (error) {
+    throw new CaptureRefusal("capture_publish_refused", error instanceof Error ? error.message : String(error));
+  }
+
+  const released = run.release.released
+    ? `released (deploy ${run.release.deployId ?? "unknown"}${run.release.productionConfirmed ? ", production confirmed" : ""})`
+    : `NOT released (${run.release.status ?? "unknown"})`;
+  return {
+    artifact: CAPTURE_ARTIFACTS.publishRun,
+    summary: `Live publish: ${run.published.length} object(s) published, ${run.failed.length} failed, ${run.withheld.length} withheld; ${released}. Build verbs remain unreachable (forbidden verbs enforced pre-transport).`,
+    targetProjectId: projectId,
+    plan,
+    run,
+    policy: policyView(policy)
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Stage: report (pure assembly — the workflow's END; the human gate begins here).
 export type CaptureRunReportEnvelope = {
   artifact: typeof CAPTURE_ARTIFACTS.report;
@@ -793,13 +899,23 @@ export type CaptureRunReportEnvelope = {
   gapsByCapability: FidelityReport["gapReport"]["byCapability"];
   w10EvidenceFeed: Array<Record<string, unknown>>;
   humanSummary: string;
-  humanGate: { publishReachable: false; note: string };
+  // T14.5 — was `humanGate: { publishReachable: false }`, which is no longer true: capture publishes.
+  // The report now states what actually went live, what was held back and why. A key that says
+  // "publishReachable: false" while a publish stage sits upstream of it is worse than no key at all.
+  publication: {
+    attempted: boolean;
+    published: unknown[];
+    failed: unknown[];
+    withheld: unknown[];
+    release: Record<string, unknown> | null;
+    note: string;
+  };
 };
 
 // Test-only seam, following the publisher.ts precedent: the adapter-backed transport (with its
 // pre-transport forbidden-verb refusal) and the regeneration adapter are internal to captureEmitStep
 // but their refusal semantics are load-bearing and test-pinned.
-export const __test__ = { buildAdapterTransport, buildRegenerationAdapter, callProjectTool, callCaptureBridge, readSnapshotThroughBridge };
+export const __test__ = { buildAdapterTransport, buildPublishTransport, buildRegenerationAdapter, callProjectTool, callCaptureBridge, readSnapshotThroughBridge };
 
 export function buildCaptureRunReport(input: {
   targetProjectId: string;
@@ -807,6 +923,8 @@ export function buildCaptureRunReport(input: {
   emission?: CaptureEmissionEnvelope;
   mapEnvelope?: CaptureMapEnvelope;
   adjudication?: Record<string, unknown>;
+  /** The capture_publish envelope, when that stage ran. Absent = it refused or was withheld. */
+  publication?: Record<string, unknown>;
 }): CaptureRunReportEnvelope {
   const gapReport = input.fidelity.report.gapReport;
   const adjudications = Array.isArray(input.adjudication?.adjudications) ? (input.adjudication!.adjudications as Array<Record<string, unknown>>) : [];
@@ -822,11 +940,32 @@ export function buildCaptureRunReport(input: {
     ? input.adjudication.humanSummary.trim()
     : undefined;
   const emissionReport = input.emission?.report as { createdObjects?: unknown[]; reusedObjects?: unknown[]; quarantines?: unknown[]; validationStates?: unknown[] } | undefined;
+  // T14.5 — what went live. `attempted: false` is a real answer and is never rendered as silence:
+  // a run whose publish stage refused (policy off, operator veto, nothing publishable) must say so,
+  // because "no publication block" and "published nothing" look identical to a reader otherwise.
+  const publicationRun = isRecord(input.publication?.run) ? input.publication.run as Record<string, unknown> : undefined;
+  const publicationBlock = publicationRun
+    ? {
+        attempted: true,
+        published: Array.isArray(publicationRun.published) ? publicationRun.published : [],
+        failed: Array.isArray(publicationRun.failed) ? publicationRun.failed : [],
+        withheld: Array.isArray(publicationRun.withheld) ? publicationRun.withheld : [],
+        release: isRecord(publicationRun.release) ? publicationRun.release : null,
+        note: "Capture publishes by default (T14.5). An object went live when this run's own validation of it passed and nothing quarantined it; everything held back is named above with its reason. trigger_netlify_build and deploy remain unreachable from every capture path."
+      }
+    : {
+        attempted: false,
+        published: [],
+        failed: [],
+        withheld: [],
+        release: null,
+        note: "The publish stage did not run or refused for this run, so everything it wrote is still an unreleased draft. The run record's capture_publish node carries the refusal code."
+      };
   const humanSummary = adjudicatorSummary
     ?? `Deterministic fallback summary (no adjudicator narrative on this run): verdict "${input.fidelity.rubric.verdict}", coverage ${(input.fidelity.rubric.coverage.score * 100).toFixed(2)}% against a ${(input.fidelity.rubric.coverage.minimum * 100).toFixed(0)}% bar, ${gapReport.entries.length} residual gap(s) across ${gapReport.byCapability.length} missing capabilit(ies). Every gap is enumerated in the W10 evidence feed below.`;
   return {
     artifact: CAPTURE_ARTIFACTS.report,
-    summary: `Capture run report for ${input.targetProjectId}: ${emissionReport?.createdObjects?.length ?? 0} never-released draft(s), verdict "${input.fidelity.rubric.verdict}", ${gapReport.entries.length} residual gap(s) fed to the W10 evidence backlog. The workflow ends here; publish/release require the human gate.`,
+    summary: `Capture run report for ${input.targetProjectId}: ${emissionReport?.createdObjects?.length ?? 0} draft(s) created, verdict "${input.fidelity.rubric.verdict}", ${gapReport.entries.length} residual gap(s) fed to the W10 evidence backlog; ${publicationBlock.attempted ? `${publicationBlock.published.length} object(s) published live, ${publicationBlock.withheld.length} withheld` : "nothing published (publish stage did not run)"}.`,
     targetProjectId: input.targetProjectId,
     sourceUrl: input.mapEnvelope?.sourceUrl ?? null,
     rubric: input.fidelity.rubric,
@@ -841,9 +980,6 @@ export function buildCaptureRunReport(input: {
     gapsByCapability: gapReport.byCapability,
     w10EvidenceFeed,
     humanSummary,
-    humanGate: {
-      publishReachable: false,
-      note: "Everything this run wrote is a never-released draft. No capture node can reach object_publish / release_to_production / trigger_netlify_build / deploy (forbidden-verb set enforced pre-transport), and the workflow's terminal node is this report. Publication is a separate, explicitly human-gated act."
-    }
+    publication: publicationBlock
   };
 }

@@ -21,6 +21,7 @@ import {
   buildCaptureRunReport,
   captureCrawlStep,
   captureEmitStep,
+  capturePublishStep,
   captureMapStep,
   captureScoreStep,
   captureThemeStep,
@@ -33,7 +34,7 @@ import {
   type RegeneratedBody
 } from "../capture/captureEngine.js";
 
-export const CAPTURE_STAGES = ["crawl", "map", "map_refine", "theme", "emit_dry", "emit_live", "score", "report"] as const;
+export const CAPTURE_STAGES = ["crawl", "map", "map_refine", "theme", "emit_dry", "emit_live", "score", "publish", "report"] as const;
 export type CaptureStage = typeof CAPTURE_STAGES[number];
 
 // The crawl job's cross-advance bookkeeping key. Deliberately ":"-suffixed so it can never collide
@@ -193,18 +194,44 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
         const envelope = await captureScoreStep({ targetProjectId, snapshot: crawl.snapshot, mapping: refined.mapping, theme: theme.theme });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
+      // T14.5 — the publish tail. Runs BEFORE the report so the report can say what went live, and
+      // AFTER the score so the run's own fidelity verdict is on the record first. The operator's
+      // explicit veto is the one thing that stops it: publishingPolicy.operatorDefault decides what a
+      // run STARTS as, and workflow.set_operator_publish_decision("withheld") overrides that default
+      // — so "the human is not involved" is the default posture, not an unconditional one.
+      case "publish": {
+        if (run.operatorPublishDecision === "withheld") {
+          return refused(
+            "capture_publish_withheld_by_operator",
+            "An operator explicitly withheld publication for this run (workflow.set_operator_publish_decision). Nothing was published and nothing was released; the drafts are intact."
+          );
+        }
+        const emission = stageOutput(run, "capture_emit_live");
+        if (emission?.artifact !== CAPTURE_ARTIFACTS.emissionRun) {
+          return refused(
+            "capture_publish_emission_missing",
+            "capture_emit_live produced no live emission envelope; a publish plan may never be built from anything else."
+          );
+        }
+        const envelope = await capturePublishStep({ targetProjectId, emission });
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
       case "report": {
         const fidelity = envelopeOf(run, "capture_score", CAPTURE_ARTIFACTS.fidelity);
         if (isOutcome(fidelity)) return fidelity;
         const emission = stageOutput(run, "capture_emit_live");
         const refined = stageOutput(run, "capture_map_refine");
         const adjudication = stageOutput(run, "gap_adjudicator");
+        // T14.5: what actually went live. Absent on a run whose publish stage refused or was
+        // withheld, which the report renders as "nothing published" rather than silence.
+        const publication = stageOutput(run, "capture_publish");
         const output = buildCaptureRunReport({
           targetProjectId,
           fidelity: fidelity as unknown as CaptureFidelityEnvelope,
           emission: emission?.artifact === CAPTURE_ARTIFACTS.emissionRun ? (emission as unknown as CaptureEmissionEnvelope) : undefined,
           mapEnvelope: refined?.artifact === CAPTURE_ARTIFACTS.mapRefined ? (refined as unknown as CaptureMapEnvelope) : undefined,
-          adjudication
+          adjudication,
+          publication: publication?.artifact === CAPTURE_ARTIFACTS.publishRun ? publication : undefined
         });
         return { kind: "completed", output: output as unknown as Record<string, unknown> };
       }

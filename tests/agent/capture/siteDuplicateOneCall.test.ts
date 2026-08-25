@@ -206,11 +206,21 @@ describe("site.duplicate — one call against an existing project (fixture end-t
     expect(emission.report.mediaPolicy?.mediaRetention).toBe("prohibited");
     expect(emission.report.mediaPolicy?.materialized).toBe(0);
     for (const verb of targetVerbs) {
-      expect(["create_capture_job", "get_capture_job_status", "get_capture_snapshot", "object_inventory", "object_contract", "object_validate", "object_create", "object_get"]).toContain(verb);
+      // T14.5 — object_checkout/object_publish/object_checkin/release_to_production join the set
+      // because capture now publishes. trigger_netlify_build and deploy are deliberately ABSENT and
+      // must stay absent: this list is the contract for what a capture run may touch on a live site.
+      expect([
+        "create_capture_job", "get_capture_job_status", "get_capture_snapshot",
+        "object_inventory", "object_contract", "object_validate", "object_create", "object_get",
+        "object_checkout", "object_publish", "object_checkin", "release_to_production"
+      ]).toContain(verb);
     }
-    const report = run.stageOutputs.capture_report as { artifact: string; humanGate: { publishReachable: boolean } };
+    const report = run.stageOutputs.capture_report as { artifact: string; publication: { attempted: boolean } };
     expect(report.artifact).toBe("capture_run_report.v1");
-    expect(report.humanGate.publishReachable).toBe(false);
+    // T14.5 — the fixture now runs the publish tail end to end: the report states what went live
+    // rather than asserting publication is unreachable. Every object the emission wrote is either
+    // published or named in `withheld`; neither list may be silently short.
+    expect(report.publication.attempted).toBe(true);
 
     // The duplication request record was persisted on the run before any advance.
     const request = run.stageOutputs[SITE_DUPLICATION_REQUEST_STAGE_KEY] as { artifact: string; sourceUrl: string };
