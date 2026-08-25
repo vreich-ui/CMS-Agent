@@ -95,6 +95,15 @@ export function buildGateEvents(run: Pick<WorkflowExecutionRecord, "stageOutputs
       const described = waived.map((entry) => (isObject(entry) ? `${String(entry.nodeId ?? "unknown")}: ${String(entry.blocker ?? "")} [rule ${String(entry.rule ?? "unnamed")}]` : String(entry)));
       events.push({ event: "blockers_waived", detail: `${waived.length} blocker(s) waived by standing rule and recorded on the decision: ${described.join(" | ")}.` });
     }
+    // W7 (2026-08-25) audit trail, same principle one class over: an editorial blocker that did NOT
+    // stop the publish is exactly the thing an operator reading the record cold needs to see, because
+    // it is the one class of objection the decision deliberately declined to enforce. Silently absent
+    // from the run record, "advisory" would be indistinguishable from "dropped".
+    const advisories = Array.isArray(decision.advisories) ? decision.advisories : [];
+    if (advisories.length) {
+      const described = advisories.map((entry) => (isObject(entry) ? `${String(entry.nodeId ?? "unknown")}: ${String(entry.blocker ?? "")}` : String(entry)));
+      events.push({ event: "blockers_advisory", detail: `${advisories.length} editorial blocker(s) recorded as advisory and deliberately not gating (blockerClassification.ts): ${described.join(" | ")}.` });
+    }
     if (nonEmptyString(decision.contentClass)) events.push({ event: "content_class", detail: `Run content class: ${decision.contentClass}.` });
   } else {
     events.push({ event: "publication_decision", detail: "no publication_controller decision record exists on this run (the run did not reach the controller, or it produced no stage output)." });
