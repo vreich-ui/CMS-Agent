@@ -18,6 +18,10 @@ export type SiteCredentialReconcileResult = {
   netlifySiteName: string;
   status: "planned" | "current" | "rotated" | "failed";
   errorCode?: string;
+  // The safe half of the underlying refusal — `METHOD /path HTTP nnn`, never a response body. A
+  // bare errorCode cannot distinguish "the credential is revoked" (401) from "Netlify wobbled"
+  // (503), and the operator reading this line is exactly the person who needs to know which.
+  errorDetail?: string;
 };
 
 type CredentialRepository = Pick<ManagedScopedBearerCredentialRepository, "mint" | "activateAndRetireOtherProjectCredentials" | "revokeCredential" | "findActiveCredentialForProject">;
@@ -137,6 +141,9 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
       results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "rotated" });
     } catch (error) {
       let errorCode = error instanceof SiteGenesisRefusal ? error.code : "credential_reconcile_failed";
+      // Captured from the ORIGINAL failure, before the cleanup below can overwrite errorCode: when
+      // a revoke also fails, the operator still needs to see what went wrong first.
+      const errorDetail = error instanceof SiteGenesisRefusal ? error.safeSummary : undefined;
       // Before the site env write succeeds the generated digest is safe to revoke. Afterwards a
       // timeout is ambiguous: Netlify may still publish that deploy, so the pending digest must
       // remain recognized until a later successful retry atomically replaces it.
@@ -151,7 +158,8 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
         projectId: project.projectId,
         netlifySiteName: siteName,
         status: "failed",
-        errorCode
+        errorCode,
+        ...(errorDetail ? { errorDetail } : {})
       });
     }
   }

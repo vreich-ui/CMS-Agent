@@ -215,7 +215,16 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
       }
     );
 
-    expect(results).toEqual([{ projectId: "platform", netlifySiteName: "kugel-platform", status: "failed", errorCode: "netlify_api_failed" }]);
+    expect(results).toEqual([{
+      projectId: "platform",
+      netlifySiteName: "kugel-platform",
+      status: "failed",
+      errorCode: "netlify_api_failed",
+      // The whole point of the detail: a reader of this line can now see it was the secret write
+      // that Netlify rejected, and that 422 means "will not improve on retry" rather than "wobble".
+      errorDetail: "PUT /api/v1/accounts/acct_1/env/CMS_AGENT_MCP_TOKEN HTTP 422"
+    }]);
+    expect(JSON.stringify(results)).not.toContain("redacted");
     expect(revoke).toHaveBeenCalledWith(digest);
     expect(activate).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
