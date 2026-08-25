@@ -2,12 +2,20 @@
   # Root install, then the two SPAs — ui/dist keeps publishing at the site
   # root exactly as before; the workbench build additionally sets
   # WORKBENCH_BASE (vite.config.ts) so every asset URL resolves under
-  # /workbench/, and VITE_MCP_TRANSPORT=netlify (workbench/src/api/client.ts)
-  # so it talks to this site's own Netlify Identity + /api/workspace-mcp
-  # broker instead of fixtures or workbench-broker/ (not deployed here).
+  # /workbench/, and VITE_MCP_TRANSPORT=cloudrun (workbench/src/api/client.ts)
+  # so it talks directly to the live Cloud Run MCP control plane with a
+  # manually entered bearer token — the same model ui/ uses (see
+  # ui/src/connection.ts) and the same VITE_CLOUD_RUN_MCP_URL build-environment
+  # setting ui/ reads, inherited here unchanged since it's a site-level env var,
+  # not set on this command line. This REPLACES the former VITE_MCP_TRANSPORT=netlify,
+  # which pointed at this site's own /api/workspace-mcp Netlify Function — a plane
+  # that 502s on every request (ERR_REQUIRE_ESM: require() of ES Module
+  # /var/task/workspace-mcp.mts from /var/task/workspace-mcp.js) because Netlify's MCP
+  # proxy paths and the Identity secure-proxy auth mode were retired once Cloud Run
+  # became the sole control plane. workbench-broker/ is still not deployed here.
   # workbench/dist is copied into ui/dist/workbench so one `publish` dir
   # serves both apps.
-  command = "npm install --no-fund --no-audit && npm --prefix ui install --no-fund --no-audit && npm run ui:build && npm --prefix workbench install --no-fund --no-audit && WORKBENCH_BASE=/workbench/ VITE_MCP_TRANSPORT=netlify npm --prefix workbench run build && mkdir -p ui/dist/workbench && cp -r workbench/dist/. ui/dist/workbench/"
+  command = "npm install --no-fund --no-audit && npm --prefix ui install --no-fund --no-audit && npm run ui:build && npm --prefix workbench install --no-fund --no-audit && WORKBENCH_BASE=/workbench/ VITE_MCP_TRANSPORT=cloudrun npm --prefix workbench run build && mkdir -p ui/dist/workbench && cp -r workbench/dist/. ui/dist/workbench/"
   publish = "ui/dist"
   functions = "netlify/functions"
 
