@@ -140,6 +140,36 @@ export type WorkflowExecutionRecord = {
   // or the operator — that is the DIFFERENT, human-supplied requestId publish_payload emits per
   // publish attempt (req_<flow>_<topic>_<yyyymmdd>_<nn>), which this does not replace.
   requestId?: string;
+  // S3 (2026-08-25, run_1787656120374_18bobg) — THE OPERATOR-SUPPLIED PUBLISH REQUEST ID, and a
+  // DIFFERENT IDENTIFIER FROM `requestId` ABOVE. `requestId` is the platform/workspace join key: it is
+  // generated once at run creation and exists so a workspace run and a platform workflow record can be
+  // proven to be the same request. THIS field is the publish contract's own id
+  // (req_<flow>_<topic>_<yyyymmdd>_<nn>) that publish_payload/publish_executor stamp on a published
+  // client object — authored by a human, never by the engine. The two are stored separately, and must
+  // stay separate, because putting the join key on a publish would put the wrong identifier on a live
+  // client object; nothing anywhere falls back from one to the other, in either direction.
+  //
+  // WHY IT EXISTS AT ALL. In a full run this id is authored by exactly one node, artifact_plan, and
+  // lifted into run context from its stage output (buildRunContext, runContext.ts). A late-stage
+  // entrypoint run seeds artifact_plan as completed-and-skipped, so it authors nothing, the run
+  // context carries no requestId, and the run could never publish — publish_executor refuses with
+  // publish_request_id_absent, which is exactly what run_1787656120374_18bobg (dr-lurie) did with a
+  // controller "go", an operator "approved" and all five publisher gates passing.
+  //
+  // WHO WRITES IT: workflow.start_dry_run, and only workflow.start_dry_run, after validating the
+  // supplied id against the project's declared objectDialect.requestIdPattern (see
+  // resolvePublishRequestId in mcp/workspace/tools.ts — a malformed id is refused before the run is
+  // created). workflow.reset_run carries it across a reset, because a reset retries the SAME publish
+  // request, not a new one.
+  // WHO READS IT: buildRunContext, and only buildRunContext, as the FALLBACK behind
+  // stageOutputs.artifact_plan.requestId — so a run that really authored an id always wins, and the
+  // stored one is what a seeded run has instead. Everything downstream (publish_payload's
+  // deterministic builder, publish_executor's engine path) already reads runContext.requestId and
+  // needs no knowledge of this field at all: there is one lift point, not one per consumer.
+  //
+  // Optional by design: absent means the run has no publish id and publish_executor's refusal stands
+  // exactly as before. An absent id is never minted, defaulted, or inherited from `requestId`.
+  publishRequestId?: string;
   status: ExecutionStatus;
   currentNodeId?: string;
   startedAt: string;

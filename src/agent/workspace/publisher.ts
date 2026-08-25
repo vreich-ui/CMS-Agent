@@ -43,7 +43,11 @@ const REQUEST_ID_PATTERN = /^req_[a-z0-9_]+_\d{8}_\d{2}$/;
 // Compile a project's declared request-id shape. Project config is operator-writable, so a declared
 // pattern is not compiled blindly: it must be anchored and short, and anything else falls back to
 // the shared contract default rather than becoming a regex-injection or backtracking seam.
-const compileRequestIdPattern = (declared: string | undefined): RegExp => {
+//
+// S3 (2026-08-25) — exported so workflow.start_dry_run can validate an operator-supplied
+// publishRequestId against the SAME authority that will judge it at publish time. Two copies of "what
+// a publish request id looks like" is how a run gets accepted at the front and refused at the back.
+export const compileRequestIdPattern = (declared: string | undefined): RegExp => {
   if (!declared || declared.length > 200 || !declared.startsWith("^") || !declared.endsWith("$")) return REQUEST_ID_PATTERN;
   try { return new RegExp(declared); } catch { return REQUEST_ID_PATTERN; }
 };

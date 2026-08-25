@@ -410,6 +410,21 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
   const artifactSet = readArtifactReferences(...params.envelopeCarriers);
   const artifactDigests = readArtifactDigests(artifactSet);
   const publishedTime = params.publishedTime ?? null;
+  // THE PUBLISH REQUEST ID, resolved in strict precedence order, and DELIBERATELY UNCHANGED by S3:
+  //
+  //   1. params.requestId  — runContext.requestId, passed down by the executor. buildRunContext lifts
+  //                          it from artifact_plan (the ONE node that authors this id), falling back
+  //                          to the run's operator-supplied publishRequestId when artifact_plan
+  //                          authored none — which on a seeded late-stage run is always.
+  //   2. envelope carriers — publication_controller / publish_payload / article_body.
+  //   3. absent            — publish_request_id_absent below. Never a mint.
+  //
+  // S3 (2026-08-25, run_1787656120374_18bobg) fixed a seeded run that could not publish, and did NOT
+  // add a fourth source here. It could have: the run record is in hand (params.run) and it now carries
+  // publishRequestId. But reading it here would resolve the id for the publisher ALONE — the run
+  // context would stay empty, publish_payload would keep omitting its optional `requestId`, and the
+  // candidate an operator reviews would not name the id the publish is actually made under. The lift
+  // therefore happens once, in buildRunContext, and arrives here through step 1 like any authored id.
   const requestId = nonEmptyString(params.requestId) ? params.requestId.trim() : readPublishRequestId(...params.envelopeCarriers);
   const receiptsFor = (steps: PublishStep[], extra: Partial<PublishExecutionReceipts> = {}): PublishExecutionReceipts =>
     ({ ...(requestId ? { requestId } : {}), publishedTime, artifactDigests, toolSequence: steps.map((step) => step.tool), steps, ...extra });
@@ -429,7 +444,7 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
     return blocked({
       code: "publish_request_id_absent",
       step: "request_id",
-      message: `no upstream output and no run context carries a publish requestId (req_<flow>_<topic>_<yyyymmdd>_<nn>). The id is operator-supplied by contract and is never minted here, so ${params.clientProjectId} is not published; supply it on artifact_plan/publish_payload and retry this node.`
+      message: `no upstream output and no run context carries a publish requestId (req_<flow>_<topic>_<yyyymmdd>_<nn>). The id is operator-supplied by contract and is never minted here, so ${params.clientProjectId} is not published; supply it on artifact_plan/publish_payload — or, for a late-stage entrypoint run whose artifact_plan is seeded and authors none, start the run with workflow.start_dry_run's publishRequestId — and retry this node.`
     }, receiptsFor([]));
   }
 

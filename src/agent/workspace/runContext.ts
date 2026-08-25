@@ -77,6 +77,12 @@ export type BuildRunContextParams = {
   // RunContext.operatorPublishDecision for why this exists.
   operatorPublishDecision?: "approved" | "withheld";
   operatorDecisionSource?: "explicit" | "project_policy_default";
+  // S3 (2026-08-25, run_1787656120374_18bobg) — the run's own stored publish request id, echoed
+  // verbatim from WorkflowExecutionRecord.publishRequestId, used ONLY as the fallback below when no
+  // node authored one. Deliberately NOT WorkflowExecutionRecord.requestId: see the comment on the
+  // fallback in buildRunContext, and executionTypes.ts, which says in as many words that the two
+  // identifiers are different things.
+  publishRequestId?: string;
 };
 
 export function buildRunContext(params: BuildRunContextParams): RunContext {
@@ -87,8 +93,38 @@ export function buildRunContext(params: BuildRunContextParams): RunContext {
   // copied downstream by publish_payload and publish_executor today. Deliberately NOT
   // WorkflowExecutionRecord.requestId, which is the platform/workspace join key (executionTypes.ts
   // says so in as many words) — conflating the two would put the wrong identifier on a publish.
+  //
+  // TWO SOURCES, IN THIS ORDER, AND NEVER A THIRD.
+  //   1. stageOutputs.artifact_plan.requestId — the AUTHORED id. Unchanged, and always first: a run
+  //      whose artifact_plan really ran and really named an id publishes under that id, full stop.
+  //   2. params.publishRequestId — S3 (2026-08-25, run_1787656120374_18bobg). The id the operator
+  //      supplied at workflow.start_dry_run, stored on the run as its own field.
+  //
+  // WHY (2) EXISTS. `workflow.start_dry_run` supports a late-stage entrypoint (`entrypoint:
+  // "article_body"` plus a supplied `articleBody`) that seeds the entry node and every ancestor as
+  // completed so the run skips ideation/research/drafting — the cheap path for exercising publish
+  // mechanics without burning tokens. artifact_plan is one of those ancestors, and it is seeded as
+  // `{seeded:true, skipped:true, reason:"late_stage_entry"}` with no stage output at all, so source
+  // (1) is empty for such a run BY CONSTRUCTION and the run was structurally incapable of publishing:
+  // on run_1787656120374_18bobg (dr-lurie) the controller said "go", the operator said "approved",
+  // all five publisher gates passed, and publish_executor still refused with
+  // publish_request_id_absent because nothing in the run held an id.
+  //
+  // WHY THE FALLBACK LIVES HERE AND NOT AT THE PUBLISHER. runContext.requestId is already the ONE
+  // lift point for this id: the executor passes it to publish_payload's deterministic builder and to
+  // publish_executor's engine path, and renders it into every node's instructions. Resolving the
+  // fallback at the publisher instead would fix only the publisher — the run context would stay
+  // empty, so publish_payload would keep emitting a payload with its optional `requestId` field
+  // missing, and the publish candidate an operator reviews would not name the id the publish is
+  // actually made under. One lift point, one answer, every consumer.
+  //
+  // AND NEVER run.requestId. That field is the platform/workspace join key; falling back to it would
+  // stamp the wrong identifier on a live client object, which is worse than not publishing. Absent
+  // stays absent here — publish_executor's publish_request_id_absent refusal is the correct outcome
+  // for a run nobody gave an id to, and nothing in this file mints one.
   const plan = params.stageOutputs?.artifact_plan;
   if (isObject(plan) && nonEmptyString(plan.requestId)) context.requestId = plan.requestId.trim();
+  else if (nonEmptyString(params.publishRequestId)) context.requestId = params.publishRequestId.trim();
 
   const prefetched = params.reducedContract;
   if (prefetched && nonEmptyString(prefetched.clientObjectType)) context.clientObjectType = prefetched.clientObjectType;
