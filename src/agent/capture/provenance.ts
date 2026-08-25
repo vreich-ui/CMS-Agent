@@ -110,6 +110,26 @@
 // upstream change is not yet committed there, so CAPTURE_ENGINE_UPSTREAM.commit below still names the
 // commit the OTHER SEVEN files were last re-vendored at and is deliberately left untouched — the
 // per-file hash pair is what pins clone.mjs, and the provenance test proves the two copies match.
+// T14.3 (2026-08-24) RE-VENDORED map.mjs AND emit.mjs (platform f2eeebe, T14.2 "capture the
+// picture, not the thumbnail of it"). Wolf, on the cloned filmography page: "the images were
+// thumbnails yet the process made them stretch." Every asset URL there carried the display size in
+// its path (fill/w_146,h_194 on 108 of them); the engine downloaded exactly that and the section
+// rendered it 980-1440px wide. map.mjs gains canonicalizeAssetUrl (proposes the untransformed
+// original across the Wix/Cloudinary/imgix/Shopify/Squarespace family, matched on HOST so a
+// look-alike path on a stranger's host is returned untouched) and assetFidelity (the no-upscale
+// rule); emit.mjs gains imageDimensions and makes createAssetProbe the VERIFYING caller — it takes
+// an upgrade only when the bytes decode strictly larger, and falls back to the captured URL on a
+// 404, an off-host redirect, HTML behind a 200, an unreadable format or a throw. Not-verifiable is
+// a fallback, never a pass.
+//
+// browser.mjs and the new gallery-items.mjs are NOT vendored here and must not be: the DOM walk
+// belongs to the pdf-tool crawl plane, and gallery-items.mjs exists precisely so the grouping
+// JUDGMENT is reachable without playwright. This runtime consumes their OUTPUT (snapshot
+// structure.gallery), never their code.
+//
+// screenshot-normalize.mjs reads as changed against upstream and is NOT drift — it is the one
+// recorded deviation (T12.16, the lazy sharp import), unchanged by this re-vendor.
+//
 // T13.3 (2026-08-24) RE-VENDORED clone.mjs ALONE — two seam fixes:
 //   (1) appliesTo/applies_to mismatch. run_1787567551705_e1qp0l's recipe_designer emitted
 //     `applies_to` (per its own outputSchema at the time) into `validateTemplateDesign`, which only
@@ -163,8 +183,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "map.mjs",
-    vendoredSha256: "ec2c0ddd1c46f83ce76a7f070ddb2483c013071d81f87f1128806844542efed4",
-    upstreamSha256: "ec2c0ddd1c46f83ce76a7f070ddb2483c013071d81f87f1128806844542efed4"
+    vendoredSha256: "c233bb27f931657f08f6b51c3e73dfdaf863f95c0ae4c22fb5dec1e27501166d",
+    upstreamSha256: "c233bb27f931657f08f6b51c3e73dfdaf863f95c0ae4c22fb5dec1e27501166d"
   },
   {
     file: "theme.mjs",
@@ -173,8 +193,8 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "77d21ba39845bcd2a6274748c0886b183d3aa428c3f5bb2c0c871956de750ea6",
-    upstreamSha256: "77d21ba39845bcd2a6274748c0886b183d3aa428c3f5bb2c0c871956de750ea6"
+    vendoredSha256: "275c701794ca98f3e294b8eff8dbce6860741fe806538796928bd744628f8089",
+    upstreamSha256: "275c701794ca98f3e294b8eff8dbce6860741fe806538796928bd744628f8089"
   },
   {
     file: "score.mjs",
