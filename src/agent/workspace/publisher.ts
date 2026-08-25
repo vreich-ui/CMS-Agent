@@ -27,6 +27,7 @@ import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks, type PublishExecutionOutcome, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
 import { describeOperatorDecisionSource, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
+import { ClientToolRefusalError } from "../projects/clientToolResult.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
@@ -263,9 +264,25 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   const steps: PublishStep[] = [];
   const call = async (tool: string, args: Record<string, unknown>): Promise<unknown> => {
     const res = await callTool(tool, args);
+    // `ok` here is the TRANSPORT's verdict, not the client's: a refusal (an MCP result carrying
+    // isError) arrives as ok:true with the reason inside `result`. The hook is what inspects that
+    // — see ../projects/clientToolResult.ts — because only it knows which call it just made.
     steps.push({ tool, ok: res.ok, error: res.error });
     if (!res.ok) throw new Error(`${tool}_failed: ${res.error ?? "call failed"}`);
     return res.result;
+  };
+
+  // ...and when the hook throws that refusal back, the step recorded above is corrected to the
+  // failure it actually was. Leaving it ok:true is how a refusal became invisible downstream: the
+  // receipts claimed every call landed, publish_execution's lastFailedStep found no failing step,
+  // and the operator got `publish_sequence_error at <parsed message prefix>` instead of
+  // `publish_step_failed at object_create` with the client's own sentence in clientError.
+  const recordClientRefusal = (error: unknown): void => {
+    if (!(error instanceof ClientToolRefusalError)) return;
+    const step = [...steps].reverse().find((entry) => entry.tool === error.tool && entry.ok);
+    if (!step) return;
+    step.ok = false;
+    step.error = error.clientError;
   };
 
   try {
@@ -289,6 +306,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     await learningRepository.recordObservation(`Live publish executed for ${projectId} request ${input.requestId}.`, { type: "publish_executed", projectId, requestId: input.requestId, runId: input.runId });
     return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(outcome.result), ...(outcome.objectId ? { objectId: outcome.objectId } : {}), ...(outcome.clientValidation ? { clientValidation: outcome.clientValidation } : {}), readiness };
   } catch (error) {
+    recordClientRefusal(error);
     const message = error instanceof Error ? error.message : "publish_failed";
     await learningRepository.recordObservation(`Live publish failed for ${projectId} request ${input.requestId}: ${message}`, { type: "publish_failed", projectId, requestId: input.requestId, runId: input.runId }).catch(() => undefined);
     return { published: false, mode: "error", gates, plan, steps, error: message };

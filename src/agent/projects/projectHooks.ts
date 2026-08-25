@@ -47,7 +47,12 @@ export type PublishExecutionContext = {
   // S3 item 8: an object the conductor already created for this request (the content-item shell made
   // before artifact_plan ran). When present the hook MUST skip object_create and patch this object.
   existingObjectId?: string;
-  call: (tool: string, args: Record<string, unknown>) => Promise<unknown>; // records a step; throws on tool failure
+  // Records a step and throws when the TRANSPORT fails. It does NOT throw when the client REFUSES:
+  // an MCP refusal (isError: true) rides home on a successful transport, so it is returned like any
+  // other result. Hooks must therefore route every call through checkedClientCall
+  // (./clientToolResult.ts) rather than calling this directly — see that module for the live publish
+  // a bare call silently mis-reported.
+  call: (tool: string, args: Record<string, unknown>) => Promise<unknown>;
 };
 export type PublishExecutionOutcome = {
   result: unknown;
