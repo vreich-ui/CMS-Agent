@@ -16,7 +16,7 @@ import { executionStatuses, type WorkflowExecutionRecord } from "../../workspace
 import { WorkspaceToolError } from "../../workspace/workspaceErrors.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
 import { validateOutput } from "../../execution/outputValidator.js";
-import { evaluatePublishReadiness, publishRun } from "../../workspace/publisher.js";
+import { compileRequestIdPattern, evaluatePublishReadiness, publishRun } from "../../workspace/publisher.js";
 import { runDeterministicPublishPayload } from "../../workspace/publishPayload.js";
 import { executeNode, getEffectivePrompt, getNodeDetails, listNodeExecutions, listNodeOutputs, prepareNodeExecution, validateAgainstNodeSchema } from "../../workspace/nodeRuntime.js";
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
@@ -205,7 +205,7 @@ const validateAgainstArticleBodyNode = (articleBody: unknown): string[] => {
 // two they are about to get, and what a mock artifact is worth.
 const EXECUTION_MODE_DESCRIPTION = "Execution mode. \"openai\" (DEFAULT) calls the configured model provider and produces real node output. \"mock\" produces deterministic placeholder output generated from each node's outputSchema — structurally valid but content-free, for cheap CI/test runs; mock artifacts must never be treated as publishable content. Every run reports its mode back on workflow.get_run / workflow.list_runs as `mode`.";
 
-const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default(DEFAULT_EXECUTION_MODE), entrypoint: z.enum(["article_body"]).optional(), articleBody: z.unknown().optional(), budgetUsd: z.number().nonnegative().optional(), requestId: z.string().min(1).optional() }).strict();
+const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default(DEFAULT_EXECUTION_MODE), entrypoint: z.enum(["article_body"]).optional(), articleBody: z.unknown().optional(), budgetUsd: z.number().nonnegative().optional(), requestId: z.string().min(1).optional(), publishRequestId: z.string().min(1).optional() }).strict();
 
 // S1 (chat-path) — CALLER-SUPPLIED REQUEST IDS. The knowledge rule every client dialect states is
 // that request ids are supplied by the caller and never generated. A project that declares
@@ -234,6 +234,48 @@ async function resolveCallerRequestId(projectId: string, requestId: string | und
     throw new WorkspaceToolError("invalid_request_id", `requestId "${requestId}" does not match project ${projectId}'s pattern ${pattern} (${REQUEST_ID_FORM}).`, { projectId, requestIdPattern: pattern, requestId });
   }
   return requestId;
+}
+
+// S3 (2026-08-25, run_1787656120374_18bobg) — THE PUBLISH REQUEST ID, which is NOT the run's join key.
+//
+// The publish contract id (req_<flow>_<topic>_<yyyymmdd>_<nn>) is authored by exactly one node,
+// artifact_plan, and lifted from its stage output into run context (buildRunContext, runContext.ts).
+// A late-stage entrypoint run seeds artifact_plan as completed-and-skipped — it authors nothing, and
+// leaves no stage output — so such a run held no publish id at all and could never publish: on
+// run_1787656120374_18bobg (dr-lurie) the controller said "go", the operator said "approved", all five
+// publisher gates passed, and publish_executor still refused with
+//
+//   publish_request_id_absent at request_id: no upstream output and no run context carries a publish
+//   requestId (req_<flow>_<topic>_<yyyymmdd>_<nn>). The id is operator-supplied by contract and is
+//   never minted here, so dr-lurie is not published; supply it on artifact_plan/publish_payload and
+//   retry.
+//
+// This is the supply channel that refusal asks for, moved to the front of the run: the operator names
+// the id when they enter late, it is stored on the run as its OWN field
+// (WorkflowExecutionRecord.publishRequestId), and buildRunContext uses it as the FALLBACK behind
+// artifact_plan's authored id — so a run that really authored one always wins, and every downstream
+// consumer (publish_payload's deterministic builder, publish_executor's engine path) reads it off
+// runContext.requestId exactly as it always read an authored id.
+//
+// TWO RULES THIS DELIBERATELY KEEPS. (1) It is never `requestId`. That field is the platform/workspace
+// join key (executionTypes.ts says so in as many words); falling back to it would put the wrong
+// identifier on a live client object, which is worse than not publishing. (2) It is never minted. The
+// argument is OPTIONAL for every project and every mode — omit it and the run has no publish id and
+// publish_executor refuses exactly as it does today. Nothing here generates, defaults, or infers one.
+//
+// A SUPPLIED id is always validated, before the run is created, the same way `articleBody` is: against
+// the project's declared objectDialect.requestIdPattern where it has one (platform, dr-lurie, fernwell
+// all declare req_<flow>_<topic>_<yyyymmdd>_<nn>), and against the publisher's shared contract default
+// otherwise — via the publisher's OWN compiler, so the id that passes here is the id that passes there.
+// A twenty-node run must not be built on a publish id its publish step will reject.
+async function resolvePublishRequestId(projectId: string, publishRequestId: string | undefined): Promise<string | undefined> {
+  if (publishRequestId === undefined) return undefined;
+  const config = await repositoryManager.getProjectRepository().get(projectId);
+  const pattern = compileRequestIdPattern(config?.objectDialect?.requestIdPattern);
+  if (!pattern.test(publishRequestId)) {
+    throw new WorkspaceToolError("invalid_publish_request_id", `publishRequestId "${publishRequestId}" does not match ${pattern.source} (${REQUEST_ID_FORM}); publish request ids are operator-supplied by contract and are never generated.`, { projectId, requestIdPattern: pattern.source, publishRequestId });
+  }
+  return publishRequestId;
 }
 const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional() }).strict();
 const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional() }).strict();
@@ -327,7 +369,7 @@ const articleBodyArgJsonSchema = { type: "object", description: "Client-shaped c
 const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, runId: { type: "string", minLength: 1, description: "Project what publish_payload would emit for this run, built deterministically from the run's own article_body/artifact_plan stage outputs (dry_run_publish_payload.v1). Mutually exclusive with articleBody." }, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, []);
 const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
-const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." }, requestId: { type: "string", minLength: 1, description: "Caller-supplied request id for this run. REQUIRED for a live (openai) run when the project declares objectDialect.requestIdPattern (platform, dr-lurie, fernwell: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case) — the tool refuses with request_id_required/invalid_request_id naming the pattern; request ids are never auto-generated for such a run. Optional (auto-minted) for a mock dry-run or a project without a pattern; a supplied id is always validated." } }, ["projectId", "input"]);
+const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." }, requestId: { type: "string", minLength: 1, description: "Caller-supplied request id for this run. REQUIRED for a live (openai) run when the project declares objectDialect.requestIdPattern (platform, dr-lurie, fernwell: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case) — the tool refuses with request_id_required/invalid_request_id naming the pattern; request ids are never auto-generated for such a run. Optional (auto-minted) for a mock dry-run or a project without a pattern; a supplied id is always validated." }, publishRequestId: { type: "string", minLength: 1, description: "Operator-supplied PUBLISH request id (req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case), stored on the run and lifted into every node's run context. A DIFFERENT identifier from `requestId`, which is the platform/workspace join key — neither ever substitutes for the other. This id is normally authored by the artifact_plan node; supply it here for a late-stage entrypoint run, whose artifact_plan is seeded as skipped and therefore authors none (without it such a run reaches the publish gate and is refused with publish_request_id_absent). Always OPTIONAL and never generated: omit it and the run simply has no publish id and that refusal stands. A supplied id is validated before the run is created against the project's objectDialect.requestIdPattern where declared (platform, dr-lurie, fernwell), otherwise the publisher's shared contract pattern, refusing with invalid_publish_request_id. An id authored by a real artifact_plan run always takes precedence over this one. Survives workflow.reset_run." } }, ["projectId", "input"]);
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
 const resumeRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0, description: "Optional: raise (or set) the run's per-run cost ceiling in the same call that resumes it. Omit to resume unchanged — this is what makes the budget gate's own remedy (\"raise budgetUsd and resume\") actually reachable; previously resume_run took only runId and there was no way to raise the ceiling that blocked the run." } }, ["runId"]);
 const runNextNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
@@ -639,7 +681,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     } }),
     tool({ name: "publish.validate_payload", description: "Validate a dry-run publish payload: envelope fields (target, dryRun, builtAt) plus the articleBody against the article_body node's own outputSchema.", zodSchema: publishValidate, inputSchema: publishValidateJsonSchema, execute: async (input) => { const parsed = publishValidate.safeParse(input); const bodyErrors = parsed.success ? validateAgainstArticleBodyNode(coerceJsonObjectInput(parsed.data.payload.articleBody)) : []; const issues = [...(parsed.success ? [] : parsed.error.issues), ...bodyErrors.map((message) => ({ code: "custom", path: ["payload", "articleBody"], message }))]; return ok({ valid: issues.length === 0, issues }); } }),
     tool({ name: "repository.get_health", description: "Return safe repository health metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ health: await repositoryManager.getRepositoryHealth() }); } }),
-    tool({ name: "workflow.start_dry_run", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects. Supply entrypoint 'article_body' with a valid client_object.v1 to enter the run at the publish stages without re-running ideation/research/draft nodes. Live (openai) runs for projects that declare a request-id pattern (platform, dr-lurie, fernwell) REQUIRE a caller-supplied requestId (req_<flow>_<topic>_<yyyymmdd>_<nn>); the tool refuses with request_id_required / invalid_request_id otherwise. Mock dry-runs keep the auto-minted id.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => {
+    tool({ name: "workflow.start_dry_run", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Start a Publishing Conductor dry-run workflow without external MCP calls or publishing side effects. Supply entrypoint 'article_body' with a valid client_object.v1 to enter the run at the publish stages without re-running ideation/research/draft nodes. Live (openai) runs for projects that declare a request-id pattern (platform, dr-lurie, fernwell) REQUIRE a caller-supplied requestId (req_<flow>_<topic>_<yyyymmdd>_<nn>); the tool refuses with request_id_required / invalid_request_id otherwise. Mock dry-runs keep the auto-minted id. Supply `publishRequestId` (a DIFFERENT id: the operator-authored publish contract id normally written by artifact_plan) to let a late-stage entrypoint run reach the publish gate — without it such a run is refused with publish_request_id_absent, and no publish id is ever generated.", zodSchema: startDryRunInput, inputSchema: startDryRunJsonSchema, execute: async (input) => {
       const data = startDryRunInput.parse(input);
       let entrypoint: { nodeId: string; output: unknown } | undefined;
       if (data.entrypoint === "article_body" || data.articleBody !== undefined) {
@@ -666,7 +708,15 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       // belongs. That is precisely the input side of the T-3 publish path, where a "successful" run
       // carrying a stringified envelope is worse than a failed one.
       const requestId = await resolveCallerRequestId(data.projectId, data.requestId, data.executionMode);
-      return ok({ run: await startDryRun({ projectId: data.projectId, input: coerceJsonObjectInput(data.input), workflowId: data.workflowId, executionMode: data.executionMode, entrypoint, budgetUsd: data.budgetUsd, requestId }, executionRepository) });
+      // S3 — the PUBLISH id, resolved and validated SEPARATELY from the join key above, and refused
+      // here (before any run exists) exactly as a malformed `articleBody` is.
+      const publishRequestId = await resolvePublishRequestId(data.projectId, data.publishRequestId);
+      const run = await startDryRun({ projectId: data.projectId, input: coerceJsonObjectInput(data.input), workflowId: data.workflowId, executionMode: data.executionMode, entrypoint, budgetUsd: data.budgetUsd, requestId }, executionRepository);
+      // Stamped onto the created run as its OWN field, never onto `requestId`. Written here rather
+      // than threaded through startDryRun because this tool is the ONLY writer of the field (see
+      // WorkflowExecutionRecord.publishRequestId): one writer, one validation point, and the run the
+      // caller gets back is the same record the conductor will later build run context from.
+      return ok({ run: publishRequestId ? await executionRepository.saveRun({ ...run, publishRequestId }) : run });
     } }),
     // `mode` is deliberately a TOP-LEVEL sibling of the run, not a field buried inside it: a mock run
     // emits schema-shaped placeholder artifacts that look exactly like real output, so what produced
@@ -694,7 +744,17 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // (this tool), ONE reader (publishDecision.isOperatorPublishWithheld, consumed by the publish
     // gates and the executor's publish-risk dispatch guard).
     tool({ name: "workflow.set_operator_publish_decision", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Record the operator's durable publish decision for a run (run.operatorPublishDecision). \"withheld\" is the operator VETO: it blocks workflow.publish_run and every publish-risk node for this run regardless of approved/live flags, until the operator replaces it. \"approved\" records explicit durable operator approval — the referent an executed publish_execution.v1's approvalMatched must match. The decision survives workflow.reset_run.", zodSchema: operatorPublishDecisionInput, inputSchema: operatorPublishDecisionJsonSchema, execute: async (input) => { const data = operatorPublishDecisionInput.parse(input); return ok({ run: await setOperatorPublishDecision(data.runId, data.decision, executionRepository) ?? null }); } }),
-    tool({ name: "workflow.reset_run", description: "Reset a dry-run workflow execution to its initial queued state.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => ok({ run: await resetRun(runIdInput.parse(input).runId, executionRepository) }) }),
+    // S3 — the operator's publish id survives a reset, for the same reason requestId and the operator's
+    // durable publish decision do: a reset RETRIES the same publish request, it does not become a new
+    // one. Re-stamped here (rather than inside resetRun's rebuild) because this tool is the field's one
+    // writer; without it a reset would silently put a seeded late-stage run back into the
+    // publish_request_id_absent state the operator supplied the id to leave.
+    tool({ name: "workflow.reset_run", description: "Reset a dry-run workflow execution to its initial queued state. The run's requestId, the operator's durable publish decision, and its operator-supplied publishRequestId all survive the reset — a reset retries the same request rather than starting a new one.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => {
+      const runId = runIdInput.parse(input).runId;
+      const publishRequestId = (await getRun(runId, executionRepository))?.publishRequestId;
+      const reset = await resetRun(runId, executionRepository);
+      return ok({ run: publishRequestId ? await executionRepository.saveRun({ ...reset, publishRequestId }) : reset });
+    } }),
     tool({ name: "workflow.get_run_context", description: "Return the reusable per-run context bundle (project contract, article_body schema, project tool policy, object contracts, node registry), memoized per run so the conductor fetches it once instead of re-reading contracts and the registry at every step.", zodSchema: runContextInput, inputSchema: runContextJsonSchema, execute: async (input) => { const data = runContextInput.parse(input); const cacheHit = conductorCache.has(data.runId, `${RUN_CONTEXT_KEY}:${data.projectId}`); const context = await getRunContext({ runId: data.runId, projectId: data.projectId, projectRepository }); return ok({ context, cacheHit }); } }),
     // T6 (Wave 3, ships dark): plan.nodeTimingAggregates is a READ-ONLY addition — per-nodeId
     // {count, emaDurationMs, p50DurationMs, p95DurationMs} across every run of this run's workflowId,

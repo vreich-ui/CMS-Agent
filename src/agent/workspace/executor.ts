@@ -1467,6 +1467,13 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     // see it at all.
     operatorPublishDecision: run.operatorPublishDecision,
     operatorDecisionSource: run.operatorDecisionSource,
+    // S3 (run_1787656120374_18bobg) — the operator's publish request id, supplied at
+    // workflow.start_dry_run and stored on the run. buildRunContext uses it ONLY where artifact_plan
+    // authored none, which on a late-stage entrypoint run is always: artifact_plan is seeded as
+    // skipped and has no stage output. Passing it here is what makes such a run publishable at all,
+    // and it reaches publish_payload and publish_executor through the same runContext.requestId
+    // channel an authored id has always travelled on — so there is nothing seam-specific downstream.
+    publishRequestId: run.publishRequestId,
     // W3 part 1's prompt-side half: the node whose validator loop the engine has taken over is told
     // so HERE, in the same dispatch that takes it over, instead of in a seeded prompt the live
     // (store-sourced) workspace would not see until a re-seed. W4 and W6.3 add their own halves on
