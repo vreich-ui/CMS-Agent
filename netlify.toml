@@ -1,7 +1,21 @@
 [build]
-  command = "npm install --no-fund --no-audit && npm --prefix ui install --no-fund --no-audit && npm run ui:build"
+  # Root install, then the two SPAs — ui/dist keeps publishing at the site
+  # root exactly as before; the workbench build additionally sets
+  # WORKBENCH_BASE (vite.config.ts) so every asset URL resolves under
+  # /workbench/, and VITE_MCP_TRANSPORT=netlify (workbench/src/api/client.ts)
+  # so it talks to this site's own Netlify Identity + /api/workspace-mcp
+  # broker instead of fixtures or workbench-broker/ (not deployed here).
+  # workbench/dist is copied into ui/dist/workbench so one `publish` dir
+  # serves both apps.
+  command = "npm install --no-fund --no-audit && npm --prefix ui install --no-fund --no-audit && npm run ui:build && npm --prefix workbench install --no-fund --no-audit && WORKBENCH_BASE=/workbench/ VITE_MCP_TRANSPORT=netlify npm --prefix workbench run build && mkdir -p ui/dist/workbench && cp -r workbench/dist/. ui/dist/workbench/"
   publish = "ui/dist"
   functions = "netlify/functions"
+
+[build.environment]
+  # workbench/package.json carries Playwright as a devDependency (its own
+  # test suite, not run as part of this build); this stops any browser
+  # binary download from happening during `npm --prefix workbench install`.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
 
 [functions]
   node_bundler = "esbuild"
@@ -64,6 +78,20 @@
 [[redirects]]
   from = "/oauth/token"
   to = "/.netlify/functions/oauth-token"
+  status = 200
+
+# Conductor Workbench SPA, built to ui/dist/workbench by the build command
+# above. Must precede the "/*" catch-all below — otherwise that rule would
+# match first and always serve the root app's index.html under /workbench/*
+# too, same reasoning as the OAuth block above.
+[[redirects]]
+  from = "/workbench"
+  to = "/workbench/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/workbench/*"
+  to = "/workbench/index.html"
   status = 200
 
 [[redirects]]

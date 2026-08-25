@@ -30,7 +30,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { AuthError, IS_MOCK, IS_READ_ONLY, getSession, login, logout, type SessionInfo } from '../api/client';
+import { AuthError, IS_MOCK, IS_NETLIFY_TRANSPORT, IS_READ_ONLY, getSession, login, logout, type SessionInfo } from '../api/client';
 
 export type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
@@ -164,6 +164,70 @@ function LoadingScreen() {
   );
 }
 
+/**
+ * The Netlify-transport unauthenticated screen: opens the Netlify Identity
+ * widget instead of collecting a password. Reuses `submitLogin` (an empty
+ * string is passed and never read — see client.ts's `login()` netlify
+ * branch) so this shares the same authenticated-state transition as the
+ * password form below, rather than duplicating it.
+ */
+function IdentitySignIn({ notice }: { notice: string | null }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSignIn(): Promise<void> {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await submitLogin('');
+      queryClient.clear(); // nothing fetched pre-auth is trustworthy to keep
+    } catch (err) {
+      setError(err instanceof AuthError ? err.message : 'Could not complete Netlify Identity sign-in. Try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="scrim open" style={{ position: 'fixed', background: 'var(--bg)', paddingTop: '18vh' }}>
+      <div className="modal" aria-labelledby="logingate-title">
+        <div className="wordmark" style={{ marginBottom: 4 }}>
+          Conductor
+          <small>agent workspace</small>
+        </div>
+        <h3 id="logingate-title" style={{ marginTop: 10 }}>
+          Sign in
+        </h3>
+        <div className="sub">
+          This console controls a real workspace. Sign in with Netlify Identity to continue — the workspace token
+          never leaves the server.
+        </div>
+
+        {notice && (
+          <p className="note" style={{ color: 'var(--acc)' }}>
+            {notice}
+          </p>
+        )}
+
+        {error && (
+          <p role="alert" className="note" style={{ color: 'var(--bad)' }}>
+            {error}
+          </p>
+        )}
+
+        <div className="foot">
+          <span />
+          <button className="btn pri" type="button" onClick={() => void handleSignIn()} disabled={submitting}>
+            {submitting ? 'Signing in…' : 'Sign in'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoginForm({ notice }: { notice: string | null }) {
   const queryClient = useQueryClient();
   const [password, setPassword] = useState('');
@@ -262,6 +326,23 @@ export function LoginGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (IS_MOCK || checkStarted) return;
     checkStarted = true;
+    if (IS_NETLIFY_TRANSPORT) {
+      // Mirrors ui/src/hooks/useIdentitySession.ts: the widget script tracks
+      // whether a Netlify Identity session already exists (from a previous
+      // visit), so init() runs once before the initial checkSession() below
+      // can see it, and a 'logout' fired from the widget's own UI (not just
+      // TopBar's "Log out") brings the gate back too. A missing widget
+      // (script blocked or offline) degrades to an explained unauthenticated
+      // state rather than an unhandled crash — fixture-mode dev never
+      // reaches this branch at all.
+      const identity = window.netlifyIdentity;
+      if (!identity) {
+        setState({ status: 'unauthenticated', operator: null, notice: 'Netlify Identity widget is not loaded.' });
+        return;
+      }
+      identity.on('logout', () => setState({ status: 'unauthenticated', operator: null, notice: null }));
+      identity.init();
+    }
     void checkSession();
   }, []);
 
@@ -274,5 +355,5 @@ export function LoginGate({ children }: { children: ReactNode }) {
   // render the login screen to exercise it.
   if (auth.status === 'authenticated') return <>{children}</>;
   if (auth.status === 'checking') return <LoadingScreen />;
-  return <LoginForm notice={auth.notice} />;
+  return IS_NETLIFY_TRANSPORT ? <IdentitySignIn notice={auth.notice} /> : <LoginForm notice={auth.notice} />;
 }
