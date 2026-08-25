@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { NetlifyGenesisClient } from "../../../src/agent/capture/siteGenesis.js";
+import { NetlifyGenesisClient, SiteGenesisRefusal } from "../../../src/agent/capture/siteGenesis.js";
 
 // T12.11 — the genesis driver's own Netlify API surface, both modes:
 //   dry_run — ZERO network; every intended action recorded on the ledger with synthetic ids.
@@ -120,5 +120,50 @@ describe("NetlifyGenesisClient", () => {
     expect(sleep).toHaveBeenCalledOnce();
     expect(calls[0]).toMatchObject({ init: { method: "POST" } });
     expect(JSON.stringify(client.actions)).toContain("netlify_credential_rebuild");
+  });
+  // A short Netlify degradation used to be indistinguishable from a revoked token: both surfaced as
+  // a bare `netlify_api_failed`, and both were terminal. These three pin the split.
+  it("live mode: retries a retryable 5xx and succeeds without ever surfacing a refusal", async () => {
+    let attempts = 0;
+    const sleep = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (!url.startsWith("https://api.netlify.com/api/v1/sites?name=")) throw new Error(`unexpected: ${url}`);
+      attempts += 1;
+      return attempts < 3
+        ? jsonResponse(503, { message: "upstream unavailable" })
+        : jsonResponse(200, [{ id: "site_123", name: "acme-site", account_id: "acct_1" }]);
+    });
+    const client = new NetlifyGenesisClient("live", "tok_live_test", fetchImpl as never, sleep);
+
+    await expect(client.resolveExistingSite("acme-site")).resolves.toMatchObject({ siteId: "site_123", accountId: "acct_1" });
+    expect(attempts).toBe(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it("live mode: exhausting the retry budget reports METHOD, path and status — never the response body", async () => {
+    const sleep = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(async () => jsonResponse(503, { message: "netlify-internal-detail" }));
+    const client = new NetlifyGenesisClient("live", "tok_live_test", fetchImpl as never, sleep);
+
+    const error = await client.resolveExistingSite("acme-site").catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(SiteGenesisRefusal);
+    expect((error as SiteGenesisRefusal).code).toBe("netlify_api_failed");
+    expect((error as SiteGenesisRefusal).safeSummary).toBe("GET /api/v1/sites HTTP 503");
+    // The summary is the half that gets REPORTED, so it must carry no upstream body and no query
+    // string — only what an operator needs to tell a wobble from a refusal.
+    expect((error as SiteGenesisRefusal).safeSummary).not.toContain("netlify-internal-detail");
+    expect((error as SiteGenesisRefusal).safeSummary).not.toContain("acme-site");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("live mode: refuses a 401 immediately — retrying a credential that will not improve only delays the answer", async () => {
+    const sleep = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(async () => jsonResponse(401, { message: "unauthorized" }));
+    const client = new NetlifyGenesisClient("live", "tok_live_test", fetchImpl as never, sleep);
+
+    const error = await client.resolveExistingSite("acme-site").catch((thrown: unknown) => thrown);
+    expect((error as SiteGenesisRefusal).safeSummary).toBe("GET /api/v1/sites HTTP 401");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
   });
 });

@@ -118,7 +118,12 @@ export const SITE_CLIENT_MANAGER_TOOLS = [
 export type GenesisNetlifyMode = "dry_run" | "live";
 
 export class SiteGenesisRefusal extends Error {
-  constructor(readonly code: string, message: string) {
+  // `safeSummary` is the part of a refusal that is safe to REPORT, as opposed to `message`, which
+  // may carry an upstream response body. A caller writing a machine-readable result line (the
+  // credential reconciler's site_credential_reconcile.v1) can surface this verbatim without
+  // breaking the "no bearer, no response body" rule that keeps those lines publishable. Absent by
+  // design on refusals that carry no safe detail worth repeating.
+  constructor(readonly code: string, message: string, readonly safeSummary?: string) {
     super(`${code}: ${message}`);
     this.name = "SiteGenesisRefusal";
   }
@@ -220,6 +225,21 @@ export const resolveGenesisNetlifyMode = (env: NodeJS.ProcessEnv = process.env):
 // the Authorization header; error bodies from secret-bearing writes are never echoed.
 export type NetlifyFetch = (input: string, init?: Record<string, unknown>) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown>; text?: () => Promise<string>; headers?: { get: (name: string) => string | null } }>;
 
+// A non-2xx from Netlify is not one failure mode but two: a REFUSAL (bad credential, invalid
+// payload, missing resource) and a WOBBLE (the API is briefly unavailable or rate-limiting).
+// Collapsing them into one terminal `netlify_api_failed` is how a short upstream degradation
+// turned into a fleet-wide `failed` with exit(1) — indistinguishable, from the outside, from a
+// revoked token. 429 and 5xx are retried with backoff; every other status refuses immediately,
+// because retrying a 401 or a 422 only delays the same answer.
+const isRetryableNetlifyStatus = (status: number): boolean => status === 429 || (status >= 500 && status < 600);
+const NETLIFY_REQUEST_MAX_ATTEMPTS = 3;
+const NETLIFY_REQUEST_BACKOFF_MS = [250, 1_000];
+
+// METHOD, path and status ONLY. No query string (site ids and key names already travel in the
+// result line; nothing else there is worth the risk of a token landing in a query param one day),
+// no response body, no headers.
+const netlifyCallSummary = (method: string, url: string, status: number): string => `${method} ${new URL(url).pathname} HTTP ${status}`;
+
 export class NetlifyGenesisClient {
   readonly actions: GenesisAction[] = [];
   constructor(
@@ -234,14 +254,25 @@ export class NetlifyGenesisClient {
   }
 
   private async request(method: string, url: string, body?: unknown, { redactErrorBody = false }: { redactErrorBody?: boolean } = {}): Promise<unknown> {
-    const response = await this.fetchImpl(url, {
-      method,
-      headers: { Authorization: `Bearer ${this.token}`, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {})
-    });
+    let response!: Awaited<ReturnType<NetlifyFetch>>;
+    for (let attempt = 0; attempt < NETLIFY_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+      response = await this.fetchImpl(url, {
+        method,
+        headers: { Authorization: `Bearer ${this.token}`, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {})
+      });
+      if (response.ok || !isRetryableNetlifyStatus(response.status)) break;
+      const backoff = NETLIFY_REQUEST_BACKOFF_MS[attempt];
+      if (backoff === undefined) break;
+      await this.sleepImpl(backoff);
+    }
     if (!response.ok) {
       const detail = redactErrorBody ? "" : ` ${(await response.text?.().catch(() => "")) ?? ""}`.trimEnd();
-      throw new SiteGenesisRefusal("netlify_api_failed", `${method} ${new URL(url).pathname} failed: HTTP ${response.status}${detail}`);
+      throw new SiteGenesisRefusal(
+        "netlify_api_failed",
+        `${method} ${new URL(url).pathname} failed: HTTP ${response.status}${detail}`,
+        netlifyCallSummary(method, url, response.status)
+      );
     }
     return response.json().catch(() => ({}));
   }
@@ -353,7 +384,13 @@ export class NetlifyGenesisClient {
     const keyUrl = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env/${encodeURIComponent(key)}?site_id=${encodeURIComponent(siteId)}`;
     const collectionUrl = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env?site_id=${encodeURIComponent(siteId)}`;
     const existing = await this.fetchImpl(keyUrl, { headers: { Authorization: `Bearer ${this.token}` } });
-    if (!existing.ok && existing.status !== 404) throw new SiteGenesisRefusal("netlify_api_failed", `Netlify env-var lookup failed for ${key}: HTTP ${existing.status}`);
+    if (!existing.ok && existing.status !== 404) {
+      throw new SiteGenesisRefusal(
+        "netlify_api_failed",
+        `Netlify env-var lookup failed for ${key}: HTTP ${existing.status}`,
+        netlifyCallSummary("GET", keyUrl, existing.status)
+      );
+    }
     const variable = { key, scopes, values: [{ value, context }], ...(isSecret ? { is_secret: true } : {}) };
     await this.request(existing.ok ? "PUT" : "POST", existing.ok ? keyUrl : collectionUrl, existing.ok ? variable : [variable], { redactErrorBody: true });
     this.record("netlify_set_env", `Set env var ${key} on site ${siteId} (name recorded; value never logged).`, { siteId, key, isSecret });
