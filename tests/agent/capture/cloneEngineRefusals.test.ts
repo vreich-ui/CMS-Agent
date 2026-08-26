@@ -244,6 +244,12 @@ describe("clone_conductor intake fetches the site and theme bodies", () => {
         if (name === "object_get" && args.object_type === "theme") {
           return respond(request.id, { record: { object_id: THEME_ID, body: { name: "Captured theme", tokens: { colors: { "brand-primary": "#111111" }, fonts: { body: "Inter, sans-serif" } } } } });
         }
+        // T2 (2026-08-26): intake now also reads each briefed page's LIVE body, to state what it
+        // compared. The live shape here MATCHES the briefing's emitted shape, so the ledger below
+        // reports no drift for this page.
+        if (name === "object_get" && args.object_type === "page") {
+          return respond(request.id, { record: { object_id: String(args.object_id), body: { route: "/", sections: [{ type: "hero" }] } } });
+        }
         throw new Error(`Unexpected verb reached transport during clone intake: ${name}`);
       })
     );
@@ -257,12 +263,17 @@ describe("clone_conductor intake fetches the site and theme bodies", () => {
     resetRepositoryManager();
   });
 
-  it("(h) object_gets exactly the site body and the captured theme record, and briefs both", async () => {
+  it("(h) object_gets exactly the site body, the captured theme record, and each briefed page's live body", async () => {
     const envelope = await cloneIntakeStep({ targetProjectId: INTAKE_TARGET, captureRunId: CAPTURE_RUN_ID }, executionDeps());
 
+    // T2 (2026-08-26): the page read is NEW and it is deliberate — the delta ledger below is what
+    // lets a run say what it compared. It is not new spend at the run level: cloneRestampStep already
+    // fetches every briefed page's body, so intake reads the objects this run was always going to
+    // read, early enough that what it learns can be reported.
     expect(objectGets()).toEqual([
       { object_type: "site", object_id: SITE_ID },
-      { object_type: "theme", object_id: THEME_ID }
+      { object_type: "theme", object_id: THEME_ID },
+      { object_type: "page", object_id: "pg_home" }
     ]);
     // Defect A: the site's palette comes from the object_get BODY. An object_inventory row has none,
     // which is what left the live run's theme_reconciler with no slots to enumerate.

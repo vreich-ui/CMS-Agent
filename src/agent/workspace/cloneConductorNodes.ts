@@ -578,7 +578,13 @@ export const cloneConductorNodes = [
     status: "active",
     position: { x: 480, y: 360 },
     updatedAt: UPDATED_AT,
-    metadata: { cloneStageDeterministic: "pdf_mint" },
+    // T5 (2026-08-26) — the empty-branch skip, extended from pdf_template_designer to the rest of the
+    // branch. pdf_template_designer already skipped itself on this predicate; mint and publish did
+    // not, so a run with no pdfTemplateBrief still marched both — and publish, being riskLevel
+    // "publish", raised an operator gate for a branch containing nothing (run 01: siteId null, zero
+    // entries). A skipped upstream counts as satisfied-with-absent for dependency purposes, so mint
+    // was dispatched with no design envelope to re-validate in the first place.
+    metadata: { cloneStageDeterministic: "pdf_mint", skipWhen: [{ when: "clone_no_pdf_template_entries" }] },
     modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 120000, budgetUsd: 0.05, maxOutputTokens: 3000 }
   },
   {
@@ -610,7 +616,11 @@ export const cloneConductorNodes = [
     status: "active",
     position: { x: 720, y: 360 },
     updatedAt: UPDATED_AT,
-    metadata: { cloneStageDeterministic: "pdf_publish" },
+    // T5 — see pdf_template_mint above. This is the node the defect was actually OBSERVED on: an
+    // empty branch consumed a publish-risk gate. The skip is evaluated BEFORE dispatch
+    // (executor.ts wouldSkipBeforeDispatch), which is what keeps the gate from being raised at all
+    // rather than raising it and then excusing it.
+    metadata: { cloneStageDeterministic: "pdf_publish", skipWhen: [{ when: "clone_no_pdf_template_entries" }] },
     modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 60000, budgetUsd: 0.02, maxOutputTokens: 2000 }
   },
   {

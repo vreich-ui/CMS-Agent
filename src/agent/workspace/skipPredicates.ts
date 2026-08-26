@@ -83,13 +83,21 @@ export type SkipPredicate =
   // unreadable entryMode RUNS the node (rule 3) — an older envelope shape that predates entryMode is
   // analyzed exactly as before.
   | { when: "clone_demand_driven_entry"; reason?: string }
-  // T15.34 clone_conductor — pdf_template_designer's gate (#210; ADR-2026-08-25-structure-studio
+  // T15.34 clone_conductor — the pdf-template branch's gate (#210; ADR-2026-08-25-structure-studio
   // §7). Skip when the upstream pdf_template_intake envelope POSITIVELY declares zero entries — no
   // pdfTemplateBrief was supplied on this run's initialInput (the overwhelming majority of studio
   // runs, which design site structure, not PDF templates) or every briefed entry was rejected at
   // intake (e.g. no siteId). Mirrors clone_no_actionable_mismatches exactly: reads a structural fact
   // of ONE named upstream envelope (never raw initialInput itself — that stays pdf_template_intake's
   // job), and an absent/unreadable envelope RUNS the node (rule 3).
+  //
+  // T5 (2026-08-26) — held by the WHOLE branch, not just pdf_template_designer. Run 01 blocked at
+  // pdf_template_publish demanding an operator decision with siteId:null and zero entries: a branch
+  // with nothing in it consumed a gate. designer already skipped itself here; mint and publish did
+  // not, so an empty branch still marched two more nodes, the second of them publish-risk. Nothing
+  // about this predicate is designer-specific — it asks whether the branch has any work at all, which
+  // is the same question for all three nodes — so the fix is to declare it on all three rather than to
+  // add two near-duplicate predicates.
   | { when: "clone_no_pdf_template_entries"; reason?: string };
 
 export type SkipPredicateKind = SkipPredicate["when"];
@@ -435,16 +443,23 @@ function evaluateCloneDemandDrivenEntry(predicate: Extract<SkipPredicate, { when
 // is evidence of what was REFUSED, not of what remains to design.
 function evaluateCloneNoPdfTemplateEntries(predicate: Extract<SkipPredicate, { when: "clone_no_pdf_template_entries" }>, context: SkipEvaluationContext): SkipVerdict {
   const basis: string[] = [];
-  for (const carrier of carriersFor(context)) {
+  // T5: pdf_template_intake is read as an EXTRA carrier, because pdf_template_publish deliberately
+  // depends on pdf_template_mint ALONE (cloneConductorNodes.ts argues that one-hop shape explicitly,
+  // mirroring publish_executor against publish_payload) and so would not see the intake envelope
+  // through dependsOn. Widening its dependsOn to reach the intake would change TOPOLOGY — a re-seed
+  // and redeploy, and a weakening of the one-hop rule that node states on purpose — to answer a
+  // question the extra-carrier mechanism already answers. carriersFor's `extra` parameter exists for
+  // exactly this; review_tier_excludes uses it the same way.
+  for (const carrier of carriersFor(context, ["pdf_template_intake"])) {
     if (isPlaceholder(carrier)) { basis.push("carrier: mock placeholder (dryRun) — not evidence"); continue; }
     if (!isObject(carrier) || carrier.artifact !== "pdf_template_intake.v1" || !Array.isArray(carrier.entries)) continue;
     basis.push(`entries: ${carrier.entries.length}`);
     return carrier.entries.length === 0
-      ? { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} skipped: pdf_template_intake named zero usable entries (no pdfTemplateBrief on this run, or every briefed entry was rejected at intake), so there is no PDF template to design.`, basis, warnings: [] }
-      : { skip: false, predicate, reason: `${context.nodeId} runs: pdf_template_intake named ${carrier.entries.length} PDF-template entrie(s) to design.`, basis, warnings: [] };
+      ? { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} skipped: pdf_template_intake named zero usable entries (no pdfTemplateBrief on this run, or every briefed entry was rejected at intake), so this run's PDF-template branch has no work — and an empty branch must never consume a gate.`, basis, warnings: [] }
+      : { skip: false, predicate, reason: `${context.nodeId} runs: pdf_template_intake named ${carrier.entries.length} PDF-template entrie(s).`, basis, warnings: [] };
   }
-  basis.push("no pdf_template_intake envelope declared on any upstream carrier");
-  return { skip: false, predicate, reason: `${context.nodeId} runs: no upstream pdf_template_intake envelope declares an entries array, and an unanswered question is answered by running.`, basis, warnings: [] };
+  basis.push("no pdf_template_intake envelope declared on any carrier");
+  return { skip: false, predicate, reason: `${context.nodeId} runs: no pdf_template_intake envelope declares an entries array, and an unanswered question is answered by running.`, basis, warnings: [] };
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -102,7 +102,61 @@ export type CloneIntake = {
   mismatches?: Array<{ pageRef: string; sourceShape: string[]; emittedShape: string[]; missingRecipeKind: "section_template" | "template"; rationale: string }>;
   recipes: { section_template: CloneRecipeIndexEntry[]; template: CloneRecipeIndexEntry[] };
   budget: { chars: number; cap: number; truncated: CloneIntakeTruncation[] };
+  /** T2 (2026-08-26) — present once `applyCloneDelta` has run over this briefing (which
+   *  cloneIntakeStep always does; a hand-built fixture may not). `pages` above is NOT narrowed by it:
+   *  the theme verdict is acted on (cloneThemeBindStep writes nothing when it says unchanged), the
+   *  page rows are drift EVIDENCE only. See applyCloneDelta's own header for why the page half is
+   *  recorded rather than decided. */
+  delta?: CloneIntakeDelta;
 };
+
+/** One page's live-vs-briefing comparison. `liveShape` is `null` only when the live body could not be
+ *  read. `shapeDrift` is evidence, never a dispatch decision — a page whose shape matches can still
+ *  need a restamp, because a restamp also re-points sections at a recipe minted this run and rewrites
+ *  section data, neither of which a shapes-only briefing can see. */
+export type CloneDeltaPage = {
+  pageRef: string | null;
+  objectId: string | null;
+  route: string | null;
+  liveShape: string[] | null;
+  emittedShape: string[];
+  sourceShape: string[];
+  shapeDrift:
+    | "live_body_unreadable"
+    | "live_shape_differs_from_briefing"
+    | "emitted_shape_differs_from_source"
+    | "none";
+};
+
+export type CloneIntakeDelta = {
+  comparedPages: number;
+  pages: CloneDeltaPage[];
+  pagesWithShapeDrift: number;
+  /** The DECIDED half: whether site_apply_theme would write anything different from what the site's
+   *  live palette already holds. `false` makes theme_bind a no-op that still reports the bound state. */
+  theme: {
+    changed: boolean;
+    reason:
+      | "no_captured_theme_to_compare"
+      | "captured_theme_tokens_differ_from_live_site_palette"
+      | "captured_theme_tokens_already_match_live_site_palette";
+    /** `null` when the briefing carries no captured theme objectId to compare. */
+    capturedThemeDigest: string | null;
+    livePaletteDigest: string;
+  };
+};
+
+/** T2 — compare a built briefing against the target's LIVE page bodies and the site's live palette,
+ *  and attach the `delta` ledger. PURE: no clock, no run id, no network. Never throws and never
+ *  refuses. Does NOT narrow `intake.pages` and no skip predicate reads it — see the implementation's
+ *  own header for why the page half is evidence rather than a gate.
+ *
+ *  `live.pages` are the object_get bodies of the briefed pages, fetched by the caller
+ *  (cloneEngine.cloneIntakeStep). A page absent from that list is recorded as unreadable. */
+export function applyCloneDelta(
+  intake: CloneIntake,
+  live?: { pages?: Array<{ objectId: string; sections?: unknown }> }
+): CloneIntake;
 
 /** Assembles the BOUNDED clone briefing from already-fetched pieces. Pure — every argument is a value
  *  the CALLER already fetched (an emission report, an inventory listing, a registry_get response, the
