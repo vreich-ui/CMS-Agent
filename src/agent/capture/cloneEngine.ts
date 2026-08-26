@@ -52,6 +52,7 @@ import { TemplateLibraryStore } from "../library/templateLibraryStore.js";
 import { TemplateLibraryRefusal, type TemplateLibraryRecord } from "../library/templateLibraryTypes.js";
 import { buildCapabilityRequests, type CapabilityRequest } from "../workspace/capabilityBacklogRequest.js";
 import {
+  applyCloneDelta,
   buildCloneIntake,
   buildCloneRunReport,
   buildRecipeMintPlan,
@@ -411,10 +412,43 @@ export async function cloneIntakeStep(
     throw error;
   }
 
+  // T2 (2026-08-26) — THE DELTA COMPARISON. Two live runs re-derived an already-published clone in
+  // full and wrote nothing: every content_revision identical, layout_restamp rewriting four pages
+  // into the shape they already had, theme_bind re-applying a byte-identical palette, $0.18 of model
+  // spend for a run of no-ops. Nothing compared incoming state against live state.
+  //
+  // The comparison happens HERE because this is the first and only point that holds both halves: the
+  // briefing is built, and this stage already has the transport. What it concludes and what it
+  // deliberately does not is applyCloneDelta's own header (capture/engine/clone.mjs) — in short, the
+  // THEME verdict is acted on by theme_bind, and the page rows are drift evidence for clone_report,
+  // because a shapes-only briefing cannot tell a needed restamp from a no-op one.
+  //
+  // ONE object_get PER BRIEFED PAGE. Not new spend at the run level: cloneRestampStep already fetches
+  // EVERY briefed page's body ("EVERY briefed page is fetched, including one whose recipe was
+  // rejected at mint"), so this reads the same objects the run was always going to read — just early
+  // enough that what it learns can be reported.
+  //
+  // A page whose body will not read is NOT quarantined here and NOT refused — it is simply absent
+  // from `live.pages`, which the ledger records as unreadable. That is deliberate: cloneRestampStep
+  // owns the quarantine vocabulary for an unreadable page, and naming the same condition twice, in
+  // two vocabularies, is how a ledger starts disagreeing with itself.
+  const livePages: Array<{ objectId: string; sections?: unknown }> = [];
+  for (const page of intake.pages ?? []) {
+    const objectId = typeof page?.objectId === "string" ? page.objectId : "";
+    if (!objectId) continue;
+    try {
+      const pageGet = await callProjectTool(projectId, "object_get", { objectType: "page", objectId }, deps);
+      livePages.push({ objectId, sections: bodyOf(recordOf(pageGet))?.sections });
+    } catch {
+      // Absent from livePages — recorded as unreadable by applyCloneDelta. See above.
+    }
+  }
+  const gated = applyCloneDelta(intake, { pages: livePages });
+
   return settleEnvelopeBudget({
-    ...intake,
+    ...gated,
     artifact: CLONE_ARTIFACTS.intake,
-    summary: `${intake.summary} Briefed ${intake.pages.length} page(s), ${Object.keys(intake.registry.sectionTypes).length} registered section type(s), ${Object.keys(intake.registry.pageTypes).length} page type(s) at ${intake.budget.chars} of ${intake.budget.cap} chars.`,
+    summary: `${gated.summary} Briefed ${gated.pages.length} page(s), ${Object.keys(gated.registry.sectionTypes).length} registered section type(s), ${Object.keys(gated.registry.pageTypes).length} page type(s) at ${gated.budget.chars} of ${gated.budget.cap} chars.`,
     policy: clonePolicyView(config)
   });
 }
@@ -597,6 +631,41 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
   if (!siteId) throw new CloneRefusal("clone_site_missing", "clone_intake's briefing carries no active site object id.");
   const themeId = intake.theme?.objectId;
   if (!themeId) throw new CloneRefusal("clone_theme_missing", "clone_intake's briefing carries no captured theme object id; theme_bind needs the theme capture already created to write its reconciled tokens onto.");
+
+  // T2 (2026-08-26) — the theme half of the delta gate, honored HERE rather than by skipping this
+  // node. clone_intake already compared the captured theme's token set against the site's own LIVE
+  // palette and found them equal; the observed defect was this stage re-applying a byte-identical
+  // palette, its own `before` and `after` blocks matching. There is nothing to write.
+  //
+  // WHY NOT A skipWhen ON THIS NODE. publish_payload reads theme_bind's ENVELOPE by artifact
+  // (cloneConductorRoutes.ts envelopeOf) and refuses on a missing one, and a skipped node writes no
+  // stage output — so skipping here would trade a wasted write for a broken publish segment. This
+  // node's contract is to state what the theme is now, and it can state that truthfully without
+  // touching the wire. `applied`/`after` carry the live palette (which IS the bound state), `dropped`
+  // and `substitutions` are empty because nothing was proposed or declined, and `published: false` is
+  // unchanged — theme_bind never published in any path.
+  //
+  // Note the ordering: this sits AFTER the site/theme id resolution and AFTER the site_apply_theme
+  // policy gate above, deliberately. A project whose policy blocks the only sanctioned palette writer
+  // must still get that named refusal — "we would not have been allowed to write" is a different fact
+  // from "there was nothing to write", and a run must not be told the second when the first is true.
+  const themeDelta = (intake as { delta?: { theme?: { changed?: boolean; reason?: string; livePaletteDigest?: string } } }).delta?.theme;
+  if (themeDelta?.changed === false) {
+    const live = (intake.site?.palette ?? {}) as CloneThemeApplied;
+    return {
+      artifact: CLONE_ARTIFACTS.themeBind,
+      summary: `Theme bind skipped for site ${siteId}: clone_intake's delta gate found the captured theme's tokens already byte-identical to the site's live palette (${themeDelta.reason}; digest ${themeDelta.livePaletteDigest ?? "unknown"}). No site_apply_theme call was made and nothing was dropped.`,
+      siteId,
+      themeId,
+      applied: live,
+      dropped: [],
+      before: live as Record<string, unknown>,
+      after: live,
+      substitutions: [],
+      published: false,
+      policy: clonePolicyView(config)
+    };
+  }
 
   const themeProposal = isRecord(input.themeProposal) ? input.themeProposal : {};
   // Both records are still read HERE, live: buildThemeApplyPlan is handed the site and theme as they

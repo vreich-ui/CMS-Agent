@@ -104,6 +104,15 @@ export type ApprovalRequired = {
   requestedAt: string;
   pending?: boolean;
   source?: "operator_explicit" | "policy_autonomous";
+  // T5 (2026-08-26) — the STABLE, addressable id of the gate this entry represents, resolved from
+  // gateRegistry.ts by (run.workflowId, nodeId). nodeId alone is not an address: three workflows
+  // share the tail's node ids, so "hold publish_executor" could not mean "hold clone's" without also
+  // meaning "hold the article path's". This is what a future manual-approval mode targets to hold ONE
+  // gate rather than a whole run, which is the difference between a mode an operator will actually
+  // use and one they will not. Optional only for records that predate this field and for a
+  // (workflow, node) pair the registry does not declare — a state the conformance test forbids for
+  // any registered workflow.
+  gateId?: string;
 };
 
 // Set when the conductor halts a run because its configured per-run cost ceiling (budgetUsd) has

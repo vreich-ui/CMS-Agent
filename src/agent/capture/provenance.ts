@@ -234,7 +234,7 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "clone.mjs",
-    vendoredSha256: "dfeb8a5068ef837f856fd9af6abb242b5c0a4c50a26cae651fff13b840f5aad9",
+    vendoredSha256: "460963ec628454e161afcc0863c3277a6db82405ba1c5c66ab6329c6e03f9257",
     upstreamSha256: "54f8f1d08bdb66027fc063e6519777117cf94173ae8035eb98a309986767fdcf",
     deviation:
       "T15.30 (#206; ADR-2026-08-25-structure-studio §3) adds buildCloneIntake's demand-driven " +
@@ -244,8 +244,16 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
       "(the vendored-engine rule: platform changes are a different agent's task, same posture as the " +
       "T14.5/T15.7 publish.mjs deletion note above). upstreamSha256 stays pinned to the pre-T15.30 " +
       "platform commit until that companion change lands and this file is re-vendored byte-identical " +
-      "again; every OTHER behavior in this file (clone-driven intake, recipe validation, mint, theme " +
-      "apply, restamp, the run report) is untouched."
+      "again. T2 (2026-08-26) adds a SECOND CMS-Agent-side deviation to the same entry, under the " +
+      "same rule and the same pin: applyCloneDelta, which compares a built briefing against the " +
+      "target's LIVE page bodies and the site's live palette and attaches a `delta` ledger — the " +
+      "theme half is a verdict theme_bind acts on (two live runs, run_1787748666186_ammpuv and " +
+      "run_1787748899372_lbvqdz, re-applied a byte-identical palette with matching before/after " +
+      "blocks), the page half is drift evidence only, for the reason applyCloneDelta's own header " +
+      "gives at length. Additive: it is a new exported function plus a `delta` key on the envelope " +
+      "and a `delta` block on the run report; every OTHER behavior in this file (clone-driven " +
+      "intake, recipe validation, mint, theme apply, restamp, the rest of the run report) is " +
+      "untouched, and no existing field changed shape."
   }
   // T15.7 — publish.mjs's entry is DELETED here, along with the file (src/agent/capture/engine/
   // publish.mjs) and the (still-pending, platform-side) upstream file it pinned. See the T14.5/T15.7

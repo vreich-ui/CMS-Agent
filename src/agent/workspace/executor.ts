@@ -39,6 +39,7 @@ import "./captureConductorWorkflow.js";
 import "./cloneConductorWorkflow.js";
 import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
+import { resolveGateId } from "./gateRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
 import { declaresContractPrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
@@ -569,6 +570,16 @@ const isConcurrencyConflict = (error: unknown): error is RunConcurrencyError => 
 // record and policy snapshot (invariant 7), so a look-ahead computed on one advance and a gate evaluated
 // on the next can never disagree about whether the upcoming node needs a hold. Under `autonomous` policy
 // the upcoming node will PROCEED at dispatch (never blocked), so no look-ahead hold is minted for it.
+// T5 (2026-08-26) — every approval entry and every publish-refusal receipt carries the STABLE gate id
+// for the (workflow, node) pair it belongs to, so an operator can address ONE gate. Spread rather than
+// assigned so an undeclared pair (an unregistered workflowId, a legacy record) simply omits the field
+// instead of carrying `gateId: undefined` into the persisted record. gateRegistry's conformance test
+// is what keeps "undeclared" from happening for any workflow this system actually runs.
+const gateIdFields = (run: Pick<WorkflowExecutionRecord, "workflowId">, nodeId: string): { gateId?: string } => {
+  const gateId = resolveGateId(run.workflowId, nodeId);
+  return gateId ? { gateId } : {};
+};
+
 const markPendingPublishApproval = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[]): void => {
   // A stale look-ahead is dropped every advance and re-derived below, so it can never outlive the gate it
   // described. An attempted (non-pending) entry is the authoritative audit record and is never touched.
@@ -580,6 +591,8 @@ const markPendingPublishApproval = (run: WorkflowExecutionRecord, nodes: Workspa
   run.approvalsRequired = [...run.approvalsRequired, {
     nodeId: upcoming.id,
     type: "approval_required",
+    // T5: the addressable gate, alongside the node it sits on — see gateRegistry.ts.
+    ...gateIdFields(run, upcoming.id),
     reason: `Next dependency-ready node ${upcoming.id} is publish-risk; the run cannot advance without explicit approval. Nothing has been attempted and no publication has been performed.`,
     requestedAt: now(),
     pending: true
@@ -658,6 +671,7 @@ const approvalEntriesForRefusals = (run: WorkflowExecutionRecord, refused: NodeE
   return [...kept, ...missing.map((nodeId) => ({
     nodeId,
     type: "approval_required" as const,
+    ...gateIdFields(run, nodeId),
     reason: `Publish-risk node ${nodeId} requires explicit approval; its output is still the gate's refusal receipt, so the run is not finished.`,
     requestedAt: now()
   }))];
@@ -1022,6 +1036,52 @@ const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
   DETERMINISTIC_ROUTE_METADATA_KEYS.some((key) => {
     const declared = node.metadata?.[key];
     return declared !== undefined && declared !== false;
+  });
+
+// T1 (2026-08-26) — WORKFLOW-OWNED STAGE ROUTES, and why they must outrank the shared tail's own.
+//
+// THE DEFECT, exactly. `publish_executor`'s STORE row carries `publishExecutorDeterministic:
+// "execute"` (set by scripts/reseedStoreFromCanonical.ts --set-publish-executor-mode; deliberately
+// NOT in any canonical literal — see that script's header). capture_conductor and clone_conductor
+// compose the SHARED publishing tail, so their publish_executor carries the SAME NODE ID, and
+// overlayStoreNode MERGES metadata by id — which is the whole point of sharing a tail, and is what
+// makes an authoring edit reach every workflow at once. The consequence nobody wired for: a composed
+// workflow's publish_executor ends up declaring BOTH its own `captureStageDeterministic`/
+// `cloneStageDeterministic` route AND the inherited DTC `publishExecutorDeterministic: "execute"`.
+//
+// The DTC execute route is evaluated far above the capture/clone stage dispatch in this file, and it
+// is — by its own design note — the ONE deterministic route here with no fallback: "Every outcome
+// therefore terminates here." So a clone run reached publisher.ts publishRun, which demands an
+// operator-supplied requestId and an article_body envelope, and died on `publish_request_id_absent` /
+// `no_valid_article_body` — for a workflow (the structure studio) that composes the PUBLISH segment
+// only, emits `clientObjectType: "clone_structure_batch"`, and has no article body and never will.
+// Live evidence: run_1787748666186_ammpuv and run_1787748899372_lbvqdz on zilberman, both 16/18 nodes
+// green with every gate passed (approvalMatched:true, controller "go", 2 objects cleared) and then
+// ZERO client calls.
+//
+// WHY THIS AND NOT A CLONE BRANCH INSIDE publisher.ts. clone_conductor already HAS a complete,
+// correct, clone-aware publish path — cloneConductorRoutes.ts's "publish_executor" case, which builds
+// an object publish plan from recipe_mint/theme_bind/layout_restamp's own reports and drives
+// checkout -> object_publish -> checkin per object (objectPublishExecution.ts). It was never missing;
+// it was never REACHED. Teaching publisher.ts to recognise a clone envelope would build a SECOND
+// clone publish path alongside the working one, and the two would drift.
+//
+// THE RULE, stated once: a node that declares a workflow-OWNED stage route is dispatched by that
+// route, and the shared tail's DTC routes do not fire for it. The workflow's own composition is the
+// more specific authority — it is per-workflow code (captureConductorNodes.ts /
+// cloneConductorNodes.ts) that deliberately tagged this node, whereas the DTC flag arrived by
+// id-collision on a shared row that publishing_conductor set for its OWN article path. Note that
+// clone's and capture's compositions ALREADY drop the inherited `publishPayloadDeterministic` flag
+// on publish_payload for exactly this reason; that fix simply was not extended to publish_executor,
+// and publish_payload's DTC route degrades gracefully where publish_executor's terminates. Fixing it
+// HERE rather than by dropping one more key per composition covers every present and future shared
+// tail node at once, and cannot be defeated by a store row re-adding the key after composition ran
+// (which a drop-at-composition fix cannot say — the overlay runs AFTER the composition).
+const WORKFLOW_STAGE_ROUTE_METADATA_KEYS = ["captureStageDeterministic", "cloneStageDeterministic"] as const;
+export const declaresWorkflowStageRoute = (node: Pick<WorkspaceNode, "metadata">): boolean =>
+  WORKFLOW_STAGE_ROUTE_METADATA_KEYS.some((key) => {
+    const declared = node.metadata?.[key];
+    return typeof declared === "string" && declared.trim().length > 0;
   });
 
 // The stage outputs the ENGINE reads outside a node's own dependsOn: buildRunContext (runContext.ts)
@@ -1775,7 +1835,10 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     state.status = "blocked";
     state.completedAt = completedAt;
     state.durationMs = duration(startedAt, completedAt);
-    state.output = { artifact: nextNode.produces[0] ?? `${nextNode.id}.decision`, dryRun: true, decision: "blocked", approvalRequired: approvalMissing, reason: publishRefusals.join(" ") };
+    // T5: the node's OWN blocked output names the gate too, not only the run-level approvalsRequired
+    // entry — an operator reading the node that stopped should not have to correlate it back to the
+    // run record to learn what to address.
+    state.output = { artifact: nextNode.produces[0] ?? `${nextNode.id}.decision`, dryRun: true, decision: "blocked", approvalRequired: approvalMissing, ...gateIdFields(run, nextNode.id), reason: publishRefusals.join(" ") };
     state.warnings = [
       ...(approvalMissing ? ["approval_required"] : []),
       ...(operatorVeto ? ["operator_publish_withheld"] : []),
@@ -1785,7 +1848,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     run.status = "blocked";
     run.updatedAt = completedAt;
     if (approvalMissing) {
-      run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", reason: authority!.reason, requestedAt: completedAt }];
+      run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", ...gateIdFields(run, nextNode.id), reason: authority!.reason, requestedAt: completedAt }];
     }
     run.stageOutputs[nextNode.id] = state.output;
     run.artifacts.push(buildArtifact(nextNode, state.output));
@@ -1805,6 +1868,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       {
         nodeId: nextNode.id,
         type: "approval_required",
+        ...gateIdFields(run, nextNode.id),
         reason: `Publish-risk node ${nextNode.id} proceeded under this project's autonomous publishing policy (autonomyMode: "autonomous"); no operator acted. Advisory only — nothing is held.`,
         requestedAt: advisedAt,
         source: "policy_autonomous"
@@ -1826,7 +1890,11 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // object_validate call against the client. A mock run's article_body "body" is a placeholder, not a
   // client object, so validating it would be both a real network call and a meaningless verdict. Mock
   // runs fall through to MockNodeRunner exactly as before.
-  if (nextNode.metadata?.publishPayloadDeterministic === true && ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+  // T1: same precedence rule as publish_executor below — a composed workflow's OWN stage route wins
+  // over the shared tail's DTC route. This is what the capture/clone compositions already try to say
+  // by deleting the inherited flag at composition time, except that deletion is undone a moment later
+  // by overlayStoreNode merging the STORE's publishing_conductor row for the same node id back on top.
+  if (nextNode.metadata?.publishPayloadDeterministic === true && !declaresWorkflowStageRoute(nextNode) && ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
     let built: Awaited<ReturnType<typeof runDeterministicPublishPayload>>;
     try {
       built = await runDeterministicPublishPayload({
@@ -1882,7 +1950,11 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // traversal keeps working through MockNodeRunner unchanged. Placed AFTER the publish-refusal block
   // (this node is riskLevel "publish") because a deterministic path must never be the thing that
   // skips a gate.
-  if (nextNode.metadata?.publicationControllerDeterministic === true && ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+  // T1: same precedence rule as publish_executor below — a composed workflow's OWN stage route wins
+  // over the shared tail's DTC route. This is what the capture/clone compositions already try to say
+  // by deleting the inherited flag at composition time, except that deletion is undone a moment later
+  // by overlayStoreNode merging the STORE's publishing_conductor row for the same node id back on top.
+  if (nextNode.metadata?.publicationControllerDeterministic === true && !declaresWorkflowStageRoute(nextNode) && ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
     let decided: Awaited<ReturnType<typeof runDeterministicPublicationController>>;
     try {
       decided = await runDeterministicPublicationController({
@@ -1945,7 +2017,12 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // gate, by calling publisher.ts publishRun directly. Absent/unrecognised is "off" — the model path,
   // exactly as before this landed. Scoped to LIVE runs and to the publisher node for the same reasons
   // the sibling routes are.
-  const publishExecutorMode = isPublishExecutorNode(nextNode) && liveRun ? readPublishExecutorDeterministicMode(nextNode.metadata) : "off";
+  // T1: a workflow-owned stage route (capture/clone) outranks the shared tail's inherited DTC route —
+  // see declaresWorkflowStageRoute's header. Resolving to "off" here means BOTH halves of the flag
+  // (the "gate" refusal half and the "execute" half) stand down for such a node, which is correct:
+  // the workflow's own route below performs the same publish-authority read (resolvePublishAuthority)
+  // and the executor's publish-risk gate has ALREADY refused the dispatch before either can run.
+  const publishExecutorMode = isPublishExecutorNode(nextNode) && liveRun && !declaresWorkflowStageRoute(nextNode) ? readPublishExecutorDeterministicMode(nextNode.metadata) : "off";
   // Envelope facts taken verbatim from upstream, nearest-to-this-node first; never invented.
   const publishEnvelopeCarriers = [run.stageOutputs.publication_controller, run.stageOutputs.publish_payload, run.stageOutputs.article_body];
 

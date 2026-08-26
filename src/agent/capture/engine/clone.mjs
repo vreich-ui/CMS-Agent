@@ -615,6 +615,161 @@ export function buildCloneIntake({
   return boundIntake(envelope);
 }
 
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// 1b. THE DELTA GATE (T2, 2026-08-26) — WHAT IT CAN DECIDE, AND WHAT IT DELIBERATELY CANNOT
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// THE EVIDENCE. Two live runs (run_1787748666186_ammpuv, run_1787748899372_lbvqdz) re-derived a clone
+// that was already published and released. Every `content_revision` came out identical — theme 2,
+// site 3, home 69, partners 54, filmography 76, book-online 12. layout_restamp spent 30.6s rewriting
+// four pages into the shape they already had, and theme_bind re-applied a byte-identical palette (its
+// own `before` and `after` blocks match). $0.18 of model spend for a run whose every write was a
+// no-op. Nothing compared incoming state against live state before paying for judgment.
+//
+// THE THEME HALF IS DECIDABLE HERE, AND IT IS DECIDED. The captured theme's token set and the site's
+// own live palette are BOTH already in the briefing — intake object_gets both — so "would
+// site_apply_theme write anything different" is a total comparison over two values in hand. When they
+// match, theme_bind writes nothing (cloneEngine.cloneThemeBindStep honors this) and says so. That is
+// the observed `before`/`after`-identical defect, closed.
+//
+// THE PAGE HALF IS NOT DECIDABLE HERE, AND THIS FUNCTION DOES NOT PRETEND OTHERWISE. It records what
+// it compared and stops. The reason is structural, not an omission to be tidied up later:
+//
+//   The briefing is SHAPES ONLY, by design and at length — clone_intake's own header calls it "a
+//   BOUNDED BRIEFING DOCUMENT rather than a data bus", because a 637,769-char envelope against a
+//   48,000-char bound is what made the first live run useless. `pages[].sourceShape` and
+//   `emittedShape` are ordered lists of section TYPE NAMES. They carry no section content.
+//
+//   layout_restamp's job is not only to fix a page's type sequence. It also re-points sections at a
+//   recipe minted THIS RUN and rewrites section data. A page can therefore need a real restamp while
+//   its type sequence is unchanged — which means "shape matches" is NOT "nothing to do", and a gate
+//   built on shape alone would skip work that was needed. The determinism fixture in
+//   tests/agent/capture/determinismHarness.test.ts is exactly that case, and it caught this: source,
+//   emitted and live shapes all read ["hero"] while the live section's data says "What the page holds
+//   NOW". A shape gate silently turned a substantive restamp into a no-op.
+//
+//   Comparing CONTENT instead is not available either: the emission's own create bodies and the live
+//   bodies differ by platform-assigned fields (section ids, at minimum), so a digest over them reports
+//   "changed" on every run and gates nothing. Deciding which fields the platform assigns is a
+//   data-contract question, not something to infer.
+//
+// WHAT THE PAGE LEDGER IS FOR, THEN. Drift evidence, stated per page: the live ordered shape beside
+// the briefing's emitted and source shapes. It is what clone_report prints so a run can SAY what it
+// compared, and it is the raw material for whichever page-level gate is chosen (the live record's own
+// `content_revision`, compared against what a prior run left behind, is the candidate the evidence
+// above points at). It is NEVER read by a skip predicate, and no node's dispatch depends on it.
+//
+// DETERMINISM. A pure function of its two arguments — no clock, no run id, no network. Called with
+// the same intake and the same live bodies it produces a byte-identical envelope, which is the same
+// property #200 asks of buildCloneIntake itself. It never throws and never refuses.
+
+/** A stable digest of any JSON-ish value: keys sorted at every level, so key order is never mistaken
+ *  for a change. Not cryptographic and not meant to be — it is a comparison token that also has to be
+ *  readable in a ledger. */
+function stableDigest(value) {
+  const canonical = (input) => {
+    if (Array.isArray(input)) return input.map(canonical);
+    if (isPlainObject(input)) {
+      const out = {};
+      for (const key of Object.keys(input).sort()) out[key] = canonical(input[key]);
+      return out;
+    }
+    return input === undefined ? null : input;
+  };
+  const text = JSON.stringify(canonical(value));
+  // FNV-1a, 32-bit, rendered hex. Chosen for being short, dependency-free and stable across runtimes.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `fnv1a_${hash.toString(16).padStart(8, '0')}`;
+}
+
+const shapeKey = (shape) => (Array.isArray(shape) ? shape : []).map(String).join('>');
+
+/**
+ * T2 — compare a built briefing against the target's LIVE objects and attach the `delta` ledger.
+ * `pages` is NOT narrowed and no node is skipped on this — see the section header above for why the
+ * page half is recorded rather than decided. The THEME verdict IS acted on, by cloneThemeBindStep.
+ *
+ * @param intake  a `clone_intake.v1` envelope as `buildCloneIntake` returned it.
+ * @param live    `{ pages: [{ objectId, sections }] }` — the object_get bodies of the briefed pages,
+ *                fetched by the caller (cloneEngine.cloneIntakeStep). A page the caller could not
+ *                read is simply absent, which is recorded as unreadable, never as "already current".
+ */
+export function applyCloneDelta(intake, live = {}) {
+  const livePages = new Map(
+    (Array.isArray(live.pages) ? live.pages : [])
+      .filter((page) => page && typeof page.objectId === 'string' && page.objectId)
+      .map((page) => [page.objectId, sectionShape(page.sections)])
+  );
+
+  const pages = [];
+  for (const page of intake.pages ?? []) {
+    const objectId = typeof page?.objectId === 'string' ? page.objectId : null;
+    const emitted = shapeKey(page?.emittedShape);
+    const source = shapeKey(page?.sourceShape);
+    const liveShape = objectId !== null && livePages.has(objectId) ? livePages.get(objectId) : null;
+    const entry = {
+      pageRef: page?.pageRef ?? null,
+      objectId,
+      route: page?.route ?? null,
+      liveShape,
+      emittedShape: Array.isArray(page?.emittedShape) ? [...page.emittedShape] : [],
+      sourceShape: Array.isArray(page?.sourceShape) ? [...page.sourceShape] : []
+    };
+    if (liveShape === null) pages.push({ ...entry, shapeDrift: 'live_body_unreadable' });
+    else if (shapeKey(liveShape) !== emitted) pages.push({ ...entry, shapeDrift: 'live_shape_differs_from_briefing' });
+    else if (emitted !== source) pages.push({ ...entry, shapeDrift: 'emitted_shape_differs_from_source' });
+    else pages.push({ ...entry, shapeDrift: 'none' });
+  }
+
+  // The theme half — the one this function DECIDES. `theme.palette` is the CAPTURED theme's token
+  // set; `site.palette` is the live site's own brandTokens: the two blocks theme_bind was observed
+  // writing identically over each other. An absent captured theme is CHANGED, never "already
+  // current" — there is nothing to compare, and theme_bind has its own named refusal
+  // (`clone_theme_missing`) for that case which this gate must not pre-empt or disguise.
+  const capturedThemeDigest = intake.theme?.objectId ? stableDigest(intake.theme?.palette ?? {}) : null;
+  const livePaletteDigest = stableDigest(intake.site?.palette ?? {});
+  const themeChanged = capturedThemeDigest === null || capturedThemeDigest !== livePaletteDigest;
+
+  const driftingPages = pages.filter((entry) => entry.shapeDrift !== 'none').length;
+  const envelope = {
+    ...intake,
+    delta: {
+      comparedPages: pages.length,
+      // EVIDENCE, NOT A VERDICT. Nothing dispatches or skips on this — see the section header.
+      pages,
+      pagesWithShapeDrift: driftingPages,
+      theme: {
+        changed: themeChanged,
+        reason: capturedThemeDigest === null
+          ? 'no_captured_theme_to_compare'
+          : themeChanged
+            ? 'captured_theme_tokens_differ_from_live_site_palette'
+            : 'captured_theme_tokens_already_match_live_site_palette',
+        capturedThemeDigest,
+        livePaletteDigest
+      }
+    }
+  };
+
+  envelope.summary =
+    `${intake.summary} DELTA: compared ${pages.length} briefed page(s) against their live bodies ` +
+    `(${driftingPages} show shape drift; page-level work is still decided downstream, by restamp, ` +
+    `since a briefing carries shapes and not content). Captured theme tokens ` +
+    `${themeChanged ? 'DIFFER from' : 'already match'} the site's live palette` +
+    `${themeChanged ? '' : ' — theme_bind will write nothing'}.`;
+
+  // The delta ledger only ever GROWS the briefing, so the budget claim must be restated against the
+  // string that now contains it — the same law settleBudgetChars enforces for buildCloneIntake's own
+  // output, and the same reason: a briefing that under-reports its own size is the precise defect
+  // CLONE-INTAKE-FIX.md exists to make unreachable.
+  settleBudgetChars(envelope);
+  return envelope;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 // 2. RECIPE VALIDATION
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -2046,6 +2201,12 @@ export function buildCloneRunReport({ intake, mintReport, themeReport, restampRe
     mint: clone(mintReport),
     theme: clone(themeReport),
     restamp: clone(restampReport),
+    // T2 (2026-08-26) — WHAT THE DELTA GATE COMPARED, relayed verbatim from clone_intake's own ledger
+    // and never re-derived here. This is the half of T2 that is not about spend: a run that did
+    // nothing must be able to SAY what it checked, or "nothing changed" is indistinguishable from
+    // "nothing ran". Absent on a pre-T2 envelope or a hand-built fixture, which renders as no delta
+    // block rather than as a fabricated all-clear.
+    ...(isPlainObject(intake.delta) ? { delta: clone(intake.delta) } : {}),
     substitutions,
     capabilityBacklog: groupUnmetNeedsBySectionType(design?.unmetNeeds),
     reviewQueue,
