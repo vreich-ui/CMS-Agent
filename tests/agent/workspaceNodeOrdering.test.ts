@@ -39,9 +39,15 @@ describe("Memory workspace repository ordering", () => {
     expect(ids[ids.length - 1]).not.toBe("research");
   });
 
+  // T15.16 (#195): the default document now also carries capture_conductor's and clone_conductor's
+  // own nodes (workspaceStoreNodes.ts), so getNodes() returns 44 ids, not 24 — but every
+  // publishing_conductor id among them must still appear in exactly canonical order; sortWorkspaceNodes
+  // ranks a canonical-indexed node ahead of any authored (non-canonical-index) node regardless of
+  // position, so publishing's own 24 stay a contiguous, correctly-ordered prefix.
   it("workspace.get_nodes returns canonical order after a prompt update", async () => {
     await repository.updateNodePrompt("research", "Another research prompt edit.");
-    expect((await repository.getNodes()).map((node) => node.id)).toEqual(canonicalOrder);
+    const ids = (await repository.getNodes()).map((node) => node.id);
+    expect(ids.filter((id) => canonicalOrder.includes(id))).toEqual(canonicalOrder);
 
     const node = await repository.getNode("research");
     expect(node?.prompt).toBe("Another research prompt edit.");
@@ -49,7 +55,8 @@ describe("Memory workspace repository ordering", () => {
 
   it("updating a node schema also preserves canonical order", async () => {
     await repository.updateNodeSchema("reader_insight", { type: "object", properties: { extra: { type: "string" } } });
-    expect((await repository.getNodes()).map((node) => node.id)).toEqual(canonicalOrder);
+    const ids = (await repository.getNodes()).map((node) => node.id);
+    expect(ids.filter((id) => canonicalOrder.includes(id))).toEqual(canonicalOrder);
   });
 });
 
@@ -72,7 +79,8 @@ describe("Blob workspace repository ordering", () => {
 
     const second = new RepositoryManager({ backend: "blobs" }).getWorkspaceRepository();
     const ids = (await second.getNodes()).map((node) => node.id);
-    expect(ids).toEqual(canonicalOrder);
+    // T15.16 (#195): see the memory-repository test above for why this filters to publishing's own ids.
+    expect(ids.filter((id) => canonicalOrder.includes(id))).toEqual(canonicalOrder);
     expect(ids.indexOf("research")).toBe(RESEARCH_INDEX);
   });
 });

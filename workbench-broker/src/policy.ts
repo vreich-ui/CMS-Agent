@@ -47,6 +47,7 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "feedback_list",
   "optimizer_status",
   "repository_get_health",
+  "site_duplicate_status",
   // Read-shaped per §6 ("no confirm"), grouped with reads for policy purposes.
   "node_validate_input",
   "workspace_validate_node",
@@ -97,6 +98,7 @@ export const MUTATING_VERBS: ReadonlySet<string> = new Set([
   "dataset_build",
   "dataset_export_sft",
   "dataset_export_preferences",
+  "site_duplicate",
 ]);
 
 export type VerbClass = "read" | "mutating" | "unknown";

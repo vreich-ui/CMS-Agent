@@ -122,13 +122,13 @@ describe("a client refusal reaches the operator as a typed blocker with the clie
     // The blocker names the failing CLIENT TOOL — not a phase parsed out of our own message — and
     // PublishExecutionBlocker.clientError carries the client's sentence verbatim, with the
     // statusCode and the per-field issues it supplied.
-    expect(output.blocker.code).toBe("publish_step_failed");
-    expect(output.blocker.step).toBe("object_create");
-    expect(output.blocker.clientError).toContain("status 400");
-    expect(output.blocker.clientError).toContain("Invalid request fields.");
-    expect(output.blocker.clientError).toContain("object_type: Invalid option: expected one of");
+    expect(output.blocker!.code).toBe("publish_step_failed");
+    expect(output.blocker!.step).toBe("object_create");
+    expect(output.blocker!.clientError).toContain("status 400");
+    expect(output.blocker!.clientError).toContain("Invalid request fields.");
+    expect(output.blocker!.clientError).toContain("object_type: Invalid option: expected one of");
     // ...and never the shape complaint that used to stand in for it.
-    expect(output.blocker.clientError).not.toContain("create_missing_object_id");
+    expect(output.blocker!.clientError).not.toContain("create_missing_object_id");
     expect(output.blockers[0]).toContain("publish_step_failed at object_create");
 
     // The receipts stop lying about the call: a refused step is a failed step.
@@ -143,9 +143,9 @@ describe("a client refusal reaches the operator as a typed blocker with the clie
     const { client, output } = await runEngine({ object_publish: clientRefusal("publication window is closed for this site") });
 
     expect(client.calls).toEqual(["object_create", "object_checkout", "object_validate", "object_patch", "object_publish"]);
-    expect(output.blocker.code).toBe("publish_step_failed");
-    expect(output.blocker.step).toBe("object_publish");
-    expect(output.blocker.clientError).toContain("publication window is closed for this site");
+    expect(output.blocker!.code).toBe("publish_step_failed");
+    expect(output.blocker!.step).toBe("object_publish");
+    expect(output.blocker!.clientError).toContain("publication window is closed for this site");
     expect(output.publishCommitted).toBe(false);
     expect(validateOutput(output, getWorkspaceNode("publish_executor")?.outputSchema).ok).toBe(true);
   });
@@ -158,6 +158,9 @@ describe("a client refusal reaches the operator as a typed blocker with the clie
     expect(output.receipts.objectId).toBe("obj_platform_9912");
     expect(output.receipts.commitSha).toBe("9f2c1ab4");
     expect(output.receipts.steps.every((step) => step.ok)).toBe(true);
-    expect(output.blocker.code).toBe("go_live_unconfirmed");
+    // T15.6: a committed publish is "published_pending_release" with no blocker — release_executor
+    // (a separate, downstream tail node) performs the release.
+    expect(output.status).toBe("published_pending_release");
+    expect(output.blocker).toBeUndefined();
   });
 });

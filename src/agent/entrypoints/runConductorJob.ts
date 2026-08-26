@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { planRun, summarizeRunCost, type RunCostLedger, type RunPlan } from "../workspace/conductor.js";
 import { summarizeModelUsage } from "../observability/modelUsage.js";
-import { DEFAULT_EXECUTION_MODE, getRun, retryNode, runNextNode, startDryRun } from "../workspace/executor.js";
+import { DEFAULT_EXECUTION_MODE, getRun, retryNode, runNextNode, setOperatorPublishDecision, startDryRun } from "../workspace/executor.js";
 import { registerCmsAgentStoreFactory, type BlobStoreClient } from "../repository/blobs/blobClient.js";
 import { createGcsStoreClient } from "../repository/gcs/gcsStoreClient.js";
 import { repositoryManager } from "../runtime/repositories.js";
@@ -27,8 +27,10 @@ export type ConductorJobOptions = {
   /** Resume an existing run instead of starting a new one. A blocked run is re-queued only when
    * `approved` is also set; a cancelled run is never resurrected here (reset is a deliberate act). */
   resumeRunId?: string;
-  /** Allow publish-risk nodes to execute. Downstream publish gates (per-project env flag,
-   * readiness policy, workflow.publish_run) still apply — this only lifts the executor's stop. */
+  /** Allow publish-risk nodes to execute: records an explicit operator "approved" publish decision
+   * on the run (resolvePublishAuthority is what the executor actually consults). Downstream publish
+   * gates (per-project env flag, readiness policy, workflow.publish_run) still apply — this only
+   * lifts the executor's stop. */
   approved?: boolean;
   maxSteps?: number;
   /** Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the run halts
@@ -127,11 +129,22 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
     }
   };
 
+  // T15.7 (ADR-2026-08-25-publish-autonomy §7) — publish authority is now a pure function of the
+  // run's own durable operator record (resolvePublishAuthority), never a caller-supplied flag: the
+  // executor's `approved` option is inert. This job's own `--approved`/`RUN_APPROVED` surface is a
+  // real operator-facing control (Cloud Run job args/env, not a test fixture), so it must still work
+  // — recording the decision on the run itself is what makes it work again.
+  if (options.approved === true) {
+    run = (await setOperatorPublishDecision(run.runId, "approved", executionRepository)) ?? run;
+  }
+
   if (run.status === "blocked" && options.approved === true) {
     // Resuming a blocked run must go through the sanctioned retry path: the executor schedules
     // only queued NODES, so merely re-queuing the run-level status would skip the blocked node
     // and mark the run completed without ever executing it. retryNode resets the blocked node to
-    // queued (clearing its approval entry) and advances exactly once.
+    // queued (clearing its approval entry) and advances exactly once; the operator decision just
+    // recorded above (not the `approved: true` passed here, which the executor no longer reads for
+    // authority) is what lets the re-dispatched node actually clear the gate.
     const blockedNodeId = run.approvalsRequired[0]?.nodeId ?? run.nodes.find((node) => node.status === "blocked")?.nodeId;
     if (blockedNodeId) {
       log(`Re-queuing blocked node ${blockedNodeId} with approval`);

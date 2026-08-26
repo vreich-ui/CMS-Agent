@@ -40,9 +40,10 @@ export type RunContext = {
   // behaviour therefore cannot drift apart: the same code that runs the loop says that it runs it.
   enginePolicies?: string[];
   // T2 (2026-08-13, run_1786557897658_elj34j) — THE live bug this field fixes. run.operatorPublishDecision
-  // is set via workflow.set_operator_publish_decision (or, now, a project's publishingPolicy.operatorDefault
-  // at run creation), but before this it was never echoed into a node's OWN run context — only the
-  // executor's pre-dispatch guard (executor.ts) and publisher.ts read it directly off the run record. On
+  // is set ONLY via workflow.set_operator_publish_decision (T15.5, ADR-2026-08-25-publish-autonomy
+  // invariant 4 — a project's autonomyMode policy never stamps this field), but before this it was
+  // never echoed into a node's OWN run context — only the executor's pre-dispatch guard (executor.ts)
+  // and publisher.ts read it directly off the run record. On
   // run_1786557897658_elj34j the publish_executor node's model dispatch had no way to see the field at
   // all and incorrectly claimed it was absent when it was actually set. Echoing it here (present only when
   // the run actually has a decision — never invented) is what lets any node's OWN reasoning agree with the
@@ -51,7 +52,7 @@ export type RunContext = {
   // WHICH source produced operatorPublishDecision — see publishDecision.describeOperatorDecisionSource.
   // Present only alongside operatorPublishDecision, so a node can distinguish an explicit operator act
   // from a standing project default without guessing.
-  operatorDecisionSource?: "explicit" | "project_policy_default";
+  operatorDecisionSource?: "explicit" | "project_policy_default" | "policy_autonomous";
 };
 
 export const RUN_CONTEXT_ENVELOPE_FIELDS = ["clientProjectId", "clientObjectType", "contractSource"] as const;
@@ -76,7 +77,7 @@ export type BuildRunContextParams = {
   // T2 — echoed verbatim from run.operatorPublishDecision / run.operatorDecisionSource. See
   // RunContext.operatorPublishDecision for why this exists.
   operatorPublishDecision?: "approved" | "withheld";
-  operatorDecisionSource?: "explicit" | "project_policy_default";
+  operatorDecisionSource?: "explicit" | "project_policy_default" | "policy_autonomous";
   // S3 (2026-08-25, run_1787656120374_18bobg) — the run's own stored publish request id, echoed
   // verbatim from WorkflowExecutionRecord.publishRequestId, used ONLY as the fallback below when no
   // node authored one. Deliberately NOT WorkflowExecutionRecord.requestId: see the comment on the

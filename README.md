@@ -375,8 +375,8 @@ Canonical content rules:
 * `content_source.v1` remains the canonical external project workflow envelope.
 * The workspace MCP manages nodes, prompts, schemas, stage outputs, and learning observations only.
 * Dr. Lurie MCP remains the future external project publishing backend; this workspace does not integrate it yet.
-* `publish_payload` consumes `article_body.v1` and produces a dry-run adapter payload only.
-* `publication_controller` is marked `publish` risk, but it is dry/approval-only for now and must not publish without future explicit approval support.
+* `publish_payload` consumes `article_body.v1` and produces the shared publish segment's input.
+* The shared publish segment (`publish_payload → publication_controller → publish_executor → release_executor → learning_recorder`) is policy-driven. Authority is resolved by `publishingPolicy.autonomyMode` and explicit operator decisions (see ADR-2026-08-25-publish-autonomy).
 * `learning_recorder` records structured observations and improvement candidates, but it does not auto-edit prompts or schemas.
 
 ### Dry-run workflow execution

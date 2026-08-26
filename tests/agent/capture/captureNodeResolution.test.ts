@@ -30,9 +30,16 @@ import "../../../src/agent/workspace/executor.js";
 // completes them before any of the above runs — and MockNodeRunner resolves no tools, which is why the
 // T12.9 mock harness and every mock-mode test passed over the defect.
 //
-// The fix is a canonical FALLBACK (nodeResolution.ts), not a store seed: seeding is the "Workspace fix ≠
-// fixed" trap scripts/seedNodesFromWorkspace.ts's header names, and resolveConductorNodes pins topology
-// to the canonical definitions on purpose. A store record still WINS wherever one exists.
+// The fix is a canonical FALLBACK (nodeResolution.ts): resolveConductorNodes pins RUN topology to the
+// canonical definitions regardless of what the store holds, so a store row was never required for
+// execution correctness, and a store record still WINS wherever one exists.
+//
+// T15.16 (#195) UPDATE: capture_conductor's (and clone_conductor's) own nodes are now ALSO additively
+// seeded into the store by default (workspaceStoreNodes.ts / store.ts's defaultWorkspaceNodes /
+// ensureWorkspaceNodeSeeds) — for GOVERNANCE visibility (workspace.get_node, the optimizer, playbook
+// curation), not because execution needed it. The fallback this file tests stays exactly as
+// necessary: a workspace whose store predates #195's seed, or whose top-up has not run yet, still
+// resolves these nodes correctly via findCanonicalNodeById.
 
 const storeStub = (nodes: WorkspaceNode[]): WorkspaceRepository => ({
   getNode: async (id: string) => nodes.find((node) => node.id === id)
@@ -41,9 +48,19 @@ const storeStub = (nodes: WorkspaceNode[]): WorkspaceRepository => ({
 const captureNode = (id: string): WorkspaceNode => listCaptureConductorNodes().find((node) => node.id === id)!;
 
 describe("T12.15 — capture_conductor's AI nodes resolve for execution without being seeded into the store", () => {
-  it("premise: none of the three AI nodes is in the workspace store (this is intended, not a gap to seed)", async () => {
+  // T15.16 (#195): the premise flipped. capture_conductor's three AI nodes are now seeded into a
+  // fresh workspace store by default (governance visibility), so the store WINS this lookup directly
+  // — but it must still describe the identical node the canonical fallback would have produced, since
+  // that store row IS a clone of the same node literal composeWorkflowNodes builds
+  // listCaptureConductorNodes() from (workspaceStoreNodes.ts unions the raw upstream array, never a
+  // tail-composed copy).
+  it("premise: the three AI nodes ARE in the workspace store post-#195, and match the canonical fallback's definition byte-for-byte", async () => {
     const workspace = repositoryManager.getWorkspaceRepository();
-    for (const nodeId of CAPTURE_AI_NODE_IDS) expect(await workspace.getNode(nodeId), nodeId).toBeUndefined();
+    for (const nodeId of CAPTURE_AI_NODE_IDS) {
+      const stored = await workspace.getNode(nodeId);
+      expect(stored, nodeId).toBeDefined();
+      expect(stored, nodeId).toEqual(findCanonicalNodeById(nodeId, "capture_conductor"));
+    }
   });
 
   // THE regression. Before the fix every one of these threw `Unknown node: <id>`.

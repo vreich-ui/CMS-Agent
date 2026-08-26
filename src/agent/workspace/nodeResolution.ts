@@ -12,11 +12,20 @@ import "./captureConductorWorkflow.js";
 //
 // THE DEFECT THIS EXISTS FOR (T12.6 acceptance run, 2026-08-18). capture_conductor's three AI nodes —
 // block_classifier, copy_regenerator, gap_adjudicator — are code-defined in captureConductorNodes.ts
-// and registered through the §2.23 registry; they were never seeded into the workspace store, and
-// they never should be (scripts/seedNodesFromWorkspace.ts's header: "Workspace fix ≠ fixed", a trap
-// this project has paid for three times; resolveConductorNodes deliberately pins topology to the
-// canonical definitions). Every per-node lookup on the execution path, however, went straight to
-// `workspaceRepository.getNode(id)` and threw `Unknown node: <id>` on a miss:
+// and registered through the §2.23 registry; at the time this module was written they were never
+// seeded into the workspace store (scripts/seedNodesFromWorkspace.ts's header: "Workspace fix ≠
+// fixed", a trap this project has paid for three times; resolveConductorNodes deliberately pins
+// topology to the canonical definitions). Every per-node lookup on the execution path, however, went
+// straight to `workspaceRepository.getNode(id)` and threw `Unknown node: <id>` on a miss:
+//
+// T15.16 (#195) UPDATE: capture_conductor's and clone_conductor's own nodes ARE now additively seeded
+// into the store (workspaceStoreNodes.ts / store.ts's ensureWorkspaceNodeSeeds), so a store row will
+// usually exist for them too — the concern above was specifically about seedNodesFromWorkspace.ts's
+// LIVE-STORE round-trip into nodes.ts's publishingConductorNodes array, which #195 does not touch
+// (see workspaceStoreNodes.ts's header). The fallback below stays: it is what keeps a workspace whose
+// store has not been topped up yet (or a store read that races the top-up) resolving correctly, at
+// zero cost when the store row is already present — `stored ?? findCanonicalNodeById` tries the store
+// first either way.
 //
 //   * toolResolver.ts's resolveEffectiveToolsForNode, called by OpenAINodeRunner for any node with a
 //     non-empty allowedTools — the LIVE break: `tool_error: Unknown node: block_classifier` out of

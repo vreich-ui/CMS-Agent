@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
-import { startDryRun } from "../../src/agent/workspace/executor.js";
+import { startDryRun, setOperatorPublishDecision } from "../../src/agent/workspace/executor.js";
 import { listWorkspaceNodes } from "../../src/agent/workspace/nodes.js";
 import { publishRun, publishEnabledEnvVar, isProjectPublishEnabled, __test__ } from "../../src/agent/workspace/publisher.js";
 import { drLurieProjectConfig } from "../../src/agent/projects/drLurie/definition.js";
@@ -74,6 +74,12 @@ const seedRun = async (articleBody: unknown, projectId = "dr-lurie") => {
   if (projectId === "acme-live") await projectRepository.save(hooklessProjectConfig);
   const run = await startDryRun({ executionMode: "mock", projectId, input: "publish", entrypoint: { nodeId: "article_body", output: articleBody } }, executionRepository);
   await seedControllerDecision(executionRepository, run.runId);
+  // T15.5 (ADR-2026-08-25-publish-autonomy §2.4) — publishRun's authority gate now requires a
+  // resolved publish authority; these fixture projects are operator-gated by default (no
+  // autonomyMode declared), so seedRun stands in an explicit operator approval for what the old
+  // `approved:true` caller flag used to buy on its own. Tests that specifically exercise the
+  // authority gate closing seed their own run WITHOUT this call.
+  await setOperatorPublishDecision(run.runId, "approved", executionRepository);
   const learningRepository = manager.getLearningRepository();
   return { runId: run.runId, executionRepository, projectRepository, learningRepository };
 };
@@ -226,6 +232,7 @@ describe("live publish gates", () => {
     const learningRepository = manager.getLearningRepository();
     const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
     await seedControllerDecision(executionRepository, run.runId);
+    await setOperatorPublishDecision(run.runId, "approved", executionRepository);
     const adapter = fakeCallTool();
     const result = await publishRun({ runId: run.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository, learningRepository, env: ENABLED_ENV, callTool: adapter.fn });
 
@@ -290,6 +297,7 @@ describe("live publish gates", () => {
     const projectRepository = manager.getProjectRepository();
     const learningRepository = manager.getLearningRepository();
     const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "no-body" }, executionRepository);
+    await setOperatorPublishDecision(run.runId, "approved", executionRepository);
     const adapter = fakeCallTool();
     const result = await publishRun({ runId: run.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository, learningRepository, env: ENABLED_ENV, callTool: adapter.fn });
     expect(result.mode).toBe("error");
@@ -323,18 +331,27 @@ describe("live publish gates", () => {
     expect(executor?.allowedTools).toContain("project.call_tool");
     expect(controller?.allowedTools).toContain("project.call_tool");
 
-    const ctx = await seedRun(textBody);
+    // T15.5: unlike seedRun (which now seeds an explicit operator approval for the "happy path"
+    // tests), this test needs the authority gate itself CLOSED, so it builds its own run without
+    // that call — every one of the three caller/operator gates stays closed on its own account.
+    const manager = new RepositoryManager();
+    const executionRepository = manager.getExecutionRepository();
+    const projectRepository = manager.getProjectRepository();
+    const learningRepository = manager.getLearningRepository();
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+    await seedControllerDecision(executionRepository, run.runId);
+    const ctx = { runId: run.runId, executionRepository, projectRepository, learningRepository };
     const adapter = fakeCallTool();
-    // Readiness GO, grant in place, and every publish gate explicitly closed (kill-switch + explicit
-    // approved:false / live:false — the go-live defaults must be actively overridden to close a gate).
-    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: false, live: false, readiness: READY }, { ...ctx, env: { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv, callTool: adapter.fn });
+    // Readiness GO, grant in place, and every publish gate explicitly closed: the env kill-switch,
+    // no operator approval and no autonomous policy (publish_authorized), and live:false.
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, live: false, readiness: READY }, { ...ctx, env: { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv, callTool: adapter.fn });
 
     expect(result.published).toBe(false);
     expect(result.mode).toBe("dry_run");
     expect(adapter.calls).toHaveLength(0);
     if (result.mode === "dry_run") {
       expect(result.gates.allPassed).toBe(false);
-      expect(result.gates.gates.filter((gate) => !gate.passed).map((gate) => gate.name)).toEqual(["operator_enabled", "explicit_approval", "explicit_live"]);
+      expect(result.gates.gates.filter((gate) => !gate.passed).map((gate) => gate.name)).toEqual(["operator_enabled", "publish_authorized", "explicit_live"]);
       expect(result.readiness?.status).toBe("go");
     }
   });
@@ -342,13 +359,25 @@ describe("live publish gates", () => {
   // Each gate is closed on its own account. Opening two of three still publishes nothing, so no
   // single flag — and certainly no tool grant — is load-bearing by itself.
   it("keeps each publish gate independent: any one closed gate is enough to refuse", async () => {
-    const combinations = [
-      { name: "operator_enabled", input: { approved: true, live: true }, env: { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv },
-      { name: "explicit_approval", input: { approved: false, live: true }, env: ENABLED_ENV },
-      { name: "explicit_live", input: { approved: true, live: false }, env: ENABLED_ENV }
+    // T15.5: seedRun now seeds an explicit operator approval (needed for the "happy path" tests),
+    // so the "publish_authorized" case here builds its own unapproved run instead, to demonstrate
+    // that gate closing entirely on its own — no other combination touches operator approval at all.
+    const unapprovedCtx = async () => {
+      const manager = new RepositoryManager();
+      const executionRepository = manager.getExecutionRepository();
+      const projectRepository = manager.getProjectRepository();
+      const learningRepository = manager.getLearningRepository();
+      const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+      await seedControllerDecision(executionRepository, run.runId);
+      return { runId: run.runId, executionRepository, projectRepository, learningRepository };
+    };
+    const combinations: Array<{ name: string; ctx: () => Promise<{ runId: string; executionRepository: any; projectRepository: any; learningRepository: any }>; input: Record<string, unknown>; env: NodeJS.ProcessEnv }> = [
+      { name: "operator_enabled", ctx: () => seedRun(textBody), input: { live: true }, env: { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv },
+      { name: "publish_authorized", ctx: unapprovedCtx, input: { live: true }, env: ENABLED_ENV },
+      { name: "explicit_live", ctx: () => seedRun(textBody), input: { live: false }, env: ENABLED_ENV }
     ];
     for (const combination of combinations) {
-      const ctx = await seedRun(textBody);
+      const ctx = await combination.ctx();
       const adapter = fakeCallTool();
       const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, readiness: READY, ...combination.input }, { ...ctx, env: combination.env, callTool: adapter.fn });
       expect(result.mode, `${combination.name} closed must refuse`).toBe("dry_run");
@@ -358,18 +387,24 @@ describe("live publish gates", () => {
 
   it("keeps the publish gate set closed and named — nothing else may satisfy a gate", () => {
     // P0 2026-08-10: two new gates join the closed set — the operator veto (§2.2) and the
-    // refuse-by-default controller decision (§2.1).
-    expect(__test__.PUBLISH_GATE_NAMES).toEqual(["operator_enabled", "explicit_approval", "explicit_live", "operator_not_withheld", "controller_decision_go"]);
-    const goRun = { stageOutputs: { publication_controller: GO_DECISION }, nodes: [] } as any;
-    // Go-live: every operator/caller gate defaults open (with an explicit go decision on the run)…
+    // refuse-by-default controller decision (§2.1). T15.5: "explicit_approval" is renamed
+    // "publish_authorized" — it now reads resolvePublishAuthority, not a bare caller flag.
+    expect(__test__.PUBLISH_GATE_NAMES).toEqual(["operator_enabled", "publish_authorized", "explicit_live", "operator_not_withheld", "controller_decision_go"]);
+    // T15.5: dr-lurie declares no autonomyMode (operator-gated by default), so the authority gate
+    // needs an explicit operator approval on the fixture run itself — the deprecated `approved`
+    // caller flag no longer buys it.
+    const goRun = { stageOutputs: { publication_controller: GO_DECISION }, nodes: [], operatorPublishDecision: "approved" } as any;
+    // Go-live: every operator/caller gate defaults open (with an explicit go decision AND an
+    // explicit operator approval on the run)…
     const open = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID }, {} as NodeJS.ProcessEnv, goRun);
     expect(open.allPassed).toBe(true);
     // …and each still closes on its own explicit input, nothing else.
-    const gates = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv, goRun);
+    const gates = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, live: true }, { DR_LURIE_PUBLISH_ENABLED: "false" } as NodeJS.ProcessEnv, goRun);
     expect(gates.allPassed).toBe(false);
     expect(gates.operatorEnabled).toBe(false);
-    // The operator veto closes its own gate regardless of every other input.
-    const withheld = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, approved: true, live: true }, {} as NodeJS.ProcessEnv, { ...goRun, operatorPublishDecision: "withheld" });
+    // The operator veto closes its own gate regardless of every other input — including its own
+    // prior "approved", which withheld now supersedes.
+    const withheld = __test__.evaluateGates(drLurieProjectConfig, { runId: "r", requestId: REQUEST_ID, live: true }, {} as NodeJS.ProcessEnv, { ...goRun, operatorPublishDecision: "withheld" });
     expect(withheld.allPassed).toBe(false);
     expect(withheld.gates.find((gate) => gate.name === "operator_not_withheld")?.passed).toBe(false);
     // Prose-only controller output ("Looks fine.") is NOT an authorization — refuse-by-default.
@@ -576,5 +611,58 @@ describe("D7 — the engine never writes judgements into a client object", () =>
     expect(meta).toHaveProperty("title");
     // And nothing judgement-shaped hides anywhere else in the patch.
     expect(JSON.stringify(ops)).not.toContain("scored_by");
+  });
+});
+
+// T15.29 (2026-08-25, #205; ADR-2026-08-25-structure-studio §2.2) — enforcement point 3, wired end
+// to end: this DTC publish path (publisher.ts's `call` closure, driven by a project's own
+// executePublish hook) IS the emission transport for publishing_conductor's governed writes. A hook
+// that somehow ended up asked to object_create a recipe type — a misconfigured contract, a future
+// dialect bug — must be refused HERE, before any wire call, not merely at publish_payload's
+// allowlist (which only ever sees an object that already exists). Unit coverage for the guard itself
+// lives in publishableTypeCharter.test.ts; this proves the wiring.
+describe("structure authority boundary — the runtime write guard, wired into the DTC publish path (T15.29/#205)", () => {
+  it("refuses BEFORE any wire call when the run's clientObjectType is a recipe type, naming the workflow, the verb, and the type", async () => {
+    const recipeTypedBody = { ...textBody, clientObjectType: "section_template" };
+    const ctx = await seedRun(recipeTypedBody);
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.published).toBe(false);
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") {
+      expect(result.error).toContain("recipe_authorship_refused");
+      expect(result.error).toContain("publishing_conductor");
+      expect(result.error).toContain("object_create");
+      expect(result.error).toContain("section_template");
+      expect(result.error).toContain("ADR-2026-08-25-structure-studio");
+    }
+    // Reject, never coerce: the transport is never reached at all — no created/checked-out/patched
+    // recipe object, no stranded lock, no half-write to clean up.
+    expect(adapter.calls).toHaveLength(0);
+  });
+
+  it("a theme/site recipe type is refused the same way", async () => {
+    const themeTypedBody = { ...textBody, clientObjectType: "theme" };
+    const ctx = await seedRun(themeTypedBody);
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.published).toBe(false);
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") expect(result.error).toContain("recipe_authorship_refused");
+    expect(adapter.calls).toHaveLength(0);
+  });
+
+  it("does not disturb the ordinary content-object publish path — the CI baseline of this whole file", async () => {
+    // textBody's own clientObjectType ("content_item") is untouched; this is the same assertion the
+    // "executes the sanctioned publish sequence" test above already makes, restated here so a reader
+    // auditing the guard's blast radius finds proof of "consumption survives" right next to the
+    // refusal tests, not three hundred lines away.
+    const ctx = await seedRun(textBody);
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+    expect(result.published).toBe(true);
+    expect(adapter.calls.map((call) => call.tool)).toEqual(DR_LURIE_PUBLISH_SEQUENCE);
   });
 });

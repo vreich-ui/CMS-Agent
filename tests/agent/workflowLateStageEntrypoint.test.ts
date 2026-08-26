@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
 import type { ExecutionRepository } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { WorkflowExecutionRecord } from "../../src/agent/workspace/executionTypes.js";
-import { getRun, resetRun, runNextNode, startDryRun } from "../../src/agent/workspace/executor.js";
+import { getRun, resetRun, runNextNode, setOperatorPublishDecision, startDryRun } from "../../src/agent/workspace/executor.js";
 import { repositoryManager, resetRepositoryManager } from "../../src/agent/runtime/repositories.js";
 import { handler } from "../../netlify/functions/mcp.mjs";
 
@@ -23,6 +23,9 @@ const validArticleBody = {
 const entrypoint = { nodeId: "article_body", output: validArticleBody };
 
 const drive = async (runId: string, store: ExecutionRepository, options: { approved?: boolean } = {}) => {
+  // T15.7 (ADR-2026-08-25-publish-autonomy §7) — `approved` is deprecated as an authority input;
+  // the executor now reads the run's own durable operator record instead.
+  if (options.approved) await setOperatorPublishDecision(runId, "approved", store);
   let run = await getRun(runId, store);
   for (let i = 0; run && i < 50 && !TERMINAL.includes(run.status); i++) run = await runNextNode(runId, { executionRepository: store, approved: options.approved });
   return run as WorkflowExecutionRecord;

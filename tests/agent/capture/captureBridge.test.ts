@@ -354,12 +354,13 @@ describe("bounds and refusals: the authority gate still runs first and is never 
   });
 
   it("exposes only the bridge seam for tests — no grant fetcher, no token scrubber, because neither exists any more", () => {
+    // T15.7 — buildPublishTransport (T14.5's publish-tail-local transport, permitting object_publish
+    // and release_to_production from inside captureEngine.ts) is retired along with publish.mjs:
+    // those two verbs are now reached only through the shared publishing tail's own governed nodes
+    // (objectPublishExecution.ts / releaseExecution.ts, wired in captureConductorRoutes.ts), never
+    // from capture-domain code.
     expect(Object.keys(captureInternals).sort()).toEqual([
       "buildAdapterTransport",
-      // T14.5 — the publish tail's transport is its own seam: it permits object_publish and
-      // release_to_production (which the emitter's transport still bans) while keeping
-      // trigger_netlify_build and deploy unreachable. Its refusal semantics are load-bearing.
-      "buildPublishTransport",
       "buildRegenerationAdapter",
       "callCaptureBridge",
       "callProjectTool",

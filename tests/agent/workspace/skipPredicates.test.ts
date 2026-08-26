@@ -227,6 +227,50 @@ describe("clone_no_actionable_mismatches — recipe_designer's gate (T13.2 Defec
   });
 });
 
+describe("clone_demand_driven_entry — layout_analyst's gate (T15.30/#206; ADR-2026-08-25-structure-studio §3)", () => {
+  // The node as clone_conductor declares it, so the test reads the SAME metadata the executor gates
+  // on — the same discipline the clone_no_actionable_mismatches suite above uses for recipe_designer.
+  const node = () => {
+    const analyst = listCloneConductorNodes().find((candidate) => candidate.id === "layout_analyst")!;
+    return { id: analyst.id, dependsOn: analyst.dependsOn, metadata: analyst.metadata };
+  };
+
+  const intake = (entryMode?: string) => ({
+    stageOutputs: {
+      clone_intake: { artifact: "clone_intake.v1", ...(entryMode !== undefined ? { entryMode } : {}) }
+    }
+  });
+
+  it("declares the predicate the engine now recognizes — no unrecognized-rule warning", () => {
+    expect(node().metadata?.skipWhen).toEqual([{ when: "clone_demand_driven_entry" }]);
+    expect(readSkipPredicates(node().metadata).warnings).toEqual([]);
+    expect(node().dependsOn).toContain("clone_intake");
+  });
+
+  it("skips when clone_intake declares entryMode \"demand\" — no capture snapshot exists to diff", () => {
+    const verdict = evaluateNodeSkip(node(), intake("demand"))!;
+    expect(verdict.skip).toBe(true);
+    expect(verdict.basis).toEqual(["entryMode: demand"]);
+    expect(verdict.reason).toMatch(/no capture snapshot/);
+  });
+
+  it("RUNS when clone_intake declares entryMode \"clone\" — the ordinary capture-derived path", () => {
+    const verdict = evaluateNodeSkip(node(), intake("clone"))!;
+    expect(verdict.skip).toBe(false);
+    expect(verdict.basis).toEqual(["entryMode: clone"]);
+  });
+
+  it("RUNS when entryMode is absent or unreadable (an older envelope shape), and never reads a mock placeholder as proof", () => {
+    const absent = evaluateNodeSkip(node(), {})!;
+    expect(absent.skip).toBe(false);
+    expect(absent.basis).toContain("no entryMode declared on any upstream envelope");
+    expect(evaluateNodeSkip(node(), intake(undefined))!.skip).toBe(false);
+    const placeholder = evaluateNodeSkip(node(), { stageOutputs: { clone_intake: { dryRun: true, entryMode: "demand" } } })!;
+    expect(placeholder.skip).toBe(false);
+    expect(placeholder.basis).toContain("carrier: mock placeholder (dryRun) — not evidence");
+  });
+});
+
 describe("review quartet tiering — operator policy (Wolf, 2026-08-12), three tiers", () => {
   it("resolves the tier from the run's declared content class", () => {
     expect(resolveReviewTier("docs").tier).toBe("docs");

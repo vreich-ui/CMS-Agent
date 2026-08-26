@@ -31,11 +31,15 @@ const articleBody = {
 const runToTheEdgeOfTheGate = async (approved = false) => {
   const started = await call("workflow.start_dry_run", { projectId: "platform", executionMode: "mock", entrypoint: "article_body", articleBody, input: { artifact: "content_source.v1", summary: "gate fixture" } });
   const runId: string = started.data.run.runId;
+  // T15.7 (ADR-2026-08-25-publish-autonomy §7) — `approved` is deprecated as an authority input: the
+  // run's own durable operator record (resolvePublishAuthority) is what the look-ahead hold and the
+  // gate itself now read, so an "approved" advance needs the real decision recorded, not a flag.
+  if (approved) await call("workflow.set_operator_publish_decision", { runId, decision: "approved" });
   let run = started.data.run;
   // Advance until the publish-risk node is the one in line, rather than hard-coding a step count — the
   // point of R-22 is that the node list is no longer a constant anybody should be memorising.
   for (let i = 0; i < 10 && run.currentNodeId !== "publication_controller"; i++) {
-    run = (await call("workflow.run_next_node", approved ? { runId, approved: true } : { runId })).data.run;
+    run = (await call("workflow.run_next_node", { runId })).data.run;
   }
   return { runId, run };
 };

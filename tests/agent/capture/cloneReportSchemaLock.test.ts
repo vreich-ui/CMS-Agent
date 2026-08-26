@@ -26,8 +26,10 @@ const reportEnvelopeFixture = () => ({
   // THE REGRESSION: a keyed map, never a list.
   capabilityBacklog: { booking_widget: [{ sectionType: "booking_widget", why: "no registered type performs this" }] },
   reviewQueue: [{ objectType: "site", objectId: "site_zilberman" }],
-  humanSummary: "Clone run for zilberman: 3 object(s) to review. Everything written is a draft.",
-  humanGate: { publishedByThisRun: false, note: "Clone runs only ever write drafts." }
+  humanSummary: "Clone run for zilberman: 3 object(s) to review. Publication was not attempted on this run.",
+  // T15.10 (#189): was `humanGate: { publishedByThisRun: false, note: "..." }` — renamed and
+  // reframed as `publication`, mirroring capture_run_report.v1's own field.
+  publication: { attempted: false, published: [], failed: [], withheld: [], release: null, note: "The tail's publish_executor did not run for this fixture." }
 });
 
 describe("clone_report outputSchema is a contract with the engine that fills it", () => {

@@ -15,7 +15,7 @@ import { getWorkspaceNode } from "../../../src/agent/workspace/nodes.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
 import { readPublicationDecision } from "../../../src/agent/workspace/publishDecision.js";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
-import { getRun, runNextNode, startDryRun } from "../../../src/agent/workspace/executor.js";
+import { getRun, runNextNode, setOperatorPublishDecision, startDryRun } from "../../../src/agent/workspace/executor.js";
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 
 // W1 + W6.1 (determinism program, 2026-08-12). This suite proves:
@@ -257,6 +257,13 @@ describe("wired into a real run: replaces the model call entirely", () => {
     // ancestors as completed with no output, so supply the body the controller's decision is about.
     run.stageOutputs.article_body = sampleArticleBody();
     await store.saveRun(run);
+    // T15.7 (ADR-2026-08-25-publish-autonomy §2.4, §7) — publication_controller is riskLevel
+    // "publish", so the OUTER gate (executor.ts, resolvePublishAuthority) runs BEFORE this node's own
+    // deterministic route can fire at all; an explicit operator "approved" is what this suite's actual
+    // subject (the deterministic controller REPLACING the model call) needs to be reachable in the
+    // first place. `approved: true` on the dispatch call below is inert (deprecated as an authority
+    // input) — the durable operator record is the only thing either gate reads now.
+    await setOperatorPublishDecision(started.runId, "approved", store);
     return { runId: started.runId, store, workspace };
   };
 

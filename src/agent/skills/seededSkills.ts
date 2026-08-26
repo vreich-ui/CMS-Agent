@@ -7,6 +7,16 @@
 //
 // Re-seed with:  npm run nodes:update
 // Check drift:   npm run nodes:check
+//
+// T15.33 (#209; ADR-2026-08-25-structure-studio §6.2) — standardsPackSkillDefinition is a DELIBERATE
+// manual addition, ahead of any live workspace to seed it from (there is none in this environment).
+// It is authored once in its own module (standardsPack.ts, the "readable way to author a NEW skill
+// before it exists anywhere" this file's own header describes) precisely so STANDARDS_PACK_VERSION
+// stays the single source of truth for both this seeded definition and templateProvenance.ts's pin —
+// they cannot silently drift apart. A future `npm run nodes:update` against a live workspace that has
+// run `skill_create`/`skill_assign` for it will fold it back into the generated block above it
+// unchanged in substance.
+import { standardsPackSkillDefinition } from "./standardsPack.js";
 import type { SkillDefinition } from "./skillTypes.js";
 
 export const seededSkillDefinitions: SkillDefinition[] = [
@@ -897,5 +907,6 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "metadata": {},
     "createdAt": "2026-01-01T00:00:00.000Z",
     "updatedAt": "2026-07-26T13:08:13.314Z"
-  }
+  },
+  standardsPackSkillDefinition
 ];

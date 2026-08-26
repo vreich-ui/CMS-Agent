@@ -79,17 +79,24 @@ describe("T5 acceptance — a durable approval satisfies the driver gate", () =>
     expect(advanced.approvalsRequired.filter((approval) => approval.pending === true)).toEqual([]);
   });
 
-  it("a standing project default counts exactly as an explicit approval does", async () => {
+  // T15.5 (#185) rewrote this case rather than deleting it. #212 asserted that a standing project
+  // default "counts exactly as an explicit approval does" — by STAMPING operatorPublishDecision:
+  // "approved" onto the run at creation (applyOperatorPublishPolicyDefault). ADR-2026-08-25-publish-
+  // autonomy §2.2 rejects that mechanism: it writes a human's decision when no human decided, and
+  // reset_run would then preserve a fabricated approval. The behaviour #212 wanted is kept and
+  // widened; the fabrication is not. An autonomous project advances through the gate carrying NO
+  // operator record at all, because authority is resolved at gate time from the policy snapshot.
+  it("an autonomous project advances the gate without any operator record", async () => {
     const projectRepository = repositoryManager.getProjectRepository();
     const config = await projectRepository.get("platform");
-    await projectRepository.save({ ...config!, publishingPolicy: { ...config!.publishingPolicy, operatorDefault: "approved" } });
+    await projectRepository.save({ ...config!, publishingPolicy: { ...config!.publishingPolicy, autonomyMode: "autonomous" } });
     try {
       const { runId, gateId, store } = await parkAtTheGate();
       const run = (await getRun(runId, store))!;
-      // applyOperatorPublishPolicyDefault stamps this at creation; assert it rather than assume it,
-      // since the whole test rests on the run genuinely carrying a policy-sourced decision.
-      expect(run.operatorPublishDecision).toBe("approved");
-      expect(run.operatorDecisionSource).toBe("project_policy_default");
+      // The load-bearing assertion, and the one #212's version had backwards: policy authorizes but
+      // never writes. Nothing except workflow.set_operator_publish_decision may touch this field.
+      expect(run.operatorPublishDecision).toBeUndefined();
+      expect(run.publishingPolicySnapshot?.autonomyMode).toBe("autonomous");
 
       const advanced = await runNextNode(runId, { executionRepository: store });
       expect(advanced.nodes.find((node) => node.nodeId === gateId)!.status).toBe("completed");

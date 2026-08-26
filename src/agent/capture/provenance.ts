@@ -159,18 +159,22 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-// T14.5 (2026-08-25) VENDORED publish.mjs — a NEW file, like clone.mjs before it, authored in
-// platform (78e67f0) alongside this task rather than pulled from the CAPTURE_ENGINE_UPSTREAM.commit
-// pin above, which still names the commit the other files were last re-vendored at and is left
-// untouched. Wolf's ruling: "this is agentic CMS -- human review and check and if needed edit
-// published content, but it needs to be assumed that the human is not involved." publish.mjs is the
-// ONE module in this engine where `object_publish` and `release_to_production` are reachable;
-// emit.mjs's forbidden-verb set is NOT relaxed, because an emission walks crawled third-party content
-// through creates, patches and asset ingestion and nothing in that walk may reach production
-// mid-write. `trigger_netlify_build` and `deploy` stay unreachable from every capture path including
-// this one. The gate that remains is not a human: an object publishes when the emission's OWN
-// validation of it passed and nothing quarantined it, and everything withheld is named with a reason.
-// Byte-identical to platform's packages/core/cli/capture/publish.mjs, no deviation of its own.
+// T14.5 (2026-08-25) VENDORED publish.mjs, a NEW file authored in platform (78e67f0) — the ONE module
+// in this engine where `object_publish` and `release_to_production` were reachable, calling
+// release_to_production directly and tagged riskLevel:"write" to dodge the publish-risk machinery
+// (ADR-2026-08-25-publish-autonomy §1). T15.7 (2026-08-25, this task) DELETES it, on both sides, per
+// the ADR's §9 ordering: T15.6 first carried its object-scoped self-check — per-object
+// postcreate/postpatch validation required, quarantine exclusion, named withholding, the non-throwing
+// per-object loop, finally-released leases — into the canonical workspace/objectPublishExecution.ts,
+// so this deletion removes a SECOND path, not the only one. Its entry below is REMOVED, not merely
+// unlisted: an entry left behind would assert an upstream file this repo no longer vendors.
+//
+// PLATFORM-SIDE COMPANION DELETION REQUIRED, NOT PERFORMED BY THIS COMMIT (T15.8, platform#615, a
+// DIFFERENT agent's task per the vendored-engine rule — this repo's worktree does not touch platform):
+// delete platform/packages/core/cli/capture/publish.mjs (and its .d.mts sibling, if platform generates
+// one, matching this repo's publish.d.mts). Until that lands, the platform repo still carries the file
+// this repo no longer vendors or verifies — a stale, orphaned copy, not a divergent one, because
+// nothing in THIS repo reads or hashes it any more once the entry below is gone.
 
 export const CAPTURE_ENGINE_UPSTREAM = {
   repo: "vreich-ui/platform",
@@ -230,14 +234,22 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "clone.mjs",
-    vendoredSha256: "54f8f1d08bdb66027fc063e6519777117cf94173ae8035eb98a309986767fdcf",
-    upstreamSha256: "54f8f1d08bdb66027fc063e6519777117cf94173ae8035eb98a309986767fdcf"
-  },
-  {
-    file: "publish.mjs",
-    vendoredSha256: "7a946cfd3fd483cadc5637e2ee4261e4cc66126eb9db17c43db9f90d9141cd01",
-    upstreamSha256: "7a946cfd3fd483cadc5637e2ee4261e4cc66126eb9db17c43db9f90d9141cd01"
+    vendoredSha256: "dfeb8a5068ef837f856fd9af6abb242b5c0a4c50a26cae651fff13b840f5aad9",
+    upstreamSha256: "54f8f1d08bdb66027fc063e6519777117cf94173ae8035eb98a309986767fdcf",
+    deviation:
+      "T15.30 (#206; ADR-2026-08-25-structure-studio §3) adds buildCloneIntake's demand-driven " +
+      "branch (structureBrief as the alternative to captureRunId, normalized into the identical " +
+      "clone_intake.v1 shape — entryMode/sourceUrl/mismatches, plus the optional structureBrief.pages " +
+      "passthrough) ahead of a platform-side companion vendoring this repo's worktree cannot perform " +
+      "(the vendored-engine rule: platform changes are a different agent's task, same posture as the " +
+      "T14.5/T15.7 publish.mjs deletion note above). upstreamSha256 stays pinned to the pre-T15.30 " +
+      "platform commit until that companion change lands and this file is re-vendored byte-identical " +
+      "again; every OTHER behavior in this file (clone-driven intake, recipe validation, mint, theme " +
+      "apply, restamp, the run report) is untouched."
   }
+  // T15.7 — publish.mjs's entry is DELETED here, along with the file (src/agent/capture/engine/
+  // publish.mjs) and the (still-pending, platform-side) upstream file it pinned. See the T14.5/T15.7
+  // header note above.
 ] as const;
 
 export async function hashVendoredEngineFile(file: string): Promise<string> {

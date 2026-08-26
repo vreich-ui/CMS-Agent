@@ -13,9 +13,12 @@
 // tool never spins on a poll — the same law capture_crawl's own one-create-or-poll contract keeps.
 //
 // AUTHORIZATION, unchanged from T12.9: the target's registry ProjectCapturePolicy is THE authority
-// (deny-all default refuses; nothing a caller passes can widen a bound), the emission transport's
-// forbidden-verb set keeps publish/release/build/deploy unreachable, and this tool never passes
-// `approved` to any advance. Genesis actions are audited on the ledger persisted with the run.
+// (deny-all default refuses; nothing a caller passes can widen a bound). trigger_netlify_build and
+// deploy stay unreachable from every path, always. publish/release are reachable, since T15.7 (#187),
+// through the shared publishing tail this tool's run composes — governed by the project's own
+// publishingPolicy.autonomyMode (ADR-2026-08-25-publish-autonomy), never by this tool: it never
+// passes `approved` to any advance, and carries no publish/release logic of its own. Genesis actions
+// are audited on the ledger persisted with the run.
 //
 // CATALOGUED REFUSALS (each test-pinned):
 //   duplicate_target_unreachable — unknown/disabled target, endpoint env unconfigured, or the
@@ -32,16 +35,22 @@
 
 import { z } from "zod";
 import { objectSchema, ok, tool, type WorkspaceTool } from "./toolKit.js";
-import { DEFAULT_EXECUTION_MODE, assessRunStall, getRun, runModeSummary, runNextNode, startDryRun } from "../../workspace/executor.js";
-import { HALTED_EXECUTION_STATUSES, type WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
+import { DEFAULT_EXECUTION_MODE, assessRunStall, getRun, runModeSummary, startDryRun } from "../../workspace/executor.js";
 import { summarizeRunCost } from "../../workspace/conductor.js";
 import { summarizeModelUsage } from "../../observability/modelUsage.js";
 import { CAPTURE_CONDUCTOR_WORKFLOW_ID } from "../../workspace/captureConductorWorkflow.js";
 import { getWorkflowDefinition } from "../../workspace/workflowRegistry.js";
 import { CAPTURE_ARTIFACTS, assertSourceWithinPolicy, resolveCaptureAuthority } from "../../capture/captureEngine.js";
+import { resolvePublishAuthority } from "../../workspace/publishDecision.js";
 import { ProjectMcpAdapter, toConnectionState } from "../../projects/projectMcpAdapter.js";
 import { registryEndpointSchema } from "../../projects/projectAdmin.js";
 import { runSiteGenesis, type GenesisHumanChecklistItem, type SiteGenesisResult } from "../../capture/siteGenesis.js";
+import { kickRun, resolveKickTimeBudgetMs, KICK_MAX_STEPS } from "../../workspace/runKick.js";
+import {
+  maybeChainCloneAfterCapture,
+  SITE_DUPLICATION_REQUEST_STAGE_KEY,
+  type DuplicationChainState
+} from "../../workspace/siteDuplicationChain.js";
 import type { ExecutionRepository } from "../../repository/interfaces/ExecutionRepository.js";
 import type { ProjectRepository } from "../../repository/interfaces/ProjectRepository.js";
 import type { UsageRepository } from "../../repository/interfaces/UsageRepository.js";
@@ -57,15 +66,19 @@ export class SiteDuplicationRefusal extends Error {
 // The duplication request record persisted on the run (":"-suffixed so it can never collide with a
 // node id in stageOutputs — the CAPTURE_CRAWL_JOB_STAGE_KEY precedent). site.duplicate_status reads
 // it back for the outstanding human items and the genesis audit ledger.
-export const SITE_DUPLICATION_REQUEST_STAGE_KEY = "site_duplicate:request";
+// T15.9 (#188): the constant itself now lives in workspace/siteDuplicationChain.ts, which needs it
+// too (to find this record from the workspace layer, without the workspace layer importing this MCP
+// tool module). Re-exported here so every existing importer of this path keeps resolving it.
+export { SITE_DUPLICATION_REQUEST_STAGE_KEY };
 
 // In-call kick budget: a safety ceiling on the advance burst, well under every platform request
 // ceiling. The burst normally ends much earlier — at the first no-progress advance.
-const KICK_TIME_BUDGET_MS = (() => {
-  const configured = Number(process.env.SITE_DUPLICATE_KICK_BUDGET_MS);
-  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 60_000;
-})();
-const KICK_MAX_STEPS = 60;
+const KICK_TIME_BUDGET_MS = resolveKickTimeBudgetMs("SITE_DUPLICATE_KICK_BUDGET_MS");
+
+// T15.17 — default budget for site.duplicate. Capture runs ≈$0.125, clone attempts ≈$0.14–$0.18
+// per run (T15.9 #188 chains both under one budgetUsd). $5.00 default gives ~17× headroom.
+// A fully autonomous duplication should never run uncapped.
+const DEFAULT_SITE_DUPLICATE_BUDGET_USD = 5.0;
 
 const newSiteSchema = z.object({
   name: z.string().min(2).max(63),
@@ -98,7 +111,7 @@ const duplicateJsonSchema = objectSchema({
     netlifySiteName: { type: "string", minLength: 2, description: "Optional Netlify site name (the <name> in <name>.netlify.app) when it must differ from the slug." },
     mcpEndpoint: { type: "string", format: "uri", maxLength: 512, description: "Optional override for the new tenant's MCP endpoint, stored on its registry record (https, no credentials/query/fragment — an endpoint is not a secret, the token still is). OMIT IT normally: genesis derives the endpoint from the Netlify site it just creates, so no endpoint has to be set by hand anywhere. Use it only when the tenant serves /mcp from a custom domain from day one." }
   }, ["name"]),
-  budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD (workflow.start_dry_run semantics). Refused as budget_exceeded when below the workflow's entry-node reservation — such a run could never dispatch its first node." },
+  budgetUsd: { type: "number", minimum: 0, description: `Optional per-run cost ceiling in USD (workflow.start_dry_run semantics); defaults to $${DEFAULT_SITE_DUPLICATE_BUDGET_USD} to ensure every autonomous duplication runs under an explicit ceiling. Refused as budget_exceeded when below the workflow's entry-node reservation — such a run could never dispatch its first node.` },
   executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: "Passed through to the run. \"mock\" is the cheap CI/test mode; deterministic capture stages run real engine code either way." }
 }, ["sourceUrl"]);
 
@@ -124,6 +137,14 @@ type DuplicationRequestRecord = {
   targetProjectId: string;
   statusTool: "site.duplicate_status";
   humanChecklist: GenesisHumanChecklistItem[];
+  // T15.9 (#188): the ORIGINAL call's budgetUsd, carried so the chained clone's own ceiling can be
+  // derived as "what's left of THIS", not a fresh allowance — see siteDuplicationChain.ts. Absent
+  // when the caller never set a ceiling; neither half of the chain gets one invented for it then.
+  budgetUsd?: number;
+  // T15.9 (#188): written by maybeChainCloneAfterCapture once the capture run reaches a terminal
+  // status — "started" (with the clone's own runId) or "refused" (named, never silent). Absent
+  // until the capture run halts; site.duplicate_status reports it as `chain`.
+  chain?: DuplicationChainState;
   genesis?: {
     netlifyMode: SiteGenesisResult["netlifyMode"];
     netlifySiteName: string;
@@ -134,9 +155,6 @@ type DuplicationRequestRecord = {
     ledger: SiteGenesisResult["ledger"];
   };
 };
-
-const settledCount = (run: WorkflowExecutionRecord): number =>
-  run.nodes.filter((node) => node.status === "completed" || node.status === "skipped" || node.status === "failed").length;
 
 export type SiteDuplicationToolDeps = {
   executionRepository: ExecutionRepository;
@@ -164,30 +182,10 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
     }
   };
 
-  // The in-call kick: advance while nodes settle; stop at the first no-progress advance (the crawl
-  // job parking on the pdf-tool plane), a halted status, the step cap, or the time budget. Never
-  // passes `approved`.
-  const kickRun = async (runId: string): Promise<{ steps: number; stoppedBecause: string; run: WorkflowExecutionRecord }> => {
-    const deadline = Date.now() + KICK_TIME_BUDGET_MS;
-    let run = (await getRun(runId, executionRepository))!;
-    let steps = 0;
-    let stoppedBecause = "run_halted";
-    while (!HALTED_EXECUTION_STATUSES.has(run.status)) {
-      if (steps >= KICK_MAX_STEPS) { stoppedBecause = "kick_step_cap"; break; }
-      if (Date.now() > deadline) { stoppedBecause = "kick_time_budget"; break; }
-      const before = settledCount(run);
-      run = await runNextNode(runId, { executionRepository, workspaceRepository });
-      steps += 1;
-      if (!HALTED_EXECUTION_STATUSES.has(run.status) && settledCount(run) <= before) {
-        // No node settled on this advance: the run is parked on external work (a pending pdf-tool
-        // capture job). The long-run planes own it from here — the run-continuation tick re-enters
-        // every queued/running run each minute; polling here would spin inside one request window.
-        stoppedBecause = "handed_to_long_run_plane";
-        break;
-      }
-    }
-    return { steps, stoppedBecause, run };
-  };
+  // T15.9 (#188): the in-call kick itself now lives in workspace/runKick.ts, shared with the clone
+  // half of the chain (siteDuplicationChain.ts) so both kicks obey the identical contract. Bound
+  // here to this tool's own configured budget/step cap.
+  const kickThisRun = (runId: string) => kickRun(runId, { executionRepository, workspaceRepository }, { timeBudgetMs: KICK_TIME_BUDGET_MS, maxSteps: KICK_MAX_STEPS });
 
   return [
     tool({
@@ -219,16 +217,16 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
         assertSourceWithinPolicy(data.sourceUrl, policy);
 
         // 3. Budget floor: a ceiling below the entry node's reservation blocks before ANY dispatch.
-        if (data.budgetUsd !== undefined) {
-          const entry = entryNodeReservationUsd();
-          if (data.budgetUsd < entry.reservationUsd) {
-            throw new SiteDuplicationRefusal("budget_exceeded", `budgetUsd $${data.budgetUsd} is below the workflow's entry-node reservation ($${entry.reservationUsd} for ${entry.nodeId}): the run would pause for budget before dispatching any node and could never make progress. Supply at least $${entry.reservationUsd}, or omit budgetUsd for no ceiling.`);
-          }
+        // T15.17: default to $5.00 so every autonomous duplication runs under an explicit ceiling.
+        const budgetUsd = data.budgetUsd ?? DEFAULT_SITE_DUPLICATE_BUDGET_USD;
+        const entry = entryNodeReservationUsd();
+        if (budgetUsd < entry.reservationUsd) {
+          throw new SiteDuplicationRefusal("budget_exceeded", `budgetUsd $${budgetUsd} is below the workflow's entry-node reservation ($${entry.reservationUsd} for ${entry.nodeId}): the run would pause for budget before dispatching any node and could never make progress. Supply at least $${entry.reservationUsd}.`);
         }
 
         // 4. Start — the same startDryRun workflow.start_dry_run drives, with the capture input shape.
         const started = await startDryRun(
-          { projectId: targetProjectId, workflowId: CAPTURE_CONDUCTOR_WORKFLOW_ID, executionMode: data.executionMode, input: { sourceUrl: data.sourceUrl, targetProjectId }, budgetUsd: data.budgetUsd },
+          { projectId: targetProjectId, workflowId: CAPTURE_CONDUCTOR_WORKFLOW_ID, executionMode: data.executionMode, input: { sourceUrl: data.sourceUrl, targetProjectId }, budgetUsd },
           executionRepository
         );
 
@@ -241,6 +239,7 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
           targetProjectId,
           statusTool: "site.duplicate_status",
           humanChecklist,
+          ...(data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {}),
           ...(genesis ? {
             genesis: {
               netlifyMode: genesis.netlifyMode,
@@ -256,27 +255,37 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
         await executionRepository.saveRun({ ...fresh, stageOutputs: { ...fresh.stageOutputs, [SITE_DUPLICATION_REQUEST_STAGE_KEY]: record }, updatedAt: new Date().toISOString() });
 
         // 6. Kick the long-run plane — same call, no second MCP round-trip.
-        const kick = await kickRun(started.runId);
+        const kick = await kickThisRun(started.runId);
+
+        // 7. T15.9 (#188) — chain: if the kick alone drove capture all the way to a terminal state
+        // (a mock run with nothing to park on), the clone half starts in THIS call too, with no
+        // second human-issued workflow.start_dry_run. The normal case — capture parks on the
+        // pdf-tool plane — chains later, off the run-continuation tick (runContinuation.ts); see
+        // siteDuplicationChain.ts for why both call sites exist and neither races the other.
+        const chainOutcome = await maybeChainCloneAfterCapture(kick.run, { executionRepository, workspaceRepository, usageRepository });
+        const chainedRun = chainOutcome.action === "chained" || chainOutcome.action === "refused" ? chainOutcome.captureRun : kick.run;
 
         return ok({
           runId: started.runId,
           statusTool: "site.duplicate_status",
           humanChecklist,
           run: {
-            runId: kick.run.runId,
-            projectId: kick.run.projectId,
-            workflowId: kick.run.workflowId,
-            status: kick.run.status,
-            currentNodeId: kick.run.currentNodeId ?? null,
-            mode: runModeSummary(kick.run)
+            runId: chainedRun.runId,
+            projectId: chainedRun.projectId,
+            workflowId: chainedRun.workflowId,
+            status: chainedRun.status,
+            currentNodeId: chainedRun.currentNodeId ?? null,
+            mode: runModeSummary(chainedRun)
           },
           kick: {
             steps: kick.steps,
             stoppedBecause: kick.stoppedBecause,
             note: kick.stoppedBecause === "handed_to_long_run_plane"
-              ? "The crawl job is created on the pdf-tool plane and the run is parked pending its completion; the long-run planes (Cloud Run conductor job / run-continuation tick) re-drive it to the terminal report with no further MCP call. Observe via site.duplicate_status."
+              ? "The crawl job is created on the pdf-tool plane and the run is parked pending its completion; the long-run planes (Cloud Run conductor job / run-continuation tick) re-drive it to the terminal report — and, on success, chain clone_conductor — with no further MCP call. Observe via site.duplicate_status."
               : "Observe progress and outstanding human items via site.duplicate_status."
           },
+          ...(chainOutcome.action === "chained" ? { chain: { status: "started" as const, cloneRunId: chainOutcome.cloneRunId } } : {}),
+          ...(chainOutcome.action === "refused" ? { chain: { status: "refused" as const, code: chainOutcome.code, reason: chainOutcome.reason } } : {}),
           ...(genesis ? {
             genesis: {
               projectId: genesis.projectId,
@@ -318,10 +327,49 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
           runReport: stageRef("capture_report", CAPTURE_ARTIFACTS.report)
         };
 
+        // T15.9 (#188): report BOTH runs as one duplication. `request.chain` is written once by
+        // maybeChainCloneAfterCapture the moment this capture run halts (siteDuplicationChain.ts):
+        // absent while capture is still in progress, "started" with the clone's own runId, or
+        // "refused" (named, per the chain's failure semantics — a blocked/failed capture never
+        // chains). When started, the clone run's own state/spend/publish-authority is read live, the
+        // same way this tool already reads capture's.
+        const chainState = request?.chain;
+        let cloneSummary: Record<string, unknown> | null = null;
+        if (chainState?.status === "started") {
+          const cloneRun = await getRun(chainState.cloneRunId, executionRepository);
+          if (cloneRun) {
+            const cloneUsage = await summarizeModelUsage({ runId: cloneRun.runId }, usageRepository);
+            const cloneLedger = summarizeRunCost(cloneRun, cloneUsage);
+            const cloneAuthority = resolvePublishAuthority(cloneRun);
+            cloneSummary = {
+              runId: cloneRun.runId,
+              workflowId: cloneRun.workflowId,
+              status: cloneRun.status,
+              currentNodeId: cloneRun.currentNodeId ?? null,
+              startedAt: cloneRun.startedAt,
+              updatedAt: cloneRun.updatedAt,
+              ...(cloneRun.completedAt ? { completedAt: cloneRun.completedAt } : {}),
+              mode: runModeSummary(cloneRun),
+              stall: assessRunStall(cloneRun) ?? null,
+              nodes: cloneRun.nodes.map((node) => ({ nodeId: node.nodeId, status: node.status, ...(node.skip ? { skip: { reason: node.skip.reason } } : {}) })),
+              spend: { ledger: cloneLedger },
+              publishAuthority: cloneAuthority.authorized
+                ? { authorized: true, source: cloneAuthority.source }
+                : { authorized: false, code: cloneAuthority.code, reason: cloneAuthority.reason }
+            };
+          }
+        }
+        const chain = !chainState
+          ? null
+          : chainState.status === "started"
+            ? { status: "started" as const, cloneRunId: chainState.cloneRunId, startedAt: chainState.startedAt, ...(chainState.budgetUsd !== undefined ? { budgetUsd: chainState.budgetUsd } : {}), clone: cloneSummary }
+            : { status: "refused" as const, code: chainState.code, reason: chainState.reason, refusedAt: chainState.refusedAt };
+
         // Outstanding human items: everything on the checklist stays listed until a human confirms —
         // except the items this system can OBSERVE (the deploy-side env NAMES), which resolve live.
         const config = await projectRepository.get(run.projectId);
         const connection = config ? toConnectionState(config) : undefined;
+        const publishAuthority = resolvePublishAuthority(run);
         const humanItems = (request?.humanChecklist ?? []).map((item) => {
           if (item.id === "deploy_side_mcp_env" && connection) {
             // endpointConfigured is true when EITHER source resolves — the env var or the endpoint
@@ -332,6 +380,10 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
           }
           return { ...item, status: "outstanding" as const };
         });
+
+        // T15.17 — surface budget ceiling and ledger on the spend block. ledger.budget contains
+        // budgetUsd, spentUsdEstimate, and remainingUsdEstimate from the budget evaluation.
+        const budgetCeiling = run.budgetUsd ?? DEFAULT_SITE_DUPLICATE_BUDGET_USD;
 
         return ok({
           runId,
@@ -355,13 +407,25 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
             ...(node.warnings?.length ? { warnings: node.warnings } : {}),
             ...(node.skip ? { skip: { reason: node.skip.reason } } : {})
           })),
-          spend: { ledger },
+          spend: { ledger, budgetUsd: budgetCeiling },
           reports: reportRefs,
           request: request
             ? { sourceUrl: request.sourceUrl, targetProjectId: request.targetProjectId, requestedAt: request.requestedAt, ...(request.genesis ? { genesis: request.genesis } : {}) }
             : null,
           outstandingHumanItems: humanItems,
-          humanGate: { publishReachable: false, note: "Everything this run writes is a never-released draft; the workflow ends at the report. Publication is a separate, explicitly human-gated act (T12.6-class acceptance is Wolf's disposition)." }
+          // T15.9 (#188) — the chained clone_conductor run, if any: null until capture halts, then
+          // "started" (with the clone run's own live state) or "refused" (named).
+          chain,
+          // T15.10 (#189) — was `{ publishReachable: false, note: "...a separate, explicitly
+          // human-gated act..." }`, unconditionally. False since T15.7 (#187): capture_conductor
+          // composes the shared publishing tail, so this run DOES have a live path. What decides
+          // whether IT is reachable right now is policy, not a human — the same resolvePublishAuthority
+          // read the tail's own gate uses (publishDecision.ts, ADR-2026-08-25-publish-autonomy §2.4),
+          // evaluated against this run's own operator record and policy snapshot.
+          humanGate: {
+            publishReachable: publishAuthority.authorized,
+            note: `Publication is governed by this project's publishingPolicy.autonomyMode ("${run.publishingPolicySnapshot?.autonomyMode ?? "operator-gated"}") and the run's own operator record — not a fixed human gate. ${publishAuthority.authorized ? `Currently authorized (source: ${publishAuthority.source}).` : `Currently blocked (${publishAuthority.code}): ${publishAuthority.reason}`} The shared tail's publish_executor/release_executor nodes decide the rest, per-object, once the run reaches them.`
+          }
         });
       }
     })

@@ -15,6 +15,7 @@ import { validateOutput } from "../../../src/agent/execution/outputValidator.js"
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 import { getRun, runNextNode, setOperatorPublishDecision, startDryRun } from "../../../src/agent/workspace/executor.js";
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { summarizeModelUsage } from "../../../src/agent/observability/modelUsage.js";
 
 // W2a (determinism program, 2026-08-12). publish_executor is the ONE node that can mutate a live site.
 // This suite proves:
@@ -47,7 +48,9 @@ describe("W2a — the gate is two exact comparisons, fail-closed", () => {
     // only — it names WHICH source produced the "approved" record ("explicit" here, since runWith
     // stamps no operatorDecisionSource of its own and describeOperatorDecisionSource's documented
     // fallback for that shape is "explicit"). PASS/FAIL above is unaffected by its presence.
-    expect(gate).toEqual({ passed: true, controllerGo: true, operatorApproved: true, reasons: [], operatorDecisionSource: "approved (source: explicit — set via workflow.set_operator_publish_decision)" });
+    // T15.5 — authoritySource names WHICH authority resolvePublishAuthority actually used
+    // ("operator_explicit" here, since the run carries an explicit approved decision).
+    expect(gate).toEqual({ passed: true, controllerGo: true, operatorApproved: true, reasons: [], operatorDecisionSource: "approved (source: explicit — set via workflow.set_operator_publish_decision)", authoritySource: "operator_explicit" });
   });
 
   it("refuses when the operator record is absent, even on an explicit controller \"go\" (the live run's exact shape)", () => {
@@ -65,7 +68,10 @@ describe("W2a — the gate is two exact comparisons, fail-closed", () => {
     expect(gate.passed).toBe(false);
     expect(gate.reasons).toHaveLength(2);
     expect(gate.reasons[0]).toMatch(/controller_decision_not_go/);
-    expect(gate.reasons[1]).toMatch(/operator_approval_absent/);
+    // T15.5 (ADR §2.4 row 1) — "withheld" now surfaces its OWN precedence code (operator_withheld),
+    // distinct from a merely-absent decision (operator_approval_absent): the veto is absolute and its
+    // reason should say so, not just "not approved".
+    expect(gate.reasons[1]).toMatch(/operator_withheld/);
   });
 
   it.each([
@@ -183,20 +189,34 @@ describe("wired into a real run: the refusal costs nothing", () => {
     repositoryManager.getUsageRepository().clear();
     const { runId, store, workspace } = await startAtExecutor();
 
-    const run = await runNextNode(runId, { executionRepository: store, workspaceRepository: workspace, approved: true });
+    // T15.7 (ADR-2026-08-25-publish-autonomy §2.4, §7) — the OUTER publish-risk gate (executor.ts,
+    // resolvePublishAuthority) now refuses this exact scenario itself, before dispatch ever reaches
+    // publish_executor's own inner gate (evaluatePublishExecutionGate / runDeterministicPublishExecutor,
+    // exercised directly above): the node is BLOCKED, not completed-with-an-inner-blocked-status. This
+    // is the carried autonomy gap T15.7 closed — the two gates used to disagree on what "approved"
+    // meant; now the run's own operator record is the one and only authority either reads.
+    const run = await runNextNode(runId, { executionRepository: store, workspaceRepository: workspace });
     const state = run!.nodes.find((node) => node.nodeId === "publish_executor")!;
 
-    expect(state.status).toBe("completed");
-    const output = state.output as { artifact: string; status: string; approvalMatched: boolean; blockers: string[] };
+    expect(state.status).toBe("blocked");
+    const output = state.output as { artifact: string; decision: string; approvalRequired: boolean; reason: string };
     expect(output.artifact).toBe("publish_execution.v1");
-    expect(output.status).toBe("blocked");
-    expect(output.approvalMatched).toBe(false);
-    expect(output.blockers[0]).toMatch(/operator_approval_absent/);
+    expect(output.decision).toBe("blocked");
+    expect(output.approvalRequired).toBe(true);
+    expect(output.reason).toMatch(/operator_approval_absent/);
     expect(state.warnings ?? []).toContain("no_publication_performed");
 
-    // The two facts that make this a refusal rather than a publish.
+    // The two facts that make this a refusal rather than a publish: no client call, and no ACTUAL
+    // spend. The outer gate's own refusal path (executor.ts) records one deterministic "estimated"
+    // dry-run cost record on every refusal — pre-existing, unrelated to T15.7, and true of every
+    // OTHER publish-risk node's outer refusal too (recordDryRunNodeUsage) — so "zero usage records"
+    // is no longer the right claim now that the outer gate (not the inner one) is what refuses here;
+    // "zero ACTUAL cost" is the invariant that still holds and is what summarizeModelUsage reports.
     expect(remoteFetch).not.toHaveBeenCalled();
-    expect(await repositoryManager.getUsageRepository().list({ runId, nodeId: "publish_executor" })).toEqual([]);
+    const usage = await repositoryManager.getUsageRepository().list({ runId, nodeId: "publish_executor" });
+    expect(usage).toHaveLength(1);
+    expect(usage[0].status).toBe("estimated");
+    expect((await summarizeModelUsage({ runId })).actualCostUsdEstimate).toBe(0);
   });
 
   it("falls through to the model path (and warns) once the operator HAS approved", async () => {
@@ -220,17 +240,24 @@ describe("wired into a real run: the refusal costs nothing", () => {
     repositoryManager.getUsageRepository().clear();
     const { runId, store, workspace } = await startAtExecutor(undefined, "execute");
 
-    const run = await runNextNode(runId, { executionRepository: store, workspaceRepository: workspace, approved: true });
+    // T15.7: the OUTER gate refuses before "execute" mode's own engine path is ever reached — see the
+    // sibling test above for why the shape is now the outer gate's, not the inner engine path's.
+    const run = await runNextNode(runId, { executionRepository: store, workspaceRepository: workspace });
     const state = run!.nodes.find((node) => node.nodeId === "publish_executor")!;
     const output = state.output as Record<string, unknown>;
 
-    expect(state.status).toBe("completed");
-    expect(output.status).toBe("blocked");
-    expect(output.approvalMatched).toBe(false);
+    expect(state.status).toBe("blocked");
+    expect(output.decision).toBe("blocked");
+    expect(output.approvalRequired).toBe(true);
     expect(output).not.toHaveProperty("publishCommitted");
     expect(state.warnings ?? []).toContain("no_publication_performed");
     expect(remoteFetch).not.toHaveBeenCalled();
-    expect(await repositoryManager.getUsageRepository().list({ runId, nodeId: "publish_executor" })).toEqual([]);
+    // See the sibling gate-only test above: the outer gate's refusal records one "estimated" dry-run
+    // cost entry (pre-existing, unrelated to T15.7); actual spend is still $0.
+    const usage = await repositoryManager.getUsageRepository().list({ runId, nodeId: "publish_executor" });
+    expect(usage).toHaveLength(1);
+    expect(usage[0].status).toBe("estimated");
+    expect((await summarizeModelUsage({ runId })).actualCostUsdEstimate).toBe(0);
   });
 
   // T4 scope: LIVE runs only. A mock run keeps MockNodeRunner even with the execute flag set, so mock
@@ -362,7 +389,7 @@ describe("T4 — the engine executes the publish, and the receipts say what happ
     // The sequence is the project's, executed once, in order, by the engine — not a model's rendition.
     expect(client.calls).toEqual(FULL_SEQUENCE);
     expect((result as { nodeBlocked: boolean }).nodeBlocked).toBe(false);
-    expect((result as { warnings: string[] }).warnings).toContain("publish_committed_go_live_unconfirmed");
+    expect((result as { warnings: string[] }).warnings).toContain("publish_committed_pending_release");
 
     // Receipts: every value came out of the sequence's own results or was carried through upstream.
     expect(output.publishCommitted).toBe(true);
@@ -383,15 +410,16 @@ describe("T4 — the engine executes the publish, and the receipts say what happ
 });
 
 describe("T4 — a committed publish is still not a go-live", () => {
-  it("records status \"blocked\" with a named go_live_unconfirmed blocker, and the evidence enforcer leaves it alone", async () => {
+  it("records status \"published_pending_release\" with no blocker, and the evidence enforcer leaves it alone", async () => {
     const { store, run } = await seedEngineRun("approved");
     const output = executedOutput(await runEngine(run, store, stubClient()));
 
     // publishRun commits the export and never releases (board B2), so "executed" — which requires
-    // verification.deployStatus "ready" AND productionConfirmed true — is never claimed.
-    expect(output.status).toBe("blocked");
-    expect(output.blocker.code).toBe("go_live_unconfirmed");
-    expect(output.blocker.step).toBe("release_and_go_live_verification");
+    // verification.deployStatus "ready" AND productionConfirmed true — is never claimed. T15.6:
+    // release_executor (a separate, downstream tail node) performs the release; this record is honestly
+    // "published_pending_release", not a blocked workaround.
+    expect(output.status).toBe("published_pending_release");
+    expect(output.blocker).toBeUndefined();
     expect(output.verification).toEqual({ deployAware: false, goLiveConfirmed: false, requiredChecks: expect.any(Array) });
     expect(output.verification).not.toHaveProperty("deployStatus");
     expect(output.verification).not.toHaveProperty("productionConfirmed");
@@ -454,9 +482,9 @@ describe("T4 — a failure stops the sequence dead", () => {
     }));
 
     expect(client.calls).toEqual(["object_create"]);
-    expect(output.blocker.code).toBe("publish_sequence_error");
-    expect(output.blocker.step).toBe("create_missing_object_id");
-    expect(output.blocker.clientError).toContain("create_missing_object_id");
+    expect(output.blocker!.code).toBe("publish_sequence_error");
+    expect(output.blocker!.step).toBe("create_missing_object_id");
+    expect(output.blocker!.clientError).toContain("create_missing_object_id");
     expect(output.publishCommitted).toBe(false);
   });
 });
@@ -486,8 +514,8 @@ describe("T4 — the gates the engine path may not relax", () => {
       const output = executedOutput(await runEngine(run, store, client));
 
       expect(client.calls).toEqual([]);
-      expect(output.blocker.code).toBe("publish_gate_closed");
-      expect(output.blocker.step).toBe("publisher_gates");
+      expect(output.blocker!.code).toBe("publish_gate_closed");
+      expect(output.blocker!.step).toBe("publisher_gates");
       expect(output.blockers.some((blocker) => blocker.startsWith("operator_enabled:"))).toBe(true);
       expect(output.publishCommitted).toBe(false);
     } finally {
@@ -512,7 +540,7 @@ describe("T4 — a request id is never minted", () => {
     const output = executedOutput(result);
 
     expect(client.calls).toEqual([]);
-    expect(output.blocker.code).toBe("publish_request_id_absent");
+    expect(output.blocker!.code).toBe("publish_request_id_absent");
     expect(output.receipts.requestId).toBeUndefined();
     expect((result as { nodeBlocked: boolean }).nodeBlocked).toBe(true);
     expect(validateOutput(output, getWorkspaceNode("publish_executor")?.outputSchema).ok).toBe(true);

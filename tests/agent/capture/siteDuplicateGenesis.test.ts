@@ -245,4 +245,32 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // Console-only steps stay outstanding — this system cannot observe them and never fakes them.
     expect(afterItems.find((item) => item.id === "enable_netlify_identity")!.status).toBe("outstanding");
   }, 90_000);
+
+  // T15.13 ACCEPTANCE: genesis derives the target's ProjectCapturePolicy from `sourceUrl` alone —
+  // no hand-edited policy required — for a source whose origin appears in NO project definition
+  // anywhere (unlike SOURCE_URL above, which happens to match platform's own hardcoded, hand-edited
+  // Zilberman policy). This proves "URL in, any site" generalizes past the one client that used to
+  // be the only one exercised for capture.
+  it("derives a working capturePolicy from an arbitrary sourceUrl that names no project definition, with no hand-edited policy", async () => {
+    const ARBITRARY_SOURCE_URL = "https://an-example-prospect-site.test/";
+    const { rpcError, structured } = await mcpCall("site_duplicate", {
+      sourceUrl: ARBITRARY_SOURCE_URL,
+      newSite: { name: "zilberman", netlifySiteName: "zilbermanfilmfoundation" },
+      executionMode: "mock"
+    });
+    expect(rpcError).toBeUndefined();
+    const result = structured.data as { genesis: { projectId: string } };
+    expect(result.genesis.projectId).toBe("zilberman");
+
+    const config = (await repositoryManager.getProjectRepository().get("zilberman"))!;
+    const policy = resolveProjectCapturePolicy(config);
+    // Derived from the SOURCE, not from the site name or any static project definition.
+    expect(policy.allowedCrawlOrigins).toEqual(["https://an-example-prospect-site.test"]);
+    expect(policy.maxPages).toBe(20);
+    expect(policy.sameOriginOnly).toBe(true);
+    expect(policy.respectRobots).toBe(true);
+    expect(policy.authenticatedAccess).toBe("prohibited");
+    // No rights are presumed by derivation alone — raising them stays an explicit human project.update.
+    expect(policy.rights).toEqual({ content: "prohibited", media: "prohibited" });
+  }, 90_000);
 });

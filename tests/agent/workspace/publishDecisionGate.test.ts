@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 import { getRun, runNextNode, setOperatorPublishDecision, startDryRun } from "../../../src/agent/workspace/executor.js";
 import { publishRun, publishEnabledEnvVar } from "../../../src/agent/workspace/publisher.js";
-import { enforcePublishExecutionEvidence, findPublicationDecision, readPublicationDecision } from "../../../src/agent/workspace/publishDecision.js";
+import { enforcePublishExecutionEvidence, findPublicationDecision, readPublicationDecision, resolvePublishAuthority } from "../../../src/agent/workspace/publishDecision.js";
 import { evaluatePublishExecutionGate } from "../../../src/agent/workspace/publishExecution.js";
 import { getWorkspaceNode } from "../../../src/agent/workspace/nodes.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
@@ -100,6 +100,9 @@ describe("P0 §2.1 — refuse-by-default publication decision (publishRun)", () 
 
   it("(b) an explicit affirmative decision (decision: \"go\") publishes when every other gate is met", async () => {
     const ctx = await seedRun(GO_DECISION);
+    // T15.5 (ADR §2.4) — this project is operator-gated by default, so publishing now needs a
+    // resolved publish authority; an explicit operator approval stands in for one.
+    await setOperatorPublishDecision(ctx.runId, "approved", ctx.executionRepository);
     const adapter = fakeCallTool();
     const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
     expect(result.published).toBe(true);
@@ -172,7 +175,13 @@ describe("P0 §2.1 — the publish_executor node cannot dispatch without an expl
 
   it("lets publish_executor reach its runner when the decision is an explicit go (the guard, not the runner, is what refused above)", async () => {
     const { runId, store } = await parkBeforeExecutor(GO_DECISION);
-    const result = await runNextNode(runId, { executionRepository: store, approved: true });
+    // T15.7 (ADR-2026-08-25-publish-autonomy §2.4, §7) — publish_executor is ALSO gated by the OUTER
+    // authority gate (resolvePublishAuthority), ahead of the controller-decision guard this test means
+    // to isolate; an explicit operator "approved" is what gets past that gate so the controller-decision
+    // guard (and, past it, the runner) is what this test actually exercises. `approved: true` on the
+    // dispatch call is inert — deprecated as an authority input.
+    await setOperatorPublishDecision(runId, "approved", store);
+    const result = await runNextNode(runId, { executionRepository: store });
 
     // Past the guard: the node was DISPATCHED and failed in the runner on the missing API key —
     // an invalid_node_configuration failure, not a publication_decision block.
@@ -230,7 +239,10 @@ describe("P0 §2.3/§2.27 — status \"executed\" requires go-live evidence and 
     // approvalMatched: true with no matching operator record is a false claim — downgraded.
     const noRecord = enforcePublishExecutionEvidence(executedWithEvidence, {});
     expect(noRecord.downgraded).toBe(true);
-    expect((noRecord.output as { blockers: string[] }).blockers.join(" ")).toContain("approval_matched_without_operator_record");
+    // T15.5 (ADR §8) — approvalMatched is checked against the run's resolved publish authority
+    // (publishDecision.resolvePublishAuthority), not literally "operatorPublishDecision === approved"
+    // any more; an absent decision on an operator-gated run (the default here) still refuses.
+    expect((noRecord.output as { blockers: string[] }).blockers.join(" ")).toContain("approval_matched_without_authority");
     // A matching operator approval plus full evidence passes untouched.
     const matched = enforcePublishExecutionEvidence(executedWithEvidence, { operatorPublishDecision: "approved" });
     expect(matched.downgraded).toBe(false);
@@ -277,7 +289,12 @@ describe("P0 §2.2 — operator veto: one field, one setter, one reader", () => 
     const controller = current!.nodes.find((node) => node.nodeId === "publication_controller")!;
     expect(controller.status).toBe("blocked");
     expect(controller.warnings).toContain("operator_publish_withheld");
-    expect((controller.output as { reason: string }).reason).toContain("operator_publish_withheld");
+    // T15.7: the output's own `reason` text is now resolvePublishAuthority's own message, prefixed
+    // with its code ("operator_withheld", not "operator_publish_withheld" — that longer name lives on
+    // in the WARNING above, unchanged); the state.warnings assertion above is what still names the
+    // veto for a reader scanning warnings, and this checks the reason text says the same thing.
+    expect((controller.output as { reason: string }).reason).toContain("operator_withheld");
+    expect((controller.output as { reason: string }).reason).toContain("withheld");
   });
 
   it("the veto is durable on the run record and settable over MCP (workflow.set_operator_publish_decision)", async () => {
@@ -307,13 +324,17 @@ describe("P0 §2.2 — operator veto: one field, one setter, one reader", () => 
   });
 });
 
-// T2 (2026-08-13, run_1786557897658_elj34j) — the operator publish gate becomes a per-project policy.
-// A project's publishingPolicy.operatorDefault can now pre-seed a NEW run's operatorPublishDecision to
-// "approved" at creation, tagged with WHICH source wrote it (operatorDecisionSource), so a receipt can
-// never be misread as an operator's own explicit act. None of this changes the §2.2 gates themselves
-// — an explicit "withheld" always wins, and absent policy is byte-identical to today.
-describe("T2 — project publishingPolicy.operatorDefault applies at run creation", () => {
-  const policyProject = (operatorDefault?: "approved" | "require_explicit"): ProjectConnectionConfig => ({
+// T15.5 (ADR-2026-08-25-publish-autonomy §2.4) — the operator publish gate now resolves through a
+// single reader, resolvePublishAuthority, against a project's publishingPolicy.autonomyMode. This
+// SUBSUMES the old operatorDefault field: autonomyMode never stamps run.operatorPublishDecision at
+// run creation (invariant 4 — nothing but workflow.set_operator_publish_decision writes that field).
+// Instead, run creation captures a run.publishingPolicySnapshot, and the resolver reads ONLY that
+// snapshot plus the run's own operatorPublishDecision — so two runs of the same project resolve
+// identically, and editing the project's policy after a run starts can never change that run's
+// resolution (invariant 7, determinism). An explicit "withheld" always wins, in every mode
+// (invariant 2).
+describe("T15.5 — project publishingPolicy.autonomyMode resolves publish authority via the run's snapshot", () => {
+  const policyProject = (autonomyMode?: "autonomous" | "operator-gated"): ProjectConnectionConfig => ({
     projectId: "t2-policy-project",
     name: "T2 Policy Project",
     mcpEndpointEnvVar: "T2_POLICY_MCP_ENDPOINT",
@@ -321,71 +342,137 @@ describe("T2 — project publishingPolicy.operatorDefault applies at run creatio
     tokenEnvVar: "T2_POLICY_MCP_TOKEN",
     allowedTools: [],
     contentContract: { contentContract: "content_source.v1" },
-    publishingPolicy: { publishEnabled: true, requiresExplicitPublish: false, description: "T2 test fixture.", ...(operatorDefault !== undefined ? { operatorDefault } : {}) },
+    publishingPolicy: { publishEnabled: true, requiresExplicitPublish: false, description: "T2 test fixture.", ...(autonomyMode !== undefined ? { autonomyMode } : {}) },
     status: "active"
   });
 
-  it("operatorDefault \"approved\" pre-seeds a new run's operatorPublishDecision, sourced project_policy_default", async () => {
+  it("autonomyMode \"autonomous\" is captured into the new run's publishingPolicySnapshot, WITHOUT stamping operatorPublishDecision", async () => {
     const manager = new RepositoryManager();
     const executionRepository = manager.getExecutionRepository();
     const projectRepository = manager.getProjectRepository();
-    await projectRepository.save(policyProject("approved"));
+    await projectRepository.save(policyProject("autonomous"));
 
     const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "policy default" }, executionRepository, undefined, projectRepository);
-    expect(run.operatorPublishDecision).toBe("approved");
-    expect(run.operatorDecisionSource).toBe("project_policy_default");
+    expect(run.publishingPolicySnapshot?.autonomyMode).toBe("autonomous");
+    // Invariant 4: an autonomy policy is never fabricated into an operator's own decision field.
+    expect(run.operatorPublishDecision).toBeUndefined();
+    expect(run.operatorDecisionSource).toBeUndefined();
   });
 
-  it("an explicit workflow.set_operator_publish_decision call records source \"explicit\", overwriting a policy default's source", async () => {
+  it("an absent operatorPublishDecision resolves authorized (source policy_autonomous) under an autonomous snapshot, and unauthorized under an operator-gated one", async () => {
     const manager = new RepositoryManager();
     const executionRepository = manager.getExecutionRepository();
     const projectRepository = manager.getProjectRepository();
-    await projectRepository.save(policyProject("approved"));
+    await projectRepository.save(policyProject("autonomous"));
 
-    const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "explicit" }, executionRepository, undefined, projectRepository);
-    expect(run.operatorDecisionSource).toBe("project_policy_default");
+    const autonomous = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "autonomous" }, executionRepository, undefined, projectRepository);
+    // Note: .passed also requires the controller's "go", which these fixtures never stage — these
+    // assertions check the AUTHORITY half of the gate (.operatorApproved / .authoritySource) in
+    // isolation, which is exactly what autonomyMode governs.
+    const autonomousGate = evaluatePublishExecutionGate(autonomous);
+    expect(autonomousGate.operatorApproved).toBe(true);
+    expect(autonomousGate.authoritySource).toBe("policy_autonomous");
 
-    const reaffirmed = await setOperatorPublishDecision(run.runId, "approved", executionRepository);
-    expect(reaffirmed?.operatorPublishDecision).toBe("approved");
-    expect(reaffirmed?.operatorDecisionSource).toBe("explicit");
+    await projectRepository.save(policyProject("operator-gated"));
+    const gated = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "gated" }, executionRepository, undefined, projectRepository);
+    expect(gated.publishingPolicySnapshot?.autonomyMode).toBe("operator-gated");
+    const gatedGate = evaluatePublishExecutionGate(gated);
+    expect(gatedGate.operatorApproved).toBe(false);
+    expect(gatedGate.reasons.join(" ")).toContain("operator_approval_absent");
+
+    // Absent policy (no autonomyMode declared) behaves exactly like "operator-gated" — the safe default.
+    const unregistered = await startDryRun({ executionMode: "mock", projectId: "t2-unregistered-project", input: "none" }, executionRepository, undefined, projectRepository);
+    expect(unregistered.publishingPolicySnapshot?.autonomyMode).toBe("operator-gated");
+    expect(evaluatePublishExecutionGate(unregistered).operatorApproved).toBe(false);
   });
 
-  it("an explicit \"withheld\" ALWAYS wins over an \"approved\" policy default and still blocks", async () => {
+  it("an explicit \"approved\" via workflow.set_operator_publish_decision authorizes publish under BOTH autonomyMode policies", async () => {
     const manager = new RepositoryManager();
     const executionRepository = manager.getExecutionRepository();
     const projectRepository = manager.getProjectRepository();
-    await projectRepository.save(policyProject("approved"));
+
+    await projectRepository.save(policyProject("autonomous"));
+    const autonomous = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "explicit under autonomous" }, executionRepository, undefined, projectRepository);
+    const approvedAutonomous = await setOperatorPublishDecision(autonomous.runId, "approved", executionRepository);
+    expect(approvedAutonomous?.operatorDecisionSource).toBe("explicit");
+    const approvedAutonomousGate = evaluatePublishExecutionGate(approvedAutonomous!);
+    expect(approvedAutonomousGate.operatorApproved).toBe(true);
+    expect(approvedAutonomousGate.authoritySource).toBe("operator_explicit");
+
+    await projectRepository.save(policyProject("operator-gated"));
+    const gated = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "explicit under gated" }, executionRepository, undefined, projectRepository);
+    const approvedGated = await setOperatorPublishDecision(gated.runId, "approved", executionRepository);
+    const approvedGatedGate = evaluatePublishExecutionGate(approvedGated!);
+    expect(approvedGatedGate.operatorApproved).toBe(true);
+    expect(approvedGatedGate.authoritySource).toBe("operator_explicit");
+  });
+
+  it("an explicit \"withheld\" ALWAYS wins over an autonomous policy and still blocks (invariant 2)", async () => {
+    const manager = new RepositoryManager();
+    const executionRepository = manager.getExecutionRepository();
+    const projectRepository = manager.getProjectRepository();
+    await projectRepository.save(policyProject("autonomous"));
 
     const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "veto" }, executionRepository, undefined, projectRepository);
-    expect(run.operatorPublishDecision).toBe("approved");
+    expect(evaluatePublishExecutionGate(run).operatorApproved).toBe(true);
 
     const vetoed = await setOperatorPublishDecision(run.runId, "withheld", executionRepository);
     expect(vetoed?.operatorPublishDecision).toBe("withheld");
     expect(vetoed?.operatorDecisionSource).toBe("explicit");
 
-    // The veto still blocks the deterministic publish_executor gate exactly as §2.2 requires —
-    // unaffected by the prior policy default, and gate.operatorDecisionSource (T2) names the veto's
-    // own source ("explicit"), never the earlier default's.
     const gate = evaluatePublishExecutionGate(vetoed!);
     expect(gate.passed).toBe(false);
     expect(gate.operatorDecisionSource).toContain("explicit");
+
+    const authority = resolvePublishAuthority(vetoed!);
+    expect(authority).toEqual({ authorized: false, code: "operator_withheld", reason: expect.any(String) });
   });
 
-  it("absent policy — or an explicit operatorDefault \"require_explicit\" — leaves a new run's operatorPublishDecision unset (today's behavior, unchanged)", async () => {
+  it("a mid-run policy change does not alter an already-started run's resolution (invariant 7, determinism)", async () => {
     const manager = new RepositoryManager();
     const executionRepository = manager.getExecutionRepository();
     const projectRepository = manager.getProjectRepository();
+    await projectRepository.save(policyProject("autonomous"));
 
-    // No project registered at all for this id: applyOperatorPublishPolicyDefault treats an unknown
-    // project the same as "no policy" — run creation itself never fails on it.
-    const unregistered = await startDryRun({ executionMode: "mock", projectId: "t2-unregistered-project", input: "none" }, executionRepository, undefined, projectRepository);
-    expect(unregistered.operatorPublishDecision).toBeUndefined();
-    expect(unregistered.operatorDecisionSource).toBeUndefined();
+    const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "snapshot pinned" }, executionRepository, undefined, projectRepository);
+    expect(run.publishingPolicySnapshot?.autonomyMode).toBe("autonomous");
+    const before = evaluatePublishExecutionGate(run);
+    expect(before.operatorApproved).toBe(true);
+    expect(before.authoritySource).toBe("policy_autonomous");
 
-    // A registered project that explicitly declares "require_explicit" behaves identically.
-    await projectRepository.save(policyProject("require_explicit"));
-    const explicitPolicy = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "explicit policy" }, executionRepository, undefined, projectRepository);
-    expect(explicitPolicy.operatorPublishDecision).toBeUndefined();
-    expect(explicitPolicy.operatorDecisionSource).toBeUndefined();
+    // The project's policy is flipped to operator-gated AFTER the run was created. The run's own
+    // record is untouched — evaluatePublishExecutionGate reads only the run (and its already-captured
+    // snapshot), never the live project config, so re-evaluating the SAME run object must produce the
+    // exact same result as before the policy edit.
+    await projectRepository.save(policyProject("operator-gated"));
+
+    const reloaded = await getRun(run.runId, executionRepository);
+    expect(reloaded?.publishingPolicySnapshot?.autonomyMode).toBe("autonomous");
+    const after = evaluatePublishExecutionGate(reloaded!);
+    expect(after.operatorApproved).toBe(true);
+    expect(after.authoritySource).toBe("policy_autonomous");
+    expect(after).toEqual(before);
+  });
+});
+
+describe("T15.5 — resolvePublishAuthority: the six-row precedence table, in isolation", () => {
+  it("row 1: withheld halts regardless of snapshot", () => {
+    expect(resolvePublishAuthority({ operatorPublishDecision: "withheld", publishingPolicySnapshot: { autonomyMode: "autonomous", publishEnabled: true } })).toMatchObject({ authorized: false, code: "operator_withheld" });
+  });
+
+  it("explicit approved authorizes regardless of snapshot", () => {
+    expect(resolvePublishAuthority({ operatorPublishDecision: "approved", publishingPolicySnapshot: { autonomyMode: "operator-gated", publishEnabled: true } })).toEqual({ authorized: true, source: "operator_explicit" });
+  });
+
+  it("absent decision + autonomous snapshot authorizes with source policy_autonomous", () => {
+    expect(resolvePublishAuthority({ operatorPublishDecision: undefined, publishingPolicySnapshot: { autonomyMode: "autonomous", publishEnabled: true } })).toEqual({ authorized: true, source: "policy_autonomous" });
+  });
+
+  it("absent decision + operator-gated snapshot is unauthorized", () => {
+    expect(resolvePublishAuthority({ operatorPublishDecision: undefined, publishingPolicySnapshot: { autonomyMode: "operator-gated", publishEnabled: true } })).toMatchObject({ authorized: false, code: "operator_approval_absent" });
+  });
+
+  it("absent decision + absent snapshot defaults to operator-gated (unauthorized) — the safe default", () => {
+    expect(resolvePublishAuthority({ operatorPublishDecision: undefined, publishingPolicySnapshot: undefined })).toMatchObject({ authorized: false, code: "operator_approval_absent" });
   });
 });

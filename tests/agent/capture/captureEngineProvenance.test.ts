@@ -12,18 +12,20 @@ describe("vendored capture engine provenance", () => {
     expect(CAPTURE_ENGINE_UPSTREAM.commit).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  it("covers exactly the nine vendored engine modules", () => {
+  it("covers exactly the eight vendored engine modules", () => {
     // T12.16 added screenshot-normalize.mjs and side-by-side.mjs: score.mjs imports both since
     // T12.10, so vendoring score.mjs without them is what left the old pin stale.
     // T13.1 added clone.mjs — the clone_conductor pure engine (CLONE-ENGINE-API.md Side A), a NEW
     // file rather than a re-vendoring of one of the other seven.
     // T14.5 added publish.mjs — the publish tail, the ONE module where object_publish and
-    // release_to_production are reachable. Also a new file, not a re-vendoring.
+    // release_to_production were reachable. T15.7 DELETES it (and its entry): capture now reaches
+    // both verbs through the shared publishing tail (workspace/objectPublishExecution.ts,
+    // workspace/releaseExecution.ts) instead of a vendored capture-local module, so there is nothing
+    // left here to vendor or hash for publishing.
     expect(CAPTURE_ENGINE_FILES.map((entry) => entry.file).sort()).toEqual([
       "clone.mjs",
       "emit.mjs",
       "map.mjs",
-      "publish.mjs",
       "score.mjs",
       "screenshot-normalize.mjs",
       "side-by-side.mjs",
@@ -36,15 +38,22 @@ describe("vendored capture engine provenance", () => {
     expect(await hashVendoredEngineFile(entry.file)).toBe(entry.vendoredSha256);
   });
 
-  it("is byte-identical to upstream everywhere except the one recorded deviation (screenshot-normalize.mjs lazy sharp import)", () => {
-    // Exactly ONE file may deviate, and since T12.16 it is the module that actually needs sharp —
-    // score.mjs is byte-identical to upstream again.
-    expect(CAPTURE_ENGINE_FILES.filter((entry) => entry.deviation).map((entry) => entry.file)).toEqual([
+  it("is byte-identical to upstream everywhere except the recorded deviations (screenshot-normalize.mjs lazy sharp import; clone.mjs's T15.30 demand-driven intake, pending platform re-vendor)", () => {
+    // Two files may deviate today: screenshot-normalize.mjs since T12.16 (the module that actually
+    // needs sharp — score.mjs is byte-identical to upstream again), and clone.mjs since T15.30/#206
+    // (buildCloneIntake's demand-driven structureBrief branch, added CMS-Agent-side ahead of the
+    // platform-side companion vendoring this repo's worktree cannot perform — see provenance.ts's own
+    // comment on the entry). Any OTHER file deviating is undocumented drift and must fail this test.
+    expect(CAPTURE_ENGINE_FILES.filter((entry) => entry.deviation).map((entry) => entry.file).sort()).toEqual([
+      "clone.mjs",
       "screenshot-normalize.mjs"
     ]);
     for (const entry of CAPTURE_ENGINE_FILES) {
       if (entry.file === "screenshot-normalize.mjs") {
         expect(entry.deviation).toMatch(/sharp/);
+        expect(entry.vendoredSha256).not.toBe(entry.upstreamSha256);
+      } else if (entry.file === "clone.mjs") {
+        expect(entry.deviation).toMatch(/T15\.30/);
         expect(entry.vendoredSha256).not.toBe(entry.upstreamSha256);
       } else {
         expect(entry.deviation).toBeUndefined();

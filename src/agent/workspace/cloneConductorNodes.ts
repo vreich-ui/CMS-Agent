@@ -1,5 +1,16 @@
 import { SUPPORTED_SECTION_TYPES } from "../capture/engine/map.mjs";
+import { STANDARDS_PACK_SKILL_ID } from "../skills/standardsPack.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
+import { composeWorkflowNodes } from "./publishingTail.js";
+
+// T15.33 (#209; ADR-2026-08-25-structure-studio §6.2) — the ONE skill assignment every studio
+// judgment node carries: the versioned standards pack (TS/component/a11y conventions + a
+// section-type registry snapshot), delivered through the existing skills machinery
+// (skillResolver.resolveSkillsForNode folds an assigned skill's `instructions` into the node's
+// effective prompt at dispatch time). Assigned to all four CLONE_AI_NODE_IDS below, never to a
+// deterministic/emission node — those complete with zero model calls and have no judgment for a
+// standards pack to inform.
+const STUDIO_SKILLS = [STANDARDS_PACK_SKILL_ID];
 
 // T13.1 — clone_conductor: CMS-Agent's THIRD workflow, and the first one whose purpose is to
 // CHANGE THE SHAPE OF THE SITE rather than to fill an existing shape with content.
@@ -18,13 +29,30 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 //
 // WHY IT IS SEPARATE FROM publishing_conductor.
 //
-// publishing_conductor composes the shared publishing tail (publish_payload ->
-// publication_controller -> publish_executor) because its product is an ARTICLE destined for a live
-// site under DTC content rules. This workflow's product is SITE STRUCTURE, its content rules are
-// the source site's, not the DTC playbook's, and it must not inherit an article's approval shape.
-// It therefore does NOT call composeWorkflowNodes — same decision capture_conductor made, for the
-// same reason, and the registry seam (workflowRegistry.ts) exists precisely so a workflow can
-// decline the tail without touching the executor.
+// publishing_conductor composes the shared publishing tail's FULL segment set (the authoring segment
+// — contract_intelligence/artifact_plan/article_body — plus the publish segment) because its product
+// is an ARTICLE destined for a live site under DTC content rules. This workflow's product is SITE
+// STRUCTURE, its content rules are the source site's, not the DTC playbook's, and it must not inherit
+// an article's approval shape or its authoring nodes. So it composes the publish segment ONLY (below,
+// listCloneConductorNodes) — same decision capture_conductor made in T15.7 (#187), for the same
+// reason: a clone run has no article body and never will, but it DOES publish, and ADR-2026-08-25-
+// publish-autonomy §6.1 makes the publish segment mandatory, not optional, for any workflow that does.
+
+// T15.10 (2026-08-25, #189; ADR-2026-08-25-publish-autonomy §6.2, §6.3; ADR-2026-08-25-
+// structure-studio §1) — clone_conductor now composes the shared publishing tail's PUBLISH segment,
+// with publish_payload bound to [recipe_mint, theme_bind, layout_restamp]: the run's minted recipes,
+// bound theme, and restamped pages, each carrying its own validation verdict and quarantine status.
+// This is what replaces the workflow's former end state ("terminal — human gate" at clone_report,
+// unchanged since T13.1): everything this workflow authors now has a live path, governed by the SAME
+// publish-risk machinery (approvalsRequired, the attention feed, resolvePublishAuthority) every other
+// tail-composing workflow shares — not a bespoke clone-local check. clone_conductor is chartered
+// (publishableTypeCharter.ts, T15.11/#190) to publish section_template, page template (objectType
+// "template"), theme and the site singleton — never a page: structure-studio ADR §2.1 draws that line
+// over object TYPE ("only the studio authors structure... a page/article may be created as evidence of
+// a structure; not its purpose"), so a restamped page reaching publish_payload is named WITHHELD
+// (type_not_publishable), never silently dropped and never smuggled live through this workflow.
+// clone_report (below) stays where it is and becomes a genuine TERMINAL REPORT over what the tail did
+// — see its own comment.
 //
 // RECIPES ARE DATA; SECTION TYPES ARE CODE. This is the one boundary the workflow may never cross.
 // A section TYPE is an .astro component plus a Zod variant — it ships in a platform release and no
@@ -40,16 +68,20 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 //                      which divergences a new recipe could actually close.
 //   recipe_designer  — judges WHAT recipe closes them, composed only of registered section types.
 //   theme_reconciler — judges the final bounded token set from the captured theme draft.
+// (T13.4 added fit_adjudicator as a fourth, and T15.34/#210 added pdf_template_designer as a fifth —
+// see CLONE_AI_NODE_IDS, below, for the current, authoritative count and roster.)
 // Every other node is engine code executed through the executor's clone route
 // (cloneConductorRoutes.ts) with zero model calls, blocking on a typed refusal rather than letting
 // a model fabricate a governed write.
 //
-// HUMAN GATE PRESERVED, UNCHANGED. The workflow ENDS at clone_report. No node here is riskLevel
-// publish or admin; no node's allowedTools contain a publish verb; the emission transport still
-// hard-refuses object_publish / release_to_production / trigger_netlify_build / deploy before any
-// wire call. Minting a recipe and binding a theme are DRAFT WRITES to governed objects — the same
-// class of write capture_emit_live already performs. Going live remains a separate, explicitly
-// human act that no node in any workflow performs.
+// THERE IS NO HUMAN GATE HERE, OR ANYWHERE ELSE IN THIS WORKFLOW. Wolf, 2026-08-25: "this is agentic
+// CMS ... it needs to be assumed that the human is not involved." Minting a recipe and binding a
+// theme are still DRAFT WRITES to governed objects — the same class of write capture_emit_live
+// already performs, and every one is re-validated by deterministic engine code before it reaches the
+// wire — but going live is no longer withheld from a human by construction. The array below (this
+// module's own upstream: clone_intake through clone_report) is composed with the shared publishing
+// tail's PUBLISH segment by listCloneConductorNodes, below; that composed array — not this one — is
+// what the executor actually runs.
 //
 // SHIP PATH: this node literal + `npm run nodes:update` + REDEPLOY. Store-created nodes never run.
 
@@ -82,8 +114,8 @@ export const cloneConductorNodes = [
     name: "Clone Intake (source, emission, and LIVE registry)",
     kind: "intake",
     description:
-      "Assembles the BOUNDED BRIEFING the three judgment nodes read: the target's live component and page-type registries, the site's own palette, the captured theme's palette, and one compact shape record per page. Read at run time, not mirrored at compile time, so the designers always compose against the section types the platform ships today. It is deliberately NOT a data bus — the deterministic stages fetch full bodies themselves through the transport.",
-    prompt: `Objective: assemble the bounded clone briefing for the run's captureRunId and targetProjectId.\nContents: the target's LIVE registries (component registry as section-type names with their FIELD NAMES; page_type registry as allowed/required sets), the site object's own brandTokens (fetched with object_get — an inventory row does not carry them), the captured theme's tokens, one compact record per page (route, the source's ordered block shape, the emitted ordered section shape, its gaps), and the existing recipe summaries for reuse.\nBOUNDED BY CONSTRUCTION. A briefing that overflows the executor's dependency bound is silently truncated before it reaches a model, and a starved judgment node is worse than no node — it was a 637,769-char envelope against a 48,000-char bound that made the first live run useless. So this stage measures its own serialized output, targets 12,000 characters, and refuses outright past its hard cap rather than shipping a quiet excerpt. Whatever it does drop is named in budget.truncated. The raw snapshot, the full mapping, the emission report and full page bodies are deliberately ABSENT: the deterministic stages downstream hold a transport and fetch what they need.\nBlocker criteria: the named capture run is missing, incomplete, or belongs to a different target; the target exposes zero or more than one active site; the site object carries no brandTokens to enumerate; the briefing cannot be brought under its cap.\n${DETERMINISTIC_PROMPT_FOOTER}`,
+      "Assembles the BOUNDED BRIEFING the judgment nodes read: the target's live component and page-type registries, the site's own palette, the captured theme's palette, and one compact shape record per page. Read at run time, not mirrored at compile time, so the designers always compose against the section types the platform ships today. It is deliberately NOT a data bus — the deterministic stages fetch full bodies themselves through the transport. THE ONE ADAPTER FOR BOTH ENTRIES (T15.30/#206; ADR-2026-08-25-structure-studio §3): a CLONE-DRIVEN run supplies captureRunId and this stage derives the briefing from a real capture; a DEMAND-DRIVEN run supplies structureBrief instead (needed structures, content shapes, constraints, references — no source site involved) and this stage normalizes it into the SAME briefing shape. entryMode states which; everything downstream is the same graph either way.",
+    prompt: `Objective: assemble the bounded clone briefing for targetProjectId, from EITHER the run's captureRunId (clone-driven) or its structureBrief (demand-driven, T15.30) — exactly one is supplied.\nContents: the target's LIVE registries (component registry as section-type names with their FIELD NAMES; page_type registry as allowed/required sets), the site object's own brandTokens (fetched with object_get — an inventory row does not carry them), the captured theme's tokens (clone-driven only), one compact record per page (route, the source's ordered block shape, the emitted ordered section shape, its gaps), and the existing recipe summaries for reuse. On a demand-driven run, "mismatches" carries the structureBrief's needs directly, in the exact shape layout_analyst would otherwise have produced by comparison — layout_analyst is skipped on this path (skipPredicates), since there is no capture snapshot to diff.\nBOUNDED BY CONSTRUCTION. A briefing that overflows the executor's dependency bound is silently truncated before it reaches a model, and a starved judgment node is worse than no node — it was a 637,769-char envelope against a 48,000-char bound that made the first live run useless. So this stage measures its own serialized output, targets 12,000 characters, and refuses outright past its hard cap rather than shipping a quiet excerpt. Whatever it does drop is named in budget.truncated. The raw snapshot, the full mapping, the emission report and full page bodies are deliberately ABSENT: the deterministic stages downstream hold a transport and fetch what they need.\nBlocker criteria: the named capture run is missing, incomplete, or belongs to a different target; the target exposes zero or more than one active site; the site object carries no brandTokens to enumerate; the briefing cannot be brought under its cap.\n${DETERMINISTIC_PROMPT_FOOTER}`,
     inputSchema: openInput,
     outputSchema: envelopeSchema(
       "clone_intake.v1",
@@ -140,7 +172,7 @@ export const cloneConductorNodes = [
       ["mismatches"]
     ),
     allowedTools: ["stage.get_output", "stage.list_outputs"],
-    assignedSkills: [],
+    assignedSkills: STUDIO_SKILLS,
     requiredInputs: ["clone_intake"],
     produces: ["clone_layout_analysis.v1"],
     riskLevel: "read",
@@ -148,7 +180,15 @@ export const cloneConductorNodes = [
     status: "active",
     position: { x: 240, y: 0 },
     updatedAt: UPDATED_AT,
-    metadata: {},
+    // T15.30 (#206; ADR-2026-08-25-structure-studio §3) — SKIPPED, not re-derived, on a demand-driven
+    // run: this node's whole job is comparing a SOURCE shape to an EMITTED one, and a demand-driven
+    // run carries no capture snapshot to derive either from. Gated through the existing skipPredicates
+    // machinery (skipPredicates.ts), never a second node array — clone_intake's own `entryMode` field
+    // is the structural fact the predicate reads. recipe_designer's OWN skip predicate
+    // (clone_no_actionable_mismatches, below) already reads a `mismatches` array off ANY upstream
+    // carrier by field name, so clone_intake stating one directly (its `mismatches`, present only on
+    // a demand-driven envelope) needs no change there to be picked up when this node is skipped.
+    metadata: { skipWhen: [{ when: "clone_demand_driven_entry" }] },
     modelConfig: { maxTurns: 4, toolCallLimit: 3, timeout: 240000, budgetUsd: 0.6, maxOutputTokens: 8000 }
   },
   {
@@ -157,7 +197,7 @@ export const cloneConductorNodes = [
     kind: "judgment",
     description:
       "Designs the section_template blueprints and page templates that close the analyst's mismatches, composed ONLY of section types registered in the live registry clone_intake read. Recipes are data; section types are code. Every design is re-validated downstream and rejected — never coerced — if it steps outside the registry.",
-    prompt: `Objective: for EACH mismatch layout_analyst marked "section_template" or "template", design the recipe that closes it. Ignore every mismatch marked "none".\nREUSE FIRST. clone_intake's recipes block lists every recipe that already exists, with its name, scope and blueprint_type (or applies_to and slot_count). If an existing recipe already fits the shape, record it in reused and design nothing for that mismatch — a redundant near-duplicate is worse than no recipe, because it splits future stamping between two names.\nVOCABULARY. Compose only from the section types in registry.sectionTypes: ${RECIPE_VOCABULARY}. Each entry lists that type's FIELD NAMES and which are required — enough to build a blueprint the type can actually hold. It is names only, not the full schema, so you cannot check enum members from the briefing; the mint stage re-validates against the real contract and will reject an illegal value, so prefer a field's plainest value over a guessed one. You may NOT invent a section type; types are .astro components plus Zod variants that ship in a platform release. If a shape genuinely needs a type that does not exist, do not approximate it — report it in unmetNeeds and move on. An honest unmet need is a platform backlog item; a bad approximation is a page nobody wants.\nFor a section_template design: name, scope ("evergreen" when the shape will recur across sites, "one_off" when it is specific to this source), description, when_to_use, blueprint_type, and the blueprint body.\nFor a page template design: name, scope, description, when_to_use, appliesTo (page types from registry.pageTypes it is legal for), and the ordered slots — each naming its section type and whether it is required.\nPAGE-TYPE LAW: a template's slots must satisfy registry.pageTypes' allowed/required sets for every page type in appliesTo. Read them rather than assuming; "any" means any.\nCite only identifiers the briefing actually showed you — a pageRef or candidateId you invent cannot be resolved downstream and silently drops the work.\nInputs expected: clone_intake's envelope (registry, recipes, pages) and layout_analyst's mismatches.\nOutput required: clone_recipe_design.v1 {artifact, summary, sectionTemplates: [...], templates: [...], reused: [...], unmetNeeds: [...]}. Empty arrays are valid, honest answers.\nBlocker criteria: no clone_intake envelope, or no layout_analyst envelope, in your input.\n${AI_SAFETY_FOOTER}`,
+    prompt: `Objective: for EACH mismatch marked "section_template" or "template", design the recipe that closes it. Ignore every mismatch marked "none".\nWHERE THE MISMATCH LEDGER COMES FROM: normally layout_analyst's own clone_layout_analysis.v1 envelope. On a DEMAND-DRIVEN run (clone_intake.entryMode === "demand" — a structure brief with no capture snapshot behind it) layout_analyst is deliberately SKIPPED, and its output will be absent from your input; read clone_intake's own "mismatches" field instead — the IDENTICAL shape ({pageRef, sourceShape, emittedShape, missingRecipeKind, rationale}), stated directly from the brief's needs rather than derived by comparison. Everything below reads the same either way; only the source of the ledger differs.\nREUSE FIRST. clone_intake's recipes block lists every recipe that already exists, with its name, scope and blueprint_type (or applies_to and slot_count). If an existing recipe already fits the shape, record it in reused and design nothing for that mismatch — a redundant near-duplicate is worse than no recipe, because it splits future stamping between two names.\nVOCABULARY. Compose only from the section types in registry.sectionTypes: ${RECIPE_VOCABULARY}. Each entry lists that type's FIELD NAMES and which are required — enough to build a blueprint the type can actually hold. It is names only, not the full schema, so you cannot check enum members from the briefing; the mint stage re-validates against the real contract and will reject an illegal value, so prefer a field's plainest value over a guessed one. You may NOT invent a section type; types are .astro components plus Zod variants that ship in a platform release. If a shape genuinely needs a type that does not exist, do not approximate it — report it in unmetNeeds and move on. An honest unmet need is a platform backlog item; a bad approximation is a page nobody wants.\nUNMET NEEDS ARE EVIDENCE FOR A FUTURE CAPABILITY REQUEST (ADR §6.3), not a throwaway note — each entry: {sectionType: your best name for the missing type (snake_case, e.g. "pricing_table"), pageRef: the mismatch's own pageRef so the request can cite which structure wanted it, why: one sentence on what the shape needs that no registered type provides, proposedFields: your best-guess field names this type would need to hold the shape (e.g. ["heading","tiers[]","tiers[].price","cta"]) — a genuine guess from the shape in front of you, never invented from nothing; leave it empty rather than pad it with fields you cannot justify from pageRef's own shape.\nFor a section_template design: name, scope ("evergreen" when the shape will recur across sites, "one_off" when it is specific to this source), description, when_to_use, blueprint_type, and the blueprint body.\nFor a page template design: name, scope, description, when_to_use, appliesTo (page types from registry.pageTypes it is legal for), and the ordered slots — each naming its section type and whether it is required.\nPAGE-TYPE LAW: a template's slots must satisfy registry.pageTypes' allowed/required sets for every page type in appliesTo. Read them rather than assuming; "any" means any.\nCite only identifiers the briefing actually showed you — a pageRef or candidateId you invent cannot be resolved downstream and silently drops the work.\nInputs expected: clone_intake's envelope (registry, recipes, pages) and layout_analyst's mismatches.\nOutput required: clone_recipe_design.v1 {artifact, summary, sectionTemplates: [...], templates: [...], reused: [...], unmetNeeds: [...]}. Empty arrays are valid, honest answers.\nBlocker criteria: no clone_intake envelope, or no layout_analyst envelope, in your input.\n${AI_SAFETY_FOOTER}`,
     inputSchema: openInput,
     outputSchema: envelopeSchema(
       "clone_recipe_design.v1",
@@ -207,12 +247,30 @@ export const cloneConductorNodes = [
           }
         },
         reused: { type: "array", items: { type: "object", additionalProperties: true } },
-        unmetNeeds: { type: "array", items: { type: "object", additionalProperties: true } }
+        // T15.33 (#209; ADR §6.3) — sectionType/pageRef/why/proposedFields are the fields the
+        // capability-backlog loop (capabilityBacklogRequest.ts's buildCapabilityRequests) reads to
+        // build a structured, evidenced capability REQUEST. additionalProperties stays true and none
+        // of these are `required`: an older run, or a model turn that supplies only `sectionType`,
+        // still produces a valid (if thinner) request — never a schema failure on the one field this
+        // codebase has always accepted (sectionType).
+        unmetNeeds: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: true,
+            properties: {
+              sectionType: { type: "string", minLength: 1 },
+              pageRef: { type: "string" },
+              why: { type: "string" },
+              proposedFields: { type: "array", items: { type: "string" } }
+            }
+          }
+        }
       },
       ["sectionTemplates", "templates"]
     ),
     allowedTools: ["stage.get_output", "stage.list_outputs"],
-    assignedSkills: [],
+    assignedSkills: STUDIO_SKILLS,
     requiredInputs: ["clone_intake", "layout_analyst"],
     produces: ["clone_recipe_design.v1"],
     riskLevel: "read",
@@ -274,7 +332,7 @@ export const cloneConductorNodes = [
       ["colors"]
     ),
     allowedTools: ["stage.get_output", "stage.list_outputs"],
-    assignedSkills: [],
+    assignedSkills: STUDIO_SKILLS,
     requiredInputs: ["clone_intake"],
     produces: ["clone_theme_proposal.v1"],
     riskLevel: "read",
@@ -363,7 +421,7 @@ export const cloneConductorNodes = [
       ["choices", "declined"]
     ),
     allowedTools: ["stage.get_output", "stage.list_outputs"],
-    assignedSkills: [],
+    assignedSkills: STUDIO_SKILLS,
     requiredInputs: ["clone_intake", "recipe_mint"],
     produces: ["clone_fit_adjudication.v1"],
     riskLevel: "read",
@@ -404,13 +462,164 @@ export const cloneConductorNodes = [
     metadata: { cloneStageDeterministic: "restamp" },
     modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 180000, budgetUsd: 0.05, maxOutputTokens: 3000 }
   },
+  // -----------------------------------------------------------------------------------------------
+  // T15.34 (#210; ADR-2026-08-25-structure-studio §7) — the PDF-TEMPLATE branch: four more nodes,
+  // one more sibling of layout_analyst/recipe_designer/theme_reconciler, NOT a second workflow and
+  // NOT a second entry mode. Activated by an independent `pdfTemplateBrief` on this SAME run's
+  // initialInput (orthogonal to captureRunId/structureBrief — a studio run may design site structure,
+  // a PDF template, both, or neither) and SKIPPED via skipPredicates.ts's clone_no_pdf_template_entries
+  // when no brief is present — the overwhelming majority of studio runs, exactly the way
+  // clone_demand_driven_entry already skips layout_analyst on a demand-driven run. See
+  // pdfTemplateEngine.ts's own header for the full discipline/transport argument; the short version,
+  // restated here because a reader of THIS file is exactly who needs to see it: a pdf_template is not
+  // a CMS governed object, these four nodes never reach composeWorkflowNodes' publish segment below
+  // and never call object_publish/release_to_production, and this is NOT a second publish path —
+  // ADR-2026-08-25-publish-autonomy's "one publish path" invariant governs CMS object publication, and
+  // a pdf_template is not one. pdf_template_publish's OWN riskLevel:"publish" is what gives it the
+  // SAME operator-veto/autonomy gate every other publish-risk node in this graph already has
+  // (executor.ts's generic isPublishRisk/resolvePublishAuthority, keyed on riskLevel alone) —
+  // deliberately reusing that mechanism rather than composing the CMS tail to get it.
+  {
+    id: "pdf_template_intake",
+    name: "PDF Template Intake (brief normalization)",
+    kind: "intake",
+    description:
+      "Normalizes this run's initialInput.pdfTemplateBrief into a bounded, validated entry list — the ONE thing pdf_template_designer and pdf_template_mint both read, exactly as clone_intake exists for the structure branch. No wire calls: pure, total, deterministic. An absent brief (the common case for a structure-only run) produces zero entries, which is what skips the rest of this branch, never a refusal.",
+    prompt: `Objective: normalize initialInput.pdfTemplateBrief into a validated list of PDF-template entries.\n${DETERMINISTIC_PROMPT_FOOTER}`,
+    inputSchema: openInput,
+    outputSchema: envelopeSchema(
+      "pdf_template_intake.v1",
+      {
+        siteId: { type: ["string", "null"] },
+        entries: { type: "array" },
+        rejectedEntries: { type: "array" }
+      },
+      ["siteId", "entries", "rejectedEntries"]
+    ),
+    allowedTools: ["pdf_template.intake", "stage.get_output", "stage.list_outputs"],
+    assignedSkills: [],
+    requiredInputs: [],
+    produces: ["pdf_template_intake.v1"],
+    riskLevel: "read",
+    dependsOn: [],
+    status: "active",
+    position: { x: 0, y: 360 },
+    updatedAt: UPDATED_AT,
+    metadata: { cloneStageDeterministic: "pdf_intake" },
+    modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 30000, budgetUsd: 0.02, maxOutputTokens: 1500 }
+  },
+  {
+    id: "pdf_template_designer",
+    name: "PDF Template Designer (AI judgment 5 of 5)",
+    kind: "judgment",
+    description:
+      "Proposes the pdf-tool template_json content (per renderer) and worst-case sample data that closes each briefed PDF-template entry. Proposes only — pdf_template_mint re-validates every design against pdf-tool's own create/validate gate and rejects, never coerces, anything that does not hold up.",
+    prompt: `Objective: for EACH entry in pdf_template_intake's envelope, design the pdf-tool template that satisfies it.\nEach entry gives you: requestedId, name, renderer (pdfme|react-pdf|typst|chromium — already defaulted to pdfme if the brief did not choose one), label, tags, purpose, an optional contentOutline (free-form hints on what the document should contain), and an optional sampleData seed.\nRENDERER LAW: pdfme templates are a pdfme schema object (fields/layout per pdfme's own template format). react-pdf/typst/chromium templates are per-renderer source (chromium: {html, css} — see live examples in this project's existing templates if any are visible to you via context; typst: typst source; react-pdf: the renderer's own component/schema shape). Compose only fields the chosen renderer actually understands; an unusable shape is rejected downstream at create_pdf_template, not coerced into something that merely looks plausible.\nSAMPLE DATA is REQUIRED for every renderer except pdfme (validate_pdf_template needs it to render a worst-case proof): give every placeholder/field the template references a realistic, LONGEST-CASE value — sample data that is shorter than real content will pass a validation a real document later fails.\nOutput required: pdf_template_design.v1 {artifact, summary, designs: [{requestedId, name, renderer, label, tags, sourceUrl, templateJson, sampleData}], unmetNeeds: [...]}. Cite ONLY requestedIds pdf_template_intake actually named — an invented one cannot be resolved downstream and silently drops that entry's design.\nBlocker criteria: no pdf_template_intake envelope in your input.\n${AI_SAFETY_FOOTER}`,
+    inputSchema: openInput,
+    outputSchema: envelopeSchema(
+      "pdf_template_design.v1",
+      {
+        designs: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["requestedId", "templateJson"],
+            additionalProperties: true,
+            properties: {
+              requestedId: { type: "string", minLength: 1 },
+              name: { type: "string" },
+              renderer: { enum: ["pdfme", "react-pdf", "typst", "chromium"] },
+              label: { type: "string" },
+              tags: { type: "array", items: { type: "string" } },
+              sourceUrl: { type: "string" },
+              templateJson: { type: "object" },
+              sampleData: { type: "object" }
+            }
+          }
+        },
+        unmetNeeds: { type: "array", items: { type: "object", additionalProperties: true } }
+      },
+      ["designs"]
+    ),
+    allowedTools: ["stage.get_output", "stage.list_outputs"],
+    assignedSkills: STUDIO_SKILLS,
+    requiredInputs: ["pdf_template_intake"],
+    produces: ["pdf_template_design.v1"],
+    riskLevel: "read",
+    dependsOn: ["pdf_template_intake"],
+    status: "active",
+    position: { x: 240, y: 360 },
+    updatedAt: UPDATED_AT,
+    metadata: { skipWhen: [{ when: "clone_no_pdf_template_entries" }] },
+    modelConfig: { maxTurns: 6, toolCallLimit: 4, timeout: 300000, budgetUsd: 1, maxOutputTokens: 12000 }
+  },
+  {
+    id: "pdf_template_mint",
+    name: "PDF Template Mint (deterministic create + validate)",
+    kind: "emission",
+    description:
+      "Re-validates pdf_template_designer's proposals and creates the survivors as pdf-tool DRAFT templates (create_pdf_template), then — for every renderer except pdfme, which publishes warn-only — runs validate_pdf_template and polls get_pdf_template_validation to a terminal report. A design with no usable content, an unrecognized renderer, or a report that never reaches PASSED is REJECTED with pdf-tool's own reason, never coerced and never retried with different content.",
+    prompt: `Objective: re-validate pdf_template_designer's designs and mint the survivors on pdf-tool.\nValidation is total and it is the engine's, not the model's: every design must name a renderer and carry a non-empty templateJson; every non-pdfme renderer must carry sample data; every create_pdf_template/validate_pdf_template/get_pdf_template_validation call is pdf-tool's own, and its refusal reason is recorded verbatim, never paraphrased into something more favorable.\nOutput required: pdf_template_mint.v1 envelope {artifact, summary, applied, rejected}. Each rejection carries pdf-tool's own reason.\n${DETERMINISTIC_PROMPT_FOOTER}`,
+    inputSchema: openInput,
+    outputSchema: envelopeSchema(
+      "pdf_template_mint.v1",
+      {
+        applied: { type: "array" },
+        rejected: { type: "array" }
+      },
+      ["applied", "rejected"]
+    ),
+    allowedTools: ["pdf_template.mint", "stage.get_output", "stage.list_outputs"],
+    assignedSkills: [],
+    requiredInputs: ["pdf_template_intake", "pdf_template_designer"],
+    produces: ["pdf_template_mint.v1"],
+    riskLevel: "write",
+    dependsOn: ["pdf_template_intake", "pdf_template_designer"],
+    status: "active",
+    position: { x: 480, y: 360 },
+    updatedAt: UPDATED_AT,
+    metadata: { cloneStageDeterministic: "pdf_mint" },
+    modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 120000, budgetUsd: 0.05, maxOutputTokens: 3000 }
+  },
+  {
+    id: "pdf_template_publish",
+    name: "PDF Template Publish (deterministic, publish-risk)",
+    kind: "emission",
+    description:
+      "Calls publish_pdf_template for every pdf_template_mint candidate that reached a validated state, then deposits each success into the cross-tenant template library (#207) under objectType \"pdf_template\". riskLevel \"publish\" — NOT because it composes the shared CMS publishing tail below (it does not, and never calls object_publish/release_to_production/trigger_netlify_build/deploy), but because that classification is what gives it the SAME operator-veto/autonomy gate (executor.ts's generic publish-risk dispatch guard, resolvePublishAuthority) every other publish-risk node in this graph already has. See pdfTemplateEngine.ts's header for why this is not a second publish path.",
+    prompt: `Objective: publish every pdf_template_mint candidate that reached a validated state, and record what happened.\nTHERE IS NO GATE TO CHECK HERE — by the time this node dispatches at all, the executor has already refused it for an operator-withheld or non-autonomous run (the identical mechanism publication_controller/publish_executor rely on) and already permitted it for an autonomous one. Your only job is to call publish_pdf_template for each validated candidate and report what pdf-tool actually did.\nOutput required: pdf_template_publish.v1 envelope {artifact, summary, published, failed}.\n${DETERMINISTIC_PROMPT_FOOTER}`,
+    inputSchema: openInput,
+    outputSchema: envelopeSchema(
+      "pdf_template_publish.v1",
+      {
+        published: { type: "array" },
+        failed: { type: "array" }
+      },
+      ["published", "failed"]
+    ),
+    allowedTools: ["pdf_template.publish", "stage.get_output", "stage.list_outputs"],
+    assignedSkills: [],
+    // Deliberately ONE upstream dependency, not two (pdf_template_intake's siteId rides forward on
+    // pdf_template_mint's own envelope instead — see PdfTemplateMintEnvelope's own comment) — the
+    // SAME one-hop shape publish_executor holds against publish_payload alone, never reaching past
+    // it to clone_intake.
+    requiredInputs: ["pdf_template_mint"],
+    produces: ["pdf_template_publish.v1"],
+    riskLevel: "publish",
+    dependsOn: ["pdf_template_mint"],
+    status: "active",
+    position: { x: 720, y: 360 },
+    updatedAt: UPDATED_AT,
+    metadata: { cloneStageDeterministic: "pdf_publish" },
+    modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 60000, budgetUsd: 0.02, maxOutputTokens: 2000 }
+  },
   {
     id: "clone_report",
-    name: "Clone Run Report (terminal — human gate)",
+    name: "Clone Run Report (terminal)",
     kind: "reporting",
     description:
-      "Deterministic terminal assembly: recipes minted and rejected with reasons, theme tokens applied and dropped, pages restamped and skipped, unmet needs that require a new section TYPE (a platform release, not an agent action), and the ordered list of objects a human may now review and publish. The workflow ENDS here.",
-    prompt: `Objective: assemble the terminal clone report — the mint ledger (applied / rejected with the validator's reason / reused), the theme ledger (applied / dropped / the reconciler's rejectedFromDraft), the restamp ledger, the designer's unmetNeeds grouped as capability backlog, and the review queue: every governed object this run created or changed, in the order a human should look at them.\nState plainly in the human summary what is DRAFT and what is LIVE. Nothing this workflow touched is live. The review queue is an invitation to a human, never an instruction to a machine.\nOutput required: clone_run_report.v1 envelope {artifact, summary, mint, theme, restamp, capabilityBacklog, reviewQueue, humanSummary, humanGate}. This node is the workflow's END: nothing downstream publishes, releases, builds, or deploys.\n${DETERMINISTIC_PROMPT_FOOTER}`,
+      "Deterministic terminal assembly: recipes minted and rejected with reasons, theme tokens applied and dropped, pages restamped and skipped, unmet needs that require a new section TYPE (a platform release, not an agent action), the publication ledger — what went LIVE and what was withheld and why, read from the shared tail's own publish_executor/release_executor records — and, when this run briefed one, the SEPARATE pdf-template ledger (T15.34/#210). The workflow ENDS here, after the shared publishing tail AND the pdf-template branch, reporting on what each actually did. This is also the studio's client-memory write: every finished template (CMS structure or pdf_template alike) this run actually published lands in the target tenant's own memory record under type \"template\" (ADR-2026-08-25-structure-studio §5) — see cloneConductorRoutes.ts's \"report\" case for the write itself; this node's own output never carries that write's wall-clock timestamp.",
+    prompt: `Objective: assemble the terminal clone report — the mint ledger (applied / rejected with the validator's reason / reused), the theme ledger (applied / dropped / the reconciler's rejectedFromDraft), the restamp ledger, the designer's unmetNeeds grouped as capability backlog, the review queue (every governed object this run created or changed), the publication ledger, and — when this run briefed one — the pdf-template ledger.\nState plainly in the human summary what went LIVE and what was WITHHELD, and why — read from publish_executor's and release_executor's own records, never re-derived or guessed. A restamped page stays a draft even on a fully successful run: clone_conductor is not chartered to publish pages, only structure (section_template, page template, theme, the site singleton) — say so, do not treat it as a defect.\nTHE PDF-TEMPLATE LEDGER IS NOT THE PUBLICATION LEDGER, and the two must never be merged into one narrative: pdf_template_publish calls pdf-tool's own publish_pdf_template, never object_publish, and pdf-tool triggers no production release — a pdf_template being \"published\" means something live in pdf-tool's own store, never a CMS site release. Report it as its own block (pdfTemplates), naming every withheld/rejected entry with pdf-tool's own reason, exactly as the publication block does for CMS structure.\nOutput required: clone_run_report.v1 envelope {artifact, summary, mint, theme, restamp, capabilityBacklog, capabilityRequests, reviewQueue, humanSummary, publication, pdfTemplates}. capabilityRequests (T15.33/#209, ADR \u00a76.3) is assembled deterministically from capabilityBacklog's own unmetNeeds \u2014 never re-judged by you. This node is the workflow's terminal REPORT: nothing downstream of it runs, but publishing, releasing, building, deploying and pdf-tool publication already happened upstream, in the branches this node reports on.\n${DETERMINISTIC_PROMPT_FOOTER}`,
     inputSchema: openInput,
     outputSchema: envelopeSchema(
       "clone_run_report.v1",
@@ -425,9 +634,27 @@ export const cloneConductorNodes = [
         // with output_schema_invalid on the first run that reached it: eight stages of real work
         // completed and persisted, and the summary that explains them could not be written.
         capabilityBacklog: { type: "object" },
+        // T15.33 (#209; ADR §6.3) — ADDITIVE, OPTIONAL (not in the `required` list below): the
+        // structured, evidenced capability REQUEST derived from the identical unmetNeeds list
+        // capabilityBacklog groups, one entry per missing section type, built by
+        // capabilityBacklogRequest.ts's buildCapabilityRequests (pure, deterministic — never
+        // re-judged here). This is step (1)+(2) of the ADR's four-step loop: recording the need with
+        // evidence and naming the proposed type/fields. Steps (3)/(4) — a human initiating the
+        // platform release and REGISTERED_SECTION_TYPES gaining the type — are NOT this workflow's
+        // job (ADR §6.4: the studio never opens a platform PR).
+        capabilityRequests: { type: "array" },
         reviewQueue: { type: "array" },
         humanSummary: { type: "string", minLength: 1 },
-        humanGate: { type: "object" }
+        // T15.10 — was `humanGate: { publishedByThisRun: false, note: "..." }`. Renamed and reframed:
+        // this workflow publishes now (composeWorkflowNodes, below), so the field states what the
+        // shared tail actually did (attempted/published/failed/withheld/release), mirroring
+        // capture_run_report.v1's own `publication` field exactly.
+        publication: { type: "object" },
+        // T15.34 (#210; ADR-2026-08-25-structure-studio §7) — DELIBERATELY a sibling of `publication`,
+        // never nested inside it and never merged with it: pdf_template_publish is not part of the
+        // shared publishing tail and a pdf_template going live in pdf-tool's own store is not a CMS
+        // release. Absent (rather than an empty ledger) on a run that briefed no pdf template at all.
+        pdfTemplates: { type: "object" }
       },
       ["reviewQueue", "humanSummary"]
     ),
@@ -436,7 +663,17 @@ export const cloneConductorNodes = [
     requiredInputs: ["recipe_mint", "theme_bind", "layout_restamp", "fit_adjudicator"],
     produces: ["clone_run_report.v1"],
     riskLevel: "read",
-    dependsOn: ["recipe_mint", "theme_bind", "layout_restamp", "fit_adjudicator"],
+    // T15.10 — clone_publish never existed as a local node; clone_report now reports on the shared
+    // tail's OWN terminal evidence: publish_executor (what published/failed/withheld) and
+    // release_executor (the release), exactly as capture_report does post-T15.7.
+    // T15.34 (#210) — pdf_template_mint/pdf_template_publish added: an INDEPENDENT branch (see its
+    // own header, above), so clone_report waits for it too before assembling the terminal ledger. A
+    // run that briefed no pdf template still reaches this node normally: pdf_template_designer is
+    // SKIPPED (skipPredicates.ts's "downstream semantics" — satisfied with absent for its own
+    // dependants), and pdf_template_mint/pdf_template_publish are NOT skipped themselves — they run
+    // and simply process zero designs, exactly as recipe_mint runs and mints zero recipes when
+    // recipe_designer was skipped upstream of it.
+    dependsOn: ["recipe_mint", "theme_bind", "layout_restamp", "fit_adjudicator", "publish_executor", "release_executor", "pdf_template_mint", "pdf_template_publish"],
     status: "active",
     position: { x: 1200, y: 80 },
     updatedAt: UPDATED_AT,
@@ -451,10 +688,25 @@ export const cloneConductorNodes = [
 // workflow that only READS; this one authors, and choosing a stand-in when the source's vocabulary
 // is not available is a judgment no rule can make — the engine can say what is legal, never what is
 // best. Everything else here still completes deterministically with zero model calls.
-export const CLONE_AI_NODE_IDS = ["layout_analyst", "recipe_designer", "theme_reconciler", "fit_adjudicator"] as const;
+// FIVE model-judgment node ids, not four, since T15.34 (#210): pdf_template_designer joins the set
+// for the identical reason recipe_designer is in it — proposing pdf-tool template content is a
+// judgment (which fields, which layout, which sample data) no deterministic rule can make; every
+// design it proposes is still re-validated and rejected-never-coerced by pdf_template_mint, exactly
+// as recipe_designer's designs are by recipe_mint. Everything else here still completes
+// deterministically with zero model calls.
+export const CLONE_AI_NODE_IDS = ["layout_analyst", "recipe_designer", "theme_reconciler", "fit_adjudicator", "pdf_template_designer"] as const;
 
+// T15.10 (2026-08-25, #189; ADR-2026-08-25-publish-autonomy §6.1, §6.2) — clone_conductor's node
+// array is this module's own upstream (clone_intake through clone_report) COMPOSED with the shared
+// publishing tail's PUBLISH segment only — clone authors no article body, so the authoring segment
+// (contract_intelligence/artifact_plan/article_body) stays out — via composeWorkflowNodes
+// (publishingTail.ts), with publish_payload bound to [recipe_mint, theme_bind, layout_restamp]
+// exactly as the ADR's §6.2 boundary table declares. This is what gives clone a live path: it now
+// reaches object_publish and release_to_production through the IDENTICAL publish_executor/
+// release_executor nodes publishing_conductor and capture_conductor use, with the identical
+// publish-risk safety machinery able to see them.
 export function listCloneConductorNodes(): WorkspaceNode[] {
-  return cloneConductorNodes.map((node) => ({
+  const upstream = cloneConductorNodes.map((node) => ({
     ...node,
     dependsOn: [...node.dependsOn],
     allowedTools: [...node.allowedTools],
@@ -463,4 +715,29 @@ export function listCloneConductorNodes(): WorkspaceNode[] {
     position: { ...node.position },
     metadata: node.metadata ? structuredClone(node.metadata) : undefined
   }));
+  const composed = composeWorkflowNodes(
+    upstream,
+    { publish_payload: ["recipe_mint", "theme_bind", "layout_restamp"] },
+    { authoring: false, publish: true }
+  );
+  // The tail node DEFINITIONS (schema, prompt, riskLevel, tool grant) are the SAME canonical objects
+  // publishing_conductor uses — composeWorkflowNodes hands back fresh per-workflow copies (never the
+  // canonical ones), so retagging clone's OWN copies below can never reach back into
+  // publishing_conductor's (or capture_conductor's) node set. Only the three nodes whose DISPATCH
+  // must differ for a multi-object structure batch (rather than a single client_object) are retagged;
+  // release_executor and learning_recorder need no clone-specific code at all — both are already
+  // object-agnostic deterministic routes, exactly as they are for capture.
+  for (const node of composed) {
+    if (node.id === "publish_payload") {
+      // The DTC deterministic route (metadata.publishPayloadDeterministic) reads article_body, which
+      // clone never produces; left in place it would degrade gracefully (fall through with a
+      // warning) rather than mis-firing, but clone's own cloneStageDeterministic route is the correct
+      // one, so the inherited DTC flag is dropped to avoid a spurious warning on every run.
+      const { publishPayloadDeterministic: _dtcFlag, ...rest } = node.metadata ?? {};
+      node.metadata = { ...rest, cloneStageDeterministic: "publish_payload" };
+    } else if (node.id === "publication_controller" || node.id === "publish_executor") {
+      node.metadata = { ...(node.metadata ?? {}), cloneStageDeterministic: node.id };
+    }
+  }
+  return composed;
 }

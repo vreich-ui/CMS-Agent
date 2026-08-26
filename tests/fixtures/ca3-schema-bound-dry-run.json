@@ -24,6 +24,7 @@
     ["publish_payload", "completed", "dry_run_publish_payload.v1"],
     ["publication_controller", "blocked", "publication_decision.v1"],
     ["publish_executor", "queued", "publish_execution.v1"],
+    ["release_executor", "queued", "release_execution.v1"],
     ["learning_recorder", "completed", "learning_observations.v1"]
   ],
   "approvalsRequired": [["publication_controller", "approval_required"]]

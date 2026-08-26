@@ -6,7 +6,7 @@ import { HALTED_EXECUTION_STATUSES } from "../../../src/agent/workspace/executio
 import { CAPTURE_AI_NODE_IDS } from "../../../src/agent/workspace/captureConductorNodes.js";
 import { CAPTURE_CRAWL_JOB_STAGE_KEY } from "../../../src/agent/workspace/captureConductorRoutes.js";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
-import { createProject, projectCreateSchema } from "../../../src/agent/projects/projectAdmin.js";
+import { createProject, projectCreateSchema, projectUpdateSchema, updateProject } from "../../../src/agent/projects/projectAdmin.js";
 import { summarizeModelUsage } from "../../../src/agent/observability/modelUsage.js";
 
 // T12.9 ACCEPTANCE (mock-mode half): a fixture run END TO END through the real executor —
@@ -128,6 +128,23 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
         if (name === "object_create") {
           return respond(request.id, { record: { object_id: String(args.requested_id ?? "obj_minted"), publication: { published_time: null } } });
         }
+        // T15.7 — the shared publishing tail's own verbs (workspace/objectPublishExecution.ts,
+        // workspace/releaseExecution.ts), now reachable because capture composes the tail's PUBLISH
+        // segment. Their reader (payloadOf) unwraps result.structuredContent ONE level — unlike
+        // respond() above, which wraps an extra "data" layer for the capture bridge's own convention
+        // — so these are built directly rather than through respond().
+        if (name === "object_checkout") {
+          return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { lockToken: `lock_${args.object_id}` } } }) } as unknown as Response;
+        }
+        if (name === "object_publish") {
+          return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { published: true, published_time: "2026-08-25T00:00:00.000Z", receipt: { commit_sha: "deadbeef" } } } }) } as unknown as Response;
+        }
+        if (name === "object_checkin") {
+          return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { released: true } } }) } as unknown as Response;
+        }
+        if (name === "release_to_production") {
+          return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { released: true, productionConfirmed: true, deployStatus: "ready", targetCommit: "deadbeef" } } }) } as unknown as Response;
+        }
         throw new Error(`Unexpected target verb: ${name}`);
       }
       throw new Error(`Unexpected endpoint: ${url}`);
@@ -158,6 +175,13 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
         }
       })
     );
+    // T15.7 — capture now composes the shared publishing tail's publish-risk nodes (publication_
+    // controller / publish_executor), gated by the SAME resolvePublishAuthority every workflow uses.
+    // This fixture drives a full run with no operator ever calling in, so the target project's own
+    // autonomy policy is what lets the run reach release — exactly the autonomous path
+    // tests/agent/capture/capturePublishTail.test.ts exercises directly, proven here end-to-end
+    // through the real crawl/map/theme/emit/score pipeline as well.
+    await updateProject(repositoryManager.getProjectRepository(), TARGET, projectUpdateSchema.parse({ autonomyMode: "autonomous" }));
   });
 
   afterEach(() => {
@@ -296,16 +320,26 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
     expect(report.humanSummary.length).toBeGreaterThan(0);
 
     // USAGE / SPEND ACCOUNTING: model usage exists ONLY for the AI nodes that actually dispatched
-    // (block_classifier + gap_adjudicator here; copy_regenerator was skipped for $0), every record
-    // is a mock-mode estimate, and ACTUAL spend is zero everywhere.
+    // (block_classifier + gap_adjudicator here; copy_regenerator was skipped for $0) — PLUS
+    // release_executor, T15.7's one addition: its own deterministic route (executor.ts) is scoped to
+    // LIVE runs only, so on this "mock" execution-mode fixture it falls through to MockNodeRunner
+    // exactly like an AI node would, and records a $0 mock-mode estimate the same way. Every record
+    // is a mock-mode estimate, and ACTUAL spend is zero everywhere regardless.
+    // learning_recorder ALSO falls through to MockNodeRunner here — a pre-existing, unrelated fact:
+    // its CANONICAL definition (nodes.ts) carries no learningRecorderDeterministic metadata flag at
+    // all (that flag is store-promoted, not baked into the static node); this is the first capture
+    // fixture to drive a run far enough to actually reach it with real tail data, so it is the first
+    // to observe this. True of publishing_conductor and clone_conductor identically — nothing T15.7
+    // introduced.
     const usageRecords = await repositoryManager.getUsageRepository().list({ runId: run.runId });
     expect(usageRecords.length).toBeGreaterThan(0);
+    const MOCK_FALLBACK_NODE_IDS = new Set([...(CAPTURE_AI_NODE_IDS as readonly string[]), "release_executor", "learning_recorder"]);
     for (const record of usageRecords) {
-      expect(CAPTURE_AI_NODE_IDS as readonly string[]).toContain(record.nodeId ?? "");
+      expect(MOCK_FALLBACK_NODE_IDS).toContain(record.nodeId ?? "");
       expect(record.status).toBe("estimated");
     }
     const dispatchedAiNodes = new Set(usageRecords.map((record) => record.nodeId));
-    expect([...dispatchedAiNodes].sort()).toEqual(["block_classifier", "gap_adjudicator"]);
+    expect([...dispatchedAiNodes].sort()).toEqual(["block_classifier", "gap_adjudicator", "learning_recorder", "release_executor"]);
     const summary = await summarizeModelUsage({ runId: run.runId });
     expect(summary.actualCostUsdEstimate).toBe(0);
 

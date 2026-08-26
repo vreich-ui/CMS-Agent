@@ -70,6 +70,7 @@ export const BLOCKER_SOURCE_CLASSES: Readonly<Record<string, BlockerSourceClass>
   artifact_plan: { class: "integrity", why: "Media artifacts. An artifact that was never materialized for THIS request is a broken render, not an editorial preference." },
   publication_controller: { class: "integrity", why: "This node's own record. It never classifies its own blockers away — a gate that can demote itself is not a gate." },
   publish_executor: { class: "integrity", why: "The publish gate's own refusals (go-live evidence, approvalMatched, the operator veto). These ARE the gate." },
+  release_executor: { class: "integrity", why: "T15.6: the release gate's own refusals (a release call that failed or was never confirmed in production). It is a successor to publish_executor, same footing — a gate that can demote itself is not a gate." },
   learning_recorder: { class: "integrity", why: "The audit trail. It is a successor, never inside publication_controller's upstream closure, so it is never collected here — classified anyway so no future wiring change can quietly make audit blockers advisory." },
 
   // ---- EDITORIAL: is the piece any good? Advisory — recorded, never gating. ---------------------

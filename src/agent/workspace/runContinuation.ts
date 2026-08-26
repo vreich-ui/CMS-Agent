@@ -27,8 +27,15 @@ import type { ExecutionStatus, WorkflowExecutionRecord } from "./executionTypes.
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
+import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { logProjectEnvNamesOnce, preflightDriverEnv, recordDriverEnvWarning } from "./driverEnvPreflight.js";
+// T15.9 (#188) — THIS is the "continuation plane" the issue names as the driver that chains
+// clone_conductor after capture: capture_crawl parks on the pdf-tool plane (see the module header
+// above), so it is THIS tick — not the site.duplicate MCP call — that is normally the first thing to
+// ever observe a site.duplicate-originated capture run reach a terminal status. See
+// siteDuplicationChain.ts for the full contract (scope, failure semantics, budget, determinism).
+import { maybeChainCloneAfterCapture } from "./siteDuplicationChain.js";
 
 // The only two statuses an unattended driver may touch. Everything else is a stop somebody or
 // something put there deliberately, and a tick that "helpfully" advanced past one would be the exact
@@ -127,6 +134,10 @@ export type ContinuationTickDeps = {
   // is not set in ITS process (records `driver_env_missing:<VAR>` on the run once instead). Injected
   // for tests; production reads the live project registry and process.env.
   projectRepository?: ProjectRepository;
+  // T15.9 (#188) — read by maybeChainCloneAfterCapture to price capture's own accrued spend against
+  // the chain's shared budgetUsd (see siteDuplicationChain.ts). Injected for tests; production reads
+  // the live usage store.
+  usageRepository?: UsageRepository;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   timeBudgetMs?: number;
@@ -145,6 +156,10 @@ export type ContinuationRunReport = {
   // Set when the tick declined to dispatch because this process cannot see the run's project MCP
   // endpoint (driver_env_missing:<VAR>). steps is 0; the run is left for a driver that can.
   skippedReason?: string;
+  // T15.9 (#188) — set when this run's advance loop ended on a HALTED capture_conductor run that
+  // carries a site.duplicate request marker: "chained" (with the new clone runId) or "refused"
+  // (with the named code) from maybeChainCloneAfterCapture. Absent for every other run.
+  chain?: { action: "chained"; cloneRunId: string } | { action: "refused"; code: string };
 };
 
 export type ContinuationTickResult = {
@@ -167,6 +182,7 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
   if (!continuationTickEnabled()) return { enabled: false, scanned: 0, verdicts: [], driven: [], timedOut: false };
   const advance = deps.advance ?? ((runId: string) => runNextNode(runId, { executionRepository: deps.executionRepository, workspaceRepository: deps.workspaceRepository, driver: "continuation_tick" }));
   const projectRepository = deps.projectRepository ?? repositoryManager.getProjectRepository();
+  const usageRepository = deps.usageRepository ?? repositoryManager.getUsageRepository();
   const env = deps.env ?? process.env;
   await logProjectEnvNamesOnce(projectRepository, env);
   const budgetMs = deps.timeBudgetMs ?? CONTINUATION_TICK_BUDGET_MS;
@@ -202,6 +218,23 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
         if (clock().getTime() > deadline) { timedOut = true; break; }
         current = await advance(verdict.runId);
         report.steps += 1;
+      }
+      // T15.9 (#188) — this run's advance loop just stopped. If it stopped because the run reached a
+      // HALTED status (decideRunContinuation no longer reenters it) and it is a site.duplicate-
+      // originated capture_conductor run, decide the chain now: this is the FIRST and, for a normally
+      // parked capture (capture_crawl on the pdf-tool plane), the ONLY place that observes the
+      // transition — see siteDuplicationChain.ts. A no-op for every other run (wrong workflow, no
+      // site.duplicate marker, or not yet halted — e.g. the loop stopped on maxSteps/deadline while
+      // still mid-run, correctly deferred to the next tick).
+      if (current) {
+        const chainOutcome = await maybeChainCloneAfterCapture(current, { executionRepository: deps.executionRepository, workspaceRepository: deps.workspaceRepository, usageRepository });
+        if (chainOutcome.action === "chained") {
+          current = chainOutcome.captureRun;
+          report.chain = { action: "chained", cloneRunId: chainOutcome.cloneRunId };
+        } else if (chainOutcome.action === "refused") {
+          current = chainOutcome.captureRun;
+          report.chain = { action: "refused", code: chainOutcome.code };
+        }
       }
       report.statusAfter = current?.status;
     } catch (error) {

@@ -8,17 +8,26 @@
 //        the inversion, in code: publish is authorized ONLY by an explicit, structurally-present
 //        affirmative decision, and every other shape refuses with a recorded reason.
 //
-//   §2.2 isOperatorPublishWithheld / isOperatorPublishApproved — the ONE reader of the operator's
-//        durable publish decision (run.operatorPublishDecision, set only by
-//        workflow.set_operator_publish_decision). A withheld veto blocks publishRun and every
-//        publish-risk node regardless of any other flag.
+//   §2.2 isOperatorPublishWithheld — the ONE reader of the operator's durable VETO
+//        (run.operatorPublishDecision === "withheld", set only by workflow.set_operator_publish_
+//        decision). A withheld veto blocks publishRun and every publish-risk node regardless of any
+//        other flag, in every mode, at every layer (ADR-2026-08-25-publish-autonomy invariant 2).
+//
+//   §2.3/§2.4 (T15.5, 2026-08-25, ADR-2026-08-25-publish-autonomy) resolvePublishAuthority — the ONE
+//        authority reader, replacing the old isOperatorPublishApproved. Implements the six-row
+//        precedence table (ADR §2.4): an explicit operator "withheld" or "approved" always wins;
+//        absent a decision, a project's snapshotted autonomyMode ("autonomous" | "operator-gated")
+//        decides. Resolved AT GATE-EVALUATION TIME from the run's own facts — never written back into
+//        run.operatorPublishDecision, which holds only what an operator actually said (invariant 4).
 //
 //   §2.3/§2.27 enforcePublishExecutionEvidence — an "executed" publish_execution.v1 claim must carry
 //        go-live evidence (verification.deployStatus === "ready" AND
 //        verification.productionConfirmed === true, plus a result) and an approvalMatched that
-//        matches the operator's durable decision. The publish_executor output schema enforces the
-//        same shape (if/then on status), but schemas are store-overlayable — this deterministic
-//        check holds even when the schema does not, downgrading the claim to "blocked".
+//        matches the run's resolved publish authority. The publish_executor output schema enforces
+//        the same shape (if/then on status), but schemas are store-overlayable — this deterministic
+//        check holds even when the schema does not, downgrading the claim to "blocked". It also
+//        refuses a FORGED authority claim (§8): a receipt may never assert an explicit operator
+//        decision that run.operatorPublishDecision does not actually hold.
 
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 
@@ -77,38 +86,100 @@ export function readPublicationDecision(record: unknown): PublicationDecisionRea
 export const isOperatorPublishWithheld = (run: Pick<WorkflowExecutionRecord, "operatorPublishDecision">): boolean =>
   run.operatorPublishDecision === "withheld";
 
-// §2.27 — the referent of publish_executor's `approvalMatched`: it matches (or fails to match) THIS
-// durable operator record, nothing else.
-export const isOperatorPublishApproved = (run: Pick<WorkflowExecutionRecord, "operatorPublishDecision">): boolean =>
-  run.operatorPublishDecision === "approved";
+// T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2.3/§2.4) — THE authority resolver. Replaces
+// isOperatorPublishApproved as the referent of publish_executor's `approvalMatched` and of every other
+// "may this run publish" question. Six-row precedence, evaluated top to bottom, first match wins:
+//
+//   1. operatorPublishDecision === "withheld"                        -> HALT  operator_withheld
+//   (rows 2-3, the project kill-switch / publishEnabled, are NOT this function's job — they are
+//    re-evaluated LIVE elsewhere, e.g. publisher.ts isProjectPublishEnabled, per §2.5: a kill-switch a
+//    snapshot could stale is not a kill-switch.)
+//   4. operatorPublishDecision === "approved"                        -> PROCEED operator_explicit
+//   5. decision absent AND snapshot.autonomyMode === "autonomous"    -> PROCEED policy_autonomous
+//   6. decision absent AND autonomyMode is "operator-gated"/unset    -> HALT  operator_approval_absent
+//
+// Reads ONLY the run's own operator record and its publishingPolicySnapshot (captured once, at run
+// creation) — never a live project read — so two runs of the same URL resolve identically regardless
+// of a policy edit made between them (invariant 7). An explicit "withheld" is absolute: it halts in
+// every mode, at every layer, and is never overridden, defaulted away, or expired (invariant 2).
+export type PublishAuthority =
+  | { authorized: true; source: "operator_explicit" | "policy_autonomous" }
+  | { authorized: false; code: string; reason: string };
 
-// T2 (2026-08-13, run_1786557897658_elj34j) — §2.2's gates (above) deliberately do not change: PASS
-// and FAIL are still exactly the two comparisons they always were. What changed is that
-// operatorPublishDecision now has TWO possible sources — an explicit workflow.set_operator_publish_
-// decision call, or a project's publishingPolicy.operatorDefault applied at run creation — and a
-// receipt that says "approved" without naming which one authorized it can be misread as explicit
-// operator sign-off when it was actually a standing project default. This is the ONE describer every
-// publish receipt (publishExecution.ts, publisher.ts) calls so that misreading can't happen; it never
-// participates in gate PASS/FAIL, only in the reason text attached to the result.
+export function resolvePublishAuthority(
+  run: Pick<WorkflowExecutionRecord, "operatorPublishDecision" | "publishingPolicySnapshot">
+): PublishAuthority {
+  // Row 1 — absolute, ahead of everything, including an "autonomous" project.
+  if (run.operatorPublishDecision === "withheld") {
+    return {
+      authorized: false,
+      code: "operator_withheld",
+      reason: `the operator's durable publish decision for this run (run.${OPERATOR_PUBLISH_DECISION_FIELD}, set via workflow.set_operator_publish_decision) is "withheld"; nothing publishes until the operator replaces it.`
+    };
+  }
+  // Row 4 — an operator's own explicit approval is sufficient authority in every mode.
+  if (run.operatorPublishDecision === "approved") {
+    return { authorized: true, source: "operator_explicit" };
+  }
+  // Rows 5/6 — no operator decision recorded. Authority now depends entirely on the run's snapshotted
+  // autonomyMode; absent snapshot/mode resolves "operator-gated" (today's behavior, unchanged).
+  const autonomyMode = run.publishingPolicySnapshot?.autonomyMode ?? "operator-gated";
+  if (autonomyMode === "autonomous") {
+    return { authorized: true, source: "policy_autonomous" };
+  }
+  return {
+    authorized: false,
+    code: "operator_approval_absent",
+    reason: `the operator's durable publish decision for this run (run.${OPERATOR_PUBLISH_DECISION_FIELD}, set via workflow.set_operator_publish_decision) is ${JSON.stringify(run.operatorPublishDecision ?? null)}, not "approved", and this run's publishing policy snapshot is not autonomous; nothing publishes until the operator approves, withholds is replaced, or the project's autonomyMode is "autonomous".`
+  };
+}
+
+// T2 (2026-08-13, run_1786557897658_elj34j) — §2.2's gates deliberately do not change: PASS and FAIL
+// are still exactly the comparisons they always were. What changed is that operatorPublishDecision can
+// have more than one SOURCE, and a receipt that says "approved" without naming which one authorized it
+// can be misread as explicit operator sign-off when it was actually a standing default. This is the
+// ONE describer every publish receipt (publishExecution.ts, publisher.ts) calls so that misreading
+// can't happen; it never participates in gate PASS/FAIL, only in the reason text attached to a result.
+// T15.5 — describes only a PRESENT run.operatorPublishDecision (unchanged), so it is silent under
+// policy_autonomous authorization (invariant 4 keeps operatorPublishDecision itself absent then); that
+// case is instead described by resolvePublishAuthority's own `source` and the publishAuthority receipt
+// field (publishExecution.ts).
 export const describeOperatorDecisionSource = (
   run: Pick<WorkflowExecutionRecord, "operatorPublishDecision" | "operatorDecisionSource">
 ): string | undefined => {
   if (!run.operatorPublishDecision) return undefined;
+  if (run.operatorDecisionSource === "project_policy_default") {
+    return `${run.operatorPublishDecision} (source: project_policy_default — a legacy pre-T15.5 project default, not an explicit operator action)`;
+  }
+  if (run.operatorDecisionSource === "policy_autonomous") {
+    return `${run.operatorPublishDecision} (source: policy_autonomous, not an explicit operator action)`;
+  }
   // Absent source on a present decision predates this field — "explicit" was the only source that
   // ever existed before it, so that is the correct (not merely convenient) fallback reading.
-  return run.operatorDecisionSource === "project_policy_default"
-    ? `${run.operatorPublishDecision} (source: project_policy_default — the project's publishingPolicy.operatorDefault, not an explicit operator action)`
-    : `${run.operatorPublishDecision} (source: explicit — set via workflow.set_operator_publish_decision)`;
+  return `${run.operatorPublishDecision} (source: explicit — set via workflow.set_operator_publish_decision)`;
 };
 
 export type PublishExecutionEvidenceResult = { output: unknown; downgraded: boolean; reasons: string[] };
 
-// §2.3/§2.27 — deterministic post-check of a publish_execution.v1 output. Anything other than an
-// "executed" claim passes through untouched (blocked/skipped need no evidence, and a non-object is
-// left for schema validation to reject). An "executed" claim without full evidence is DOWNGRADED to
-// status "blocked" with the missing evidence appended to blockers — fail closed, never trust the
-// claim — so it can never masquerade as a confirmed go-live in the run record or downstream nodes.
-export function enforcePublishExecutionEvidence(output: unknown, run: Pick<WorkflowExecutionRecord, "operatorPublishDecision">): PublishExecutionEvidenceResult {
+// §2.3/§2.27, redefined by T15.5 (ADR §8) — deterministic post-check of a publish_execution.v1
+// output. Anything other than an "executed" claim passes through untouched (blocked/skipped need no
+// evidence, and a non-object is left for schema validation to reject). An "executed" claim without
+// full evidence is DOWNGRADED to status "blocked" with the missing evidence appended to blockers —
+// fail closed, never trust the claim — so it can never masquerade as a confirmed go-live in the run
+// record or downstream nodes.
+//
+// approvalMatched's meaning is redefined, fail-closed character preserved: it used to mean "the
+// operator's durable decision is approved" — a claim that is simply false under autonomy, which would
+// force every autonomous publish to be downgraded. It now means "the authority this receipt claims
+// matches the authority the run actually holds" — checked against resolvePublishAuthority, the SAME
+// resolver the gate itself used. One new clause: a receipt's OWN `publishAuthority.source` claiming
+// "operator_explicit" while run.operatorPublishDecision is not "approved" is a FORGED claim and
+// downgrades regardless of anything else — no receipt may ever assert a human decided when no human
+// did (invariant 6).
+export function enforcePublishExecutionEvidence(
+  output: unknown,
+  run: Pick<WorkflowExecutionRecord, "operatorPublishDecision" | "publishingPolicySnapshot">
+): PublishExecutionEvidenceResult {
   if (!isPlainObject(output) || output.status !== "executed") return { output, downgraded: false, reasons: [] };
   const reasons: string[] = [];
   const verification = isPlainObject(output.verification) ? output.verification : undefined;
@@ -118,10 +189,18 @@ export function enforcePublishExecutionEvidence(output: unknown, run: Pick<Workf
   if (!isPlainObject(output.result)) {
     reasons.push("executed_without_result: status \"executed\" requires a `result` object recording the publish outcome.");
   }
+  const authority = resolvePublishAuthority(run);
   if (output.approvalMatched !== true) {
     reasons.push("executed_without_approval_matched: status \"executed\" requires approvalMatched === true.");
-  } else if (!isOperatorPublishApproved(run)) {
-    reasons.push(`approval_matched_without_operator_record: approvalMatched claims the operator's durable publish decision (run.${OPERATOR_PUBLISH_DECISION_FIELD}, set via workflow.set_operator_publish_decision) is "approved", but it is ${JSON.stringify(run.operatorPublishDecision ?? null)}.`);
+  } else if (!authority.authorized) {
+    reasons.push(`approval_matched_without_authority: approvalMatched claims this run's publish is authorized, but resolvePublishAuthority disagrees (${authority.code}: run.${OPERATOR_PUBLISH_DECISION_FIELD} is ${JSON.stringify(run.operatorPublishDecision ?? null)}, publishingPolicySnapshot.autonomyMode is ${JSON.stringify(run.publishingPolicySnapshot?.autonomyMode ?? null)}).`);
+  }
+  // §8 — the forged-receipt clause. Checked independently of `authority` above: a claim can be
+  // internally "authorized" (e.g. the run really is autonomous) while still LYING about which source
+  // authorized it, and that lie is exactly what this clause exists to catch.
+  const claimedAuthority = isPlainObject(output.publishAuthority) ? output.publishAuthority : undefined;
+  if (claimedAuthority?.source === "operator_explicit" && run.operatorPublishDecision !== "approved") {
+    reasons.push(`forged_publish_authority_claim: publishAuthority.source claims "operator_explicit" but run.${OPERATOR_PUBLISH_DECISION_FIELD} is ${JSON.stringify(run.operatorPublishDecision ?? null)}, not "approved" — no receipt may assert a human decision that did not occur.`);
   }
   if (reasons.length === 0) return { output, downgraded: false, reasons };
   const blockers = Array.isArray(output.blockers) ? output.blockers : [];

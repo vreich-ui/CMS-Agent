@@ -167,5 +167,61 @@ export const PLATFORM_TOOL_SCHEMAS: Record<string, unknown> = {
     },
     required: ["theme_id", "site_id"],
     type: "object"
+  },
+  // T15.34 (#210; ADR-2026-08-25-structure-studio §7) — the pdf-tool bridge's four verbs
+  // pdfTemplateEngine.ts's callProjectTool reaches. DIFFERENT PROVENANCE from the eight entries
+  // above: those were captured from the platform's own object-substrate MCP connector
+  // ("Kugel-Platform"); these four were captured live, VERBATIM (copied, not retyped or
+  // paraphrased), from a tenant's own connected MCP surface (site "Dr_Lurie_Skincare") on
+  // 2026-08-25 — the same trusted Platform bridge in front of pdf-tool's pdf-template-store that
+  // ADR §7 charters the studio to call. PLATFORM_TOOL_SCHEMAS_CAPTURED_AT above is left untouched
+  // (it still honestly describes only the eight object-substrate entries); these four carry their
+  // own capture date in this comment instead, per the same re-capture discipline the header above
+  // documents.
+  create_pdf_template: {
+    additionalProperties: false,
+    properties: {
+      idempotency_key: { description: "Optional client-supplied key for safe retries. Pass the SAME value on a retry of this exact call (e.g. after a timeout or 502) to get back the ORIGINAL result instead of causing a duplicate write. Example: pass \"publish-article-42-attempt\" on both the first call and any retry. Omit to run the write fresh every time (previous behavior).", minLength: 1, type: "string" },
+      label: { description: "Optional human-readable label.", minLength: 1, type: "string" },
+      renderer: { description: "Rendering engine, pinned for the template's life. Omit to default to pdfme.", enum: ["pdfme", "react-pdf", "typst", "chromium"], type: "string" },
+      site_id: { description: "Owning site object id, e.g. site_acme. Must match this deployment.", minLength: 1, type: "string" },
+      tags: { description: "Optional list of tags.", items: { minLength: 1, type: "string" }, type: "array" },
+      template_id: { description: "Optional existing template id to version instead of creating a new template.", minLength: 1, type: "string" },
+      template_json: { additionalProperties: true, description: "The pdf-tool template definition for the chosen renderer.", type: "object" }
+    },
+    required: ["site_id", "template_json"],
+    type: "object"
+  },
+  validate_pdf_template: {
+    additionalProperties: false,
+    properties: {
+      data: { additionalProperties: true, description: "Required worst-case sample data for the validation render, forwarded verbatim to pdf-tool. pdf-tool renders the template against this data during validation, so it should exercise the template's longest/edge-case field values, not typical data.", type: "object" },
+      site_id: { description: "Owning site object id; must match this deployment.", minLength: 1, type: "string" },
+      template_id: { description: "The template object id to validate.", minLength: 1, type: "string" },
+      version: { description: "Optional specific version to validate; omit for the latest draft version.", minimum: 0, type: "integer" }
+    },
+    required: ["site_id", "template_id", "data"],
+    type: "object"
+  },
+  get_pdf_template_validation: {
+    additionalProperties: false,
+    properties: {
+      site_id: { description: "Owning site object id; must match this deployment.", minLength: 1, type: "string" },
+      template_id: { description: "The template object id.", minLength: 1, type: "string" },
+      validation_id: { description: "Optional specific validationId from validate_pdf_template; omit for the latest.", minLength: 1, type: "string" },
+      version: { description: "Optional specific version; omit for the latest/active version.", minimum: 0, type: "integer" }
+    },
+    required: ["site_id", "template_id"],
+    type: "object"
+  },
+  publish_pdf_template: {
+    additionalProperties: false,
+    properties: {
+      site_id: { description: "Owning site object id; must match this deployment.", minLength: 1, type: "string" },
+      template_id: { description: "The template object id to publish.", minLength: 1, type: "string" },
+      version: { description: "Optional specific version to publish; omit for the latest draft version.", minimum: 0, type: "integer" }
+    },
+    required: ["site_id", "template_id"],
+    type: "object"
   }
 };

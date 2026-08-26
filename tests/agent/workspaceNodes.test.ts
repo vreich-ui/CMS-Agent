@@ -10,8 +10,10 @@ describe("Publishing Conductor workspace nodes", () => {
   // adds placement_resolver (the computed aggression target) and monetization_strategy (the offer
   // decision before the brief): 23. This canonical change reaches live runs only via a deliberate
   // re-seed + redeploy (Wolf's coordinated step).
-  it("defines the full 23-node graph", () => {
-    expect(listWorkspaceNodes()).toHaveLength(23);
+  // T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3) adds release_executor between
+  // publish_executor and learning_recorder: 24.
+  it("defines the full 24-node graph", () => {
+    expect(listWorkspaceNodes()).toHaveLength(24);
   });
 
   // §2.16 — the two new scaffolds and their edges.

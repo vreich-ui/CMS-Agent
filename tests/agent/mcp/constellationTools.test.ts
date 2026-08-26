@@ -22,7 +22,11 @@ describe("constellation.* MCP tools", () => {
 
   it("returns structural data with derived execution edges matching the graph derivation", async () => {
     const structure = await data("constellation.get_structure");
-    expect(structure.agents).toHaveLength(23); // R-22 re-seed + §2.16 placement_resolver/monetization_strategy
+    // 24 publishing_conductor + 11 capture_conductor + 13 clone_conductor own nodes (T15.16 / #195:
+    // capture/clone joined the governance-visible workspace store seed, so they are now first-class
+    // constellation agents too, not just publishing_conductor's; clone_conductor's own upstream grew
+    // from 9 to 13 with T15.34/#210's four pdf-template nodes).
+    expect(structure.agents).toHaveLength(48);
     expect(structure.relationships).toEqual([]);
     const graph = await data("workspace.get_graph");
     expect(structure.derivedExecutionEdges).toHaveLength(graph.edges.length);
@@ -33,7 +37,7 @@ describe("constellation.* MCP tools", () => {
 
   it("returns honest empty-system shapes before any runs or usage exist", async () => {
     const metrics = await data("constellation.get_metrics");
-    expect(metrics.agents).toHaveLength(23); // R-22 re-seed + §2.16 placement_resolver/monetization_strategy
+    expect(metrics.agents).toHaveLength(48); // see the 48-node breakdown above (T15.16 / #195; T15.34 / #210)
     for (const agent of metrics.agents) {
       expect(agent.usage.estimated.recordCount).toBe(0);
       expect(agent.usage.actual.recordCount).toBe(0);
@@ -52,6 +56,23 @@ describe("constellation.* MCP tools", () => {
     const attention = (await data("constellation.get_attention")).items as { id: string; severity: string }[];
     expect(attention.filter((item) => item.id.startsWith("attn_run_") || item.id.startsWith("attn_output_validation_"))).toEqual([]);
     expect(attention.map((item) => item.id).sort()).toEqual([
+      // T15.16 (#195): capture_conductor's and clone_conductor's own nodes are governance-visible
+      // (in the store) for the first time, so configurationAttentionItems can see them too — these
+      // nine warning-severity items are pre-existing facts about those node literals
+      // (captureConductorNodes.ts / cloneConductorNodes.ts), newly SURFACED by registration, not
+      // introduced by it, and out of this issue's scope to change:
+      //   dependency_mismatch — dependsOn carries an execution-ordering edge to a node whose output
+      //   is not itself a requiredInputs entry (e.g. capture_score depends on capture_emit_live for
+      //   ordering but does not require its output to score).
+      //   ungrantable_tools — a deterministic-route node (captureStageDeterministic /
+      //   cloneStageDeterministic) is riskLevel "read" but allowedTools names a "write"-risk tool
+      //   (capture.emit, learning.record_observation); harmless in practice since the deterministic
+      //   route never goes through tool-grant resolution, but visible here as the flat check it is.
+      "attn_dependency_mismatch_capture_emit_live",
+      "attn_dependency_mismatch_capture_report",
+      "attn_dependency_mismatch_capture_score",
+      "attn_dependency_mismatch_clone_report",
+      "attn_dependency_mismatch_fit_adjudicator",
       "attn_project_unconfigured_dr-lurie",
       "attn_project_unconfigured_fernwell",
       "attn_project_unconfigured_monetizer",
@@ -60,12 +81,16 @@ describe("constellation.* MCP tools", () => {
       // absent from defaultProjectConnections, so it never once passed through
       // migrateDefaultProjectConfig — it now joins the other three default projects here, and in a
       // test environment (no PLATFORM_MCP_ENDPOINT/TOKEN) is honestly reported unconfigured too.
-      "attn_project_unconfigured_platform"
+      "attn_project_unconfigured_platform",
       // The two attn_skill_requests_denied_tool_* items for publication_controller /
       // publish_executor are GONE, deliberately (node-system overhaul): the contract skill whose
       // instructions request project.call_read_tool is no longer assigned to the publish-risk
       // nodes at all — the mismatch was the assignment, not the lock. The nodes keep their
       // approval-gated project.call_tool grant unchanged and still deny project.call_read_tool.
+      "attn_ungrantable_tools_capture_emit_dry",
+      "attn_ungrantable_tools_capture_report",
+      "attn_ungrantable_tools_clone_report",
+      "attn_ungrantable_tools_gap_adjudicator"
     ]);
     // Nothing blocker-severity. Before the skills were re-seeded alongside the nodes there were thirteen.
     expect(attention.filter((item) => item.id.startsWith("attn_skill_blocker_"))).toEqual([]);

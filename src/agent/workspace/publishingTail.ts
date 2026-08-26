@@ -21,6 +21,17 @@ import type { WorkspaceNode, WorkspaceRiskLevel } from "./nodeTypes.js";
 //     boundary edges re-bound to that workflow's node ids, so every gate and fix that lands on the
 //     tail lands once, for every workflow (src/agent/workspace/workflowRegistry.ts is the seam that
 //     hands the composed array to the executor).
+//
+// T15.29 (2026-08-25, #205; ADR-2026-08-25-structure-studio §2.2) — every workflow composed through
+// this seam ALSO inherits the copy/structure authority boundary, not just the publish tail's shape.
+// "Only the studio (clone_conductor) authors structure" is declared ONCE, per workflowId, in
+// publishableTypeCharter.ts's charter table, and enforced at three independent points: a static
+// tool-permission audit over the composed node array (publishableTypeCharter.recipeAuthorityConformanceIssues),
+// a publish-time type allowlist (that same charter, enforced in objectPublishExecution.buildObjectPublishPlan),
+// and a runtime write guard in the emission transport
+// (publishableTypeCharter.assertRecipeAuthorshipAllowed). A new workflow composed here gets all three
+// for free by declaring its own row in that one charter table — it does not re-derive "who may author
+// a recipe" locally, for the same reason it does not re-derive the publish gates themselves.
 
 // The tail's node ids in canonical conductor order. This IS the shared sub-graph.
 //
@@ -32,6 +43,9 @@ import type { WorkspaceNode, WorkspaceRiskLevel } from "./nodeTypes.js";
 // brief_architect (mediaSlots, the desired-media declaration) and contract_intelligence (the artifact
 // protocol) instead of article_body, generates and verifies the artifact BEFORE the body is built, and
 // article_body binds artifact_plan's verified references rather than planning its own media.
+// T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3): release_executor lands after
+// publish_executor and before learning_recorder — "publish_payload → publication_controller →
+// publish_executor → release_executor → learning_recorder".
 export const publishingTailNodeIds = [
   "contract_intelligence",
   "artifact_plan",
@@ -39,6 +53,7 @@ export const publishingTailNodeIds = [
   "publish_payload",
   "publication_controller",
   "publish_executor",
+  "release_executor",
   "learning_recorder"
 ] as const;
 
@@ -47,6 +62,30 @@ export type PublishingTailNodeId = typeof publishingTailNodeIds[number];
 const tailIdSet = new Set<string>(publishingTailNodeIds);
 
 export const isTailNode = (nodeId: string): nodeId is PublishingTailNodeId => tailIdSet.has(nodeId);
+
+// T15.6 (ADR §6.1) — the tail's two segments. The AUTHORING segment is DTC copy authoring
+// (contract_intelligence, artifact_plan, article_body) and is optional in composition: a capture or
+// clone run has no article body and never will. The PUBLISH segment — publish_payload through
+// learning_recorder, now including release_executor — is THE shared tail: mandatory for every workflow
+// that publishes anything, not optional, not forkable, not substitutable. Both are exact partitions of
+// publishingTailNodeIds (asserted at module load below), so composeWorkflowNodes's segment selector can
+// never disagree with the drift guard about which node belongs to which segment.
+export const publishingAuthoringSegmentIds = ["contract_intelligence", "artifact_plan", "article_body"] as const;
+export const publishingPublishSegmentIds = ["publish_payload", "publication_controller", "publish_executor", "release_executor", "learning_recorder"] as const;
+
+const authoringIdSet = new Set<string>(publishingAuthoringSegmentIds);
+const publishSegmentIdSet = new Set<string>(publishingPublishSegmentIds);
+
+// Structural self-check: every tail node id belongs to EXACTLY one segment, and the two segments
+// together cover the whole tail. A future tail-topology edit that forgets to update one of the three
+// arrays fails here, at import time, rather than as a silent composition-time surprise.
+{
+  const uncovered = publishingTailNodeIds.filter((id) => !authoringIdSet.has(id) && !publishSegmentIdSet.has(id));
+  const doubled = publishingTailNodeIds.filter((id) => authoringIdSet.has(id) && publishSegmentIdSet.has(id));
+  if (uncovered.length || doubled.length) {
+    throw new Error(`publishingTail segment partition drift: uncovered=[${uncovered.join(", ")}], in-both=[${doubled.join(", ")}]. publishingAuthoringSegmentIds and publishingPublishSegmentIds must exactly partition publishingTailNodeIds.`);
+  }
+}
 
 // The declared shape of every tail node: full dependsOn/requiredInputs in canonical order (boundary
 // and internal edges interleaved exactly as the canonical literal declares them), the artifact each
@@ -60,7 +99,8 @@ export const publishingTailDeclaration: Record<PublishingTailNodeId, { dependsOn
   publish_payload: { dependsOn: ["article_body", "artifact_plan"], requiredInputs: ["article_body", "artifact_plan"], produces: ["dry_run_publish_payload.v1"], riskLevel: "write" },
   publication_controller: { dependsOn: ["publish_payload"], requiredInputs: ["publish_payload"], produces: ["publication_decision.v1"], riskLevel: "publish" },
   publish_executor: { dependsOn: ["publication_controller"], requiredInputs: ["publication_controller"], produces: ["publish_execution.v1"], riskLevel: "publish" },
-  learning_recorder: { dependsOn: ["publication_controller", "publish_executor"], requiredInputs: ["publication_controller", "publish_executor"], produces: ["learning_observations.v1"], riskLevel: "write" }
+  release_executor: { dependsOn: ["publish_executor"], requiredInputs: ["publish_executor"], produces: ["release_execution.v1"], riskLevel: "publish" },
+  learning_recorder: { dependsOn: ["publication_controller", "publish_executor", "release_executor"], requiredInputs: ["publication_controller", "publish_executor", "release_executor"], produces: ["learning_observations.v1"], riskLevel: "write" }
 };
 
 const deriveEdges = (keep: (dependency: string) => boolean): Record<PublishingTailNodeId, readonly string[]> => {
@@ -139,10 +179,31 @@ const copyNode = (node: WorkspaceNode): WorkspaceNode => ({ ...node, dependsOn: 
 // non-empty ends up with no upstream edge at all; or the composed graph fails validateWorkspaceGraph
 // evaluated against itself as the run sequence.
 //
+// T15.6 (ADR §6.1) — which segments a composition includes. Default is the FULL tail (both segments),
+// so every existing caller (composeWorkflowNodes(upstream) with no third argument) is unchanged and
+// still reproduces the canonical array exactly. `publish: false` is refused outright when the upstream
+// set can itself reach a publish verb (see PUBLISH_ONLY_VERBS below) — a workflow that can publish must
+// compose the publish segment; there is no other sanctioned way for it to reach that verb.
+export type PublishingTailSegmentSelection = { authoring?: boolean; publish?: boolean };
+const DEFAULT_SEGMENTS: Required<PublishingTailSegmentSelection> = { authoring: true, publish: true };
+
+// The two verbs a governed tail node may reach (object_publish via publish_executor,
+// release_to_production via release_executor). An UPSTREAM node — anything the caller supplies, never
+// a tail node — that can reach either of these while the publish segment is not composed is exactly
+// the workflow-local publish/release path this ADR forbids (invariant 1): "a workflow-local publish or
+// release mechanism is a defect, whatever its justification." Composition refuses it structurally.
+const PUBLISH_ONLY_VERBS = new Set(["object_publish", "release_to_production"]);
+
+// The tail node ids actually included for a given segment selection, in canonical order. Every tail id
+// belongs to exactly one segment (asserted at module load above), so this partition is total.
+const segmentTailIds = (selection: Required<PublishingTailSegmentSelection>): PublishingTailNodeId[] =>
+  publishingTailNodeIds.filter((id) => (authoringIdSet.has(id) ? selection.authoring : selection.publish));
+
 // The current workflow is expressible through this seam: composing the canonical upstream (every
-// non-tail canonical node) with the default binding reproduces the canonical array exactly — the
-// drift-guard test asserts it.
-export function composeWorkflowNodes(upstreamNodes: WorkspaceNode[], boundaryBinding: PublishingTailBoundaryBinding = {}): WorkspaceNode[] {
+// non-tail canonical node) with the default binding and the default (full-tail) segment selection
+// reproduces the canonical array exactly — the drift-guard test asserts it.
+export function composeWorkflowNodes(upstreamNodes: WorkspaceNode[], boundaryBinding: PublishingTailBoundaryBinding = {}, segments: PublishingTailSegmentSelection = {}): WorkspaceNode[] {
+  const selection: Required<PublishingTailSegmentSelection> = { ...DEFAULT_SEGMENTS, ...segments };
   const issues: string[] = [];
   const upstreamIds = new Set<string>();
   for (const node of upstreamNodes) {
@@ -150,10 +211,19 @@ export function composeWorkflowNodes(upstreamNodes: WorkspaceNode[], boundaryBin
     else if (upstreamIds.has(node.id)) issues.push(`Duplicate upstream node id: ${node.id}`);
     upstreamIds.add(node.id);
   }
+  // The structural refusal (ADR §6.1): a workflow that publishes and does not compose the publish
+  // segment fails composition, rather than silently omitting the tail's safety machinery.
+  if (!selection.publish) {
+    for (const node of upstreamNodes) {
+      const reachable = node.allowedTools.filter((tool) => PUBLISH_ONLY_VERBS.has(tool));
+      if (reachable.length) issues.push(`Upstream node ${node.id} can reach ${reachable.join(", ")} but the publish segment was not composed; a workflow that publishes must compose publishingPublishSegmentIds — there is no other sanctioned publish/release path.`);
+    }
+  }
+  const includedTailIds = new Set<string>(segmentTailIds(selection));
   for (const [nodeId, bound] of Object.entries(boundaryBinding)) {
     if (!isTailNode(nodeId)) { issues.push(`Boundary binding names a non-tail node: ${nodeId}`); continue; }
+    if (!includedTailIds.has(nodeId)) { issues.push(`Boundary binding names ${nodeId}, which is not part of the composed segment selection (authoring:${selection.authoring}, publish:${selection.publish})`); continue; }
     if (!bound) continue;
-    if (publishingTailBoundary[nodeId].length && !bound.length) issues.push(`Boundary binding for ${nodeId} is empty, but its declared boundary [${publishingTailBoundary[nodeId].join(", ")}] must be bound to at least one upstream node`);
     for (const dependency of bound) {
       if (isTailNode(dependency)) issues.push(`Boundary binding for ${nodeId} points at a tail node: ${dependency} — tail-internal edges are fixed and never bound`);
       else if (!upstreamIds.has(dependency)) issues.push(`Unsatisfied boundary for ${nodeId}: ${dependency} is not in the upstream set`);
@@ -162,21 +232,32 @@ export function composeWorkflowNodes(upstreamNodes: WorkspaceNode[], boundaryBin
   const canonicalById = new Map(listWorkspaceNodes().map((node) => [node.id, node]));
   const tailNodes: WorkspaceNode[] = [];
   for (const nodeId of publishingTailNodeIds) {
+    if (!includedTailIds.has(nodeId)) continue;
     const canonical = canonicalById.get(nodeId);
     if (!canonical) { issues.push(`Tail node missing from the canonical set: ${nodeId}`); continue; }
+    // Boundary/internal are computed relative to the INCLUDED segment set, not the full tail: when a
+    // node's declared dependency is excluded from this composition (e.g. publish_payload's article_body
+    // edge, when the authoring segment is not composed), that dependency is no longer available
+    // internally and becomes part of THIS node's boundary — exactly the seam capture/clone need to bind
+    // publish_payload to their own emission/mint report (ADR §6.2), without this module needing to know
+    // anything about capture or clone.
+    const declaredDeps = publishingTailDeclaration[nodeId].dependsOn;
+    const declaredBoundary = declaredDeps.filter((dependency) => !includedTailIds.has(dependency));
+    const declaredInternal = declaredDeps.filter((dependency) => includedTailIds.has(dependency));
     const bound = boundaryBinding[nodeId];
     if (!bound) {
-      // Unbound: the declared (publishing_conductor) edges apply verbatim — including their declared
-      // interleaving — so composing the canonical upstream reproduces the canonical array exactly.
-      for (const dependency of publishingTailBoundary[nodeId]) {
+      // Unbound: the declared edges apply verbatim, restricted to what THIS composition includes —
+      // for the default full-tail selection this reproduces the canonical array exactly.
+      for (const dependency of declaredBoundary) {
         if (!upstreamIds.has(dependency)) issues.push(`Unsatisfied boundary for ${nodeId}: ${dependency} is not in the upstream set (bind it via boundaryBinding or add the upstream node)`);
       }
       tailNodes.push(copyNode(canonical));
       continue;
     }
+    if (declaredBoundary.length && !bound.length) issues.push(`Boundary binding for ${nodeId} is empty, but its declared boundary [${declaredBoundary.join(", ")}] must be bound to at least one upstream node`);
     const rebound = copyNode(canonical);
-    rebound.dependsOn = [...bound, ...publishingTailInternalEdges[nodeId]];
-    rebound.requiredInputs = [...bound, ...publishingTailInternalEdges[nodeId]];
+    rebound.dependsOn = [...bound, ...declaredInternal];
+    rebound.requiredInputs = [...bound, ...declaredInternal];
     tailNodes.push(rebound);
   }
   if (issues.length) throw new WorkflowCompositionError(issues);

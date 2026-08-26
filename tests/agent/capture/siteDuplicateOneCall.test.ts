@@ -7,7 +7,7 @@ import { HALTED_EXECUTION_STATUSES } from "../../../src/agent/workspace/executio
 import { CAPTURE_AI_NODE_IDS } from "../../../src/agent/workspace/captureConductorNodes.js";
 import { SITE_DUPLICATION_REQUEST_STAGE_KEY } from "../../../src/agent/mcp/workspace/siteDuplicationTools.js";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
-import { createProject, projectCreateSchema } from "../../../src/agent/projects/projectAdmin.js";
+import { createProject, projectCreateSchema, projectUpdateSchema, updateProject } from "../../../src/agent/projects/projectAdmin.js";
 
 // T12.11 ACCEPTANCE (existing-target half): ONE MCP call — tools/call site_duplicate — against an
 // EXISTING registered project drives sourceUrl → scored never-released drafts END TO END on the
@@ -94,6 +94,22 @@ describe("site.duplicate — one call against an existing project (fixture end-t
         if (name === "object_create") {
           return respond(request.id, { record: { object_id: String(args.requested_id ?? "obj_minted"), publication: { published_time: null } } });
         }
+        // T15.7 — the shared publishing tail's own verbs, now reachable because capture composes the
+        // tail's PUBLISH segment. Their reader (objectPublishExecution.ts payloadOf) unwraps
+        // result.structuredContent ONE level — unlike respond() above, which wraps an extra "data"
+        // layer for the capture bridge's own convention — so these are built directly.
+        if (name === "object_checkout") {
+          return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { lockToken: `lock_${args.object_id}` } } }) } as unknown as Response;
+        }
+        if (name === "object_publish") {
+          return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { published: true, published_time: "2026-08-25T00:00:00.000Z", receipt: { commit_sha: "deadbeef" } } } }) } as unknown as Response;
+        }
+        if (name === "object_checkin") {
+          return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { released: true } } }) } as unknown as Response;
+        }
+        if (name === "release_to_production") {
+          return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { released: true, productionConfirmed: true, deployStatus: "ready", targetCommit: "deadbeef" } } }) } as unknown as Response;
+        }
         throw new Error(`Unexpected target verb: ${name}`);
       }
       throw new Error(`Unexpected endpoint: ${url}`);
@@ -122,6 +138,10 @@ describe("site.duplicate — one call against an existing project (fixture end-t
         }
       })
     );
+    // T15.7 — capture now composes the shared publishing tail's publish-risk nodes, gated by the same
+    // resolvePublishAuthority every workflow uses. This fixture drives a run with no operator ever
+    // calling in, so the target's own autonomy policy is what lets it reach release.
+    await updateProject(repositoryManager.getProjectRepository(), TARGET, projectUpdateSchema.parse({ autonomyMode: "autonomous" }));
   });
 
   afterEach(() => {
@@ -227,10 +247,15 @@ describe("site.duplicate — one call against an existing project (fixture end-t
     expect(request.artifact).toBe("site_duplication.v1");
     expect(request.sourceUrl).toBe(SOURCE_URL);
 
-    // Spend law unchanged: usage exists only for the AI nodes that dispatched; actual spend zero.
+    // Spend law unchanged: usage exists only for the AI nodes that dispatched — PLUS release_executor
+    // and learning_recorder, which fall through to MockNodeRunner on this mock-mode run for reasons
+    // unrelated to AI judgment (see captureConductorMockRun.test.ts's identical note: release_executor's
+    // own deterministic route is scoped to live runs only, and learning_recorder's canonical definition
+    // carries no learningRecorderDeterministic flag at all) — actual spend is zero regardless.
     const usageRecords = await repositoryManager.getUsageRepository().list({ runId: result.runId });
+    const MOCK_FALLBACK_NODE_IDS = new Set([...(CAPTURE_AI_NODE_IDS as readonly string[]), "release_executor", "learning_recorder"]);
     for (const record of usageRecords) {
-      expect(CAPTURE_AI_NODE_IDS as readonly string[]).toContain(record.nodeId ?? "");
+      expect(MOCK_FALLBACK_NODE_IDS).toContain(record.nodeId ?? "");
       expect(record.status).toBe("estimated");
     }
 

@@ -26,7 +26,7 @@ import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks, type PublishExecutionOutcome, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
-import { describeOperatorDecisionSource, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
+import { describeOperatorDecisionSource, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
 import { ClientToolRefusalError } from "../projects/clientToolResult.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
 import { repositoryManager } from "../runtime/repositories.js";
@@ -34,6 +34,7 @@ import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepo
 import type { LearningRepository } from "../repository/interfaces/LearningRepository.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
+import { assertRecipeAuthorshipAllowed } from "./publishableTypeCharter.js";
 
 // request_id contract: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, supplied by the
 // caller (never auto-generated). A malformed id is accepted at create but breaks every later step.
@@ -55,12 +56,27 @@ export const compileRequestIdPattern = (declared: string | undefined): RegExp =>
 const OWNER = { owner_id: "cms-agent", owner_label: "CMS-Agent Publishing Conductor" };
 
 export type PublishGate = { name: string; passed: boolean; reason?: string };
-// T2 (run_1786557897658_elj34j) — operatorDecisionSource names WHICH source (explicit operator call
-// vs. a project's publishingPolicy.operatorDefault) produced run.operatorPublishDecision, whatever
-// its value. Purely descriptive: it rides alongside the gates so a caller can render "approved (source:
-// project_policy_default)" rather than a bare "approved" a reader could take for explicit sign-off. It
-// never feeds gate PASS/FAIL — the operator_not_withheld gate below is unchanged.
-export type PublishGates = { operatorEnabled: boolean; approved: boolean; live: boolean; allPassed: boolean; gates: PublishGate[]; operatorDecisionSource?: string };
+// T2 (run_1786557897658_elj34j) — operatorDecisionSource names WHICH source (explicit operator call,
+// a legacy project policy default, or — T15.5 — autonomyMode policy) produced the authority behind
+// this publish, whatever its value. Purely descriptive: it rides alongside the gates so a caller can
+// render "approved (source: policy_autonomous)" rather than a bare "approved" a reader could take for
+// explicit sign-off. It never feeds gate PASS/FAIL — the operator_not_withheld gate below is unchanged.
+export type PublishGates = {
+  operatorEnabled: boolean;
+  // T15.5 (ADR-2026-08-25-publish-autonomy §7) — DEPRECATED as an authority input: this is the
+  // caller's raw `approved` flag, kept on the result for backward-compat visibility only. It no
+  // longer drives `allPassed` or the `publish_authorized` gate below — see `authorized`.
+  approved: boolean;
+  // The ACTUAL authority gate (publishDecision.resolvePublishAuthority): is this run's publish
+  // authorized, by an operator's own explicit approval or by the project's autonomyMode policy?
+  authorized: boolean;
+  live: boolean;
+  allPassed: boolean;
+  gates: PublishGate[];
+  operatorDecisionSource?: string;
+  // T15.5 — present only when `authorized`: which authority actually let this through.
+  authoritySource?: "operator_explicit" | "policy_autonomous";
+};
 export type PublishStep = { tool: string; ok: boolean; error?: string };
 export type PublishPlan = { projectId: string; requestId: string; nodeCount: number; publishedTime: string | null; toolSequence: string[] };
 // Resumable blocked-state descriptor so an operator/UI can act without reconstructing the run.
@@ -114,19 +130,24 @@ export const isProjectPublishEnabled = (config: ProjectConnectionConfig, env: No
 // publish gate is the day the gates stop meaning anything. (Go-live 2026-07-31: the controlled-tool
 // layer's former per-run approval lock on project.call_tool was removed — requiresApproval is now
 // false — so granted nodes reach client tools without a per-run approval ceremony.)
-const PUBLISH_GATE_NAMES = ["operator_enabled", "explicit_approval", "explicit_live", "operator_not_withheld", "controller_decision_go"] as const;
+const PUBLISH_GATE_NAMES = ["operator_enabled", "publish_authorized", "explicit_live", "operator_not_withheld", "controller_decision_go"] as const;
 
-const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, env: NodeJS.ProcessEnv, run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource">): PublishGates => {
+const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, env: NodeJS.ProcessEnv, run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource" | "publishingPolicySnapshot">): PublishGates => {
   const operatorEnabled = isProjectPublishEnabled(config, env);
   // Go-live 2026-07-31: approval and live default to TRUE — a publish request is taken at its word.
-  // Passing approved:false or live:false still forces a dry-run plan, so a deliberate rehearsal
-  // remains one explicit flag away; it is simply no longer the default posture.
+  // T15.5 (ADR-2026-08-25-publish-autonomy §7) — `approved` is DEPRECATED as an authority input: it
+  // is recorded on the result for backward-compat visibility (one release) but no longer opens or
+  // closes any gate. `live` is unchanged and still required for a live publish.
   const approved = input.approved !== false;
   const live = input.live !== false;
   // P0 §2.2 — the operator veto: run.operatorPublishDecision (the ONE named field, set only by
   // workflow.set_operator_publish_decision) read through the ONE reader shared with the executor's
   // publish-risk guard. A withheld veto closes this gate regardless of every other input.
   const operatorNotWithheld = !isOperatorPublishWithheld(run);
+  // T15.5 (ADR §2.4, §7) — THE authority gate: is this run's publish authorized? An operator's own
+  // explicit "approved" is always sufficient; absent that, the project's snapshotted autonomyMode
+  // policy decides. Replaces the old `approved` caller-flag gate below.
+  const authority = resolvePublishAuthority(run);
   // P0 §2.1 — refuse-by-default controller decision. Publish is authorized ONLY by an explicit,
   // structurally-present affirmative decision record (decision: "go") from publication_controller;
   // an absent record, prose-only approval, hedging, or malformed output closes the gate with the
@@ -134,7 +155,7 @@ const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, 
   const decision = readPublicationDecision(findPublicationDecision(run));
   const gates: PublishGate[] = [
     { name: "operator_enabled", passed: operatorEnabled, reason: operatorEnabled ? undefined : `Publishing is not enabled for ${config.projectId}; set ${publishEnabledEnvVar(config)}=true in the deployment.` },
-    { name: "explicit_approval", passed: approved, reason: approved ? undefined : "approved: true is required for a live publish." },
+    { name: "publish_authorized", passed: authority.authorized, reason: authority.authorized ? undefined : `${authority.code}: ${authority.reason}` },
     { name: "explicit_live", passed: live, reason: live ? undefined : "live: true (dryRun false) is required for a live publish." },
     { name: "operator_not_withheld", passed: operatorNotWithheld, reason: operatorNotWithheld ? undefined : "operator_publish_withheld: the operator's durable publish decision for this run (run.operatorPublishDecision, set via workflow.set_operator_publish_decision) is \"withheld\"; nothing publishes until the operator replaces it." },
     { name: "controller_decision_go", passed: decision.authorized, reason: decision.authorized ? undefined : `publication_decision_not_affirmative (${decision.code}): ${decision.reason}` }
@@ -146,12 +167,21 @@ const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, 
   if (names.length !== PUBLISH_GATE_NAMES.length || !PUBLISH_GATE_NAMES.every((name, index) => names[index] === name)) {
     throw new Error(`publish_gate_set_changed: expected exactly [${PUBLISH_GATE_NAMES.join(", ")}], got [${names.join(", ")}]. The publish gates are a closed set; adding or removing one is a deliberate act, not a refactor.`);
   }
-  const allPassed = operatorEnabled && approved && live && operatorNotWithheld && decision.authorized;
+  const allPassed = operatorEnabled && authority.authorized && live && operatorNotWithheld && decision.authorized;
   if (allPassed !== gates.every((gate) => gate.passed)) throw new Error("publish_gate_evaluation_inconsistent: a gate's passed flag disagrees with its own input.");
-  // T2 — descriptive only (see PublishGates): names the source of run.operatorPublishDecision so a
-  // live publish receipt below can never be misread as explicit operator sign-off when the run
-  // actually started pre-approved by the project's publishingPolicy.operatorDefault.
-  return { operatorEnabled, approved, live, allPassed, gates, operatorDecisionSource: describeOperatorDecisionSource(run) };
+  // T2/T15.5 — descriptive only (see PublishGates): names the source of the run's publish authority so
+  // a live publish receipt below can never be misread as explicit operator sign-off when the run
+  // actually published under a project's autonomyMode (or, legacy, operatorDefault) policy.
+  return {
+    operatorEnabled,
+    approved,
+    authorized: authority.authorized,
+    live,
+    allPassed,
+    gates,
+    operatorDecisionSource: describeOperatorDecisionSource(run),
+    ...(authority.authorized ? { authoritySource: authority.source } : {})
+  };
 };
 
 const findArticleBody = (run: WorkflowExecutionRecord): unknown =>
@@ -266,7 +296,17 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   const callTool = deps.callTool ?? ((tool, args) => new ProjectMcpAdapter(config).callTool(tool, args));
   const shell = readContentItemShell(run);
   const steps: PublishStep[] = [];
+  // T15.29 (#205; ADR-2026-08-25-structure-studio §2.2) — enforcement point 3, the runtime write
+  // guard. This IS the emission transport for the DTC publish dialect ("Explicit PUBLISH gate for
+  // the Publishing Conductor", this file's own header): every object_create/object_patch/
+  // site_apply_theme a project's executePublish hook makes crosses this closure. Checked against the
+  // RUN's own workflowId (not hardcoded to publishing_conductor) so a future workflow composing this
+  // same path inherits the guard by construction rather than by remembering to add it — the same
+  // reasoning publishingTail.ts's header gives for the shared tail itself. Throws
+  // RecipeAuthorshipRefusedError before any wire call; the outer catch below turns that into a named,
+  // typed publish failure (mode:"error") rather than a half-executed sequence.
   const call = async (tool: string, args: Record<string, unknown>): Promise<unknown> => {
+    assertRecipeAuthorshipAllowed(run.workflowId, tool, args);
     const res = await callTool(tool, args);
     // `ok` here is the TRANSPORT's verdict, not the client's: a refusal (an MCP result carrying
     // isError) arrives as ok:true with the reason inside `result`. The hook is what inspects that

@@ -12,16 +12,33 @@ import { __test__ } from "../../../src/agent/workspace/executor.js";
 // AI nodes (fit_adjudicator, judging substitutions the engine merely enumerates). The assertions
 // below are written against CLONE_AI_NODE_IDS itself and against graph SHAPE, not against a count —
 // they exist to catch a SAFETY property breaking (a node escaping deterministic-stage bookkeeping,
-// a publish verb sneaking into allowedTools, a cycle, an orphaned dependency, a second terminal
-// node), not to catch the node set legitimately growing again:
+// a publish verb sneaking into an UPSTREAM node's allowedTools, a cycle, an orphaned dependency, a
+// second terminal node), not to catch the node set legitimately growing again.
+//
+// T15.10 (2026-08-25, #189; ADR-2026-08-25-publish-autonomy §6, §9) SUPERSEDES this suite's old
+// "human gate preserved" invariant, exactly as T15.7 did for capture_conductor: clone composes the
+// shared publishing tail's PUBLISH segment, so publish-risk nodes, project.call_tool, and
+// object_publish/release_to_production ARE now reachable — through the IDENTICAL governed tail every
+// workflow shares, with the identical safety machinery watching them (see
+// tests/agent/workspace/publishingTail.test.ts's riskLevel conformance suite and
+// tests/agent/capture/clonePublishTail.test.ts). What is preserved is narrower and still real:
+// clone_report is still the workflow's terminal REPORT (nothing depends on it), and clone still
+// authors no article body (the tail's AUTHORING segment stays uncomposed).
 //   (a) the AI nodes are EXACTLY CLONE_AI_NODE_IDS — whatever CLONE_AI_NODE_IDS names, today four;
-//   (b) every other node carries metadata.cloneStageDeterministic and it is a member of CLONE_STAGES;
-//   (c) no node has riskLevel publish or admin;
-//   (d) no node's allowedTools contain a publish verb;
-//   (e) the graph is acyclic, every dependsOn names a real node, and clone_report is the unique
-//       terminal node.
+//   (b) every other UPSTREAM node carries metadata.cloneStageDeterministic and is a member of
+//       CLONE_STAGES (the tail's own release_executor/learning_recorder need no clone-specific route);
+//   (c) no UPSTREAM node has riskLevel publish or admin, or a publish verb in allowedTools — the
+//       tail's own publish-risk nodes are the ONLY ones that do, exactly as every workflow shares,
+//       with exactly ONE deliberate exception since T15.34/#210: pdf_template_publish, upstream and
+//       riskLevel "publish" BY ITSELF (never a tail composition) so it reuses the SAME generic
+//       publish-risk gate without touching object_publish or any CMS-object machinery — see (c)'s own
+//       test for the full argument;
+//   (d) the graph is acyclic, every dependsOn/requiredInputs names a real node, and clone_report is
+//       the unique terminal node (report, not necessarily last array entry).
 describe("clone_conductor canonical node set", () => {
   const nodes = listCloneConductorNodes();
+  const UPSTREAM_IDS = new Set(cloneConductorNodes.map((node) => node.id));
+  const upstream = () => nodes.filter((node) => UPSTREAM_IDS.has(node.id));
 
   it("is registered and resolvable by workflowId through the executor's registry seam", async () => {
     expect(getWorkflowDefinition("clone_conductor")?.canonicalNodes().map((node) => node.id)).toEqual(nodes.map((node) => node.id));
@@ -29,25 +46,35 @@ describe("clone_conductor canonical node set", () => {
     expect(resolved.map((node) => node.id)).toEqual(nodes.map((node) => node.id));
   });
 
-  it("(e) forms a valid DAG: unique ids, resolvable edges, acyclic, requiredInputs satisfiable", () => {
+  it("(d) forms a valid DAG: unique ids, resolvable edges, acyclic, requiredInputs satisfiable", () => {
     const ids = new Set(nodes.map((node) => node.id));
     expect(ids.size).toBe(nodes.length);
     for (const node of nodes) {
       for (const dependency of node.dependsOn) expect(ids.has(dependency), `${node.id} depends on unknown ${dependency}`).toBe(true);
       for (const input of node.requiredInputs) expect(ids.has(input), `${node.id} requires unknown input ${input}`).toBe(true);
     }
-    // Acyclic: canonical order must already be a topological order (the executor dispatches in it).
-    const seen = new Set<string>();
-    for (const node of nodes) {
-      for (const dependency of node.dependsOn) expect(seen.has(dependency), `${node.id} listed before its dependency ${dependency}`).toBe(true);
-      seen.add(node.id);
-    }
+    // Acyclic — checked structurally (DFS), not by array position. T15.10: composeWorkflowNodes
+    // appends the shared tail AFTER the whole upstream array, but clone_report (upstream) now depends
+    // on publish_executor/release_executor (tail, appended after it) — so the canonical array is no
+    // longer itself a topological order, though the graph it describes is still acyclic.
+    const state = new Map<string, "visiting" | "done">();
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const visit = (id: string, path: string[]): void => {
+      const mark = state.get(id);
+      if (mark === "done") return;
+      if (mark === "visiting") throw new Error(`Cycle detected: ${[...path, id].join(" -> ")}`);
+      state.set(id, "visiting");
+      for (const dependency of byId.get(id)!.dependsOn) visit(dependency, [...path, id]);
+      state.set(id, "done");
+    };
+    expect(() => { for (const node of nodes) visit(node.id, []); }).not.toThrow();
   });
 
-  it("(a) the AI nodes are EXACTLY CLONE_AI_NODE_IDS, whatever its size; (b) every other node declares a deterministic clone stage that is a member of CLONE_STAGES", () => {
-    const aiNodes = nodes.filter((node) => !readCloneStage(node));
+  it("(a) the AI nodes are EXACTLY CLONE_AI_NODE_IDS; (b) every other UPSTREAM node declares a deterministic clone stage that is a member of CLONE_STAGES", () => {
+    const SHARED_TAIL_DETERMINISTIC_IDS = new Set(["release_executor", "learning_recorder"]);
+    const aiNodes = upstream().filter((node) => !readCloneStage(node));
     expect(aiNodes.map((node) => node.id).sort()).toEqual([...CLONE_AI_NODE_IDS].sort());
-    for (const node of nodes) {
+    for (const node of upstream()) {
       if ((CLONE_AI_NODE_IDS as readonly string[]).includes(node.id)) {
         expect(readCloneStage(node)).toBeUndefined();
       } else {
@@ -56,6 +83,14 @@ describe("clone_conductor canonical node set", () => {
         expect(CLONE_STAGES as readonly string[]).toContain(stage);
       }
     }
+    // The tail's own nodes need no clone-specific route: release_executor/learning_recorder are
+    // already object/workflow-agnostic (executor.ts), and readCloneStage is deliberately silent on
+    // them — the identical shape captureConductorWorkflow.test.ts asserts for capture.
+    for (const id of SHARED_TAIL_DETERMINISTIC_IDS) {
+      const node = nodes.find((candidate) => candidate.id === id)!;
+      expect(readCloneStage(node)).toBeUndefined();
+    }
+    expect(nodes.find((node) => node.id === "release_executor")?.metadata?.releaseExecutorDeterministic).toBe(true);
     // There is no "pending" stage in this workflow — clone never polls an external job plane.
     expect(CLONE_STAGES as readonly string[]).not.toContain("pending");
   });
@@ -71,14 +106,28 @@ describe("clone_conductor canonical node set", () => {
     }
   });
 
-  it("(c) no node has riskLevel publish or admin; (d) no node's allowedTools contain a publish verb; clone_report is the unique terminal node", () => {
-    for (const node of nodes) {
-      // Structural, not a hardcoded count: riskLevel is a closed enum, so proving membership in
-      // {read, write} IS proving "not publish, not admin" — restated explicitly below too, so this
-      // property reads directly off the assertion rather than off an inference from the allowlist.
-      expect(["read", "write"]).toContain(node.riskLevel);
-      expect(node.riskLevel).not.toBe("publish");
-      expect(node.riskLevel).not.toBe("admin");
+  it("(c) T15.10: publish-risk nodes ARE now reachable, through the identical shared-tail safety machinery — clone_report stays the terminal report", () => {
+    // The shared tail's own publish-risk nodes, PLUS exactly one deliberate upstream exception:
+    // pdf_template_publish (T15.34/#210; ADR-2026-08-25-structure-studio §7). It is riskLevel
+    // "publish" ON PURPOSE and BY ITSELF — not because it composes the shared tail (it does not: it
+    // is clone's own upstream node, dispatched by cloneConductorRoutes.ts's "pdf_publish" case, never
+    // by publishingTail.ts) but so the executor's SAME generic publish-risk gate
+    // (isPublishRisk/resolvePublishAuthority, keyed on riskLevel alone) reuses the identical
+    // operator-veto/autonomy check every tail-composed publish-risk node gets, without a pdf_template
+    // needing to pass through object_publish or any CMS-object machinery to earn it. This is the ONE
+    // upstream node this suite's own header (c) now names as a sanctioned exception; every other
+    // upstream node keeps the invariant unchanged.
+    const publishRisk = nodes.filter((node) => node.riskLevel === "publish" || node.riskLevel === "admin");
+    expect(publishRisk.map((node) => node.id).sort()).toEqual(["pdf_template_publish", "publication_controller", "publish_executor", "release_executor"]);
+    for (const node of upstream()) {
+      if (node.id === "pdf_template_publish") {
+        expect(node.riskLevel).toBe("publish");
+        expect(node.kind).not.toBe("publisher"); // never masquerades as the shared tail's releaser/publisher kind
+      } else {
+        expect(["read", "write"]).toContain(node.riskLevel);
+        expect(node.riskLevel).not.toBe("publish");
+        expect(node.riskLevel).not.toBe("admin");
+      }
       expect(node.kind).not.toBe("publisher");
       for (const tool of node.allowedTools) {
         expect(tool).not.toBe("project.call_tool");
@@ -89,18 +138,12 @@ describe("clone_conductor canonical node set", () => {
         expect(tool).not.toBe("deploy");
       }
     }
-    // clone_report is the UNIQUE terminal node: every other node is an ancestor of something. This
-    // is derived structurally from the dependency graph (the set of ids nothing's dependsOn
-    // mentions) rather than assumed from array position, so inserting a node anywhere in the
-    // canonical list — as fit_adjudicator was — cannot silently stop this test from meaning what it
-    // says.
-    const dependedOn = new Set(nodes.flatMap((node) => node.dependsOn));
-    const terminalNodes = nodes.filter((node) => !dependedOn.has(node.id));
-    expect(terminalNodes.map((node) => node.id)).toEqual(["clone_report"]);
-    const terminal = terminalNodes[0];
-    expect(terminal.produces).toEqual(["clone_run_report.v1"]);
-    // Nothing depends on the report: the workflow ENDS at the prepared report + drafts.
+    // clone_report is still the workflow's terminal REPORT: nothing depends on it, even though it is
+    // no longer the last array entry (the tail's own learning_recorder is, per composeWorkflowNodes).
+    const report = nodes.find((node) => node.id === "clone_report")!;
+    expect(report.produces).toEqual(["clone_run_report.v1"]);
     expect(nodes.some((node) => node.dependsOn.includes("clone_report"))).toBe(false);
+    expect(nodes[nodes.length - 1].id).toBe("learning_recorder");
   });
 
   it("generates schema-valid mock outputs for every clone node (mock CI traversal cannot dead-end)", () => {
