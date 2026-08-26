@@ -46,6 +46,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { getWorkspaceNode, listWorkspaceNodes, validateWorkspaceGraph } from "../src/agent/workspace/nodes.js";
 import { publishingTailConformanceIssues } from "../src/agent/workspace/publishingTail.js";
+import { recipeAuthorityConformanceIssues } from "../src/agent/workspace/publishableTypeCharter.js";
 import { seededSkillDefinitions } from "../src/agent/skills/seededSkills.js";
 import type { SkillDefinition } from "../src/agent/skills/skillTypes.js";
 import type { WorkspaceNode } from "../src/agent/workspace/nodeTypes.js";
@@ -286,6 +287,13 @@ const refuseUnsafe = (incoming: WorkspaceNode[], allowShrink = false): void => {
   // future gate/fix would then have to land N times — so it refuses here. A deliberate tail change is
   // still possible: update publishingTail.ts in the same change, then re-seed.
   problems.push(...publishingTailConformanceIssues(incoming).map((issue) => `tail: ${issue} — the tail is declared in src/agent/workspace/publishingTail.ts; a deliberate tail change must update that declaration in the same change.`));
+
+  // T15.29 (#205; ADR-2026-08-25-structure-studio §2.2) — enforcement point 1's reseed-time twin,
+  // the same reasoning as the tail check just above: this script seeds publishing_conductor's OWN
+  // canonical node array into nodes.ts, so a re-seed that would grant it a recipe-authoring verb
+  // (object_create/object_patch/site_apply_theme against theme/site/section_template/template) is
+  // caught here, before it ever reaches the store — not just in the CI conformance test.
+  problems.push(...recipeAuthorityConformanceIssues(incoming, "publishing_conductor").map((issue) => `structure authority: ${issue} — ADR-2026-08-25-structure-studio §2.2: only the studio (clone_conductor) authors structure.`));
 
   if (problems.length) die(`Refusing to re-seed ${problems.length} problem(s):`, problems);
 };

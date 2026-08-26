@@ -41,7 +41,7 @@ The runtime must support:
 - Keep transport-neutral runtime behavior outside hosting adapters.
 - Do not hardcode secrets.
 - Read secrets from `process.env`.
-- Default all publishing actions to dry-run unless explicitly told otherwise.
+- Publishing is policy-driven by `publishingPolicy.autonomyMode` (see ADR-2026-08-25-publish-autonomy). `dryRun` is a separate parameter: `dryRun: true` disables side effects (API calls, releases, etc.); policy controls whether publication proceeds.
 - Add Zod validation for request bodies and tool parameters.
 - Return structured JSON from API endpoints.
 - Keep publishing adapters replaceable.
@@ -57,6 +57,7 @@ The runtime must support:
 
 ## Safety rules
 
-- Never publish content unless `dryRun` is false.
+- Publishing is controlled by `publishingPolicy.autonomyMode` and operator decisions, never by `dryRun` alone. `dryRun: false` is required to actually publish, but policy is the authority (ADR-2026-08-25-publish-autonomy §2.4).
 - Never expose raw API keys or authorization headers in logs.
 - Tool calls that mutate external systems must be explicit and auditable.
+- Every explicit operator `withheld` decision halts publication in every mode (ADR-2026-08-25-publish-autonomy §2.4, rule 1).

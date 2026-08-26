@@ -4,6 +4,7 @@ import { z } from "zod";
 import { listWorkspaceNodes, sortWorkspaceNodes } from "../../workspace/nodes.js";
 import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceEvent, type WorkspaceNode, type WorkspaceVersionSnapshot } from "../../workspace/nodeTypes.js";
 import { validateWorkspaceGraph } from "../../workspace/nodes.js";
+import { workspaceStoreCanonicalIds, workspaceStoreSeedNodes } from "../../workspace/workspaceStoreNodes.js";
 import { relationshipDirections, relationshipKinds, type WorkspaceRelationship, type WorkspaceRelationshipsUpdate } from "../../workspace/relationshipTypes.js";
 import { WorkspaceVersionConflictError } from "../../workspace/workspaceErrors.js";
 import { type WorkspaceActor, type WorkspaceChangeCorrelation, type WorkspaceChangeOperation, type WorkspaceChangeSink, type WorkspaceChangeSource, type WorkspaceChangeTarget, type WorkspaceRevision } from "../../workspace/changeTypes.js";
@@ -66,6 +67,14 @@ export interface WorkspaceStore {
   updateRelationships(update: WorkspaceRelationshipsUpdate, meta: WorkspaceMutationMeta): Promise<{ relationships: WorkspaceRelationship[]; workspaceVersion: number; revisionId?: string }>;
   getNodes(): Promise<WorkspaceNode[]>;
   getNode(id: string): Promise<WorkspaceNode | undefined>;
+  // T15.16 (#195) — additive top-up for a workspace document that existed before
+  // captureConductorNodes/cloneConductorNodes joined the governance-visible seed set (see
+  // workspaceStoreNodes.ts). Mirrors ensureConversationalAgentSeeds exactly: any canonical id
+  // missing from document.nodes is appended verbatim from the canonical definition; an id already
+  // present — including an operator-promoted prompt/schema/tools edit — is never touched. A no-op
+  // (no mutate() call) when nothing is missing, so calling this on every read is cheap once a
+  // workspace is caught up.
+  ensureWorkspaceNodeSeeds(meta?: WorkspaceMutationMeta): Promise<WorkspaceNode[]>;
   ensureConversationalAgentSeeds(meta?: WorkspaceMutationMeta): Promise<ConversationalAgentDefinition[]>;
   listConversationalAgents(): Promise<ConversationalAgentDefinition[]>;
   getConversationalAgent(id: string): Promise<ConversationalAgentDefinition | undefined>;
@@ -117,7 +126,13 @@ const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toSt
 // {schema_version, nodes} monolith (both its Zod and JSON Schema forms) from this module entirely, along
 // with the article_body.* wire tools that served it; the article_body node's own outputSchema — and,
 // beyond it, the client's fetched contract — is the only remaining definition of "what a body is".
-const defaultWorkspaceNodes = (): WorkspaceNode[] => listWorkspaceNodes();
+// T15.16 (#195) — a fresh workspace document is seeded with EVERY governance-visible node: the
+// publishing conductor's own canonical set PLUS capture_conductor's and clone_conductor's own
+// upstream nodes (workspaceStoreNodes.ts's union — never their tail-composed copies; see that
+// module's header for why). This is what makes workspace.get_node("block_classifier") resolve on a
+// brand-new workspace without any separate seed step: exactly "the same way publishing nodes are
+// seeded", because it now IS the same seed.
+const defaultWorkspaceNodes = (): WorkspaceNode[] => workspaceStoreSeedNodes();
 export const createDefaultWorkspaceDocument = (): WorkspaceDocument => {
   const createdAt = now();
   return { schemaVersion: 1, workspaceVersion: 0, updatedAt: createdAt, nodes: defaultWorkspaceNodes(), conversationalAgents: seededConversationalAgents(createdAt), stageOutputs: [], learningObservations: [], versions: [], events: [], relationships: [], reducedContractCache: [] };
@@ -184,7 +199,10 @@ export const workspaceDocumentSchema = z.object({ schemaVersion: z.literal(1), w
 
 
 export const hashValue = (value: unknown) => JSON.stringify(value).split("").reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0).toString(16);
-const canonicalIds = () => new Set(listWorkspaceNodes().map((node) => node.id));
+// T15.16 (#195) — the "no node may be deleted without admin approval" floor (assertGraphValid, below)
+// now covers capture_conductor's and clone_conductor's own nodes too, not only publishing's: once a
+// node is governance-visible it gets the same deletion protection every canonical node already has.
+const canonicalIds = () => workspaceStoreCanonicalIds();
 export const validateJsonSchema = (schema: unknown): string[] => {
   if (typeof schema === "boolean") return [];
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return ["JSON Schema must be an object or boolean."];
@@ -441,6 +459,18 @@ export class WorkspaceStateStore implements WorkspaceStore {
   async getCurrentRevisionId() { return (await this.load()).currentRevisionId; }
   async getNodes() { return sortWorkspaceNodes([...(await this.load()).nodes]); }
   async getNode(id: string) { return (await this.load()).nodes.find((node) => node.id === id); }
+  // T15.16 (#195) — see the interface doc comment. `missing` is computed against the CURRENT
+  // document, so this stays correct however many times it is called; the append preserves every
+  // other node byte-for-byte (mutate()'s own assertGraphValid re-validates the result regardless).
+  async ensureWorkspaceNodeSeeds(meta: WorkspaceMutationMeta = { actor: { kind: "system" }, source: "system", reason: "Seed capture/clone governance-visible nodes (#195)" }) {
+    const current = await this.load();
+    const missing = workspaceStoreSeedNodes().filter((seed) => !current.nodes.some((node) => node.id === seed.id));
+    if (missing.length === 0) return [...current.nodes];
+    await this.mutate((document) => {
+      document.nodes = [...document.nodes, ...workspaceStoreSeedNodes().filter((seed) => !document.nodes.some((node) => node.id === seed.id))];
+    }, meta, "node.seeded", undefined, undefined);
+    return [...(await this.load()).nodes];
+  }
   async ensureConversationalAgentSeeds(meta: WorkspaceMutationMeta = { actor: { kind: "system" }, source: "system", reason: "Seed canonical conversational agents" }) {
     const current = await this.load();
     const missing = seededConversationalAgents(current.updatedAt).filter((seed) => !current.conversationalAgents.some((agent) => agent.id === seed.id));

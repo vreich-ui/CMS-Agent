@@ -56,18 +56,30 @@ export function bindMappingAssets(
 
 export type CaptureMapGap = {
   gapId: string;
+  // T15.21: an embed gap whose containing block did not survive reconciliation (or whose embed sat
+  // outside every block to begin with) has no real block to name and reports blockRef as "" — kept
+  // as `string`, not widened to `string | null`, so every existing blockRef-keyed lookup elsewhere
+  // (Set<string>, Map<string, ...>) keeps typechecking unchanged; "" can never collide with a real
+  // block id (pdf-tool mints those as non-empty `<pageId>_block_NNN`).
   blockRef: string;
   screenshotRef: string | null;
   why: string;
   nearestType: string;
   missingCapability: string;
+  // T15.21 embed-gap enrichment (embeds.ts, not the vendored mapper) — present only on a gap that
+  // came from an embed, so its src/provider/reason reach the report per ADR T15.4 without forcing
+  // every non-embed gap to carry null placeholders for fields that never apply to it.
+  embedRef?: string;
+  embedProvider?: string;
+  embedSrc?: string | null;
+  notCapturableReason?: string | null;
 };
 
 export type CaptureMapPage = {
   pageRef: string;
   sourceUrl: string;
   pageBody: { route: string; pageType: string; title: string; seo: Record<string, unknown>; sections: Array<{ id: string; type: string; data: Record<string, unknown> }> };
-  candidates: Array<{ candidateId: string; sectionType: string; data: Record<string, unknown>; section: { id: string; type: string; data: Record<string, unknown> }; confidence: number; mappingReason: string; sourceBlockIds: string[]; screenshotRefs: string[]; assetBindings: Array<Record<string, unknown>>; assetPlan?: CaptureAssetPlan; assetBindingStatus?: "pending" | "bound" | "quarantined"; provenance: { textFields: Array<{ path: string; source: string; sourceBlockRefs: string[] }>; assetFields?: Array<{ path: string; source: string; sourceBlockRefs: string[]; manifestRef: string }> } }>;
+  candidates: Array<{ candidateId: string; sectionType: string; data: Record<string, unknown>; section: { id: string; type: string; data: Record<string, unknown> }; confidence: number; mappingReason: string; sourceBlockIds: string[]; screenshotRefs: string[]; assetBindings: Array<Record<string, unknown>>; assetPlan?: CaptureAssetPlan; assetBindingStatus?: "pending" | "bound" | "quarantined"; provenance: { textFields: Array<{ path: string; source: string; sourceBlockRefs: string[] }>; assetFields?: Array<{ path: string; source: string; sourceBlockRefs: string[]; manifestRef: string }>; embedRef?: string } }>;
   gaps: CaptureMapGap[];
   blockAccounting: Array<{ blockRef: string; status: string; gapId?: string; candidateId?: string; reason?: string; resolvedInto?: string }>;
 };
@@ -80,7 +92,9 @@ export type CaptureMapping = {
   policy: Record<string, unknown>;
   pages: CaptureMapPage[];
   navigationCandidates: Array<{ candidateId: string; role: string; body: Record<string, unknown>; confidence: number; sourcePageRefs: string[]; provenance: unknown }>;
-  summary: { pages: number; sectionCandidates: number; navigationCandidates: number; pendingAssetSections: number; gaps: number; sourceBlocks: number; accountedBlocks: number };
+  // embedSections is optional here because the vendored mapSnapshot itself never sets it — only
+  // embeds.ts's augmentMappingWithEmbeds (T15.21, deliberately NOT part of the vendored engine) does.
+  summary: { pages: number; sectionCandidates: number; navigationCandidates: number; pendingAssetSections: number; gaps: number; sourceBlocks: number; accountedBlocks: number; embedSections?: number };
 };
 
 export type CaptureMapAssistanceSuggestion = { blockRef: string; sectionType: string; [key: string]: unknown };

@@ -6,13 +6,12 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 // different upstream composed with the SAME publishing tail via composeWorkflowNodes in
 // publishingTail.ts) plugs in by registering here, without touching the executor.
 //
-// Today publishing_conductor is the only entry, and an unknown workflowId falls back to the
-// publishing_conductor canonical set — exactly what every caller got before this registry existed, so
-// existing runs (whatever workflowId a caller stamped on them) behave byte-identically. Activating a
-// second workflow means: register it here with its composed node array, and have its callers pass its
-// workflowId to workflow.start_dry_run. The store overlay in resolveConductorNodes keys by NODE id,
-// so an authoring edit to a tail node (prompt, schema, tools, model config) reaches every registered
-// workflow at once — the point of sharing the tail.
+// Three workflows are registered: publishing_conductor (DTC articles), capture_conductor (site
+// crawl → emission), and clone_conductor (structure + theme authoring). An unknown workflowId falls
+// back to publishing_conductor for backward compatibility with existing runs. The registry seam
+// lets each workflow reach the shared publishing tail without refactoring every tail node. The store
+// overlay in resolveConductorNodes keys by NODE id, so an authoring edit to a tail node (prompt,
+// schema, tools, model config) reaches every registered workflow at once — the point of sharing the tail.
 export type WorkflowDefinition = {
   workflowId: string;
   // The canonical (code-defined) node array for the workflow. For publishing_conductor this is
@@ -33,6 +32,8 @@ export const getWorkflowDefinition = (workflowId: string): WorkflowDefinition | 
 
 export const listRegisteredWorkflowIds = (): string[] => [...registry.keys()];
 
-// The only workflow that exists today. Its node array is the canonical literal in nodes.ts, whose
-// tail slice is drift-guarded against publishingTail.ts by test and by the re-seed script.
+// publishing_conductor: the original DTC article workflow. Its node array is the canonical
+// literal in nodes.ts, whose tail slice is drift-guarded against publishingTail.ts by test and by
+// the re-seed script. (capture_conductor and clone_conductor are registered separately in their
+// own files; all three converge on the shared publishing tail.)
 registerWorkflow({ workflowId: "publishing_conductor", canonicalNodes: listWorkspaceNodes });

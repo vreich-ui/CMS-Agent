@@ -5,7 +5,7 @@ import { drLurieProjectConfig } from "../../../src/agent/projects/drLurie/defini
 import type { CallToolResult } from "../../../src/agent/projects/projectMcpAdapter.js";
 import { ensureContentItemShell, readContentItemShell } from "../../../src/agent/workspace/contentItemShell.js";
 import { publishEnabledEnvVar, publishRun } from "../../../src/agent/workspace/publisher.js";
-import { getRun, startDryRun } from "../../../src/agent/workspace/executor.js";
+import { getRun, setOperatorPublishDecision, startDryRun } from "../../../src/agent/workspace/executor.js";
 
 // S3 item 8 — the content-item shell: created once, idempotently, under the run's request id before
 // artifact_plan runs on an object-substrate client; the publisher then patches it instead of creating.
@@ -85,6 +85,11 @@ describe("the publisher patches the shell instead of creating a second object", 
     artifactPlan.input = { ...(artifactPlan.input as Record<string, unknown> ?? {}), contentItemShell: { objectId: REQUEST_ID, created: true, objectType: "content_item", requestId: REQUEST_ID } };
     await executionRepository.saveRun(record);
     expect(readContentItemShell(record)?.objectId).toBe(REQUEST_ID);
+    // T15.5 (ADR-2026-08-25-publish-autonomy §2.4) — publishRun's gate now requires a resolved
+    // publish authority (operator explicit approval, or an autonomous project policy); this project
+    // is operator-gated by default, so an explicit approval stands in for what the removed caller
+    // `approved:true` flag used to buy on its own.
+    await setOperatorPublishDecision(started.runId, "approved", executionRepository);
 
     const adapter = publishFake();
     const result = await publishRun({ runId: started.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository: manager.getProjectRepository(), learningRepository: manager.getLearningRepository(), env: ENABLED_ENV, callTool: adapter.fn });

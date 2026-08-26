@@ -3291,6 +3291,7 @@ export const publishingConductorNodes = [
           "enum": [
             "blocked",
             "skipped",
+            "published_pending_release",
             "executed"
           ]
         },
@@ -3471,6 +3472,7 @@ export const publishingConductorNodes = [
           "enum": [
             "blocked",
             "skipped",
+            "published_pending_release",
             "executed"
           ]
         },
@@ -3622,11 +3624,291 @@ export const publishingConductorNodes = [
     }
   },
   {
+    "id": "release_executor",
+    "name": "Release Executor",
+    "kind": "releaser",
+    "description": "Deterministic, idempotent release of what publish_executor committed: calls release_to_production at most once for this run, then confirms production is serving the deployed commit before this node ever claims \"executed\".",
+    "prompt": "Objective: Release what publish_executor committed and confirm production is actually serving it. This node is a governed release step, not a publish step — it never creates, patches or publishes a client object.\nSource of truth: publish_executor's own publish_execution.v1 record on this run says what was committed (publishCommitted) and under what authority (publishAuthority). Read the release/build behaviour and any deploy-status contract from the target client's fetched contract; never guess a dialect.\nInputs expected: publish_executor.\nOutput required: produce release_execution.v1 with status skipped (nothing was published this run), executed (release_to_production succeeded AND deploy_status confirms deployStatus \"ready\" and productionConfirmed true), or blocked (a release call failed, was declined, or verification did not confirm within the allowed attempts).\nIdempotency policy: release_to_production is called AT MOST ONCE for this run's publish request id. If a prior attempt on this run already released, do not call it again under any circumstance — only re-poll deploy_status for an updated verification result.\nSkip policy: when publish_executor did not commit a publish, do nothing — call no client tool at all, and record status skipped with the reason. Asking production to rebuild for zero commits is not a safe default.\nVerification policy: an \"executed\" claim requires BOTH deployStatus \"ready\" and productionConfirmed true from the client's own deploy-status tool. A queued or ready-but-undeployed build is not live and must not be reported as executed.\nCompletion criteria: the release outcome is recorded exactly once per run; verification evidence (or its explicit absence) is recorded; nothing here silently retries a release that already happened.\nBlocker criteria: release_to_production call failure or explicit decline; deploy_status verification not confirmed within the allowed attempts; missing contract provenance for a client whose release behaviour is not the shared default.\nTool policy: reach the client only through the explicitly allowed release and deploy-status tools; never call object_create, object_patch, object_publish, trigger_netlify_build or deploy directly — a build is release_to_production's own decision, never something requested directly.\nMemory policy: never expose or persist secrets, raw authorization headers, storage grants, scoped upload tokens, or blob credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "status",
+        "blockers"
+      ],
+      "if": {
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "executed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "result",
+          "verification"
+        ],
+        "properties": {
+          "verification": {
+            "type": "object",
+            "required": [
+              "deployStatus",
+              "productionConfirmed"
+            ],
+            "properties": {
+              "deployStatus": {
+                "const": "ready"
+              },
+              "productionConfirmed": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "properties": {
+        "artifact": {
+          "const": "release_execution.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "skipped",
+            "executed",
+            "blocked"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "releaseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deployedSha": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approvalMatched": {
+          "type": "boolean"
+        },
+        "publishAuthority": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "deployStatus": {
+              "type": "string",
+              "description": "Client deploy status for the released commit; \"ready\" is the only value that counts toward go-live evidence."
+            },
+            "productionConfirmed": {
+              "type": "boolean",
+              "description": "True only when the production site was confirmed to serve the released commit. Required (with deployStatus \"ready\") for status \"executed\"."
+            }
+          }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "stageOutputs": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "status",
+        "blockers"
+      ],
+      "if": {
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "executed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "result",
+          "verification"
+        ],
+        "properties": {
+          "verification": {
+            "type": "object",
+            "required": [
+              "deployStatus",
+              "productionConfirmed"
+            ],
+            "properties": {
+              "deployStatus": {
+                "const": "ready"
+              },
+              "productionConfirmed": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "properties": {
+        "artifact": {
+          "const": "release_execution.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "skipped",
+            "executed",
+            "blocked"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "releaseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deployedSha": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approvalMatched": {
+          "type": "boolean"
+        },
+        "publishAuthority": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "deployStatus": {
+              "type": "string",
+              "description": "Client deploy status for the released commit; \"ready\" is the only value that counts toward go-live evidence."
+            },
+            "productionConfirmed": {
+              "type": "boolean",
+              "description": "True only when the production site was confirmed to serve the released commit. Required (with deployStatus \"ready\") for status \"executed\"."
+            }
+          }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [
+      "workspace.get_node",
+      "stage.get_output",
+      "stage.save_output",
+      "stage.list_outputs",
+      "project.call_tool"
+    ],
+    "assignedSkills": [],
+    "requiredInputs": [
+      "publish_executor"
+    ],
+    "produces": [
+      "release_execution.v1"
+    ],
+    "riskLevel": "publish",
+    "dependsOn": [
+      "publish_executor"
+    ],
+    "status": "active",
+    "position": {
+      "x": 560,
+      "y": 1060
+    },
+    "updatedAt": "2026-08-25T00:00:00.000Z",
+    "metadata": {
+      "activationRequired": false,
+      "approvalRequired": false,
+      "releaseExecutorDeterministic": true,
+      "canonicalRules": [
+        "release_to_production is reachable from exactly this node (Board decision B2, amended by ADR-2026-08-25-publish-autonomy §4)",
+        "trigger_netlify_build and deploy are never reachable from any node, including this one",
+        "release_to_production is called at most once per (runId, requestId)",
+        "Nothing is released when publish_executor did not commit a publish"
+      ]
+    },
+    "modelConfig": {
+      "maxTurns": 3,
+      "toolCallLimit": 2,
+      "timeout": 120000,
+      "budgetUsd": 0.25,
+      "maxOutputTokens": 2000
+    }
+  },
+  {
     "id": "learning_recorder",
     "name": "Learning Recorder",
     "kind": "learning",
     "description": "Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.",
-    "prompt": "Objective: Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller and publish_executor when the run reached them — publish_execution.v1 carries the executor/publish outcome (blocks, lock conflicts, failed releases, unconfirmed go-lives) this node exists to observe, and a publish_executor refused at its own gate still leaves an observable blocked decision record. When publish_executor never executed (refused upstream, or publishing happened outside node execution via workflow.publish_run), its input slot is simply absent — record what the run's terminal state shows instead of treating the absence as a blocker. On early termination (blocked or failed) this node fires directly with the run's terminal state.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; stage.list_outputs returns bounded summaries (id, stage, size, preview) — record observations from those summaries and the run's terminal state, and do not try to read every stage in full. Do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+    "prompt": "Objective: Record structured workflow observations, including project artifact/rendering failures, and improvement candidates without mutating prompts or schemas automatically.\nInputs expected: publication_controller, publish_executor and release_executor when the run reached them — publish_execution.v1 carries the executor/publish outcome (blocks, lock conflicts, a published-pending-release commit) and release_execution.v1 carries the release/go-live outcome (skipped, executed, or blocked verification) this node exists to observe, and a node refused at its own gate still leaves an observable blocked decision record. When publish_executor or release_executor never executed (refused upstream, or publishing happened outside node execution via workflow.publish_run), the missing input slot is simply absent — record what the run's terminal state shows instead of treating the absence as a blocker. On early termination (blocked or failed) this node fires directly with the run's terminal state.\nOutput required: produce learning_observations.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; stage.list_outputs returns bounded summaries (id, stage, size, preview) — record observations from those summaries and the run's terminal state, and do not try to read every stage in full. Do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input — work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
     "schema": {
       "type": "object",
       "required": [
@@ -3695,7 +3977,8 @@ export const publishingConductorNodes = [
     "assignedSkills": [],
     "requiredInputs": [
       "publication_controller",
-      "publish_executor"
+      "publish_executor",
+      "release_executor"
     ],
     "produces": [
       "learning_observations.v1"
@@ -3703,7 +3986,8 @@ export const publishingConductorNodes = [
     "riskLevel": "write",
     "dependsOn": [
       "publication_controller",
-      "publish_executor"
+      "publish_executor",
+      "release_executor"
     ],
     "status": "active",
     "position": {
@@ -3839,11 +4123,17 @@ export function validateWorkspaceGraph(nodes: WorkspaceNode[] = publishingConduc
       if (!sequenceIds.has(requiredInput) && !sequenceProduces.has(requiredInput)) issues.push(`Required input not satisfiable by the conductor sequence for ${node.id}: ${requiredInput} — no sequence node has this id or produces this artifact`);
     }
   }
+  // T15.6 (ADR-2026-08-25-publish-autonomy §6.1) — article_body is mandatory for the canonical
+  // Publishing Conductor sequence (the default `nodes` above), but NOT for every graph this function
+  // validates: composeWorkflowNodes can compose the publish segment alone (capture/clone style, no
+  // copy-authoring nodes at all), and validating THAT graph must not fail for lacking a node the
+  // segment selector deliberately left out. So these two checks are conditional on article_body's
+  // actual PRESENCE in the graph being validated, rather than unconditionally required — a graph that
+  // composed the authoring segment still gets both checks; one that did not simply has nothing to check.
   const articleBody = nodes.find((node) => node.id === "article_body");
-  if (!articleBody) issues.push("Missing article_body node");
   if (articleBody && !articleBody.produces.includes("client_object.v1")) issues.push("article_body must produce client_object.v1");
   const publishPayload = nodes.find((node) => node.id === "publish_payload");
-  if (publishPayload && !publishPayload.dependsOn.includes("article_body")) issues.push("publish_payload must depend on article_body");
+  if (publishPayload && articleBody && !publishPayload.dependsOn.includes("article_body")) issues.push("publish_payload must depend on article_body");
   const publicationController = nodes.find((node) => node.id === "publication_controller");
   if (publicationController && !publicationController.dependsOn.includes("publish_payload")) issues.push("publication_controller must depend on publish_payload");
   return issues.length ? { valid: false, issues } : { valid: true, issues: [] };

@@ -58,15 +58,48 @@ export type CloneRecipeIndexEntry = {
  *  `registry.pageTypes` never appear here: they are never dropped, at any size. */
 export type CloneIntakeTruncation = { field: string; kept: number; total: number; reason: string };
 
+// T15.30 (#206; ADR-2026-08-25-structure-studio §3) — the demand-driven entry's own brief shape. One
+// of `captureRunId` (clone-driven) or `structureBrief` (demand-driven) is supplied to
+// buildCloneIntake; never both, never neither.
+export type CloneStructureBriefNeed = {
+  pageRef: string;
+  kind: "section_template" | "template";
+  sourceShape?: string[];
+  emittedShape?: string[];
+  rationale?: string;
+};
+export type CloneStructureBrief = {
+  sourceUrl?: string;
+  needs: CloneStructureBriefNeed[];
+  /** OPTIONAL passthrough: existing pages (by objectId) this brief also wants restamped once a
+   *  recipe mints, in the same shape a clone-driven run derives from its own mapping. Absent = no
+   *  restamp target, the normal demand-driven case ("layout_restamp participates only when the brief
+   *  asks"). */
+  pages?: Array<{ objectId: string; pageRef?: string; route?: string; sourceShape?: string[]; emittedShape?: string[] }>;
+};
+
 export type CloneIntake = {
   artifact: "clone_intake.v1";
   summary: string;
-  captureRunId: string;
+  /** "clone" (captureRunId-driven) or "demand" (structureBrief-driven, T15.30/#206) — the ONE
+   *  structural fact every downstream skip predicate and the template-library provenance writer key
+   *  off of. */
+  entryMode: "clone" | "demand";
+  captureRunId: string | null;
+  /** Present only on a demand-driven envelope whose brief stated one (`structureBrief.sourceUrl`);
+   *  `null` otherwise. Never fabricated — see templateProvenance.ts for what happens when a template
+   *  minted from a `sourceUrl: null` demand-driven run is later deposited into the library. */
+  sourceUrl: string | null;
   target: string;
   site: { objectId: string | null; palette: ClonePalette };
   theme: { objectId: string | null; name: string | null; palette: Record<string, unknown> };
   registry: CloneRegistry;
   pages: CloneBriefingPage[];
+  /** Present ONLY on a demand-driven envelope — the same shape layout_analyst's own
+   *  `clone_layout_analysis.v1.mismatches` carries, stated directly from `structureBrief.needs`
+   *  rather than derived by comparing a source shape to an emitted one (there is no snapshot to
+   *  compare on this entry). recipe_designer reads whichever of the two exists. */
+  mismatches?: Array<{ pageRef: string; sourceShape: string[]; emittedShape: string[]; missingRecipeKind: "section_template" | "template"; rationale: string }>;
   recipes: { section_template: CloneRecipeIndexEntry[]; template: CloneRecipeIndexEntry[] };
   budget: { chars: number; cap: number; truncated: CloneIntakeTruncation[] };
 };
@@ -79,14 +112,19 @@ export type CloneIntake = {
  *  carries no brandTokens, and a body without one is refused HERE rather than three stages later.
  *  `theme` is the object_get record (or bare body) of the captured theme.
  *
- *  Throws CloneError when mapping is not a capture-map.v1 mapping, when componentRegistry reduces to
- *  zero section types, when inventory does not carry exactly one active site row, when siteBody
- *  carries no brandTokens, or when the briefing is still over cap after every documented drop
- *  (`intake_cannot_be_bounded`). */
+ *  ENTRY MODE (T15.30/#206): supply exactly one of `captureRunId` (truthy selects clone mode; `mapping`
+ *  is then required and read) or `structureBrief` (selects demand mode; validated total and
+ *  deterministic, no capture involved).
+ *
+ *  Throws CloneError when mapping is not a capture-map.v1 mapping (clone mode), when structureBrief is
+ *  missing/malformed (demand mode), when componentRegistry reduces to zero section types, when
+ *  inventory does not carry exactly one active site row, when siteBody carries no brandTokens, or when
+ *  the briefing is still over cap after every documented drop (`intake_cannot_be_bounded`). */
 export function buildCloneIntake(input: {
-  captureRunId: string;
+  captureRunId?: string;
+  structureBrief?: CloneStructureBrief;
   target: string;
-  mapping: unknown;
+  mapping?: unknown;
   siteBody: unknown;
   theme?: unknown;
   emissionReport?: unknown;

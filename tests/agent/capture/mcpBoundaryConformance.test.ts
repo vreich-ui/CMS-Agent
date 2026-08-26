@@ -172,6 +172,40 @@ describe("mcpBoundary conformance — toWireArguments output validates against t
   });
 });
 
+// T15.34 (#210; ADR-2026-08-25-structure-studio §7) — the pdf-tool bridge's four verbs,
+// pdfTemplateEngine.ts's own call site. Same conformance discipline as every CMS object verb above,
+// against the SAME kind of real, verbatim-captured schema (platformToolSchemas.ts's own T15.34 note
+// records this batch's distinct provenance/date).
+describe("mcpBoundary conformance — pdf-tool bridge verbs (T15.34)", () => {
+  it("create_pdf_template", () =>
+    assertConforms(
+      "create_pdf_template",
+      toWireArguments("create_pdf_template", { siteId: "site_x", templateJson: { html: "<div/>", css: "" }, renderer: "chromium", idempotencyKey: "abc123" })
+    ));
+
+  it("validate_pdf_template", () =>
+    assertConforms("validate_pdf_template", toWireArguments("validate_pdf_template", { siteId: "site_x", templateId: "tpl_1", data: { title: "x" } })));
+
+  it("get_pdf_template_validation", () =>
+    assertConforms("get_pdf_template_validation", toWireArguments("get_pdf_template_validation", { siteId: "site_x", templateId: "tpl_1" })));
+
+  it("publish_pdf_template", () =>
+    assertConforms("publish_pdf_template", toWireArguments("publish_pdf_template", { siteId: "site_x", templateId: "tpl_1", version: 1 })));
+
+  it("every pdf-tool verb's `required` in the real schema is honored: dropping any one required field throws", () => {
+    const cases: Array<{ tool: string; args: Record<string, unknown> }> = [
+      { tool: "create_pdf_template", args: { templateJson: { html: "<div/>" } } }, // missing siteId
+      { tool: "create_pdf_template", args: { siteId: "site_x" } }, // missing templateJson
+      { tool: "validate_pdf_template", args: { siteId: "site_x", templateId: "tpl_1" } }, // missing data
+      { tool: "get_pdf_template_validation", args: { siteId: "site_x" } }, // missing templateId
+      { tool: "publish_pdf_template", args: { templateId: "tpl_1" } } // missing siteId
+    ];
+    for (const { tool, args } of cases) {
+      expect(() => toWireArguments(tool, args), `${tool} with ${JSON.stringify(args)} should have thrown`).toThrow(McpBoundaryError);
+    }
+  });
+});
+
 // THE ENVELOPE / BODY BOUNDARY — the subtle part, and the place a fix here can do real damage.
 // MCP envelope keys are snake_case; a `body` (or `ops`) payload is per-type PLATFORM CONTENT whose
 // real field names are the platform's own — often camelCase (`whenToUse`, `appliesTo`,

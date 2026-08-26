@@ -39,7 +39,7 @@ export const summarizeTick = (result: ContinuationTickResult): string => JSON.st
   event: "workflow.continuation_tick",
   enabled: result.enabled,
   scanned: result.scanned,
-  driven: result.driven.map((report) => ({ runId: report.runId, code: report.code, statusBefore: report.statusBefore, statusAfter: report.statusAfter, steps: report.steps })),
+  driven: result.driven.map((report) => ({ runId: report.runId, code: report.code, statusBefore: report.statusBefore, statusAfter: report.statusAfter, steps: report.steps, ...(report.chain ? { chain: report.chain } : {}) })),
   timedOut: result.timedOut,
   refusals: result.verdicts.filter((verdict) => !verdict.reenter).map((verdict) => ({ runId: verdict.runId, code: verdict.code }))
 });

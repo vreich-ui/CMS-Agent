@@ -5,8 +5,12 @@
 //   1. the run's publication_controller record is an EXPLICIT decision:"go" — readPublicationDecision,
 //      refuse-by-default: silence, prose approval, hedging, a wrong artifact label, a dry-run
 //      placeholder, or a "go" carrying open blockers all refuse;
-//   2. the operator's durable publish decision is EXACTLY "approved" — isOperatorPublishApproved over
-//      run.operatorPublishDecision, the one named field with one setter and one reader.
+//   2. the run's publish authority is AUTHORIZED — resolvePublishAuthority over run.
+//      operatorPublishDecision and run.publishingPolicySnapshot, the one authority reader (T15.5,
+//      ADR-2026-08-25-publish-autonomy §2.4): an operator's own explicit "approved" is always
+//      sufficient, and — new in T15.5 — an absent decision is ALSO sufficient when the project's
+//      autonomyMode policy (snapshotted onto the run at creation) is "autonomous". An explicit
+//      "withheld" still always refuses, in every mode.
 // Neither is a judgment call, and neither has ever needed prose reasoning to evaluate. This node is
 // the ONE node that can mutate a live site, so its refusal path is the last place a model turn
 // belongs: on run_1786468126136_ev9goe the model spent a turn re-reading the two facts through stage
@@ -48,7 +52,7 @@
 // executor's publish-refusal block, never before — a deterministic path must never be the thing that
 // skips a gate.
 
-import { describeOperatorDecisionSource, findPublicationDecision, isOperatorPublishApproved, readPublicationDecision, OPERATOR_PUBLISH_DECISION_FIELD } from "./publishDecision.js";
+import { describeOperatorDecisionSource, findPublicationDecision, readPublicationDecision, resolvePublishAuthority, type PublishAuthority } from "./publishDecision.js";
 import { publishRun, type PublisherDeps, type PublishResult, type PublishStep } from "./publisher.js";
 import { findDeep } from "../projects/toolResultSearch.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
@@ -58,14 +62,21 @@ export const PUBLISH_EXECUTION_ARTIFACT = "publish_execution.v1";
 export type PublishExecutionGate = {
   passed: boolean;
   controllerGo: boolean;
+  // Kept as the two-exact-comparisons gate shape's second half: true iff resolvePublishAuthority
+  // authorized this run (operator explicit approval, OR — T15.5 — the project's autonomyMode policy).
+  // The name predates autonomy; the value is now "authorized", not literally "an operator approved".
   operatorApproved: boolean;
   // One reason per closed gate, in gate order. Empty when the gate passed.
   reasons: string[];
   // T2 (run_1786557897658_elj34j) — WHICH source produced operatorApproved's underlying decision
-  // ("explicit" | "project_policy_default"), so a receipt reader can never mistake a project default
-  // for an operator's own act. Undefined when no decision is recorded at all. Purely descriptive:
-  // never read by gate PASS/FAIL logic above.
+  // ("explicit" | "project_policy_default" | "policy_autonomous"), so a receipt reader can never
+  // mistake a policy default for an operator's own act. Undefined when no decision is recorded at
+  // all. Purely descriptive: never read by gate PASS/FAIL logic above.
   operatorDecisionSource?: string;
+  // T15.5 (ADR §2.3) — the resolved PublishAuthority's own `source`, present only when authorized:
+  // "operator_explicit" (an operator's own decision) or "policy_autonomous" (autonomyMode policy,
+  // no operator spoke). This is the field the publishAuthority receipt (below) is built from.
+  authoritySource?: "operator_explicit" | "policy_autonomous";
 };
 
 export type BlockedPublishExecution = {
@@ -77,6 +88,9 @@ export type BlockedPublishExecution = {
   contractSource: Record<string, unknown>;
   approvalMatched: false;
   publishPolicyChecked: true;
+  // T15.5 (ADR §8) — structural statement of which authority this run holds (never which authority
+  // let a BLOCKED record through, since none did); see publishAuthorityReceipt.
+  publishAuthority: PublishAuthorityReceipt;
   blockers: string[];
   notes: string[];
 };
@@ -90,16 +104,46 @@ const nonEmptyString = (value: unknown): value is string => typeof value === "st
 
 // THE gate. Both comparisons are exact-match reads of existing engine facts — no parsing of prose, no
 // inference, no defaulting. Fail-closed: anything that is not an explicit affirmative is a refusal
-// with the reason recorded.
-export function evaluatePublishExecutionGate(run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource">): PublishExecutionGate {
+// with the reason recorded. T15.5 (ADR §3): this stays the two-exact-comparisons shape it always was —
+// an explicit controller "go" AND an authorized publish decision — autonomy changes only HOW the
+// second comparison resolves (resolvePublishAuthority, publishDecision.ts), never that it exists.
+export function evaluatePublishExecutionGate(run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource" | "publishingPolicySnapshot">): PublishExecutionGate {
   const decision = readPublicationDecision(findPublicationDecision(run));
-  const operatorApproved = isOperatorPublishApproved(run);
+  const authority: PublishAuthority = resolvePublishAuthority(run);
   const reasons: string[] = [
     ...(decision.authorized ? [] : [`publication_decision_not_affirmative (${decision.code}): ${decision.reason}`]),
-    ...(operatorApproved ? [] : [`operator_approval_absent: the operator's durable publish decision for this run (run.${OPERATOR_PUBLISH_DECISION_FIELD}, set via workflow.set_operator_publish_decision) is ${JSON.stringify(run.operatorPublishDecision ?? null)}, not "approved"; nothing publishes until it is.`])
+    ...(authority.authorized ? [] : [`${authority.code}: ${authority.reason}`])
   ];
-  return { passed: decision.authorized && operatorApproved, controllerGo: decision.authorized, operatorApproved, reasons, operatorDecisionSource: describeOperatorDecisionSource(run) };
+  return {
+    passed: decision.authorized && authority.authorized,
+    controllerGo: decision.authorized,
+    operatorApproved: authority.authorized,
+    reasons,
+    operatorDecisionSource: describeOperatorDecisionSource(run),
+    ...(authority.authorized ? { authoritySource: authority.source } : {})
+  };
 }
+
+// T15.5 (ADR §8) — the publishAuthority receipt: an autonomous publish must never read as a human
+// one, and this is the structural (not merely prose) statement of which authority let a publish
+// through. `operatorDecision` is run.operatorPublishDecision VERBATIM — null is null, never omitted,
+// so a reader can always tell "no operator record" apart from "operator said X".
+export type PublishAuthorityReceipt = {
+  mode: "autonomous" | "operator-gated";
+  source: "operator_explicit" | "policy_autonomous" | null;
+  operatorDecision: "approved" | "withheld" | null;
+};
+
+// Exported for releaseExecution.ts: release_executor's own "executed" claim carries the SAME receipt
+// shape, over the SAME run, so a reader never sees two different renderings of one run's authority.
+export const publishAuthorityReceipt = (
+  run: Pick<WorkflowExecutionRecord, "operatorPublishDecision" | "publishingPolicySnapshot">,
+  gate: PublishExecutionGate
+): PublishAuthorityReceipt => ({
+  mode: run.publishingPolicySnapshot?.autonomyMode ?? "operator-gated",
+  source: gate.authoritySource ?? null,
+  operatorDecision: run.operatorPublishDecision ?? null
+});
 
 // The envelope facts a publish_execution.v1 record must carry. Taken verbatim from upstream (the
 // publish candidate, then the controller's decision record, then article_body) — never invented: a
@@ -121,6 +165,10 @@ export type BlockedPublishExecutionSources = {
   clientProjectId: string;
   envelope: PublishExecutionEnvelope;
   gate: PublishExecutionGate;
+  // T15.5 — optional so a caller constructing a record from a gate alone (e.g. a unit test) still
+  // gets a defined publishAuthority (operator-gated, no source, no operator decision) rather than a
+  // required-field break.
+  run?: Pick<WorkflowExecutionRecord, "operatorPublishDecision" | "publishingPolicySnapshot">;
 };
 
 // The fail-closed record. Deliberately shaped like the one the model produced on the live run:
@@ -131,9 +179,9 @@ export function buildBlockedPublishExecution(sources: BlockedPublishExecutionSou
     artifact: PUBLISH_EXECUTION_ARTIFACT,
     summary:
       `Publish refused fail-closed by the engine gate for ${sources.clientProjectId}/${sources.envelope.clientObjectType}: ` +
-      `controller decision ${gate.controllerGo ? "go" : "not \"go\""}, operator publish decision ${gate.operatorApproved ? "approved" : "not \"approved\""}` +
-      // T2 — an "approved" decision names its source here, so this summary can never be misread as
-      // an explicit operator sign-off when it was actually a project's publishingPolicy default.
+      `controller decision ${gate.controllerGo ? "go" : "not \"go\""}, publish authority ${gate.operatorApproved ? "authorized" : "not authorized"}` +
+      // T2/T15.5 — an authorized decision names its source here, so this summary can never be misread
+      // as an explicit operator sign-off when it was actually a policy default (project or autonomy).
       `${gate.operatorApproved && gate.operatorDecisionSource ? ` (${gate.operatorDecisionSource})` : ""}. ` +
       `No client tool was called, no object was created, patched, published or released. No model call.`,
     status: "blocked",
@@ -142,11 +190,12 @@ export function buildBlockedPublishExecution(sources: BlockedPublishExecutionSou
     contractSource: sources.envelope.contractSource,
     approvalMatched: false,
     publishPolicyChecked: true,
+    publishAuthority: publishAuthorityReceipt(sources.run ?? {}, gate),
     blockers: gate.reasons,
     notes: [
-      "Evaluated deterministically by the conductor (publishExecution.ts): the publish gate is two exact comparisons over existing run facts — an explicit publication_controller decision:\"go\" and run.operatorPublishDecision === \"approved\" — and both are read through the single shared reader (publishDecision.ts) that publishRun's own gates use, so the node and the publisher cannot drift apart.",
+      "Evaluated deterministically by the conductor (publishExecution.ts): the publish gate is two exact comparisons over existing run facts — an explicit publication_controller decision:\"go\" and the run's resolved publish authority (publishDecision.resolvePublishAuthority: an explicit operator approval, or the project's autonomyMode policy) — and both are read through the single shared reader (publishDecision.ts) that publishRun's own gates use, so the node and the publisher cannot drift apart.",
       "Zero side effects: this path performs no client call whatsoever, so a refusal cannot half-publish.",
-      "To proceed: record the operator decision with workflow.set_operator_publish_decision (approved) and/or resolve the blockers the publication_controller decision names, then retry this node."
+      "To proceed: record the operator decision with workflow.set_operator_publish_decision (approved), enable the project's autonomyMode policy, and/or resolve the blockers the publication_controller decision names, then retry this node."
     ]
   };
 }
@@ -155,7 +204,7 @@ export function buildBlockedPublishExecution(sources: BlockedPublishExecutionSou
 // and a missing envelope both return {ok:false} so the caller's single decision stays "use it, or fall
 // through to the model path".
 export function runDeterministicPublishExecutor(params: {
-  run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource">;
+  run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource" | "publishingPolicySnapshot">;
   clientProjectId: string;
   envelopeCarriers: unknown[];
 }): PublishExecutionResult {
@@ -164,7 +213,7 @@ export function runDeterministicPublishExecutor(params: {
     return {
       ok: false,
       code: "gate_passed_execution_not_deterministic",
-      error: "the publish gate passed (controller \"go\" + operator \"approved\"); engine-side publish EXECUTION (create/validate/patch/publish + release + go-live verification) is not implemented deterministically, so the approved path stays on the model path by design."
+      error: "the publish gate passed (controller \"go\" + publish authorized); engine-side publish EXECUTION (create/validate/patch/publish + release + go-live verification) is not implemented deterministically, so the authorized path stays on the model path by design."
     };
   }
   const envelope = readPublishExecutionEnvelope(...params.envelopeCarriers);
@@ -175,7 +224,7 @@ export function runDeterministicPublishExecutor(params: {
       error: "no upstream output carries both a clientObjectType and a contractSource object; a publish_execution.v1 record cannot be assembled without inventing the envelope facts it must name."
     };
   }
-  return { ok: true, output: buildBlockedPublishExecution({ clientProjectId: params.clientProjectId, envelope, gate }) };
+  return { ok: true, output: buildBlockedPublishExecution({ clientProjectId: params.clientProjectId, envelope, gate, run: params.run }) };
 }
 
 // ── T4 (Wave 2a, 2026-08-13) — the ENGINE-EXECUTED half ─────────────────────────────────────────
@@ -247,7 +296,12 @@ export type PublishExecutionReceipts = {
 export type ExecutedPublishExecution = {
   artifact: typeof PUBLISH_EXECUTION_ARTIFACT;
   summary: string;
-  status: "blocked";
+  // T15.6 (ADR-2026-08-25-publish-autonomy §4.4) — "published_pending_release" replaces the old
+  // "blocked" + go_live_unconfirmed workaround for a COMMITTED publish: publishRun committed the
+  // export (board B2: it never releases), and release_executor — a separate, downstream tail node —
+  // performs the release and produces the real "executed" claim. "blocked" now means what it says: the
+  // publish itself did not complete.
+  status: "blocked" | "published_pending_release";
   clientProjectId: string;
   clientObjectType: string;
   contractSource: Record<string, unknown>;
@@ -255,6 +309,8 @@ export type ExecutedPublishExecution = {
   // T2's field, recorded NEXT TO approvalMatched so a receipt reader can never take a project-policy
   // default for an explicit operator sign-off.
   operatorDecisionSource?: string;
+  // T15.5 (ADR §8) — see publishAuthorityReceipt / BlockedPublishExecution.publishAuthority.
+  publishAuthority: PublishAuthorityReceipt;
   publishPolicyChecked: true;
   // The one bit that separates "nothing happened" from "a live site was mutated". Read it before
   // retrying anything.
@@ -264,7 +320,9 @@ export type ExecutedPublishExecution = {
   result?: Record<string, unknown>;
   verification?: Record<string, unknown>;
   receipts: PublishExecutionReceipts;
-  blocker: PublishExecutionBlocker;
+  // Present only on a NON-committed record — a real failure. A committed publish is
+  // "published_pending_release", not blocked, and names nothing here (see buildEnginePublishExecution).
+  blocker?: PublishExecutionBlocker;
   blockers: string[];
   notes: string[];
 };
@@ -308,12 +366,16 @@ export type EnginePublishExecutionSources = {
   envelope: PublishExecutionEnvelope;
   gate: PublishExecutionGate;
   receipts: PublishExecutionReceipts;
-  blocker: PublishExecutionBlocker;
+  // Present exactly when publishCommitted is false — a committed publish has nothing to name as a
+  // blocker; see ExecutedPublishExecution.blocker.
+  blocker?: PublishExecutionBlocker;
   publishCommitted: boolean;
   artifactSet: Record<string, unknown>[];
   extraBlockers?: string[];
   result?: unknown;
   clientValidation?: unknown;
+  // T15.5 — see BlockedPublishExecutionSources.run.
+  run?: Pick<WorkflowExecutionRecord, "operatorPublishDecision" | "publishingPolicySnapshot">;
 };
 
 // The engine-execution record. status is ALWAYS "blocked" and that is not a placeholder: publishRun
@@ -329,15 +391,16 @@ export function buildEnginePublishExecution(sources: EnginePublishExecutionSourc
     summary: sources.publishCommitted
       ? `PUBLISH COMMITTED by the engine for ${sources.clientProjectId}/${sources.envelope.clientObjectType}` +
         `${receipts.objectId ? ` (object ${receipts.objectId})` : ""} via ${ran} client call(s) [${receipts.toolSequence.join(" -> ")}], request ${receipts.requestId ?? "(none)"}. ` +
-        `Go-live is NOT confirmed — release and production verification are a separate gate this path does not perform — so this record is "blocked", not "executed". No model call.`
-      : `Publish did NOT complete for ${sources.clientProjectId}/${sources.envelope.clientObjectType}: stopped at ${blocker.step} (${blocker.code}) after ${ran} client call(s)` +
+        `Go-live is NOT yet confirmed — release_executor performs the release and production verification next, downstream in the shared tail (board decision B2: this stage never releases) — so this record is "published_pending_release", not "executed". No model call.`
+      : `Publish did NOT complete for ${sources.clientProjectId}/${sources.envelope.clientObjectType}: stopped at ${blocker?.step ?? "unknown"} (${blocker?.code ?? "unknown"}) after ${ran} client call(s)` +
         `${ran ? ` [${receipts.toolSequence.join(" -> ")}]` : ""}. Nothing was published. No model call.`,
-    status: "blocked",
+    status: sources.publishCommitted ? "published_pending_release" : "blocked",
     clientProjectId: sources.clientProjectId,
     clientObjectType: sources.envelope.clientObjectType,
     contractSource: sources.envelope.contractSource,
     approvalMatched: gate.operatorApproved,
     ...(gate.operatorDecisionSource ? { operatorDecisionSource: gate.operatorDecisionSource } : {}),
+    publishAuthority: publishAuthorityReceipt(sources.run ?? {}, gate),
     publishPolicyChecked: true,
     publishCommitted: sources.publishCommitted,
     approvedAction: {
@@ -348,20 +411,21 @@ export function buildEnginePublishExecution(sources: EnginePublishExecutionSourc
     },
     ...(isObject(sources.clientValidation) ? { clientValidation: sources.clientValidation } : {}),
     ...(isObject(sources.result) ? { result: sources.result } : {}),
-    // Recorded ONLY on a committed publish, and it records what was NOT done. deployStatus and
-    // productionConfirmed are deliberately absent rather than false-y placeholders: the engine made
-    // no deploy observation at all, and an absent observation must not read as a negative one.
+    // Recorded ONLY on a committed publish, and it records what was NOT done here. deployStatus and
+    // productionConfirmed are deliberately absent rather than false-y placeholders: THIS node made no
+    // deploy observation at all — release_executor is what produces those — and an absent observation
+    // must not read as a negative one.
     ...(sources.publishCommitted
       ? { verification: { deployAware: false, goLiveConfirmed: false, requiredChecks: ["production_deploy_confirmed", "target_commit_served", "page_and_media_verification"] } }
       : {}),
     receipts,
-    blocker,
-    blockers: [renderPublishExecutionBlocker(blocker), ...(sources.extraBlockers ?? [])],
+    ...(blocker ? { blocker } : {}),
+    blockers: blocker ? [renderPublishExecutionBlocker(blocker), ...(sources.extraBlockers ?? [])] : (sources.extraBlockers ?? []),
     notes: [
       "Executed by the conductor (publishExecution.ts) as a direct function call into publisher.ts publishRun — the SAME sequence workflow.publish_run drives, in the project's own dialect, with no MCP transport hop and no model turn. The gate that authorized it is the two exact comparisons at the top of this module, and publishRun re-checked its own five gates (including the per-project publishEnabled kill-switch) over the persisted run before calling anything.",
       `receipts.toolSequence is what ACTUALLY ran, in order, taken from the steps publishRun recorded — not the project's declared publishToolSequence, which is a plan.${sources.publishCommitted ? "" : " The sequence stopped at the first failure; no later step was attempted."}`,
       ...(sources.publishCommitted
-        ? ["A client object EXISTS and was published. Do not re-run this node to \"finish\" the publish: the release/go-live tail is a separate gate, and a retry would drive the create step again."]
+        ? ["A client object EXISTS and was published. Do not re-run this node to \"finish\" the publish: release_executor performs the release exactly once, downstream in the tail — retrying THIS node would drive the create step again."]
         : [])
     ]
   };
@@ -377,7 +441,7 @@ export type EnginePublishExecutionResult =
   | { ok: false; code: string; error: string };
 
 export type EnginePublishExecutionParams = {
-  run: Pick<WorkflowExecutionRecord, "runId" | "projectId" | "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource">;
+  run: Pick<WorkflowExecutionRecord, "runId" | "projectId" | "stageOutputs" | "nodes" | "operatorPublishDecision" | "operatorDecisionSource" | "publishingPolicySnapshot">;
   clientProjectId: string;
   envelopeCarriers: unknown[];
   requestId?: string;
@@ -404,7 +468,7 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
   }
   // Gate closed: the fail-closed record, bit-for-bit what the gate-only path produces. Zero calls.
   if (!gate.passed) {
-    return { ok: true, output: buildBlockedPublishExecution({ clientProjectId: params.clientProjectId, envelope, gate }), nodeBlocked: false, warnings: ["no_publication_performed"] };
+    return { ok: true, output: buildBlockedPublishExecution({ clientProjectId: params.clientProjectId, envelope, gate, run: params.run }), nodeBlocked: false, warnings: ["no_publication_performed"] };
   }
 
   const artifactSet = readArtifactReferences(...params.envelopeCarriers);
@@ -430,7 +494,7 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
     ({ ...(requestId ? { requestId } : {}), publishedTime, artifactDigests, toolSequence: steps.map((step) => step.tool), steps, ...extra });
   const blocked = (blocker: PublishExecutionBlocker, receipts: PublishExecutionReceipts, extraBlockers?: string[]): EnginePublishExecutionResult => ({
     ok: true,
-    output: buildEnginePublishExecution({ clientProjectId: params.clientProjectId, envelope, gate, receipts, blocker, publishCommitted: false, artifactSet, extraBlockers }),
+    output: buildEnginePublishExecution({ clientProjectId: params.clientProjectId, envelope, gate, receipts, blocker, publishCommitted: false, artifactSet, extraBlockers, run: params.run }),
     nodeBlocked: true,
     // Run-visible and specific: the blocker's own code, plus how many client calls DID land. A
     // partially-executed sequence must never be summarised as "no publication performed".
@@ -450,11 +514,13 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
 
   let result: PublishResult;
   try {
-    // approved/live are the publisher's EXPLICIT-intent flags, and this call is that explicit intent:
-    // the engine only reaches this line with a controller "go" AND an operator "approved" already
-    // proven above. Every other gate — the project kill-switch, the operator veto, the controller
-    // decision again, the request-id contract, the body contract, the readiness policy, the media
-    // refusal — is publishRun's own and is deliberately left to it.
+    // live is the publisher's EXPLICIT-intent flag, and this call is that explicit intent: the engine
+    // only reaches this line with a controller "go" AND a resolved publish authority already proven
+    // above (evaluatePublishExecutionGate). `approved` is passed for backward compatibility only
+    // (T15.5, ADR §7: deprecated as an authority input at publisher.ts's own gate, which re-derives
+    // authorization from the SAME run independently). Every other gate — the project kill-switch, the
+    // operator veto, the controller decision again, the request-id contract, the body contract, the
+    // readiness policy, the media refusal — is publishRun's own and is deliberately left to it.
     //
     // No `readiness` input is supplied on purpose: verifiedMediaRefs is the operator's evidence that
     // pdf-tool materialized each artifact, and an engine that hands itself that evidence has waived
@@ -488,14 +554,15 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
         artifactSet,
         result: result.result,
         clientValidation: result.clientValidation,
-        blocker: {
-          code: "go_live_unconfirmed",
-          step: "release_and_go_live_verification",
-          message: "the client object was created, patched and published (see receipts) — publishRun commits the export and, by board decision B2, never releases. Production deploy confirmation and page/media verification are a SEPARATE gate this path does not perform, so status \"executed\" (which requires verification.deployStatus \"ready\" AND productionConfirmed true) is not claimed. Confirm go-live out of band before treating this content as live."
-        }
+        run: params.run
+        // No `blocker` here (T15.6, ADR §4.4): the client object was created, patched and published
+        // (see receipts) — publishRun commits the export and, by board decision B2, never releases.
+        // That is no longer an unevidenced "blocked" workaround; it is the honest intermediate status
+        // "published_pending_release", and release_executor — downstream in the shared tail — performs
+        // the release and produces the real "executed" claim with go-live evidence.
       }),
       nodeBlocked: false,
-      warnings: ["publish_committed_go_live_unconfirmed"]
+      warnings: ["publish_committed_pending_release"]
     };
   }
 

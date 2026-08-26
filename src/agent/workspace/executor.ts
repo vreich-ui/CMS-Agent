@@ -1,7 +1,7 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
-import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type RunDriver, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
-import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
+import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type PublishingPolicySnapshot, type RunDriver, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
+import { resolveProjectConnection, ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
@@ -27,10 +27,12 @@ import { ENGINE_VALIDATION_POLICY, ownsValidationLoop, promoteValidationUnavaila
 import { applyRunContextEnvelope, buildRunContext } from "./runContext.js";
 import { runDeterministicPublicationController } from "./publicationController.js";
 import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
+import { runDeterministicReleaseExecutor } from "./releaseExecution.js";
 import { buildLearningObservations } from "./learningRecord.js";
 import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
-import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishApproved, isOperatorPublishWithheld, readPublicationDecision } from "./publishDecision.js";
+import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
 import { getWorkflowDefinition } from "./workflowRegistry.js";
+import { resolvePublishableTypeCharter } from "./publishableTypeCharter.js";
 // T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
 // that drives runs, since they all import this module. See captureConductorWorkflow.ts.
 import "./captureConductorWorkflow.js";
@@ -385,20 +387,34 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
   } as WorkflowExecutionRecord;
 };
 
-// T2 (2026-08-13, run_1786557897658_elj34j) — apply a project's publishingPolicy.operatorDefault to a
-// FRESH run (buildInitialRun's output never carries operatorPublishDecision, so "unset" here just
-// means "this run has no decision yet"). Only "approved" default is ever applied; "require_explicit"
-// or an absent policy leaves the run exactly as buildInitialRun made it — today's behavior,
-// unchanged. This can NEVER produce "withheld": a veto is only ever an explicit operator act (the
-// setter below), so a project policy has no way to durably block a run it did not also create.
+// T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2.2/§2.5) — REPLACES T2's
+// applyOperatorPublishPolicyDefault (2026-08-13), which is deleted, not kept alongside this. That
+// function fabricated an operator record: it stamped run.operatorPublishDecision "approved" from a
+// project's policy default, so a receipt could claim a human decided when no human did. This function
+// makes the opposite choice, by design (ADR invariant 4): it NEVER touches operatorPublishDecision.
+// It only captures the project's CURRENT publishing policy as a read-only snapshot on the run, once,
+// at creation — autonomyMode (and publishEnabled, for audit completeness) — so
+// publishDecision.resolvePublishAuthority can resolve authority later without a live project read.
+// That snapshot is what makes two runs of the same URL resolve identically regardless of a policy
+// edit made between them (invariant 7), and it is preserved across workflow.reset_run exactly like
+// operatorPublishDecision (see resetRun below) for the same reason: a reset retries the request, it
+// does not let a mid-flight policy edit change what an in-flight run resolves to.
 // projectRepository.get returning undefined (unknown/deleted project) is not an error here — it is
-// handled the same as "no policy", because startDryRun's own downstream node dispatch is what
-// surfaces an unknown-project failure, not run creation.
-async function applyOperatorPublishPolicyDefault(run: WorkflowExecutionRecord, projectRepository: ProjectRepository): Promise<WorkflowExecutionRecord> {
-  if (run.operatorPublishDecision !== undefined) return run;
+// handled the same as "no policy" (operator-gated, publishEnabled false), because startDryRun's own
+// downstream node dispatch is what surfaces an unknown-project failure, not run creation.
+// T15.11 (2026-08-25, #190; ADR §6.3) — publishableTypes is resolved from the run's OWN workflowId
+// (buildInitialRun already stamped it before this function runs) via the code-declared charter, and
+// captured onto the snapshot in the exact same "once, at creation, never re-read live" shape as
+// autonomyMode/publishEnabled above — see publishableTypeCharter.ts's header for why this must never
+// become a live read.
+async function capturePublishingPolicySnapshot(run: WorkflowExecutionRecord, projectRepository: ProjectRepository): Promise<WorkflowExecutionRecord> {
   const config = await projectRepository.get(run.projectId);
-  if (config?.publishingPolicy.operatorDefault !== "approved") return run;
-  return { ...run, operatorPublishDecision: "approved", operatorDecisionSource: "project_policy_default" };
+  const snapshot: PublishingPolicySnapshot = {
+    autonomyMode: config?.publishingPolicy.autonomyMode ?? "operator-gated",
+    publishEnabled: config?.publishingPolicy.publishEnabled ?? false,
+    publishableTypes: resolvePublishableTypeCharter(run.workflowId).publishableTypes
+  };
+  return { ...run, publishingPolicySnapshot: snapshot };
 }
 
 const nodeById = (nodes: WorkspaceNode[]) => new Map(nodes.map((node) => [node.id, node]));
@@ -496,6 +512,10 @@ const isPublishRisk = (node: WorkspaceNode): boolean => node.riskLevel === "publ
 // kind, per the isPublishRisk/isLearningRecorder precedent of a semantic node property rather than a
 // hardcoded id, so any future publisher node is guarded identically.
 const isPublishExecutorNode = (node: WorkspaceNode): boolean => node.kind === "publisher";
+// T15.6 (ADR-2026-08-25-publish-autonomy §4.3) — release_executor, matched by `kind` per the same
+// isPublishRisk/isPublishExecutorNode/isLearningRecorder precedent: a semantic node property, never a
+// hardcoded id, so any future releaser node is guarded and dispatched identically.
+const isReleaserNode = (node: WorkspaceNode): boolean => node.kind === "releaser";
 const isConcurrencyConflict = (error: unknown): error is RunConcurrencyError => error instanceof RunConcurrencyError;
 
 // T5 (autonomous-publish) — ONE APPROVAL, NOT TWO.
@@ -520,8 +540,14 @@ const isConcurrencyConflict = (error: unknown): error is RunConcurrencyError => 
 //   - publish_executor still needs an explicit publication_controller "go" ON TOP of this. The
 //     two-precondition read (controller go + operator approved) is untouched — this collapses the
 //     duplicate operator gate, not the controller's.
-const publishAdvanceApproved = (run: Pick<WorkflowExecutionRecord, "operatorPublishDecision">, options: RunAdvanceOptions): boolean =>
-  options.approved === true || isOperatorPublishApproved(run);
+// T15.5/T15.7 (ADR-2026-08-25-publish-autonomy §2.4, §7) — publishAdvanceApproved is SUPERSEDED and
+// removed. It read `options.approved === true || isOperatorPublishApproved(run)`; both halves are
+// gone. `approved` is deprecated as an authority input (invariant 7: authority is a pure function of
+// the run's own operator record and policy snapshot), and isOperatorPublishApproved was replaced by
+// resolvePublishAuthority, which additionally authorizes an autonomous project carrying NO operator
+// record at all. Every former caller now calls resolvePublishAuthority(run) directly. The intent this
+// helper was written for — a scheduled driver tick carrying an already-authorized run through the
+// gate without re-asserting a flag it cannot supply — is preserved and widened, not lost.
 
 // R-18 — look-ahead publish-gate visibility.
 //
@@ -537,11 +563,17 @@ const publishAdvanceApproved = (run: Pick<WorkflowExecutionRecord, "operatorPubl
 // handoff — whether "running" should instead become a distinct awaiting-approval status is a state-machine
 // decision, not a bug fix, and is left for an explicit call). Populating approvalsRequired is enough for
 // RunStatusPanel (which already ORs on approvalsRequired.length) and for the attention feed.
-const markPendingPublishApproval = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[], approved: boolean): void => {
+//
+// T15.7 (ADR-2026-08-25-publish-autonomy §2.4, §7) — the look-ahead now reads resolvePublishAuthority(run)
+// instead of a caller-supplied `approved` flag: authority is a pure function of the run's own operator
+// record and policy snapshot (invariant 7), so a look-ahead computed on one advance and a gate evaluated
+// on the next can never disagree about whether the upcoming node needs a hold. Under `autonomous` policy
+// the upcoming node will PROCEED at dispatch (never blocked), so no look-ahead hold is minted for it.
+const markPendingPublishApproval = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[]): void => {
   // A stale look-ahead is dropped every advance and re-derived below, so it can never outlive the gate it
   // described. An attempted (non-pending) entry is the authoritative audit record and is never touched.
   run.approvalsRequired = run.approvalsRequired.filter((approval) => approval.pending !== true);
-  if (approved) return;
+  if (resolvePublishAuthority(run).authorized) return;
   const upcoming = findNextRunnableNode(run, nodes);
   if (!upcoming || !isPublishRisk(upcoming)) return;
   if (run.approvalsRequired.some((approval) => approval.nodeId === upcoming.id)) return;
@@ -742,7 +774,7 @@ export async function startDryRun(data: StartDryRunInput, store: ExecutionReposi
   // S1 — a caller-supplied requestId (validated by the tool layer against the project's pattern)
   // becomes the run's requestId; absent, the auto-minted join key is used as before.
   const initial = buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID), makeRunId(), data.requestId?.trim() || makeRequestId());
-  return store.createRun(await applyOperatorPublishPolicyDefault(initial, projectRepository));
+  return store.createRun(await capturePublishingPolicySnapshot(initial, projectRepository));
 }
 
 export async function getRun(runId: string, store: ExecutionRepository = repositoryManager.getExecutionRepository()) {
@@ -769,19 +801,16 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     // requestId travels with the run across a reset — it identifies the same request being retried,
     // not a new one, and a platform-side record correlating against it must still resolve. The
     // operator's durable publish decision (P0 §2.2) survives a reset for the same reason: a reset
-    // retries the request, it does not un-say the operator's veto/approval — and that includes WHICH
-    // source recorded it (T2): a reset must not relabel an existing explicit decision as a policy
-    // default, or vice versa. When the run had NO decision yet, the rebuilt run re-applies the
-    // project's current policy default exactly as a brand-new run would (a reset that lost its
-    // pre-approval because the policy default logic only ran at original creation would be a second,
-    // subtler way to make this same bug reappear).
-    const rebuilt = await applyOperatorPublishPolicyDefault(
-      buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId),
-      repositoryManager.getProjectRepository()
-    );
+    // retries the request, it does not un-say the operator's veto/approval. T15.5 (ADR §2.5) — the
+    // run's publishingPolicySnapshot survives a reset for the SAME reason and no other: a reset
+    // retries the ORIGINAL request under the ORIGINAL policy it was created under, so a policy edit
+    // made after the run started must not change what the reset run resolves to (a fresh capture
+    // here would be exactly the staleness bug §2.5 exists to prevent, one layer later).
+    const rebuilt = buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId);
     return store.resetRun(runId, {
       ...rebuilt,
-      ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision, operatorDecisionSource: existing.operatorDecisionSource ?? "explicit" } : {})
+      ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision, operatorDecisionSource: existing.operatorDecisionSource ?? "explicit" } : {}),
+      ...(existing.publishingPolicySnapshot ? { publishingPolicySnapshot: existing.publishingPolicySnapshot } : {})
     });
   });
 }
@@ -887,13 +916,37 @@ const dependenciesReached = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[
   // W4: "did not complete" here means "cannot ever satisfy", so a SKIPPED dependency does not seal —
   // a skip is a satisfied dependency (isDependencySatisfied), and treating it as a seal would report
   // the DAG as refused at a node the conductor deliberately routed around.
-  const sealed = (id: string): boolean => {
+  //
+  // T15.6 (ADR-2026-08-25-publish-autonomy §4.3): BOUNDED two-level sealing, not open recursion.
+  // learning_recorder now depends on release_executor, which itself depends on publish_executor — a
+  // chain one hop deeper than plain one-level sealing reaches. A publish gate refusing at
+  // publication_controller leaves BOTH publish_executor and release_executor "queued" forever:
+  // publish_executor seals at depth 0 (its sole dependency, publication_controller, is literally
+  // reached — status "blocked"), but release_executor's own dependency is publish_executor, which is
+  // itself only SEALED, not literally reached — so release_executor needs one more hop of sealing to
+  // resolve, hence maxDepth 1 below (an id sealed at depth d may treat a dependency as satisfied if
+  // that dependency is itself sealed at depth d-1).
+  //
+  // This must stay BOUNDED, not fully recursive: an earlier version of this function let sealed(id)
+  // recurse through sealed(dependency) with no depth limit, which reintroduced exactly the 2.4 bug it
+  // was meant to avoid — a run that fails at its very first node (input_triage) leaves every
+  // downstream node "queued", and open recursion found that placement_resolver (whose sole dependency,
+  // input_triage, is literally reached — status "failed") seals at depth 0, and from there the seal
+  // tunnels all the way down the entire graph to publication_controller and beyond, purely because
+  // every node in between chains sealed-through-sealed with no distance limit. Bounding the recursion
+  // to maxDepth 1 hop is enough for the current tail (release_executor -> publish_executor ->
+  // publication_controller, a 2-edge chain) while remaining far too shallow to tunnel across the ~15
+  // nodes between input_triage and publication_controller, so the 2.4 regression test (a run dead at
+  // input_triage never dispatches learning_recorder) still holds. If a future tail edge needs a third
+  // hop, raise maxDepth deliberately — do not restore open recursion.
+  const sealed = (id: string, depth: number): boolean => {
     const dependencies = byId.get(id)?.dependsOn ?? [];
     return dependencies.length > 0
-      && dependencies.every(reached)
+      && dependencies.every((dependency) => reached(dependency) || (depth > 0 && sealed(dependency, depth - 1)))
       && dependencies.some((dependency) => !isDependencySatisfied(states.get(dependency)));
   };
-  return node.dependsOn.every((dependency) => reached(dependency) || sealed(dependency));
+  const MAX_SEAL_DEPTH = 1;
+  return node.dependsOn.every((dependency) => reached(dependency) || sealed(dependency, MAX_SEAL_DEPTH));
 };
 
 async function recordTerminationObservations(run: WorkflowExecutionRecord, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions): Promise<WorkflowExecutionRecord> {
@@ -957,6 +1010,7 @@ const DETERMINISTIC_ROUTE_METADATA_KEYS = [
   "publishPayloadDeterministic",
   "publicationControllerDeterministic",
   "publishExecutorDeterministic",
+  "releaseExecutorDeterministic",
   "learningRecorderDeterministic",
   // T12.9: the capture_conductor stages (captureConductorRoutes.ts). String-valued ("crawl", ...),
   // which declaresDeterministicRoute below already treats as declared.
@@ -1113,7 +1167,7 @@ async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: Work
   reconciled.status = halted ? halted.status : "running";
   reconciled.currentNodeId = halted ? halted.nodeId : findNextRunnableNode(reconciled, nodes)?.id;
   if (reconciled.budgetBlock) reconciled.budgetBlock = undefined;
-  markPendingPublishApproval(reconciled, nodes, publishAdvanceApproved(reconciled, options));
+  markPendingPublishApproval(reconciled, nodes);
   reconciled.updatedAt = now();
   const saved = await store.saveRun(reconciled);
   // Side effects after the durable commit, in canonical order, non-authoritative — same posture and same
@@ -1131,19 +1185,23 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const run = await store.getRun(runId);
     if (!run) throw new Error(`Unknown run: ${runId}`);
     latest = run;
-    // T5 fix 1 (2026-08-13) — an advance carrying explicit approval re-enters a run whose ONLY blocker
-    // is the publish-approval gate. Until now that took workflow.resume_run + workflow.retry_node by
-    // hand, because resume_run re-queues the RUN while the executor schedules only queued NODES: the
-    // gate-blocked node stayed "blocked", nothing was runnable, and the run fell straight into the
-    // completed branch below (which is T5 fix 2's defect). Approval is the whole remedy for THIS
-    // blocker, so an approved advance may clear it — and nothing else. "Approved" here now means the
-    // per-call flag OR the operator's durable decision (publishAdvanceApproved), so a plain tick from
-    // a scheduled driver carries an already-approved run through the gate instead of parking it for a
-    // human to re-approve what they already approved. Every other halt returns
-    // untouched below: budget, operator veto, a non-affirmative controller decision, a failed node, an
-    // operator pause or cancel. The requeue happens before the halted-status return so one
-    // workflow.run_all call carries the run through the gate instead of stopping at it.
-    if (publishAdvanceApproved(run, options) && isApprovalGateOnlyBlock(run)) {
+    // T5 fix 1 (2026-08-13) — an advance re-enters a run whose ONLY blocker is the publish-approval
+    // gate. Until now that took workflow.resume_run + workflow.retry_node by hand, because resume_run
+    // re-queues the RUN while the executor schedules only queued NODES: the gate-blocked node stayed
+    // "blocked", nothing was runnable, and the run fell straight into the completed branch below (which
+    // is T5 fix 2's defect). Every other halt returns untouched below: budget, operator veto, a
+    // non-affirmative controller decision, a failed node, an operator pause or cancel.
+    //
+    // T15.7 (ADR-2026-08-25-publish-autonomy §2.4, §7) — the trigger is resolvePublishAuthority(run),
+    // not a caller-supplied `approved` flag: `approved` is deprecated as an authority input everywhere
+    // (invariant 7 — authority is a pure function of the run's own operator record and policy snapshot),
+    // so a caller no longer has to re-assert approval in lockstep with the durable decision. The run
+    // becomes self-healing — the NEXT advance of any kind, with or without any flag, clears the gate the
+    // moment workflow.set_operator_publish_decision("approved") lands on the record, exactly as it
+    // already does the moment an autonomous run's policy snapshot would have let the node proceed in the
+    // first place. The requeue happens before the halted-status return so one workflow.run_all call
+    // carries the run through the gate instead of stopping at it.
+    if (resolvePublishAuthority(run).authorized && isApprovalGateOnlyBlock(run)) {
       for (const blockedNode of approvalGateOnlyBlockedNodes(run)) requeueGateBlockedNode(run, blockedNode);
       run.status = "queued";
       run.updatedAt = now();
@@ -1264,7 +1322,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       if (prepared.run.budgetBlock) prepared.run.budgetBlock = undefined;
       // R-18: record (or clear) a look-ahead publish-approval hold before the state is committed, so the
       // hold is durable and visible on the very next read rather than only after another advance attempt.
-      markPendingPublishApproval(prepared.run, nodes, publishAdvanceApproved(prepared.run, options));
+      markPendingPublishApproval(prepared.run, nodes);
       const saved = await store.saveRun(prepared.run);
       // Side effects (usage telemetry, workspace stage-output mirror) run only after the state
       // transition is durably committed, so a discarded attempt on a CAS conflict leaves no phantom
@@ -1686,26 +1744,30 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     // Mock run: fall through to the MockNodeRunner placeholder below so CI traversal keeps working.
   }
 
-  // P0 §2.1/§2.2 — the deterministic publish refusals, evaluated BEFORE any dispatch so a refused
-  // publish-risk node never starts a model turn (and therefore can never fire a client tool):
-  //   1. operator veto (§2.2) — run.operatorPublishDecision === "withheld" (set via
-  //      workflow.set_operator_publish_decision, read through the ONE reader
-  //      isOperatorPublishWithheld shared with publishRun's gate) blocks every publish-risk node
-  //      regardless of the approved flag.
-  //   2. missing approval — unchanged: a publish-risk node needs options.approved === true.
-  //   3. controller decision (§2.1) — a publisher-kind node (publish_executor) additionally requires
-  //      an EXPLICIT affirmative publication_controller decision (decision: "go"); silence, hedging,
-  //      or a malformed record refuses with the reason recorded. Scoped to live runs: a mock run's
-  //      placeholder pipeline has no client reach (MockNodeRunner calls no tools) and a mock decision
-  //      is refused by readPublicationDecision anyway (dryRun marker), so mock CI traversal keeps
-  //      working while a live publisher node can never dispatch without an explicit go.
-  const operatorVeto = isPublishRisk(nextNode) && isOperatorPublishWithheld(run);
-  const approvalMissing = isPublishRisk(nextNode) && !publishAdvanceApproved(run, options);
+  // P0 §2.1/§2.2, rewired by T15.7 (ADR-2026-08-25-publish-autonomy §2.4, §5, §7) — the deterministic
+  // publish refusals, evaluated BEFORE any dispatch so a refused publish-risk node never starts a
+  // model turn (and therefore can never fire a client tool):
+  //   1/2. authority (§2.4) — a publish-risk node needs resolvePublishAuthority(run).authorized: an
+  //      operator's own explicit "approved" is sufficient in every mode; absent a decision, the run's
+  //      OWN snapshotted autonomyMode decides ("autonomous" proceeds, "operator-gated" blocks); an
+  //      explicit "withheld" always halts, ahead of everything else, in every mode. A caller-supplied
+  //      `options.approved` flag no longer contributes to this decision (§7 — deprecated as an
+  //      authority input everywhere, not only on workflow.publish_run): the run's own operator record
+  //      and policy snapshot are the ONLY authority, so two calls against the same run state resolve
+  //      identically regardless of what flag either caller happened to pass (invariant 7).
+  //   3. controller decision (§2.1) — unchanged.
+  const authority = isPublishRisk(nextNode) ? resolvePublishAuthority(run) : undefined;
+  // operator_withheld is ALSO !authority.authorized, so this stays a NAMED subset of approvalMissing
+  // below (both fire together on a veto, exactly as before) rather than a separate condition — the
+  // veto is not a different authority question, it is authority's own row 1 (§2.4), given its own
+  // warning because NON_APPROVAL_REFUSAL_WARNINGS (below) must keep telling a veto apart from a plain
+  // "no decision yet" hold: only the latter is something a later approval can clear.
+  const operatorVeto = authority !== undefined && !authority.authorized && authority.code === "operator_withheld";
+  const approvalMissing = authority !== undefined && !authority.authorized;
   const liveRun = ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock";
   const controllerDecision = isPublishExecutorNode(nextNode) && liveRun ? readPublicationDecision(findPublicationDecision(run)) : undefined;
   const publishRefusals: string[] = [
-    ...(operatorVeto ? [`operator_publish_withheld: the operator's durable publish decision for this run (run.operatorPublishDecision, set via workflow.set_operator_publish_decision) is "withheld"; node ${nextNode.id} cannot run regardless of approval flags.`] : []),
-    ...(approvalMissing ? [`Dry-run stopped before publish-risk node ${nextNode.id}; explicit approval is required before any publishing side effect.`] : []),
+    ...(approvalMissing ? [`${authority!.code}: ${authority!.reason}`] : []),
     ...(controllerDecision && !controllerDecision.authorized ? [`publication_decision_not_affirmative (${controllerDecision.code}): ${controllerDecision.reason}`] : [])
   ];
   if (publishRefusals.length) {
@@ -1723,11 +1785,31 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     run.status = "blocked";
     run.updatedAt = completedAt;
     if (approvalMissing) {
-      run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", reason: `Publish-risk node ${nextNode.id} requires explicit approval; dry-run blocked before publishing.`, requestedAt: completedAt }];
+      run.approvalsRequired = [{ nodeId: nextNode.id, type: "approval_required", reason: authority!.reason, requestedAt: completedAt }];
     }
     run.stageOutputs[nextNode.id] = state.output;
     run.artifacts.push(buildArtifact(nextNode, state.output));
     return { run, commit: async () => { await recordDryRunNodeUsage(run, nextNode, state.input, state.output); } };
+  }
+  // ADR §5 — an autonomous publish must be exactly as visible as a gated one. The gate above just let
+  // this node through on `policy_autonomous` authority (no human spoke), so it proceeds — but records a
+  // NON-PENDING, ADVISORY approvalsRequired entry naming the authority that let it through, so the
+  // attention feed and every publish-risk accounting reader sees this pass exactly as they would see a
+  // gated approval. A stale entry for this node (from an earlier authority state) is replaced, never
+  // duplicated; an operator's own explicit approval needs no such entry — it is already visible on
+  // run.operatorPublishDecision itself, and duplicating it here would be noise, not visibility.
+  if (authority?.authorized && authority.source === "policy_autonomous") {
+    const advisedAt = now();
+    run.approvalsRequired = [
+      ...run.approvalsRequired.filter((approval) => approval.nodeId !== nextNode.id),
+      {
+        nodeId: nextNode.id,
+        type: "approval_required",
+        reason: `Publish-risk node ${nextNode.id} proceeded under this project's autonomous publishing policy (autonomyMode: "autonomous"); no operator acted. Advisory only — nothing is held.`,
+        requestedAt: advisedAt,
+        source: "policy_autonomous"
+      }
+    ];
   }
 
   // W0 (determinism program, 2026-08-12): publish_payload was $2.73 of the last $5.56 live run and its
@@ -1965,6 +2047,71 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     }
     const reason = executed.ok ? (executionValidation && !executionValidation.ok ? executionValidation.errors[0] ?? "schema_invalid" : "schema_invalid") : executed.code;
     state.warnings = [...(state.warnings ?? []), `publish_executor_deterministic_unavailable:${reason}`];
+  }
+
+  // T15.6 (ADR-2026-08-25-publish-autonomy §4.3) — release_executor: DETERMINISTIC, no model turn,
+  // idempotent keyed on (runId, requestId) via run.releaseLedger. Positioned after publish_executor,
+  // before learning_recorder. Reads publish_executor's own record; calls release_to_production AT MOST
+  // ONCE for this run; polls deploy_status once per dispatch (create-or-poll, the same idiom
+  // captureStage's pdf-tool jobs use — never a wait loop inside one call); skips honestly when nothing
+  // was published. Scoped to LIVE runs and to the releaser node, same reasons the sibling publish-path
+  // routes are: a mock run has no client reach.
+  if (isReleaserNode(nextNode) && liveRun && nextNode.metadata?.releaseExecutorDeterministic === true) {
+    const projectConfig = await repositoryManager.getProjectRepository().get(run.projectId);
+    const releaseCallTool = projectConfig ? (tool: string, args: Record<string, unknown>) => new ProjectMcpAdapter(projectConfig).callTool(tool, args) : undefined;
+    let released: Awaited<ReturnType<typeof runDeterministicReleaseExecutor>>;
+    try {
+      released = await runDeterministicReleaseExecutor({
+        run,
+        requestId: runContext.requestId,
+        deps: { callTool: releaseCallTool }
+      });
+    } catch (error) {
+      released = { ok: false, code: "threw", error: error instanceof Error ? error.message : String(error) };
+    }
+    if (released.ok && released.kind === "pending") {
+      // A release genuinely in flight: release_to_production already succeeded (or was already
+      // ledgered), deploy_status is not yet "ready". Re-queue for one more poll on the next dispatch —
+      // release_to_production is never reachable again for this key.
+      run.releaseLedger = { ...(run.releaseLedger ?? {}), [released.ledgerKey]: released.ledgerEntry };
+      state.status = "queued";
+      delete state.startedAt;
+      delete state.dispatch;
+      state.warnings = [...(state.warnings ?? []), ...released.warnings];
+      run.status = "running";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = now();
+      return { run };
+    }
+    if (released.ok && released.kind === "completed") {
+      // Same fail-closed evidence check publish_executor's model/engine outputs get (publishDecision.ts
+      // enforcePublishExecutionEvidence): an "executed" claim without deployStatus "ready" AND
+      // productionConfirmed true is downgraded to "blocked" before it is validated or persisted — this
+      // module only ever produces a genuinely-evidenced "executed" claim itself, so this is defense in
+      // depth, not the primary control.
+      const enforced = enforcePublishExecutionEvidence(released.output, run);
+      const output = enforced.output;
+      const releaseValidation = validateOutput(output, nextNode.outputSchema);
+      if (releaseValidation.ok) {
+        const completedAt = now();
+        state.status = "completed";
+        state.completedAt = completedAt;
+        state.durationMs = duration(startedAt, completedAt);
+        state.output = output;
+        state.warnings = [...(state.warnings ?? []), ...released.warnings, ...(enforced.downgraded ? ["executed_claim_downgraded_to_blocked", ...enforced.reasons.map((reason) => reason.split(":")[0])] : [])];
+        run.stageOutputs[nextNode.id] = output;
+        run.artifacts.push(buildArtifact(nextNode, output));
+        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.releaseLedger = { ...(run.releaseLedger ?? {}), [released.ledgerKey]: { status: "terminal", requestId: released.ledgerEntry.requestId, performedAt: released.ledgerEntry.status === "terminal" ? released.ledgerEntry.performedAt : now(), output: output as Record<string, unknown> } };
+        run.updatedAt = completedAt;
+        run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+        // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
+        return { run };
+      }
+      state.warnings = [...(state.warnings ?? []), `release_executor_deterministic_unavailable:${releaseValidation.errors[0] ?? "schema_invalid"}`];
+    } else if (!released.ok) {
+      state.warnings = [...(state.warnings ?? []), `release_executor_deterministic_unavailable:${released.code}`];
+    }
   }
 
   // W2b (determinism program, 2026-08-12): learning_recorder writes down what the run DID — which
@@ -2354,7 +2501,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // holds even when the schema was edited: an unevidenced claim is DOWNGRADED to status "blocked"
   // with the missing evidence recorded in blockers, before validation and before anything downstream
   // can read it as a confirmed go-live.
-  if (isPublishExecutorNode(nextNode)) {
+  if (isPublishExecutorNode(nextNode) || isReleaserNode(nextNode)) {
     const enforced = enforcePublishExecutionEvidence(output, run);
     if (enforced.downgraded) {
       output = enforced.output;

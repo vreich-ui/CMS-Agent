@@ -52,7 +52,11 @@ describe("T5 fix 1 — an approved advance re-enters a run held only by the appr
   it("re-dispatches the gate-blocked node instead of returning the blocked run untouched", async () => {
     const { runId, gateId, store } = await blockAtTheGate();
 
-    const cleared = await runNextNode(runId, { executionRepository: store, approved: true });
+    // T15.7 (ADR-2026-08-25-publish-autonomy §7) — `approved` is deprecated as an authority input:
+    // the run's own operator record (resolvePublishAuthority) is what T5 fix 1's re-entry now checks,
+    // so the durable decision is what has to land, not a caller flag.
+    await setOperatorPublishDecision(runId, "approved", store);
+    const cleared = await runNextNode(runId, { executionRepository: store });
 
     const gate = cleared.nodes.find((node) => node.nodeId === gateId)!;
     expect(gate.status).toBe("completed");
@@ -61,7 +65,7 @@ describe("T5 fix 1 — an approved advance re-enters a run held only by the appr
     expect(isApprovalGateStub(gate.output)).toBe(false);
     expect(cleared.approvalsRequired.filter((approval) => approval.nodeId === gateId && approval.pending !== true)).toEqual([]);
     // And the run finishes on the next advance, in the same driver loop — no manual resume + retry.
-    expect((await runNextNode(runId, { executionRepository: store, approved: true })).status).toBe("completed");
+    expect((await runNextNode(runId, { executionRepository: store })).status).toBe("completed");
   });
 
   it("still refuses when the operator's publish decision is withheld — approval is not authority over a veto", async () => {
@@ -197,9 +201,13 @@ describe("T5 fix 1 over MCP — workflow.run_all with approved:true", () => {
     const blocked = (await call("workflow.run_all", { runId: started.runId })).data.run;
     expect(blocked.status).toBe("blocked");
 
+    // T15.7 (ADR-2026-08-25-publish-autonomy §7) — `approved` is deprecated as an authority input;
+    // the durable operator decision is what T5 fix 1's re-entry (and the gate itself) now checks.
+    await call("workflow.set_operator_publish_decision", { runId: started.runId, decision: "approved" });
+
     // Before T5 this returned the blocked run verbatim — the loop stopped on the halted status before
     // taking a single step, and clearing the gate took resume_run + retry_node by hand.
-    const approved = (await call("workflow.run_all", { runId: started.runId, approved: true })).data.run;
+    const approved = (await call("workflow.run_all", { runId: started.runId })).data.run;
     expect(approved.nodes.find((node: { nodeId: string }) => node.nodeId === gateId).status).toBe("completed");
     expect(approved.status).toBe("completed");
   });

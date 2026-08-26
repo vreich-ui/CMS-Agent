@@ -76,17 +76,20 @@ export type ProjectPublishingPolicy = {
   publishEnabled: boolean;
   requiresExplicitPublish: boolean;
   description: string;
-  // T2 (2026-08-13, run_1786557897658_elj34j): whether a NEW run for this project starts with the
-  // operator's durable publish decision (run.operatorPublishDecision, publishDecision.ts) already
-  // "approved". ABSENT is "require_explicit" — today's exact behavior, unchanged: a run starts with
-  // no operator decision and every publish-risk node/publishRun stays refused until
-  // workflow.set_operator_publish_decision is called. "approved" is a PER-PROJECT convenience for a
-  // client that has pre-authorized standing publishes; it never sets the decision to "withheld" (an
-  // operator veto is only ever explicit, see executor.ts applyOperatorPublishPolicyDefault), and an
-  // explicit "withheld" set at any time always overrides it. The decision this produces is recorded
-  // with operatorDecisionSource "project_policy_default" so a receipt can never be misread as
-  // explicit operator sign-off (see publishDecision.ts describeOperatorDecisionSource).
-  operatorDefault?: "approved" | "require_explicit";
+  // T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2) — the ONE autonomy knob, and it SUBSUMES
+  // T2's `operatorDefault` (2026-08-13), which is removed, not kept alongside this. ABSENT is
+  // "operator-gated" — today's exact behavior, unchanged: a run starts with no operator decision and
+  // every publish-risk node/publishRun stays refused until an operator acts (or an explicit approval
+  // is recorded). "autonomous" lets a run with NO operator decision proceed under policy authority —
+  // resolved by publishDecision.resolvePublishAuthority AT GATE-EVALUATION TIME, from the run's
+  // publishingPolicySnapshot (captured once at run creation, §2.5, so a later policy edit can never
+  // change an in-flight run's resolution). This is deliberately NOT applied by stamping
+  // run.operatorPublishDecision at run creation (that was `operatorDefault`'s defect — it fabricated
+  // an operator record nobody wrote): the field holds only what an operator actually said, in every
+  // mode, always (ADR invariant 4). An explicit "withheld" set at any time still always overrides
+  // autonomy (ADR invariant 2) — a project policy has no way to durably block a run it did not also
+  // create, and no way to un-say an operator's veto either.
+  autonomyMode?: "autonomous" | "operator-gated";
   // W7 (2026-08-25, run_1787655709652_4k1z56): node ids whose blockers this project wants treated as
   // HARD blocks even though the engine classifies them EDITORIAL (blockerClassification.ts). The
   // engine's default is that a review node's taste verdict is advisory — recorded on the decision,
@@ -98,7 +101,7 @@ export type ProjectPublishingPolicy = {
   // already classified editorial, so nothing in it can demote an INTEGRITY source to advisory. A
   // project can make its gate stricter than the engine's, never looser. Absent (the case for every
   // project today) means the engine's classification stands unmodified. Server-controlled like every
-  // other publishingPolicy field except operatorDefault: it is declared in the project's definition,
+  // other publishingPolicy field except autonomyMode: it is declared in the project's definition,
   // not patchable through project.update.
   hardBlockerSources?: string[];
 };

@@ -4,12 +4,15 @@ import { MemoryExecutionRepository } from "../../src/agent/repository/memory/Mem
 import { RunConcurrencyError } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { ExecutionRepository } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { WorkflowExecutionRecord } from "../../src/agent/workspace/executionTypes.js";
-import { getRun, resetRun, retryNode, runNextNode, startDryRun, updateRunStatus } from "../../src/agent/workspace/executor.js";
+import { getRun, resetRun, retryNode, runNextNode, setOperatorPublishDecision, startDryRun, updateRunStatus } from "../../src/agent/workspace/executor.js";
 import { repositoryManager } from "../../src/agent/runtime/repositories.js";
 
 const TERMINAL = ["completed", "failed", "blocked", "cancelled"];
 
 const drive = async (runId: string, store: ExecutionRepository, options: { approved?: boolean } = {}) => {
+  // T15.7 (ADR-2026-08-25-publish-autonomy §7) — `approved` is deprecated as an authority input;
+  // the executor now reads the run's own durable operator record instead.
+  if (options.approved) await setOperatorPublishDecision(runId, "approved", store);
   let run = await getRun(runId, store);
   for (let i = 0; run && i < 50 && !TERMINAL.includes(run.status); i++) {
     run = await runNextNode(runId, { executionRepository: store, approved: options.approved });

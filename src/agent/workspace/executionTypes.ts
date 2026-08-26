@@ -89,12 +89,21 @@ export type NodeExecutionState = {
 //                       the gate refused, the run is "blocked", and the node carries its
 //                       publication_decision.v1 "blocked" output as the audit record.
 // A look-ahead entry is replaced (not duplicated) by the attempted entry for the same node.
+//
+// T15.7 (ADR-2026-08-25-publish-autonomy §5) — `source` names the PublishAuthority that produced this
+// entry, present on the ADVISORY shape: `pending` absent/false AND `source: "policy_autonomous"` means
+// the node PROCEEDED under the project's autonomous policy (no operator spoke) rather than having been
+// refused — an autonomous publish must stay exactly as visible in this feed as a gated one, so it gets
+// its own entry naming the authority that let it through, distinct from the "attempted, refused"
+// meaning `pending` absent otherwise carries. Absent `source` on a `pending`-absent entry keeps its
+// pre-T15.7 meaning: a real refusal, recorded before autonomy existed to author anything else here.
 export type ApprovalRequired = {
   nodeId: string;
   type: "approval_required";
   reason: string;
   requestedAt: string;
   pending?: boolean;
+  source?: "operator_explicit" | "policy_autonomous";
 };
 
 // Set when the conductor halts a run because its configured per-run cost ceiling (budgetUsd) has
@@ -214,23 +223,77 @@ export type WorkflowExecutionRecord = {
   budgetBlock?: RunBudgetBlock;
   // P0 §2.2 — THE operator publish veto/approval field: ONE named field, ONE setter, ONE reader.
   // Set ONLY by workflow.set_operator_publish_decision (executor.setOperatorPublishDecision); read
-  // ONLY through publishDecision.isOperatorPublishWithheld / isOperatorPublishApproved, consumed by
-  // publishRun's "operator_not_withheld" gate and the executor's publish-risk dispatch guard.
+  // ONLY through publishDecision.isOperatorPublishWithheld / resolvePublishAuthority, consumed by
+  // publishRun's gates and the executor's publish-risk dispatch guard.
   // "withheld" is a durable operator veto: it blocks workflow.publish_run and every publish-risk
   // node regardless of approved/live flags until the operator replaces it. "approved" is the durable
   // operator approval an "executed" publish_execution.v1 claim must match (its approvalMatched
   // field refers to exactly this record). Absent means no operator decision has been recorded;
   // absence never authorizes anything by itself. Preserved across workflow.reset_run.
+  //
+  // T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2.2, invariant 4) — NOTHING but this setter
+  // ever writes this field, in ANY mode, including "autonomous": autonomy is resolved at
+  // gate-evaluation time from publishingPolicySnapshot below and is NEVER stamped here. A policy
+  // default that fabricates an operator record ("operatorDefault" pre-T15.5) is the exact defect
+  // this invariant closes.
   operatorPublishDecision?: "approved" | "withheld";
   // T2 (2026-08-13, run_1786557897658_elj34j) — WHICH source wrote operatorPublishDecision.
-  // "explicit" is the ONLY source that existed before this field: an operator's own
-  // workflow.set_operator_publish_decision call. "project_policy_default" means run creation applied
-  // the owning project's publishingPolicy.operatorDefault === "approved" (executor.ts
-  // applyOperatorPublishPolicyDefault) — nobody made an explicit call for THIS run. The setter always
-  // writes "explicit", so a later explicit call (approved OR withheld) overwrites a policy default's
-  // source along with its decision; a withheld veto is source "explicit" by construction — the
-  // policy default never produces "withheld". Absent alongside a present operatorPublishDecision
-  // means the record predates this field and is treated as "explicit" (publishDecision.ts
-  // describeOperatorDecisionSource), since explicit was the only source that ever existed then.
-  operatorDecisionSource?: "explicit" | "project_policy_default";
+  // "explicit" is the ONLY source the setter ever writes (T15.5 removed the one other writer,
+  // applyOperatorPublishPolicyDefault). "project_policy_default" is LEGACY ONLY: a run persisted
+  // before T15.5 whose operatorPublishDecision was pre-seeded "approved" by the owning project's
+  // now-removed publishingPolicy.operatorDefault. "policy_autonomous" is reserved for the same
+  // reason — a run's OWN operatorDecisionSource can in practice never carry it (invariant 4 keeps
+  // operatorPublishDecision itself absent under autonomy, so there is nothing here to describe), but
+  // the literal is kept legal so a legacy or foreign record naming it fails no stricter than any
+  // other known source. The autonomous-authorization story lives on the GATE/RECEIPT side instead —
+  // see publishDecision.PublishAuthority and publishExecution.ts's publishAuthority receipt field.
+  // Absent alongside a present operatorPublishDecision means the record predates this field and is
+  // treated as "explicit" (publishDecision.ts describeOperatorDecisionSource), since explicit was
+  // the only source that ever existed then.
+  operatorDecisionSource?: "explicit" | "project_policy_default" | "policy_autonomous";
+  // T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2.5) — the publishing-policy facts this run
+  // needs to resolve publish authority IDENTICALLY on every re-evaluation, captured ONCE at run
+  // creation (executor.ts buildInitialRun / startDryRun) and preserved across workflow.reset_run
+  // exactly like operatorPublishDecision above. publishDecision.resolvePublishAuthority reads ONLY
+  // this snapshot for autonomyMode — never a live project read — so a policy edit made after a run
+  // starts can never change that run's resolution, and two runs of the same URL resolve identically
+  // (invariant 7). Absent (a run predating T15.5) resolves autonomyMode as "operator-gated" — today's
+  // behavior, unchanged.
+  publishingPolicySnapshot?: PublishingPolicySnapshot;
+  // T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3) — release_executor's idempotency ledger,
+  // keyed by `${runId}:${requestId}` (releaseExecution.ts releaseLedgerKey). THE correctness property
+  // this exists for: once release_executor has reached a TERMINAL answer for a key (skipped, executed,
+  // or a real failure), it never calls release_to_production or deploy_status again for that key — a
+  // retry, a stale-dispatch reclaim, or a continuation tick all get the SAME result back. Deliberately
+  // its OWN field, separate from stageOutputs/node.output: retryNode clears those on a node retry, and
+  // a release must stay released across a retry of the node that reports it. A "pending" entry means
+  // release_to_production already succeeded (so it is never called again) but deploy_status has not
+  // yet confirmed — the next dispatch polls once more rather than re-releasing.
+  releaseLedger?: Record<string, ReleaseLedgerEntry>;
+};
+
+// T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3) — see WorkflowExecutionRecord.releaseLedger
+// above and releaseExecution.ts for the module that reads and writes it.
+export type ReleaseLedgerEntry =
+  | { status: "terminal"; requestId: string; performedAt: string; output: Record<string, unknown> }
+  | { status: "pending"; requestId: string; performedAt: string; releaseId?: string; deployedSha?: string; attempts: number };
+
+// T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2.5) — see WorkflowExecutionRecord.
+// publishingPolicySnapshot above. `publishEnabled` rides along for audit/UI completeness (ADR §2.5's
+// parenthetical); the actual publishEnabled/env-kill-switch gate stays a LIVE read (publisher.ts
+// isProjectPublishEnabled) by design, because a kill-switch a snapshot could stale is not a
+// kill-switch.
+export type PublishingPolicySnapshot = {
+  autonomyMode: "autonomous" | "operator-gated";
+  publishEnabled: boolean;
+  // T15.11 (2026-08-25, #190; ADR-2026-08-25-publish-autonomy §6.3) — this run's CHARTERED
+  // publishable object types, resolved from publishableTypeCharter.resolvePublishableTypeCharter(run.
+  // workflowId) and captured here ONCE at run creation, for the identical determinism reason
+  // autonomyMode is snapshotted above: buildObjectPublishPlan (objectPublishExecution.ts) reads ONLY
+  // this field, never the live charter, so a code-level charter change landing between run creation
+  // and publish_payload's dispatch can never alter an in-flight run's outcome (invariant 7). Absent
+  // only for a run that predates T15.11; buildObjectPublishPlan falls back to its own
+  // OBJECT_PUBLISHABLE_TYPES default (page, navigation) in that case — today's exact pre-T15.11
+  // behavior, unchanged.
+  publishableTypes?: readonly string[];
 };

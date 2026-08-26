@@ -391,9 +391,110 @@ function boundIntake(envelope) {
   throw new CloneError('intake_cannot_be_bounded');
 }
 
+// T15.30 (#206; ADR-2026-08-25-structure-studio §3) — THE DEMAND-DRIVEN ENTRY.
+//
+// "ONE node graph, two entry adapters." buildCloneIntake is that adapter, for both. A clone-driven
+// call supplies `captureRunId` (+ `mapping`/`emissionReport`) and the briefing's `pages`/`site`/
+// `theme` are DERIVED from a real capture. A demand-driven call supplies `structureBrief` instead —
+// a tenant, an operator, or another workflow naming the structure(s) it wants with no source site
+// involved — and this module normalizes it into the IDENTICAL clone_intake.v1 shape: same `registry`,
+// same `site`/`theme` palette resolution, same `recipes` reuse index, same `budget` law. Everything
+// downstream of this function (layout_analyst through clone_report) is the SAME code either way; only
+// `entryMode` on the envelope, and which fields are populated, differ.
+//
+// `structureBrief` shape: `{ sourceUrl?, needs: [{ pageRef, kind: 'section_template'|'template',
+// sourceShape?, emittedShape?, rationale? }], pages?: [...] }`. `needs` is REQUIRED and non-empty —
+// a demand-driven run with nothing to ask for is a caller error, not an empty-but-valid run.
+// `pages` is the OPTIONAL passthrough that lets a demand-driven brief also name existing pages to
+// restamp once a recipe mints (the "layout_restamp participates only when the brief asks" case) —
+// same `CloneBriefingPage` shape a clone-driven run derives from its mapping, just supplied directly.
+//
+// layout_analyst — the one stage that GENUINELY requires a snapshot to do its job (comparing a
+// SOURCE shape against an EMITTED one) — is skipped on a demand-driven run through the existing
+// skipPredicates machinery (`clone_demand_driven_entry`, cloneConductorNodes.ts/skipPredicates.ts),
+// never through a second node array. What replaces its output for recipe_designer is `mismatches`
+// below: the SAME `clone_layout_analysis.v1` shape (`{pageRef, sourceShape, emittedShape,
+// missingRecipeKind, rationale}`), built directly and deterministically from `structureBrief.needs`
+// rather than by comparing shapes — the vocabulary recipe_designer already reads is unchanged, only
+// who produced it differs. `evaluateCloneNoActionableMismatches` (skipPredicates.ts) already reads a
+// `mismatches` array off ANY upstream carrier by field name, so recipe_designer's OWN skip predicate
+// needs no change at all to pick this up when layout_analyst was skipped.
+//
+// DETERMINISM (#200). This whole branch is a pure function of `structureBrief`'s own content: no
+// clock, no run id, and — this is the specific trap ADR §3 names — no CAPTURE id. `captureRunId` is
+// `null` on a demand-driven envelope, never a fabricated or borrowed one, and nothing downstream of
+// clone_intake (recipe_mint/theme_bind/layout_restamp/clone_report — see buildRecipeMintPlan,
+// buildThemeApplyPlan, buildRestampOps, buildCloneRunReport, none of which read intake.captureRunId)
+// ever reads it. That is what makes convergence provable: two intakes built from byte-identical
+// registry/site/theme/recipes/mismatches content — one clone-driven, one demand-driven — feed
+// byte-identical input to every stage downstream of clone_intake, regardless of what captureRunId (if
+// any) either one carries.
+const STRUCTURE_BRIEF_ACTIONABLE_KINDS = ['section_template', 'template'];
+
+/** Total, deterministic validation of a demand-driven `structureBrief`. Never coerces a malformed
+ *  brief into an empty-but-valid one — an unusable brief is a refusal, not a silently smaller run. */
+function validateStructureBrief(structureBrief) {
+  if (!isPlainObject(structureBrief)) {
+    throw new CloneError(
+      'A structureBrief is required when clone_intake is called without a captureRunId (the demand-driven entry, ADR-2026-08-25-structure-studio §3).'
+    );
+  }
+  if (!Array.isArray(structureBrief.needs) || structureBrief.needs.length === 0) {
+    throw new CloneError('structureBrief.needs must be a non-empty array naming the structure(s) wanted.');
+  }
+  const seenRefs = new Set();
+  structureBrief.needs.forEach((need, index) => {
+    if (!isPlainObject(need)) throw new CloneError(`structureBrief.needs[${index}] must be an object.`);
+    if (typeof need.pageRef !== 'string' || !need.pageRef.trim()) {
+      throw new CloneError(`structureBrief.needs[${index}] requires a non-empty pageRef naming this need.`);
+    }
+    if (seenRefs.has(need.pageRef)) throw new CloneError(`structureBrief.needs carries a duplicate pageRef "${need.pageRef}".`);
+    seenRefs.add(need.pageRef);
+    if (!STRUCTURE_BRIEF_ACTIONABLE_KINDS.includes(need.kind)) {
+      throw new CloneError(
+        `structureBrief.needs[${index}].kind must be one of ${STRUCTURE_BRIEF_ACTIONABLE_KINDS.join(', ')}; got ${JSON.stringify(need.kind ?? null)}.`
+      );
+    }
+  });
+}
+
+/** `structureBrief.needs`, normalized into the EXACT shape layout_analyst's own
+ *  `clone_layout_analysis.v1.mismatches` carries — see the header comment above for why recipe_designer
+ *  needs no change to consume this when layout_analyst was skipped. */
+function demandMismatches(structureBrief) {
+  return structureBrief.needs.map((need) => ({
+    pageRef: need.pageRef.trim(),
+    sourceShape: Array.isArray(need.sourceShape) ? need.sourceShape.map(String) : [],
+    emittedShape: Array.isArray(need.emittedShape) ? need.emittedShape.map(String) : [],
+    missingRecipeKind: need.kind,
+    rationale:
+      typeof need.rationale === 'string' && need.rationale.trim()
+        ? need.rationale.trim()
+        : 'Requested directly via structureBrief; no capture snapshot exists to compare against.',
+  }));
+}
+
+/** `structureBrief.pages` (OPTIONAL), normalized into the same `CloneBriefingPage` shape a
+ *  clone-driven run derives from its mapping. Absent/malformed entries are dropped rather than
+ *  refused — a demand-driven brief with no restamp target is the normal case, not an error. */
+function demandBriefingPages(structureBrief) {
+  const pages = Array.isArray(structureBrief?.pages) ? structureBrief.pages : [];
+  return pages
+    .filter((page) => isPlainObject(page) && typeof page.objectId === 'string' && page.objectId.trim())
+    .map((page) => ({
+      pageRef: typeof page.pageRef === 'string' && page.pageRef.trim() ? page.pageRef.trim() : page.objectId,
+      objectId: page.objectId,
+      route: typeof page.route === 'string' ? page.route : null,
+      sourceShape: Array.isArray(page.sourceShape) ? page.sourceShape.map(String) : [],
+      emittedShape: Array.isArray(page.emittedShape) ? page.emittedShape.map(String) : [],
+      gaps: [],
+      candidateIds: [],
+    }));
+}
+
 /**
  * Assemble the bounded clone BRIEFING from already-fetched pieces (CLONE-ENGINE-API.md §1, amended by
- * CLONE-INTAKE-FIX.md).
+ * CLONE-INTAKE-FIX.md, amended by T15.30/#206 — see the demand-driven-entry comment above).
  *
  * This is intake, not discovery: every argument is a value the CALLER already fetched (an emission
  * report, an inventory listing, a `registry_get` response, the `object_get` bodies of the site and the
@@ -409,9 +510,14 @@ function boundIntake(envelope) {
  * DROPPED ARGUMENTS: `snapshot` and `policy`. Neither appears anywhere in the briefing shape — the
  * snapshot was 241,558 of the 637,769 chars and no AI node ever read it, and the rights policy governs
  * capture and emission, both already finished by the time this envelope exists.
+ *
+ * ENTRY MODE: exactly one of `captureRunId` (clone-driven) or `structureBrief` (demand-driven,
+ * T15.30/#206) is expected; `captureRunId` truthy selects clone mode, its absence selects demand
+ * mode and `structureBrief` is then required. `mapping`/`emissionReport` are read only in clone mode.
  */
 export function buildCloneIntake({
   captureRunId,
+  structureBrief,
   target,
   mapping,
   siteBody,
@@ -422,11 +528,15 @@ export function buildCloneIntake({
   pageTypeRegistry,
 }) {
   if (!target || typeof target !== 'string') throw new CloneError('A named clone target is required.');
-  if (!captureRunId || typeof captureRunId !== 'string') {
-    throw new CloneError('A captureRunId is required to bind this workspace to the capture run it clones.');
+
+  const driven = captureRunId ? 'clone' : 'demand';
+  if (driven === 'clone') {
+    if (typeof captureRunId !== 'string') throw new CloneError('A captureRunId is required to bind this workspace to the capture run it clones.');
+    if (mapping?.schemaVersion !== 'capture-map.v1')
+      throw new CloneError('Clone intake requires a capture-map.v1 mapping.');
+  } else {
+    validateStructureBrief(structureBrief);
   }
-  if (mapping?.schemaVersion !== 'capture-map.v1')
-    throw new CloneError('Clone intake requires a capture-map.v1 mapping.');
 
   const sectionTypes = sectionTypesFromRegistry(componentRegistry);
   // "Nothing here may create a section type" only means anything if the registry that says what
@@ -457,20 +567,44 @@ export function buildCloneIntake({
     );
   }
 
+  // T15.30 — the one structural fact that tells every downstream stage (and skipPredicates.ts'
+  // `clone_demand_driven_entry`) which entry this run took. NEVER a wall-clock value, never a run id
+  // of its own — just which of the two REQUIRED-mutually-exclusive inputs this call received.
+  const sourceUrl =
+    driven === 'demand' && typeof structureBrief.sourceUrl === 'string' && structureBrief.sourceUrl.trim()
+      ? structureBrief.sourceUrl.trim()
+      : null;
+
   const envelope = {
     artifact: INTAKE_ARTIFACT,
     summary:
-      `Bounded clone briefing for "${target}" from capture run ${captureRunId}. Shapes, slots and ` +
-      'vocabulary only: the deterministic stages object_get the full page, site and theme bodies ' +
-      'themselves. budget.truncated names everything this briefing had to leave out.',
-    captureRunId,
+      driven === 'clone'
+        ? `Bounded clone briefing for "${target}" from capture run ${captureRunId}. Shapes, slots and ` +
+          'vocabulary only: the deterministic stages object_get the full page, site and theme bodies ' +
+          'themselves. budget.truncated names everything this briefing had to leave out.'
+        : `Bounded clone briefing for "${target}" from a demand-driven structure brief (no capture run ` +
+          `involved). ${structureBrief.needs.length} structure(s) requested directly. Shapes, slots and ` +
+          'vocabulary only; budget.truncated names everything this briefing had to leave out.',
+    entryMode: driven,
+    // `null`, never omitted or fabricated — a demand-driven envelope states plainly that no capture
+    // run backs it, rather than leaving the field absent (which would read as "not yet resolved").
+    captureRunId: driven === 'clone' ? captureRunId : null,
+    // Present only for a demand-driven run whose brief stated one — the reference this run's minted
+    // templates state as their own provenance.sourceUrl (ADR §4.1) when they are later deposited into
+    // the cross-tenant library. `null` when absent, never fabricated; a deposit with no stateable
+    // sourceUrl refuses at that later stage (templateProvenance.ts), not here.
+    sourceUrl,
     target,
     // T13.3: `palette`, not `brandTokens` — see the comment on `themeBriefing` above. The real
     // platform field this was read FROM (siteBody.brandTokens) is unchanged.
     site: { objectId: activeSites[0].object_id ?? activeSites[0].objectId ?? null, palette },
     theme: themeBriefing(theme, Array.isArray(inventory?.theme) ? inventory.theme : []),
     registry: { sectionTypes, pageTypes },
-    pages: briefingPages(mapping, emissionReport),
+    pages: driven === 'clone' ? briefingPages(mapping, emissionReport) : demandBriefingPages(structureBrief),
+    // T15.30 — present ONLY on a demand-driven envelope: the SAME shape layout_analyst's own
+    // `clone_layout_analysis.v1.mismatches` carries, built directly from `structureBrief.needs`
+    // rather than derived by comparison. See the header comment above `validateStructureBrief`.
+    ...(driven === 'demand' ? { mismatches: demandMismatches(structureBrief) } : {}),
     recipes: {
       section_template: recipeIndex(inventory?.section_template, 'section_template'),
       template: recipeIndex(inventory?.template, 'template'),

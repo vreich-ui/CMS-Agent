@@ -73,10 +73,27 @@ export type SkipPredicate =
   // whose `missingRecipeKind` is "section_template" or "template". A mismatch marked "none" is an
   // honest analyst answer that NO recipe closes that divergence — it is evidence against running the
   // designer, never for it. Absent/unreadable ledger runs the node.
-  | { when: "clone_no_actionable_mismatches"; reason?: string };
+  | { when: "clone_no_actionable_mismatches"; reason?: string }
+  // T15.30 clone_conductor — layout_analyst's gate (#206; ADR-2026-08-25-structure-studio §3). Skip
+  // when the upstream clone_intake envelope POSITIVELY declares entryMode === "demand": a
+  // demand-driven run carries no capture snapshot to diff a source shape against, so there is
+  // nothing for the layout analyst to compare — clone_intake states the equivalent mismatch ledger
+  // directly (its own `mismatches` field, read by `clone_no_actionable_mismatches` above via the
+  // SAME generic "any carrier declaring a `mismatches` array" rule, no change needed there). Absent/
+  // unreadable entryMode RUNS the node (rule 3) — an older envelope shape that predates entryMode is
+  // analyzed exactly as before.
+  | { when: "clone_demand_driven_entry"; reason?: string }
+  // T15.34 clone_conductor — pdf_template_designer's gate (#210; ADR-2026-08-25-structure-studio
+  // §7). Skip when the upstream pdf_template_intake envelope POSITIVELY declares zero entries — no
+  // pdfTemplateBrief was supplied on this run's initialInput (the overwhelming majority of studio
+  // runs, which design site structure, not PDF templates) or every briefed entry was rejected at
+  // intake (e.g. no siteId). Mirrors clone_no_actionable_mismatches exactly: reads a structural fact
+  // of ONE named upstream envelope (never raw initialInput itself — that stays pdf_template_intake's
+  // job), and an absent/unreadable envelope RUNS the node (rule 3).
+  | { when: "clone_no_pdf_template_entries"; reason?: string };
 
 export type SkipPredicateKind = SkipPredicate["when"];
-export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks", "clone_no_actionable_mismatches"];
+export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks", "clone_no_actionable_mismatches", "clone_demand_driven_entry", "clone_no_pdf_template_entries"];
 
 // ---------------------------------------------------------------------------------------------
 // REVIEW QUARTET TIERING — operator policy, decided by Wolf 2026-08-12. Three tiers:
@@ -389,6 +406,48 @@ function evaluateCloneNoActionableMismatches(predicate: Extract<SkipPredicate, {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Predicate 8 — the clone_conductor demand-driven-entry gate (T15.30/#206). layout_analyst's whole
+// job is comparing a SOURCE shape to an EMITTED one; a demand-driven run has no capture snapshot to
+// derive either from, so the comparison is not merely unneeded, it is impossible to perform honestly.
+// clone_intake states which entry produced this run (`entryMode`, engine/clone.mjs's
+// buildCloneIntake) as a STRUCTURAL fact of its own envelope — never a model's inference — so this
+// predicate reads it exactly the way capture_rights_allow_extracted_copy reads `policy.rights.content`.
+function evaluateCloneDemandDrivenEntry(predicate: Extract<SkipPredicate, { when: "clone_demand_driven_entry" }>, context: SkipEvaluationContext): SkipVerdict {
+  const basis: string[] = [];
+  for (const carrier of carriersFor(context)) {
+    if (isPlaceholder(carrier)) { basis.push("carrier: mock placeholder (dryRun) — not evidence"); continue; }
+    if (!isObject(carrier) || typeof carrier.entryMode !== "string") continue;
+    basis.push(`entryMode: ${carrier.entryMode}`);
+    return carrier.entryMode === "demand"
+      ? { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} skipped: clone_intake declares entryMode "demand" — a demand-driven run carries no capture snapshot to diff a source shape against, so there is nothing for the layout analyst to compare.`, basis, warnings: [] }
+      : { skip: false, predicate, reason: `${context.nodeId} runs: clone_intake declares entryMode "${carrier.entryMode}", not "demand".`, basis, warnings: [] };
+  }
+  basis.push("no entryMode declared on any upstream envelope");
+  return { skip: false, predicate, reason: `${context.nodeId} runs: no upstream clone_intake envelope declares entryMode, and an unanswered question is answered by running.`, basis, warnings: [] };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Predicate 9 — the clone_conductor pdf-template gate (T15.34/#210; ADR-2026-08-25-structure-studio
+// §7). pdf_template_designer exists to propose the template_json content that closes a BRIEFED pdf
+// template need; when pdf_template_intake named none (no pdfTemplateBrief on this run, or every
+// entry rejected at intake) there is nothing to design. Reads `entries` as an ARRAY, structurally —
+// the same shape clone_no_actionable_mismatches reads `mismatches` — never `rejectedEntries`, which
+// is evidence of what was REFUSED, not of what remains to design.
+function evaluateCloneNoPdfTemplateEntries(predicate: Extract<SkipPredicate, { when: "clone_no_pdf_template_entries" }>, context: SkipEvaluationContext): SkipVerdict {
+  const basis: string[] = [];
+  for (const carrier of carriersFor(context)) {
+    if (isPlaceholder(carrier)) { basis.push("carrier: mock placeholder (dryRun) — not evidence"); continue; }
+    if (!isObject(carrier) || carrier.artifact !== "pdf_template_intake.v1" || !Array.isArray(carrier.entries)) continue;
+    basis.push(`entries: ${carrier.entries.length}`);
+    return carrier.entries.length === 0
+      ? { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} skipped: pdf_template_intake named zero usable entries (no pdfTemplateBrief on this run, or every briefed entry was rejected at intake), so there is no PDF template to design.`, basis, warnings: [] }
+      : { skip: false, predicate, reason: `${context.nodeId} runs: pdf_template_intake named ${carrier.entries.length} PDF-template entrie(s) to design.`, basis, warnings: [] };
+  }
+  basis.push("no pdf_template_intake envelope declared on any upstream carrier");
+  return { skip: false, predicate, reason: `${context.nodeId} runs: no upstream pdf_template_intake envelope declares an entries array, and an unanswered question is answered by running.`, basis, warnings: [] };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Metadata parsing. `skipWhen` accepts a single predicate or an array of them; an array means OR
 // (the first predicate that fires skips the node), which is the only composition rule worth having
 // while predicates are this few — AND would let two half-true conditions add up to a skip nobody
@@ -421,6 +480,8 @@ const evaluatePredicate = (predicate: SkipPredicate, context: SkipEvaluationCont
     case "capture_rights_allow_extracted_copy": return evaluateCaptureRightsAllowExtractedCopy(predicate, context);
     case "capture_no_declined_blocks": return evaluateCaptureNoDeclinedBlocks(predicate, context);
     case "clone_no_actionable_mismatches": return evaluateCloneNoActionableMismatches(predicate, context);
+    case "clone_demand_driven_entry": return evaluateCloneDemandDrivenEntry(predicate, context);
+    case "clone_no_pdf_template_entries": return evaluateCloneNoPdfTemplateEntries(predicate, context);
     default: {
       // Unreachable through readSkipPredicates; kept because an unrecognized rule must be inert
       // rather than throwing inside a dispatch path.

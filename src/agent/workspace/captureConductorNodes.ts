@@ -1,5 +1,6 @@
 import { SUPPORTED_SECTION_TYPES } from "../capture/engine/map.mjs";
 import type { WorkspaceNode } from "./nodeTypes.js";
+import { composeWorkflowNodes } from "./publishingTail.js";
 
 // T12.23 — the classifier's vocabulary is GENERATED from the builder, never restated beside it.
 //
@@ -30,10 +31,17 @@ const CLASSIFIER_VOCABULARY = [...SUPPORTED_SECTION_TYPES].sort().join(", ");
 //   gap_adjudicator — turns residual gaps into the W10 evidence feed + the run report's human
 //     summary. Each carries a tight per-node modelConfig budget.
 //
-// HUMAN GATE PRESERVED: the workflow ENDS at capture_report (prepared report + never-released
-// drafts). No node here is riskLevel publish/admin, no node's allowedTools include
-// project.call_tool or any publish verb, and the emission transport hard-refuses
-// object_publish / release_to_production / trigger_netlify_build / deploy before any wire call.
+// T15.7 (ADR-2026-08-25-publish-autonomy §6, §9) — the array below is the UPSTREAM only: crawl
+// through gap_adjudicator. There is no human gate here or anywhere else in this workflow — Wolf,
+// 2026-08-25: "this is agentic CMS ... it needs to be assumed that the human is not involved." The
+// side publish path this comment used to describe (T14.5's capture_publish node, riskLevel "write" to
+// dodge the publish-risk machinery) is DELETED. capture_conductor's node array is instead COMPOSED —
+// see listCaptureConductorNodes below — as this upstream + the shared publishing tail's PUBLISH
+// segment (publishingTail.ts: publish_payload -> publication_controller -> publish_executor ->
+// release_executor -> learning_recorder), the identical tail publishing_conductor uses, with
+// publish_payload bound to capture_emit_live/capture_score per the ADR's boundary contract. capture's
+// own terminal report (capture_report, below) runs AFTER the tail and reports on what it did; it is
+// no longer where the human gate "begins" — there is no human gate.
 //
 // LONG-RUN PLANE: capture_crawl creates the pdf-tool capture job (T12.8: create_capture_job /
 // get_capture_job_status) and each dispatch performs at most ONE create-or-poll; a non-terminal
@@ -111,7 +119,7 @@ export const captureConductorNodes = [
     name: "Block Classifier (AI judgment 1 of 3)",
     kind: "judgment",
     description: "Judges ONLY the blocks the heuristic mapper declined, proposing a governed sectionType per declined block. Suggestions are re-validated by the deterministic builder downstream — an invalid or unregistered type is rejected, never coerced.",
-    prompt: `Objective: for EACH entry in capture_map's declinedBlocks ledger (and ONLY those blocks — never re-judge a block the mapper already mapped), propose the single best governed sectionType from the mapper's own vocabulary (${CLASSIFIER_VOCABULARY}) or propose nothing when no governed type fits.\nSeveral of these are STRUCTURAL types the mapper builds from a block's recovered DOM shape (block.structure: lists, tables, quotes, question/answer pairs) rather than from its prose — faq, comparison_table, testimonial, stats, timeline, steps and checklist. Suggesting one for a block whose snapshot carries no such structure is not an error, but the builder will reject it and the block stays declined, so prefer a type the block's own evidence can actually fill.\nInputs expected: capture_map's envelope (declinedBlocks with why/nearestType/missingCapability, plus the mapping for context).\nOutput required: block_classification.v1 {artifact, summary, suggestions: [{blockRef, sectionType, rationale}]}. An empty suggestions array is a valid, honest answer.\nRe-validation contract: your suggestions are ADVISORY. The deterministic builder re-validates every one (type registry, buildability, PageType allowance); an invalid or unregistered type is rejected, never coerced — so never invent a type name outside the vocabulary above and never suggest a block outside the declined ledger.\nBlocker criteria: no capture_map envelope in your input.\n${AI_SAFETY_FOOTER}`,
+    prompt: `Objective: for EACH entry in capture_map's declinedBlocks ledger (and ONLY those blocks — never re-judge a block the mapper already mapped), propose the single best governed sectionType from the mapper's own vocabulary (${CLASSIFIER_VOCABULARY}) or propose nothing when no governed type fits.\nSeveral of these are STRUCTURAL types the mapper builds from a block's recovered DOM shape (block.structure: lists, tables, quotes, question/answer pairs) rather than from its prose — faq, comparison_table, testimonial, stats, timeline, steps and checklist. Suggesting one for a block whose snapshot carries no such structure is not an error, but the builder will reject it and the block stays declined, so prefer a type the block's own evidence can actually fill.\nEmbeds (third-party iframes: video/maps/booking/social widgets) are first-class now — a recognized provider is placed automatically as its own content_embed section before you ever see this ledger, with no judgment call needed from you. A ledger entry with nearestType "content_embed" is NOT a block you can retype: it means an embedded widget's provider was not recognized (or was declined by policy), and it exists here only so the miss is visible — content_embed is outside your vocabulary above, so never propose a sectionType for one.\nInputs expected: capture_map's envelope (declinedBlocks with why/nearestType/missingCapability, plus the mapping for context).\nOutput required: block_classification.v1 {artifact, summary, suggestions: [{blockRef, sectionType, rationale}]}. An empty suggestions array is a valid, honest answer.\nRe-validation contract: your suggestions are ADVISORY. The deterministic builder re-validates every one (type registry, buildability, PageType allowance); an invalid or unregistered type is rejected, never coerced — so never invent a type name outside the vocabulary above and never suggest a block outside the declined ledger.\nBlocker criteria: no capture_map envelope in your input.\n${AI_SAFETY_FOOTER}`,
     inputSchema: openInput,
     outputSchema: envelopeSchema("block_classification.v1", {
       suggestions: {
@@ -283,34 +291,11 @@ export const captureConductorNodes = [
     modelConfig: { maxTurns: 4, toolCallLimit: 3, timeout: 180000, budgetUsd: 0.4, maxOutputTokens: 6000 }
   },
   {
-    id: "capture_publish",
-    name: "Capture Publish (deterministic — live)",
-    description: "Deterministic publish tail: publishes every object this run WROTE and validated clean, then releases production once. No human gate. trigger_netlify_build and deploy stay unreachable; an operator's explicit veto still stops it.",
-    kind: "publishing",
-    prompt: `Objective: publish what this capture run wrote, and release production once.\nThis stage is deterministic and reaches the live site. It publishes an object when the emission's OWN validation of that object passed and nothing quarantined it, and it names everything it holds back with the reason. It then calls release_to_production exactly once for the whole set.\nOutput required: capture_publish_run.v1 envelope. Never fabricate a publication: if the engine refuses, the node blocks.\n${DETERMINISTIC_PROMPT_FOOTER}`,
-    inputSchema: openInput,
-    outputSchema: envelopeSchema("capture_publish_run.v1", { plan: { type: "object" }, run: { type: "object" }, policy: { type: "object" } }),
-    allowedTools: ["stage.get_output", "stage.list_outputs"],
-    assignedSkills: [],
-    requiredInputs: ["capture_emit_live"],
-    produces: ["capture_publish_run.v1"],
-    // The only write-to-production node in the workflow. riskLevel "write" is what the publish-risk
-    // machinery reads; the capture node-set test asserts no capture node is publish-RISK in the
-    // approval sense, because approval is the project's publishingPolicy decision, not a per-node one.
-    riskLevel: "write",
-    dependsOn: ["capture_emit_live", "capture_score"],
-    status: "active",
-    position: { x: 1980, y: 160 },
-    updatedAt: UPDATED_AT,
-    metadata: { captureStageDeterministic: "publish" },
-    modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 300000, budgetUsd: 0.05, maxOutputTokens: 4000 }
-  },
-  {
     id: "capture_report",
     name: "Capture Run Report (terminal)",
     kind: "reporting",
-    description: "Deterministic terminal assembly: rubric verdict, coverage delta, the draft ledger, what went LIVE and what was withheld and why, gaps by capability, the W10 evidence feed, and the adjudicator's human summary. The workflow ENDS here.",
-    prompt: `Objective: assemble the terminal run report — rubric verdict, coverage delta, draft ledger (created/reused/quarantined/validation states), the publication ledger (published/withheld/release), gaps grouped by missing capability, the W10 evidence feed (one entry per residual gap, carrying the adjudicator's disposition where present), and the human summary.\nOutput required: capture_run_report.v1 envelope, including the 'publication' block: what went live, what was withheld and why, and the release. This node is the workflow's END.\n${DETERMINISTIC_PROMPT_FOOTER}`,
+    description: "Deterministic terminal assembly: rubric verdict, coverage delta, the draft ledger, what went LIVE and what was withheld and why, gaps by capability, the W10 evidence feed, and the adjudicator's human summary. The workflow ENDS here — after the shared publishing tail, reporting on what the tail did.",
+    prompt: `Objective: assemble the terminal run report — rubric verdict, coverage delta, draft ledger (created/reused/quarantined/validation states), the publication ledger (published/withheld/release, read from the shared tail's own publish_executor/release_executor records), gaps grouped by missing capability, the W10 evidence feed (one entry per residual gap, carrying the adjudicator's disposition where present), and the human summary.\nOutput required: capture_run_report.v1 envelope, including the 'publication' block: what went live, what was withheld and why, and the release. This node is the workflow's END.\n${DETERMINISTIC_PROMPT_FOOTER}`,
     inputSchema: openInput,
     outputSchema: envelopeSchema("capture_run_report.v1", { rubric: { type: "object" }, drafts: { type: "object" }, w10EvidenceFeed: { type: "array" }, humanSummary: { type: "string" }, publication: { type: "object" } }),
     allowedTools: ["stage.get_output", "stage.list_outputs", "learning.record_observation"],
@@ -318,9 +303,11 @@ export const captureConductorNodes = [
     requiredInputs: ["capture_score", "gap_adjudicator"],
     produces: ["capture_run_report.v1"],
     riskLevel: "read",
-    dependsOn: ["capture_score", "gap_adjudicator", "capture_emit_live", "capture_publish"],
+    // T15.7 — capture_publish is gone; capture_report now reports on the shared tail's OWN terminal
+    // evidence: publish_executor (what published/failed/withheld) and release_executor (the release).
+    dependsOn: ["capture_score", "gap_adjudicator", "capture_emit_live", "publish_executor", "release_executor"],
     status: "active",
-    position: { x: 1980, y: 0 },
+    position: { x: 2640, y: 0 },
     updatedAt: UPDATED_AT,
     metadata: { captureStageDeterministic: "report" },
     modelConfig: { maxTurns: 2, toolCallLimit: 2, timeout: 60000, budgetUsd: 0.05, maxOutputTokens: 4000 }
@@ -331,8 +318,19 @@ export const captureConductorNodes = [
 // the deterministic capture route with zero model calls; tests assert both facts.
 export const CAPTURE_AI_NODE_IDS = ["block_classifier", "copy_regenerator", "gap_adjudicator"] as const;
 
+// T15.7 (ADR-2026-08-25-publish-autonomy §6.1, §6.2) — capture_conductor's node array is this
+// module's own upstream (crawl through gap_adjudicator, plus the terminal capture_report) COMPOSED
+// with the shared publishing tail's PUBLISH segment only — capture authors no article body, so the
+// authoring segment (contract_intelligence/artifact_plan/article_body) stays out — via
+// composeWorkflowNodes (publishingTail.ts), with publish_payload bound to
+// [capture_emit_live, capture_score] exactly as the ADR's §6.2 boundary table declares. This is what
+// replaces the deleted capture_publish side path: capture_conductor now reaches object_publish and
+// release_to_production through the IDENTICAL publish_executor/release_executor nodes
+// publishing_conductor uses, with the identical publish-risk safety machinery able to see them
+// (executor.ts's isPublishRisk/approvalsRequired/attention-feed — none of which could see
+// riskLevel:"write" capture_publish).
 export function listCaptureConductorNodes(): WorkspaceNode[] {
-  return captureConductorNodes.map((node) => ({
+  const upstream = captureConductorNodes.map((node) => ({
     ...node,
     dependsOn: [...node.dependsOn],
     allowedTools: [...node.allowedTools],
@@ -341,4 +339,30 @@ export function listCaptureConductorNodes(): WorkspaceNode[] {
     position: { ...node.position },
     metadata: node.metadata ? structuredClone(node.metadata) : undefined
   }));
+  const composed = composeWorkflowNodes(
+    upstream,
+    { publish_payload: ["capture_emit_live", "capture_score"] },
+    { authoring: false, publish: true }
+  );
+  // The tail node DEFINITIONS (schema, prompt, riskLevel, tool grant) are the SAME canonical objects
+  // publishing_conductor uses — composeWorkflowNodes hands back fresh per-workflow copies (never the
+  // canonical ones), so retagging capture's OWN copies below can never reach back into
+  // publishing_conductor's node set. Only the three nodes whose DISPATCH must differ for a multi-object
+  // emission report (rather than a single client_object) are retagged; release_executor and
+  // learning_recorder need no capture-specific code at all — both are already object-agnostic
+  // deterministic routes (releaseExecutorDeterministic reads only publish_executor's own
+  // publishCommitted flag; learningRecorderDeterministic reads only run facts).
+  for (const node of composed) {
+    if (node.id === "publish_payload") {
+      // The DTC deterministic route (metadata.publishPayloadDeterministic) reads article_body, which
+      // capture never produces; left in place it would degrade gracefully (fall through with a
+      // warning) rather than mis-firing, but capture's own captureStageDeterministic route is the
+      // correct one, so the inherited DTC flag is dropped to avoid a spurious warning on every run.
+      const { publishPayloadDeterministic: _dtcFlag, ...rest } = node.metadata ?? {};
+      node.metadata = { ...rest, captureStageDeterministic: "publish_payload" };
+    } else if (node.id === "publication_controller" || node.id === "publish_executor") {
+      node.metadata = { ...(node.metadata ?? {}), captureStageDeterministic: node.id };
+    }
+  }
+  return composed;
 }

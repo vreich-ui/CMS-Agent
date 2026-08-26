@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGateEvents, buildLearningObservations, buildNodeFacts, collectRunBlockers } from "../../../src/agent/workspace/learningRecord.js";
+import { buildCaptureFacts, buildCloneFacts, buildGateEvents, buildLearningObservations, buildNodeFacts, collectRunBlockers } from "../../../src/agent/workspace/learningRecord.js";
 import { getWorkspaceNode } from "../../../src/agent/workspace/nodes.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
 import type { ModelUsageSummary } from "../../../src/agent/observability/modelUsageTypes.js";
@@ -138,6 +138,172 @@ describe("W2b — the record is templated over structured run facts", () => {
   });
 });
 
+// T15.15 (#194) — learning parity: capture_conductor and clone_conductor now compose the shared
+// publishing tail (T15.7/#187, T15.10/#189), so learning_recorder dispatches for them exactly as it
+// does for publishing_conductor. This suite proves their OWN facts — fidelity, the gap ledger,
+// quarantines with reasons, the recipe mint/theme/restamp ledgers, the capability backlog — reach
+// learning_observations.v1 through the SAME templated envelope, never a forked recorder, and that the
+// facts read are all TRANSITIVE ANCESTORS of learning_recorder's own dependsOn (never a sibling like
+// gap_adjudicator or the terminal *_report nodes), so the record cannot vary by dispatch order.
+const captureRun = (overrides: Partial<WorkflowExecutionRecord> = {}) => ({
+  runId: "run_capture_w15_15",
+  status: "completed" as const,
+  errors: [],
+  approvalsRequired: [],
+  nodes: [],
+  stageOutputs: {
+    capture_crawl: {
+      artifact: "capture_snapshot.v1",
+      summary: "fixture",
+      sourceUrl: "https://source.example/",
+      jobId: "job_c1",
+      snapshot: { schemaVersion: "capture-snapshot.v1", capture: {}, pages: [{}, {}, {}], diagnostics: { quarantined: [{ objectId: "page_3", reason: "robots_disallowed" }] } }
+    },
+    capture_score: {
+      artifact: "capture_fidelity.v1",
+      summary: "fixture",
+      rubric: {
+        verdict: "needs_governed_iteration",
+        coverage: { score: 0.82, mappedBlocks: 41, relevantBlocks: 50, minimum: 0.9, met: false },
+        tokensComplete: { value: true, required: true, met: true },
+        gapsEnumerated: { value: true, required: true, met: true }
+      },
+      report: {
+        gapReport: {
+          schemaVersion: "capture-palette-gaps.v1",
+          entries: [{ gapId: "gap_1" }, { gapId: "gap_2" }],
+          byCapability: [{ missingCapability: "pricing_table", count: 2, gapIds: ["gap_1", "gap_2"] }]
+        }
+      }
+    },
+    capture_emit_live: {
+      artifact: "capture_emission_run.v1",
+      summary: "fixture",
+      report: {
+        createdObjects: [{ objectId: "sec_1" }, { objectId: "sec_2" }],
+        reusedObjects: [{ objectId: "sec_3" }],
+        quarantines: [{ requestedId: "sec_4", reason: "postcreate_validation_failed", detail: "schema mismatch" }]
+      }
+    }
+  },
+  ...overrides
+}) as unknown as WorkflowExecutionRecord;
+
+const cloneRun = (overrides: Partial<WorkflowExecutionRecord> = {}) => ({
+  runId: "run_clone_w15_15",
+  status: "completed" as const,
+  errors: [],
+  approvalsRequired: [],
+  nodes: [],
+  stageOutputs: {
+    recipe_designer: {
+      artifact: "clone_recipe_design.v1",
+      summary: "fixture",
+      sectionTemplates: [],
+      templates: [],
+      unmetNeeds: [{ sectionType: "pricing_table" }, { sectionType: "pricing_table" }, { sectionType: "video_embed" }]
+    },
+    recipe_mint: {
+      artifact: "clone_recipe_mint.v1",
+      summary: "fixture",
+      applied: [{ objectId: "rec_1" }, { objectId: "rec_2" }],
+      reused: [{ objectId: "rec_3" }],
+      rejected: [{ kind: "section_template", name: "hero_v2", reason: "unregistered_section_type" }]
+    },
+    theme_bind: {
+      artifact: "clone_theme_bind.v1",
+      summary: "fixture",
+      applied: { colors: { bg: "#fff", text: "#000" }, fonts: { heading: "Georgia" } },
+      dropped: [{ slot: "accent2", value: "#ff00ff", reason: "contrast_violation" }]
+    },
+    layout_restamp: {
+      artifact: "clone_restamp.v1",
+      summary: "fixture",
+      restamped: [{ objectId: "page_1" }],
+      skipped: [{ objectId: "page_2" }],
+      quarantined: [{ objectId: "page_3", reason: "restamp_lock_conflict", detail: "lock held by another run" }]
+    }
+  },
+  ...overrides
+}) as unknown as WorkflowExecutionRecord;
+
+describe("T15.15 — capture facts flow into learning_observations.v1", () => {
+  it("is undefined for a run with no capture_score envelope (a publishing/clone run)", () => {
+    expect(buildCaptureFacts({ stageOutputs: {} })).toBeUndefined();
+    expect(buildCaptureFacts(cloneRun())).toBeUndefined();
+  });
+
+  it("reads fidelity, the gap ledger, crawl evidence and emission quarantines from capture_score/capture_crawl/capture_emit_live — never from gap_adjudicator or capture_report", () => {
+    const facts = buildCaptureFacts(captureRun())!;
+    expect(facts.fidelity).toEqual({ verdict: "needs_governed_iteration", coverageScorePct: 82, coverageMinimumPct: 90, mappedBlocks: 41, relevantBlocks: 50, tokensComplete: true, gapsEnumerated: true });
+    expect(facts.gapLedger).toEqual({ totalGaps: 2, byCapability: [{ missingCapability: "pricing_table", count: 2 }] });
+    expect(facts.crawlEvidence?.pagesCaptured).toBe(3);
+    expect(facts.crawlEvidence?.quarantinedPages).toEqual([{ id: "page_3", reason: "robots_disallowed" }]);
+    expect(facts.emissionQuarantines).toEqual([{ id: "sec_4", reason: "postcreate_validation_failed", detail: "schema mismatch" }]);
+    expect(facts.drafts).toEqual({ created: 2, reused: 1 });
+  });
+
+  it("names a withheld/quarantined capture object with its reason in the observations ledger", () => {
+    const output = buildLearningObservations({ run: captureRun() });
+    expect(output.observations).toContain("Capture emission quarantined sec_4: postcreate_validation_failed (schema mismatch).");
+    expect(output.observations).toContain("Capture crawl quarantined page page_3: robots_disallowed.");
+    expect(output.captureFacts).toBeDefined();
+    expect(output.cloneFacts).toBeUndefined();
+  });
+});
+
+describe("T15.15 — clone facts flow into learning_observations.v1", () => {
+  it("is undefined for a run with no recipe_mint envelope (a publishing/capture run)", () => {
+    expect(buildCloneFacts({ stageOutputs: {} })).toBeUndefined();
+    expect(buildCloneFacts(captureRun())).toBeUndefined();
+  });
+
+  it("reads the mint/theme/restamp ledgers and the capability backlog from recipe_mint/theme_bind/layout_restamp/recipe_designer — never from clone_report", () => {
+    const facts = buildCloneFacts(cloneRun())!;
+    expect(facts.recipeMint).toEqual({ applied: 2, reused: 1, rejected: [{ id: "hero_v2", reason: "unregistered_section_type" }] });
+    expect(facts.themeBind).toEqual({ colorsApplied: 2, fontsApplied: 1, dropped: [{ id: "accent2", reason: "contrast_violation" }] }); // "slot" is theme_bind's own identifier key (engine/clone.mjs)
+    expect(facts.restamp).toEqual({ restamped: 1, skipped: 1, quarantined: [{ id: "page_3", reason: "restamp_lock_conflict", detail: "lock held by another run" }] });
+    expect(facts.capabilityBacklog).toEqual([{ sectionType: "pricing_table", count: 2 }, { sectionType: "video_embed", count: 1 }]);
+  });
+
+  it("names T15.12/#191's restamp_lock_conflict quarantine with its reason in the observations ledger, and surfaces the capability backlog", () => {
+    const output = buildLearningObservations({ run: cloneRun() });
+    expect(output.observations).toContain("Clone restamp quarantined page page_3: restamp_lock_conflict (lock held by another run).");
+    expect(output.observations.some((line) => line.includes("pricing_table (2)") && line.includes("video_embed (1)"))).toBe(true);
+    expect(output.cloneFacts).toBeDefined();
+    expect(output.captureFacts).toBeUndefined();
+  });
+});
+
+describe("T15.15 — determinism: no wall-clock value, random id, or completion-order dependence", () => {
+  it("is byte-identical across two builds of the identical capture run", () => {
+    const a = buildLearningObservations({ run: captureRun() });
+    const b = buildLearningObservations({ run: captureRun() });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  it("is byte-identical across two builds of the identical clone run", () => {
+    const a = buildLearningObservations({ run: cloneRun() });
+    const b = buildLearningObservations({ run: cloneRun() });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  it("never reads gap_adjudicator, capture_report or clone_report even when present on the run — only ancestors of learning_recorder", () => {
+    const withSiblings = captureRun({
+      stageOutputs: {
+        ...captureRun().stageOutputs,
+        gap_adjudicator: { artifact: "gap_adjudication.v1", summary: "fixture", adjudications: [{ gapId: "gap_1", disposition: "capability_backlog" }], humanSummary: "should never be read here" },
+        capture_report: { artifact: "capture_run_report.v1", summary: "fixture", gapsByCapability: [{ missingCapability: "SHOULD_NOT_APPEAR", count: 999 }] }
+      }
+    });
+    const withoutSiblings = captureRun();
+    const withOutput = buildLearningObservations({ run: withSiblings });
+    const withoutOutput = buildLearningObservations({ run: withoutSiblings });
+    expect(JSON.stringify(withOutput)).toBe(JSON.stringify(withoutOutput));
+    expect(JSON.stringify(withOutput)).not.toContain("SHOULD_NOT_APPEAR");
+  });
+});
+
 describe("wired into a real run: replaces the model call entirely", () => {
   it("completes learning_recorder with zero model calls and zero usage records", async () => {
     repositoryManager.getUsageRepository().clear();
@@ -165,11 +331,14 @@ describe("wired into a real run: replaces the model call entirely", () => {
       }
     }, store, workspace);
 
-    // Seed the two publish-tail nodes learning_recorder depends on, so it is the only node dispatched.
+    // Seed the three publish-tail nodes learning_recorder depends on, so it is the only node dispatched.
+    // T15.6: release_executor joined the tail between publish_executor and learning_recorder; since
+    // publish_executor never published, release_executor's honest outcome is "skipped".
     const run = (await getRun(started.runId, store))!;
     for (const [nodeId, output] of [
       ["publication_controller", { artifact: "publication_decision.v1", summary: "Ready.", decision: "go", blockers: [] }],
-      ["publish_executor", { artifact: "publish_execution.v1", summary: "Refused.", status: "blocked", blockers: ["operator_approval_absent: ..."] }]
+      ["publish_executor", { artifact: "publish_execution.v1", summary: "Refused.", status: "blocked", blockers: ["operator_approval_absent: ..."] }],
+      ["release_executor", { artifact: "release_execution.v1", summary: "Nothing published.", status: "skipped", reason: "nothing_published", blockers: [], notes: [] }]
     ] as const) {
       const state = run.nodes.find((node) => node.nodeId === nodeId)!;
       state.status = "completed";

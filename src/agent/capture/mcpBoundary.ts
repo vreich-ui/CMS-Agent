@@ -28,12 +28,23 @@
 // blanket recursive case transform — and any field named `body` or `ops` is carried through
 // byte-identical, never walked into. See TOOL_WIRE_SPECS below.
 //
-// SCOPE: only the tools cloneEngine.ts's callProjectTool actually calls are registered here
-// (registry_get, object_inventory, object_get, object_create, object_checkout, object_checkin,
-// object_patch, site_apply_theme). Calling toWireArguments/fromWireResult with an unregistered tool
-// name is a typed refusal, not a silent pass-through — a ninth verb showing up here unregistered is
-// exactly the kind of thing that must fail loudly during development, not ship a call this module
-// never actually checked.
+// SCOPE: only the tools callProjectTool actually calls are registered here (registry_get,
+// object_inventory, object_get, object_create, object_checkout, object_checkin, object_patch,
+// site_apply_theme). Calling toWireArguments/fromWireResult with an unregistered tool name is a
+// typed refusal, not a silent pass-through — a ninth verb showing up here unregistered is exactly
+// the kind of thing that must fail loudly during development, not ship a call this module never
+// actually checked.
+//
+// T15.34 (#210; ADR-2026-08-25-structure-studio §7) added the four pdf-tool bridge verbs
+// (create_pdf_template, validate_pdf_template, get_pdf_template_validation, publish_pdf_template) —
+// pdfTemplateEngine.ts's OWN call site, alongside cloneEngine.ts's. THE DISCIPLINE IS SHARED, THE
+// TRANSPORT IS NOT: this module is still the one place any field name crosses the wire for EITHER
+// caller, so a pdf-tool argument gets the identical typed-refusal-over-guess treatment a CMS object
+// verb gets — but the four pdf-tool entries are a wholly separate vocabulary (site_id/template_id/
+// template_json/...) from the CMS object verbs above them, addressing pdf-tool's own
+// pdf-template-store, never object_publish/object_create or anything CMS-governed. Every field name
+// below is copied verbatim from the live tool schemas (mcp__*__create_pdf_template et al.), not
+// paraphrased.
 //
 // SCHEMA PROVENANCE: docs/mcp-tool-manifest.json — the two-plane drift lock — does NOT carry these
 // schemas. It fingerprints CMS-Agent's OWN served tool surface (workspace_*, project_*, agent_*, ...)
@@ -140,6 +151,46 @@ const TOOL_WIRE_SPECS: Record<string, ToolWireSpec> = {
       { engine: "themeId", wire: "theme_id" }
     ],
     required: ["theme_id", "site_id"]
+  },
+  // T15.34 (#210) — the pdf-tool bridge verbs. `templateJson` and `data` are opaque (per-renderer
+  // pdf-tool content, exactly like object_create's `body` above — never renamed or walked into).
+  create_pdf_template: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "templateJson", wire: "template_json", opaque: true },
+      { engine: "renderer", wire: "renderer" },
+      { engine: "templateId", wire: "template_id" },
+      { engine: "label", wire: "label" },
+      { engine: "tags", wire: "tags" },
+      { engine: "idempotencyKey", wire: "idempotency_key" }
+    ],
+    required: ["site_id", "template_json"]
+  },
+  validate_pdf_template: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "templateId", wire: "template_id" },
+      { engine: "version", wire: "version" },
+      { engine: "data", wire: "data", opaque: true }
+    ],
+    required: ["site_id", "template_id", "data"]
+  },
+  get_pdf_template_validation: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "templateId", wire: "template_id" },
+      { engine: "version", wire: "version" },
+      { engine: "validationId", wire: "validation_id" }
+    ],
+    required: ["site_id", "template_id"]
+  },
+  publish_pdf_template: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "templateId", wire: "template_id" },
+      { engine: "version", wire: "version" }
+    ],
+    required: ["site_id", "template_id"]
   }
 };
 

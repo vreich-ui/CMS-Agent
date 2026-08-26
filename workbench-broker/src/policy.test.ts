@@ -38,3 +38,27 @@ test("policy: node_validate_input and workspace_validate_node are read-shaped (n
   assert.equal(classifyVerb("node_validate_input"), "read");
   assert.equal(classifyVerb("workspace_validate_node"), "read");
 });
+
+test("policy: site_duplicate_status is a read verb (T15.14)", () => {
+  assert.equal(classifyVerb("site_duplicate_status"), "read");
+  assert.equal(checkPolicy("site_duplicate_status", true).allowed, true);
+  assert.equal(checkPolicy("site_duplicate_status", false).allowed, true);
+});
+
+test("policy: site_duplicate is a mutating verb (T15.14)", () => {
+  assert.equal(classifyVerb("site_duplicate"), "mutating");
+  // Allowed when READ_ONLY is off
+  assert.equal(checkPolicy("site_duplicate", false).allowed, true);
+  // Refused when READ_ONLY is on
+  const readOnlyDecision = checkPolicy("site_duplicate", true);
+  assert.equal(readOnlyDecision.allowed, false);
+  assert.equal(readOnlyDecision.code, "read_only");
+});
+
+test("policy: neighbouring verbs like site_duplicate_foobar are not allowed (T15.14 narrowness)", () => {
+  // Verify that only site_duplicate and site_duplicate_status are allowed,
+  // not other similar-sounding verbs.
+  const unknownVerb = checkPolicy("site_duplicate_foobar", false);
+  assert.equal(unknownVerb.allowed, false);
+  assert.equal(unknownVerb.code, "unknown_verb");
+});
