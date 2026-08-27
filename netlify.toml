@@ -8,11 +8,14 @@
   # ui/src/connection.ts) and the same VITE_CLOUD_RUN_MCP_URL build-environment
   # setting ui/ reads, inherited here unchanged since it's a site-level env var,
   # not set on this command line. This REPLACES the former VITE_MCP_TRANSPORT=netlify,
-  # which pointed at this site's own /api/workspace-mcp Netlify Function — a plane
-  # that 502s on every request (ERR_REQUIRE_ESM: require() of ES Module
-  # /var/task/workspace-mcp.mts from /var/task/workspace-mcp.js) because Netlify's MCP
-  # proxy paths and the Identity secure-proxy auth mode were retired once Cloud Run
-  # became the sole control plane. workbench-broker/ is still not deployed here.
+  # which pointed at this site's own /api/workspace-mcp Netlify Function — a plane that
+  # 502'd on every request (ERR_REQUIRE_ESM, from a sibling-function import) and that
+  # nothing has called since, because Netlify's MCP proxy paths and the Identity
+  # secure-proxy auth mode were retired once Cloud Run became the sole control plane.
+  # T8 (2026-08-27) deleted that function and this redirect: an entry point nothing
+  # reaches is still a deployed auth surface, and it was bundled on every build.
+  # The guard it carried, requireAdminSession, is unchanged in src/ and tested there.
+  # workbench-broker/ is still not deployed here.
   # workbench/dist is copied into ui/dist/workbench so one `publish` dir
   # serves both apps.
   command = "npm install --no-fund --no-audit && npm --prefix ui install --no-fund --no-audit && npm run ui:build && npm --prefix workbench install --no-fund --no-audit && WORKBENCH_BASE=/workbench/ VITE_MCP_TRANSPORT=cloudrun VITE_READ_ONLY=0 npm --prefix workbench run build && mkdir -p ui/dist/workbench && cp -r workbench/dist/. ui/dist/workbench/"
@@ -43,11 +46,6 @@
 [[redirects]]
   from = "/api/session"
   to = "/.netlify/functions/session"
-  status = 200
-
-[[redirects]]
-  from = "/api/workspace-mcp"
-  to = "/.netlify/functions/workspace-mcp"
   status = 200
 
 # MCP Authorization (OAuth) discovery + endpoints. These MUST precede the SPA catch-all below;

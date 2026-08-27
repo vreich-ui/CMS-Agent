@@ -18,7 +18,8 @@
 // publisher reads it back from the persisted run.
 
 import { getProjectHooks } from "../projects/projectHooks.js";
-import { findObjectId } from "../projects/objectDialect.js";
+import { readCreateOutcome } from "../projects/objectDialect.js";
+import { describeMcpErrorResult, isMcpErrorResult } from "../projects/clientToolResult.js";
 import { ProjectMcpAdapter, type CallToolResult } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
@@ -52,6 +53,20 @@ const nonEmpty = (value: unknown): value is string => typeof value === "string" 
 const ALREADY_EXISTS = /already[ _-]?exists|duplicate|conflict|409|exists for this (?:request|id)/i;
 const REJECTS_IDEMPOTENCY_KEY = /idempotency_key/i;
 
+// The shell is created BEFORE article_body exists, so it has no real content — but it cannot be
+// created EMPTY either: this substrate validates the body before persisting and content_item requires
+// slug/title/nodes. So the shell carries the minimum body that is legal to WRITE and illegal to
+// PUBLISH: a slug/title derived from the request id and no nodes at all. `article_visible_nodes`
+// (at least one public node) is a blocks_PUBLISH constraint, not blocks_write — which is exactly the
+// property wanted here: the shell exists for the artifact bridge to index against and can never be
+// mistaken for a publishable article. The publisher's set_article_meta later overwrites slug and
+// title with the real ones, and upsert_node adds the real nodes.
+const shellBody = (requestId: string): Record<string, unknown> => ({
+  slug: requestId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+  title: requestId,
+  nodes: []
+});
+
 const skipped = (code: string, message: string): ContentItemShellResult => ({ ok: false, code, message, skipped: true });
 const failed = (code: string, message: string): ContentItemShellResult => ({ ok: false, code, message, skipped: false });
 
@@ -79,7 +94,7 @@ export async function ensureContentItemShell(params: ContentItemShellParams, dep
   const objectType = nonEmpty(params.prefetchedContract?.clientObjectType) ? params.prefetchedContract!.clientObjectType as string : "content_item";
   const requestId = run.requestId.trim();
 
-  const baseArguments: Record<string, unknown> = { object_type: objectType, site: dialect.siteObjectId, requested_id: requestId };
+  const baseArguments: Record<string, unknown> = { object_type: objectType, site: dialect.siteObjectId, requested_id: requestId, body: shellBody(requestId) };
   const policyFindings = getProjectHooks(run.projectId)?.enforceCallToolPolicy?.({ tool: "object_create", arguments: baseArguments }) ?? [];
   const blocking = policyFindings.filter((finding) => finding.severity === "error");
   if (blocking.length) return failed("policy_blocked", `object_create blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}`);
@@ -104,15 +119,36 @@ export async function ensureContentItemShell(params: ContentItemShellParams, dep
   let call = await attempt({ ...baseArguments, idempotency_key: run.runId });
   if (!call.ok && REJECTS_IDEMPOTENCY_KEY.test(call.error ?? "")) call = await attempt(baseArguments);
 
+  // TRANSPORT failure (the call never reached the client, or the adapter refused to make it).
   if (!call.ok) {
     const message = call.error ?? "object_create failed";
     if (ALREADY_EXISTS.test(message)) return { ok: true, shell: { objectId: requestId, created: false, objectType, requestId } };
     return failed(call.permission === "blocked" ? "blocked" : "create_failed", message);
   }
-  const alreadyExisted = isObject(call.result) && (call.result.created === false || call.result.existing === true || call.result.idempotent_replay === true);
-  const minted = findObjectId(call.result);
-  const objectId = minted === undefined ? requestId : String(minted);
-  return { ok: true, shell: { objectId, created: !alreadyExisted, objectType, requestId } };
+
+  // CLIENT REFUSAL. `ok` is a statement about the transport only: an MCP refusal (isError: true,
+  // reason in content[].text / structuredContent.error) rides home on a successful transport, so a
+  // reader that stops at `ok` treats every refusal as a success. That is precisely how a refused
+  // shell used to become `{ objectId: requestId, created: true }` — the publisher then trusted the
+  // shell, skipped its own object_create, and died at object_checkout on an object that was never
+  // made. A refusal is now surfaced with the client's own sentence, and "already exists" is read as
+  // the success it is (the shell is idempotent on the run by design).
+  if (isMcpErrorResult(call.result)) {
+    const clientError = describeMcpErrorResult(call.result as Record<string, unknown>);
+    if (ALREADY_EXISTS.test(clientError)) return { ok: true, shell: { objectId: requestId, created: false, objectType, requestId } };
+    return failed("client_refused", `object_create refused by ${run.projectId}: ${clientError}`);
+  }
+
+  // SUCCESS. The flags live under `structuredContent` on this substrate, not at the raw result's own
+  // top level, and a replay is signalled by `replayed_from_idempotency_key` (a value, not a boolean)
+  // — readCreateOutcome reads every level and both forms. An id that cannot be found is NOT silently
+  // replaced by the request id any more: for a request_id dialect the two are equal when the create
+  // really happened, so the fallback could only ever mask a create that did not.
+  const { objectId, existed } = readCreateOutcome(call.result);
+  if (objectId === undefined) {
+    return failed("create_missing_object_id", `object_create for ${run.projectId} returned a SUCCESS result (no isError) that carries no object id (object_id/id); refusing to assume the request id names a created object.`);
+  }
+  return { ok: true, shell: { objectId, created: !existed, objectType, requestId } };
 }
 
 /** The shell artifact_plan's dispatch recorded on the run, if any (read by the publisher). */

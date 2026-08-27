@@ -7,9 +7,21 @@
 # whole environment and has silently deleted the six client-connection variables twice. Anything that
 # adds a deploy step here must use --update-env-vars / --update-secrets, or call deploy-mcp.sh, or the
 # next green build takes the connections — and now the *_PUBLISH_ENABLED flags — down with it.
+#
+# LAYER CACHE. Cloud Build starts every build on a clean worker with an empty local image store, so
+# without an explicit --cache-from every build reinstalls node_modules from scratch. Pulling the
+# previous image first and offering it as a cache source lets Docker reuse every layer up to the
+# first one whose inputs actually changed — in practice the whole dependency install, which is the
+# expensive part. The pull is allowed to fail (`|| exit 0`): the very first build, or a build after
+# the tag was deleted, has nothing to pull and must still succeed.
 steps:
   - name: gcr.io/cloud-builders/docker
-    args: ["build", "-f", "Dockerfile.mcp", "-t", "${_IMAGE}", "."]
+    id: pull-cache
+    entrypoint: bash
+    args: ["-c", "docker pull ${_IMAGE} || exit 0"]
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args: ["build", "-f", "Dockerfile.mcp", "--cache-from", "${_IMAGE}", "-t", "${_IMAGE}", "."]
 images: ["${_IMAGE}"]
 
 # Required as soon as the build runs under a specified service account (a trigger-level setting).

@@ -78,11 +78,51 @@ export const recordModelUsageSchema = z.object({
 
 const roundUsd = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
 
-export function estimateModelCost(input: EstimateModelCostInput): number {
-  const pricing = modelPricingCatalog[input.model] ?? modelPricingCatalog["gpt-5.5"];
+export type ModelPricing = (typeof modelPricingCatalog)[string];
+
+// T6 — NEVER INVENT A RATE.
+//
+// This used to be `catalog[model] ?? catalog["gpt-5.5"]`, a silent substitution inside the function
+// that gates real money: an unrecognised model id (a new tier, a typo in a node's modelConfig, a
+// provider-registry id that never reached this catalog) was priced at gpt-5.5's $5/$30 and the
+// budget guard then enforced a ceiling against a number nobody had checked. modelLadder.ts handled
+// the identical case the OPPOSITE way — it returned undefined and dropped the candidate — so the two
+// consumers of one catalog disagreed about what an unknown model costs. This is now the single
+// resolver both use, and it reports what it did instead of hiding it.
+//
+// The `pricing` returned for an unknown model is the catalog's DEAREST entry. That is not a
+// fallback rate standing in for the truth: it exists only so a caller that must produce a number
+// can never produce an UNDER-estimate. Any caller that can refuse instead reads `known` and refuses
+// — see budgetGuard.ts, which stops the turn rather than gating against a guess.
+export const resolvePricing = (model: string): { pricing: ModelPricing; known: boolean } => {
+  const listed = modelPricingCatalog[model];
+  if (listed) return { pricing: listed, known: true };
+  const dearest = Object.values(modelPricingCatalog).reduce((worst, entry) =>
+    entry.inputUsdPerMillion + entry.outputUsdPerMillion > worst.inputUsdPerMillion + worst.outputUsdPerMillion ? entry : worst);
+  return { pricing: dearest, known: false };
+};
+
+/** Input+output list rate for ranking models by cost. `undefined` for a model this catalog has no rate for. */
+export const pricingCostIndex = (model: string): number | undefined => {
+  const listed = modelPricingCatalog[model];
+  return listed ? listed.inputUsdPerMillion + listed.outputUsdPerMillion : undefined;
+};
+
+/** Cost plus the one fact the number alone cannot carry: whether it came from a real listed rate. */
+export function estimatePricedCost(input: EstimateModelCostInput): { costUsd: number; pricingUnknown: boolean } {
+  const { pricing, known } = resolvePricing(input.model);
   const cached = Math.min(input.cachedInputTokens ?? 0, input.inputTokens);
   const uncached = input.inputTokens - cached;
-  return roundUsd(((uncached * pricing.inputUsdPerMillion) + (cached * (pricing.cachedInputUsdPerMillion ?? pricing.inputUsdPerMillion)) + (input.outputTokens * pricing.outputUsdPerMillion)) / 1_000_000);
+  const costUsd = roundUsd(((uncached * pricing.inputUsdPerMillion) + (cached * (pricing.cachedInputUsdPerMillion ?? pricing.inputUsdPerMillion)) + (input.outputTokens * pricing.outputUsdPerMillion)) / 1_000_000);
+  return { costUsd, pricingUnknown: !known };
+}
+
+/**
+ * Conservative cost estimate in USD. For an unrecognised model this is an UPPER BOUND, not a rate
+ * anyone published — callers that can act on that distinction should use estimatePricedCost.
+ */
+export function estimateModelCost(input: EstimateModelCostInput): number {
+  return estimatePricedCost(input).costUsd;
 }
 
 export async function recordModelUsage(input: RecordModelUsageInput, store: UsageRepository = repositoryManager.getUsageRepository()): Promise<ModelUsageRecord> {
@@ -91,12 +131,16 @@ export async function recordModelUsage(input: RecordModelUsageInput, store: Usag
     ...parsed,
     usageId: parsed.usageId ?? makeUsageId(),
     totalTokens: parsed.totalTokens ?? parsed.inputTokens + parsed.outputTokens,
-    costUsdEstimate: parsed.costUsdEstimate ?? estimateModelCost(parsed),
+    // A caller-supplied cost is authoritative and is never re-priced; only an estimate this module
+    // computed can carry the pricingUnknown flag, because only that one could be a guess.
+    costUsdEstimate: parsed.costUsdEstimate ?? estimatePricedCost(parsed).costUsd,
     currency: "USD",
     recordedAt: parsed.recordedAt ?? now(),
     pricingAsOf: parsed.pricingAsOf ?? MODEL_PRICING_CATALOG_ASOF,
     pricingCatalogVersion: parsed.pricingCatalogVersion ?? MODEL_PRICING_CATALOG_VERSION,
-    metadata: parsed.metadata as ModelUsageMetadata | undefined
+    metadata: (parsed.costUsdEstimate === undefined && estimatePricedCost(parsed).pricingUnknown
+      ? { ...(parsed.metadata ?? {}), pricingUnknown: true, pricingUnknownModel: parsed.model }
+      : parsed.metadata) as ModelUsageMetadata | undefined
   };
   return store.record(record);
 }

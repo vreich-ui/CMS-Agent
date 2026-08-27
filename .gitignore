@@ -5,3 +5,10 @@ dist/
 !.env.example
 workbench/shots/
 workbench/test-results/
+
+# T8 — 15MB of source media (an 11MB mp4 in Other/, JPEGs in DrLurieBlog/) that every clone,
+# every CI checkout and every Docker build context paid for. The files stay on disk and are
+# untracked here rather than deleted: they are inputs to content work, not to this repo. Keep
+# the originals wherever the media for a site actually lives.
+Other/
+DrLurieBlog/

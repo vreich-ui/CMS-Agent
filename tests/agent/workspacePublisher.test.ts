@@ -72,7 +72,7 @@ const seedRun = async (articleBody: unknown, projectId = "dr-lurie") => {
   const projectRepository = manager.getProjectRepository();
   if (projectId === "platform") await projectRepository.save(platformProjectConfig);
   if (projectId === "acme-live") await projectRepository.save(hooklessProjectConfig);
-  const run = await startDryRun({ executionMode: "mock", projectId, input: "publish", entrypoint: { nodeId: "article_body", output: articleBody } }, executionRepository);
+  const run = await startDryRun({ executionMode: "openai", projectId, input: "publish", entrypoint: { nodeId: "article_body", output: articleBody } }, executionRepository);
   await seedControllerDecision(executionRepository, run.runId);
   // T15.5 (ADR-2026-08-25-publish-autonomy §2.4) — publishRun's authority gate now requires a
   // resolved publish authority; these fixture projects are operator-gated by default (no
@@ -230,7 +230,7 @@ describe("live publish gates", () => {
     await projectRepository.save({ ...withoutDialect, definitionVersion: drLurieProjectConfig.definitionVersion });
     const executionRepository = manager.getExecutionRepository();
     const learningRepository = manager.getLearningRepository();
-    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+    const run = await startDryRun({ executionMode: "openai", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
     await seedControllerDecision(executionRepository, run.runId);
     await setOperatorPublishDecision(run.runId, "approved", executionRepository);
     const adapter = fakeCallTool();
@@ -296,7 +296,7 @@ describe("live publish gates", () => {
     const executionRepository = manager.getExecutionRepository();
     const projectRepository = manager.getProjectRepository();
     const learningRepository = manager.getLearningRepository();
-    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "no-body" }, executionRepository);
+    const run = await startDryRun({ executionMode: "openai", projectId: "dr-lurie", input: "no-body" }, executionRepository);
     await setOperatorPublishDecision(run.runId, "approved", executionRepository);
     const adapter = fakeCallTool();
     const result = await publishRun({ runId: run.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository, learningRepository, env: ENABLED_ENV, callTool: adapter.fn });
@@ -338,7 +338,7 @@ describe("live publish gates", () => {
     const executionRepository = manager.getExecutionRepository();
     const projectRepository = manager.getProjectRepository();
     const learningRepository = manager.getLearningRepository();
-    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+    const run = await startDryRun({ executionMode: "openai", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
     await seedControllerDecision(executionRepository, run.runId);
     const ctx = { runId: run.runId, executionRepository, projectRepository, learningRepository };
     const adapter = fakeCallTool();
@@ -367,7 +367,7 @@ describe("live publish gates", () => {
       const executionRepository = manager.getExecutionRepository();
       const projectRepository = manager.getProjectRepository();
       const learningRepository = manager.getLearningRepository();
-      const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+      const run = await startDryRun({ executionMode: "openai", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
       await seedControllerDecision(executionRepository, run.runId);
       return { runId: run.runId, executionRepository, projectRepository, learningRepository };
     };
@@ -469,6 +469,28 @@ describe("per-project publish execution hooks", () => {
     expect((adapter.calls.find((call) => call.tool === "object_create")!.args as any).object_type).toBe("content_item");
   });
 
+  it("T5 — a mock run is refused before any gate is even considered; mock is never publishable", async () => {
+    // This was already TRUE, but only as a CONSEQUENCE: MockNodeRunner emits a dryRun:true hint,
+    // publication_controller carries it, publishDecision turns it into controller_decision_placeholder.
+    // Every link there is a model-shaped output a prompt edit or a seeded controller output could stop
+    // producing — and at that point a run whose entire body is placeholder text has nothing left
+    // standing between it and a tenant's live site. executionMode is a property of the run RECORD.
+    const manager = new RepositoryManager();
+    const executionRepository = manager.getExecutionRepository();
+    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+    await seedControllerDecision(executionRepository, run.runId);
+    await setOperatorPublishDecision(run.runId, "approved", executionRepository);
+
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: run.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { executionRepository, projectRepository: manager.getProjectRepository(), learningRepository: manager.getLearningRepository(), env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.published).toBe(false);
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") expect(result.error).toContain("mock_run_not_publishable");
+    // Every gate passed and the controller said go — the refusal is the MODE, on its own.
+    expect(adapter.calls).toHaveLength(0);
+  });
+
   it("never calls release_to_production in any path — publishRun never releases (board B2)", async () => {
     const platformCtx = await seedRun(platformTextBody, "platform");
     const platformAdapter = fakePlatformCallTool();
@@ -492,14 +514,99 @@ describe("per-project publish execution hooks", () => {
     const platformAdapter = fakePlatformCallTool();
     await publishRun({ runId: platformCtx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...platformCtx, env: PLATFORM_ENABLED_ENV, callTool: platformAdapter.fn });
 
-    // dr-lurie: caller-supplied object id under its own site. platform: server-minted, no site
-    // configured in its test registration, and never a requested_id (board D2c).
+    // Each tenant creates under ITS OWN site, and only dr-lurie supplies the object id.
+    //
+    // T1: this assertion used to read `expect(platformCreate.site).toBeUndefined()` — it LOCKED IN
+    // the defect. `site` is REQUIRED by the live object_create schema (object_type + site + body;
+    // object_contract(content_item).auxiliary_inputs names it "the owning site object id"), so
+    // omitting it 400'd every publish platform ever attempted. Board D2c is about `requested_id`,
+    // which is still absent below — sending `site` does not touch it.
     const drLurieCreate = drLurieAdapter.calls.find((call) => call.tool === "object_create")!.args as any;
     const platformCreate = platformAdapter.calls.find((call) => call.tool === "object_create")!.args as any;
     expect(drLurieCreate.site).toBe("site_drlurie");
-    expect(platformCreate.site).toBeUndefined();
+    expect(platformCreate.site).toBe("site_platform");
+    expect(drLurieCreate.requested_id).toBe(REQUEST_ID);
     expect("requested_id" in platformCreate).toBe(false);
     expect(JSON.stringify(platformAdapter.calls)).not.toContain("drlurie");
+  });
+
+  it("T1 — creates WITH the body: the platform validates a create body before persisting, so an empty create can never make an object", async () => {
+    const drLurieCtx = await seedRun(textBody);
+    const drLurieAdapter = fakeCallTool();
+    await publishRun({ runId: drLurieCtx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...drLurieCtx, env: ENABLED_ENV, callTool: drLurieAdapter.fn });
+
+    const platformCtx = await seedRun(platformTextBody, "platform");
+    const platformAdapter = fakePlatformCallTool();
+    await publishRun({ runId: platformCtx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...platformCtx, env: PLATFORM_ENABLED_ENV, callTool: platformAdapter.fn });
+
+    const createBodyOf = (adapter: { calls: Array<{ tool: string; args: Record<string, unknown> }> }) =>
+      (adapter.calls.find((call) => call.tool === "object_create")!.args as any).body;
+
+    for (const adapter of [drLurieAdapter, platformAdapter]) {
+      const body = createBodyOf(adapter);
+      // The create carries the SAME stripped body the patch does — never the judgement substrate,
+      // never client_object.v1's own `schema_version` label (the content_item body is zod .strict(),
+      // so a stray key is a 422 at create exactly as it is at patch). dr-lurie's fixture envelope
+      // carries schema_version, so its absence here is the stripping actually running.
+      expect(Array.isArray(body.nodes)).toBe(true);
+      expect(body.nodes.length).toBeGreaterThan(0);
+      for (const key of ["scores", "claims", "sources", "compliance", "emotional_strategy", "lineage", "schema_version"]) {
+        expect(key in body).toBe(false);
+      }
+    }
+    // content_item requires slug/title/nodes and the client validates the body BEFORE persisting, so
+    // the meta the envelope carries has to travel on the create, not wait for the patch.
+    expect(createBodyOf(platformAdapter)).toMatchObject({ slug: "live-title", title: "Live Title", deck: "A deck line." });
+    // The patch step is unchanged: it still runs, which is what keeps re-entry over an
+    // already-created object idempotent.
+    expect(platformAdapter.calls.map((call) => call.tool)).toContain("object_patch");
+  });
+
+  it("T1 — reads the object id out of the platform's REAL create envelope ({content:[{text}], structuredContent:{record:{object_id}}})", async () => {
+    // No test exercised this shape before: every fake answered {structuredContent:{object_id}}, a
+    // flatter envelope than the one the live server actually sends. findObjectId walks both, and
+    // this is the one that matters in production.
+    const ctx = await seedRun(platformTextBody, "platform");
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const realEnvelopeCreate = {
+      content: [{ type: "text", text: JSON.stringify({ record: { object_id: "obj_srv_777", record_version: 1 }, created: true }) }],
+      structuredContent: { record: { object_id: "obj_srv_777", record_version: 1 }, created: true }
+    };
+    const fn = async (tool: string, args: Record<string, unknown>): Promise<CallToolResult> => {
+      calls.push({ tool, args });
+      const base = { ok: true as const, projectId: "platform", connection: {} as any, tool };
+      if (tool === "object_create") return { ...base, result: realEnvelopeCreate };
+      if (tool === "object_checkout") return { ...base, result: { structuredContent: { record: { lock_token: "lock_p9", record_version: 1 } } } };
+      if (tool === "object_validate") return { ...base, result: { structuredContent: { valid: true, issues: [] } } };
+      return { ...base, result: { structuredContent: { record: { object_id: "obj_srv_777" } } } };
+    };
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: fn });
+
+    expect(result.mode).toBe("live");
+    expect(result.mode === "live" ? result.objectId : undefined).toBe("obj_srv_777");
+    // Every later step addresses the SERVER-MINTED id, never the request id.
+    expect((calls.find((call) => call.tool === "object_checkout")!.args as any).object_id).toBe("obj_srv_777");
+    expect((calls.find((call) => call.tool === "object_publish")!.args as any).object_id).toBe("obj_srv_777");
+  });
+
+  it("T1 — a REFUSED object_create is reported as the client's own refusal, not as create_missing_object_id", async () => {
+    // The 2026-08-25 failure (run_1787656120374_18bobg): the client refused object_create outright
+    // and said why; the hook read only the missing id and filed a refusal as an unfamiliar SHAPE.
+    const ctx = await seedRun(platformTextBody, "platform");
+    const fn = async (tool: string): Promise<CallToolResult> => ({
+      ok: true, projectId: "platform", connection: {} as any, tool,
+      result: tool === "object_create"
+        ? { isError: true, content: [{ type: "text", text: "Invalid arguments" }], structuredContent: { statusCode: 400, error_code: "invalid_arguments", issues: [{ path: ["site"], message: "Required" }, { path: ["body"], message: "Required" }] } }
+        : { structuredContent: { ok: true } }
+    });
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY }, { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: fn });
+
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") {
+      expect(result.error).toContain("object_create_refused");
+      expect(result.error).toContain("site: Required");
+      expect(result.error).not.toContain("create_missing_object_id");
+    }
   });
 
   it("aborts before object_patch/object_publish when the client validator rejects the candidate patch", async () => {
@@ -544,7 +651,7 @@ describe("workflow.publish_run / publish_readiness MCP tools (gated end-to-end)"
     const names = JSON.parse(listed.body ?? "{}").result.tools.map((tool: { name: string }) => tool.name);
     expect(names).toEqual(expect.arrayContaining(["workflow_publish_run", "workflow_publish_readiness"]));
 
-    const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
+    const runId = (await data("workflow.start_dry_run", { executionMode: "openai", projectId: "dr-lurie", requestId: REQUEST_ID, input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
     // Go-live: publishing defaults on, so the dry-run posture takes the env kill-switch.
     process.env.DR_LURIE_PUBLISH_ENABLED = "false";
     const publish = (await data("workflow.publish_run", { runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY })).publish;
@@ -554,7 +661,7 @@ describe("workflow.publish_run / publish_readiness MCP tools (gated end-to-end)"
   });
 
   it("publish_readiness returns the GO/NO-GO checklist without publishing", async () => {
-    const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
+    const runId = (await data("workflow.start_dry_run", { executionMode: "openai", projectId: "dr-lurie", requestId: REQUEST_ID, input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
 
     const go = (await data("workflow.publish_readiness", { projectId: "dr-lurie", runId, readiness: READY })).readiness;
     expect(go).toMatchObject({ available: true, articleBodyValid: true });

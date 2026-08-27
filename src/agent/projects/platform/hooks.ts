@@ -7,8 +7,10 @@
 import { evaluatePlatformPublishReadiness } from "./publishReadiness.js";
 import { platformProjectKnowledge } from "./knowledge.js";
 import {
+  EXCLUDED_CLIENT_BODY_KEYS,
   JUDGEMENT_SUBSTRATE_KEYS,
   buildArticleCandidatePatch,
+  buildCreateBody,
   describeCandidatePatch,
   findObjectId,
   findRecordVersion,
@@ -40,14 +42,35 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   // problem. See ../clientToolResult.ts for the live failure that motivated it.
   const call = checkedClientCall(ctx.call);
 
-  // a. Create the object. D2c: the server mints the id — NEVER send requested_id. The request id
-  // stays run-correlation only and is never used as an object id.
+  // Per-site parameters come from the project config's objectDialect block, never from literals
+  // here. platform declares siteObjectId "site_platform" (definition.ts) for exactly this call;
+  // firing one tenant's site id at another's server is the failure this refusal prevents.
+  const dialect = ctx.objectDialect;
+  if (!dialect) throw new Error("missing_object_dialect: the platform project config declares no objectDialect (siteObjectId / taxonomyRegistryObjectId / objectIdSource); refusing to guess per-site parameters.");
+
+  // a. Create the object under its owning site, carrying the body.
+  //
+  //    `site` is REQUIRED by the live create schema (object_create requires object_type + site +
+  //    body; object_contract(content_item).auxiliary_inputs names it "the owning site object id").
+  //    Omitting it was a 400 on every publish this client ever attempted. D2c is untouched by
+  //    sending it: D2c is about `requested_id` — the server still mints the id here, and the request
+  //    id stays run-correlation only.
+  //
+  //    `body` is required for the same reason and for a second one: the platform validates the body
+  //    BEFORE persisting (content_item requires slug/title/nodes), so an empty create is a 422 and
+  //    the create-empty-then-patch dialect cannot succeed at all. The patch step below is unchanged
+  //    and still carries the full candidate — it is what keeps re-entry idempotent.
+  //
   //    S3 item 8: a shell the conductor already created for this request is patched, not re-created.
   let objectId: string;
   if (ctx.existingObjectId) {
     objectId = ctx.existingObjectId;
   } else {
-    const created = await call("object_create", { object_type: ctx.clientObjectType });
+    const created = await call("object_create", {
+      object_type: ctx.clientObjectType,
+      site: dialect.siteObjectId,
+      body: buildCreateBody(ctx.body, EXCLUDED_CLIENT_BODY_KEYS)
+    });
     // Reached ONLY when the client did not signal an error — so this now means what it says: the
     // create SUCCEEDED and the success carried no id. It is not the catch-all it used to be; a
     // refusal is a ClientToolRefusalError naming object_create and quoting the client.
@@ -85,7 +108,10 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   // `guard` is deliberately omitted for now so a compare-and-set mismatch can never be confused
   // with a shape problem during the T1 shakeout. The builder is shared with the other tenants of
   // this substrate (../objectDialect.ts) because the contract it encodes is the same one.
-  const { patch: candidatePatch, nodeCount } = buildArticleCandidatePatch(ctx.body, JUDGEMENT_SUBSTRATE_KEYS);
+  // EXCLUDED_CLIENT_BODY_KEYS, not JUDGEMENT_SUBSTRATE_KEYS: the same set the create above sends.
+  // The two must be identical or the create and the patch would disagree about what the object is —
+  // and the extra key the shared set adds, `schema_version`, is rejected outright by this strict body.
+  const { patch: candidatePatch, nodeCount } = buildArticleCandidatePatch(ctx.body, EXCLUDED_CLIENT_BODY_KEYS);
 
   // d. Validate BEFORE any patch (board B1): the client's own validator is the authority on the
   // client shape, and its verdict is recorded as clientValidation evidence on the publish result.

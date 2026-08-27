@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { handler as sessionHandler } from "../../../netlify/functions/session.mjs";
-import { handler as workspaceMcpHandler } from "../../../netlify/functions/workspace-mcp.mjs";
+import { AdminSessionError, requireAdminSession } from "../../../src/agent/runtime/adminSession.js";
 
 const event = (method: string, body: unknown = null) => ({
   httpMethod: method,
@@ -35,27 +35,34 @@ describe("Netlify Identity admin session", () => {
     expect(JSON.parse(response.body)).toEqual({ authenticated: true, authorized: true, email: "owner@example.com" });
   });
 
-  it("workspace-mcp proxy rejects missing identity", async () => {
-    process.env.ADMIN_EMAIL_IDS = "admin@example.com";
-    const response = await workspaceMcpHandler(event("POST", { jsonrpc: "2.0", id: 1, method: "initialize", params: {} }), context());
+  // T8: these three used to drive netlify/functions/workspace-mcp.mts, the admin-session MCP proxy.
+  // That function was deleted — nothing called it (the Workbench moved to the Cloud Run plane and
+  // netlify.toml's own comment recorded the path as 502ing on every request), and a deployed entry
+  // point nothing reaches is a live auth surface with no purpose. The GUARD it carried is not
+  // deleted with it: requireAdminSession is what actually decides 401/403, and it is exercised
+  // directly below, so the next function that adopts it inherits the same tested behaviour.
+  const statusOf = (email?: string) => {
+    try {
+      requireAdminSession(context(email));
+      return 200;
+    } catch (error) {
+      return error instanceof AdminSessionError ? error.statusCode : 500;
+    }
+  };
 
-    expect(response.statusCode).toBe(401);
+  it("requireAdminSession rejects missing identity", () => {
+    process.env.ADMIN_EMAIL_IDS = "admin@example.com";
+    expect(statusOf()).toBe(401);
   });
 
-  it("workspace-mcp proxy rejects non-admin email", async () => {
+  it("requireAdminSession rejects a non-admin email", () => {
     process.env.ADMIN_EMAIL_IDS = "admin@example.com";
-    const response = await workspaceMcpHandler(event("POST", { jsonrpc: "2.0", id: 1, method: "initialize", params: {} }), context("reader@example.com"));
-
-    expect(response.statusCode).toBe(403);
+    expect(statusOf("reader@example.com")).toBe(403);
   });
 
-  it("workspace-mcp proxy forwards authorized requests using the server-side MCP_API_TOKEN", async () => {
+  it("requireAdminSession accepts an admin email, case-insensitively", () => {
     process.env.ADMIN_EMAIL_IDS = "admin@example.com";
-    process.env.MCP_API_TOKEN = "server-only-token";
-    const response = await workspaceMcpHandler(event("POST", { jsonrpc: "2.0", id: 1, method: "initialize", params: {} }), context("admin@example.com"));
-    const payload = JSON.parse(response.body);
-
-    expect(response.statusCode).toBe(200);
-    expect(payload.result.serverInfo.name).toBe("publishing-workspace-mcp");
+    expect(statusOf("Admin@Example.com")).toBe(200);
+    expect(requireAdminSession(context("Admin@Example.com")).email).toBe("admin@example.com");
   });
 });

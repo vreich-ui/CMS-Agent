@@ -230,6 +230,17 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   if (!config) throw new Error(`Unknown projectId: ${projectId}`);
 
   const gates = evaluateGates(config, input, env, run);
+  // T5 — "mock is never publishable", made load-bearing. It was already TRUE, but only as a
+  // consequence: MockNodeRunner emits a dryRun:true hint, publication_controller carries it into its
+  // decision, and publishDecision.ts turns that into controller_decision_placeholder. Every link in
+  // that chain is a model-shaped output that a prompt edit, a seeded controller output or a
+  // late-stage entrypoint could stop producing — at which point a run whose entire body is
+  // placeholder text would reach a tenant's live site with nothing left to stop it. The mode is a
+  // property of the RUN RECORD, so it is checked here, first, where nothing can rewrite it.
+  if (run.executionMode === "mock") {
+    return { published: false, mode: "error", gates, plan: null, steps: [], error: `mock_run_not_publishable: run ${input.runId} executed in mock mode, whose node outputs are placeholders and were never produced by a model or judged by the client. A publish test must run in "openai" mode against a seeded entrypoint (see docs/plan/PUBLISH-SMOKE.md); mock is a wiring check and is never publishable.` };
+  }
+
   const emptyPlan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: 0, publishedTime: input.publishedTime ?? null, toolSequence: [] };
 
   const requestIdPattern = compileRequestIdPattern(config.objectDialect?.requestIdPattern);

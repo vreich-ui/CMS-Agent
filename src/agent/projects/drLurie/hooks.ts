@@ -8,8 +8,10 @@ import { evaluateDrLuriePublishReadiness } from "./publishReadiness.js";
 import { drLurieProjectKnowledge } from "./knowledge.js";
 import { DR_LURIE_VOICE_FALLBACK } from "./editorialVoice.js";
 import {
+  EXCLUDED_CLIENT_BODY_KEYS,
   JUDGEMENT_SUBSTRATE_KEYS,
   buildArticleCandidatePatch,
+  buildCreateBody,
   describeCandidatePatch,
   findObjectId,
   findRecordVersion,
@@ -47,7 +49,9 @@ const DR_LURIE_PUBLISH_TOOL_SEQUENCE = ["object_create", "object_checkout", "obj
 //     `fields` map would otherwise accept every one of them;
 //   - `schema_version` — client_object.v1's own label. The content_item body has NO schema_version and
 //     is zod .strict(), so carrying it through would be rejected at write (mapping rule: drop it).
-const EXCLUDED_META_KEYS: ReadonlySet<string> = new Set([...JUDGEMENT_SUBSTRATE_KEYS, "schema_version"]);
+// Kept as a named local for readers of this file; the set itself now lives in ../objectDialect.ts so
+// platform speaks the identical dialect (it previously excluded the judgement substrate only).
+const EXCLUDED_META_KEYS: ReadonlySet<string> = EXCLUDED_CLIENT_BODY_KEYS;
 
 const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExecutionOutcome> => {
   // EVERY client call in this sequence goes through `call`, never ctx.call. ctx.call records the step
@@ -80,6 +84,11 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
     const created = await call("object_create", {
       object_type: ctx.clientObjectType,
       site: dialect.siteObjectId,
+      // The body is REQUIRED at create time: this platform validates it BEFORE persisting
+      // (content_item requires slug/title/nodes), so the create-empty-then-patch dialect this hook
+      // used to speak was a 422 that never made an object. The patch step below is unchanged and
+      // still carries the full candidate, which is what keeps re-entry idempotent.
+      body: buildCreateBody(ctx.body, EXCLUDED_META_KEYS),
       ...(dialect.objectIdSource === "request_id" ? { requested_id: ctx.requestId } : {})
     });
     // Reached ONLY when the client did not signal an error — so this now means what it says: the
