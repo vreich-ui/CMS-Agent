@@ -80,7 +80,7 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   }
 
   // b. Checkout: take the edit lock and learn the record version the patch must expect.
-  const checkout = await call("object_checkout", { object_id: objectId, ...ctx.owner });
+  const checkout = await call("object_checkout", { object_type: ctx.clientObjectType, object_id: objectId, ...ctx.owner });
   const lockToken = findLockToken(checkout);
   if (!lockToken) throw new Error("checkout_missing_lock_token: object_checkout returned a SUCCESS result (no isError) that carries no lock_token.");
   const recordVersion = findRecordVersion(checkout);
@@ -118,16 +118,16 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   // A REFUSED validate (isError) never reaches parseValidateResult: "the client would not judge this
   // candidate" and "the client judged it invalid" are different facts, and only the second one is a
   // verdict about the body.
-  const validated = await call("object_validate", { object_id: objectId, candidate_patch: candidatePatch });
+  const validated = await call("object_validate", { object_type: ctx.clientObjectType, object_id: objectId, candidate_patch: candidatePatch });
   const clientValidation = parseValidateResult(validated, describeCandidatePatch(candidatePatch, nodeCount));
   if (!clientValidation.valid) throw new Error(`object_validate_rejected: ${formatValidationIssues(clientValidation.issues)}`);
 
   // e. Patch under the lock, pinned to the checked-out record version.
-  await call("object_patch", { object_id: objectId, lock_token: lockToken, expected_record_version: recordVersion, patch: candidatePatch });
+  await call("object_patch", { object_type: ctx.clientObjectType, object_id: objectId, lock_token: lockToken, expected_record_version: recordVersion, patch: candidatePatch });
 
   // f. Publish (commit the export — NOT a release; board B2). Omitting published_time means
   // "immediate" per the client's M-6 pin rules, so it is only sent when the caller pinned a time.
-  const publishResult = await call("object_publish", { object_id: objectId, lock_token: lockToken, ...(ctx.publishedTime ? { published_time: ctx.publishedTime } : {}) });
+  const publishResult = await call("object_publish", { object_type: ctx.clientObjectType, object_id: objectId, lock_token: lockToken, ...(ctx.publishedTime ? { published_time: ctx.publishedTime } : {}) });
 
   // g. Best-effort lock release. The export is already committed, so a refused checkin must never
   // turn a landed publish into a failure — the lease expires on its own. It must not be SILENT
@@ -135,7 +135,7 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   // lease expired" and "we never knew". The object id is safe to log; the lock token is a capability
   // and is not.
   try {
-    await call("object_checkin", { object_id: objectId, lock_token: lockToken });
+    await call("object_checkin", { object_type: ctx.clientObjectType, object_id: objectId, lock_token: lockToken });
   } catch (error) {
     console.warn("platform.object_checkin_refused", JSON.stringify({ objectId, clientError: describeClientCallFailure(error) }));
   }

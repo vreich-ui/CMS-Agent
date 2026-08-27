@@ -142,6 +142,27 @@ describe.each([
 ])("$name executePublish surfaces a client refusal at every step", ({ hooks }) => {
   const ctxFor = (opts: { refuseAt?: string; overrides?: Record<string, unknown> } = {}) => makeCtx(opts);
 
+  // -----------------------------------------------------------------------------------------------
+  // Regression: run_1787862284296_x53xz0 (dr-lurie, 2026-08-27) stopped at object_checkout with
+  //   status 400: Invalid request fields.
+  //   (issues: object_type: Invalid option: expected one of "page"|"section"|...|"content_item")
+  // object_create had already SUCCEEDED, so the run left a created-but-unpublished object behind
+  // (publish_partial_client_writes:2). The cause was not the payload: `object_type` is REQUIRED by
+  // every object verb on the client (checkout, validate, patch, publish_by_time, checkin — see
+  // objectVerbRequestSchema), and both hooks passed it on object_create ONLY. `...ctx.owner` spreads
+  // { owner_id, owner_label } and carries no type, so checkout arrived without one and Zod rejected
+  // it against the enum. Publishing could never complete past step 2 through this dialect.
+  it("passes object_type on EVERY verb, not just object_create", async () => {
+    const { ctx, calls } = ctxFor();
+    await hooks.executePublish!(ctx);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const entry of calls) {
+      expect(entry.args.object_type, `${entry.tool} must carry object_type`).toBe("content_item");
+    }
+    // The whole sequence ran — a hook that stopped early would pass the loop above vacuously.
+    expect(calls.map((entry) => entry.tool)).toEqual([...PUBLISH_STEPS, "object_checkin"]);
+  });
+
   it.each(PUBLISH_STEPS)("names %s and quotes the client verbatim", async (tool) => {
     const { ctx, calls } = ctxFor({ refuseAt: tool });
     const error = await hooks.executePublish!(ctx).then(() => undefined, (thrown) => thrown as ClientToolRefusalError);
