@@ -6,7 +6,7 @@
   "scripts": {
     "setup": "npm ci",
     "dev": "npm run serve:mcp",
-    "dev:legacy-netlify": "netlify dev",
+    "dev:legacy-netlify": "npx --yes netlify-cli@^17 dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:drift": "tsx scripts/twoPlaneDrift.ts",
@@ -55,7 +55,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.14",
-    "netlify-cli": "^17.38.1",
     "typescript": "^5.9.2",
     "vitest": "^2.1.9"
   },

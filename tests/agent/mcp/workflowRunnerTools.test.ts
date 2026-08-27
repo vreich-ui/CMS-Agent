@@ -72,7 +72,8 @@ describe("workflow runner MCP tools (end-to-end)", () => {
     }));
     await post(batch);
 
-    const run = (await call("workflow.get_run", { runId })).data.run;
+    // detail:"full" — this assertion is about run.artifacts, which the compact default omits.
+    const run = (await call("workflow.get_run", { runId, detail: "full" })).data.run;
     const artifactNodeIds = run.artifacts.map((artifact: any) => artifact.nodeId);
     // One artifact per completed node — no replays. Twelve atomic commits: each advance persists a
     // dispatch claim (the ~300s silent-death heartbeat) plus the completion save.

@@ -62,7 +62,7 @@ const seedRun = async (decision?: unknown) => {
   const executionRepository = manager.getExecutionRepository();
   const projectRepository = manager.getProjectRepository();
   const learningRepository = manager.getLearningRepository();
-  const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+  const run = await startDryRun({ executionMode: "openai", projectId: "dr-lurie", input: "publish", entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
   if (decision !== undefined) {
     const record = (await executionRepository.getRun(run.runId))!;
     record.stageOutputs.publication_controller = decision;
@@ -277,7 +277,7 @@ describe("P0 §2.2 — operator veto: one field, one setter, one reader", () => 
 
   it("a withheld veto blocks every publish-risk node in the executor, even with approved:true (mock mode included)", async () => {
     const store = new RepositoryManager().getExecutionRepository();
-    const run = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "vetoed", entrypoint: { nodeId: "article_body", output: textBody } }, store);
+    const run = await startDryRun({ executionMode: "openai", projectId: "dr-lurie", input: "vetoed", entrypoint: { nodeId: "article_body", output: textBody } }, store);
     await setOperatorPublishDecision(run.runId, "withheld", store);
 
     let current = await getRun(run.runId, store);
@@ -308,7 +308,7 @@ describe("P0 §2.2 — operator veto: one field, one setter, one reader", () => 
       };
       const data = async (name: string, args: Record<string, unknown> = {}) => (await call(name, args)).result.structuredContent.data;
 
-      const runId = (await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
+      const runId = (await data("workflow.start_dry_run", { executionMode: "openai", projectId: "dr-lurie", requestId: REQUEST_ID, input: {}, entrypoint: "article_body", articleBody: textBody })).run.runId;
       const withheld = (await data("workflow.set_operator_publish_decision", { runId, decision: "withheld" })).run;
       expect(withheld.operatorPublishDecision).toBe("withheld");
       // Durable: the persisted record carries the field, and list summaries surface it.
@@ -352,7 +352,7 @@ describe("T15.5 — project publishingPolicy.autonomyMode resolves publish autho
     const projectRepository = manager.getProjectRepository();
     await projectRepository.save(policyProject("autonomous"));
 
-    const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "policy default" }, executionRepository, undefined, projectRepository);
+    const run = await startDryRun({ executionMode: "openai", projectId: "t2-policy-project", input: "policy default" }, executionRepository, undefined, projectRepository);
     expect(run.publishingPolicySnapshot?.autonomyMode).toBe("autonomous");
     // Invariant 4: an autonomy policy is never fabricated into an operator's own decision field.
     expect(run.operatorPublishDecision).toBeUndefined();
@@ -365,7 +365,7 @@ describe("T15.5 — project publishingPolicy.autonomyMode resolves publish autho
     const projectRepository = manager.getProjectRepository();
     await projectRepository.save(policyProject("autonomous"));
 
-    const autonomous = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "autonomous" }, executionRepository, undefined, projectRepository);
+    const autonomous = await startDryRun({ executionMode: "openai", projectId: "t2-policy-project", input: "autonomous" }, executionRepository, undefined, projectRepository);
     // Note: .passed also requires the controller's "go", which these fixtures never stage — these
     // assertions check the AUTHORITY half of the gate (.operatorApproved / .authoritySource) in
     // isolation, which is exactly what autonomyMode governs.
@@ -374,14 +374,14 @@ describe("T15.5 — project publishingPolicy.autonomyMode resolves publish autho
     expect(autonomousGate.authoritySource).toBe("policy_autonomous");
 
     await projectRepository.save(policyProject("operator-gated"));
-    const gated = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "gated" }, executionRepository, undefined, projectRepository);
+    const gated = await startDryRun({ executionMode: "openai", projectId: "t2-policy-project", input: "gated" }, executionRepository, undefined, projectRepository);
     expect(gated.publishingPolicySnapshot?.autonomyMode).toBe("operator-gated");
     const gatedGate = evaluatePublishExecutionGate(gated);
     expect(gatedGate.operatorApproved).toBe(false);
     expect(gatedGate.reasons.join(" ")).toContain("operator_approval_absent");
 
     // Absent policy (no autonomyMode declared) behaves exactly like "operator-gated" — the safe default.
-    const unregistered = await startDryRun({ executionMode: "mock", projectId: "t2-unregistered-project", input: "none" }, executionRepository, undefined, projectRepository);
+    const unregistered = await startDryRun({ executionMode: "openai", projectId: "t2-unregistered-project", input: "none" }, executionRepository, undefined, projectRepository);
     expect(unregistered.publishingPolicySnapshot?.autonomyMode).toBe("operator-gated");
     expect(evaluatePublishExecutionGate(unregistered).operatorApproved).toBe(false);
   });
@@ -392,7 +392,7 @@ describe("T15.5 — project publishingPolicy.autonomyMode resolves publish autho
     const projectRepository = manager.getProjectRepository();
 
     await projectRepository.save(policyProject("autonomous"));
-    const autonomous = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "explicit under autonomous" }, executionRepository, undefined, projectRepository);
+    const autonomous = await startDryRun({ executionMode: "openai", projectId: "t2-policy-project", input: "explicit under autonomous" }, executionRepository, undefined, projectRepository);
     const approvedAutonomous = await setOperatorPublishDecision(autonomous.runId, "approved", executionRepository);
     expect(approvedAutonomous?.operatorDecisionSource).toBe("explicit");
     const approvedAutonomousGate = evaluatePublishExecutionGate(approvedAutonomous!);
@@ -400,7 +400,7 @@ describe("T15.5 — project publishingPolicy.autonomyMode resolves publish autho
     expect(approvedAutonomousGate.authoritySource).toBe("operator_explicit");
 
     await projectRepository.save(policyProject("operator-gated"));
-    const gated = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "explicit under gated" }, executionRepository, undefined, projectRepository);
+    const gated = await startDryRun({ executionMode: "openai", projectId: "t2-policy-project", input: "explicit under gated" }, executionRepository, undefined, projectRepository);
     const approvedGated = await setOperatorPublishDecision(gated.runId, "approved", executionRepository);
     const approvedGatedGate = evaluatePublishExecutionGate(approvedGated!);
     expect(approvedGatedGate.operatorApproved).toBe(true);
@@ -413,7 +413,7 @@ describe("T15.5 — project publishingPolicy.autonomyMode resolves publish autho
     const projectRepository = manager.getProjectRepository();
     await projectRepository.save(policyProject("autonomous"));
 
-    const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "veto" }, executionRepository, undefined, projectRepository);
+    const run = await startDryRun({ executionMode: "openai", projectId: "t2-policy-project", input: "veto" }, executionRepository, undefined, projectRepository);
     expect(evaluatePublishExecutionGate(run).operatorApproved).toBe(true);
 
     const vetoed = await setOperatorPublishDecision(run.runId, "withheld", executionRepository);
@@ -434,7 +434,7 @@ describe("T15.5 — project publishingPolicy.autonomyMode resolves publish autho
     const projectRepository = manager.getProjectRepository();
     await projectRepository.save(policyProject("autonomous"));
 
-    const run = await startDryRun({ executionMode: "mock", projectId: "t2-policy-project", input: "snapshot pinned" }, executionRepository, undefined, projectRepository);
+    const run = await startDryRun({ executionMode: "openai", projectId: "t2-policy-project", input: "snapshot pinned" }, executionRepository, undefined, projectRepository);
     expect(run.publishingPolicySnapshot?.autonomyMode).toBe("autonomous");
     const before = evaluatePublishExecutionGate(run);
     expect(before.operatorApproved).toBe(true);

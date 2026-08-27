@@ -1,7 +1,7 @@
 // Cost-aware model ladder (docs/improvement/STRATEGY.md §4): recommend the CHEAPEST model whose
 // rubric pass-rate on a node stays at or above threshold — decided from eval evidence, never
 // intuition. Pure function over recorded results plus the (placeholder) pricing catalog.
-import { modelPricingCatalog } from "../observability/modelUsage.js";
+import { pricingCostIndex } from "../observability/modelUsage.js";
 import type { EvalResult } from "./improvementTypes.js";
 import type { EvaluationRepository } from "../repository/interfaces/EvaluationRepository.js";
 import type { WorkspaceNode } from "../workspace/nodeTypes.js";
@@ -9,10 +9,10 @@ import type { WorkspaceNode } from "../workspace/nodeTypes.js";
 export type ModelLadderCandidate = { model: string; samples: number; passRate: number; meanScore: number; costIndexUsdPerMillion?: number; meetsThreshold: boolean };
 export type ModelLadderRecommendation = { nodeId: string; threshold: number; minSamples: number; recommended?: string; reason: string; candidates: ModelLadderCandidate[] };
 
-const costIndex = (model: string): number | undefined => {
-  const pricing = modelPricingCatalog[model];
-  return pricing ? pricing.inputUsdPerMillion + pricing.outputUsdPerMillion : undefined;
-};
+// T6: the same resolver the budget gate uses. This file and modelUsage.ts used to handle an
+// unlisted model in opposite directions — here it dropped out of the ranking, there it was silently
+// priced as gpt-5.5. One helper, one answer.
+const costIndex = pricingCostIndex;
 
 export function recommendModel(params: { nodeId: string; results: EvalResult[]; threshold?: number; minSamples?: number }): ModelLadderRecommendation {
   const threshold = params.threshold ?? 0.7;

@@ -18,7 +18,7 @@
 // survives the failure so the runner can record what the aborted node really cost (previously a failed
 // node recorded NO usage at all, hiding exactly the overshoot this guard exists to stop).
 import type { Model, ModelRequest, ModelResponse, StreamEvent } from "@openai/agents";
-import { estimateModelCost } from "../../observability/modelUsage.js";
+import { estimateModelCost, estimatePricedCost } from "../../observability/modelUsage.js";
 
 export class NodeBudgetExceededError extends Error {
   readonly code = "budget_exceeded";
@@ -30,12 +30,19 @@ export class NodeBudgetExceededError extends Error {
       spentUsdEstimate: number;
       prospectiveTurnUsd: number;
       accruedNodeUsage: { inputTokens: number; outputTokens: number };
+      // T6: set when the node was stopped because its model has NO listed rate, rather than because
+      // a real ceiling was crossed. The dollar figures above are then meaningless and the sentence
+      // below says so instead of quoting them.
+      pricingUnknown?: true;
+      reason?: string;
     }
   ) {
     super(
-      `budget_exceeded: node "${details.nodeId}" stopped before the model turn that would cross the ${details.ceiling} ceiling: ` +
-        `$${details.spentUsdEstimate.toFixed(4)} already spent (actual, ${details.ceiling === "node" ? "this node" : "run-wide"}) + ~$${details.prospectiveTurnUsd.toFixed(4)} for the upcoming turn ` +
-        `exceeds the $${details.budgetUsd} ${details.ceiling} budget. Caught before the turn ran, not after.`
+      details.pricingUnknown
+        ? `budget_exceeded: node "${details.nodeId}" stopped before its first model turn. ${details.reason}`
+        : `budget_exceeded: node "${details.nodeId}" stopped before the model turn that would cross the ${details.ceiling} ceiling: ` +
+          `$${details.spentUsdEstimate.toFixed(4)} already spent (actual, ${details.ceiling === "node" ? "this node" : "run-wide"}) + ~$${details.prospectiveTurnUsd.toFixed(4)} for the upcoming turn ` +
+          `exceeds the $${details.budgetUsd} ${details.ceiling} budget. Caught before the turn ran, not after.`
     );
     this.name = "NodeBudgetExceededError";
   }
@@ -95,7 +102,26 @@ export type BudgetGuardConfig = {
 // this must keep working across SDK refactors of everything else.
 export function wrapModelWithBudgetGuard(inner: Model, config: BudgetGuardConfig, state: BudgetGuardState): Model {
   const gate = (request: ModelRequest): void => {
-    const accruedNodeUsd = estimateModelCost({ model: config.model, inputTokens: state.accrued.inputTokens, outputTokens: state.accrued.outputTokens });
+    // T6 — a ceiling enforced against an invented rate is not a ceiling. When this node's model is
+    // not in the pricing catalog, every number below is an upper-bound guess, so a budgeted node
+    // refuses the turn by name instead of gating on it. Only a node with NO ceiling at all may run
+    // unpriced — there is nothing to enforce there, so there is nothing to get wrong.
+    const priced = estimatePricedCost({ model: config.model, inputTokens: state.accrued.inputTokens, outputTokens: state.accrued.outputTokens });
+    if (priced.pricingUnknown && (config.nodeBudgetUsd !== undefined || config.runBudgetUsd !== undefined)) {
+      const details = {
+        nodeId: config.nodeId,
+        budgetUsd: (config.nodeBudgetUsd ?? config.runBudgetUsd)!,
+        ceiling: config.nodeBudgetUsd !== undefined ? ("node" as const) : ("run" as const),
+        spentUsdEstimate: 0,
+        prospectiveTurnUsd: 0,
+        accruedNodeUsage: { ...state.accrued },
+        pricingUnknown: true as const,
+        reason: `model_pricing_unknown: "${config.model}" has no entry in the model pricing catalog, so this node's budget ceiling cannot be enforced against a real rate. Add the model to modelPricingCatalog (src/agent/observability/modelUsage.ts) or point the node at a listed model; the turn is refused rather than gated against a guess.`
+      };
+      state.exceeded = details;
+      throw new NodeBudgetExceededError(details);
+    }
+    const accruedNodeUsd = priced.costUsd;
     // run_1786557897658_elj34j (2026-08-12, verified live): topic_opportunity was stopped here with
     // only $0.02 of its $0.10 node ceiling actually spent. Cause: a stray workspace.get_node call
     // ERRORED the turn before, and the SDK's own error text for that call became the newest history

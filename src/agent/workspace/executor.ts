@@ -23,7 +23,7 @@ import { getEditorialVoice } from "./voicePrefetch.js";
 import { CONTENT_ITEM_SHELL_FAILED_PREFIX, CONTENT_ITEM_SHELL_INPUT_KEY, ensureContentItemShell } from "./contentItemShell.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
 import { runDeterministicPublishPayload, validateClientObjectOnce, readTopLevelObjectId } from "./publishPayload.js";
-import { ENGINE_VALIDATION_POLICY, ownsValidationLoop, promoteValidationUnavailableToBlocker, runArticleBodyValidationLoop, readBodyForValidation } from "./articleBodyValidation.js";
+import { ENGINE_VALIDATION_POLICY, MAX_ENGINE_REVALIDATION_CYCLES, ownsValidationLoop, promoteValidationUnavailableToBlocker, runArticleBodyValidationLoop, readBodyForValidation } from "./articleBodyValidation.js";
 import { applyRunContextEnvelope, buildRunContext } from "./runContext.js";
 import { runDeterministicPublicationController } from "./publicationController.js";
 import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
@@ -95,6 +95,21 @@ export const runModeSummary = (run: Pick<WorkflowExecutionRecord, "executionMode
 // that shape for every run made workflow.list_runs grow past a million response tokens in production.
 // Keep the operational fields needed by the overview and run picker; workflow.get_run is the explicit
 // detail read for one selected run.
+// T7 — bound a string by CODE POINT, never by UTF-16 unit. `"…".slice(0, n)` can cut between the two
+// halves of a surrogate pair and emit a lone surrogate, which is not valid UTF-8 and cannot be
+// serialized to JSON that a strict reader will accept. That is the prime suspect for the live
+// "Anthropic Proxy: Invalid content from server" failure on workflow_list_runs: one emoji or CJK
+// extension character landing on the boundary of a truncated error string is enough.
+const boundText = (value: string, max: number): string => {
+  const points = [...value];
+  return points.length <= max ? value : `${points.slice(0, max).join("")}…`;
+};
+// Per-node errors/warnings were passed through UNBOUNDED while the run-level `errors` above them was
+// capped at 10 x 2000 chars. One node with a long stack, or a validation loop that appended a warning
+// per attempt, could therefore blow up a whole page of rows.
+const boundList = (values: string[] | undefined, maxItems: number, maxChars: number): string[] | undefined =>
+  values === undefined ? undefined : values.slice(0, maxItems).map((value) => boundText(value, maxChars));
+
 export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   runId: run.runId,
   // The caller's join key. compactRun (workflow.run_all) has always carried it;
@@ -111,10 +126,14 @@ export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   startedAt: run.startedAt,
   updatedAt: run.updatedAt,
   ...(run.completedAt ? { completedAt: run.completedAt } : {}),
-  nodes: run.nodes.map(({ input: _input, output: _output, ...state }) => state),
+  nodes: run.nodes.map(({ input: _input, output: _output, ...state }) => ({
+    ...state,
+    ...(state.errors !== undefined ? { errors: boundList(state.errors, 5, 1_000) } : {}),
+    ...(state.warnings !== undefined ? { warnings: boundList(state.warnings, 5, 1_000) } : {})
+  })),
   nodeCount: run.nodes.length,
   artifactCount: run.artifacts.length,
-  errors: run.errors.slice(0, 10).map((error) => error.slice(0, 2_000)),
+  errors: boundList(run.errors, 10, 2_000) ?? [],
   approvalsRequired: run.approvalsRequired,
   dryRun: run.dryRun,
   executionMode: run.executionMode,
@@ -133,6 +152,12 @@ const MAX_SAVE_RETRIES = 5;
 // timeoutMs + this margin means the driver process was killed mid-node (the ~300s serverless
 // ceiling), not that work is still happening.
 export const STALL_MARGIN_MS = 90_000;
+// T3 — the wall-clock the engine-owned VALIDATE phase of the article_body loop can legitimately
+// occupy after the model has already returned: one validator call per revalidation cycle plus the
+// initial one, at the 15s per-call abort publishPayload.ts applies (OBJECT_VALIDATE_TIMEOUT_MS),
+// plus one call's margin for the loop's own bookkeeping. The REVISION phase is a full second model
+// dispatch and re-claims with nodeTimeoutMs instead — see reclaimForPhase at the loop.
+export const ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS = (MAX_ENGINE_REVALIDATION_CYCLES + 2) * 15_000;
 const now = () => new Date().toISOString();
 const makeRunId = () => `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 // R-9: system-generated, one per run, distinct from publish_payload's human-authored requestId
@@ -2470,7 +2495,31 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // production until the next re-seed, which is precisely how long this defect has already lasted.
   // Wholly best-effort — any failure leaves `output` exactly as the model produced it, with a
   // run-visible warning, so this can cost the old price but never a run.
+  // T3 — THE CLAIM WINDOW. The dispatch claim above was stamped ONCE, with nodeTimeoutMs, BEFORE the
+  // model loop. Everything below runs AFTER the model returned but INSIDE that same claim: up to
+  // three validator calls at 15s each plus one full second model dispatch of up to nodeTimeoutMs. On
+  // article_body that is ~645s of legitimate work under a claim that goes stale at
+  // nodeTimeoutMs + STALL_MARGIN_MS (390s), so the 60s continuation tick read a live node as a dead
+  // driver and RE-DISPATCHED it — the same double-dispatch loop already documented for
+  // gap_adjudicator. Extending the initial claim to cover the worst case would instead hide a
+  // genuinely dead driver for eleven minutes; re-stamping PER PHASE keeps stall detection honest at
+  // the granularity of the work actually in flight, which is why it is the shape chosen here.
+  const reclaimForPhase = async (timeoutMs: number): Promise<void> => {
+    if (!claim) return;
+    try {
+      stampDispatch(state, now(), timeoutMs, options.driver ?? "http_run_all", state.dispatch?.projectEndpointConfigured ?? false);
+      run = await store.saveRun(run);
+      state = stateById(run).get(nextNode.id) as NodeExecutionState;
+    } catch (error) {
+      // A save conflict here means another driver already moved this run. The phase's own result is
+      // still worth having, so it proceeds under the previous claim and the failure is named rather
+      // than silently widening or silently losing the window.
+      state.warnings = [...(state.warnings ?? []), `article_body_claim_reclaim_failed:${error instanceof Error ? error.message : String(error)}`];
+    }
+  };
+
   if (ownsValidationLoop(nextNode) && mode !== "mock" && readBodyForValidation(output)) {
+    await reclaimForPhase(ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS);
     try {
       const loop = await runArticleBodyValidationLoop(output as Record<string, unknown>, {
         // objectType threaded from the envelope the model just emitted (its schema requires
@@ -2483,6 +2532,10 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         // toolCallLimit is not what runs out; the runner records its own usage, so the turn is paid
         // for visibly rather than hidden inside another node's bill.
         revise: async ({ issues, output: previous, attempt }) => {
+          // A revision is a FULL second model dispatch — the phase claim must widen back out to a
+          // model timeout for its duration, or the continuation tick reclaims mid-dispatch exactly
+          // as it did before this fix.
+          await reclaimForPhase(nodeTimeoutMs(nextNode));
           const revision = await runner.run({
             node: effectiveNode,
             input: {

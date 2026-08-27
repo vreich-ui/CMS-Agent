@@ -17,6 +17,14 @@ import { findDeep } from "./toolResultSearch.js";
 // that never says "scores" anywhere. All judgements stay workspace-side.
 export const JUDGEMENT_SUBSTRATE_KEYS: ReadonlySet<string> = new Set(["scores", "claims", "sources", "compliance", "emotional_strategy", "lineage"]);
 
+// Every key the engine must strip before a client body crosses the wire, in EITHER direction — the
+// D7 judgement substrate above plus `schema_version`, which is client_object.v1's own envelope label
+// and has no place in a content_item body (that body is zod .strict(), so carrying it through is
+// rejected at write). Dr. Lurie's hook declared this pair locally; platform's did not, which left
+// platform's set_article_meta willing to send `schema_version` into a strict schema. One shared set
+// means the two tenants of this substrate cannot drift apart again.
+export const EXCLUDED_CLIENT_BODY_KEYS: ReadonlySet<string> = new Set([...JUDGEMENT_SUBSTRATE_KEYS, "schema_version"]);
+
 // Tolerant extractors over a client's tool results (envelope shapes vary; see toolResultSearch).
 export const findObjectId = (value: unknown): string | number | undefined =>
   findDeep(value, (key, child) => (key === "object_id" || key === "id") && ((typeof child === "string" && child !== "") || typeof child === "number")) as string | number | undefined;
@@ -38,6 +46,36 @@ export const buildArticleCandidatePatch = (body: Record<string, unknown>, exclud
   const fields = Object.fromEntries(Object.entries(body).filter(([key]) => key !== "nodes" && !excludedMetaKeys.has(key)));
   const nodes = Array.isArray(body.nodes) ? (body.nodes as unknown[]) : [];
   return { patch: [{ op: "set_article_meta", fields }, ...nodes.map((node) => ({ op: "upsert_node", node }))], nodeCount: nodes.length };
+};
+
+// The body to send AT CREATE TIME. object_create's live schema requires {object_type, site, body}
+// and the platform validates that body BEFORE persisting (content_item requires slug/title/nodes),
+// so the historical create-empty-then-patch dialect is structurally unsatisfiable: an empty create is
+// a 422 and every later step then addresses an object that was never made. The create therefore
+// carries the same client object the patch does, minus the keys the engine must never write.
+// The patch step still runs afterwards and is unchanged — it is what makes re-entry over an
+// already-created object (the S3 item 8 shell, or a retried run) idempotent.
+export const buildCreateBody = (
+  body: Record<string, unknown>,
+  excludedKeys: ReadonlySet<string> = EXCLUDED_CLIENT_BODY_KEYS
+): Record<string, unknown> => Object.fromEntries(Object.entries(body).filter(([key]) => !excludedKeys.has(key)));
+
+// What an object_create answer actually says, read at EVERY envelope level this substrate uses.
+// The platform answers {content:[{type:"text",text:JSON}], structuredContent:{record:{object_id,…}}},
+// so a reader pinned to the raw result's own top level sees none of it. `existed` is true when the
+// client is telling us this call did not make a new object: an explicit created:false / existing:true
+// / idempotent_replay:true, or the substrate's real replay key, `replayed_from_idempotency_key`,
+// which is a VALUE (the key echoed back), not a boolean — a boolean-only reader misses every replay.
+export type CreateOutcome = { objectId: string | undefined; existed: boolean };
+export const readCreateOutcome = (result: unknown): CreateOutcome => {
+  const flag = (name: string): boolean | undefined =>
+    findDeep(result, (key, child) => key === name && typeof child === "boolean") as boolean | undefined;
+  const replayKey = findDeep(result, (key, child) => key === "replayed_from_idempotency_key" && child !== null && child !== undefined && child !== "");
+  const minted = findObjectId(result);
+  return {
+    objectId: minted === undefined ? undefined : String(minted),
+    existed: flag("created") === false || flag("existing") === true || flag("idempotent_replay") === true || replayKey !== undefined
+  };
 };
 
 export type ClientValidation = { tool: string; candidate_patch_summary: string; valid: boolean; issues: unknown[] };

@@ -72,26 +72,50 @@ const driverBudgetMs = (requested?: number): number => {
 const driverTimeBudgetNote = (budgetMs: number): string => `Driver time budget (${budgetMs}ms) reached before the caller's request ceiling; the run's state is persisted and nothing is in flight. The scheduled continuation tick advances a queued/running run on its own; call the same tool again to drive it sooner, or use the Cloud Run conductor job for runs longer than one request window.`;
 const DRIVER_TIME_BUDGET_NOTE = driverTimeBudgetNote(RUN_DRIVER_TIME_BUDGET_MS);
 
-// The compact run view workflow.run_all returns. A full run record (inputs, outputs, stageOutputs,
-// artifacts) for a 20-node run is hundreds of KB — far past what a chat tool result can carry, and
-// none of it is what the caller needs to decide the next step. workflow.get_run stays full.
+// The compact run view workflow.run_all returns, and (T7) the DEFAULT shape of workflow.get_run.
+// A full run record (inputs, outputs, stageOutputs, artifacts) for a 20-node run is hundreds of KB —
+// far past what a chat tool result can carry, and none of it is what the caller needs to decide the
+// next step. get_run's `detail:"full"` still returns the whole record for when the payloads are the
+// point.
+//
+// Because this is now what a plain get_run answers with, it also carries the short scalar facts an
+// operator checks by name: the publish request id (distinct from requestId, and a null one is its own
+// failure mode) and the durable operator publish decision. Both are a few bytes and their absence
+// would have sent every caller straight back to detail:"full".
 export type CompactRunView = {
   runId: string;
   requestId?: string;
+  publishRequestId?: string;
+  workflowId?: string;
   projectId: string;
   status: WorkflowExecutionRecord["status"];
   currentNodeId?: string;
+  executionMode?: WorkflowExecutionRecord["executionMode"];
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
   budget?: { budgetUsd?: number; budgetBlock?: WorkflowExecutionRecord["budgetBlock"] };
   errors: string[];
   approvalsRequired: WorkflowExecutionRecord["approvalsRequired"];
+  operatorPublishDecision?: WorkflowExecutionRecord["operatorPublishDecision"];
+  operatorDecisionSource?: WorkflowExecutionRecord["operatorDecisionSource"];
+  artifactCount?: number;
   nodes: Array<{ nodeId: string; status: string; warnings?: string[]; errors?: string[]; durationMs?: number; dispatch?: unknown; lastDispatch?: unknown }>;
 };
 export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
   runId: run.runId,
   ...(run.requestId !== undefined ? { requestId: run.requestId } : {}),
+  ...(run.publishRequestId !== undefined && run.publishRequestId !== null ? { publishRequestId: run.publishRequestId } : {}),
+  ...(run.workflowId !== undefined ? { workflowId: run.workflowId } : {}),
   projectId: run.projectId,
   status: run.status,
   ...(run.currentNodeId !== undefined ? { currentNodeId: run.currentNodeId } : {}),
+  ...(run.executionMode !== undefined ? { executionMode: run.executionMode } : {}),
+  ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
+  ...(run.updatedAt !== undefined ? { updatedAt: run.updatedAt } : {}),
+  ...(run.completedAt !== undefined ? { completedAt: run.completedAt } : {}),
+  ...(run.operatorPublishDecision ? { operatorPublishDecision: run.operatorPublishDecision, operatorDecisionSource: run.operatorDecisionSource ?? "explicit" } : {}),
+  ...(Array.isArray(run.artifacts) ? { artifactCount: run.artifacts.length } : {}),
   ...(run.budgetUsd !== undefined || run.budgetBlock !== undefined ? { budget: { ...(run.budgetUsd !== undefined ? { budgetUsd: run.budgetUsd } : {}), ...(run.budgetBlock !== undefined ? { budgetBlock: run.budgetBlock } : {}) } } : {}),
   errors: run.errors,
   approvalsRequired: run.approvalsRequired,
@@ -290,6 +314,8 @@ async function resolvePublishRequestId(projectId: string, publishRequestId: stri
 const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional() }).strict();
 const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional() }).strict();
 const runIdInput = z.object({ runId: z.string().min(1) }).strict();
+// T7: get_run defaults to the compact view; "full" is the old raw-record behaviour, opted into.
+const getRunInput = z.object({ runId: z.string().min(1), detail: z.enum(["compact", "full"]).default("compact") }).strict();
 // F3 (T-2, run_1785352838155_l544ye): budgetUsd is optional so plain resume (no ceiling change)
 // keeps working exactly as before; supplying it raises (or sets) the run's ceiling in the same call.
 const resumeRunInput = z.object({ runId: z.string().min(1), budgetUsd: z.number().nonnegative().optional() }).strict();
@@ -382,6 +408,7 @@ const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyArgJsonS
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
 const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." }, requestId: { type: "string", minLength: 1, description: "Caller-supplied request id for this run. REQUIRED for a live (openai) run when the project declares objectDialect.requestIdPattern (platform, dr-lurie, fernwell: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case) — the tool refuses with request_id_required/invalid_request_id naming the pattern; request ids are never auto-generated for such a run. Optional (auto-minted) for a mock dry-run or a project without a pattern; a supplied id is always validated." }, publishRequestId: { type: "string", minLength: 1, description: "Operator-supplied PUBLISH request id (req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case), stored on the run and lifted into every node's run context. A DIFFERENT identifier from `requestId`, which is the platform/workspace join key — neither ever substitutes for the other. This id is normally authored by the artifact_plan node; supply it here for a late-stage entrypoint run, whose artifact_plan is seeded as skipped and therefore authors none (without it such a run reaches the publish gate and is refused with publish_request_id_absent). Always OPTIONAL and never generated: omit it and the run simply has no publish id and that refusal stands. A supplied id is validated before the run is created against the project's objectDialect.requestIdPattern where declared (platform, dr-lurie, fernwell), otherwise the publisher's shared contract pattern, refusing with invalid_publish_request_id. An id authored by a real artifact_plan run always takes precedence over this one. Survives workflow.reset_run." } }, ["projectId", "input"]);
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
+const getRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, detail: { type: "string", enum: ["compact", "full"], default: "compact", description: "compact (default): the compact run view. full: the complete record including node inputs/outputs, stageOutputs and artifacts." } }, ["runId"]);
 const resumeRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0, description: "Optional: raise (or set) the run's per-run cost ceiling in the same call that resumes it. Omit to resume unchanged — this is what makes the budget gate's own remedy (\"raise budgetUsd and resume\") actually reachable; previously resume_run took only runId and there was no way to raise the ceiling that blocked the run." } }, ["runId"]);
 const runNextNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
 const operatorPublishDecisionJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, decision: { type: "string", enum: ["approved", "withheld"], description: "\"withheld\" is a durable operator veto: it blocks workflow.publish_run and every publish-risk node for this run regardless of approved/live flags, until replaced. \"approved\" records explicit, durable operator approval — the record an executed publish_execution.v1's approvalMatched must match." } }, ["runId", "decision"]);
@@ -756,7 +783,11 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // emits schema-shaped placeholder artifacts that look exactly like real output, so what produced
     // them has to be impossible to miss. It also names the node source, since static mode means
     // workspace edits made over MCP were not in this run (see runModeSummary).
-    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state. The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status \"running\" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.", zodSchema: runIdInput, inputSchema: runIdJsonSchema, execute: async (input) => { const run = await getRun(runIdInput.parse(input).runId, executionRepository); return ok({ run: run ?? null, mode: run ? runModeSummary(run) : null, stall: run ? assessRunStall(run) ?? null : null }); } }),
+    // T7 — get_run returned the RAW record: 110KB on a live run, because that record carries every
+    // node's input and output plus stageOutputs and artifacts. `detail:"compact"` (the default) reuses
+    // the compactRun view run_all has always returned; `detail:"full"` is the old behaviour, unchanged,
+    // for when the node payloads are what you actually came for.
+    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state. detail:\"compact\" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch}]}; detail:\"full\" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status \"running\" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.", zodSchema: getRunInput, inputSchema: getRunJsonSchema, execute: async (input) => { const data = getRunInput.parse(input); const run = await getRun(data.runId, executionRepository); return ok({ run: run ? (data.detail === "full" ? run : compactRun(run)) : null, detail: data.detail, mode: run ? runModeSummary(run) : null, stall: run ? assessRunStall(run) ?? null : null }); } }),
     tool({ name: "workflow.list_runs", description: "List compact dry-run workflow summaries, newest first, paged (default 20 rows, max 100; `page.nextCursor` fetches the next page) with optional status and startedAt time-range filters. Node inputs/outputs, stage outputs, and artifact values are intentionally omitted; call workflow.get_run for one selected run. Each row carries the caller-supplied `requestId` it was started with (when it has one), so a page of runs can be joined back to the requests that asked for them, plus a `mode` block naming what produced it and a `stall` block on status \"running\" rows naming whether the driver is alive.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => { const { runs, page } = await listRunsPage(listRunsInput.parse(input), executionRepository); return ok({ runs: runs.map((run) => ({ ...summarizeRunForList(run), mode: runModeSummary(run), ...(assessRunStall(run) ? { stall: assessRunStall(run) } : {}) })), page }); } }),
     tool({ name: "workflow.run_next_node", description: "Run exactly one dependency-ready Publishing Conductor node, stopping before publish-risk nodes unless approved is true.", zodSchema: runNextNodeInput, inputSchema: runNextNodeJsonSchema, execute: async (input) => { const data = runNextNodeInput.parse(input); return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); } }),
     tool({ name: "workflow.run_node", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Run dependency-ready nodes; when nodeId is given, advance the run until that node completes. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); if (!data.nodeId) return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS; let timedOut = false; let run = await getRun(data.runId, executionRepository); for (let i = 0; run && i < 100 && !HALTED_RUN_STATUSES.includes(run.status); i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }); const state = run.nodes.find((node) => node.nodeId === data.nodeId); if (state && state.status !== "queued" && state.status !== "running") break; } return ok({ run, ...(timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) }); } }),

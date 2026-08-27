@@ -37,6 +37,52 @@ describe("ensureContentItemShell", () => {
     expect(adapter.calls).toHaveLength(1);
     expect(adapter.calls[0]!.tool).toBe("object_create");
     expect(adapter.calls[0]!.args).toMatchObject({ object_type: "content_item", site: drLurieProjectConfig.objectDialect!.siteObjectId, requested_id: REQUEST_ID, idempotency_key: "run_shell_1" });
+    // T2 — the shell can no longer be created EMPTY: this substrate validates the body before it
+    // persists anything, and content_item requires slug/title/nodes. The shell therefore carries the
+    // minimum body that is legal to WRITE and illegal to PUBLISH — a slug/title derived from the
+    // request id and NO nodes (article_visible_nodes is blocks_publish, not blocks_write), so it can
+    // never be mistaken for a publishable article while the artifact bridge indexes against it.
+    expect(adapter.calls[0]!.args.body).toEqual({ slug: "req-agent-shell-probe-20260818-01", title: REQUEST_ID, nodes: [] });
+  });
+
+  it("T2 — a REFUSED create is a named failure, never a shell the publisher will trust", async () => {
+    // The old reader stopped at the adapter's transport-level `ok`, so a refusal became
+    // { objectId: requestId, created: true }: the publisher then skipped its own object_create and
+    // died at object_checkout on an object that had never been made.
+    const refuse = async (_config: unknown, tool: string): Promise<CallToolResult> => ({
+      projectId: "dr-lurie", connection: {} as never, tool, ok: true,
+      result: { isError: true, content: [{ type: "text", text: "Invalid arguments" }], structuredContent: { statusCode: 400, error_code: "invalid_arguments", issues: [{ path: ["body"], message: "Required" }] } }
+    });
+    const result = await ensureContentItemShell({ run: run() }, { projectRepository: new MemoryProjectRepository(), env: ENABLED_ENV, callTool: refuse });
+    expect(result).toMatchObject({ ok: false, skipped: false, code: "client_refused" });
+    expect(result.ok === false ? result.message : "").toContain("status 400");
+  });
+
+  it("T2 — reads created/existing under structuredContent, and treats replayed_from_idempotency_key as an existing object", async () => {
+    // Both facts live one level down on this substrate, and a REPLAY is signalled by a VALUE (the
+    // key echoed back), not a boolean — a boolean-only reader at the raw top level saw neither and
+    // reported every replay as a fresh create.
+    const answer = (structuredContent: Record<string, unknown>) => async (_config: unknown, tool: string): Promise<CallToolResult> =>
+      ({ projectId: "dr-lurie", connection: {} as never, tool, ok: true, result: { content: [{ type: "text", text: JSON.stringify(structuredContent) }], structuredContent } });
+    const deps = { projectRepository: new MemoryProjectRepository(), env: ENABLED_ENV };
+
+    const replayed = await ensureContentItemShell({ run: run() }, { ...deps, callTool: answer({ record: { object_id: REQUEST_ID }, replayed_from_idempotency_key: "run_shell_1" }) });
+    expect(replayed).toEqual({ ok: true, shell: { objectId: REQUEST_ID, created: false, objectType: "content_item", requestId: REQUEST_ID } });
+
+    const existing = await ensureContentItemShell({ run: run() }, { ...deps, callTool: answer({ record: { object_id: REQUEST_ID }, created: false }) });
+    expect(existing.ok === true ? existing.shell.created : true).toBe(false);
+
+    const fresh = await ensureContentItemShell({ run: run() }, { ...deps, callTool: answer({ record: { object_id: REQUEST_ID }, created: true }) });
+    expect(fresh.ok === true ? fresh.shell.created : false).toBe(true);
+  });
+
+  it("T2 — an id-less success is a named failure, not a shell silently named after the request id", async () => {
+    // objectId = requestId was the old fallback. On a request_id dialect the two are equal WHEN the
+    // create really happened, so the fallback could only ever mask a create that did not.
+    const idless = async (_config: unknown, tool: string): Promise<CallToolResult> =>
+      ({ projectId: "dr-lurie", connection: {} as never, tool, ok: true, result: { structuredContent: { ok: true } } });
+    const result = await ensureContentItemShell({ run: run() }, { projectRepository: new MemoryProjectRepository(), env: ENABLED_ENV, callTool: idless });
+    expect(result).toMatchObject({ ok: false, skipped: false, code: "create_missing_object_id" });
   });
 
   it("retries once without idempotency_key when the client rejects that key; an existing object is created:false, not a failure", async () => {
@@ -78,7 +124,7 @@ describe("the publisher patches the shell instead of creating a second object", 
   it("skips object_create when artifact_plan's input carries the shell for this request", async () => {
     const manager = new RepositoryManager();
     const executionRepository = manager.getExecutionRepository();
-    const started = await startDryRun({ executionMode: "mock", projectId: "dr-lurie", input: "publish", requestId: REQUEST_ID, entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
+    const started = await startDryRun({ executionMode: "openai", projectId: "dr-lurie", input: "publish", requestId: REQUEST_ID, entrypoint: { nodeId: "article_body", output: textBody } }, executionRepository);
     const record = (await getRun(started.runId, executionRepository))!;
     record.stageOutputs.publication_controller = { artifact: "publication_decision.v1", summary: "go", decision: "go", blockers: [] };
     const artifactPlan = record.nodes.find((node) => node.nodeId === "artifact_plan")!;

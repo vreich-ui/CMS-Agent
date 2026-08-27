@@ -3,12 +3,42 @@ import { metaJson, mutationMeta, objectSchema, ok, tool, type WorkspaceTool } fr
 import type { WorkspaceMutationMeta } from "./store.js";
 import type { WorkspaceRepository } from "../../repository/interfaces/WorkspaceRepository.js";
 import type { ChangeRepository } from "../../repository/interfaces/ChangeRepository.js";
-import { workspaceActorKinds, workspaceChangeOperations, workspaceChangeSources } from "../../workspace/changeTypes.js";
+import { workspaceActorKinds, workspaceChangeOperations, workspaceChangeSources, type WorkspaceChangeEvent } from "../../workspace/changeTypes.js";
 import { relationshipDirections, relationshipKinds, type WorkspaceRelationshipsUpdate } from "../../workspace/relationshipTypes.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import { hashValue } from "./store.js";
 
+// T7 — RESPONSE HYGIENE. changes.list embedded the FULL before/after node snapshot on every event:
+// 491KB for 24 events on the live plane, for a listing whose entire job is "what changed, when, by
+// whom". The snapshots are still there when asked for (detail:"full"), and changes.get has always
+// returned one event whole — so nothing is lost, it just stops being the default.
+const detailSchema = z.enum(["summary", "full"]).default("summary");
+const detailJson = { detail: { type: "string", enum: ["summary", "full"], default: "summary", description: "summary (default): event headers, changed field names and before/after byte counts. full: the complete before/after snapshots." } };
+
+const byteLength = (value: unknown): number => (value === undefined ? 0 : JSON.stringify(value)?.length ?? 0);
+
+// Which top-level keys actually differ between two recorded values. This is the fact a reader wants
+// from a listing; the values themselves are what makes it 491KB.
+const changedFieldNames = (before: unknown, after: unknown): string[] => {
+  const keysOf = (value: unknown) => (value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value as Record<string, unknown>) : []);
+  const keys = [...new Set([...keysOf(before), ...keysOf(after)])].sort();
+  if (!keys.length) return [];
+  return keys.filter((key) => hashValue((before as Record<string, unknown> | undefined)?.[key] ?? null) !== hashValue((after as Record<string, unknown> | undefined)?.[key] ?? null));
+};
+
+const summarizeEvent = (event: WorkspaceChangeEvent) => {
+  const { before, after, ...header } = event;
+  return {
+    ...header,
+    changedFields: changedFieldNames(before, after),
+    beforeBytes: byteLength(before),
+    afterBytes: byteLength(after),
+    detailAvailable: before !== undefined || after !== undefined
+  };
+};
+
 const listChangesInput = z.object({
+  detail: detailSchema,
   nodeId: z.string().min(1).optional(),
   operation: z.enum(workspaceChangeOperations).optional(),
   actorKind: z.enum(workspaceActorKinds).optional(),
@@ -19,6 +49,7 @@ const listChangesInput = z.object({
   cursor: z.string().min(1).optional()
 }).strict();
 const listChangesJsonSchema = objectSchema({
+  ...detailJson,
   nodeId: { type: "string", minLength: 1 },
   operation: { type: "string", enum: [...workspaceChangeOperations] },
   actorKind: { type: "string", enum: [...workspaceActorKinds] },
@@ -32,8 +63,8 @@ const listChangesJsonSchema = objectSchema({
 const getChangeInput = z.object({ eventId: z.string().min(1) }).strict();
 const getChangeJsonSchema = objectSchema({ eventId: { type: "string", minLength: 1 } }, ["eventId"]);
 
-const compareInput = z.object({ fromRevisionId: z.string().min(1), toRevisionId: z.string().min(1) }).strict();
-const compareJsonSchema = objectSchema({ fromRevisionId: { type: "string", minLength: 1 }, toRevisionId: { type: "string", minLength: 1 } }, ["fromRevisionId", "toRevisionId"]);
+const compareInput = z.object({ fromRevisionId: z.string().min(1), toRevisionId: z.string().min(1), detail: detailSchema }).strict();
+const compareJsonSchema = objectSchema({ fromRevisionId: { type: "string", minLength: 1 }, toRevisionId: { type: "string", minLength: 1 }, ...detailJson }, ["fromRevisionId", "toRevisionId"]);
 
 const restoreInput = z.object({ revisionId: z.string().min(1), nodeId: z.string().min(1), ...mutationMeta }).strict();
 const restoreJsonSchema = objectSchema({ revisionId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, ...metaJson }, ["revisionId", "nodeId"]);
@@ -61,7 +92,7 @@ const updateRelationshipsJsonSchema = objectSchema({ create: { type: "array", it
 
 // Node-level diff between two revisions. Values were redacted at write time, so diff output is
 // safe to surface directly.
-const diffNodes = (fromNodes: WorkspaceNode[], toNodes: WorkspaceNode[]) => {
+const diffNodes = (fromNodes: WorkspaceNode[], toNodes: WorkspaceNode[], detail: "summary" | "full" = "full") => {
   const fromById = new Map(fromNodes.map((node) => [node.id, node]));
   const toById = new Map(toNodes.map((node) => [node.id, node]));
   const added = toNodes.filter((node) => !fromById.has(node.id));
@@ -73,8 +104,13 @@ const diffNodes = (fromNodes: WorkspaceNode[], toNodes: WorkspaceNode[]) => {
     const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])]
       .filter((field) => hashValue((before as Record<string, unknown>)[field] ?? null) !== hashValue((after as Record<string, unknown>)[field] ?? null))
       .sort();
-    changed.push({ nodeId: id, changedFields: fields, before, after });
+    changed.push(detail === "full"
+      ? { nodeId: id, changedFields: fields, before, after }
+      : { nodeId: id, changedFields: fields, beforeBytes: byteLength(before), afterBytes: byteLength(after) } as never);
   }
+  // In summary the added/removed lists carry ids, not whole nodes: a compare that adds twelve nodes
+  // should not ship twelve node definitions to say so.
+  if (detail === "summary") return { added: added.map((node) => node.id), removed: removed.map((node) => node.id), changed } as never;
   return { added, removed, changed };
 };
 
@@ -91,7 +127,12 @@ export function createChangesTools({ workspaceRepository, changeRepository, meta
       description: "List immutable workspace change events, newest first, with pagination and filters for a future Changes UI.",
       zodSchema: listChangesInput,
       inputSchema: listChangesJsonSchema,
-      execute: async (input) => ok(await changeRepository.listEvents(listChangesInput.parse(input)))
+      execute: async (input) => {
+        const { detail, ...filters } = listChangesInput.parse(input);
+        const page = await changeRepository.listEvents(filters);
+        if (detail === "full") return ok(page);
+        return ok({ ...page, events: (page.events ?? []).map(summarizeEvent) });
+      }
     }),
     tool({
       name: "changes.get",
@@ -116,10 +157,11 @@ export function createChangesTools({ workspaceRepository, changeRepository, meta
           diff: {
             fromRevisionId: data.fromRevisionId,
             toRevisionId: data.toRevisionId,
-            nodes: diffNodes(from.nodes, to.nodes),
+            detail: data.detail,
+            nodes: diffNodes(from.nodes, to.nodes, data.detail),
             relationships: {
-              added: to.relationships.filter((relationship) => !fromRelationships.has(relationship.id)),
-              removed: from.relationships.filter((relationship) => !toRelationships.has(relationship.id)),
+              added: to.relationships.filter((relationship) => !fromRelationships.has(relationship.id)).map((relationship) => data.detail === "full" ? relationship : relationship.id),
+              removed: from.relationships.filter((relationship) => !toRelationships.has(relationship.id)).map((relationship) => data.detail === "full" ? relationship : relationship.id),
               changedIds: [...fromRelationships.keys()].filter((id) => toRelationships.has(id) && hashValue(fromRelationships.get(id)) !== hashValue(toRelationships.get(id)))
             }
           }

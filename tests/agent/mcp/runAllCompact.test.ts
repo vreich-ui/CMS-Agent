@@ -51,7 +51,13 @@ describe("workflow.run_all — budget below caller timeouts, compact response", 
     expect(["blocked", "completed"]).toContain(data.run.status);
     expect(data.continued).toBe(false);
 
-    const full = (await call("workflow.get_run", { runId })).result.structuredContent.data.run;
+    // T7: get_run now DEFAULTS to the same compact view (the raw record was 110KB on a live run);
+    // detail:"full" is the opt-in that returns the node payloads.
+    const compact = (await call("workflow.get_run", { runId })).result.structuredContent.data.run;
+    expect(compact).not.toHaveProperty("stageOutputs");
+    expect(compact.nodes.every((node: { output?: unknown }) => node.output === undefined)).toBe(true);
+
+    const full = (await call("workflow.get_run", { runId, detail: "full" })).result.structuredContent.data.run;
     expect(full).toHaveProperty("stageOutputs");
     expect(full.nodes.some((node: { output?: unknown }) => node.output !== undefined)).toBe(true);
   });
@@ -69,9 +75,16 @@ describe("workflow.run_all — budget below caller timeouts, compact response", 
       nodes: [{ nodeId: "n1", status: "completed", durationMs: 12, output: { big: "x".repeat(10) }, lastDispatch: { dispatchedAt: "2026-08-17T00:00:00.000Z", driver: "http_run_all", projectEndpointConfigured: true } }],
       artifacts: [], errors: [], approvalsRequired: [], stageOutputs: { n1: {} }, dryRun: true, budgetUsd: 2
     });
+    // T7 — the compact view is now also what a plain workflow.get_run returns, so it carries the
+    // short scalar facts an operator reads by name (ids, mode, timestamps, artifact COUNT). What it
+    // still must never carry is the bulk: node inputs/outputs, stageOutputs, artifact values.
     expect(view).toEqual({
-      runId: "r", projectId: "p", status: "running", budget: { budgetUsd: 2 }, errors: [], approvalsRequired: [],
+      runId: "r", workflowId: "w", projectId: "p", status: "running", executionMode: undefined, budget: { budgetUsd: 2 },
+      startedAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z", artifactCount: 0,
+      errors: [], approvalsRequired: [],
       nodes: [{ nodeId: "n1", status: "completed", durationMs: 12, lastDispatch: { dispatchedAt: "2026-08-17T00:00:00.000Z", driver: "http_run_all", projectEndpointConfigured: true } }]
     });
+    expect(view).not.toHaveProperty("stageOutputs");
+    expect(JSON.stringify(view)).not.toContain("xxxxx");
   });
 });

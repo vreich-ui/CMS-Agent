@@ -107,10 +107,24 @@ describe("changes.* MCP tools", () => {
 
   it("never exposes sensitive metadata values through change responses", async () => {
     await data("workspace.update_node_metadata", { id: "input_triage", patch: { metadata: { apiKey: "raw-secret-value-9", note: "public note" } } });
-    const serialized = JSON.stringify(await data("changes.list", { limit: 5 }));
+    // detail:"full" — redaction happens at WRITE time and lives in the before/after values, which the
+    // summary default deliberately omits (T7: 491KB for 24 events). The summary is checked below.
+    const serialized = JSON.stringify(await data("changes.list", { detail: "full", limit: 5 }));
     expect(serialized).not.toContain("raw-secret-value-9");
     expect(serialized).toContain("[REDACTED]");
     expect(serialized).toContain("public note");
+
+    // T7 — the summary default is a strictly SMALLER surface: it names which fields changed and how
+    // many bytes each side was, and carries no recorded value at all, redacted or otherwise.
+    const summary = await data("changes.list", { limit: 5 });
+    const serializedSummary = JSON.stringify(summary);
+    expect(serializedSummary).not.toContain("raw-secret-value-9");
+    expect(serializedSummary).not.toContain("public note");
+    expect(serializedSummary.length).toBeLessThan(serialized.length);
+    expect(summary.events[0]).toMatchObject({ changedFields: expect.arrayContaining(["metadata"]), detailAvailable: true });
+    expect(summary.events[0].beforeBytes).toBeGreaterThan(0);
+    expect(summary.events[0]).not.toHaveProperty("before");
+    expect(summary.events[0]).not.toHaveProperty("after");
   });
 
   it("manages typed relationships through the guarded mutation tool", async () => {

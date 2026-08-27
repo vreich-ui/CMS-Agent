@@ -1,0 +1,45 @@
+{
+  "artifact": "client_object.v1",
+  "summary": "Publish-smoke fixture: a deterministic, mechanically-recognisable article body used to exercise the real publish path end to end without spending a single model call.",
+  "clientProjectId": "platform",
+  "clientObjectType": "content_item",
+  "contractSource": {
+    "tool": "object_contract",
+    "objectType": "content_item",
+    "fetchedAt": "2026-08-27T00:00:00.000Z"
+  },
+  "body": {
+    "slug": "zz-test-publish-smoke",
+    "title": "ZZ Test — Publish Smoke",
+    "deck": "A deliberately dull article that exists only to prove the publish path works.",
+    "description": "Deterministic publish-smoke fixture. Safe to unpublish and retire at any time.",
+    "nodes": [
+      {
+        "id": "n_intro",
+        "kind": "content",
+        "visibility": "public",
+        "public": {
+          "title": "ZZ Test — Publish Smoke",
+          "body": "This article is a test fixture. It exists so that the publishing pipeline can be exercised end to end against a real tenant site without asking a model to write anything, and without any human having to judge whether the result reads well. Everything below is filler chosen to be obviously non-editorial: if this page is ever seen by a reader, something has gone wrong with teardown rather than with the writing. The body is long enough to clear the reader-visible content floor the readiness gate applies, and short enough that nobody is tempted to keep it."
+        }
+      },
+      {
+        "id": "n_body",
+        "kind": "content",
+        "visibility": "public",
+        "public": {
+          "title": "What this fixture is for",
+          "body": "A publish smoke test answers one question: does an approved run reach the tenant's live site through the same tools a real article would use? To answer it honestly the fixture has to be ordinary in every way that matters to the pipeline — a valid client object, a slug the site will accept, at least one public content node — and unmistakable in every way that matters to a human. Hence the zz-test- prefix, which sorts to the end of any listing, and this paragraph, which no editor would ever ship. Nothing here references media, taxonomy terms, products, or any other object, so the publish never depends on an artifact bridge or a taxonomy registry being in the right state."
+        }
+      }
+    ]
+  },
+  "artifactReferences": [],
+  "assumptions": [
+    "Committed fixture, not model output: it is deliberately identical on every run so a publish failure is always about the pipeline and never about the body."
+  ],
+  "blockers": [],
+  "notes": [
+    "Teardown is part of the test: unpublish and retire the zz-test- object after each run (see docs/plan/PUBLISH-SMOKE.md)."
+  ]
+}
