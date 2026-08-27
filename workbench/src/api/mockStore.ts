@@ -16,6 +16,7 @@
 // Everything here is synchronous — client.ts adds the artificial network
 // delay, this module just owns the data.
 
+import changesJson from './fixtures/changes.json';
 import nodesJson from './fixtures/nodes.json';
 import projectsJson from './fixtures/projects.json';
 import runsJson from './fixtures/runs.json';
@@ -59,6 +60,25 @@ export interface RunFilter {
   limit?: number;
 }
 
+/** U2/U4 — one change event, live shape (see fixtures/changes.json). */
+export interface MockChangeEvent {
+  eventId: string;
+  type: string;
+  operation?: string;
+  target?: { type: string; id: string };
+  actor?: { kind: string; id?: string; label?: string };
+  source?: string;
+  reason?: string;
+  parentRevisionId?: string;
+  resultingRevisionId?: string;
+  workspaceVersion?: string;
+  riskLevel?: string;
+  before?: unknown;
+  after?: unknown;
+  correlation?: { requestId?: string };
+  createdAt: string;
+}
+
 class MockStore {
   private workflows: Record<string, Workflow>;
   private nodes: RawWorkflowNode[];
@@ -84,10 +104,19 @@ class MockStore {
    *  workspace_get_nodes / dataset stage listings by workflow the same way
    *  verbs.ts does client-side for the live transport. */
   private nodeWorkflow: Map<string, string>;
+  /** U2/U4 — fixture change history (fixtures/changes.json). Live shape,
+   *  authored contents; see that file's own `_comment`. */
+  private changeEvents: MockChangeEvent[];
+  /** U3 — operator output overrides written this session, keyed
+   *  `${runId}:${nodeId}`. In-memory only, exactly like every other mock
+   *  mutation: a mock save is not a real one. */
+  private stageOverrides: Map<string, { value: unknown; note?: string; savedAt: string }>;
 
   constructor() {
     this.workflows = WORKFLOW_CATALOG;
     this.nodes = clone((nodesJson as unknown as { nodes: RawWorkflowNode[] }).nodes);
+    this.changeEvents = clone((changesJson as unknown as { events: MockChangeEvent[] }).events);
+    this.stageOverrides = new Map();
     this.projects = clone((projectsJson as unknown as { projects: RawProject[] }).projects);
     this.runs = clone((runsJson as unknown as { runs: RawRun[] }).runs);
     this.costLedgers = new Map(
@@ -127,6 +156,117 @@ class MockStore {
 
   getWorkflowIdForNode(nodeId: string): string | undefined {
     return this.nodeWorkflow.get(nodeId);
+  }
+
+  // --- changes / attention / overrides (U1-U4) -----------------------------
+
+  getChangeEvents(): MockChangeEvent[] {
+    return this.changeEvents;
+  }
+
+  /**
+   * Fixture attention items. Derived from the fixture runs so they are
+   * consistent with what the rest of the app shows, and shaped like the
+   * live verb's items — every one carries its own evidence string, because
+   * an attention item without evidence is just a red dot.
+   */
+  getAttention(): Array<Record<string, unknown>> {
+    const items: Array<Record<string, unknown>> = [];
+    for (const run of this.runs) {
+      if (run.status === 'failed' || run.errors.length > 0) {
+        items.push({
+          kind: 'failed_run',
+          severity: 'blocker',
+          runId: run.runId,
+          projectId: run.projectId,
+          nodeId: run.nodes.find((n) => n.status === 'failed')?.nodeId,
+          title: `Run ${run.runId} failed`,
+          reason: run.errors[0] ?? 'the run recorded a failure',
+          evidence: run.errors[0] ?? `status=${run.status}`,
+        });
+      } else if (run.status === 'blocked') {
+        items.push({
+          kind: 'pending_approval',
+          severity: 'attention',
+          runId: run.runId,
+          projectId: run.projectId,
+          nodeId: run.nodes.find((n) => n.status === 'blocked')?.nodeId ?? run.currentNodeId ?? undefined,
+          title: `Run ${run.runId} is waiting on a decision`,
+          reason: 'a gate node is holding this run until an operator decides',
+          evidence: `status=blocked, ${run.nodes.filter((n) => n.status === 'completed').length}/${run.nodes.length} nodes done`,
+        });
+      }
+    }
+    return items.slice(0, 12);
+  }
+
+  /** U3 — validates a proposed output against the node's declared output schema. */
+  validateNodeOutput(nodeId: string, output: unknown): { valid: boolean; issues: Array<{ path: string; message: string }> } {
+    const node = this.getNode(nodeId);
+    const schema = (node?.outputSchema ?? null) as null | {
+      required?: string[];
+      properties?: Record<string, unknown>;
+      additionalProperties?: boolean;
+    };
+    const issues: Array<{ path: string; message: string }> = [];
+    if (!schema) return { valid: true, issues };
+    if (output === null || typeof output !== 'object' || Array.isArray(output)) {
+      return { valid: false, issues: [{ path: '(root)', message: 'expected an object' }] };
+    }
+    const obj = output as Record<string, unknown>;
+    for (const key of schema.required ?? []) {
+      if (!(key in obj)) issues.push({ path: key, message: `required property "${key}" is missing` });
+    }
+    if (schema.additionalProperties === false && schema.properties) {
+      for (const key of Object.keys(obj)) {
+        if (!(key in schema.properties)) issues.push({ path: key, message: `"${key}" is not allowed by the schema` });
+      }
+    }
+    return { valid: issues.length === 0, issues };
+  }
+
+  /** U3 — prior recorded outputs for a node, newest first. */
+  listNodeOutputs(nodeId: string, runId?: string): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (const run of this.runs) {
+      if (runId && run.runId !== runId) continue;
+      const hit = run.nodes.find((n) => n.nodeId === nodeId && n.output !== undefined);
+      if (!hit) continue;
+      out.push({
+        id: `${run.runId}:${nodeId}`,
+        runId: run.runId,
+        nodeId,
+        type: 'stage_output',
+        createdAt: hit.completedAt ?? run.startedAt,
+        value: hit.output,
+      });
+    }
+    const override = this.stageOverrides.get(`${runId ?? ''}:${nodeId}`);
+    if (override) {
+      out.unshift({
+        id: `${runId}:${nodeId}:override`,
+        runId,
+        nodeId,
+        type: 'operator_override',
+        createdAt: override.savedAt,
+        value: override.value,
+      });
+    }
+    return out;
+  }
+
+  /** U3 — writes an operator override into the run's stage outputs. */
+  saveStageOutput(runId: string, nodeId: string, value: unknown, note?: string): Record<string, unknown> {
+    const savedAt = new Date().toISOString();
+    this.stageOverrides.set(`${runId}:${nodeId}`, { value, note, savedAt });
+    const run = this.runs.find((r) => r.runId === runId);
+    const target = run?.nodes.find((n) => n.nodeId === nodeId);
+    if (target) {
+      target.output = value;
+      target.status = 'completed';
+      (target as Record<string, unknown>).operatorOverride = true;
+    }
+    return { saved: true, runId, nodeId, savedAt, source: 'operator_override', note: note ?? null };
   }
 
   // --- workspace / nodes ---------------------------------------------------

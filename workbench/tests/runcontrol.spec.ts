@@ -48,9 +48,14 @@ test.describe('run dock controls', () => {
     page,
   }) => {
     await page.goto('/');
-    // Default bound state: publish_executor, blocked — Reset is never
-    // disabled by run status (mirrors the mockup exactly), so it's a safe,
-    // always-available control to exercise the confirm lifecycle against.
+    // P2-01 — the app no longer boots with a run bound (it used to boot
+    // naming a fixture run id, which is exactly the bug that made every
+    // cold load fire a failing workflow_get_run). Tests that need a bound
+    // run now bind one, explicitly, the same way a Runs-table row click
+    // does. This one wants publish_executor's blocked run, because Reset is
+    // never disabled by run status (mirrors the mockup exactly) and so is a
+    // safe, always-available control to exercise the confirm lifecycle.
+    await bindRunDirectly(page, 'run_1787492010814_kxdbeb', 'publishing_conductor', 'publish_executor');
     const resetBtn = page.locator('.dock .ctl button', { hasText: 'Reset' });
     await expect(resetBtn).toBeEnabled();
 
@@ -210,7 +215,10 @@ test.describe('gate panel', () => {
   }) => {
     await page.goto('/');
 
-    // --- default bound run: publish_executor — the "makes it live" gate ---
+    // P2-01 — bind explicitly; nothing is bound at boot any more.
+    await bindRunDirectly(page, 'run_1787492010814_kxdbeb', 'publishing_conductor', 'publish_executor');
+
+    // --- publish_executor's blocked run — the "makes it live" gate ---
     await expect(page.locator('.dock .gate .lbl')).toHaveText('⛔ gate · publish_executor');
     await expect(page.locator('.dock .gate')).toContainText('publish_executor then executes the real publish sequence');
     await expect(page.locator('.dock .gate')).toContainText('expected to publish live content');

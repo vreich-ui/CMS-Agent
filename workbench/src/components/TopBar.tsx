@@ -154,14 +154,18 @@ export function TopBar() {
             <span className="n">— nodes</span>
           </button>
         </div>
+        {/* U1(d) — operator-worded: what state the workspace is in and what
+            it means for what you can do here, never the env-flag name that
+            happens to control it (that's an implementation detail, not
+            something the operator can act on). */}
         {auth.status === 'authenticated' && (
           <span
             className="chip"
             style={auth.readOnly ? { color: 'var(--acc)' } : { color: 'var(--ok)' }}
             title={
               auth.readOnly
-                ? 'This session cannot change anything — every mutating verb is disabled by the broker’s READ_ONLY flag.'
-                : 'This session can execute mutating verbs — runs, publishes, and edits take real effect.'
+                ? 'Read-only workspace — you can look, but nothing here can change anything: runs, publishes, and edits are all blocked.'
+                : 'Read-write workspace — your actions here take real effect: runs execute, publishes go live, edits save immediately.'
             }
           >
             {auth.readOnly ? 'read-only' : 'read-write'}
@@ -178,6 +182,10 @@ export function TopBar() {
         <button className="kbd" id="kbtn" title="Command palette" onClick={openPalette}>
           ⌘K
         </button>
+        {/* U1(d) — this used to be an unexplained "operator ▾" caret. It
+            holds exactly two things: who's signed in, and Log out — so it
+            now says "Session" up front instead of making the operator
+            guess what a bare name-plus-caret opens. */}
         {auth.status === 'authenticated' && (
           <div ref={accountRef} style={{ position: 'relative' }}>
             <button
@@ -185,12 +193,12 @@ export function TopBar() {
               id="accountbtn"
               aria-haspopup="true"
               aria-expanded={accountOpen}
-              title={auth.operator ?? 'operator'}
+              title={`Session — signed in as ${auth.operator ?? 'operator'}. Click for account actions.`}
               onClick={() => setAccountOpen((v) => !v)}
             >
-              {auth.operator ?? 'operator'} ▾
+              Session: {auth.operator ?? 'operator'} ▾
             </button>
-            <div className={`wfmenu${accountOpen ? ' open' : ''}`} id="accountmenu" style={{ minWidth: 160 }}>
+            <div className={`wfmenu${accountOpen ? ' open' : ''}`} id="accountmenu" style={{ minWidth: 190 }}>
               <button onClick={handleLogout} disabled={IS_MOCK} title={IS_MOCK ? 'Fixture mode has no real session to end.' : undefined}>
                 <span>
                   <span className="t">Log out</span>

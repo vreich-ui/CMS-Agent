@@ -1,0 +1,67 @@
+# Conductor Workbench — Track A single-origin Cloud Run image (Pass 2 consolidation,
+# docs/plan/TRACK-A-RUNBOOK.md). Serves the built `workbench/` SPA as static files (SPA-route
+# fallback to index.html) AND the `workbench-broker/` API from ONE process on ONE origin — the
+# whole point being that the browser never talks to the MCP Cloud Run service directly and never
+# holds an MCP credential (workbench-broker/README.md §7). Does NOT touch Dockerfile or
+# Dockerfile.mcp — this is a new, separate image for a new, separate Cloud Run service.
+#
+# Three stages: build the SPA (vite), build the broker (tsc), then a slim runtime image carrying
+# only compiled output + production node_modules for the broker, plus the SPA's static dist/.
+
+# --- Stage 1: build the Conductor Workbench SPA ------------------------------------------------
+FROM node:22-slim AS spa-build
+WORKDIR /spa
+COPY workbench/package.json workbench/package-lock.json ./
+# --ignore-scripts: workbench/package.json carries Playwright as a devDependency for its own E2E
+# suite (not run in this image); skipping install scripts avoids its browser-binary postinstall
+# download, exactly the reasoning netlify.toml already documents for this same package.json.
+RUN npm ci --no-audit --no-fund --ignore-scripts
+COPY workbench/ ./
+# VITE_MOCK=0 forces the broker network transport — workbench/src/api/client.ts's IS_MOCK
+# otherwise defaults true whenever VITE_API_BASE is empty (see that file's own header comment).
+# VITE_API_BASE and VITE_MCP_TRANSPORT stay UNSET on purpose: this broker serves the SPA from the
+# SAME origin as /api/*, so every call the SPA makes is a same-origin relative fetch("/api/...")
+# with no separate base URL and no CORS involved at all — that is the entire point of Track A
+# (see workbench-broker/src/index.ts's static-serving comment). `base` in vite.config.ts also
+# stays its own default ('/') since WORKBENCH_BASE is unset here, unlike the Netlify build, which
+# mounts this SPA under a path prefix on a different app's origin.
+RUN VITE_MOCK=0 npm run build
+
+# --- Stage 2: build the broker ------------------------------------------------------------------
+FROM node:22-slim AS broker-build
+WORKDIR /broker
+COPY workbench-broker/package.json workbench-broker/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+COPY workbench-broker/tsconfig.json ./
+COPY workbench-broker/src ./src
+RUN npm run build
+
+# --- Stage 3: runtime -----------------------------------------------------------------------------
+FROM node:22-slim AS runtime
+ENV NODE_ENV=production
+# Cloud Run injects PORT (default 8080 for a fresh service); config.ts's own default (8787) only
+# matters for local dev outside Cloud Run.
+ENV PORT=8080
+WORKDIR /app
+
+COPY workbench-broker/package.json workbench-broker/package-lock.json* ./
+RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
+
+COPY --from=broker-build /broker/dist ./dist
+# STATIC_ROOT (see workbench-broker/.env.example) should be set to "public" for this image — the
+# broker's own static.ts serves out of whatever directory that env var names.
+COPY --from=spa-build /spa/dist ./public
+
+# BUILD-TIME STARTUP GUARD, same pattern and same reason as Dockerfile.mcp (see that file's own
+# comment for the incident that motivated it): index.ts's real entrypoint is gated behind
+# isMainModule(), so importing the compiled entry here exercises the WHOLE module graph — every
+# import resolves, every top-level statement in every module runs — without needing real env vars
+# and without ever calling loadConfig() or binding a port. A build that cannot even load fails
+# HERE, loudly, in the build log, instead of shipping a green image that logs zero bytes on Cloud
+# Run and burns a full deploy-plus-health-check cycle to discover.
+RUN node --input-type=module \
+      -e "await import('./dist/index.js'); console.log('startup guard ok: workbench broker graph loads')"
+
+USER node
+EXPOSE 8080
+CMD ["node", "dist/index.js"]

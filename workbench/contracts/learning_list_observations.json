@@ -1,0 +1,44 @@
+{
+  "verb": "learning_list_observations",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "observations": [
+            {
+              "id": "string",
+              "observation": "string",
+              "createdAt": "string"
+            }
+          ],
+          "_note": "string"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "observations": [
+            {
+              "id": "learning_1784723843029_ylbhsw",
+              "observation": "Dr. Lurie publishing (v2 policy, 2026-07-22): TWO grammars. ...",
+              "createdAt": "2026-07-22T12:37:23.029Z"
+            },
+            {
+              "id": "learning_1785401174556_5a68d0",
+              "observation": "Publication workflow blocked in dry-run mode before publish-risk publication_controller stage...",
+              "runId": "run_1785352838155_l544ye",
+              "nodeId": "learning_recorder",
+              "createdAt": "2026-07-30T08:46:14.557Z"
+            }
+          ],
+          "_note": "11 observations total in the live workspace. Shape: {id, observation, createdAt} always present; nodeId, runId, metadata{} present only on some (workflow-originated) observations, absent on early/manu\u2026"
+        }
+      },
+      "notes": "[no-args] 11 observations total; nodeId/runId/metadata are OPTIONAL per-observation, not always present; no 'actor' field on observations"
+    }
+  ]
+}

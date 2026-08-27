@@ -1,0 +1,63 @@
+{
+  "verb": "tool_list",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "tools": [
+            {
+              "toolId": "string",
+              "name": "string",
+              "description": "string",
+              "riskLevel": "string",
+              "sideEffect": "string",
+              "requiresApproval": "boolean",
+              "timeoutMs": "number",
+              "category": "string",
+              "enabled": "boolean",
+              "metadata": {}
+            }
+          ],
+          "_note": "string"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "tools": [
+            {
+              "toolId": "workspace.get_node",
+              "name": "workspace.get_node",
+              "description": "Get one workspace node.",
+              "riskLevel": "read",
+              "sideEffect": "none",
+              "requiresApproval": false,
+              "timeoutMs": 2000,
+              "category": "workspace",
+              "enabled": true,
+              "metadata": {}
+            },
+            {
+              "toolId": "stage.save_output",
+              "name": "stage.save_output",
+              "description": "Save stage output.",
+              "riskLevel": "write",
+              "sideEffect": "workspace_write",
+              "requiresApproval": false,
+              "timeoutMs": 2000,
+              "category": "workspace",
+              "enabled": true,
+              "metadata": {}
+            }
+          ],
+          "_note": "49 controlled-tool registry entries total (workspace, learning, web, files, artifacts, blobs, project_mcp, diagnostics, usage, capture, monetize categories); truncated to 3 representative entries here\u2026"
+        }
+      },
+      "notes": "[no-args] 49 controlled tool registry entries"
+    }
+  ]
+}

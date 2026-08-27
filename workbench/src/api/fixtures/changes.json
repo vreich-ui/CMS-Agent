@@ -1,0 +1,1167 @@
+{
+  "_comment": "FIXTURE change history. Shape is live-verified (WP-00, 2026-08-26): changes_list returns {events, nextCursor}; each event carries eventId, type, operation, target{type,id}, actor{kind,id?,label}, source, reason, parentRevisionId, resultingRevisionId, workspaceVersion, riskLevel, before/after full node snapshots, correlation and createdAt. The specific events here are AUTHORED, not captured \u2014 the live capture's before/after snapshots were too large to record in full. They deliberately cover the five cases the diff & merge studio and the learning activity feed have to handle: a human edit, an agent edit, an optimizer promotion, a playbook delta, and a model-ladder step.",
+  "events": [
+    {
+      "eventId": "evt_1786467679822_ybk8py",
+      "type": "node.prompt_updated",
+      "operation": "update",
+      "target": {
+        "type": "node",
+        "id": "draft_writer"
+      },
+      "actor": {
+        "kind": "agent",
+        "label": "Claude (oauth)"
+      },
+      "source": "mcp",
+      "reason": "Handoff 2.2 \u2014 the writer never saw the dials; now consumes resolved values from article_brief.v1.",
+      "parentRevisionId": "rev_1786467662906_mqcu7h",
+      "resultingRevisionId": "rev_1786467679535_3jtm1x",
+      "workspaceVersion": "352",
+      "riskLevel": "read",
+      "before": {
+        "id": "draft_writer",
+        "name": "Full Draft Writer",
+        "kind": "drafting",
+        "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
+        "prompt": "Objective: Write the complete reader-facing draft from brief.v0 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nAggression policy: the brief carries resolved claim_strength/urgency/emotional_agitation/cta_density \u2014 the componentwise minimum of the placement target and the client contract's aggression ceiling. At draft time that vector is still provisional (the brief's `resolvedBasis` says so: the contract ceiling is extracted and applied by contract_intelligence, which runs after you and blocks if the brief exceeds it), so treat the brief's `resolved` dials as the levels to write to \u2014 do not exceed them, and do not undershoot cta_density so far the piece cannot monetize. `resolved` is a ceiling on intensity, never a licence: the Style policy below still governs, so never manufacture urgency, agitation, or certainty the evidence does not support merely to reach a dial. If the brief carries no `resolved` vector, treat that as a blocker rather than choosing dial levels yourself.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give \u2014 a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; the draft sits within the brief's resolved aggression levels; blockers are explicit.\nBlocker criteria: missing brief, missing resolved aggression vector on the brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [
+          "editorial_craft"
+        ],
+        "requiredInputs": [
+          "brief_architect"
+        ],
+        "produces": [
+          "draft.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "brief_architect"
+        ],
+        "status": "active",
+        "position": {
+          "x": 840,
+          "y": 180
+        },
+        "updatedAt": "2026-08-11T17:01:19.519Z",
+        "metadata": {
+          "externalStageMapping": "draft",
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 4,
+          "toolCallLimit": 2,
+          "timeout": 300000,
+          "budgetUsd": 0.5,
+          "maxOutputTokens": 8000,
+          "retryCount": 1
+        }
+      },
+      "after": {
+        "id": "draft_writer",
+        "name": "Full Draft Writer",
+        "kind": "drafting",
+        "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
+        "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nAggression policy: the brief carries resolved claim_strength/urgency/emotional_agitation/cta_density \u2014 the componentwise minimum of the placement target and the client contract's aggression ceiling. At draft time that vector is still provisional (the brief's `resolvedBasis` says so: the contract ceiling is extracted and applied by contract_intelligence, which runs after you and blocks if the brief exceeds it), so treat the brief's `resolved` dials as the levels to write to \u2014 do not exceed them, and do not undershoot cta_density so far the piece cannot monetize. `resolved` is a ceiling on intensity, never a licence: the Style policy below still governs, so never manufacture urgency, agitation, or certainty the evidence does not support merely to reach a dial. If the brief carries no `resolved` vector, treat that as a blocker rather than choosing dial levels yourself.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give \u2014 a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; the draft sits within the brief's resolved aggression levels; blockers are explicit.\nBlocker criteria: missing brief, missing resolved aggression vector on the brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [
+          "editorial_craft"
+        ],
+        "requiredInputs": [
+          "brief_architect"
+        ],
+        "produces": [
+          "draft.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "brief_architect"
+        ],
+        "status": "active",
+        "position": {
+          "x": 840,
+          "y": 180
+        },
+        "updatedAt": "2026-08-11T17:01:19.519Z",
+        "metadata": {
+          "externalStageMapping": "draft",
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 4,
+          "toolCallLimit": 2,
+          "timeout": 300000,
+          "budgetUsd": 0.5,
+          "maxOutputTokens": 8000,
+          "retryCount": 1
+        }
+      },
+      "correlation": {
+        "requestId": "req_1786467679822_ybk8py"
+      },
+      "createdAt": "2026-08-11T17:01:19.520Z"
+    },
+    {
+      "eventId": "evt_1786901220110_qq31ab",
+      "type": "node.prompt_updated",
+      "operation": "update",
+      "target": {
+        "type": "node",
+        "id": "human_texture"
+      },
+      "actor": {
+        "kind": "agent",
+        "id": "optimizer",
+        "label": "Optimizer promotion (trial t-4471)"
+      },
+      "source": "optimizer",
+      "reason": "Promoted variant B: +0.14 mean rubric score over 12 replay cases, no regression on the trust rubric.",
+      "parentRevisionId": "rev_1786901210001_a1b2c3",
+      "resultingRevisionId": "rev_1786901220099_d4e5f6",
+      "workspaceVersion": "347",
+      "riskLevel": "read",
+      "before": {
+        "id": "human_texture",
+        "name": "Human Texture Editor",
+        "kind": "review",
+        "description": "Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.",
+        "prompt": "Objective: Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.\nInputs expected: draft_writer.\nOutput required: produce human_texture_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "human_texture_review.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "human_texture_review.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [
+          "editorial_craft"
+        ],
+        "requiredInputs": [
+          "draft_writer"
+        ],
+        "produces": [
+          "human_texture_review.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "draft_writer"
+        ],
+        "status": "active",
+        "position": {
+          "x": 1120,
+          "y": 180
+        },
+        "updatedAt": "2026-07-31T09:35:11.082Z",
+        "metadata": {
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 3,
+          "toolCallLimit": 2,
+          "timeout": 180000,
+          "budgetUsd": 0.25,
+          "maxOutputTokens": 4000
+        }
+      },
+      "after": {
+        "id": "human_texture",
+        "name": "Human Texture Editor",
+        "kind": "review",
+        "description": "Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.",
+        "prompt": "Objective: Improve specificity, rhythm, voice, examples, and lived-in human texture without changing factual meaning.\nInputs expected: draft_writer.\nOutput required: produce human_texture_review.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.\n\nWhere a sentence could have been written by anyone, rewrite it so it could only have been written by someone who has actually done this. Prefer one concrete particular over three adjectives.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "human_texture_review.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "human_texture_review.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [
+          "editorial_craft"
+        ],
+        "requiredInputs": [
+          "draft_writer"
+        ],
+        "produces": [
+          "human_texture_review.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "draft_writer"
+        ],
+        "status": "active",
+        "position": {
+          "x": 1120,
+          "y": 180
+        },
+        "updatedAt": "2026-07-31T09:35:11.082Z",
+        "metadata": {
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 3,
+          "toolCallLimit": 2,
+          "timeout": 180000,
+          "budgetUsd": 0.25,
+          "maxOutputTokens": 4000
+        }
+      },
+      "correlation": {
+        "requestId": "req_1786901220110_qq31ab"
+      },
+      "createdAt": "2026-08-16T09:27:00.110Z"
+    },
+    {
+      "eventId": "evt_1787003311444_kt99xz",
+      "type": "node.playbook_delta_applied",
+      "operation": "update",
+      "target": {
+        "type": "node",
+        "id": "review_aggregator"
+      },
+      "actor": {
+        "kind": "agent",
+        "id": "playbook",
+        "label": "Playbook curation"
+      },
+      "source": "learning",
+      "reason": "Curated from observation obs_\u2026 \u2014 aggregator was passing drafts that no single reviewer had approved.",
+      "parentRevisionId": "rev_1787003300000_gg77hh",
+      "resultingRevisionId": "rev_1787003311400_jj88kk",
+      "workspaceVersion": "317",
+      "riskLevel": "read",
+      "before": {
+        "id": "review_aggregator",
+        "name": "Review Aggregator",
+        "kind": "review",
+        "description": "Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.",
+        "prompt": "Objective: Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.\nInputs expected: human_texture, trust_factual, emotional_resonance, reader_simulation.\nOutput required: produce review_aggregation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "review_aggregation.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "review_aggregation.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [],
+        "requiredInputs": [
+          "human_texture",
+          "trust_factual",
+          "emotional_resonance",
+          "reader_simulation"
+        ],
+        "produces": [
+          "review_aggregation.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "human_texture",
+          "trust_factual",
+          "emotional_resonance",
+          "reader_simulation"
+        ],
+        "status": "active",
+        "position": {
+          "x": 840,
+          "y": 360
+        },
+        "updatedAt": "2026-07-31T09:36:03.991Z",
+        "metadata": {
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 3,
+          "toolCallLimit": 2,
+          "timeout": 120000,
+          "budgetUsd": 0.25,
+          "maxOutputTokens": 3500
+        }
+      },
+      "after": {
+        "id": "review_aggregator",
+        "name": "Review Aggregator",
+        "kind": "review",
+        "description": "Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.",
+        "prompt": "Objective: Combine parallel reviews into prioritized revisions, unresolved conflicts, and final build instructions.\nInputs expected: human_texture, trust_factual, emotional_resonance, reader_simulation.\nOutput required: produce review_aggregation.v1 with concise rationale, assumptions, and unresolved questions.\nCompletion criteria: required inputs are addressed, output matches the node schemas, dependencies are respected, and blockers are explicit.\nBlocker criteria: missing critical input, unsafe or contradictory instructions, unavailable evidence for factual claims, or a requested side effect outside this node's policy.\nTool policy: use only allowedTools; prefer read-only workspace/stage tools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.\n\nA draft is only 'pass' if every reviewer that ran returned pass. One abstention is not a pass.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "review_aggregation.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "review_aggregation.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [],
+        "requiredInputs": [
+          "human_texture",
+          "trust_factual",
+          "emotional_resonance",
+          "reader_simulation"
+        ],
+        "produces": [
+          "review_aggregation.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "human_texture",
+          "trust_factual",
+          "emotional_resonance",
+          "reader_simulation"
+        ],
+        "status": "active",
+        "position": {
+          "x": 840,
+          "y": 360
+        },
+        "updatedAt": "2026-07-31T09:36:03.991Z",
+        "metadata": {
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 3,
+          "toolCallLimit": 2,
+          "timeout": 120000,
+          "budgetUsd": 0.25,
+          "maxOutputTokens": 3500
+        }
+      },
+      "correlation": {
+        "requestId": "req_1787003311444_kt99xz"
+      },
+      "createdAt": "2026-08-17T13:48:31.444Z"
+    },
+    {
+      "eventId": "evt_1787310884001_ml02pq",
+      "type": "node.tools_updated",
+      "operation": "update",
+      "target": {
+        "type": "node",
+        "id": "draft_writer"
+      },
+      "actor": {
+        "kind": "human",
+        "id": "wolf",
+        "label": "Wolf"
+      },
+      "source": "workbench",
+      "reason": "Removed the direct publish grant \u2014 drafting never publishes.",
+      "parentRevisionId": "rev_1787310880000_zz11yy",
+      "resultingRevisionId": "rev_1787310884000_xx22ww",
+      "workspaceVersion": "308",
+      "riskLevel": "read",
+      "before": {
+        "id": "draft_writer",
+        "name": "Full Draft Writer",
+        "kind": "drafting",
+        "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
+        "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nAggression policy: the brief carries resolved claim_strength/urgency/emotional_agitation/cta_density \u2014 the componentwise minimum of the placement target and the client contract's aggression ceiling. At draft time that vector is still provisional (the brief's `resolvedBasis` says so: the contract ceiling is extracted and applied by contract_intelligence, which runs after you and blocks if the brief exceeds it), so treat the brief's `resolved` dials as the levels to write to \u2014 do not exceed them, and do not undershoot cta_density so far the piece cannot monetize. `resolved` is a ceiling on intensity, never a licence: the Style policy below still governs, so never manufacture urgency, agitation, or certainty the evidence does not support merely to reach a dial. If the brief carries no `resolved` vector, treat that as a blocker rather than choosing dial levels yourself.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give \u2014 a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; the draft sits within the brief's resolved aggression levels; blockers are explicit.\nBlocker criteria: missing brief, missing resolved aggression vector on the brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs",
+          "release_to_production"
+        ],
+        "assignedSkills": [
+          "editorial_craft"
+        ],
+        "requiredInputs": [
+          "brief_architect"
+        ],
+        "produces": [
+          "draft.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "brief_architect"
+        ],
+        "status": "active",
+        "position": {
+          "x": 840,
+          "y": 180
+        },
+        "updatedAt": "2026-08-11T17:01:19.519Z",
+        "metadata": {
+          "externalStageMapping": "draft",
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 4,
+          "toolCallLimit": 2,
+          "timeout": 300000,
+          "budgetUsd": 0.5,
+          "maxOutputTokens": 8000,
+          "retryCount": 1
+        }
+      },
+      "after": {
+        "id": "draft_writer",
+        "name": "Full Draft Writer",
+        "kind": "drafting",
+        "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
+        "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nAggression policy: the brief carries resolved claim_strength/urgency/emotional_agitation/cta_density \u2014 the componentwise minimum of the placement target and the client contract's aggression ceiling. At draft time that vector is still provisional (the brief's `resolvedBasis` says so: the contract ceiling is extracted and applied by contract_intelligence, which runs after you and blocks if the brief exceeds it), so treat the brief's `resolved` dials as the levels to write to \u2014 do not exceed them, and do not undershoot cta_density so far the piece cannot monetize. `resolved` is a ceiling on intensity, never a licence: the Style policy below still governs, so never manufacture urgency, agitation, or certainty the evidence does not support merely to reach a dial. If the brief carries no `resolved` vector, treat that as a blocker rather than choosing dial levels yourself.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give \u2014 a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; the draft sits within the brief's resolved aggression levels; blockers are explicit.\nBlocker criteria: missing brief, missing resolved aggression vector on the brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [
+          "editorial_craft"
+        ],
+        "requiredInputs": [
+          "brief_architect"
+        ],
+        "produces": [
+          "draft.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "brief_architect"
+        ],
+        "status": "active",
+        "position": {
+          "x": 840,
+          "y": 180
+        },
+        "updatedAt": "2026-08-11T17:01:19.519Z",
+        "metadata": {
+          "externalStageMapping": "draft",
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 4,
+          "toolCallLimit": 2,
+          "timeout": 300000,
+          "budgetUsd": 0.5,
+          "maxOutputTokens": 8000,
+          "retryCount": 1
+        }
+      },
+      "correlation": {
+        "requestId": "req_1787310884001_ml02pq"
+      },
+      "createdAt": "2026-08-21T07:14:44.001Z"
+    },
+    {
+      "eventId": "evt_1787498220777_bn55rt",
+      "type": "node.model_config_updated",
+      "operation": "update",
+      "target": {
+        "type": "node",
+        "id": "draft_writer"
+      },
+      "actor": {
+        "kind": "system",
+        "label": "Model ladder"
+      },
+      "source": "learning",
+      "reason": "Ladder step: escalated to the larger model after two consecutive output-schema failures on this node.",
+      "parentRevisionId": "rev_1787498210000_pp33qq",
+      "resultingRevisionId": "rev_1787498220700_rr44ss",
+      "workspaceVersion": "311",
+      "riskLevel": "read",
+      "before": {
+        "id": "draft_writer",
+        "name": "Full Draft Writer",
+        "kind": "drafting",
+        "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
+        "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nAggression policy: the brief carries resolved claim_strength/urgency/emotional_agitation/cta_density \u2014 the componentwise minimum of the placement target and the client contract's aggression ceiling. At draft time that vector is still provisional (the brief's `resolvedBasis` says so: the contract ceiling is extracted and applied by contract_intelligence, which runs after you and blocks if the brief exceeds it), so treat the brief's `resolved` dials as the levels to write to \u2014 do not exceed them, and do not undershoot cta_density so far the piece cannot monetize. `resolved` is a ceiling on intensity, never a licence: the Style policy below still governs, so never manufacture urgency, agitation, or certainty the evidence does not support merely to reach a dial. If the brief carries no `resolved` vector, treat that as a blocker rather than choosing dial levels yourself.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give \u2014 a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; the draft sits within the brief's resolved aggression levels; blockers are explicit.\nBlocker criteria: missing brief, missing resolved aggression vector on the brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [
+          "editorial_craft"
+        ],
+        "requiredInputs": [
+          "brief_architect"
+        ],
+        "produces": [
+          "draft.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "brief_architect"
+        ],
+        "status": "active",
+        "position": {
+          "x": 840,
+          "y": 180
+        },
+        "updatedAt": "2026-08-11T17:01:19.519Z",
+        "metadata": {
+          "externalStageMapping": "draft",
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 4,
+          "toolCallLimit": 2,
+          "timeout": 300000,
+          "budgetUsd": 0.5,
+          "maxOutputTokens": 8000,
+          "retryCount": 1,
+          "model": "gpt-5.5-mini"
+        }
+      },
+      "after": {
+        "id": "draft_writer",
+        "name": "Full Draft Writer",
+        "kind": "drafting",
+        "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
+        "prompt": "Objective: Write the complete reader-facing draft from article_brief.v1 in the target client's editorial voice.\nInputs expected: brief_architect, plus clientProjectId (the run's registered client) delivered in this node's input.\nVoice policy: the client's voice and styling direction come from the client's own record and the brief's tone guardrails, never from this prompt. If no client voice direction is supplied, write calm, precise, practical, evidence-led, reader-first prose and record the gap as an assumption. Never write in a client voice the input does not declare.\nOutput required: produce draft.v1 with proposed title, deck/description, slug candidate, section-by-section draft, source/claim notes, suggested CTA/next step, and unresolved questions.\nAggression policy: the brief carries resolved claim_strength/urgency/emotional_agitation/cta_density \u2014 the componentwise minimum of the placement target and the client contract's aggression ceiling. At draft time that vector is still provisional (the brief's `resolvedBasis` says so: the contract ceiling is extracted and applied by contract_intelligence, which runs after you and blocks if the brief exceeds it), so treat the brief's `resolved` dials as the levels to write to \u2014 do not exceed them, and do not undershoot cta_density so far the piece cannot monetize. `resolved` is a ceiling on intensity, never a licence: the Style policy below still governs, so never manufacture urgency, agitation, or certainty the evidence does not support merely to reach a dial. If the brief carries no `resolved` vector, treat that as a blocker rather than choosing dial levels yourself.\nStyle policy: calm, precise, practical, evidence-led, and reader-first. Avoid hype, fear tactics, fake urgency, invented sources, and overclaiming; never state certainty the evidence does not support, and never imply professional advice (medical, legal, financial) the content is not qualified to give \u2014 a client whose domain needs stricter caution declares it in its own record. Use concrete decisions, tradeoffs, and reassurance.\nStructure policy: write in a form that can be converted into the client's content-object nodes. Keep headings and paragraphs clean. Do not expose private strategy labels in reader-visible copy.\nCost policy: do not re-research; use the brief and research outputs. Mark evidence gaps instead of inventing support.\nCompletion criteria: the draft can be reviewed without major missing sections; claims are tied to research or flagged; the draft sits within the brief's resolved aggression levels; blockers are explicit.\nBlocker criteria: missing brief, missing resolved aggression vector on the brief, missing or unresolvable target client, missing evidence for required claims, unsupported certainty on high-stakes claims, unclear audience/action, or requested side effect outside this node's policy.\nTool policy: use only allowedTools; do not publish or mutate external systems.\nMemory policy: your dependency outputs and the run's inputs are delivered in this node's input \u2014 work from them. Do not re-read stage outputs you already hold; fetch a stage output only when it is essential, named, and missing from your input. Save only this node's structured output; do not expose secrets or raw authorization headers.",
+        "schema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stageOutputs": {
+              "type": "object"
+            },
+            "contentSource": {
+              "type": "object"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "artifact",
+            "summary"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "artifact": {
+              "const": "draft.v1"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowedTools": [
+          "workspace.get_node",
+          "stage.get_output",
+          "stage.list_outputs"
+        ],
+        "assignedSkills": [
+          "editorial_craft"
+        ],
+        "requiredInputs": [
+          "brief_architect"
+        ],
+        "produces": [
+          "draft.v1"
+        ],
+        "riskLevel": "read",
+        "dependsOn": [
+          "brief_architect"
+        ],
+        "status": "active",
+        "position": {
+          "x": 840,
+          "y": 180
+        },
+        "updatedAt": "2026-08-11T17:01:19.519Z",
+        "metadata": {
+          "externalStageMapping": "draft",
+          "approvalRequired": false
+        },
+        "modelConfig": {
+          "maxTurns": 4,
+          "toolCallLimit": 2,
+          "timeout": 300000,
+          "budgetUsd": 0.5,
+          "maxOutputTokens": 8000,
+          "retryCount": 1,
+          "model": "gpt-5.5"
+        }
+      },
+      "correlation": {
+        "requestId": "req_1787498220777_bn55rt"
+      },
+      "createdAt": "2026-08-23T11:17:00.777Z"
+    }
+  ],
+  "nextCursor": null
+}

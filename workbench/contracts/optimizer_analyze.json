@@ -1,0 +1,12 @@
+{
+  "verb": "optimizer_analyze",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": "see notes",
+      "ok": false,
+      "error": "no successful payload captured in this session",
+      "notes": "Not called \u2014 deprioritized in favor of optimizer_status (confirmed read-shaped) given time/priority constraints; optimizer_analyze itself is read-shaped per its tool description ('Evidence-cited diagnosis... Read-only' implied by no mutation language) and should be safe to capture in a follow-up pass."
+    }
+  ]
+}

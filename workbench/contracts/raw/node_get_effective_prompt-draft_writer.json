@@ -1,0 +1,1 @@
+{"ok":true,"data":{"prompt":"<full merged prompt: node prompt + skill instructions, string>","nodePrompt":"<node-only prompt, string>","skillInstructions":"<node prompt + '\\n\\n---\\n\\nSkill editorial_craft v1.0.0:\\n' + skill body, string>"}}

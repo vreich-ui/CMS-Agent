@@ -1,0 +1,57 @@
+{
+  "ok": true,
+  "data": {
+    "agents": [
+      {
+        "id": "input_triage",
+        "name": "CMS Input Triage",
+        "kind": "intake",
+        "status": "active",
+        "riskLevel": "read",
+        "dependsOn": [],
+        "position": {
+          "x": -407,
+          "y": 159
+        }
+      },
+      {
+        "id": "draft_writer",
+        "name": "Full Draft Writer",
+        "kind": "drafting",
+        "status": "active",
+        "riskLevel": "read",
+        "dependsOn": [
+          "brief_architect"
+        ],
+        "position": {
+          "x": 840,
+          "y": 180
+        }
+      },
+      {
+        "id": "publish_executor",
+        "name": "Publish Executor",
+        "kind": "publisher",
+        "status": "active",
+        "riskLevel": "publish",
+        "dependsOn": [
+          "publication_controller"
+        ],
+        "position": {
+          "x": 560,
+          "y": 1600
+        }
+      }
+    ],
+    "relationships": [],
+    "derivedExecutionEdges": [
+      {
+        "kind": "execution",
+        "sourceId": "input_triage",
+        "targetId": "placement_resolver",
+        "derivedFrom": "dependsOn"
+      }
+    ]
+  },
+  "_note": "48 agents total (one per workspace node), matching workspace_get_nodes/workspace_get_graph counts exactly. relationships[] (stored typed relationships) was empty in this workspace; derivedExecutionEdges[] had 92 entries (== workspace_get_graph's edge count for the no-args flat view), each {kind:'execution', sourceId, targetId, derivedFrom:'dependsOn'}. Truncated to representative entries here \u2014 full payload captured inline in session transcript."
+}

@@ -1,0 +1,52 @@
+{
+  "verb": "project_list",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "projects": [
+            {
+              "projectId": "string",
+              "name": "string",
+              "status": "string",
+              "connection": {
+                "mcpEndpointEnvVar": "string",
+                "tokenEnvVar": "string",
+                "mcpEndpoint": "string"
+              }
+            }
+          ],
+          "_note": "string"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "projects": [
+            {
+              "projectId": "dr-lurie",
+              "name": "Dr. Lurie",
+              "status": "active",
+              "connection": {
+                "mcpEndpointEnvVar": "DR_LURIE_MCP_ENDPOINT",
+                "tokenEnvVar": "DR_LURIE_MCP_TOKEN",
+                "mcpEndpoint": "https://drluriescience.netlify.app/mcp"
+              }
+            },
+            {
+              "projectId": "fernwell",
+              "name": "Fernwell",
+              "status": "disabled"
+            }
+          ],
+          "_note": "6 projects total; each carries projectId, name, authMode, allowedTools[], defaultToolPolicy, toolPolicies{}, contentContract, capturePolicy{}, publishingPolicy{}, status, connection{endpointConfigured\u2026"
+        }
+      },
+      "notes": "[no-args] 6 projects: dr-lurie, fernwell, monetizer, pdf-tool, platform, zilberman"
+    }
+  ]
+}

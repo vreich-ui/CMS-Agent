@@ -2,6 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { McpClient, McpError } from "./mcp.js";
 
+interface JsonRpcCallRequest {
+  jsonrpc: "2.0";
+  id: number | string;
+  method: string;
+  params?: { name?: string; arguments?: Record<string, unknown> };
+}
+
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -156,4 +163,89 @@ test("mcp: mock mode returns canned results without any network calls", async ()
   const data = (await client.callTool("workflow_list_runs", { foo: "bar" })) as Record<string, unknown>;
   assert.equal(data.mock, true);
   assert.equal(data.verb, "workflow_list_runs");
+});
+
+// --- Track A additions: timeouts + JSON-RPC array batching -----------------
+
+test("mcp: a stalled upstream call rejects with a clear timeout McpError, not a bare AbortError", async () => {
+  const fetchStub = ((_url: RequestInfo | URL, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      // AbortSignal.timeout()'s own internal timer is unref'd (by design — it must never be the
+      // thing keeping a real process alive), so a bare `signal.addEventListener("abort", ...)`
+      // with nothing else scheduled can let the event loop drain before the 20ms abort ever
+      // fires, silently dropping this promise. A real `fetch()` never has this problem — its
+      // open socket keeps the loop alive regardless — so this ref'd keep-alive timer exists only
+      // to make the test stub behave like a real pending network call.
+      const keepAlive = setTimeout(() => {}, 1000);
+      const signal = init?.signal;
+      signal?.addEventListener("abort", () => {
+        clearTimeout(keepAlive);
+        const err = new Error("This operation was aborted");
+        err.name = "TimeoutError";
+        reject(err);
+      });
+    })) as typeof fetch;
+
+  const client = new McpClient({ url: "http://mock.invalid/mcp", token: "t", fetchImpl: fetchStub });
+  await assert.rejects(
+    () => client.callTool("workflow_list_runs", {}, 20),
+    (err: unknown) => {
+      assert.ok(err instanceof McpError);
+      assert.match(err.message, /timed out after 20ms/);
+      return true;
+    }
+  );
+});
+
+test("mcp: callToolsBatch sends exactly one JSON-RPC array request and returns per-call outcomes in the same order", async () => {
+  let sawBatchBody: JsonRpcCallRequest[] | null = null;
+  let batchPostCount = 0;
+  const fetchStub = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const parsed = JSON.parse(String(init?.body)) as JsonRpcCallRequest | JsonRpcCallRequest[];
+    if (!Array.isArray(parsed)) {
+      // initialize / notifications/initialized
+      return jsonResponse(200, { jsonrpc: "2.0", id: parsed.id, result: {} }, { "mcp-session-id": "sess-1" });
+    }
+    batchPostCount += 1;
+    sawBatchBody = parsed;
+    const responses = parsed.map((req) => {
+      if (req.params?.name === "bad_verb") {
+        return { jsonrpc: "2.0", id: req.id, result: { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "nope" }) }] } };
+      }
+      return {
+        jsonrpc: "2.0",
+        id: req.id,
+        result: { content: [{ type: "text", text: JSON.stringify({ ok: true, data: { echo: req.params?.name } }) }] },
+      };
+    });
+    return jsonResponse(200, responses);
+  }) as typeof fetch;
+
+  const client = new McpClient({ url: "http://mock.invalid/mcp", token: "t", fetchImpl: fetchStub });
+  const results = await client.callToolsBatch([
+    { verb: "workflow_list_runs", args: {} },
+    { verb: "bad_verb", args: {} },
+    { verb: "tool_list", args: {} },
+  ]);
+
+  assert.equal(batchPostCount, 1, "exactly one upstream call should carry the batch");
+  assert.equal(results.length, 3);
+  assert.deepEqual(results[0], { ok: true, data: { echo: "workflow_list_runs" } });
+  assert.deepEqual(results[1], { ok: false, error: "nope" });
+  assert.deepEqual(results[2], { ok: true, data: { echo: "tool_list" } });
+  assert.ok(Array.isArray(sawBatchBody) && (sawBatchBody as JsonRpcCallRequest[]).length === 3);
+});
+
+test("mcp: callToolsBatch mock mode returns canned per-call results without any network call", async () => {
+  const fetchStub = (async () => {
+    throw new Error("fetch should not be called in mock mode");
+  }) as typeof fetch;
+  const client = new McpClient({ url: "http://mock.invalid/mcp", token: "t", mock: true, fetchImpl: fetchStub });
+  const results = await client.callToolsBatch([
+    { verb: "workspace_get_graph", args: {} },
+    { verb: "workflow_list_runs", args: { limit: 5 } },
+  ]);
+  assert.equal(results.length, 2);
+  assert.equal(results[0]!.ok, true);
+  assert.equal(results[1]!.ok, true);
 });

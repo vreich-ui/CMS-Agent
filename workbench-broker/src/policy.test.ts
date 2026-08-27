@@ -15,12 +15,14 @@ test("policy: unknown verb is default-denied and names the verb", () => {
   assert.match(decision.message ?? "", /totally_made_up_verb/);
 });
 
-test("policy: mutating verb is refused under READ_ONLY and names the flag", () => {
+test("policy: mutating verb is refused under READ_ONLY with an operator-worded message naming the verb", () => {
   const decision = checkPolicy("workflow_pause_run", true);
   assert.equal(decision.allowed, false);
   assert.equal(decision.code, "read_only");
-  assert.match(decision.message ?? "", /READ_ONLY/);
+  assert.match(decision.message ?? "", /read-only mode/i);
   assert.match(decision.message ?? "", /workflow_pause_run/);
+  // Operator-worded means no bare env-var-name shouting at the person reading it.
+  assert.doesNotMatch(decision.message ?? "", /\bREAD_ONLY=/);
 });
 
 test("policy: mutating verb is allowed when READ_ONLY is off", () => {

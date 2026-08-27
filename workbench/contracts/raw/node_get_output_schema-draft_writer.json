@@ -1,0 +1,1 @@
+{"ok":true,"data":{"schema":{"type":"object","required":["artifact","summary"],"additionalProperties":true,"properties":{"artifact":{"const":"draft.v1"},"summary":{"type":"string","minLength":1},"notes":{"type":"array","items":{"type":"string"}}}}}}

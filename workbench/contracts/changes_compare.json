@@ -1,0 +1,79 @@
+{
+  "verb": "changes_compare",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "fromRevisionId": "rev_1786467662906_mqcu7h",
+        "toRevisionId": "rev_1786467679535_3jtm1x"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "diff": {
+            "fromRevisionId": "string",
+            "toRevisionId": "string",
+            "nodes": {
+              "added": [],
+              "removed": [],
+              "changed": [
+                {
+                  "nodeId": "string",
+                  "changedFields": [
+                    "string"
+                  ],
+                  "before": {
+                    "...": "string"
+                  },
+                  "after": {
+                    "...": "string"
+                  }
+                }
+              ]
+            },
+            "relationships": {
+              "added": [],
+              "removed": [],
+              "changedIds": []
+            }
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "diff": {
+            "fromRevisionId": "rev_1786467662906_mqcu7h",
+            "toRevisionId": "rev_1786467679535_3jtm1x",
+            "nodes": {
+              "added": [],
+              "removed": [],
+              "changed": [
+                {
+                  "nodeId": "draft_writer",
+                  "changedFields": [
+                    "prompt",
+                    "updatedAt"
+                  ],
+                  "before": {
+                    "...": "full node object"
+                  },
+                  "after": {
+                    "...": "full node object"
+                  }
+                }
+              ]
+            },
+            "relationships": {
+              "added": [],
+              "removed": [],
+              "changedIds": []
+            }
+          }
+        }
+      },
+      "notes": "[real revisions]"
+    }
+  ]
+}

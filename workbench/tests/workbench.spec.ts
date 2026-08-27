@@ -32,9 +32,23 @@ test('workbench: rail, tabs, dock render correctly across nodes, themes and mode
   page.on('pageerror', (err) => pageErrors.push(err.message));
 
   await page.goto('/');
+
+  // P2-01 — the app boots in Build mode with no run bound and no node
+  // pre-selected (the rail adopts the workflow's first node once the live
+  // node list arrives). Assert that first, then bind the run this test is
+  // actually about.
+  await expect(page.locator('.rail .nrow.sel')).toHaveCount(1);
+  await expect(page.locator('nav.main button[data-s="bench"]')).toBeVisible();
+
+  await page.evaluate(async () => {
+    const mod = (await import('/src/store.ts')) as {
+      useStore: { getState: () => { bindRun: (r: string, w: string, n: string) => void } };
+    };
+    mod.useStore.getState().bindRun('run_1787492010814_kxdbeb', 'publishing_conductor', 'publish_executor');
+  });
   await page.locator('nav.main button', { hasText: 'Workbench' }).click();
 
-  // --- default state: publishing_conductor, run bound, publish_executor selected ---
+  // --- bound state: publishing_conductor, run bound, publish_executor selected ---
   await expect(page.locator('.nhead h2')).toHaveText('Publish Executor');
   await expect(page.locator('.nhead .id')).toHaveText('publish_executor');
   await expect(page.locator('.nhead .risk')).toHaveText('publish');
@@ -80,12 +94,18 @@ test('workbench: rail, tabs, dock render correctly across nodes, themes and mode
   await expect(page.locator('.center .lbl', { hasText: /^gate$/ })).toHaveCount(1);
 
   // --- unengaged toggle: dims + hides nodes downstream of the run's stopped node ---
+  // Was 1 (learning_recorder only). The catalog's phase lists were
+  // realigned to the live topology (contracts/README.md) — publishing_
+  // conductor's Publish phase now also lists release_executor, one of the
+  // five shared publish-tail nodes the old, pre-WP-00 23-node catalog was
+  // missing — so two nodes now sit downstream of publish_executor:
+  // release_executor, then learning_recorder.
   const dimRows = page.locator('.rail .nrow.dim');
-  await expect(dimRows).toHaveCount(1); // learning_recorder, the only node after publish_executor
+  await expect(dimRows).toHaveCount(2); // release_executor, learning_recorder
   await page.locator('.railfoot input[type="checkbox"]').uncheck();
   await expect(dimRows).toHaveCount(0);
   await page.locator('.railfoot input[type="checkbox"]').check();
-  await expect(dimRows).toHaveCount(1);
+  await expect(dimRows).toHaveCount(2);
 
   // --- keyboard: ArrowDown/ArrowUp move the rail selection ---
   await publishRow.click(); // focus a known row first
@@ -116,25 +136,29 @@ test('workbench: rail, tabs, dock render correctly across nodes, themes and mode
   // run, but that read depends on a runs query keyed to the new workflow
   // that may not have resolved the instant the workflow switch renders;
   // retry the click until a run is actually bound (the dock's "bound run"
-  // panel present). workbench-verb-fixes: workspace_get_node never returns
-  // a clone_conductor node live (see fixtures/README.md) — the run's own
-  // stopped node has no resolvable record, so `.tabs` (which needs the node
-  // to load first) never renders here; the dock panel doesn't need node
-  // data, so it's the honest thing to gate this retry on instead.
+  // panel present). The dock panel doesn't depend on the node registry at
+  // all (it's driven by the run's own per-node statuses), so it's the
+  // fastest-settling, most honest thing to gate this retry on regardless
+  // of whether the node registry has resolved yet.
   await expect(async () => {
     await page.locator('#mode-run').click();
     await expect(page.locator('.dock .card', { hasText: 'bound run' })).toBeVisible({ timeout: 500 });
   }).toPass({ timeout: 8000 });
 
-  // The rail still renders clone_conductor's 9 nodes (from the workflow
-  // catalog + this run's own per-node statuses — never workspace_get_node),
-  // and clicking one still updates `node` — but the center pane shows the
-  // same honest "not found" card as clone_report above, for every
-  // clone_conductor node, not a synthesized Prompt/Tools/Model view.
+  // The rail renders clone_conductor's real nodes, and clicking one
+  // updates `node`. Was: workspace_get_node never returned a
+  // clone_conductor node live (fixtures/README.md's old, pre-WP-00 gap),
+  // so this asserted an honest "not found" card and zero tabs. The
+  // fixture workspace is now a verbatim live capture of all 48 nodes
+  // (including clone_conductor's 18 — contracts/README.md), so
+  // theme_bind resolves to its real record and the center pane renders
+  // the normal node view, tabs included, same as draft_writer above.
   await page.locator('.rail .nrow', { hasText: 'theme_bind' }).click();
-  await expect(page.locator('.center .lbl', { hasText: 'not found' })).toBeVisible();
-  await expect(page.locator('.center')).toContainText('theme_bind could not be resolved');
-  await expect(page.locator('.tabs')).toHaveCount(0);
+  await expect(page.locator('.nhead h2')).toHaveText('Theme Bind (deterministic site-token write)');
+  await expect(page.locator('.nhead .id')).toHaveText('theme_bind');
+  await expect(page.locator('.nhead .risk')).toHaveText('write');
+  await expect(page.locator('.tabs button')).toHaveCount(9);
+  await expect(page.locator('.center .lbl', { hasText: 'not found' })).toHaveCount(0);
 
   // --- Build mode: the dock's "▸ Start run…" opens the start-run modal
   // (WP-22 — see tests/runcontrol.spec.ts for the modal's own behaviour) ---
@@ -144,12 +168,16 @@ test('workbench: rail, tabs, dock render correctly across nodes, themes and mode
   await page.screenshot({ path: 'shots/bench-build.png', fullPage: true });
 
   // Graph overlay (WP-42b) — real now, not a toast stub. Still on
-  // clone_conductor here, so it must state the honest gap rather than
-  // render an empty or misleading graph (see tests/palette.spec.ts for the
-  // full graph-overlay coverage on publishing_conductor).
+  // clone_conductor here. Was: this workflow had no live node records, so
+  // the overlay stated an honest gap rather than rendering a graph. The
+  // fixture workspace now carries clone_conductor's real 18-node topology
+  // (contracts/README.md), so the overlay renders its real graph instead
+  // (see tests/palette.spec.ts / tests/nav.spec.ts for the full
+  // graph-overlay coverage across all three workflows).
   await page.locator('.railfoot .ghost').click();
   await expect(page.locator('.scrim.open .modal h3')).toHaveText('Graph overlay — Clone conductor');
-  await expect(page.locator('.scrim.open .modal')).toContainText('workspace_get_graph');
+  await expect(page.locator('.scrim.open .modal')).toContainText('18 nodes');
+  await expect(page.locator('.scrim.open .modal button[title]')).toHaveCount(18);
   await page.keyboard.press('Escape');
   await expect(page.locator('.scrim.open')).toHaveCount(0);
 

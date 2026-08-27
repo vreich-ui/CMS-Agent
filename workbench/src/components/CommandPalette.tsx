@@ -18,10 +18,12 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNodes, useProjects, useRun, useRuns, useWorkflows } from '../api/hooks';
+import { changesList } from '../api/verbs';
 import { performLogout } from './LoginGate';
+import { toast } from './Toasts';
 import { useQueryClient } from '@tanstack/react-query';
 import { useStore } from '../store';
-import type { LearnTab, RegTab, RunTab } from '../types';
+import type { LearnTab, RegTab, RunTab, ScreenId } from '../types';
 
 type PalKind = 'node' | 'run' | 'workflow' | 'project' | 'screen' | 'action';
 
@@ -29,6 +31,55 @@ interface PalEntry {
   kind: PalKind;
   label: string;
   go: () => void;
+}
+
+// U5 — recents (⌘K with an empty query) and the four contextual verb
+// actions below both persist/read a tiny bit of state through localStorage,
+// wrapped in try/catch per the app's established pattern (store.ts's theme
+// persistence) — a private window or blocked storage degrades to "no
+// recents", never a thrown error.
+
+const RECENTS_KEY = 'cw-recents';
+const MAX_RECENTS = 8;
+
+interface RecentEntry {
+  kind: 'node' | 'run' | 'screen';
+  id: string;
+  label: string;
+  ts: number;
+}
+
+function readRecents(): RecentEntry[] {
+  try {
+    const raw = localStorage.getItem(RECENTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as RecentEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushRecent(entry: Omit<RecentEntry, 'ts'>) {
+  try {
+    const existing = readRecents().filter((e) => !(e.kind === entry.kind && e.id === entry.id));
+    const next: RecentEntry[] = [{ ...entry, ts: Date.now() }, ...existing].slice(0, MAX_RECENTS);
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+  } catch {
+    // ignore — storage unavailable
+  }
+}
+
+const SCREEN_LABEL: Record<ScreenId, string> = {
+  library: 'Workflows',
+  bench: 'Workbench',
+  runs: 'Runs',
+  learning: 'Learning',
+  registry: 'Registry',
+};
+
+/** Run ids encode their creation time (`run_<epochMs>_<rand>`) — same convention as Runs/helpers.ts's runTimestamp. */
+function runTimestamp(id: string): number {
+  return Number(/^run_(\d+)_/.exec(id)?.[1] ?? 0);
 }
 
 // Higher wins ties at equal match quality — "a node's own id should win
@@ -127,6 +178,8 @@ export function CommandPalette() {
   const openPalette = useStore((s) => s.openPalette);
   const closePalette = useStore((s) => s.closePalette);
   const runId = useStore((s) => s.runId);
+  const node = useStore((s) => s.node);
+  const screen = useStore((s) => s.screen);
 
   const workflowsQ = useWorkflows();
   const nodesQ = useNodes(undefined); // every node, across every workflow
@@ -137,6 +190,22 @@ export function CommandPalette() {
 
   const [query, setQuery] = useState('');
   const [hi, setHi] = useState(0);
+  const [recents, setRecents] = useState<RecentEntry[]>([]);
+
+  // U5 — recents tracking. This component is mounted for the app's whole
+  // lifetime (see App.tsx), so it's the one place that can observe every
+  // navigation regardless of which surface caused it — the rail, the graph
+  // overlay, a run row, ⌘K itself — without threading a "record this visit"
+  // call through each of them individually.
+  useEffect(() => {
+    if (node) pushRecent({ kind: 'node', id: node, label: node });
+  }, [node]);
+  useEffect(() => {
+    if (runId) pushRecent({ kind: 'run', id: runId, label: `…${runId.slice(-10)}` });
+  }, [runId]);
+  useEffect(() => {
+    pushRecent({ kind: 'screen', id: screen, label: SCREEN_LABEL[screen] });
+  }, [screen]);
 
   const scrimRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -166,6 +235,7 @@ export function CommandPalette() {
       triggerRef.current = document.activeElement as HTMLElement | null;
       setQuery('');
       setHi(0);
+      setRecents(readRecents());
       requestAnimationFrame(() => inputRef.current?.focus());
     } else {
       triggerRef.current?.focus?.();
@@ -193,6 +263,26 @@ export function CommandPalette() {
     }
     s.setNode(nodeId);
     s.setScreen('bench');
+  }
+
+  // U5 — "compare last two revisions of <node>": changes_list has no
+  // guaranteed order (fixture mode returns oldest-first — see
+  // contracts/README.md's own live captures for the general shape), so this
+  // sorts by `when` itself rather than trusting fetch order. Fewer than two
+  // recorded changes is an honest "nothing to compare" toast, not a diff
+  // modal opened on made-up revisions.
+  async function compareLastTwoRevisions(nodeId: string) {
+    try {
+      const records = await changesList({ nodeId });
+      const sorted = [...records].sort((a, b) => Date.parse(b.when) - Date.parse(a.when));
+      if (sorted.length < 2) {
+        toast('Not enough revision history', `${nodeId} has fewer than two recorded changes to compare.`);
+        return;
+      }
+      useStore.getState().openModal('diff', { node: nodeId, revA: sorted[1].id, revB: sorted[0].id });
+    } catch (err) {
+      toast('Could not load revision history', err instanceof Error ? err.message : 'Something went wrong.');
+    }
   }
 
   function navigateToWorkflow(workflowId: string) {
@@ -246,11 +336,79 @@ export function CommandPalette() {
         void performLogout(() => queryClient.clear());
       },
     });
+
+    // U5 — verb actions: rows that DO something rather than navigate,
+    // contextual to whatever's currently selected/bound. Each only appears
+    // when it has something real to act on — no dead rows.
+    if (node) {
+      out.push({
+        kind: 'action',
+        label: `override output on ${node}`,
+        go: () =>
+          useStore.getState().openModal('override', runId ? { node, run: runId } : { node }),
+      });
+      out.push({
+        kind: 'action',
+        label: `compare last two revisions of ${node}`,
+        go: () => {
+          void compareLastTwoRevisions(node);
+        },
+      });
+    }
+    const latestFailed = [...(runsQ.data ?? [])]
+      .filter((r) => r.status === 'failed')
+      .sort((a, b) => runTimestamp(b.id) - runTimestamp(a.id))[0];
+    if (latestFailed) {
+      out.push({
+        kind: 'action',
+        label: `open latest failed run (…${latestFailed.id.slice(-10)})`,
+        go: () => {
+          const entryNode = workflows.find((w) => w.id === latestFailed.wf)?.phases[0]?.[1]?.[0];
+          useStore.getState().bindRun(latestFailed.id, latestFailed.wf, latestFailed.cur ?? entryNode ?? latestFailed.wf);
+        },
+      });
+    }
+    if (runId) {
+      out.push({
+        kind: 'action',
+        label: `open trace waterfall for …${runId.slice(-10)}`,
+        go: () => useStore.getState().openModal('waterfall', { run: runId }),
+      });
+    }
+
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodesQ.data, runsQ.data, workflows, projectsQ.data, nodeWorkflowOf, boundRun, queryClient]);
+  }, [nodesQ.data, runsQ.data, workflows, projectsQ.data, nodeWorkflowOf, boundRun, queryClient, node, runId]);
 
-  const results = useMemo(() => rankEntries(entries, query), [entries, query]);
+  // U5 — recents: shown, most-recent-first, when the query is empty (the
+  // state the palette opens into) instead of the old unfiltered/alphabetical
+  // dump of every entry. Typing anything switches back to the ranked search
+  // exactly as before.
+  function goToRecent(entry: RecentEntry) {
+    if (entry.kind === 'node') {
+      navigateToNode(entry.id);
+      return;
+    }
+    if (entry.kind === 'screen') {
+      useStore.getState().setScreen(entry.id as ScreenId);
+      return;
+    }
+    const found = runsQ.data?.find((r) => r.id === entry.id);
+    if (!found) return; // evicted from the fetched list — nothing safe to bind to
+    const entryNode = workflows.find((w) => w.id === found.wf)?.phases[0]?.[1]?.[0];
+    useStore.getState().bindRun(found.id, found.wf, found.cur ?? entryNode ?? found.wf);
+  }
+
+  const recentResults = useMemo<PalEntry[]>(
+    () => recents.map((r) => ({ kind: r.kind, label: r.label, go: () => goToRecent(r) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [recents, runsQ.data, workflows],
+  );
+
+  const results = useMemo(
+    () => (query.trim() === '' ? recentResults : rankEntries(entries, query)),
+    [entries, query, recentResults],
+  );
 
   useEffect(() => {
     setHi(0);
@@ -326,6 +484,21 @@ export function CommandPalette() {
           onChange={(e) => setQuery(e.target.value)}
         />
         <div className="res" id="palres" role="listbox" aria-label="Command palette results" ref={resultsRef}>
+          {query.trim() === '' && results.length > 0 && (
+            <div
+              aria-hidden="true"
+              style={{
+                padding: '6px 12px 2px',
+                fontFamily: 'var(--mono)',
+                fontSize: 9.5,
+                letterSpacing: '.1em',
+                textTransform: 'uppercase',
+                color: 'var(--faint)',
+              }}
+            >
+              recent
+            </div>
+          )}
           {results.map((r, i) => (
             <button
               key={`${r.kind}-${r.label}`}
@@ -342,7 +515,9 @@ export function CommandPalette() {
             </button>
           ))}
           {results.length === 0 && (
-            <div style={{ padding: '10px 12px', color: 'var(--faint)', fontSize: 12.5 }}>no matches</div>
+            <div style={{ padding: '10px 12px', color: 'var(--faint)', fontSize: 12.5 }}>
+              {query.trim() === '' ? 'no recent activity yet' : 'no matches'}
+            </div>
           )}
         </div>
       </div>

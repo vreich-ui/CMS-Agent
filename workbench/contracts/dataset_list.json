@@ -1,0 +1,3182 @@
+{
+  "verb": "dataset_list",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "datasets": [
+            {
+              "datasetId": "string",
+              "nodeId": "string",
+              "name": "string",
+              "cases": [
+                {
+                  "caseId": "string",
+                  "nodeId": "string",
+                  "dependencyOutputs": {
+                    "brief_architect": {
+                      "artifact": "string",
+                      "summary": "string",
+                      "notes": [
+                        "string"
+                      ],
+                      "blockers": [
+                        {
+                          "blocker": "string",
+                          "why_it_matters": "string",
+                          "required_resolution": "string"
+                        }
+                      ],
+                      "working_title_direction": {
+                        "primary_title": "string",
+                        "alternate_titles": [
+                          "string"
+                        ],
+                        "slug_direction": "string",
+                        "title_notes": [
+                          "string"
+                        ]
+                      },
+                      "reader_promise": "string",
+                      "target_reader": {
+                        "provisional_audience": "string",
+                        "reader_state": "string",
+                        "desired_after_state": "string"
+                      },
+                      "core_angle": "string",
+                      "positioning_constraints": [
+                        "string"
+                      ],
+                      "recommended_article_structure": [
+                        {
+                          "heading": "string",
+                          "purpose": "string",
+                          "key_points": [
+                            "string"
+                          ],
+                          "proof_or_support": [
+                            "string"
+                          ],
+                          "risk_notes": [
+                            "string"
+                          ]
+                        }
+                      ],
+                      "claim_proof_map": [
+                        {
+                          "claim": "string",
+                          "support_level": "string",
+                          "proof_points": [
+                            "string"
+                          ],
+                          "allowed_wording": "string",
+                          "avoid_wording": "string"
+                        }
+                      ],
+                      "reader_next_step": {
+                        "primary_next_step": "string",
+                        "commercial_awareness": "string",
+                        "avoid": [
+                          "string"
+                        ]
+                      },
+                      "seo_meta_notes": {
+                        "search_intent": "string",
+                        "primary_keyword_direction": [
+                          "string"
+                        ],
+                        "secondary_keyword_direction": [
+                          "string"
+                        ],
+                        "meta_title_options": [
+                          "string"
+                        ],
+                        "meta_description": "string",
+                        "seo_cautions": [
+                          "string"
+                        ]
+                      },
+                      "tone_guardrails": {
+                        "status": "string",
+                        "assumption": "string",
+                        "do": [
+                          "string"
+                        ],
+                        "dont": [
+                          "string"
+                        ]
+                      },
+                      "what_to_skip": [
+                        "string"
+                      ],
+                      "acceptance_criteria": [
+                        "string"
+                      ],
+                      "contract_policy_notes": {
+                        "likely_target_object_type": "string",
+                        "expected_content_object_fields": [
+                          "string"
+                        ],
+                        "taxonomy_needs": [
+                          "string"
+                        ],
+                        "contract_intelligence_needs": "string",
+                        "special_contract_caution": "string"
+                      },
+                      "review_needs": [
+                        {
+                          "reviewer": "string",
+                          "focus": "string"
+                        }
+                      ],
+                      "assumptions_to_carry_forward": [
+                        "string"
+                      ]
+                    }
+                  },
+                  "context": {
+                    "clientProjectId": "string",
+                    "prefetchedContract": {
+                      "clientObjectType": "string",
+                      "bodySchema": {
+                        "$schema": "string",
+                        "type": "string",
+                        "properties": {
+                          "tracking": {
+                            "type": "string",
+                            "properties": {
+                              "enabled": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string",
+                                "maxLength": "number"
+                              },
+                              "tags": {
+                                "maxItems": "number",
+                                "type": "string",
+                                "items": {
+                                  "type": "string",
+                                  "maxLength": "number"
+                                }
+                              },
+                              "goals": {
+                                "maxItems": "number",
+                                "type": "string",
+                                "items": {
+                                  "type": "string",
+                                  "properties": {
+                                    "goal": "...",
+                                    "on": "...",
+                                    "provider_conversions": "..."
+                                  },
+                                  "required": [
+                                    "..."
+                                  ],
+                                  "additionalProperties": "boolean"
+                                }
+                              }
+                            },
+                            "additionalProperties": "boolean"
+                          },
+                          "slug": {
+                            "type": "string",
+                            "pattern": "string"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": "number"
+                          },
+                          "deck": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "author": {
+                            "type": "string",
+                            "maxLength": "number"
+                          },
+                          "image": {
+                            "type": "string",
+                            "properties": {
+                              "src": {
+                                "type": "string"
+                              },
+                              "alt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "string"
+                            ],
+                            "additionalProperties": "boolean"
+                          },
+                          "taxonomy": {
+                            "type": "string",
+                            "properties": {
+                              "category": {
+                                "type": "string"
+                              },
+                              "tags": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "additionalProperties": "boolean"
+                          },
+                          "seo": {
+                            "type": "string",
+                            "properties": {
+                              "meta_title": {
+                                "type": "string"
+                              },
+                              "meta_description": {
+                                "type": "string"
+                              },
+                              "canonical_url": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": "boolean"
+                          },
+                          "nodes": {
+                            "type": "string",
+                            "items": {
+                              "type": "string",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "pattern": "string"
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "..."
+                                  ]
+                                },
+                                "public": {
+                                  "type": "string",
+                                  "properties": {
+                                    "eyebrow": "...",
+                                    "title": "...",
+                                    "body": "...",
+                                    "items": "...",
+                                    "ctaText": "...",
+                                    "ctaLink": "...",
+                                    "label": "...",
+                                    "media": "...",
+                                    "images": "..."
+                                  },
+                                  "additionalProperties": "boolean"
+                                },
+                                "private": {
+                                  "type": "string",
+                                  "properties": {
+                                    "strategy": "...",
+                                    "intent": "...",
+                                    "agentNotes": "...",
+                                    "sourcePromptId": "...",
+                                    "inputTemplateId": "..."
+                                  },
+                                  "additionalProperties": "boolean"
+                                },
+                                "commercial": {
+                                  "type": "string",
+                                  "properties": {
+                                    "type": "...",
+                                    "source": "...",
+                                    "sponsorName": "...",
+                                    "advertiserName": "...",
+                                    "merchantName": "...",
+                                    "productId": "...",
+                                    "offerId": "...",
+                                    "campaignId": "...",
+                                    "creativeId": "...",
+                                    "placementId": "...",
+                                    "destinationUrl": "...",
+                                    "rel": "...",
+                                    "disclosure": "...",
+                                    "offer": "...",
+                                    "adSlot": "..."
+                                  },
+                                  "additionalProperties": "boolean"
+                                },
+                                "chat": {
+                                  "type": "string",
+                                  "properties": {
+                                    "invitationText": "...",
+                                    "suggestedQuery": "..."
+                                  },
+                                  "additionalProperties": "boolean"
+                                },
+                                "rendering": {
+                                  "type": "string",
+                                  "properties": {
+                                    "presentation": "...",
+                                    "emphasis": "...",
+                                    "placement": "..."
+                                  },
+                                  "additionalProperties": "boolean"
+                                },
+                                "visibility": {
+                                  "type": "string",
+                                  "enum": [
+                                    "..."
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "string"
+                              ],
+                              "additionalProperties": "boolean"
+                            }
+                          },
+                          "chat": {
+                            "type": "string",
+                            "properties": {
+                              "enabled": {
+                                "type": "string"
+                              },
+                              "promptOverride": {
+                                "type": "string"
+                              },
+                              "welcomeMessage": {
+                                "type": "string"
+                              },
+                              "suggestedQuestions": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "metadata": {
+                                "type": "string",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {}
+                              }
+                            },
+                            "required": [
+                              "string"
+                            ],
+                            "additionalProperties": "boolean"
+                          },
+                          "editorial": {
+                            "type": "string",
+                            "properties": {
+                              "writer_notes": {
+                                "type": "string"
+                              },
+                              "framework": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": "boolean"
+                          },
+                          "emotional_strategy": {
+                            "type": "string",
+                            "properties": {
+                              "overall_texture_assessment": {
+                                "type": "string"
+                              },
+                              "overly_polished_moments": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "opportunities_for_specificity": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "rhythm_adjustments": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "sensory_detail_additions": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "lines_to_preserve": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "additionalProperties": "boolean"
+                          },
+                          "sources": {
+                            "type": "string",
+                            "properties": {
+                              "source_list": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string",
+                                  "properties": {
+                                    "source_id": "...",
+                                    "name": "...",
+                                    "url": "...",
+                                    "publisher": "...",
+                                    "accessed_at": "..."
+                                  },
+                                  "required": [
+                                    "..."
+                                  ],
+                                  "additionalProperties": "boolean"
+                                }
+                              }
+                            },
+                            "required": [
+                              "string"
+                            ],
+                            "additionalProperties": "boolean"
+                          },
+                          "claims": {
+                            "type": "string",
+                            "properties": {
+                              "claim_list": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string",
+                                  "properties": {
+                                    "claim_id": "...",
+                                    "text": "...",
+                                    "node_ids": "...",
+                                    "source_ids": "...",
+                                    "risk": "...",
+                                    "status": "...",
+                                    "notes": "..."
+                                  },
+                                  "required": [
+                                    "..."
+                                  ],
+                                  "additionalProperties": "boolean"
+                                }
+                              }
+                            },
+                            "required": [
+                              "string"
+                            ],
+                            "additionalProperties": "boolean"
+                          },
+                          "compliance": {
+                            "type": "string",
+                            "properties": {
+                              "requirements": {
+                                "type": "string",
+                                "items": {
+                                  "type": "string",
+                                  "properties": {
+                                    "requirement_id": "...",
+                                    "kind": "...",
+                                    "text": "...",
+                                    "satisfied": "...",
+                                    "node_ids": "...",
+                                    "notes": "..."
+                                  },
+                                  "required": [
+                                    "..."
+                                  ],
+                                  "additionalProperties": "boolean"
+                                }
+                              }
+                            },
+                            "required": [
+                              "string"
+                            ],
+                            "additionalProperties": "boolean"
+                          },
+                          "publication_context": {
+                            "type": "string",
+                            "properties": {
+                              "publication_name": {
+                                "type": "string"
+                              },
+                              "domain": {
+                                "type": "string"
+                              },
+                              "topic_scope": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": "boolean"
+                          },
+                          "lineage": {
+                            "type": "string",
+                            "properties": {
+                              "parent_content_id": {
+                                "type": "string"
+                              },
+                              "source_version_id": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": "boolean"
+                          },
+                          "scores": {
+                            "type": "string",
+                            "items": {
+                              "type": "string",
+                              "properties": {
+                                "scored_by": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string"
+                                },
+                                "framework": {
+                                  "type": "string"
+                                },
+                                "dimension": {
+                                  "type": "string"
+                                },
+                                "score": {
+                                  "type": "string"
+                                },
+                                "rationale": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "string"
+                              ],
+                              "additionalProperties": "boolean"
+                            }
+                          }
+                        },
+                        "required": [
+                          "string"
+                        ],
+                        "additionalProperties": "boolean",
+                        "$defs": {
+                          "__schema0": {
+                            "type": "string",
+                            "properties": {
+                              "nodeType": {
+                                "type": "string",
+                                "enum": [
+                                  "string"
+                                ]
+                              },
+                              "data": {
+                                "type": "string",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {}
+                              },
+                              "content": {
+                                "minItems": "number",
+                                "type": "string",
+                                "items": {
+                                  "type": "string",
+                                  "properties": {
+                                    "nodeType": "...",
+                                    "data": "...",
+                                    "content": "..."
+                                  },
+                                  "required": [
+                                    "..."
+                                  ],
+                                  "additionalProperties": "boolean"
+                                }
+                              }
+                            },
+                            "required": [
+                              "string"
+                            ],
+                            "additionalProperties": "boolean"
+                          }
+                        }
+                      },
+                      "idConventions": [
+                        {
+                          "id": "string",
+                          "severity": "string",
+                          "note": "string"
+                        }
+                      ],
+                      "mediaConvention": {
+                        "policy": {
+                          "max_image_bytes": "number",
+                          "preferred_image_format": "string",
+                          "over_budget": "string",
+                          "note": "string"
+                        },
+                        "notes": [
+                          {
+                            "input": "string",
+                            "how": "string"
+                          }
+                        ]
+                      },
+                      "taxonomy": {
+                        "notes": [
+                          {
+                            "input": "string",
+                            "how": "string"
+                          }
+                        ],
+                        "blockingConstraints": [
+                          {
+                            "id": "string",
+                            "note": "string"
+                          }
+                        ]
+                      },
+                      "constraints": [
+                        {
+                          "id": "string",
+                          "severity": "string",
+                          "enforcedLive": "boolean",
+                          "note": "string"
+                        }
+                      ],
+                      "publishPolicy": {
+                        "gated": "boolean",
+                        "requires_approval": "boolean",
+                        "pin_rules": "string",
+                        "note": "string"
+                      },
+                      "workflowSequence": [
+                        "string"
+                      ],
+                      "validationSurface": [
+                        {
+                          "op": "string",
+                          "requiredFields": [
+                            "string"
+                          ],
+                          "note": "string"
+                        }
+                      ],
+                      "contractSource": {
+                        "tool": "string",
+                        "fetchedAtISO": "string"
+                      },
+                      "unmapped": {
+                        "governed": "boolean",
+                        "creatable": "boolean",
+                        "summary": "string",
+                        "creation_policy": {
+                          "humans": "string",
+                          "agents": "string",
+                          "note": "string"
+                        }
+                      }
+                    }
+                  },
+                  "subjectHash": "string",
+                  "sourceRunId": "string",
+                  "sourceExecutionMode": "string",
+                  "championOutput": {
+                    "artifact": "string",
+                    "summary": "string",
+                    "clientProjectId": "string",
+                    "clientObjectType": "string",
+                    "contractSource": {
+                      "tool": "string",
+                      "fetchedAtISO": "string"
+                    },
+                    "bodySchema": {
+                      "$schema": "string",
+                      "type": "string",
+                      "properties": {
+                        "tracking": {
+                          "type": "string",
+                          "properties": {
+                            "enabled": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string",
+                              "maxLength": "number"
+                            },
+                            "tags": {
+                              "maxItems": "number",
+                              "type": "string",
+                              "items": {
+                                "type": "string",
+                                "maxLength": "number"
+                              }
+                            },
+                            "goals": {
+                              "maxItems": "number",
+                              "type": "string",
+                              "items": {
+                                "type": "string",
+                                "properties": {
+                                  "goal": {
+                                    "type": "...",
+                                    "pattern": "..."
+                                  },
+                                  "on": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "provider_conversions": {
+                                    "type": "...",
+                                    "items": "..."
+                                  }
+                                },
+                                "required": [
+                                  "string"
+                                ],
+                                "additionalProperties": "boolean"
+                              }
+                            }
+                          },
+                          "additionalProperties": "boolean"
+                        },
+                        "slug": {
+                          "type": "string",
+                          "pattern": "string"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "deck": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "author": {
+                          "type": "string",
+                          "maxLength": "number"
+                        },
+                        "image": {
+                          "type": "string",
+                          "properties": {
+                            "src": {
+                              "type": "string"
+                            },
+                            "alt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "string"
+                          ],
+                          "additionalProperties": "boolean"
+                        },
+                        "taxonomy": {
+                          "type": "string",
+                          "properties": {
+                            "category": {
+                              "type": "string"
+                            },
+                            "tags": {
+                              "type": "string",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "additionalProperties": "boolean"
+                        },
+                        "seo": {
+                          "type": "string",
+                          "properties": {
+                            "meta_title": {
+                              "type": "string"
+                            },
+                            "meta_description": {
+                              "type": "string"
+                            },
+                            "canonical_url": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": "boolean"
+                        },
+                        "nodes": {
+                          "type": "string",
+                          "items": {
+                            "type": "string",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "pattern": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "string"
+                                ]
+                              },
+                              "public": {
+                                "type": "string",
+                                "properties": {
+                                  "eyebrow": {
+                                    "type": "..."
+                                  },
+                                  "title": {
+                                    "type": "..."
+                                  },
+                                  "body": {
+                                    "anyOf": "..."
+                                  },
+                                  "items": {
+                                    "type": "...",
+                                    "items": "..."
+                                  },
+                                  "ctaText": {
+                                    "type": "..."
+                                  },
+                                  "ctaLink": {
+                                    "type": "..."
+                                  },
+                                  "label": {
+                                    "type": "..."
+                                  },
+                                  "media": {
+                                    "type": "...",
+                                    "properties": "...",
+                                    "required": "...",
+                                    "additionalProperties": "..."
+                                  },
+                                  "images": {
+                                    "type": "...",
+                                    "items": "..."
+                                  }
+                                },
+                                "additionalProperties": "boolean"
+                              },
+                              "private": {
+                                "type": "string",
+                                "properties": {
+                                  "strategy": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "intent": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "agentNotes": {
+                                    "type": "..."
+                                  },
+                                  "sourcePromptId": {
+                                    "type": "..."
+                                  },
+                                  "inputTemplateId": {
+                                    "type": "..."
+                                  }
+                                },
+                                "additionalProperties": "boolean"
+                              },
+                              "commercial": {
+                                "type": "string",
+                                "properties": {
+                                  "type": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "source": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "sponsorName": {
+                                    "type": "..."
+                                  },
+                                  "advertiserName": {
+                                    "type": "..."
+                                  },
+                                  "merchantName": {
+                                    "type": "..."
+                                  },
+                                  "productId": {
+                                    "type": "..."
+                                  },
+                                  "offerId": {
+                                    "type": "..."
+                                  },
+                                  "campaignId": {
+                                    "type": "..."
+                                  },
+                                  "creativeId": {
+                                    "type": "..."
+                                  },
+                                  "placementId": {
+                                    "type": "..."
+                                  },
+                                  "destinationUrl": {
+                                    "type": "..."
+                                  },
+                                  "rel": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "disclosure": {
+                                    "type": "...",
+                                    "properties": "...",
+                                    "required": "...",
+                                    "additionalProperties": "..."
+                                  },
+                                  "offer": {
+                                    "type": "...",
+                                    "properties": "...",
+                                    "additionalProperties": "..."
+                                  },
+                                  "adSlot": {
+                                    "type": "...",
+                                    "properties": "...",
+                                    "additionalProperties": "..."
+                                  }
+                                },
+                                "additionalProperties": "boolean"
+                              },
+                              "chat": {
+                                "type": "string",
+                                "properties": {
+                                  "invitationText": {
+                                    "type": "..."
+                                  },
+                                  "suggestedQuery": {
+                                    "type": "..."
+                                  }
+                                },
+                                "additionalProperties": "boolean"
+                              },
+                              "rendering": {
+                                "type": "string",
+                                "properties": {
+                                  "presentation": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "emphasis": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "placement": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  }
+                                },
+                                "additionalProperties": "boolean"
+                              },
+                              "visibility": {
+                                "type": "string",
+                                "enum": [
+                                  "string"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "string"
+                            ],
+                            "additionalProperties": "boolean"
+                          }
+                        },
+                        "chat": {
+                          "type": "string",
+                          "properties": {
+                            "enabled": {
+                              "type": "string"
+                            },
+                            "promptOverride": {
+                              "type": "string"
+                            },
+                            "welcomeMessage": {
+                              "type": "string"
+                            },
+                            "suggestedQuestions": {
+                              "type": "string",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "metadata": {
+                              "type": "string",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": [
+                            "string"
+                          ],
+                          "additionalProperties": "boolean"
+                        },
+                        "editorial": {
+                          "type": "string",
+                          "properties": {
+                            "writer_notes": {
+                              "type": "string"
+                            },
+                            "framework": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": "boolean"
+                        },
+                        "emotional_strategy": {
+                          "type": "string",
+                          "properties": {
+                            "overall_texture_assessment": {
+                              "type": "string"
+                            },
+                            "overly_polished_moments": {
+                              "type": "string",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "opportunities_for_specificity": {
+                              "type": "string",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "rhythm_adjustments": {
+                              "type": "string",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "sensory_detail_additions": {
+                              "type": "string",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "lines_to_preserve": {
+                              "type": "string",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "additionalProperties": "boolean"
+                        },
+                        "sources": {
+                          "type": "string",
+                          "properties": {
+                            "source_list": {
+                              "type": "string",
+                              "items": {
+                                "type": "string",
+                                "properties": {
+                                  "source_id": {
+                                    "type": "..."
+                                  },
+                                  "name": {
+                                    "type": "..."
+                                  },
+                                  "url": {
+                                    "type": "..."
+                                  },
+                                  "publisher": {
+                                    "type": "..."
+                                  },
+                                  "accessed_at": {
+                                    "type": "..."
+                                  }
+                                },
+                                "required": [
+                                  "string"
+                                ],
+                                "additionalProperties": "boolean"
+                              }
+                            }
+                          },
+                          "required": [
+                            "string"
+                          ],
+                          "additionalProperties": "boolean"
+                        },
+                        "claims": {
+                          "type": "string",
+                          "properties": {
+                            "claim_list": {
+                              "type": "string",
+                              "items": {
+                                "type": "string",
+                                "properties": {
+                                  "claim_id": {
+                                    "type": "..."
+                                  },
+                                  "text": {
+                                    "type": "..."
+                                  },
+                                  "node_ids": {
+                                    "type": "...",
+                                    "items": "..."
+                                  },
+                                  "source_ids": {
+                                    "type": "...",
+                                    "items": "..."
+                                  },
+                                  "risk": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "status": {
+                                    "type": "...",
+                                    "enum": "..."
+                                  },
+                                  "notes": {
+                                    "type": "..."
+                                  }
+                                },
+                                "required": [
+                                  "string"
+                                ],
+                                "additionalProperties": "boolean"
+                              }
+                            }
+                          },
+                          "required": [
+                            "string"
+                          ],
+                          "additionalProperties": "boolean"
+                        },
+                        "compliance": {
+                          "type": "string",
+                          "properties": {
+                            "requirements": {
+                              "type": "string",
+                              "items": {
+                                "type": "string",
+                                "properties": {
+                                  "requirement_id": {
+                                    "type": "..."
+                                  },
+                                  "kind": {
+                                    "type": "..."
+                                  },
+                                  "text": {
+                                    "type": "..."
+                                  },
+                                  "satisfied": {
+                                    "type": "..."
+                                  },
+                                  "node_ids": {
+                                    "type": "...",
+                                    "items": "..."
+                                  },
+                                  "notes": {
+                                    "type": "..."
+                                  }
+                                },
+                                "required": [
+                                  "string"
+                                ],
+                                "additionalProperties": "boolean"
+                              }
+                            }
+                          },
+                          "required": [
+                            "string"
+                          ],
+                          "additionalProperties": "boolean"
+                        },
+                        "publication_context": {
+                          "type": "string",
+                          "properties": {
+                            "publication_name": {
+                              "type": "string"
+                            },
+                            "domain": {
+                              "type": "string"
+                            },
+                            "topic_scope": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": "boolean"
+                        },
+                        "lineage": {
+                          "type": "string",
+                          "properties": {
+                            "parent_content_id": {
+                              "type": "string"
+                            },
+                            "source_version_id": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": "boolean"
+                        },
+                        "scores": {
+                          "type": "string",
+                          "items": {
+                            "type": "string",
+                            "properties": {
+                              "scored_by": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "framework": {
+                                "type": "string"
+                              },
+                              "dimension": {
+                                "type": "string"
+                              },
+                              "score": {
+                                "type": "string"
+                              },
+                              "rationale": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "string"
+                            ],
+                            "additionalProperties": "boolean"
+                          }
+                        }
+                      },
+                      "required": [
+                        "string"
+                      ],
+                      "additionalProperties": "boolean",
+                      "$defs": {
+                        "__schema0": {
+                          "type": "string",
+                          "properties": {
+                            "nodeType": {
+                              "type": "string",
+                              "enum": [
+                                "string"
+                              ]
+                            },
+                            "data": {
+                              "type": "string",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {}
+                            },
+                            "content": {
+                              "minItems": "number",
+                              "type": "string",
+                              "items": {
+                                "type": "string",
+                                "properties": {
+                                  "nodeType": {
+                                    "type": "...",
+                                    "const": "..."
+                                  },
+                                  "data": {
+                                    "type": "...",
+                                    "propertyNames": "...",
+                                    "additionalProperties": "..."
+                                  },
+                                  "content": {
+                                    "minItems": "...",
+                                    "type": "...",
+                                    "items": "..."
+                                  }
+                                },
+                                "required": [
+                                  "string"
+                                ],
+                                "additionalProperties": "boolean"
+                              }
+                            }
+                          },
+                          "required": [
+                            "string"
+                          ],
+                          "additionalProperties": "boolean"
+                        }
+                      }
+                    },
+                    "idConventions": {
+                      "source": "string",
+                      "conventions": [
+                        {
+                          "id": "string",
+                          "severity": "string",
+                          "note": "string"
+                        }
+                      ]
+                    },
+                    "mediaConvention": {
+                      "policy": {
+                        "max_image_bytes": "number",
+                        "preferred_image_format": "string",
+                        "over_budget": "string",
+                        "note": "string"
+                      },
+                      "notes": [
+                        {
+                          "input": "string",
+                          "how": "string"
+                        }
+                      ]
+                    },
+                    "taxonomy": {
+                      "notes": [
+                        {
+                          "input": "string",
+                          "how": "string"
+                        }
+                      ],
+                      "blockingConstraints": [
+                        {
+                          "id": "string",
+                          "note": "string"
+                        }
+                      ],
+                      "unknownTermsBlock": "boolean"
+                    },
+                    "constraints": [
+                      {
+                        "id": "string",
+                        "severity": "string",
+                        "enforcedLive": "boolean",
+                        "note": "string"
+                      }
+                    ],
+                    "publishPolicy": {
+                      "gated": "boolean",
+                      "requires_approval": "boolean",
+                      "pin_rules": "string",
+                      "note": "string"
+                    },
+                    "contract_findings": [
+                      "string"
+                    ],
+                    "assumptions": [
+                      "string"
+                    ],
+                    "blockers": [],
+                    "notes": [
+                      "string"
+                    ]
+                  },
+                  "frozenAt": "string"
+                }
+              ],
+              "metadata": {
+                "distinctSubjects": "number",
+                "duplicateSubjects": "number",
+                "degenerate": "boolean"
+              },
+              "createdAt": "string"
+            }
+          ]
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "datasets": [
+            {
+              "datasetId": "ds_1786383065058_ugd98n",
+              "nodeId": "contract_intelligence",
+              "name": "contract_intelligence frozen replay \u2014 2026-08-10 rebuild (distinct subjects, post P1 dedup fix)",
+              "cases": [
+                {
+                  "caseId": "case_1786383065054_6lnqu0",
+                  "nodeId": "contract_intelligence",
+                  "dependencyOutputs": {
+                    "brief_architect": {
+                      "artifact": "article_brief.v1",
+                      "summary": "Executable article brief with a critical blocker: clientProjectId \"platform\" is present, but the target client record was not resolved in upstream strategy. The safest draft direction is a cautious, d\u2026",
+                      "notes": [
+                        "Critical blocker: the target client record for clientProjectId \"platform\" was not resolved. Do not treat this as a finalized registered-client deliverable until client identity, brand voice, and appro\u2026",
+                        "Use the supplied lifecycle terms only as provisional article concepts unless SME/product documentation confirms they are official platform states."
+                      ],
+                      "blockers": [
+                        {
+                          "blocker": "Unresolved target client",
+                          "why_it_matters": "The brief cannot safely finalize brand voice, product naming, commercial direction, or approved claims without the client record for clientProjectId \"platform\".",
+                          "required_resolution": "Confirm the registered client/project record and deliver any available voice, style, audience, taxonomy, and content-object contract guidance."
+                        },
+                        {
+                          "blocker": "Unverified platform mechanics",
+                          "why_it_matters": "The article topic depends on lifecycle terms and publish/release semantics that may be product-specific and high-impact.",
+                          "required_resolution": "SME or product documentation must confirm official terminology, state transitions, publish behavior, release behavior, validation scope, and authorization model before final copy presents them as plat\u2026"
+                        }
+                      ],
+                      "working_title_direction": {
+                        "primary_title": "Why Lifecycle Gates Matter in Agent-Assisted Content Workflows",
+                        "alternate_titles": [
+                          "From Agent Drafts to Controlled Release: Understanding Content Lifecycle Gates",
+                          "Publish Is Not Always Release: A Governance Guide for Agent-Assisted Content"
+                        ],
+                        "slug_direction": "agent-assisted-content-lifecycle-gates",
+                        "title_notes": [
+                          "Avoid product-specific naming in the title until the official brand/product name is confirmed.",
+                          "If product terminology is confirmed, the title can become more specific, e.g. \"Understanding the Kugel Platform Content Lifecycle\"."
+                        ]
+                      },
+                      "reader_promise": "Readers will understand why governed lifecycle gates matter when agents can create or modify content quickly, what questions each stage should help answer, why publish and release may be separate deci\u2026",
+                      "target_reader": {
+                        "provisional_audience": "Operators, reviewers, content owners, platform stakeholders, and first-time agent authors responsible for safe agent-assisted content workflows.",
+                        "reader_state": "Curious but cautious. They want speed from agent-authored content, but they worry about accidental exposure, unclear approvals, weak validation, and confusion around publish versus release.",
+                        "desired_after_state": "They can explain the lifecycle as a sequence of decisions, identify what should be checked at each gate, and know which product-specific details must be verified before relying on the workflow operati\u2026"
+                      },
+                      "core_angle": "Lifecycle gates turn agent-assisted content from a speed risk into a governed operating model. The article should show that the goal is not bureaucracy; the goal is preserving visibility, review, acco\u2026",
+                      "positioning_constraints": [
+                        "Make the content useful first and commercially aware second.",
+                        "Frame the article as practical education, not sales copy and not definitive product documentation unless product facts are confirmed."
+                      ],
+                      "recommended_article_structure": [
+                        {
+                          "heading": "Why content lifecycle gates matter when agents move fast",
+                          "purpose": "Open with the reader\u2019s concern: agent-assisted work can accelerate content changes faster than teams can review them.",
+                          "key_points": [
+                            "...",
+                            "..."
+                          ],
+                          "proof_or_support": [
+                            "..."
+                          ],
+                          "risk_notes": [
+                            "..."
+                          ]
+                        },
+                        {
+                          "heading": "Think of the lifecycle as decisions, not just status labels",
+                          "purpose": "Introduce checkout, validation, patching, publishing, and release carefully as decision gates.",
+                          "key_points": [
+                            "...",
+                            "..."
+                          ],
+                          "proof_or_support": [
+                            "..."
+                          ],
+                          "risk_notes": [
+                            "..."
+                          ]
+                        }
+                      ],
+                      "claim_proof_map": [
+                        {
+                          "claim": "Lifecycle gates help teams make content changes deliberate rather than accidental.",
+                          "support_level": "supported generally",
+                          "proof_points": [
+                            "..."
+                          ],
+                          "allowed_wording": "Governed lifecycle gates can help teams make content changes more deliberate and reviewable.",
+                          "avoid_wording": "The platform prevents accidental releases."
+                        },
+                        {
+                          "claim": "High-impact advancement should be gated by clear ownership or authorization.",
+                          "support_level": "supported generally",
+                          "proof_points": [
+                            "..."
+                          ],
+                          "allowed_wording": "Teams should treat publish and release decisions as authorized-owner or operator decisions.",
+                          "avoid_wording": "The platform enforces RBAC, approvals, or audit trails."
+                        }
+                      ],
+                      "reader_next_step": {
+                        "primary_next_step": "Use the checklist to review one content-object workflow before relying on it operationally, then confirm platform-specific behavior with documentation or an SME.",
+                        "commercial_awareness": "If appropriate after client confirmation, add a low-pressure CTA such as: \"Review your team\u2019s content lifecycle model before enabling agent-assisted changes in production workflows.\"",
+                        "avoid": [
+                          "Do not push a hard sales demo CTA unless the client strategy explicitly asks for it.",
+                          "Do not instruct readers to publish or release content."
+                        ]
+                      },
+                      "seo_meta_notes": {
+                        "search_intent": "Informational/support intent around governed content lifecycle, agent-assisted content workflows, MCP publishing workflow, publish versus release, and content release governance.",
+                        "primary_keyword_direction": [
+                          "content lifecycle gates",
+                          "agent-assisted content workflow"
+                        ],
+                        "secondary_keyword_direction": [
+                          "content validation",
+                          "content release process"
+                        ],
+                        "meta_title_options": [
+                          "Why Lifecycle Gates Matter in Agent-Assisted Content Workflows",
+                          "Publish vs. Release in Governed Content Workflows"
+                        ],
+                        "meta_description": "Learn how lifecycle gates help teams review, validate, publish, and release agent-assisted content more deliberately\u2014without treating speed as a substitute for governance.",
+                        "seo_cautions": [
+                          "Do not over-optimize around Kugel Platform until official product naming is confirmed.",
+                          "Avoid procedural keywords implying exact command/API guidance unless such guidance is approved."
+                        ]
+                      },
+                      "tone_guardrails": {
+                        "status": "No client voice record was delivered in this node input.",
+                        "assumption": "Use neutral, reader-first, practical, careful language until client voice is available.",
+                        "do": [
+                          "Be clear, calm, and operator-focused.",
+                          "Use cautious phrasing for unverified mechanics: \"in many governed workflows,\" \"teams should verify,\" \"if the platform defines these as separate actions.\""
+                        ],
+                        "dont": [
+                          "Do not sound like definitive product documentation without verified product sources.",
+                          "Do not use hype about AI agents replacing governance."
+                        ]
+                      },
+                      "what_to_skip": [
+                        "Skip command-level MCP instructions unless product documentation confirms approved command names and examples.",
+                        "Skip UI walkthroughs, screenshots, diagrams, or API examples unless approved."
+                      ],
+                      "acceptance_criteria": [
+                        "The draft clearly states that lifecycle gates exist to preserve visibility, review, accountability, and deliberate control in agent-assisted content workflows.",
+                        "The draft explains each lifecycle concept by the decision/question it helps answer."
+                      ],
+                      "contract_policy_notes": {
+                        "likely_target_object_type": "Article or documentation-adjacent educational content object.",
+                        "expected_content_object_fields": [
+                          "title",
+                          "slug"
+                        ],
+                        "taxonomy_needs": [
+                          "Content governance",
+                          "Agent-assisted workflows"
+                        ],
+                        "contract_intelligence_needs": "Contract intelligence should inspect the client's default article/content object type once the client record is resolved. It may also need to inspect documentation/help-center object types if the clie\u2026",
+                        "special_contract_caution": "No publish or release action should be inferred from this brief; content should remain draft/review until separately authorized."
+                      },
+                      "review_needs": [
+                        {
+                          "reviewer": "Client/project owner or conductor",
+                          "focus": "Resolve clientProjectId \"platform\" and confirm brand/product identity."
+                        },
+                        {
+                          "reviewer": "Product SME",
+                          "focus": "Verify lifecycle terminology, state transitions, validation scope, publish semantics, release semantics, permissions, and approved examples."
+                        }
+                      ],
+                      "assumptions_to_carry_forward": [
+                        "The intended product may be Kugel Platform, but official naming is unconfirmed.",
+                        "The article should be conceptual/operator education rather than exact product documentation unless product evidence is supplied."
+                      ]
+                    }
+                  },
+                  "context": {
+                    "clientProjectId": "platform",
+                    "prefetchedContract": {
+                      "clientObjectType": "content_item",
+                      "bodySchema": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {
+                          "tracking": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "slug": {
+                            "type": "...",
+                            "pattern": "..."
+                          },
+                          "title": {
+                            "type": "...",
+                            "minLength": "..."
+                          },
+                          "deck": {
+                            "type": "..."
+                          },
+                          "description": {
+                            "type": "..."
+                          },
+                          "author": {
+                            "type": "...",
+                            "maxLength": "..."
+                          },
+                          "image": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "taxonomy": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "seo": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "nodes": {
+                            "type": "...",
+                            "items": "..."
+                          },
+                          "chat": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "editorial": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "emotional_strategy": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "sources": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "claims": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "compliance": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "publication_context": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "lineage": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "scores": {
+                            "type": "...",
+                            "items": "..."
+                          }
+                        },
+                        "required": [
+                          "slug",
+                          "title"
+                        ],
+                        "additionalProperties": false,
+                        "$defs": {
+                          "__schema0": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          }
+                        }
+                      },
+                      "idConventions": [
+                        {
+                          "id": "article_slug",
+                          "severity": "blocks_write",
+                          "note": "slug must be lowercase-hyphen and unique across article objects AND the committed legacy posts (src/data/post) \u2014 it becomes the article URL through the blog per\u2026"
+                        }
+                      ],
+                      "mediaConvention": {
+                        "policy": {
+                          "max_image_bytes": 153600,
+                          "preferred_image_format": "webp",
+                          "over_budget": "warn",
+                          "note": "Per-site image budget (src/config/media-policy.ts), enforced by the server-side pdf-tool artifact bridge. Encode images to preferred_image_format and keep each within max_image_bytes. over_budget=warn\u2026"
+                        },
+                        "notes": [
+                          {
+                            "input": "...",
+                            "how": "..."
+                          },
+                          {
+                            "input": "...",
+                            "how": "..."
+                          }
+                        ]
+                      },
+                      "taxonomy": {
+                        "notes": [
+                          {
+                            "input": "...",
+                            "how": "..."
+                          }
+                        ],
+                        "blockingConstraints": [
+                          {
+                            "id": "...",
+                            "note": "..."
+                          }
+                        ]
+                      },
+                      "constraints": [
+                        {
+                          "id": "schema_zod",
+                          "severity": "blocks_write",
+                          "enforcedLive": true,
+                          "note": "The body must parse against this type\u2019s zod schema (see body_schema). Unknown keys are rejected (strict)."
+                        },
+                        {
+                          "id": "id_object",
+                          "severity": "blocks_write",
+                          "enforcedLive": true,
+                          "note": "The object id must match its type\u2019s id pattern (page_ / sec_ / nav_ / tax_ / site_ / tpl_ / prod_ + lowercase; content_item keeps the article req_<flow>_<topic>\u2026"
+                        }
+                      ],
+                      "publishPolicy": {
+                        "gated": true,
+                        "requires_approval": false,
+                        "pin_rules": "M-6: pin \"immediate\" \u21d4 omit published_time; pin <ISO> \u21d4 same instant; pin null \u21d4 request null (unpublish). Any other action needs re-approval.",
+                        "note": "Autonomous: an agent may object_publish directly (no approval). A HUMAN executing a publish still needs the admin/publisher role."
+                      },
+                      "workflowSequence": [
+                        "object_contract (this call) \u2192 read the schema, ops, constraints",
+                        "object_validate (object_type: \"content_item\" + body, NO object_id) \u2014 dry-run the candidate body BEFORE creating it: the identical checks object_create runs (id pattern/availability, singleton conflict\u2026"
+                      ],
+                      "validationSurface": [
+                        {
+                          "op": "set_article_meta",
+                          "requiredFields": [
+                            "...",
+                            "..."
+                          ],
+                          "note": "Merge article meta fields (title/slug/author/taxonomy/seo/scores/\u2026); nodes are edited only via node ops."
+                        },
+                        {
+                          "op": "upsert_node",
+                          "requiredFields": [
+                            "...",
+                            "..."
+                          ]
+                        }
+                      ],
+                      "contractSource": {
+                        "tool": "object_contract",
+                        "fetchedAtISO": "2026-08-04T11:29:29.388Z"
+                      },
+                      "unmapped": {
+                        "governed": true,
+                        "creatable": true,
+                        "summary": "Articles as governed objects (W7.3): an annotated node list (private.strategy/intent per block \u2014 the behavioral framework) with rich_text.v1 or plain-text bodies, plus the envelope-level judge/score s\u2026",
+                        "creation_policy": {
+                          "humans": "always_allowed",
+                          "agents": "open",
+                          "note": "Resolution: per-type override \u2192 master (src/config/creation-policy.ts; currently open for this type). The policy keys on the type BEING CREATED: object_instantiate_template creates a page; a standalon\u2026"
+                        }
+                      }
+                    }
+                  },
+                  "subjectHash": "be6fccb6",
+                  "sourceRunId": "run_1785842430906_tqjk1o",
+                  "sourceExecutionMode": "openai",
+                  "championOutput": {
+                    "artifact": "contract_intelligence.v1",
+                    "summary": "Live prefetched contract for platform/content_item was present and used directly (deterministic pass-through, no model call). 13 structural constraint(s), 13 blocking. Taxonomy unknown-terms-block: tr\u2026",
+                    "clientProjectId": "platform",
+                    "clientObjectType": "content_item",
+                    "contractSource": {
+                      "tool": "object_contract",
+                      "fetchedAtISO": "2026-08-04T11:29:29.388Z"
+                    },
+                    "bodySchema": {
+                      "$schema": "https://json-schema.org/draft/2020-12/schema",
+                      "type": "object",
+                      "properties": {
+                        "tracking": {
+                          "type": "object",
+                          "properties": {
+                            "enabled": "...",
+                            "label": "...",
+                            "tags": "...",
+                            "goals": "..."
+                          },
+                          "additionalProperties": false
+                        },
+                        "slug": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deck": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "author": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "image": {
+                          "type": "object",
+                          "properties": {
+                            "src": "...",
+                            "alt": "..."
+                          },
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false
+                        },
+                        "taxonomy": {
+                          "type": "object",
+                          "properties": {
+                            "category": "...",
+                            "tags": "..."
+                          },
+                          "additionalProperties": false
+                        },
+                        "seo": {
+                          "type": "object",
+                          "properties": {
+                            "meta_title": "...",
+                            "meta_description": "...",
+                            "canonical_url": "..."
+                          },
+                          "additionalProperties": false
+                        },
+                        "nodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          }
+                        },
+                        "chat": {
+                          "type": "object",
+                          "properties": {
+                            "enabled": "...",
+                            "promptOverride": "...",
+                            "welcomeMessage": "...",
+                            "suggestedQuestions": "...",
+                            "metadata": "..."
+                          },
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false
+                        },
+                        "editorial": {
+                          "type": "object",
+                          "properties": {
+                            "writer_notes": "...",
+                            "framework": "..."
+                          },
+                          "additionalProperties": false
+                        },
+                        "emotional_strategy": {
+                          "type": "object",
+                          "properties": {
+                            "overall_texture_assessment": "...",
+                            "overly_polished_moments": "...",
+                            "opportunities_for_specificity": "...",
+                            "rhythm_adjustments": "...",
+                            "sensory_detail_additions": "...",
+                            "lines_to_preserve": "..."
+                          },
+                          "additionalProperties": false
+                        },
+                        "sources": {
+                          "type": "object",
+                          "properties": {
+                            "source_list": "..."
+                          },
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false
+                        },
+                        "claims": {
+                          "type": "object",
+                          "properties": {
+                            "claim_list": "..."
+                          },
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false
+                        },
+                        "compliance": {
+                          "type": "object",
+                          "properties": {
+                            "requirements": "..."
+                          },
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false
+                        },
+                        "publication_context": {
+                          "type": "object",
+                          "properties": {
+                            "publication_name": "...",
+                            "domain": "...",
+                            "topic_scope": "..."
+                          },
+                          "additionalProperties": false
+                        },
+                        "lineage": {
+                          "type": "object",
+                          "properties": {
+                            "parent_content_id": "...",
+                            "source_version_id": "..."
+                          },
+                          "additionalProperties": false
+                        },
+                        "scores": {
+                          "type": "array",
+                          "items": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          }
+                        }
+                      },
+                      "required": [
+                        "slug",
+                        "title"
+                      ],
+                      "additionalProperties": false,
+                      "$defs": {
+                        "__schema0": {
+                          "type": "object",
+                          "properties": {
+                            "nodeType": "...",
+                            "data": "...",
+                            "content": "..."
+                          },
+                          "required": [
+                            "...",
+                            "..."
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "idConventions": {
+                      "source": "prefetchedContract.idConventions (deterministic 1:1 carry-through, no invented grouping)",
+                      "conventions": [
+                        {
+                          "id": "article_slug",
+                          "severity": "blocks_write",
+                          "note": "slug must be lowercase-hyphen and unique across article objects AND the committed legacy posts (src/data/post) \u2014 it becomes the article URL through the blog per\u2026"
+                        }
+                      ]
+                    },
+                    "mediaConvention": {
+                      "policy": {
+                        "max_image_bytes": 153600,
+                        "preferred_image_format": "webp",
+                        "over_budget": "warn",
+                        "note": "Per-site image budget (src/config/media-policy.ts), enforced by the server-side pdf-tool artifact bridge. Encode images to preferred_image_format and keep each within max_image_bytes. over_budget=warn\u2026"
+                      },
+                      "notes": [
+                        {
+                          "input": "image artifacts",
+                          "how": "Call this Platform connector's create_agent_artifact_job with site_id + this content_item's request_id (never guess projectId and never fetch/pass a grant), poll get_agent_artifact_job_status, then us\u2026"
+                        },
+                        {
+                          "input": "PDF artifacts",
+                          "how": "Use this Platform connector's create_agent_artifact_job + get_agent_artifact_job_status bridge; Platform resolves the project and grant server-side. Use the verified /pdf/{id}/{sha256}.pdf public_path\u2026"
+                        }
+                      ]
+                    },
+                    "taxonomy": {
+                      "notes": [
+                        {
+                          "input": "taxonomy terms",
+                          "how": "Slugs from the tax_platform registry (registry_get / object_contract(\"taxonomy\")); merged_into aliases resolve, unknown terms block."
+                        }
+                      ],
+                      "blockingConstraints": [
+                        {
+                          "id": "article_taxonomy",
+                          "note": "taxonomy.category and taxonomy.tags resolve against the tax_platform registry when it exists (merged_into aliases followed); unknown terms are blockers."
+                        }
+                      ],
+                      "unknownTermsBlock": true
+                    },
+                    "constraints": [
+                      {
+                        "id": "schema_zod",
+                        "severity": "blocks_write",
+                        "enforcedLive": true,
+                        "note": "The body must parse against this type\u2019s zod schema (see body_schema). Unknown keys are rejected (strict)."
+                      },
+                      {
+                        "id": "id_object",
+                        "severity": "blocks_write",
+                        "enforcedLive": true,
+                        "note": "The object id must match its type\u2019s id pattern (page_ / sec_ / nav_ / tax_ / site_ / tpl_ / prod_ + lowercase; content_item keeps the article req_<flow>_<topic>\u2026"
+                      }
+                    ],
+                    "publishPolicy": {
+                      "gated": true,
+                      "requires_approval": false,
+                      "pin_rules": "M-6: pin \"immediate\" \u21d4 omit published_time; pin <ISO> \u21d4 same instant; pin null \u21d4 request null (unpublish). Any other action needs re-approval.",
+                      "note": "Autonomous: an agent may object_publish directly (no approval). A HUMAN executing a publish still needs the admin/publisher role."
+                    },
+                    "contract_findings": [
+                      "Contract fetched via object_contract at 2026-08-04T11:29:29.388Z for object type content_item; deterministic pass-through, no re-fetch and no model call.",
+                      "Body schema present as a JSON Schema object; required top-level fields: slug, title, nodes."
+                    ],
+                    "assumptions": [
+                      "This output was built deterministically from the conductor's contract prefetch (contractReduction.ts) \u2014 no discovery call was made by this node, and nothing here was inferred beyond what the reduced c\u2026",
+                      "idConventions is carried as the flat list the reduction extracted (entries whose id matches /id|slug/i in the contract's own constraints); no client-specific grouping was invented on top of it."
+                    ],
+                    "blockers": [],
+                    "notes": [
+                      "Unmapped contract data preserved for downstream attention: governed = true",
+                      "Unmapped contract data preserved for downstream attention: creatable = true"
+                    ]
+                  },
+                  "frozenAt": "2026-08-10T17:31:05.054Z"
+                },
+                {
+                  "caseId": "case_1786383065057_0fnx3f",
+                  "nodeId": "contract_intelligence",
+                  "dependencyOutputs": {
+                    "brief_architect": {
+                      "artifact": "article_brief.v1",
+                      "summary": "Executable brief for a Kugel Platform operator article: lead with \u201cPublish is not go-live\u201d and teach the governed lifecycle as a sequence of bounded control questions\u2014target confirmation, checkout, va\u2026",
+                      "notes": [
+                        "Client/project: clientProjectId is platform. Target client is resolvable from the run input and upstream platform-focused outputs. No external publish, release, patch, create, or mutation should occur\u2026",
+                        "Working title direction: \u201cPublish Is Not Go-Live: A Safer Kugel Content Lifecycle Guide.\u201d Alternatives: \u201cFrom Publish to Production: How Kugel Content Moves Through Governed Gates\u201d; \u201cKugel Content Lif\u2026"
+                      ]
+                    }
+                  },
+                  "context": {
+                    "clientProjectId": "platform",
+                    "prefetchedContract": {
+                      "clientObjectType": "content_item",
+                      "bodySchema": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {
+                          "tracking": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "slug": {
+                            "type": "...",
+                            "pattern": "..."
+                          },
+                          "title": {
+                            "type": "...",
+                            "minLength": "..."
+                          },
+                          "deck": {
+                            "type": "..."
+                          },
+                          "description": {
+                            "type": "..."
+                          },
+                          "author": {
+                            "type": "...",
+                            "maxLength": "..."
+                          },
+                          "image": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "taxonomy": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "seo": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "nodes": {
+                            "type": "...",
+                            "items": "..."
+                          },
+                          "chat": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "editorial": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "emotional_strategy": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "sources": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "claims": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "compliance": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          },
+                          "publication_context": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "lineage": {
+                            "type": "...",
+                            "properties": "...",
+                            "additionalProperties": "..."
+                          },
+                          "scores": {
+                            "type": "...",
+                            "items": "..."
+                          }
+                        },
+                        "required": [
+                          "slug",
+                          "title"
+                        ],
+                        "additionalProperties": false,
+                        "$defs": {
+                          "__schema0": {
+                            "type": "...",
+                            "properties": "...",
+                            "required": "...",
+                            "additionalProperties": "..."
+                          }
+                        }
+                      },
+                      "idConventions": [
+                        {
+                          "id": "article_slug",
+                          "severity": "blocks_write",
+                          "note": "slug must be lowercase-hyphen and unique across article objects AND the committed legacy posts (src/data/post) \u2014 it becomes the article URL through the blog per\u2026"
+                        }
+                      ],
+                      "mediaConvention": {
+                        "policy": {
+                          "max_image_bytes": 153600,
+                          "preferred_image_format": "webp",
+                          "over_budget": "warn",
+                          "note": "Per-site image budget (src/config/media-policy.ts), also carried on the pdf-tool storage grant as `limits`. Encode images to preferred_image_format and keep each within max_image_bytes. over_budget=wa\u2026"
+                        },
+                        "notes": [
+                          {
+                            "input": "...",
+                            "how": "..."
+                          },
+                          {
+                            "input": "...",
+                            "how": "..."
+                          }
+                        ]
+                      },
+                      "taxonomy": {
+                        "notes": [
+                          {
+                            "input": "...",
+                            "how": "..."
+                          }
+                        ],
+                        "blockingConstraints": [
+                          {
+                            "id": "...",
+                            "note": "..."
+                          }
+                        ]
+                      },
+                      "constraints": [
+                        {
+                          "id": "schema_zod",
+                          "severity": "blocks_write",
+                          "enforcedLive": true,
+                          "note": "The body must parse against this type\u2019s zod schema (see body_schema). Unknown keys are rejected (strict)."
+                        },
+                        {
+                          "id": "id_object",
+                          "severity": "blocks_write",
+                          "enforcedLive": true,
+                          "note": "The object id must match its type\u2019s id pattern (page_ / sec_ / nav_ / tax_ / site_ / tpl_ / prod_ + lowercase; content_item keeps the article req_<flow>_<topic>\u2026"
+                        }
+                      ],
+                      "publishPolicy": {
+                        "gated": true,
+                        "requires_approval": false,
+                        "pin_rules": "M-6: pin \"immediate\" \u21d4 omit published_time; pin <ISO> \u21d4 same instant; pin null \u21d4 request null (unpublish). Any other action needs re-approval.",
+                        "note": "Autonomous: an agent may object_publish directly (no approval). A HUMAN executing a publish still needs the admin/publisher role."
+                      },
+                      "workflowSequence": [
+                        "object_contract (this call) \u2192 read the schema, ops, constraints",
+                        "object_create (omit requested_id to mint one) \u2014 for a new object"
+                      ],
+                      "validationSurface": [
+                        {
+                          "op": "set_article_meta",
+                          "requiredFields": [
+                            "...",
+                            "..."
+                          ],
+                          "note": "Merge article meta fields (title/slug/author/taxonomy/seo/scores/\u2026); nodes are edited only via node ops."
+                        },
+                        {
+                          "op": "upsert_node",
+                          "requiredFields": [
+                            "...",
+                            "..."
+                          ]
+                        }
+                      ],
+                      "contractSource": {
+                        "tool": "object_contract",
+                        "fetchedAtISO": "2026-07-30T18:41:30.074Z"
+                      },
+                      "unmapped": {
+                        "governed": true,
+                        "creatable": true,
+                        "summary": "Articles as governed objects (W7.3): an annotated node list (private.strategy/intent per block \u2014 the behavioral framework) with rich_text.v1 or plain-text bodies, plus the envelope-level judge/score s\u2026",
+                        "creation_policy": {
+                          "humans": "always_allowed",
+                          "agents": "open",
+                          "note": "Resolution: per-type override \u2192 master (src/config/creation-policy.ts; currently open for this type). The policy keys on the type BEING CREATED: object_instantiate_template creates a page; a standalon\u2026"
+                        }
+                      }
+                    }
+                  },
+                  "subjectHash": "3b2ceab0",
+                  "sourceRunId": "run_1785435947311_jl8hl4",
+                  "sourceExecutionMode": "openai",
+                  "championOutput": {
+                    "artifact": "contract_intelligence.v1",
+                    "summary": "Live prefetched contract for platform/content_item was present and sane-checked. Downstream nodes must create a strict content_item body with slug, title, and nodes; use lowercase-hyphen slugs, opaque\u2026",
+                    "clientProjectId": "platform",
+                    "clientObjectType": "content_item",
+                    "contractSource": {
+                      "tool": "object_contract",
+                      "fetchedAtISO": "2026-07-30T18:41:30.074Z"
+                    },
+                    "bodySchema": {
+                      "$schema": "https://json-schema.org/draft/2020-12/schema",
+                      "type": "object",
+                      "required": [
+                        "slug",
+                        "title"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "slug": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deck": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "author": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "image": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "src": "...",
+                            "alt": "..."
+                          }
+                        },
+                        "taxonomy": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "category": "...",
+                            "tags": "..."
+                          }
+                        },
+                        "seo": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "meta_title": "...",
+                            "meta_description": "...",
+                            "canonical_url": "..."
+                          }
+                        },
+                        "nodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "...",
+                            "required": "...",
+                            "additionalProperties": "...",
+                            "properties": "..."
+                          }
+                        },
+                        "tracking": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "enabled": "...",
+                            "label": "...",
+                            "tags": "...",
+                            "goals": "..."
+                          }
+                        },
+                        "chat": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "enabled": "...",
+                            "promptOverride": "...",
+                            "welcomeMessage": "...",
+                            "suggestedQuestions": "...",
+                            "metadata": "..."
+                          }
+                        },
+                        "editorial": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "writer_notes": "...",
+                            "framework": "..."
+                          }
+                        },
+                        "emotional_strategy": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "overall_texture_assessment": "...",
+                            "overly_polished_moments": "...",
+                            "opportunities_for_specificity": "...",
+                            "rhythm_adjustments": "...",
+                            "sensory_detail_additions": "...",
+                            "lines_to_preserve": "..."
+                          }
+                        },
+                        "sources": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "source_list": "..."
+                          }
+                        },
+                        "claims": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "claim_list": "..."
+                          }
+                        },
+                        "compliance": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "requirements": "..."
+                          }
+                        },
+                        "publication_context": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "publication_name": "...",
+                            "domain": "...",
+                            "topic_scope": "..."
+                          }
+                        },
+                        "lineage": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "parent_content_id": "...",
+                            "source_version_id": "..."
+                          }
+                        },
+                        "scores": {
+                          "type": "array",
+                          "items": {
+                            "type": "...",
+                            "required": "...",
+                            "additionalProperties": "...",
+                            "properties": "..."
+                          }
+                        }
+                      }
+                    },
+                    "idConventions": {
+                      "source": "prefetchedContract.idConventions plus bodySchema node id patterns",
+                      "object": [
+                        {
+                          "id": "article_slug",
+                          "severity": "blocks_write",
+                          "note": "slug must be lowercase-hyphen and unique across article objects AND the committed legacy posts (src/data/post); it becomes the article URL through the blog path."
+                        }
+                      ],
+                      "nodes": [
+                        {
+                          "id": "article_node_ids",
+                          "severity": "blocks_write",
+                          "pattern": "^n_[a-z0-9]+$",
+                          "note": "Node ids are opaque n_* ids, unique within the article, and must never contain strategy or commercial vocabulary such as hook, agitation, or cta."
+                        }
+                      ]
+                    },
+                    "mediaConvention": {
+                      "policy": {
+                        "max_image_bytes": 153600,
+                        "preferred_image_format": "webp",
+                        "over_budget": "warn",
+                        "note": "Per-site image budget. Encode images to preferred_image_format and keep each within max_image_bytes unless a human/admin explicitly asks for a larger one; over-budget images store but warn."
+                      },
+                      "notes": [
+                        {
+                          "input": "image artifacts",
+                          "how": "Generate through pdf-tool under the site's storage grant, then set rendered src to the PUBLIC path of the returned blobKey: image/{id}/{sha256}.{ext} becomes /img/{id}/{sha256}.{ext}. Raw blobKeys, da\u2026"
+                        },
+                        {
+                          "input": "PDF artifacts",
+                          "how": "Generate the PDF through pdf-tool under a storage grant, then use public path /pdf/{id}/{sha256}.pdf as the document media src or action-node ctaLink. Missing/deleted artifacts block publish."
+                        }
+                      ],
+                      "rendered_field_rule": "Rendered media src fields must use public serving paths, not raw Major-Key artifact keys."
+                    },
+                    "taxonomy": {
+                      "notes": [
+                        {
+                          "input": "taxonomy terms",
+                          "how": "Slugs from the tax_platform registry via registry_get or object_contract(\"taxonomy\"); merged_into aliases resolve; unknown terms block."
+                        }
+                      ],
+                      "blockingConstraints": [
+                        {
+                          "id": "article_taxonomy",
+                          "note": "taxonomy.category and taxonomy.tags resolve against the tax_platform registry when it exists; unknown terms are blockers."
+                        }
+                      ],
+                      "unknownTermsBlock": true,
+                      "source": "tax_platform registry"
+                    },
+                    "constraints": [
+                      {
+                        "id": "schema_zod",
+                        "severity": "blocks_write",
+                        "enforcedLive": true,
+                        "note": "The body must parse against this type\u2019s zod schema/body schema. Unknown keys are rejected strictly."
+                      },
+                      {
+                        "id": "id_object",
+                        "severity": "blocks_write",
+                        "enforcedLive": true,
+                        "note": "The object id must match its type\u2019s id pattern; content_item keeps the article req_<flow>_<topic> convention noted by the contract."
+                      }
+                    ],
+                    "publishPolicy": {
+                      "gated": true,
+                      "requires_approval": false,
+                      "pin_rules": "M-6: pin \"immediate\" \u21d4 omit published_time; pin <ISO> \u21d4 same instant; pin null \u21d4 request null/unpublish. Any other action needs re-approval.",
+                      "note": "Autonomous agents may object_publish directly with no approval. A human executing publish still needs admin/publisher role."
+                    },
+                    "mediaPolicy": {
+                      "max_image_bytes": 153600,
+                      "preferred_image_format": "webp",
+                      "over_budget": "warn",
+                      "rawArtifactField": "trusted Major-Key artifact refs only where the contract expects AssetRef values",
+                      "publicServingPaths": {
+                        "image": "image/{id}/{sha256}.{ext} -> /img/{id}/{sha256}.{ext}",
+                        "pdf": "pdf/{id}/{sha256}.pdf -> /pdf/{id}/{sha256}.pdf"
+                      },
+                      "renderedFieldRule": "Use public /img/... or /pdf/... paths in rendered media fields and CTA/download links; do not place raw blobKeys, data URIs, or src/assets paths in rendered fields."
+                    },
+                    "contract_findings": [
+                      "The contract source is the prefetched live platform object_contract result for content_item; no runtime re-fetch was needed.",
+                      "content_item is governed and creatable; required body fields are slug, title, and nodes, with strict rejection of unknown top-level keys."
+                    ],
+                    "assumptions": [
+                      "Because taxonomy terms were not inlined in the prefetched contract, downstream nodes should omit taxonomy or perform a read-only registry lookup before selecting category/tags.",
+                      "The full live validator remains the final enforcement surface; this output preserves the operational rules and a compact structural schema sufficient for drafting and validation planning."
+                    ],
+                    "blockers": [],
+                    "notes": [
+                      "Unmapped contract data preserved for downstream attention: content_item is governed=true and creatable=true; creation policy allows humans always and agents open for this type.",
+                      "Unmapped summary: content_item articles are annotated node lists with private strategy/intent per block, rich_text.v1 or plain-text bodies, and envelope-level judge/score substrate including claims, s\u2026"
+                    ]
+                  },
+                  "frozenAt": "2026-08-10T17:31:05.057Z"
+                }
+              ],
+              "metadata": {
+                "distinctSubjects": 4,
+                "duplicateSubjects": 0,
+                "degenerate": false
+              },
+              "createdAt": "2026-08-10T17:31:05.058Z"
+            },
+            {
+              "datasetId": "ds_1785777163498_thqdgr",
+              "nodeId": "contract_intelligence",
+              "name": "contract_intelligence REAL champions only \u2014 2026-08-03 (Session B follow-up)",
+              "cases": [
+                {
+                  "caseId": "case_1785777163497_1bsc9y",
+                  "nodeId": "contract_intelligence",
+                  "dependencyOutputs": {
+                    "brief_architect": {
+                      "artifact": "article_brief.v1",
+                      "summary": "Executable brief for a Kugel Platform operator article: lead with \u201cPublish is not go-live\u201d and teach the governed lifecycle as a sequence of bounded control questions\u2014target confirmation, checkout, va\u2026",
+                      "notes": [
+                        "Client/project: clientProjectId is platform. Target client is resolvable from the run input and upstream platform-focused outputs. No external publish, release, patch, create, or mutation should occur\u2026",
+                        "Working title direction: \u201cPublish Is Not Go-Live: A Safer Kugel Content Lifecycle Guide.\u201d Alternatives: \u201cFrom Publish to Production: How Kugel Content Moves Through Governed Gates\u201d; \u201cKugel Content Lif\u2026"
+                      ]
+                    }
+                  },
+                  "sourceRunId": "run_1785435947311_jl8hl4",
+                  "sourceExecutionMode": "openai",
+                  "championOutput": {
+                    "artifact": "contract_intelligence.v1",
+                    "summary": "Live prefetched contract for platform/content_item was present and sane-checked. Downstream nodes must create a strict content_item body with slug, title, and nodes; use lowercase-hyphen slugs, opaque\u2026",
+                    "clientProjectId": "platform",
+                    "clientObjectType": "content_item",
+                    "contractSource": {
+                      "tool": "object_contract",
+                      "fetchedAtISO": "2026-07-30T18:41:30.074Z"
+                    },
+                    "bodySchema": {
+                      "$schema": "https://json-schema.org/draft/2020-12/schema",
+                      "type": "object",
+                      "required": [
+                        "slug",
+                        "title"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "slug": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deck": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "author": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "image": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "src": "...",
+                            "alt": "..."
+                          }
+                        },
+                        "taxonomy": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "category": "...",
+                            "tags": "..."
+                          }
+                        },
+                        "seo": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "meta_title": "...",
+                            "meta_description": "...",
+                            "canonical_url": "..."
+                          }
+                        },
+                        "nodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "...",
+                            "required": "...",
+                            "additionalProperties": "...",
+                            "properties": "..."
+                          }
+                        },
+                        "tracking": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "enabled": "...",
+                            "label": "...",
+                            "tags": "...",
+                            "goals": "..."
+                          }
+                        },
+                        "chat": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "enabled": "...",
+                            "promptOverride": "...",
+                            "welcomeMessage": "...",
+                            "suggestedQuestions": "...",
+                            "metadata": "..."
+                          }
+                        },
+                        "editorial": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "writer_notes": "...",
+                            "framework": "..."
+                          }
+                        },
+                        "emotional_strategy": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "overall_texture_assessment": "...",
+                            "overly_polished_moments": "...",
+                            "opportunities_for_specificity": "...",
+                            "rhythm_adjustments": "...",
+                            "sensory_detail_additions": "...",
+                            "lines_to_preserve": "..."
+                          }
+                        },
+                        "sources": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "source_list": "..."
+                          }
+                        },
+                        "claims": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "claim_list": "..."
+                          }
+                        },
+                        "compliance": {
+                          "type": "object",
+                          "required": [
+                            "..."
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "requirements": "..."
+                          }
+                        },
+                        "publication_context": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "publication_name": "...",
+                            "domain": "...",
+                            "topic_scope": "..."
+                          }
+                        },
+                        "lineage": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "parent_content_id": "...",
+                            "source_version_id": "..."
+                          }
+                        },
+                        "scores": {
+                          "type": "array",
+                          "items": {
+                            "type": "...",
+                            "required": "...",
+                            "additionalProperties": "...",
+                            "properties": "..."
+                          }
+                        }
+                      }
+                    },
+                    "idConventions": {
+                      "source": "prefetchedContract.idConventions plus bodySchema node id patterns",
+                      "object": [
+                        {
+                          "id": "article_slug",
+                          "severity": "blocks_write",
+                          "note": "slug must be lowercase-hyphen and unique across article objects AND the committed legacy posts (src/data/post); it becomes the article URL through the blog path."
+                        }
+                      ],
+                      "nodes": [
+                        {
+                          "id": "article_node_ids",
+                          "severity": "blocks_write",
+                          "pattern": "^n_[a-z0-9]+$",
+                          "note": "Node ids are opaque n_* ids, unique within the article, and must never contain strategy or commercial vocabulary such as hook, agitation, or cta."
+                        }
+                      ]
+                    },
+                    "mediaConvention": {
+                      "policy": {
+                        "max_image_bytes": 153600,
+                        "preferred_image_format": "webp",
+                        "over_budget": "warn",
+                        "note": "Per-site image budget. Encode images to preferred_image_format and keep each within max_image_bytes unless a human/admin explicitly asks for a larger one; over-budget images store but warn."
+                      },
+                      "notes": [
+                        {
+                          "input": "image artifacts",
+                          "how": "Generate through pdf-tool under the site's storage grant, then set rendered src to the PUBLIC path of the returned blobKey: image/{id}/{sha256}.{ext} becomes /img/{id}/{sha256}.{ext}. Raw blobKeys, da\u2026"
+                        },
+                        {
+                          "input": "PDF artifacts",
+                          "how": "Generate the PDF through pdf-tool under a storage grant, then use public path /pdf/{id}/{sha256}.pdf as the document media src or action-node ctaLink. Missing/deleted artifacts block publish."
+                        }
+                      ],
+                      "rendered_field_rule": "Rendered media src fields must use public serving paths, not raw Major-Key artifact keys."
+                    },
+                    "taxonomy": {
+                      "notes": [
+                        {
+                          "input": "taxonomy terms",
+                          "how": "Slugs from the tax_platform registry via registry_get or object_contract(\"taxonomy\"); merged_into aliases resolve; unknown terms block."
+                        }
+                      ],
+                      "blockingConstraints": [
+                        {
+                          "id": "article_taxonomy",
+                          "note": "taxonomy.category and taxonomy.tags resolve against the tax_platform registry when it exists; unknown terms are blockers."
+                        }
+                      ],
+                      "unknownTermsBlock": true,
+                      "source": "tax_platform registry"
+                    },
+                    "constraints": [
+                      {
+                        "id": "schema_zod",
+                        "severity": "blocks_write",
+                        "enforcedLive": true,
+                        "note": "The body must parse against this type\u2019s zod schema/body schema. Unknown keys are rejected strictly."
+                      },
+                      {
+                        "id": "id_object",
+                        "severity": "blocks_write",
+                        "enforcedLive": true,
+                        "note": "The object id must match its type\u2019s id pattern; content_item keeps the article req_<flow>_<topic> convention noted by the contract."
+                      }
+                    ],
+                    "publishPolicy": {
+                      "gated": true,
+                      "requires_approval": false,
+                      "pin_rules": "M-6: pin \"immediate\" \u21d4 omit published_time; pin <ISO> \u21d4 same instant; pin null \u21d4 request null/unpublish. Any other action needs re-approval.",
+                      "note": "Autonomous agents may object_publish directly with no approval. A human executing publish still needs admin/publisher role."
+                    },
+                    "mediaPolicy": {
+                      "max_image_bytes": 153600,
+                      "preferred_image_format": "webp",
+                      "over_budget": "warn",
+                      "rawArtifactField": "trusted Major-Key artifact refs only where the contract expects AssetRef values",
+                      "publicServingPaths": {
+                        "image": "image/{id}/{sha256}.{ext} -> /img/{id}/{sha256}.{ext}",
+                        "pdf": "pdf/{id}/{sha256}.pdf -> /pdf/{id}/{sha256}.pdf"
+                      },
+                      "renderedFieldRule": "Use public /img/... or /pdf/... paths in rendered media fields and CTA/download links; do not place raw blobKeys, data URIs, or src/assets paths in rendered fields."
+                    },
+                    "contract_findings": [
+                      "The contract source is the prefetched live platform object_contract result for content_item; no runtime re-fetch was needed.",
+                      "content_item is governed and creatable; required body fields are slug, title, and nodes, with strict rejection of unknown top-level keys."
+                    ],
+                    "assumptions": [
+                      "Because taxonomy terms were not inlined in the prefetched contract, downstream nodes should omit taxonomy or perform a read-only registry lookup before selecting category/tags.",
+                      "The full live validator remains the final enforcement surface; this output preserves the operational rules and a compact structural schema sufficient for drafting and validation planning."
+                    ],
+                    "blockers": [],
+                    "notes": [
+                      "Unmapped contract data preserved for downstream attention: content_item is governed=true and creatable=true; creation policy allows humans always and agents open for this type.",
+                      "Unmapped summary: content_item articles are annotated node lists with private strategy/intent per block, rich_text.v1 or plain-text bodies, and envelope-level judge/score substrate including claims, s\u2026"
+                    ]
+                  },
+                  "frozenAt": "2026-08-03T17:12:43.497Z"
+                },
+                {
+                  "caseId": "case_1785777163497_aie7us",
+                  "nodeId": "contract_intelligence",
+                  "dependencyOutputs": {
+                    "brief_architect": {
+                      "artifact": "article_brief.v1",
+                      "summary": "Executable brief for a source-safe governance readiness article titled around \u201cValidation Is Not Approval.\u201d The article should help Kugel content operators, reviewers, admins, managers, and business o\u2026",
+                      "notes": [
+                        "Blocker/risk: Only angle_strategy was supplied. No separate topic, reader, research, objection, or narrative outputs were available. Draft should therefore avoid asserting exact Kugel mechanics, state\u2026",
+                        "Likely target object type: content_item/article_body for a CMS article. Expected fields: title, slug, deck/summary, body sections with headings, checklist module/table, CTA/next step, meta_title, meta\u2026"
+                      ]
+                    }
+                  },
+                  "sourceRunId": "run_1785405350649_9u5mjz",
+                  "sourceExecutionMode": "openai",
+                  "championOutput": {
+                    "artifact": "contract_intelligence.v1",
+                    "summary": "Live platform/content_item contract fetched successfully through project.call_read_tool. Downstream nodes may construct a strict text article content_item using root slug, title, and nodes; may option\u2026",
+                    "clientProjectId": "platform",
+                    "clientObjectType": "content_item",
+                    "contractSource": {
+                      "status": "fetched",
+                      "primary": {
+                        "tool": "project.call_read_tool",
+                        "readOnlyOperation": "object_contract",
+                        "arguments": {
+                          "object_type": "content_item"
+                        },
+                        "fetchedAtISO": "2026-07-30T10:02:30.025Z",
+                        "object_type": "content_item",
+                        "contract_fingerprint": null,
+                        "fingerprint_status": "not_published_in_contract"
+                      },
+                      "secondary": [
+                        {
+                          "tool": "project.call_read_tool",
+                          "readOnlyOperation": "registry_get",
+                          "arguments": {
+                            "registry": "..."
+                          },
+                          "fetchedAtISO": "2026-07-30T10:02:30.025Z",
+                          "finding": "registry_get exposes only page_type and component registries; taxonomy terms must be read through taxonomy object surfaces."
+                        },
+                        {
+                          "tool": "project.call_read_tool",
+                          "readOnlyOperation": "object_contract",
+                          "arguments": {
+                            "object_type": "..."
+                          },
+                          "fetchedAtISO": "2026-07-30T10:02:30.025Z",
+                          "finding": "Fetched taxonomy contract to confirm taxonomy body shape, term ids, term statuses, and taxonomy constraints."
+                        }
+                      ]
+                    },
+                    "bodySchema": {
+                      "status": "fetched_reduced",
+                      "schemaVersion": "json-schema draft 2020-12 as served by object_contract",
+                      "root": {
+                        "type": "object",
+                        "required": [
+                          "slug",
+                          "title"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "requiredFields": {
+                        "slug": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                          "contractRule": "must be unique across article objects and committed legacy posts"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nodes": {
+                          "type": "array",
+                          "items": "article node objects"
+                        }
+                      },
+                      "optionalRootFields": {
+                        "tracking": "object; write only via set_tracking, not article meta ops",
+                        "deck": "string",
+                        "description": "string",
+                        "author": "string maxLength 120",
+                        "image": "object {src required, alt optional}; rendered image src must be public path, not raw artifact ref",
+                        "taxonomy": "object {category:string, tags:string[]}; optional but unknown terms block",
+                        "seo": "object {meta_title, meta_description, canonical_url}; no additional properties",
+                        "chat": "object; enabled required if present",
+                        "editorial": "object {writer_notes, framework}; private/non-rendered annotation field",
+                        "emotional_strategy": "object of editorial texture arrays/strings; not rendered to reader HTML",
+                        "sources": "object with required source_list[]; each source requires name and url",
+                        "claims": "object with required claim_list[]; each claim requires text; optional risk/status/node_ids/source_ids/notes",
+                        "compliance": "object with required requirements[]; each requirement requires kind and text",
+                        "publication_context": "object {publication_name, domain, topic_scope}",
+                        "lineage": "object {parent_content_id, source_version_id}",
+                        "scores": "array of scored_by, at, framework, dimension, score, rationale"
+                      },
+                      "recommendedForThisBrief": {
+                        "include": [
+                          "slug",
+                          "title"
+                        ],
+                        "omitUnlessNeeded": [
+                          "author",
+                          "image"
+                        ],
+                        "omitBecauseNoValidTermsNow": [
+                          "taxonomy"
+                        ]
+                      },
+                      "nodeSchema": {
+                        "required": [
+                          "id",
+                          "kind"
+                        ],
+                        "additionalProperties": false,
+                        "idPattern": "^n_[a-z0-9]+$",
+                        "kindEnum": [
+                          "content",
+                          "action"
+                        ],
+                        "visibilityEnum": [
+                          "public",
+                          "internal"
+                        ],
+                        "publishRequiresAtLeastOnePublicContentNode": true,
+                        "publicFields": {
+                          "additionalProperties": false,
+                          "fields": [
+                            "...",
+                            "..."
+                          ],
+                          "body": "string plain text or rich_text document object",
+                          "items": "array of string arrays",
+                          "media": "object with required type and src; type enum image, video, audio, embed, document",
+                          "images": "array of media objects"
+                        },
+                        "privateFields": {
+                          "fields": [
+                            "...",
+                            "..."
+                          ],
+                          "strategyEnum": [
+                            "...",
+                            "..."
+                          ],
+                          "intentEnum": [
+                            "...",
+                            "..."
+                          ],
+                          "readerVisibility": "never rendered to reader HTML"
+                        },
+                        "commercialFields": "available for commercial annotations but not needed for this brief; internals are never serialized into reader HTML",
+                        "rendering": {
+                          "presentationEnum": [
+                            "...",
+                            "..."
+                          ],
+                          "emphasisEnum": [
+                            "...",
+                            "..."
+                          ],
+                          "placementEnum": [
+                            "...",
+                            "..."
+                          ]
+                        }
+                      },
+                      "richText": {
+                        "documentRequired": [
+                          "nodeType",
+                          "data"
+                        ],
+                        "documentNodeType": "document",
+                        "allowedBlockNodeTypes": [
+                          "paragraph",
+                          "heading-2"
+                        ],
+                        "allowedInlineNodeTypes": [
+                          "text",
+                          "hyperlink"
+                        ],
+                        "textRequired": [
+                          "nodeType",
+                          "value"
+                        ],
+                        "marksEnum": [
+                          "bold",
+                          "italic"
+                        ],
+                        "hyperlinkRule": "schema allows non-empty no-whitespace uri; live richtext constraint requires https:// href",
+                        "stringBodies": "plain text only; escaped at render; blank lines split paragraphs; use rich_text document for formatting"
+                      },
+                      "patchOps": {
+                        "allowed": [
+                          "set_article_meta",
+                          "upsert_node"
+                        ],
+                        "rules": [
+                          "nodes are edited only via node ops, not set_article_meta",
+                          "tracking is written only by set_tracking"
+                        ]
+                      }
+                    },
+                    "idConventions": {
+                      "objectId": {
+                        "content_itemPattern": "req_<flow>_<topic>_<yyyymmdd>_<nn>",
+                        "creationRule": "omit requested_id on object_create to have server mint the id",
+                        "constraintSeverity": "blocks_write",
+                        "note": "Other object types use prefixes such as page_, sec_, nav_, tax_, site_, tpl_, prod_; do not apply those patterns to content_item."
+                      },
+                      "nodeIds": {
+                        "pattern": "^n_[a-z0-9]+$",
+                        "scope": "unique within article",
+                        "privacyRule": "must not contain strategy or commercial vocabulary such as hook, agitation, cta",
+                        "minting": "contract says omit node.id on upsert_node to have one minted, but the upsert_node arg schema marks node.id required; downstream should prefer explicit safe n_* ids unless validator/server confirms omi\u2026"
+                      },
+                      "taxonomyTermIds": {
+                        "pattern": "^t_[a-z0-9]+$",
+                        "minting": "taxonomy add_term can mint term.term_id"
+                      },
+                      "slug": {
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "uniqueness": "unique across content_item article objects and committed legacy posts"
+                      }
+                    },
+                    "mediaConvention": {
+                      "status": "fetched",
+                      "artifactProtocol": "Major-Key artifact references plus public serving paths",
+                      "rawArtifactReferencePattern": "image|pdf/{id}/{sha256}.{ext}",
+                      "rawArtifactReferenceFields": "only *AssetRef fields may hold raw refs; no *AssetRef field is needed for this text-only article",
+                      "publicServingPathRules": {
+                        "image": "raw image/{id}/{sha256}.{ext} becomes /img/{id}/{sha256}.{ext} in renderable src fields",
+                        "pdf": "raw pdf/{id}/{sha256}.pdf becomes /pdf/{id}/{sha256}.pdf in renderable document media src or ctaLink"
+                      },
+                      "fieldsAcceptingPublicPaths": [
+                        "root image.src",
+                        "node.public.media.src"
+                      ],
+                      "forbiddenInRenderableFields": [
+                        "raw blob keys",
+                        "data: URIs"
+                      ],
+                      "remoteHttpsUrls": "warn as ungoverned; do not use unless explicitly accepted by a human/admin",
+                      "textOnlyArticleGuidance": "No media is required. Do not add image, public.media, public.images, embedded-asset-block, or PDF ctaLink unless an artifact is generated and verified under the declared protocol."
+                    },
+                    "taxonomy": {
+                      "status": "fetched",
+                      "source": "tax_platform taxonomy object via object_get(object_type=taxonomy, object_id=tax_platform)",
+                      "contractRule": "taxonomy.category and taxonomy.tags resolve against tax_platform when it exists; merged_into aliases followed; unknown terms block writes.",
+                      "unknownTermsBlock": true,
+                      "registryExists": true,
+                      "availableTerms": {
+                        "category": [],
+                        "tag": []
+                      },
+                      "candidateTermsFromBrief": [
+                        "Kugel",
+                        "governance"
+                      ],
+                      "usableTermsForThisRun": [],
+                      "downstreamRule": "Omit taxonomy.category and taxonomy.tags for this article unless valid active terms are added to tax_platform or a later live fetch shows active terms."
+                    },
+                    "constraints": [
+                      {
+                        "id": "schema_zod",
+                        "severity": "blocks_write",
+                        "enforced_live": true,
+                        "rule": "Body must parse against body_schema; unknown keys rejected strictly."
+                      },
+                      {
+                        "id": "id_object",
+                        "severity": "blocks_write",
+                        "enforced_live": true,
+                        "rule": "Object id must match type pattern; content_item uses req_<flow>_<topic>_<yyyymmdd>_<nn>; omit requested_id on create to mint."
+                      }
+                    ],
+                    "publishPolicy": {
+                      "status": "fetched",
+                      "governed": true,
+                      "gated": true,
+                      "requiresApproval": false,
+                      "agentPublish": "Contract note says autonomous agents may object_publish directly with no approval.",
+                      "humanPublish": "Human executing publish needs admin or publisher role.",
+                      "pinningRules": "M-6: pin 'immediate' iff published_time omitted; pin <ISO> iff same instant; pin null iff request null/unpublish; any other action requires re-approval.",
+                      "denialCodes": [
+                        "content_item_not_gated",
+                        "approval_required"
+                      ],
+                      "workflowSequence": [
+                        "object_contract",
+                        "object_create with requested_id omitted for new object"
+                      ],
+                      "publishVsRelease": "object_publish exports/publishes the governed object; release_to_production is a separate deliberate go-live step and publishes a production commit with [skip netlify].",
+                      "lockAndRevisionRules": "423 means checkout/relock; 409 means expected_record_version stale and must re-read. Publishing bumps version but not content_revision. Any body write bumps content_revision and invalidates a pinned a\u2026"
+                    },
+                    "mediaPolicy": {
+                      "status": "fetched",
+                      "mediaRequired": false,
+                      "maxImageBytes": 153600,
+                      "preferredImageFormat": "webp",
+                      "overBudget": "warn",
+                      "rule": "Encode images to webp and keep within budget; over-budget stores but flags when over_budget=warn and should be avoided unless a human/admin explicitly asks. No media should be generated for this text-\u2026"
+                    },
+                    "contract_findings": [
+                      "The requested object type content_item is supported, governed, and creatable on project platform.",
+                      "content_item body is strict: required slug, title, nodes; additional root keys are rejected unless declared in the schema."
+                    ],
+                    "assumptions": [
+                      "clientProjectId=platform and clientObjectType=content_item are confirmed by successful live read-only project calls.",
+                      "The fetchedAtISO timestamp is agent-recorded for the read calls because the object_contract and object_get responses did not include server fetch timestamps; object_inventory returned generated_at 202\u2026"
+                    ],
+                    "blockers": [],
+                    "notes": [
+                      "Deliberately omitted the full raw JSON schemas, patch arg schemas, denial-code descriptions, and error catalog prose to keep context small; preserved rules downstream nodes must obey.",
+                      "Do not use workspace-local prior contract artifacts as authority; use the live contract provenance recorded here and the client validator for candidate objects/patches."
+                    ]
+                  },
+                  "frozenAt": "2026-08-03T17:12:43.498Z"
+                }
+              ],
+              "createdAt": "2026-08-03T17:12:43.498Z"
+            }
+          ]
+        }
+      },
+      "notes": "[no-args] large payload, ~642KB kept intact under 2MB raw limit"
+    }
+  ]
+}

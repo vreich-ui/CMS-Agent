@@ -81,7 +81,7 @@ export const deriveExecutionEdges = (nodes: WorkspaceNode[]): DerivedExecutionEd
 const derivedRetryCount = (nodeId: string, runs: WorkflowExecutionRecord[]) => {
   let count = 0;
   for (const run of runs) {
-    const failures = run.errors.filter((entry) => entry.startsWith(`${nodeId}:`)).length;
+    const failures = (run.errors ?? []).filter((entry) => entry.startsWith(`${nodeId}:`)).length;
     if (failures > 1) count += failures - 1;
   }
   return count;
@@ -103,7 +103,9 @@ export function aggregateAgentMetrics(inputs: ConstellationInputs): AgentMetrics
       let outputValidationFailures = 0;
       let sawErrorEntries = false;
       for (const run of inputs.runs) {
-        const state = run.nodes.find((candidate) => candidate.nodeId === node.id);
+        // Defensive `?? []` throughout (see B4): a run record missing one of these always-declared
+        // arrays must degrade this one node's metrics, never crash the whole tool for every caller.
+        const state = (run.nodes ?? []).find((candidate) => candidate.nodeId === node.id);
         if (!state) continue;
         byStatus[state.status] = (byStatus[state.status] ?? 0) + 1;
         if (run.workflowId === INDEPENDENT_WORKFLOW_ID) independent += 1; else workflow += 1;
@@ -111,14 +113,16 @@ export function aggregateAgentMetrics(inputs: ConstellationInputs): AgentMetrics
         // R-18: a look-ahead entry (pending) means the gate is one step away, not that an approval was
         // requested at it. Counting it here would inflate approvalsRequested for every run that merely
         // reached the stage before a publish node, so the per-node metrics stay on attempted gates only.
-        approvalsRequested += run.approvalsRequired.filter((approval) => approval.nodeId === node.id && approval.pending !== true).length;
-        if (run.status === "blocked" && run.approvalsRequired.some((approval) => approval.nodeId === node.id && approval.pending !== true)) blockedRuns += 1;
-        outputValidationFailures += run.errors.filter((entry) => entry === `${node.id}:output_validation_failed`).length;
+        const runApprovalsRequired = run.approvalsRequired ?? [];
+        const runErrors = run.errors ?? [];
+        approvalsRequested += runApprovalsRequired.filter((approval) => approval.nodeId === node.id && approval.pending !== true).length;
+        if (run.status === "blocked" && runApprovalsRequired.some((approval) => approval.nodeId === node.id && approval.pending !== true)) blockedRuns += 1;
+        outputValidationFailures += runErrors.filter((entry) => entry === `${node.id}:output_validation_failed`).length;
         if (state.status === "failed" && (state.errors ?? []).some((entry) => entry === "output_validation_failed" || /must be|is required|must equal|must be one of/.test(entry))) {
           // Independent runs persist raw validator strings instead of the coded run.errors entry.
           if (run.workflowId === INDEPENDENT_WORKFLOW_ID) outputValidationFailures += 1;
         }
-        if (run.errors.some((entry) => entry.startsWith(`${node.id}:`))) sawErrorEntries = true;
+        if (runErrors.some((entry) => entry.startsWith(`${node.id}:`))) sawErrorEntries = true;
       }
       const total = Object.values(byStatus).reduce((sum, value) => sum + (value ?? 0), 0);
       const completed = byStatus.completed ?? 0;
@@ -149,8 +153,8 @@ const relationshipInteraction = (sourceId: string, targetId: string, runs: Workf
   let targetCompleted = 0;
   const downstreamDurations: number[] = [];
   for (const run of runs) {
-    const source = run.nodes.find((candidate) => candidate.nodeId === sourceId);
-    const target = run.nodes.find((candidate) => candidate.nodeId === targetId);
+    const source = (run.nodes ?? []).find((candidate) => candidate.nodeId === sourceId);
+    const target = (run.nodes ?? []).find((candidate) => candidate.nodeId === targetId);
     if (!source || !target) continue;
     if (source.status !== "completed" || !target.startedAt) continue;
     interactionCount += 1;
@@ -228,21 +232,29 @@ export function buildAttentionItems(inputs: ConstellationInputs): ConstellationA
   const items: ConstellationAttentionItem[] = [];
 
   for (const run of [...inputs.runs].sort((a, b) => a.runId.localeCompare(b.runId))) {
+    // Defensive: WorkflowExecutionRecord declares `errors`/`approvalsRequired` as always-present
+    // arrays, but that is a compile-time guarantee only — a record persisted before either field
+    // existed, or otherwise partially written, would previously crash this ENTIRE tool (every run in
+    // the workspace is scanned unconditionally, with no way to skip past just the one bad record) with
+    // an unguarded `.map`/`.filter` on `undefined`. See B4: this is exactly the shared failure shape
+    // that surfaced as constellation_get_attention failing on every call.
+    const runErrors = run.errors ?? [];
+    const runApprovalsRequired = run.approvalsRequired ?? [];
     if (run.status === "failed") {
-      const nodeIds = [...new Set(run.errors.map((entry) => entry.split(":")[0]).filter((id) => inputs.nodes.some((node) => node.id === id)))];
+      const nodeIds = [...new Set(runErrors.map((entry) => entry.split(":")[0]).filter((id) => inputs.nodes.some((node) => node.id === id)))];
       items.push({
         id: `attn_run_failed_${run.runId}`,
         severity: "action",
         title: `Run ${run.runId} failed`,
         detail: `Run for project ${run.projectId} failed${nodeIds.length ? ` at ${nodeIds.join(", ")}` : ""}.`,
-        reasons: [...new Set(run.errors)].slice(0, 5),
+        reasons: [...new Set(runErrors)].slice(0, 5),
         evidence: { runIds: [run.runId], nodeIds: nodeIds.length ? nodeIds : undefined }
       });
     }
     // R-18: also surface a run held one step BEFORE the gate. Such a run reports status "running" with a
     // pending look-ahead entry and will never advance on its own; gating this item on status === "blocked"
     // is what made that state invisible to an operator. A finished run keeps no live hold.
-    const holds = run.approvalsRequired.filter(() => run.status !== "completed" && run.status !== "cancelled");
+    const holds = runApprovalsRequired.filter(() => run.status !== "completed" && run.status !== "cancelled");
     if (holds.length > 0 && (run.status === "blocked" || holds.some((approval) => approval.pending === true))) {
       const attempted = holds.some((approval) => approval.pending !== true);
       items.push({
@@ -260,7 +272,7 @@ export function buildAttentionItems(inputs: ConstellationInputs): ConstellationA
 
   const validationByNode = new Map<string, string[]>();
   for (const run of inputs.runs) {
-    for (const entry of run.errors) {
+    for (const entry of run.errors ?? []) {
       if (!entry.endsWith(":output_validation_failed")) continue;
       const nodeId = entry.slice(0, -":output_validation_failed".length);
       validationByNode.set(nodeId, [...(validationByNode.get(nodeId) ?? []), run.runId]);

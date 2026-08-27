@@ -1,0 +1,193 @@
+{
+  "verb": "workflow_list_runs",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "runs": [
+            {
+              "runId": "string",
+              "requestId": "string",
+              "workflowId": "string",
+              "projectId": "string",
+              "status": "string",
+              "currentNodeId": "string",
+              "startedAt": "string",
+              "updatedAt": "string",
+              "nodes": [
+                {
+                  "nodeId": "string",
+                  "status": "string",
+                  "produces": [
+                    "string"
+                  ],
+                  "startedAt": "string",
+                  "completedAt": "string",
+                  "durationMs": "number",
+                  "errors": [
+                    "string"
+                  ]
+                }
+              ],
+              "nodeCount": "number",
+              "artifactCount": "number",
+              "errors": [
+                "string"
+              ],
+              "approvalsRequired": [],
+              "dryRun": "boolean",
+              "executionMode": "string",
+              "rev": "number",
+              "operatorPublishDecision": "string",
+              "operatorDecisionSource": "string",
+              "mode": {
+                "executionMode": "string",
+                "live": "boolean",
+                "declared": "boolean",
+                "nodeSource": "string",
+                "notice": "string"
+              }
+            }
+          ],
+          "page": {
+            "limit": "number",
+            "matchedCount": "number",
+            "hasMore": "boolean",
+            "nextCursor": "string"
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "runs": [
+            {
+              "runId": "run_1787690045355_411vjm",
+              "requestId": "req_article_testlorem_20240711_01",
+              "workflowId": "publishing_conductor",
+              "projectId": "dr-lurie",
+              "status": "failed",
+              "currentNodeId": "input_triage",
+              "startedAt": "2026-08-25T20:34:05.355Z",
+              "updatedAt": "2026-08-25T20:34:37.816Z",
+              "nodes": [
+                {
+                  "nodeId": "input_triage",
+                  "status": "failed",
+                  "produces": [
+                    "content_source.v1"
+                  ],
+                  "startedAt": "2026-08-25T20:34:37.105Z",
+                  "completedAt": "2026-08-25T20:34:37.816Z",
+                  "durationMs": 711,
+                  "errors": [
+                    "driver_auth_failed:DR_LURIE_MCP_TOKEN",
+                    "Project \"dr-lurie\" rejected this driver's credential with HTTP 401 on an authenticated registry_get read, so no node was dispatched and nothing was spent. The credential this driver presented came fro\u2026"
+                  ]
+                },
+                {
+                  "nodeId": "placement_resolver",
+                  "status": "queued",
+                  "produces": [
+                    "placement_resolution.v1"
+                  ]
+                }
+              ],
+              "nodeCount": 23,
+              "artifactCount": 0,
+              "errors": [
+                "input_triage:driver_auth_failed:DR_LURIE_MCP_TOKEN"
+              ],
+              "approvalsRequired": [],
+              "dryRun": true,
+              "executionMode": "openai",
+              "rev": 1,
+              "operatorPublishDecision": "approved",
+              "operatorDecisionSource": "project_policy_default",
+              "mode": {
+                "executionMode": "openai",
+                "live": true,
+                "declared": true,
+                "nodeSource": "store",
+                "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in \u2026"
+              }
+            },
+            {
+              "runId": "run_1787678554270_stw73q",
+              "requestId": "req_probe_t11_mechanics_20260825_01",
+              "workflowId": "publishing_conductor",
+              "projectId": "dr-lurie",
+              "status": "cancelled",
+              "currentNodeId": "publication_controller",
+              "startedAt": "2026-08-25T17:22:34.271Z",
+              "updatedAt": "2026-08-25T17:23:36.781Z",
+              "nodes": [
+                {
+                  "nodeId": "input_triage",
+                  "status": "completed",
+                  "startedAt": "2026-08-25T17:22:34.271Z",
+                  "completedAt": "2026-08-25T17:22:34.271Z",
+                  "durationMs": 0,
+                  "produces": [
+                    "content_source.v1"
+                  ],
+                  "warnings": [
+                    "late_stage_entry_skipped"
+                  ]
+                },
+                {
+                  "nodeId": "placement_resolver",
+                  "status": "completed",
+                  "startedAt": "2026-08-25T17:22:34.271Z",
+                  "completedAt": "2026-08-25T17:22:34.271Z",
+                  "durationMs": 0,
+                  "produces": [
+                    "placement_resolution.v1"
+                  ],
+                  "warnings": [
+                    "late_stage_entry_skipped"
+                  ]
+                }
+              ],
+              "nodeCount": 23,
+              "artifactCount": 4,
+              "errors": [],
+              "approvalsRequired": [
+                {
+                  "nodeId": "publication_controller",
+                  "type": "approval_required",
+                  "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+                  "requestedAt": "2026-08-25T17:23:11.516Z"
+                }
+              ],
+              "dryRun": true,
+              "executionMode": "openai",
+              "rev": 7,
+              "budgetUsd": 2,
+              "operatorPublishDecision": "approved",
+              "operatorDecisionSource": "project_policy_default",
+              "mode": {
+                "executionMode": "openai",
+                "live": true,
+                "declared": true,
+                "nodeSource": "store",
+                "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in \u2026"
+              }
+            }
+          ],
+          "page": {
+            "limit": 20,
+            "matchedCount": 69,
+            "hasMore": true,
+            "nextCursor": "eyJzdGFydGVkQXQiOiIyMDI2LTA4LTIzVDA4OjA5OjA3LjExMVoiLCJydW5JZCI6InJ1bl8xNzg3NDcyNTQ3MTExX3Z6b3Z6NCJ9"
+          }
+        }
+      },
+      "notes": "[no-args (default limit 20)] matchedCount 69, hasMore true, nextCursor present. NOTE: calling with an explicit limit:5 argument triggered a proxy transport error twice in this session ('Anthropic Proxy: Invalid content from server') while omitting limit worked; not conclusively attributable to the limit arg itself vs transient proxy flakiness, but worth re-testing."
+    }
+  ]
+}

@@ -2,10 +2,22 @@ import { expect, test } from '@playwright/test';
 
 // WP-15 — Workflows library screen. Fixtures carry 55 real runs (not the
 // mockup's 15 — workbench-verb-fixes recaptured the full live run history,
-// minus independent_node/trial rows) and clone_conductor has 9 live nodes
-// (not the mockup's 8, because of fit_adjudicator) — see
-// api/fixtures/README.md. This spec asserts the real numbers, not the
-// mockup's hand-drawn ones.
+// minus independent_node/trial rows) — see api/fixtures/README.md. This
+// spec asserts the real numbers, not the mockup's hand-drawn ones.
+//
+// U1(c) — node counts are now driven by the live workspace_get_graph query
+// (WorkflowCard in screens/Library/index.tsx), not the static catalog's
+// phase list, which workflowCatalog.ts's own doc comment admits is stale
+// for two of three conductors (clone_conductor: catalog 9 vs. live 18;
+// capture_conductor: catalog 11 vs. live 16 — see contracts/README.md).
+// The fixture workspace is now a verbatim live capture of all 48 nodes
+// across all three conductors (api/fixtures/README.md — it used to hold
+// only publishing_conductor's 23), so the live graph query returns each
+// conductor's real topology: publishing_conductor 24, capture_conductor
+// 16, clone_conductor 18 (contracts/README.md). There is no more "0
+// nodes" gap for clone/capture. See tests/deck.spec.ts for the fuller U1
+// coverage (AttentionStrip, resume chip, the jump); this spec keeps the
+// rest of the card's existing behaviour under test.
 
 function cardFor(page: import('@playwright/test').Page, name: string) {
   return page.locator('.cards .wfcard').filter({ has: page.locator('h3', { hasText: name }) });
@@ -39,20 +51,30 @@ test('library screen renders workflow cards from live data, both themes', async 
   const clone = cardFor(page, 'Clone conductor');
   const capture = cardFor(page, 'Capture conductor');
 
-  // Node counts come from live workflow data (workflows.json phases), never
-  // the mockup's prose — clone_conductor is 9 (fit_adjudicator), not 8.
-  await expect(pub.locator('.stats span').nth(0)).toHaveText('23 nodes');
-  await expect(clone.locator('.stats span').nth(0)).toHaveText('9 nodes');
-  await expect(capture.locator('.stats span').nth(0)).toHaveText('11 nodes');
+  // Node counts: live query, not catalog prose — all three conductors now
+  // carry real live node records (see this file's header comment).
+  await expect(pub.locator('.stats span').nth(0)).toHaveText('24 nodes');
+  await expect(clone.locator('.stats span').nth(0)).toHaveText('18 nodes');
+  await expect(capture.locator('.stats span').nth(0)).toHaveText('16 nodes');
+
+  // U1(c) — recent run count, new stat.
+  await expect(pub.locator('.stats span').nth(1)).toHaveText('31 runs');
+  await expect(clone.locator('.stats span').nth(1)).toHaveText('6 runs');
+  await expect(capture.locator('.stats span').nth(1)).toHaveText('18 runs');
 
   // "needing attention" / "last" reflect the real 55-run fixture set.
-  await expect(pub.locator('.stats span').nth(1)).toHaveText('13 needing attention');
-  await expect(clone.locator('.stats span').nth(1)).toHaveText('4 needing attention');
-  await expect(capture.locator('.stats span').nth(1)).toHaveText('7 needing attention');
+  await expect(pub.locator('.stats span').nth(2)).toHaveText('13 needing attention');
+  await expect(clone.locator('.stats span').nth(2)).toHaveText('4 needing attention');
+  await expect(capture.locator('.stats span').nth(2)).toHaveText('7 needing attention');
 
   await expect(pub.locator('.stats .chip')).toHaveText('blocked');
   await expect(clone.locator('.stats .chip')).toHaveText('blocked');
   await expect(capture.locator('.stats .chip')).toHaveText('completed');
+
+  // U1(c) — last run's "when", new alongside the existing status chip.
+  await expect(pub.locator('.stats span').nth(3)).toContainText('25 Aug');
+  await expect(clone.locator('.stats span').nth(3)).toContainText('24 Aug');
+  await expect(capture.locator('.stats span').nth(3)).toContainText('25 Aug');
 
   // "Start run" is wired by WP-22: it opens the start-run modal preselected
   // to that card's workflow (see tests/runcontrol.spec.ts for the modal's

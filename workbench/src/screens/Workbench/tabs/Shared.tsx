@@ -22,11 +22,20 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Btn } from '../../../components/primitives';
+import { Skeleton } from '../../../components/Skeleton';
 import { useStore } from '../../../store';
 import type { JSONSchema } from '../../../api/verbs';
 
+/** U7 — the shared skeleton (components/Skeleton.tsx) plus whatever this
+ * call site's own text says is loading, so every tab's loading state reads
+ * the same way at a glance instead of the "Loading…" text alone. */
 export function LoadingNote({ children = 'Loading…' }: { children?: ReactNode }) {
-  return <p style={{ color: 'var(--muted)', fontSize: 12.5, margin: 0 }}>{children}</p>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Skeleton lines={2} />
+      <p style={{ color: 'var(--muted)', fontSize: 12.5, margin: 0 }}>{children}</p>
+    </div>
+  );
 }
 
 export function ErrorNote({ message }: { message?: string }) {
@@ -62,9 +71,12 @@ export function Disclosure({
   );
 }
 
-/** Shared copy for every disabled-while-read-only mutating control across the edit tabs. */
+/** Shared copy for every disabled-while-read-only mutating control across the edit tabs.
+ * U7 polish — operator copy, not developer copy: the old text named an
+ * environment variable, which tells the person holding this console
+ * nothing they can act on. This says what's true and who can change it. */
 export const READONLY_REASON =
-  'Mutations are disabled — the workbench is running read-only. The broker’s READ_ONLY env flag must be set to 0 to enable them.';
+  'This workbench is connected read-only right now, so nothing here can be saved or run. Ask whoever administers this deployment to switch it to read-write.';
 
 // ============================================================================
 // Local change log — WP-34's History feed. Every owned tab calls recordChange()

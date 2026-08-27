@@ -1,0 +1,68 @@
+{
+  "verb": "agent_list",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "agents": [
+            {
+              "id": "string",
+              "role": "string",
+              "name": "string",
+              "prompt": "string",
+              "promptState": "string",
+              "modelConfig": {
+                "provider": "string",
+                "model": "string",
+                "timeoutMs": "number",
+                "maxOutputTokens": "number"
+              },
+              "skills": [
+                "string"
+              ],
+              "status": "string",
+              "rev": "number",
+              "updatedAt": "string"
+            }
+          ],
+          "workspaceVersion": "number"
+        },
+        "_note": "string"
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "agents": [
+            {
+              "id": "agt_client_manager",
+              "role": "client_manager",
+              "name": "Client Manager",
+              "prompt": "<full agent prompt string>",
+              "promptState": "diverged",
+              "modelConfig": {
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "timeoutMs": 90000,
+                "maxOutputTokens": 16000
+              },
+              "skills": [
+                "editorial_craft",
+                "editorial_review"
+              ],
+              "status": "active",
+              "rev": 7,
+              "updatedAt": "2026-08-21T14:34:27.517Z"
+            }
+          ],
+          "workspaceVersion": 697
+        },
+        "_note": "only 1 conversational agent registered (client_manager). promptState enum values seen: 'diverged' (operator-edited from shipped canonical text)."
+      },
+      "notes": "[no-args] 1 conversational agent (client_manager)"
+    }
+  ]
+}

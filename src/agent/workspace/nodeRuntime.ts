@@ -16,7 +16,8 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 // keeps the store as the winner wherever it holds a record and falls back to the registered workflow's
 // canonical definition only when it does not — see nodeResolution.ts for the full rationale.
 import { resolveNodeForExecution } from "./nodeResolution.js";
-import type { ExecutionArtifact, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
+import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
+import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
 
 const now = () => new Date().toISOString();
 const makeRunId = () => `node_run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -64,7 +65,7 @@ export function summarizeNodeVersions(nodeId: string, versions: Array<{ workspac
 }
 
 export function summarizeNodeExecution(run: WorkflowExecutionRecord, nodeId: string) {
-  const state = run.nodes.find((candidate) => candidate.nodeId === nodeId);
+  const state = (run.nodes ?? []).find((candidate) => candidate.nodeId === nodeId);
   return {
     runId: run.runId,
     workflowId: run.workflowId,
@@ -75,22 +76,30 @@ export function summarizeNodeExecution(run: WorkflowExecutionRecord, nodeId: str
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
     executionMode: run.executionMode,
     node: state ? (({ input: _input, output: _output, ...summary }) => summary)(state) : null,
-    artifactCount: run.artifacts.filter((artifact) => artifact.nodeId === nodeId).length,
-    errors: run.errors.slice(0, 10).map((error) => error.slice(0, 2_000))
+    artifactCount: (run.artifacts ?? []).filter((artifact) => artifact.nodeId === nodeId).length,
+    errors: (run.errors ?? []).slice(0, 10).map((error) => error.slice(0, 2_000))
   };
 }
+
+// B2 (Pass 2): node.list_executions now returns compact NodeExecutionEntry objects, not full run
+// records, so node.get (getNodeDetails, below) needs its own "which runs touched this node" read —
+// it still wants the FULL run record (summarizeNodeExecution reads run.status/completedAt/etc.,
+// none of which the compact shape carries).
+const runsTouchingNode = (runs: WorkflowExecutionRecord[], nodeId: string): WorkflowExecutionRecord[] =>
+  runs
+    .filter((run) => (run.nodes ?? []).some((state) => state.nodeId === nodeId))
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 
 export async function getNodeDetails(nodeId: string, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository(), executionRepository: repositoryManager.getExecutionRepository() }) {
   const node = await repos.workspaceRepository.getNode(nodeId);
   if (!node) return null;
   const versions = summarizeNodeVersions(nodeId, await repos.workspaceRepository.getVersions());
-  // Read executions once. The previous implementation called listRuns for latestExecution and then
-  // called it again through listNodeOutputs, doubling the GCS scan for every node inspection.
-  const executions = await listNodeExecutions({ nodeId }, repos.executionRepository);
-  const latestRun = executions[0] ?? null;
+  // Read runs once; both the latest-execution summary and the latest-output lookup derive from it.
+  const runs = runsTouchingNode(await repos.executionRepository.listRuns({}), nodeId);
+  const latestRun = runs[0] ?? null;
   const latestExecution = latestRun ? summarizeNodeExecution(latestRun, nodeId) : null;
-  const latestOutput = executions
-    .flatMap((run) => run.artifacts.map((artifact: any) => ({ ...artifact, runId: artifact.runId ?? run.runId })))
+  const latestOutput = runs
+    .flatMap((run) => (run.artifacts ?? []).map((artifact: any) => ({ ...artifact, runId: artifact.runId ?? run.runId })))
     .filter((artifact: any) => artifact.nodeId === nodeId)
     .sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
   return redactSecrets({
@@ -192,12 +201,87 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId });
 }
 
-export async function listNodeExecutions(filters: NodeExecutionFilters = {}, executionRepository: ExecutionRepository = repositoryManager.getExecutionRepository()) {
-  const runs = await executionRepository.listRuns({});
-  return runs.filter((run) => (!filters.runId || run.runId === filters.runId) && (!filters.executionId || run.artifacts.some((a: any) => a.executionId === filters.executionId)) && (!filters.nodeId || run.nodes.some((n) => n.nodeId === filters.nodeId)) && (!filters.from || run.startedAt >= filters.from) && (!filters.to || run.startedAt <= filters.to)).sort((a,b)=>b.startedAt.localeCompare(a.startedAt));
+// B2 (Pass 2, WP-00 finding #2) — node.list_executions used to hand back the WHOLE run record
+// (structurally identical to workflow_get_run's `data.run`) wrapped in a 1-element array, rather
+// than a per-node execution list, and any call naming `nodeId` crashed the JSON-RPC transport
+// entirely because the old predicate below evaluated `run.nodes.some(...)` unguarded — a run
+// record without a populated `.nodes` array (e.g. a partial/legacy record) threw a bare TypeError
+// that this layer never expected to see (see B4). This rewrite returns one compact entry per
+// node-execution, joined from data that already exists — never fabricated:
+//   - status/timing (startedAt/completedAt/durationMs) come straight from
+//     WorkflowExecutionRecord.nodes[] (the exact fields workflow_get_run.data.run.nodes[] exposes).
+//   - cost/token figures come from usage records already persisted for that run+node
+//     (recordModelUsage's ModelUsageRecord), summed when a node produced more than one record.
+// `attempt` is deliberately omitted: this data model persists one state per node per run (a retry
+// creates a NEW run via node.execute, not a second entry on the same run), so there is no existing
+// per-run attempt counter to report without inventing one.
+export type NodeExecutionEntry = {
+  runId: string;
+  nodeId: string;
+  status: ExecutionStatus;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  error?: string;
+  costUsd?: number;
+  tokensIn?: number;
+  tokensOut?: number;
+};
+
+const filterRunsForNodeQuery = (runs: WorkflowExecutionRecord[], filters: NodeExecutionFilters): WorkflowExecutionRecord[] =>
+  runs.filter((run) =>
+    (!filters.runId || run.runId === filters.runId) &&
+    (!filters.from || run.startedAt >= filters.from) &&
+    (!filters.to || run.startedAt <= filters.to)
+  );
+
+const round6 = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
+
+export async function listNodeExecutions(
+  filters: NodeExecutionFilters = {},
+  executionRepository: ExecutionRepository = repositoryManager.getExecutionRepository(),
+  usageRepository: UsageRepository = repositoryManager.getUsageRepository()
+): Promise<NodeExecutionEntry[]> {
+  const runs = filterRunsForNodeQuery(await executionRepository.listRuns({}), filters);
+  // One usage read for the whole call, scoped by whatever of runId/nodeId the caller supplied — the
+  // per-entry cost/token join below is then an in-memory match, not N repository round-trips.
+  const usageRecords = await usageRepository.list({ runId: filters.runId, nodeId: filters.nodeId });
+
+  const entries: NodeExecutionEntry[] = [];
+  for (const run of runs) {
+    for (const state of run.nodes ?? []) {
+      if (filters.nodeId && state.nodeId !== filters.nodeId) continue;
+      if (filters.executionId && !(run.artifacts ?? []).some((artifact) => artifact.nodeId === state.nodeId && (artifact as unknown as { executionId?: string }).executionId === filters.executionId)) continue;
+
+      const usage = usageRecords.filter((record) => record.runId === run.runId && record.nodeId === state.nodeId);
+      const costUsd = usage.length ? round6(usage.reduce((sum, record) => sum + record.costUsdEstimate, 0)) : undefined;
+      const tokensIn = usage.length ? usage.reduce((sum, record) => sum + record.inputTokens, 0) : undefined;
+      const tokensOut = usage.length ? usage.reduce((sum, record) => sum + record.outputTokens, 0) : undefined;
+
+      entries.push({
+        runId: run.runId,
+        nodeId: state.nodeId,
+        status: state.status,
+        ...(state.startedAt ? { startedAt: state.startedAt } : {}),
+        ...(state.completedAt ? { completedAt: state.completedAt } : {}),
+        ...(state.durationMs !== undefined ? { durationMs: state.durationMs } : {}),
+        ...(state.errors?.length ? { error: state.errors.join("; ") } : {}),
+        ...(costUsd !== undefined ? { costUsd } : {}),
+        ...(tokensIn !== undefined ? { tokensIn } : {}),
+        ...(tokensOut !== undefined ? { tokensOut } : {})
+      });
+    }
+  }
+  return entries.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? "") || b.runId.localeCompare(a.runId));
 }
 
 export async function listNodeOutputs(filters: NodeExecutionFilters = {}, executionRepository: ExecutionRepository = repositoryManager.getExecutionRepository()) {
-  const runs = await listNodeExecutions(filters, executionRepository);
-  return runs.flatMap((run) => run.artifacts.map((artifact: any) => ({ ...artifact, runId: artifact.runId ?? run.runId }))).filter((artifact: any) => (!filters.nodeId || artifact.nodeId === filters.nodeId) && (!filters.artifactType || artifact.type === filters.artifactType) && (!filters.executionId || artifact.executionId === filters.executionId) && (!filters.from || artifact.createdAt >= filters.from) && (!filters.to || artifact.createdAt <= filters.to)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  // Deliberately independent of listNodeExecutions (which now returns compact status entries, not
+  // full run records) — outputs are artifacts, joined from the run list directly, with the same
+  // `?? []` defensiveness so a run missing `.artifacts` can never crash this read.
+  const runs = filterRunsForNodeQuery(await executionRepository.listRuns({}), filters);
+  return runs
+    .flatMap((run) => (run.artifacts ?? []).map((artifact: any) => ({ ...artifact, runId: artifact.runId ?? run.runId })))
+    .filter((artifact: any) => (!filters.nodeId || artifact.nodeId === filters.nodeId) && (!filters.artifactType || artifact.type === filters.artifactType) && (!filters.executionId || artifact.executionId === filters.executionId) && (!filters.from || artifact.createdAt >= filters.from) && (!filters.to || artifact.createdAt <= filters.to))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }

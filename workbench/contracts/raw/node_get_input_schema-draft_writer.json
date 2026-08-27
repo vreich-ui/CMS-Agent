@@ -1,0 +1,1 @@
+{"ok":true,"data":{"schema":{"type":"object","additionalProperties":true,"properties":{"stageOutputs":{"type":"object"},"contentSource":{"type":"object"},"instructions":{"type":"string"}}}}}

@@ -1,0 +1,12 @@
+{
+  "verb": "node_get_latest_output",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": "see notes",
+      "ok": false,
+      "error": "no successful payload captured in this session",
+      "notes": "Every call with nodeId present (with or without runId) failed with the identical proxy-layer 'Invalid content from server' error seen on node_list_executions(nodeId) and constellation_get_attention. No successful payload obtained in this session."
+    }
+  ]
+}

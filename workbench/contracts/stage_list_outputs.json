@@ -1,0 +1,79 @@
+{
+  "verb": "stage_list_outputs",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "outputs": [
+            {
+              "id": "string",
+              "stage": "string",
+              "value": {
+                "artifact": "string",
+                "summary": "string",
+                "notes": [
+                  "string"
+                ],
+                "contentSource": {
+                  "topic": "string",
+                  "audience": "string",
+                  "requestedFormat": "string",
+                  "voice": "string",
+                  "status": "string"
+                }
+              },
+              "createdAt": "string"
+            }
+          ]
+        },
+        "_truncation_note": "string"
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "outputs": [
+            {
+              "id": "node_run_1784645900041_k30xkq:node_exec_1784645900041_jpukvo:input_triage",
+              "stage": "input_triage",
+              "value": {
+                "artifact": "content_source.v1",
+                "summary": "Working request established: draft a short Dr. Lurie-style article about the benefits of niacinamide in a daily skincare routine for sensitive skin, aimed at skincare-curious consumers.",
+                "notes": [
+                  "Assumption: \u201cDr. Lurie\u201d refers to a desired expert, dermatologist-like editorial voice; no verified biographical or credential claims should be made unless supplied.",
+                  "Assumption: The article should be educational and consumer-friendly, not personalized medical advice."
+                ],
+                "contentSource": {
+                  "topic": "niacinamide for sensitive skin",
+                  "audience": "skincare-curious consumers",
+                  "requestedFormat": "short article",
+                  "voice": "Dr. Lurie-style expert educational tone",
+                  "status": "ready_with_assumptions"
+                }
+              },
+              "createdAt": "2026-07-21T14:58:29.262Z"
+            },
+            {
+              "id": "node_run_1784645922007_bwq3va:node_exec_1784645922007_887uqk:topic_opportunity",
+              "stage": "topic_opportunity",
+              "value": {
+                "artifact": "topic_opportunity.v1",
+                "summary": "Recommended route: short educational Dr. Lurie-style article. The topic is viable because niacinamide is a broadly relevant, well-tolerated skincare ingredient with clear reader value for sensitive-sk\u2026",
+                "notes": [
+                  "Reader value: helps skincare-curious consumers understand what niacinamide may do, why it is often suitable for sensitive skin, how to introduce it gently, and what to watch for when layering products\u2026",
+                  "DTC/business value: supports trust-building education and can naturally guide readers toward related sensitive-skin routines, barrier-support content, newsletter signup, or suitable gentle product/res\u2026"
+                ]
+              },
+              "createdAt": "2026-07-21T14:58:55.600Z"
+            }
+          ]
+        },
+        "_truncation_note": "truncated from 436 to 5 elements for raw-file size limit"
+      },
+      "notes": "[no-args] 436 outputs total (truncated to 5 in raw capture for size); each {createdAt,id,stage,value} \u2014 NOTE: no runId/nodeId top-level key, stage carries the nodeId-like stage name, and id embeds runId:execId:stage as a composite string 'node_run_...:node_exec_...:<stage>'"
+    }
+  ]
+}

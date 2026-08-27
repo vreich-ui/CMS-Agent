@@ -7,15 +7,41 @@
  * broker that silently leaks or silently blocks — neither is acceptable.
  */
 
+import { isSecretVersionRef } from "./secrets.js";
+
+export type AuthMode = "iap" | "password";
+
 export interface Config {
   port: number;
   sessionSecret: string;
   operatorPasswordHash: string;
   mcpUrl: string;
+  /** Plain-env MCP bearer token (local dev / MOCK_UPSTREAM fallback). Empty when
+   *  `mcpTokenSecretRef` is set — the real value is then resolved once at startup via Secret
+   *  Manager (see secrets.ts) and handed to McpClient directly, never stored back on this object. */
   mcpToken: string;
+  /** Secret Manager secret VERSION resource name for the MCP bearer token. When set, this is the
+   *  token's only source of truth in a real deploy — `mcpToken` is ignored. */
+  mcpTokenSecretRef: string;
   readOnly: boolean;
   allowedOrigin: string;
   mockUpstream: boolean;
+  /** iap (default): trust only a verified IAP JWT for operator identity; the password login
+   *  endpoints stay present but are not the access gate. password: the original cookie-session
+   *  login flow, for a deployment not sitting behind IAP (e.g. local dev). */
+  authMode: AuthMode;
+  /** Expected `aud` claim on the IAP JWT — the backend service / load balancer resource this
+   *  deployment is authorized for. Optional: unset skips audience pinning (signature + issuer +
+   *  expiry are still verified) — see docs/plan/TRACK-A-RUNBOOK.md for how to read the real value
+   *  off the running service once IAP is enabled. Ignored outside AUTH_MODE=iap. */
+  iapAudience: string | undefined;
+  /** TTL for the read-verb response cache (A1.4). */
+  cacheTtlMs: number;
+  /** Directory containing the built Conductor Workbench SPA (`workbench/dist`, copied into the
+   *  image by Dockerfile.workbench). Unset or missing an index.html -> static serving is simply
+   *  unavailable (404 for non-API paths) rather than a startup failure, so this broker still runs
+   *  standalone (its historical deploy shape) when no SPA is bundled alongside it. */
+  staticRoot: string | undefined;
 }
 
 class ConfigError extends Error {}
@@ -74,10 +100,44 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // MOCK_UPSTREAM=1 relaxes the MCP endpoint/token requirement so the full
   // HTTP surface can be exercised without real credentials (see smoke.test.ts).
   const mcpUrl = mockUpstream ? optional(env, "CMS_AGENT_MCP_URL", "http://mock.invalid/mcp") : required(env, "CMS_AGENT_MCP_URL");
-  const mcpToken = mockUpstream ? optional(env, "CMS_AGENT_MCP_TOKEN", "mock-token") : required(env, "CMS_AGENT_MCP_TOKEN");
+
+  const mcpTokenSecretRef = optional(env, "CMS_AGENT_MCP_TOKEN_SECRET", "");
+  if (mcpTokenSecretRef && !isSecretVersionRef(mcpTokenSecretRef)) {
+    throw new ConfigError(
+      `CMS_AGENT_MCP_TOKEN_SECRET is not a Secret Manager version resource name. Expected ` +
+        `"projects/<project>/secrets/<name>/versions/<latest|N>", got "${mcpTokenSecretRef}".`
+    );
+  }
+  // A real deploy needs exactly one source for the token: the Secret Manager ref (preferred —
+  // A1.2, never sent to the browser, never logged) or the plain env var (local dev fallback).
+  // MOCK_UPSTREAM never touches either.
+  let mcpToken = "";
+  if (mockUpstream) {
+    mcpToken = optional(env, "CMS_AGENT_MCP_TOKEN", "mock-token");
+  } else if (!mcpTokenSecretRef) {
+    mcpToken = required(env, "CMS_AGENT_MCP_TOKEN");
+  }
 
   const readOnly = parseBoolFlag(optional(env, "READ_ONLY", "1"));
   const allowedOrigin = optional(env, "ALLOWED_ORIGIN", "http://localhost:5173");
+
+  const authModeRaw = optional(env, "AUTH_MODE", "iap").trim().toLowerCase();
+  if (authModeRaw !== "iap" && authModeRaw !== "password") {
+    throw new ConfigError(`Invalid AUTH_MODE: "${authModeRaw}" — must be "iap" or "password".`);
+  }
+  const authMode = authModeRaw as AuthMode;
+
+  const iapAudienceRaw = optional(env, "IAP_AUDIENCE", "");
+  const iapAudience = iapAudienceRaw === "" ? undefined : iapAudienceRaw;
+
+  const cacheTtlMsRaw = optional(env, "CACHE_TTL_MS", "20000");
+  const cacheTtlMs = Number.parseInt(cacheTtlMsRaw, 10);
+  if (!Number.isInteger(cacheTtlMs) || cacheTtlMs < 0) {
+    throw new ConfigError(`Invalid CACHE_TTL_MS: "${cacheTtlMsRaw}" is not a non-negative integer.`);
+  }
+
+  const staticRootRaw = optional(env, "STATIC_ROOT", "");
+  const staticRoot = staticRootRaw === "" ? undefined : staticRootRaw;
 
   return {
     port,
@@ -85,9 +145,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     operatorPasswordHash,
     mcpUrl,
     mcpToken,
+    mcpTokenSecretRef,
     readOnly,
     allowedOrigin,
     mockUpstream,
+    authMode,
+    iapAudience,
+    cacheTtlMs,
+    staticRoot,
   };
 }
 

@@ -1,0 +1,88 @@
+{
+  "ok": true,
+  "data": {
+    "health": {
+      "backend": "gcs",
+      "storageHealth": "healthy",
+      "build": {
+        "revision": "cms-agent-mcp-00167-gnq",
+        "service": "cms-agent-mcp",
+        "gitSha": null,
+        "deployedAt": null
+      },
+      "workspaceVersion": 697,
+      "workspace": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "execution": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "artifact": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "learning": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "usage": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "nodeTiming": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "node_timings.v1"
+      },
+      "project": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "skill": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "change": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "evaluation": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "improvement": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      },
+      "conversationTurns": {
+        "backend": "gcs",
+        "writable": true,
+        "readable": true,
+        "version": "blobs.v1"
+      }
+    }
+  }
+}

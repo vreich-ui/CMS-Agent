@@ -1,0 +1,25 @@
+{
+  "verb": "workspace_validate_node",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "id": "draft_writer"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "valid": "boolean"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "valid": true
+        }
+      },
+      "notes": "[draft_writer (id only)]"
+    }
+  ]
+}

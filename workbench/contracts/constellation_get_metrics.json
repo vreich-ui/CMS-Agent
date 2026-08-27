@@ -1,0 +1,12 @@
+{
+  "verb": "constellation_get_metrics",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": "see notes",
+      "ok": false,
+      "error": "no successful payload captured in this session",
+      "notes": "Not independently re-tested after constellation_get_attention's failure pattern was confirmed and workflow_get_run_cost's plan.nodeTimingAggregates was found to satisfy the per-node-timing-history need; given constellation_get_summary and constellation_get_structure both worked fine with similar args, get_metrics was deprioritized. Recommend a follow-up capture."
+    }
+  ]
+}

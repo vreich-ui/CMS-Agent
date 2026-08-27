@@ -1,0 +1,72 @@
+{
+  "verb": "workflow_publish_readiness",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "runId": "run_1787678554270_stw73q",
+        "projectId": "dr-lurie"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "readiness": {
+            "available": "boolean",
+            "articleBodyValid": "boolean",
+            "readiness": {
+              "status": "string",
+              "state": "string",
+              "checklist": [
+                {
+                  "key": "string",
+                  "label": "string",
+                  "status": "string"
+                }
+              ],
+              "blockers": [],
+              "hardConstraints": {
+                "contentPath": "string",
+                "artifactProtocol": "string",
+                "legacyFallbacksUsed": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "readiness": {
+            "available": true,
+            "articleBodyValid": true,
+            "readiness": {
+              "status": "go",
+              "state": "ready_for_publish_execution",
+              "checklist": [
+                {
+                  "key": "article_body_valid",
+                  "label": "client_object.v1 valid",
+                  "status": "pass"
+                },
+                {
+                  "key": "media_artifacts_verified",
+                  "label": "Blob artifacts verified",
+                  "status": "pass",
+                  "detail": "no media artifacts"
+                }
+              ],
+              "blockers": [],
+              "hardConstraints": {
+                "contentPath": "client_object.v1",
+                "artifactProtocol": "pdf_tool_dr_lurie_blob.v1",
+                "legacyFallbacksUsed": false
+              }
+            }
+          }
+        }
+      },
+      "notes": "[run_1787678554270_stw73q / dr-lurie]"
+    }
+  ]
+}

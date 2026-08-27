@@ -8,29 +8,38 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { usePauseRun, useResumeRun, useCancelRun, useResetRun, useRetryNode, useRunNextNode, useRunUntil, useRun, useRuns, useWorkflows } from '../../api/hooks';
+import { useNodes, usePauseRun, useResumeRun, useCancelRun, useResetRun, useRetryNode, useRunNextNode, useRunUntil, useRun, useRunCost, useRuns, useWorkflows } from '../../api/hooks';
 import { ActionCancelledError, confirmAction } from '../../api/confirmAction';
 import { IS_READ_ONLY, callVerb } from '../../api/client';
 import { workflowPublishReadiness } from '../../api/verbs';
 import { setNextConfirmTrigger } from '../../components/ConfirmDialog';
 import { Btn, Dot, Prog, StatusChip } from '../../components/primitives';
+import { Skeleton } from '../../components/Skeleton';
 import { toast } from '../../components/Toasts';
 import { useStore } from '../../store';
 import type { Run, RunStatus } from '../../types';
 import {
   DEFAULT_GATE_COPY_DOCK,
   GATE_COPY,
-  fallbackBarHeight,
+  timelineBars,
   gateApproveEffect,
   gateDeclineEffect,
   isRealPublishGate,
-  nodeRunStatus,
   optimisticRunControl,
   orderedNodes,
 } from './helpers';
+// U3 — drive mode reuses this same dock (Pause/Step/Run until/Retry/Cancel/
+// Reset are still exactly the right controls for a hand-driven run); the one
+// thing that changes is "Run until…" clamping its target list at the first
+// breakpointed node, so the operator can never pick a target that would run
+// straight through a flagged node unattended.
+import { getBreakpoint } from '../../components/drive/breakpoints';
 
+// U7 polish — operator copy, not developer copy (see tabs/Shared.tsx's
+// own READONLY_REASON, kept as a separate local copy per this file's
+// existing pattern rather than importing across that boundary).
 const READONLY_REASON =
-  'Mutations are disabled — the workbench is running read-only. The broker’s READ_ONLY env flag must be set to 0 to enable them.';
+  'This workbench is connected read-only right now, so nothing here can be saved or run. Ask whoever administers this deployment to switch it to read-write.';
 
 function unavailableBecause(status: RunStatus, blocked: RunStatus[], label: string): string | undefined {
   return blocked.includes(status) ? `${label} is unavailable — the run is already ${status}.` : undefined;
@@ -53,35 +62,65 @@ export function Dock() {
   const workflowsQ = useWorkflows();
   const wfRunsQ = useRuns({ workflowId: wf });
   const boundRunQ = useRun(runId);
+  // P2-03 split the cost ledger out of workflowGetRun into its own lazy
+  // query (see verbs.workflowGetRun's doc comment) — `boundRunQ.data.cost`/
+  // `.budget` are only ever the "nothing spent yet" placeholder toRun()
+  // fills in before a real ledger lands. The dock is exactly the surface
+  // that needs the real numbers (cost-vs-budget display, the near/over-
+  // budget alerts below), so it has to actually fetch and merge the
+  // ledger — not just read the placeholder off the run object.
+  const boundRunActive = (mode === 'run' || mode === 'drive') && Boolean(runId);
+  const runCostQ = useRunCost(boundRunActive ? runId : null);
 
+  const setMode = useStore((s) => s.setMode);
   const workflow = workflowsQ.data?.find((w) => w.id === wf);
-  const run: Run | null = mode === 'run' && runId ? (boundRunQ.data ?? null) : null;
+  // U3 — drive mode is a run-bound mode too; only build mode forces `run`
+  // to null regardless of what's bound (see store.ts's unbindRun/bindRun —
+  // build mode is the one state that means "no run engaged").
+  const run: Run | null =
+    boundRunActive && boundRunQ.data
+      ? {
+          ...boundRunQ.data,
+          cost: runCostQ.data?.ledger.totalCostUsdEstimate ?? boundRunQ.data.cost,
+          budget: runCostQ.data?.ledger.budget?.budgetUsd ?? boundRunQ.data.budget,
+        }
+      : null;
   const order = workflow ? orderedNodes(workflow) : [];
 
   if (mode === 'build' || !run) {
     const recent = (wfRunsQ.data ?? []).slice(0, 4);
+    const inDrive = mode === 'drive';
     return (
       <aside className="dock">
         <div className="card">
-          <span className="lbl">build mode</span>
+          <span className="lbl">{inDrive ? 'drive mode' : 'build mode'}</span>
           <p style={{ color: 'var(--muted)', fontSize: 12.5, margin: '0 0 12px' }}>
-            No run bound. Edits save to the store and apply to the next run of{' '}
-            {(workflow?.name ?? wf).toLowerCase()}.
+            {inDrive
+              ? 'No run bound yet — start a dry run or bind one below to hand-drive it.'
+              : <>No run bound. Edits save to the store and apply to the next run of{' '}
+                  {(workflow?.name ?? wf).toLowerCase()}.</>}
           </p>
-          <Btn
-            variant="pri"
-            style={{ width: '100%' }}
-            disabled={IS_READ_ONLY}
-            title={IS_READ_ONLY ? READONLY_REASON : undefined}
-            onClick={openStartModal}
-          >
-            ▸ Start run…
-          </Btn>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <Btn
+              variant="pri"
+              style={{ flex: 1 }}
+              disabled={IS_READ_ONLY}
+              title={IS_READ_ONLY ? READONLY_REASON : undefined}
+              onClick={openStartModal}
+            >
+              ▸ Start run…
+            </Btn>
+            {!inDrive && (
+              <Btn title="Hand-drive a run one node at a time" onClick={() => setMode('drive')}>
+                ⛭ Drive
+              </Btn>
+            )}
+          </div>
         </div>
         <div className="card">
           <span className="lbl">recent runs · this workflow</span>
           {wfRunsQ.isLoading ? (
-            <p style={{ color: 'var(--muted)', fontSize: 12.5, margin: 0 }}>Loading…</p>
+            <Skeleton lines={3} />
           ) : wfRunsQ.isError ? (
             <p style={{ color: 'var(--bad)', fontSize: 12.5, margin: 0 }}>{wfRunsQ.error?.message}</p>
           ) : recent.length === 0 ? (
@@ -107,14 +146,33 @@ export function Dock() {
     );
   }
 
-  return <BoundDock run={run} order={order} onUnbind={unbindRun} />;
+  return <BoundDock run={run} order={order} onUnbind={unbindRun} wf={wf} driveMode={mode === 'drive'} />;
 }
 
-function BoundDock({ run, order, onUnbind }: { run: Run; order: string[]; onUnbind: () => void }) {
+function BoundDock({
+  run,
+  order,
+  onUnbind,
+  wf,
+  driveMode,
+}: {
+  run: Run;
+  order: string[];
+  onUnbind: () => void;
+  wf: string;
+  driveMode: boolean;
+}) {
   const qc = useQueryClient();
+  const setMode = useStore((s) => s.setMode);
   const [showUntilPicker, setShowUntilPicker] = useState(false);
   const [untilTarget, setUntilTarget] = useState('');
   const [showReadiness, setShowReadiness] = useState(false);
+
+  // U3 — only fetched for the breakpoint-risk lookup below; harmless in
+  // 'run' mode (cached under the same ['nodes', wf] key Rail/Center already
+  // populate, so this is very rarely a fresh network round trip).
+  const nodesQ = useNodes(wf);
+  const riskById = new Map((nodesQ.data ?? []).map((n) => [n.id, n.risk]));
 
   const pauseM = usePauseRun();
   const resumeM = useResumeRun();
@@ -125,14 +183,39 @@ function BoundDock({ run, order, onUnbind }: { run: Run; order: string[]; onUnbi
   const runUntilM = useRunUntil();
 
   const total = order.length || 1;
-  const durBars = order.map((nid, i) => {
-    const st = nodeRunStatus(run, nid, order);
-    const h = fallbackBarHeight(i, st);
-    return <i key={nid} style={{ height: h }} className={run.cur === nid ? 'hot' : ''} title={nid} />;
-  });
+  // P2-05 — measured durations off the run record, not a deterministic
+  // placeholder. See helpers.timelineBars().
+  const bars = timelineBars(run.nodes, order);
+  const timedCount = bars.filter((b) => b.durationMs !== null).length;
+  const durBars = bars.map((b) => (
+    <i
+      key={b.nodeId}
+      style={{ height: b.height }}
+      className={[run.cur === b.nodeId ? 'hot' : '', b.durationMs === null ? 'dim' : ''].filter(Boolean).join(' ')}
+      title={b.title}
+    />
+  ));
 
   const curIdx = run.cur ? order.indexOf(run.cur) : -1;
-  const remaining = curIdx >= 0 ? order.slice(curIdx + 1) : order;
+  const remainingAll = curIdx >= 0 ? order.slice(curIdx + 1) : order;
+  // U3 — in drive mode, "Run until…" can't be asked to run straight through
+  // a breakpointed node: the option list stops AT the first one (reachable
+  // — picking it is a deliberate "stop here" choice) and omits everything
+  // past it, so nothing beyond a flag is even selectable.
+  let clampedAtBreakpoint: string | null = null;
+  const remaining = driveMode
+    ? (() => {
+        const out: string[] = [];
+        for (const nid of remainingAll) {
+          out.push(nid);
+          if (getBreakpoint(run.id, nid, riskById.get(nid))) {
+            clampedAtBreakpoint = nid;
+            break;
+          }
+        }
+        return out;
+      })()
+    : remainingAll;
 
   const readinessQ = useQuery({
     queryKey: ['publish-readiness', run.id],
@@ -234,9 +317,20 @@ function BoundDock({ run, order, onUnbind }: { run: Run; order: string[]; onUnbi
           </p>
         )}
         <Prog pct={(100 * run.done) / total} />
-        <Btn style={{ width: '100%', marginTop: 6 }} onClick={onUnbind}>
-          unbind · back to build
-        </Btn>
+        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+          <Btn style={{ flex: 1 }} onClick={onUnbind}>
+            unbind · back to build
+          </Btn>
+          {driveMode ? (
+            <Btn title="Back to the read-only run-following view" onClick={() => setMode('run')}>
+              ← run mode
+            </Btn>
+          ) : (
+            <Btn title="Hand-drive this run one node at a time" onClick={() => setMode('drive')}>
+              ⛭ Drive
+            </Btn>
+          )}
+        </div>
       </div>
 
       <div className="card">
@@ -332,6 +426,13 @@ function BoundDock({ run, order, onUnbind }: { run: Run; order: string[]; onUnbi
                     </option>
                   ))}
                 </select>
+                {clampedAtBreakpoint && (
+                  <p className="note" style={{ margin: '4px 0 0' }}>
+                    nodes past <span className="mono">{clampedAtBreakpoint}</span> are hidden — it carries a
+                    breakpoint, so drive mode won't run through it unattended. Toggle it off in the node grid to
+                    reach further.
+                  </p>
+                )}
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   <Btn onClick={() => setShowUntilPicker(false)}>Cancel</Btn>
                   <Btn
@@ -379,7 +480,7 @@ function BoundDock({ run, order, onUnbind }: { run: Run; order: string[]; onUnbi
           {showReadiness && (
             <div style={{ marginTop: 10 }}>
               {readinessQ.isLoading ? (
-                <p className="note" style={{ margin: 0 }}>loading workflow_publish_readiness…</p>
+                <Skeleton lines={3} />
               ) : readinessQ.isError ? (
                 <p className="note" style={{ margin: 0, color: 'var(--bad)' }}>{errorMessage(readinessQ.error)}</p>
               ) : (
@@ -421,11 +522,25 @@ function BoundDock({ run, order, onUnbind }: { run: Run; order: string[]; onUnbi
       )}
 
       <div className="card">
-        <span className="lbl">timeline</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span className="lbl" style={{ marginBottom: 0 }}>
+            timeline
+          </span>
+          {/* U5 — entry point into the trace waterfall for this bound run. */}
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: '2px 9px', fontSize: 11 }}
+            onClick={() => useStore.getState().openModal('waterfall', { run: run.id })}
+          >
+            ⏱ waterfall
+          </button>
+        </div>
         <div className="tl">{durBars}</div>
         <p className="note">
-          bar heights are a deterministic placeholder, not measured duration — node_list_executions returns
-          durationMs: null for every node in this workspace today.
+          {timedCount > 0
+            ? `measured duration, ${timedCount} of ${bars.length} nodes timed — hover a bar for the figure`
+            : 'no node in this run has finished yet, so nothing is timed'}
         </p>
         <div className="dockstat">
           <span>{run.started}</span>

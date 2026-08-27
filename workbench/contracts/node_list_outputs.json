@@ -1,0 +1,207 @@
+{
+  "verb": "node_list_outputs",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "nodeId": "draft_writer"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "outputs": [
+            {
+              "id": "string",
+              "nodeId": "string",
+              "type": "string",
+              "value": {
+                "artifact": "string",
+                "summary": "string",
+                "title": "string",
+                "deck": "string",
+                "slugCandidate": "string",
+                "seo": {
+                  "metaTitle": "string",
+                  "metaDescription": "string"
+                },
+                "draft": {
+                  "sections": [
+                    {
+                      "heading": "string",
+                      "paragraphs": [
+                        "string"
+                      ]
+                    }
+                  ]
+                },
+                "suggestedCTA": {
+                  "type": "string",
+                  "readerFacingCopy": "string",
+                  "commercialCTA": "boolean"
+                },
+                "sourceClaimNotes": [
+                  {
+                    "draftClaim": "string",
+                    "supportStatus": "string"
+                  }
+                ],
+                "unresolvedQuestions": [
+                  "string"
+                ],
+                "blockers": [],
+                "notes": [
+                  "string"
+                ]
+              },
+              "createdAt": "string",
+              "runId": "string"
+            }
+          ]
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "outputs": [
+            {
+              "id": "artifact_draft_writer_1787658594501",
+              "nodeId": "draft_writer",
+              "type": "draft.v1",
+              "value": {
+                "artifact": "draft.v1",
+                "summary": "Complete evidence-led draft for Dr. Lurie on how readers can evaluate natural, traditional, folk, or unfamiliar skincare ingredient claims without hype, dismissal, or product pressure.",
+                "title": "How to Tell Whether a Natural Skincare Ingredient Is Actually Worth Trying",
+                "deck": "Traditional and natural skincare ingredients can be meaningful, but meaning is not the same as evidence. Here is a practical way to judge the claim, the product, and your own skin context before you t\u2026",
+                "slugCandidate": "natural-skincare-ingredient-evidence-guide",
+                "seo": {
+                  "metaTitle": "How to Judge Natural Skincare Ingredient Claims",
+                  "metaDescription": "A calm guide to evaluating natural, folk, and traditional skincare ingredients\u2014what tradition can tell you, what evidence matters, and when to be cautious."
+                },
+                "draft": {
+                  "sections": [
+                    {
+                      "heading": "Why unusual skincare ingredients are so compelling",
+                      "paragraphs": [
+                        "If you have ever heard about a skincare ingredient from a relative, a cultural practice, a creator, a product review, or a natural-product brand, you are not alone. Skincare advice often travels throu\u2026",
+                        "That does not make the story meaningless. It also does not make the claim reliable."
+                      ]
+                    },
+                    {
+                      "heading": "What traditional use can\u2014and cannot\u2014tell you",
+                      "paragraphs": [
+                        "Traditional use can tell you that an ingredient has mattered to people over time. It may reflect cultural knowledge, access to local plants or minerals, family routines, or observations passed from on\u2026",
+                        "That history deserves respect. Controlled human evidence is not a measure of cultural worth."
+                      ]
+                    }
+                  ]
+                },
+                "suggestedCTA": {
+                  "type": "low_pressure_clinician_boundary",
+                  "readerFacingCopy": "If you are considering an unfamiliar ingredient and your skin is irritated, eczema-prone, acne-prone, recovering from a procedure, pregnant, or already using prescription actives, bring the product or\u2026",
+                  "commercialCTA": false
+                },
+                "sourceClaimNotes": [
+                  {
+                    "draftClaim": "Traditional use can be culturally meaningful without proving a dermatologic benefit.",
+                    "supportStatus": "Framing claim from brief; no named tradition included. Keep humble wording and avoid implying that research evidence measures cultural value."
+                  },
+                  {
+                    "draftClaim": "Human studies and reviews provide stronger practical confidence than lab, animal, anecdotal, influencer, or review-based evidence.",
+                    "supportStatus": "General evidence-literacy claim from brief. If citations are required in final CMS, support with dermatology or evidence-based medicine source selected during review."
+                  }
+                ],
+                "unresolvedQuestions": [
+                  "Should the final CMS object be standard Article or MedicalWebPage, and are reviewer, disclaimer, or medical review fields required for Dr. Lurie content?",
+                  "Will the publisher add inline citations, endnotes, or source links? If so, use the source plan from the brief and verify FDA wording before publication."
+                ],
+                "blockers": [],
+                "notes": [
+                  "Editorial voice source was the provided fallback for Dr. Lurie; the draft keeps a warm, calm, evidence-led, non-alarmist style.",
+                  "No product recommendations, affiliate framing, urgency, scarcity, or purchase CTA were included."
+                ]
+              },
+              "createdAt": "2026-08-25T11:49:54.501Z",
+              "runId": "run_1787658091131_cv41es"
+            },
+            {
+              "id": "artifact_draft_writer_1787655902996",
+              "nodeId": "draft_writer",
+              "type": "draft.v1",
+              "value": {
+                "artifact": "draft.v1",
+                "summary": "Complete minimal operational draft for a temporary CMS publishing workflow test. The draft avoids medical, service, SEO, commercial, and CTA language; it is suitable for review as a short private/draf\u2026",
+                "proposedTitle": "Temporary Publishing Workflow Test",
+                "deck": "Temporary CMS publishing workflow test. This page is not medical, diagnostic, treatment, product, service, or patient-education content.",
+                "slugCandidate": "temporary-publishing-workflow-test",
+                "meta": {
+                  "metaTitle": "Temporary Publishing Workflow Test",
+                  "metaDescription": "Temporary CMS publishing workflow test. This page is not medical, diagnostic, treatment, product, service, or patient-education content.",
+                  "indexingRecommendation": "Prefer draft, private, password-protected, noindex, excluded from sitemap, and excluded from feeds where the CMS supports those controls.",
+                  "taxonomyRecommendation": "Use an internal QA/testing taxonomy if available. Avoid patient education, condition, treatment, ingredient, procedure, or service categories."
+                },
+                "draft": {
+                  "sections": [
+                    {
+                      "sectionId": "s1-identify",
+                      "heading": "Temporary publishing workflow test",
+                      "body": [
+                        "This page is a temporary CMS publishing workflow test."
+                      ]
+                    },
+                    {
+                      "sectionId": "s2-clarify",
+                      "heading": "Not medical or service information",
+                      "body": [
+                        "It does not provide clinical, diagnostic, treatment, product, service, or patient-education information."
+                      ]
+                    }
+                  ],
+                  "fullText": "Temporary publishing workflow test\n\nThis page is a temporary CMS publishing workflow test.\n\nNot medical or service information\n\nIt does not provide clinical, diagnostic, treatment, product, service, o\u2026"
+                },
+                "sourceClaimNotes": [
+                  {
+                    "claim": "This page is a temporary CMS publishing workflow test.",
+                    "support": "Supported by the approved article_brief.v1, which identifies the asset as an operational CMS QA notice / test post.",
+                    "risk": "Low."
+                  },
+                  {
+                    "claim": "The page does not provide clinical, diagnostic, treatment, product, service, or patient-education information.",
+                    "support": "Supported by the approved brief's constraints and by the absence of medical, service, product, or patient-education copy in the draft.",
+                    "risk": "Low if no downstream medical or service copy is added."
+                  }
+                ],
+                "suggestedCTA": {
+                  "readerVisibleCTA": "None.",
+                  "closingLineIfRequired": "No patient or public action is needed.",
+                  "internalNextStep": "Assign a QA owner to confirm publication behavior, visibility/indexing settings, sitemap/feed exposure, and post-test cleanup."
+                },
+                "aggressionCompliance": {
+                  "claim_strength": 0.1,
+                  "urgency": 0,
+                  "emotional_agitation": 0.2,
+                  "cta_density": 0,
+                  "notes": [
+                    "No medical, efficacy, service, or commercial claims are included.",
+                    "No urgency, scarcity, fear framing, or persuasion is included."
+                  ]
+                },
+                "unresolvedQuestions": [
+                  "Exact CMS object type and publish contract are not established.",
+                  "It is unresolved whether the test must be publicly live or can be validated as draft, private, password-protected, or noindex."
+                ],
+                "notes": [
+                  "Client voice source is fallback; the draft uses calm, plain, non-alarmist operational language and avoids unsupported client-specific claims.",
+                  "No external dermatology research was used or needed because the brief forbids medical, diagnostic, treatment, efficacy, product, ingredient, procedure, and service claims."
+                ]
+              },
+              "createdAt": "2026-08-25T11:05:02.996Z",
+              "runId": "run_1787655709652_4k1z56"
+            }
+          ]
+        }
+      },
+      "notes": "[draft_writer] 24 outputs returned; each {createdAt,id,nodeId,runId,type,value}"
+    }
+  ]
+}

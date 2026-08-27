@@ -5,6 +5,7 @@
 
 import type { FocusEvent, KeyboardEvent } from 'react';
 import { Note, StatusChip } from '../../components/primitives';
+import { useStore } from '../../store';
 import type { Run, Workflow } from '../../types';
 import type { RunFilters } from './index';
 import { blockedSummary, shortId } from './helpers';
@@ -67,6 +68,23 @@ function HistoryRow({
       <td className="num">{run.started}</td>
       <td className="num">{run.dur}</td>
       <td className="num">${run.cost.toFixed(2)}</td>
+      <td>
+        {/* U5 — row action: the trace waterfall for this run. Its own
+            button so it can stop the row's click (which opens the run in
+            the workbench) from also firing. */}
+        <button
+          type="button"
+          className="btn"
+          style={{ padding: '3px 9px', fontSize: 11 }}
+          title={`Open the trace waterfall for ${shortId(run.id)}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            useStore.getState().openModal('waterfall', { run: run.id });
+          }}
+        >
+          ⏱ waterfall
+        </button>
+      </td>
     </tr>
   );
 }
@@ -154,6 +172,7 @@ export function HistoryTab({
               <th>started</th>
               <th>duration</th>
               <th>cost</th>
+              <th />
             </tr>
           </thead>
           <tbody>

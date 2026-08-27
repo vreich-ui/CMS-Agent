@@ -5,6 +5,8 @@
 import { useEffect } from 'react';
 import { useNode, useRun, useWorkflows } from '../../api/hooks';
 import { Chip, RiskBadge, TabBar } from '../../components/primitives';
+import { Skeleton } from '../../components/Skeleton';
+import { DriveCenter } from '../../components/drive/DriveCenter';
 import { useStore } from '../../store';
 import type { NodeTab } from '../../types';
 import { nodeRunStatus, orderedNodes } from './helpers';
@@ -62,6 +64,18 @@ export function Center() {
     }
   }, [runBound, tab, tabs, setTab]);
 
+  // U3 — drive mode replaces the tab set entirely with the step debugger.
+  // Rendered ahead of the loading/error branches below: DriveCenter owns
+  // its own loading/empty/error states and must not be blocked behind a
+  // slow or failing fetch for whatever node the rail last had selected.
+  if (mode === 'drive') {
+    return (
+      <main className="center">
+        <DriveCenter />
+      </main>
+    );
+  }
+
   if (workflowsQ.isError || nodeQ.isError) {
     return (
       <main className="center">
@@ -75,7 +89,7 @@ export function Center() {
   if (workflowsQ.isLoading || nodeQ.isLoading || !workflow) {
     return (
       <main className="center">
-        <p style={{ color: 'var(--muted)' }}>Loading node…</p>
+        <Skeleton lines={5} />
       </main>
     );
   }

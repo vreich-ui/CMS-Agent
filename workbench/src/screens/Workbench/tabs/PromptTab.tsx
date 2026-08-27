@@ -184,7 +184,9 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
             loadingPlaybook={playbookQ.isLoading}
           />
         </Disclosure>
-        <Btn disabled title="Phase 5 — optimizer_run_trial counterfactual replay against a frozen dataset">
+        {/* U7 polish — operator copy, not an internal roadmap phase label
+            plus a bare MCP verb name. */}
+        <Btn disabled title="Replaying this prompt against a frozen test dataset isn't available from this screen yet.">
           ⇄ Replay vs dataset
         </Btn>
       </div>

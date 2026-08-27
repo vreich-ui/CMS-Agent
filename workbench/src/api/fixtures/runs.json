@@ -1,5 +1,5 @@
 {
-  "_comment": "Raw live capture: workflow_list_runs({limit:100}) on 2026-08-25, filtered to drop the 11 independent_node/trial_reg_*/node_run_* rows (regression-trial and single-node runs, not real workflow runs -- same exclusion the old fixture README documented). All 55 remaining rows are the FULL real run history (31 publishing_conductor, 18 capture_conductor, 6 clone_conductor) so count-derived UI text (e.g. per-workflow \"needing attention\" totals) matches live truth. Each row's `nodes[]` is trimmed to {nodeId,status} only (dropping warnings/lastDispatch/produces/durationMs/skip detail -- verbose per-attempt telemetry not read by any adapter) and `mode` is trimmed to {executionMode} (dropping its long human-readable notice string) -- every field actually consumed by api/adapters.ts's toRun() is kept verbatim. See fixtures/README.md.",
+  "_comment": "Raw live capture: workflow_list_runs({limit:100}) on 2026-08-25, filtered to drop the 11 independent_node/trial_reg_*/node_run_* rows (regression-trial and single-node runs, not real workflow runs -- same exclusion the old fixture README documented). All 55 remaining rows are the FULL real run history (31 publishing_conductor, 18 capture_conductor, 6 clone_conductor) so count-derived UI text (e.g. per-workflow \"needing attention\" totals) matches live truth. Each row's `nodes[]` is trimmed to {nodeId,status} only (dropping warnings/lastDispatch/produces/durationMs/skip detail -- verbose per-attempt telemetry not read by any adapter) and `mode` is trimmed to {executionMode} (dropping its long human-readable notice string) -- every field actually consumed by api/adapters.ts's toRun() is kept verbatim. See fixtures/README.md.  P2-05: per-node startedAt/completedAt/durationMs added so fixture mode exercises the real timeline code path. These specific figures are SYNTHESIZED (deterministic per runId+nodeId, 900 ms - 45 s, the range live runs actually occupy) \u2014 the live shape they imitate is real and verified: workflow_get_run's run.nodes[] carries exactly these three keys. Nothing here is a live measurement.",
   "runs": [
     {
       "runId": "run_1787660289228_5ypfpm",
@@ -26,27 +26,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:18:09.228Z",
+          "completedAt": "2026-08-25T12:18:38.089Z",
+          "durationMs": 28861
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:18:38.089Z",
+          "completedAt": "2026-08-25T12:19:10.582Z",
+          "durationMs": 32493
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:19:10.582Z",
+          "completedAt": "2026-08-25T12:19:34.528Z",
+          "durationMs": 23946
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:19:34.528Z",
+          "completedAt": "2026-08-25T12:19:48.187Z",
+          "durationMs": 13659
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:19:48.187Z",
+          "completedAt": "2026-08-25T12:20:29.811Z",
+          "durationMs": 41624
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:20:29.811Z",
+          "completedAt": "2026-08-25T12:21:01.937Z",
+          "durationMs": 32126
         },
         {
           "nodeId": "copy_regenerator",
@@ -54,19 +72,31 @@
         },
         {
           "nodeId": "capture_emit_live",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:21:01.937Z",
+          "completedAt": "2026-08-25T12:21:08.974Z",
+          "durationMs": 7037
         },
         {
           "nodeId": "capture_score",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:21:08.974Z",
+          "completedAt": "2026-08-25T12:21:34.404Z",
+          "durationMs": 25430
         },
         {
           "nodeId": "gap_adjudicator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:21:34.404Z",
+          "completedAt": "2026-08-25T12:21:47.584Z",
+          "durationMs": 13180
         },
         {
           "nodeId": "capture_report",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T12:21:47.584Z",
+          "completedAt": "2026-08-25T12:22:28.513Z",
+          "durationMs": 40929
         }
       ]
     },
@@ -95,7 +125,10 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-25T12:17:54.949Z",
+          "completedAt": "2026-08-25T12:18:09.106Z",
+          "durationMs": 14157
         },
         {
           "nodeId": "capture_map",
@@ -163,71 +196,122 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:41:31.132Z",
+          "completedAt": "2026-08-25T11:41:32.926Z",
+          "durationMs": 1794
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:41:32.926Z",
+          "completedAt": "2026-08-25T11:41:46.311Z",
+          "durationMs": 13385
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:41:46.311Z",
+          "completedAt": "2026-08-25T11:42:24.269Z",
+          "durationMs": 37958
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:42:24.269Z",
+          "completedAt": "2026-08-25T11:42:47.224Z",
+          "durationMs": 22955
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:42:47.224Z",
+          "completedAt": "2026-08-25T11:43:15.530Z",
+          "durationMs": 28306
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:43:15.530Z",
+          "completedAt": "2026-08-25T11:43:25.000Z",
+          "durationMs": 9470
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:43:25.000Z",
+          "completedAt": "2026-08-25T11:44:09.484Z",
+          "durationMs": 44484
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:44:09.484Z",
+          "completedAt": "2026-08-25T11:44:35.640Z",
+          "durationMs": 26156
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:44:35.640Z",
+          "completedAt": "2026-08-25T11:44:46.157Z",
+          "durationMs": 10517
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:44:46.157Z",
+          "completedAt": "2026-08-25T11:45:04.667Z",
+          "durationMs": 18510
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:45:04.667Z",
+          "completedAt": "2026-08-25T11:45:45.526Z",
+          "durationMs": 40859
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:45:45.526Z",
+          "completedAt": "2026-08-25T11:46:07.110Z",
+          "durationMs": 21584
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:46:07.110Z",
+          "completedAt": "2026-08-25T11:46:10.611Z",
+          "durationMs": 3501
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:46:10.611Z",
+          "completedAt": "2026-08-25T11:46:37.671Z",
+          "durationMs": 27060
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:46:37.671Z",
+          "completedAt": "2026-08-25T11:46:42.588Z",
+          "durationMs": 4917
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:46:42.588Z",
+          "completedAt": "2026-08-25T11:46:47.698Z",
+          "durationMs": 5110
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:46:47.698Z",
+          "completedAt": "2026-08-25T11:47:18.608Z",
+          "durationMs": 30910
         },
         {
           "nodeId": "artifact_plan",
@@ -235,23 +319,38 @@
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:47:18.608Z",
+          "completedAt": "2026-08-25T11:47:31.603Z",
+          "durationMs": 12995
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:47:31.603Z",
+          "completedAt": "2026-08-25T11:47:39.052Z",
+          "durationMs": 7449
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:47:39.052Z",
+          "completedAt": "2026-08-25T11:47:51.128Z",
+          "durationMs": 12076
         },
         {
           "nodeId": "publish_executor",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-25T11:47:51.128Z",
+          "completedAt": "2026-08-25T11:48:30.982Z",
+          "durationMs": 39854
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:48:30.982Z",
+          "completedAt": "2026-08-25T11:48:55.291Z",
+          "durationMs": 24309
         }
       ]
     },
@@ -281,95 +380,164 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:08:40.374Z",
+          "completedAt": "2026-08-25T11:09:08.524Z",
+          "durationMs": 28150
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:09:08.524Z",
+          "completedAt": "2026-08-25T11:09:34.953Z",
+          "durationMs": 26429
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:09:34.953Z",
+          "completedAt": "2026-08-25T11:09:38.842Z",
+          "durationMs": 3889
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:09:38.842Z",
+          "completedAt": "2026-08-25T11:10:17.646Z",
+          "durationMs": 38804
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:10:17.646Z",
+          "completedAt": "2026-08-25T11:10:22.754Z",
+          "durationMs": 5108
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:10:22.754Z",
+          "completedAt": "2026-08-25T11:10:39.500Z",
+          "durationMs": 16746
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:10:39.500Z",
+          "completedAt": "2026-08-25T11:10:53.328Z",
+          "durationMs": 13828
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:10:53.328Z",
+          "completedAt": "2026-08-25T11:11:09.081Z",
+          "durationMs": 15753
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:11:09.081Z",
+          "completedAt": "2026-08-25T11:11:12.293Z",
+          "durationMs": 3212
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:11:12.293Z",
+          "completedAt": "2026-08-25T11:11:48.752Z",
+          "durationMs": 36459
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:11:48.752Z",
+          "completedAt": "2026-08-25T11:11:50.543Z",
+          "durationMs": 1791
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:11:50.543Z",
+          "completedAt": "2026-08-25T11:11:56.910Z",
+          "durationMs": 6367
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:11:56.910Z",
+          "completedAt": "2026-08-25T11:12:13.679Z",
+          "durationMs": 16769
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:12:13.679Z",
+          "completedAt": "2026-08-25T11:12:15.335Z",
+          "durationMs": 1656
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:12:15.335Z",
+          "completedAt": "2026-08-25T11:12:49.642Z",
+          "durationMs": 34307
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:12:49.642Z",
+          "completedAt": "2026-08-25T11:13:28.782Z",
+          "durationMs": 39140
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:13:28.782Z",
+          "completedAt": "2026-08-25T11:13:54.017Z",
+          "durationMs": 25235
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:13:54.017Z",
+          "completedAt": "2026-08-25T11:14:37.412Z",
+          "durationMs": 43395
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:14:37.412Z",
+          "completedAt": "2026-08-25T11:14:52.842Z",
+          "durationMs": 15430
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:14:52.842Z",
+          "completedAt": "2026-08-25T11:15:23.498Z",
+          "durationMs": 30656
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:15:23.498Z",
+          "completedAt": "2026-08-25T11:16:01.380Z",
+          "durationMs": 37882
         },
         {
           "nodeId": "publish_executor",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-25T11:16:01.380Z",
+          "completedAt": "2026-08-25T11:16:16.545Z",
+          "durationMs": 15165
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:16:16.545Z",
+          "completedAt": "2026-08-25T11:16:56.785Z",
+          "durationMs": 40240
         }
       ]
     },
@@ -397,71 +565,122 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:01:49.652Z",
+          "completedAt": "2026-08-25T11:02:07.046Z",
+          "durationMs": 17394
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:02:07.046Z",
+          "completedAt": "2026-08-25T11:02:48.543Z",
+          "durationMs": 41497
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:02:48.543Z",
+          "completedAt": "2026-08-25T11:03:25.186Z",
+          "durationMs": 36643
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:03:25.186Z",
+          "completedAt": "2026-08-25T11:03:40.545Z",
+          "durationMs": 15359
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:03:40.545Z",
+          "completedAt": "2026-08-25T11:03:47.768Z",
+          "durationMs": 7223
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:03:47.768Z",
+          "completedAt": "2026-08-25T11:04:08.637Z",
+          "durationMs": 20869
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:04:08.637Z",
+          "completedAt": "2026-08-25T11:04:48.059Z",
+          "durationMs": 39422
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:04:48.059Z",
+          "completedAt": "2026-08-25T11:04:57.209Z",
+          "durationMs": 9150
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:04:57.209Z",
+          "completedAt": "2026-08-25T11:04:59.865Z",
+          "durationMs": 2656
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:04:59.865Z",
+          "completedAt": "2026-08-25T11:05:15.987Z",
+          "durationMs": 16122
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:05:15.987Z",
+          "completedAt": "2026-08-25T11:05:23.782Z",
+          "durationMs": 7795
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:05:23.782Z",
+          "completedAt": "2026-08-25T11:05:25.296Z",
+          "durationMs": 1514
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:05:25.296Z",
+          "completedAt": "2026-08-25T11:06:07.545Z",
+          "durationMs": 42249
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:06:07.545Z",
+          "completedAt": "2026-08-25T11:06:27.516Z",
+          "durationMs": 19971
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:06:27.516Z",
+          "completedAt": "2026-08-25T11:06:51.595Z",
+          "durationMs": 24079
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:06:51.595Z",
+          "completedAt": "2026-08-25T11:07:09.790Z",
+          "durationMs": 18195
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:07:09.790Z",
+          "completedAt": "2026-08-25T11:07:19.687Z",
+          "durationMs": 9897
         },
         {
           "nodeId": "artifact_plan",
@@ -469,23 +688,38 @@
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:07:19.687Z",
+          "completedAt": "2026-08-25T11:07:22.984Z",
+          "durationMs": 3297
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:07:22.984Z",
+          "completedAt": "2026-08-25T11:07:41.900Z",
+          "durationMs": 18916
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:07:41.900Z",
+          "completedAt": "2026-08-25T11:07:45.600Z",
+          "durationMs": 3700
         },
         {
           "nodeId": "publish_executor",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-25T11:07:45.600Z",
+          "completedAt": "2026-08-25T11:07:56.337Z",
+          "durationMs": 10737
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T11:07:56.337Z",
+          "completedAt": "2026-08-25T11:08:22.188Z",
+          "durationMs": 25851
         }
       ]
     },
@@ -512,27 +746,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T10:53:53.171Z",
+          "completedAt": "2026-08-25T10:54:29.441Z",
+          "durationMs": 36270
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T10:54:29.441Z",
+          "completedAt": "2026-08-25T10:55:01.402Z",
+          "durationMs": 31961
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T10:55:01.402Z",
+          "completedAt": "2026-08-25T10:55:45.888Z",
+          "durationMs": 44486
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T10:55:45.888Z",
+          "completedAt": "2026-08-25T10:56:24.633Z",
+          "durationMs": 38745
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T10:56:24.633Z",
+          "completedAt": "2026-08-25T10:56:45.355Z",
+          "durationMs": 20722
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-25T10:56:45.355Z",
+          "completedAt": "2026-08-25T10:57:25.110Z",
+          "durationMs": 39755
         },
         {
           "nodeId": "copy_regenerator",
@@ -540,7 +792,10 @@
         },
         {
           "nodeId": "capture_emit_live",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-25T10:57:25.110Z",
+          "completedAt": "2026-08-25T10:57:27.749Z",
+          "durationMs": 2639
         },
         {
           "nodeId": "capture_score",
@@ -579,39 +834,66 @@
       "nodes": [
         {
           "nodeId": "clone_intake",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T14:36:55.829Z",
+          "completedAt": "2026-08-24T14:37:01.666Z",
+          "durationMs": 5837
         },
         {
           "nodeId": "layout_analyst",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T14:37:01.666Z",
+          "completedAt": "2026-08-24T14:37:33.058Z",
+          "durationMs": 31392
         },
         {
           "nodeId": "recipe_designer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T14:37:33.058Z",
+          "completedAt": "2026-08-24T14:37:51.653Z",
+          "durationMs": 18595
         },
         {
           "nodeId": "recipe_mint",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T14:37:51.653Z",
+          "completedAt": "2026-08-24T14:38:03.023Z",
+          "durationMs": 11370
         },
         {
           "nodeId": "theme_reconciler",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T14:38:03.023Z",
+          "completedAt": "2026-08-24T14:38:30.476Z",
+          "durationMs": 27453
         },
         {
           "nodeId": "theme_bind",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T14:38:30.476Z",
+          "completedAt": "2026-08-24T14:38:46.419Z",
+          "durationMs": 15943
         },
         {
           "nodeId": "fit_adjudicator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T14:38:46.419Z",
+          "completedAt": "2026-08-24T14:39:30.707Z",
+          "durationMs": 44288
         },
         {
           "nodeId": "layout_restamp",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T14:39:30.707Z",
+          "completedAt": "2026-08-24T14:39:52.331Z",
+          "durationMs": 21624
         },
         {
           "nodeId": "clone_report",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-24T14:39:52.331Z",
+          "completedAt": "2026-08-24T14:40:31.318Z",
+          "durationMs": 38987
         }
       ]
     },
@@ -639,71 +921,122 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:38:36.097Z",
+          "completedAt": "2026-08-24T13:39:20.763Z",
+          "durationMs": 44666
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:39:20.763Z",
+          "completedAt": "2026-08-24T13:39:45.353Z",
+          "durationMs": 24590
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:39:45.353Z",
+          "completedAt": "2026-08-24T13:39:55.664Z",
+          "durationMs": 10311
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:39:55.664Z",
+          "completedAt": "2026-08-24T13:39:56.857Z",
+          "durationMs": 1193
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:39:56.857Z",
+          "completedAt": "2026-08-24T13:40:37.428Z",
+          "durationMs": 40571
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:40:37.428Z",
+          "completedAt": "2026-08-24T13:41:21.422Z",
+          "durationMs": 43994
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:41:21.422Z",
+          "completedAt": "2026-08-24T13:41:27.917Z",
+          "durationMs": 6495
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:41:27.917Z",
+          "completedAt": "2026-08-24T13:42:10.949Z",
+          "durationMs": 43032
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:42:10.949Z",
+          "completedAt": "2026-08-24T13:42:21.717Z",
+          "durationMs": 10768
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:42:21.717Z",
+          "completedAt": "2026-08-24T13:42:36.384Z",
+          "durationMs": 14667
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:42:36.384Z",
+          "completedAt": "2026-08-24T13:42:46.127Z",
+          "durationMs": 9743
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:42:46.127Z",
+          "completedAt": "2026-08-24T13:43:06.111Z",
+          "durationMs": 19984
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:43:06.111Z",
+          "completedAt": "2026-08-24T13:43:38.575Z",
+          "durationMs": 32464
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:43:38.575Z",
+          "completedAt": "2026-08-24T13:43:54.692Z",
+          "durationMs": 16117
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:43:54.692Z",
+          "completedAt": "2026-08-24T13:44:29.954Z",
+          "durationMs": 35262
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:44:29.954Z",
+          "completedAt": "2026-08-24T13:45:11.552Z",
+          "durationMs": 41598
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:45:11.552Z",
+          "completedAt": "2026-08-24T13:45:34.646Z",
+          "durationMs": 23094
         },
         {
           "nodeId": "artifact_plan",
@@ -711,23 +1044,38 @@
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:45:34.646Z",
+          "completedAt": "2026-08-24T13:45:41.087Z",
+          "durationMs": 6441
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:45:41.087Z",
+          "completedAt": "2026-08-24T13:46:11.373Z",
+          "durationMs": 30286
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:46:11.373Z",
+          "completedAt": "2026-08-24T13:46:15.329Z",
+          "durationMs": 3956
         },
         {
           "nodeId": "publish_executor",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-24T13:46:15.329Z",
+          "completedAt": "2026-08-24T13:46:34.248Z",
+          "durationMs": 18919
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T13:46:34.248Z",
+          "completedAt": "2026-08-24T13:47:17.324Z",
+          "durationMs": 43076
         }
       ]
     },
@@ -754,27 +1102,45 @@
       "nodes": [
         {
           "nodeId": "clone_intake",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T11:55:11.291Z",
+          "completedAt": "2026-08-24T11:55:51.713Z",
+          "durationMs": 40422
         },
         {
           "nodeId": "layout_analyst",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T11:55:51.713Z",
+          "completedAt": "2026-08-24T11:56:07.318Z",
+          "durationMs": 15605
         },
         {
           "nodeId": "recipe_designer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T11:56:07.318Z",
+          "completedAt": "2026-08-24T11:56:27.634Z",
+          "durationMs": 20316
         },
         {
           "nodeId": "recipe_mint",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T11:56:27.634Z",
+          "completedAt": "2026-08-24T11:57:04.587Z",
+          "durationMs": 36953
         },
         {
           "nodeId": "theme_reconciler",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T11:57:04.587Z",
+          "completedAt": "2026-08-24T11:57:41.006Z",
+          "durationMs": 36419
         },
         {
           "nodeId": "theme_bind",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-24T11:57:41.006Z",
+          "completedAt": "2026-08-24T11:57:54.589Z",
+          "durationMs": 13583
         },
         {
           "nodeId": "layout_restamp",
@@ -809,95 +1175,164 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:36:51.921Z",
+          "completedAt": "2026-08-24T10:36:58.003Z",
+          "durationMs": 6082
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:36:58.003Z",
+          "completedAt": "2026-08-24T10:37:03.774Z",
+          "durationMs": 5771
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:37:03.774Z",
+          "completedAt": "2026-08-24T10:37:38.982Z",
+          "durationMs": 35208
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:37:38.982Z",
+          "completedAt": "2026-08-24T10:38:16.623Z",
+          "durationMs": 37641
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:38:16.623Z",
+          "completedAt": "2026-08-24T10:38:27.243Z",
+          "durationMs": 10620
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:38:27.243Z",
+          "completedAt": "2026-08-24T10:39:04.350Z",
+          "durationMs": 37107
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:39:04.350Z",
+          "completedAt": "2026-08-24T10:39:05.382Z",
+          "durationMs": 1032
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:39:05.382Z",
+          "completedAt": "2026-08-24T10:39:32.059Z",
+          "durationMs": 26677
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:39:32.059Z",
+          "completedAt": "2026-08-24T10:40:05.242Z",
+          "durationMs": 33183
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:40:05.242Z",
+          "completedAt": "2026-08-24T10:40:11.263Z",
+          "durationMs": 6021
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:40:11.263Z",
+          "completedAt": "2026-08-24T10:40:36.928Z",
+          "durationMs": 25665
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:40:36.928Z",
+          "completedAt": "2026-08-24T10:40:56.180Z",
+          "durationMs": 19252
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:40:56.180Z",
+          "completedAt": "2026-08-24T10:41:41.022Z",
+          "durationMs": 44842
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:41:41.022Z",
+          "completedAt": "2026-08-24T10:41:52.932Z",
+          "durationMs": 11910
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:41:52.932Z",
+          "completedAt": "2026-08-24T10:42:33.989Z",
+          "durationMs": 41057
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:42:33.989Z",
+          "completedAt": "2026-08-24T10:42:40.556Z",
+          "durationMs": 6567
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:42:40.556Z",
+          "completedAt": "2026-08-24T10:42:55.008Z",
+          "durationMs": 14452
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:42:55.008Z",
+          "completedAt": "2026-08-24T10:43:27.777Z",
+          "durationMs": 32769
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:43:27.777Z",
+          "completedAt": "2026-08-24T10:43:28.704Z",
+          "durationMs": 927
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:43:28.704Z",
+          "completedAt": "2026-08-24T10:44:08.415Z",
+          "durationMs": 39711
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:44:08.415Z",
+          "completedAt": "2026-08-24T10:44:49.276Z",
+          "durationMs": 40861
         },
         {
           "nodeId": "publish_executor",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:44:49.276Z",
+          "completedAt": "2026-08-24T10:45:15.772Z",
+          "durationMs": 26496
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:45:15.772Z",
+          "completedAt": "2026-08-24T10:45:19.887Z",
+          "durationMs": 4115
         }
       ]
     },
@@ -924,27 +1359,45 @@
       "nodes": [
         {
           "nodeId": "clone_intake",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:32:31.706Z",
+          "completedAt": "2026-08-24T10:33:10.115Z",
+          "durationMs": 38409
         },
         {
           "nodeId": "layout_analyst",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:33:10.115Z",
+          "completedAt": "2026-08-24T10:33:32.602Z",
+          "durationMs": 22487
         },
         {
           "nodeId": "recipe_designer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:33:32.602Z",
+          "completedAt": "2026-08-24T10:34:14.151Z",
+          "durationMs": 41549
         },
         {
           "nodeId": "recipe_mint",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:34:14.151Z",
+          "completedAt": "2026-08-24T10:34:54.119Z",
+          "durationMs": 39968
         },
         {
           "nodeId": "theme_reconciler",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-24T10:34:54.119Z",
+          "completedAt": "2026-08-24T10:35:19.671Z",
+          "durationMs": 25552
         },
         {
           "nodeId": "theme_bind",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-24T10:35:19.671Z",
+          "completedAt": "2026-08-24T10:35:22.774Z",
+          "durationMs": 3103
         },
         {
           "nodeId": "layout_restamp",
@@ -979,27 +1432,45 @@
       "nodes": [
         {
           "nodeId": "clone_intake",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T18:06:37.978Z",
+          "completedAt": "2026-08-23T18:07:04.698Z",
+          "durationMs": 26720
         },
         {
           "nodeId": "layout_analyst",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T18:07:04.698Z",
+          "completedAt": "2026-08-23T18:07:06.889Z",
+          "durationMs": 2191
         },
         {
           "nodeId": "recipe_designer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T18:07:06.889Z",
+          "completedAt": "2026-08-23T18:07:42.947Z",
+          "durationMs": 36058
         },
         {
           "nodeId": "recipe_mint",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T18:07:42.947Z",
+          "completedAt": "2026-08-23T18:07:51.301Z",
+          "durationMs": 8354
         },
         {
           "nodeId": "theme_reconciler",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T18:07:51.301Z",
+          "completedAt": "2026-08-23T18:08:14.548Z",
+          "durationMs": 23247
         },
         {
           "nodeId": "theme_bind",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-23T18:08:14.548Z",
+          "completedAt": "2026-08-23T18:08:37.160Z",
+          "durationMs": 22612
         },
         {
           "nodeId": "layout_restamp",
@@ -1037,11 +1508,17 @@
       "nodes": [
         {
           "nodeId": "clone_intake",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T16:45:22.535Z",
+          "completedAt": "2026-08-23T16:45:59.364Z",
+          "durationMs": 36829
         },
         {
           "nodeId": "layout_analyst",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-08-23T16:45:59.364Z",
+          "completedAt": "2026-08-23T16:46:29.945Z",
+          "durationMs": 30581
         },
         {
           "nodeId": "recipe_designer",
@@ -1053,7 +1530,10 @@
         },
         {
           "nodeId": "theme_reconciler",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-08-23T16:46:29.945Z",
+          "completedAt": "2026-08-23T16:47:10.971Z",
+          "durationMs": 41026
         },
         {
           "nodeId": "theme_bind",
@@ -1146,27 +1626,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:00:06.104Z",
+          "completedAt": "2026-08-23T15:00:41.481Z",
+          "durationMs": 35377
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:00:41.481Z",
+          "completedAt": "2026-08-23T15:00:43.014Z",
+          "durationMs": 1533
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:00:43.014Z",
+          "completedAt": "2026-08-23T15:01:15.882Z",
+          "durationMs": 32868
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:01:15.882Z",
+          "completedAt": "2026-08-23T15:01:20.585Z",
+          "durationMs": 4703
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:01:20.585Z",
+          "completedAt": "2026-08-23T15:01:47.030Z",
+          "durationMs": 26445
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:01:47.030Z",
+          "completedAt": "2026-08-23T15:01:48.852Z",
+          "durationMs": 1822
         },
         {
           "nodeId": "copy_regenerator",
@@ -1174,19 +1672,31 @@
         },
         {
           "nodeId": "capture_emit_live",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:01:48.852Z",
+          "completedAt": "2026-08-23T15:02:18.309Z",
+          "durationMs": 29457
         },
         {
           "nodeId": "capture_score",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:02:18.309Z",
+          "completedAt": "2026-08-23T15:02:40.748Z",
+          "durationMs": 22439
         },
         {
           "nodeId": "gap_adjudicator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:02:40.748Z",
+          "completedAt": "2026-08-23T15:03:07.986Z",
+          "durationMs": 27238
         },
         {
           "nodeId": "capture_report",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T15:03:07.986Z",
+          "completedAt": "2026-08-23T15:03:11.361Z",
+          "durationMs": 3375
         }
       ]
     },
@@ -1214,71 +1724,122 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:33:30.815Z",
+          "completedAt": "2026-08-23T13:33:40.221Z",
+          "durationMs": 9406
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:33:40.221Z",
+          "completedAt": "2026-08-23T13:34:11.352Z",
+          "durationMs": 31131
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:34:11.352Z",
+          "completedAt": "2026-08-23T13:34:15.750Z",
+          "durationMs": 4398
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:34:15.750Z",
+          "completedAt": "2026-08-23T13:34:31.718Z",
+          "durationMs": 15968
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:34:31.718Z",
+          "completedAt": "2026-08-23T13:34:50.577Z",
+          "durationMs": 18859
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:34:50.577Z",
+          "completedAt": "2026-08-23T13:35:17.572Z",
+          "durationMs": 26995
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:35:17.572Z",
+          "completedAt": "2026-08-23T13:35:23.982Z",
+          "durationMs": 6410
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:35:23.982Z",
+          "completedAt": "2026-08-23T13:36:04.155Z",
+          "durationMs": 40173
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:36:04.155Z",
+          "completedAt": "2026-08-23T13:36:08.641Z",
+          "durationMs": 4486
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:36:08.641Z",
+          "completedAt": "2026-08-23T13:36:48.622Z",
+          "durationMs": 39981
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:36:48.622Z",
+          "completedAt": "2026-08-23T13:37:08.265Z",
+          "durationMs": 19643
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:37:08.265Z",
+          "completedAt": "2026-08-23T13:37:20.810Z",
+          "durationMs": 12545
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:37:20.810Z",
+          "completedAt": "2026-08-23T13:37:25.986Z",
+          "durationMs": 5176
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:37:25.986Z",
+          "completedAt": "2026-08-23T13:38:09.192Z",
+          "durationMs": 43206
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:38:09.192Z",
+          "completedAt": "2026-08-23T13:38:35.540Z",
+          "durationMs": 26348
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:38:35.540Z",
+          "completedAt": "2026-08-23T13:39:09.480Z",
+          "durationMs": 33940
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:39:09.480Z",
+          "completedAt": "2026-08-23T13:39:14.953Z",
+          "durationMs": 5473
         },
         {
           "nodeId": "artifact_plan",
@@ -1286,23 +1847,38 @@
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:39:14.953Z",
+          "completedAt": "2026-08-23T13:39:28.751Z",
+          "durationMs": 13798
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:39:28.751Z",
+          "completedAt": "2026-08-23T13:39:31.013Z",
+          "durationMs": 2262
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:39:31.013Z",
+          "completedAt": "2026-08-23T13:40:15.462Z",
+          "durationMs": 44449
         },
         {
           "nodeId": "publish_executor",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-23T13:40:15.462Z",
+          "completedAt": "2026-08-23T13:40:37.695Z",
+          "durationMs": 22233
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T13:40:37.695Z",
+          "completedAt": "2026-08-23T13:40:50.203Z",
+          "durationMs": 12508
         }
       ]
     },
@@ -1335,71 +1911,122 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:09:07.111Z",
+          "completedAt": "2026-08-23T08:09:28.768Z",
+          "durationMs": 21657
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:09:28.768Z",
+          "completedAt": "2026-08-23T08:09:39.053Z",
+          "durationMs": 10285
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:09:39.053Z",
+          "completedAt": "2026-08-23T08:10:16.108Z",
+          "durationMs": 37055
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:10:16.108Z",
+          "completedAt": "2026-08-23T08:10:27.592Z",
+          "durationMs": 11484
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:10:27.592Z",
+          "completedAt": "2026-08-23T08:10:53.826Z",
+          "durationMs": 26234
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:10:53.826Z",
+          "completedAt": "2026-08-23T08:11:23.906Z",
+          "durationMs": 30080
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:11:23.906Z",
+          "completedAt": "2026-08-23T08:11:39.136Z",
+          "durationMs": 15230
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:11:39.136Z",
+          "completedAt": "2026-08-23T08:11:42.968Z",
+          "durationMs": 3832
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:11:42.968Z",
+          "completedAt": "2026-08-23T08:11:53.770Z",
+          "durationMs": 10802
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:11:53.770Z",
+          "completedAt": "2026-08-23T08:12:26.858Z",
+          "durationMs": 33088
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:12:26.858Z",
+          "completedAt": "2026-08-23T08:12:30.091Z",
+          "durationMs": 3233
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:12:30.091Z",
+          "completedAt": "2026-08-23T08:13:01.794Z",
+          "durationMs": 31703
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:13:01.794Z",
+          "completedAt": "2026-08-23T08:13:22.513Z",
+          "durationMs": 20719
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:13:22.513Z",
+          "completedAt": "2026-08-23T08:13:38.906Z",
+          "durationMs": 16393
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:13:38.906Z",
+          "completedAt": "2026-08-23T08:14:01.454Z",
+          "durationMs": 22548
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:14:01.454Z",
+          "completedAt": "2026-08-23T08:14:19.253Z",
+          "durationMs": 17799
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:14:19.253Z",
+          "completedAt": "2026-08-23T08:14:31.825Z",
+          "durationMs": 12572
         },
         {
           "nodeId": "artifact_plan",
@@ -1407,15 +2034,24 @@
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:14:31.825Z",
+          "completedAt": "2026-08-23T08:14:37.555Z",
+          "durationMs": 5730
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:14:37.555Z",
+          "completedAt": "2026-08-23T08:14:52.769Z",
+          "durationMs": 15214
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-23T08:14:52.769Z",
+          "completedAt": "2026-08-23T08:15:33.929Z",
+          "durationMs": 41160
         },
         {
           "nodeId": "publish_executor",
@@ -1423,7 +2059,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-23T08:15:33.929Z",
+          "completedAt": "2026-08-23T08:16:03.701Z",
+          "durationMs": 29772
         }
       ]
     },
@@ -1451,63 +2090,108 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:21:35.018Z",
+          "completedAt": "2026-08-22T14:21:38.645Z",
+          "durationMs": 3627
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:21:38.645Z",
+          "completedAt": "2026-08-22T14:22:19.582Z",
+          "durationMs": 40937
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:22:19.582Z",
+          "completedAt": "2026-08-22T14:22:58.539Z",
+          "durationMs": 38957
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:22:58.539Z",
+          "completedAt": "2026-08-22T14:23:19.633Z",
+          "durationMs": 21094
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:23:19.633Z",
+          "completedAt": "2026-08-22T14:23:34.000Z",
+          "durationMs": 14367
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:23:34.000Z",
+          "completedAt": "2026-08-22T14:23:53.687Z",
+          "durationMs": 19687
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:23:53.687Z",
+          "completedAt": "2026-08-22T14:24:16.946Z",
+          "durationMs": 23259
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:24:16.946Z",
+          "completedAt": "2026-08-22T14:24:53.550Z",
+          "durationMs": 36604
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:24:53.550Z",
+          "completedAt": "2026-08-22T14:25:23.939Z",
+          "durationMs": 30389
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:25:23.939Z",
+          "completedAt": "2026-08-22T14:26:07.768Z",
+          "durationMs": 43829
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:26:07.768Z",
+          "completedAt": "2026-08-22T14:26:28.316Z",
+          "durationMs": 20548
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:26:28.316Z",
+          "completedAt": "2026-08-22T14:26:44.003Z",
+          "durationMs": 15687
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:26:44.003Z",
+          "completedAt": "2026-08-22T14:27:05.835Z",
+          "durationMs": 21832
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-22T14:27:05.835Z",
+          "completedAt": "2026-08-22T14:27:39.434Z",
+          "durationMs": 33599
         },
         {
           "nodeId": "reader_simulation",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-08-22T14:27:39.434Z",
+          "completedAt": "2026-08-22T14:28:24.074Z",
+          "durationMs": 44640
         },
         {
           "nodeId": "review_aggregator",
@@ -1567,71 +2251,122 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:13:38.437Z",
+          "completedAt": "2026-08-21T16:14:19.867Z",
+          "durationMs": 41430
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:14:19.867Z",
+          "completedAt": "2026-08-21T16:14:24.861Z",
+          "durationMs": 4994
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:14:24.861Z",
+          "completedAt": "2026-08-21T16:14:49.600Z",
+          "durationMs": 24739
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:14:49.600Z",
+          "completedAt": "2026-08-21T16:15:31.977Z",
+          "durationMs": 42377
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:15:31.977Z",
+          "completedAt": "2026-08-21T16:16:11.953Z",
+          "durationMs": 39976
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:16:11.953Z",
+          "completedAt": "2026-08-21T16:16:55.361Z",
+          "durationMs": 43408
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:16:55.361Z",
+          "completedAt": "2026-08-21T16:17:12.156Z",
+          "durationMs": 16795
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:17:12.156Z",
+          "completedAt": "2026-08-21T16:17:41.109Z",
+          "durationMs": 28953
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:17:41.109Z",
+          "completedAt": "2026-08-21T16:18:15.879Z",
+          "durationMs": 34770
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:18:15.879Z",
+          "completedAt": "2026-08-21T16:18:59.587Z",
+          "durationMs": 43708
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:18:59.587Z",
+          "completedAt": "2026-08-21T16:19:36.792Z",
+          "durationMs": 37205
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:19:36.792Z",
+          "completedAt": "2026-08-21T16:20:13.078Z",
+          "durationMs": 36286
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:20:13.078Z",
+          "completedAt": "2026-08-21T16:20:56.267Z",
+          "durationMs": 43189
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:20:56.267Z",
+          "completedAt": "2026-08-21T16:21:11.171Z",
+          "durationMs": 14904
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:21:11.171Z",
+          "completedAt": "2026-08-21T16:21:42.422Z",
+          "durationMs": 31251
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:21:42.422Z",
+          "completedAt": "2026-08-21T16:21:52.866Z",
+          "durationMs": 10444
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:21:52.866Z",
+          "completedAt": "2026-08-21T16:22:35.526Z",
+          "durationMs": 42660
         },
         {
           "nodeId": "artifact_plan",
@@ -1639,7 +2374,10 @@
         },
         {
           "nodeId": "article_body",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-08-21T16:22:35.526Z",
+          "completedAt": "2026-08-21T16:22:43.236Z",
+          "durationMs": 7710
         },
         {
           "nodeId": "publish_payload",
@@ -1681,27 +2419,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:00:02.801Z",
+          "completedAt": "2026-08-21T16:00:10.836Z",
+          "durationMs": 8035
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:00:10.836Z",
+          "completedAt": "2026-08-21T16:00:53.096Z",
+          "durationMs": 42260
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:00:53.096Z",
+          "completedAt": "2026-08-21T16:01:30.993Z",
+          "durationMs": 37897
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:01:30.993Z",
+          "completedAt": "2026-08-21T16:01:36.226Z",
+          "durationMs": 5233
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:01:36.226Z",
+          "completedAt": "2026-08-21T16:02:20.314Z",
+          "durationMs": 44088
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:02:20.314Z",
+          "completedAt": "2026-08-21T16:02:40.971Z",
+          "durationMs": 20657
         },
         {
           "nodeId": "copy_regenerator",
@@ -1709,19 +2465,31 @@
         },
         {
           "nodeId": "capture_emit_live",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:02:40.971Z",
+          "completedAt": "2026-08-21T16:03:12.402Z",
+          "durationMs": 31431
         },
         {
           "nodeId": "capture_score",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:03:12.402Z",
+          "completedAt": "2026-08-21T16:03:43.797Z",
+          "durationMs": 31395
         },
         {
           "nodeId": "gap_adjudicator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:03:43.797Z",
+          "completedAt": "2026-08-21T16:04:03.934Z",
+          "durationMs": 20137
         },
         {
           "nodeId": "capture_report",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T16:04:03.934Z",
+          "completedAt": "2026-08-21T16:04:24.620Z",
+          "durationMs": 20686
         }
       ]
     },
@@ -1754,87 +2522,150 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:18:11.908Z",
+          "completedAt": "2026-08-21T15:18:49.016Z",
+          "durationMs": 37108
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:18:49.016Z",
+          "completedAt": "2026-08-21T15:19:28.664Z",
+          "durationMs": 39648
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:19:28.664Z",
+          "completedAt": "2026-08-21T15:20:11.993Z",
+          "durationMs": 43329
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:20:11.993Z",
+          "completedAt": "2026-08-21T15:20:22.262Z",
+          "durationMs": 10269
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:20:22.262Z",
+          "completedAt": "2026-08-21T15:20:34.039Z",
+          "durationMs": 11777
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:20:34.039Z",
+          "completedAt": "2026-08-21T15:20:36.021Z",
+          "durationMs": 1982
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:20:36.021Z",
+          "completedAt": "2026-08-21T15:21:07.693Z",
+          "durationMs": 31672
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:21:07.693Z",
+          "completedAt": "2026-08-21T15:21:12.789Z",
+          "durationMs": 5096
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:21:12.789Z",
+          "completedAt": "2026-08-21T15:21:44.473Z",
+          "durationMs": 31684
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:21:44.473Z",
+          "completedAt": "2026-08-21T15:22:28.345Z",
+          "durationMs": 43872
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:22:28.345Z",
+          "completedAt": "2026-08-21T15:22:37.190Z",
+          "durationMs": 8845
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:22:37.190Z",
+          "completedAt": "2026-08-21T15:23:02.161Z",
+          "durationMs": 24971
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:23:02.161Z",
+          "completedAt": "2026-08-21T15:23:07.341Z",
+          "durationMs": 5180
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:23:07.341Z",
+          "completedAt": "2026-08-21T15:23:32.929Z",
+          "durationMs": 25588
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:23:32.929Z",
+          "completedAt": "2026-08-21T15:23:48.854Z",
+          "durationMs": 15925
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:23:48.854Z",
+          "completedAt": "2026-08-21T15:24:25.888Z",
+          "durationMs": 37034
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:24:25.888Z",
+          "completedAt": "2026-08-21T15:25:01.490Z",
+          "durationMs": 35602
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:25:01.490Z",
+          "completedAt": "2026-08-21T15:25:17.465Z",
+          "durationMs": 15975
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:25:17.465Z",
+          "completedAt": "2026-08-21T15:25:44.683Z",
+          "durationMs": 27218
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:25:44.683Z",
+          "completedAt": "2026-08-21T15:25:57.836Z",
+          "durationMs": 13153
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-21T15:25:57.836Z",
+          "completedAt": "2026-08-21T15:26:10.926Z",
+          "durationMs": 13090
         },
         {
           "nodeId": "publish_executor",
@@ -1842,7 +2673,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T15:26:10.926Z",
+          "completedAt": "2026-08-21T15:26:32.183Z",
+          "durationMs": 21257
         }
       ]
     },
@@ -1868,27 +2702,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T12:59:28.383Z",
+          "completedAt": "2026-08-21T13:00:01.030Z",
+          "durationMs": 32647
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:00:01.030Z",
+          "completedAt": "2026-08-21T13:00:05.412Z",
+          "durationMs": 4382
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:00:05.412Z",
+          "completedAt": "2026-08-21T13:00:49.992Z",
+          "durationMs": 44580
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:00:49.992Z",
+          "completedAt": "2026-08-21T13:01:05.094Z",
+          "durationMs": 15102
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:01:05.094Z",
+          "completedAt": "2026-08-21T13:01:18.266Z",
+          "durationMs": 13172
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:01:18.266Z",
+          "completedAt": "2026-08-21T13:01:43.390Z",
+          "durationMs": 25124
         },
         {
           "nodeId": "copy_regenerator",
@@ -1896,19 +2748,31 @@
         },
         {
           "nodeId": "capture_emit_live",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:01:43.390Z",
+          "completedAt": "2026-08-21T13:02:14.882Z",
+          "durationMs": 31492
         },
         {
           "nodeId": "capture_score",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:02:14.882Z",
+          "completedAt": "2026-08-21T13:02:19.366Z",
+          "durationMs": 4484
         },
         {
           "nodeId": "gap_adjudicator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:02:19.366Z",
+          "completedAt": "2026-08-21T13:02:55.188Z",
+          "durationMs": 35822
         },
         {
           "nodeId": "capture_report",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-21T13:02:55.188Z",
+          "completedAt": "2026-08-21T13:03:34.902Z",
+          "durationMs": 39714
         }
       ]
     },
@@ -1935,27 +2799,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-20T15:42:21.150Z",
+          "completedAt": "2026-08-20T15:42:53.520Z",
+          "durationMs": 32370
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-20T15:42:53.520Z",
+          "completedAt": "2026-08-20T15:43:29.007Z",
+          "durationMs": 35487
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-20T15:43:29.007Z",
+          "completedAt": "2026-08-20T15:43:45.942Z",
+          "durationMs": 16935
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-20T15:43:45.942Z",
+          "completedAt": "2026-08-20T15:44:04.873Z",
+          "durationMs": 18931
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-20T15:44:04.873Z",
+          "completedAt": "2026-08-20T15:44:14.151Z",
+          "durationMs": 9278
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-20T15:44:14.151Z",
+          "completedAt": "2026-08-20T15:44:32.321Z",
+          "durationMs": 18170
         },
         {
           "nodeId": "copy_regenerator",
@@ -1963,7 +2845,10 @@
         },
         {
           "nodeId": "capture_emit_live",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-20T15:44:32.321Z",
+          "completedAt": "2026-08-20T15:45:11.098Z",
+          "durationMs": 38777
         },
         {
           "nodeId": "capture_score",
@@ -2002,7 +2887,10 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-20T15:24:17.923Z",
+          "completedAt": "2026-08-20T15:24:39.187Z",
+          "durationMs": 21264
         },
         {
           "nodeId": "capture_map",
@@ -2069,7 +2957,10 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-20T13:28:09.292Z",
+          "completedAt": "2026-08-20T13:28:21.941Z",
+          "durationMs": 12649
         },
         {
           "nodeId": "capture_map",
@@ -2136,27 +3027,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-19T13:47:22.624Z",
+          "completedAt": "2026-08-19T13:47:36.320Z",
+          "durationMs": 13696
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-19T13:47:36.320Z",
+          "completedAt": "2026-08-19T13:47:42.540Z",
+          "durationMs": 6220
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-19T13:47:42.540Z",
+          "completedAt": "2026-08-19T13:48:22.153Z",
+          "durationMs": 39613
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-19T13:48:22.153Z",
+          "completedAt": "2026-08-19T13:48:28.752Z",
+          "durationMs": 6599
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-19T13:48:28.752Z",
+          "completedAt": "2026-08-19T13:48:58.137Z",
+          "durationMs": 29385
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-19T13:48:58.137Z",
+          "completedAt": "2026-08-19T13:49:06.460Z",
+          "durationMs": 8323
         },
         {
           "nodeId": "copy_regenerator",
@@ -2168,11 +3077,17 @@
         },
         {
           "nodeId": "capture_score",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-19T13:49:06.460Z",
+          "completedAt": "2026-08-19T13:49:47.860Z",
+          "durationMs": 41400
         },
         {
           "nodeId": "gap_adjudicator",
-          "status": "running"
+          "status": "running",
+          "startedAt": "2026-08-19T13:49:47.860Z",
+          "completedAt": "2026-08-19T13:50:29.377Z",
+          "durationMs": 41517
         },
         {
           "nodeId": "capture_report",
@@ -2203,27 +3118,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T13:49:38.987Z",
+          "completedAt": "2026-08-18T13:49:44.292Z",
+          "durationMs": 5305
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T13:49:44.292Z",
+          "completedAt": "2026-08-18T13:49:46.334Z",
+          "durationMs": 2042
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T13:49:46.334Z",
+          "completedAt": "2026-08-18T13:49:51.310Z",
+          "durationMs": 4976
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T13:49:51.310Z",
+          "completedAt": "2026-08-18T13:50:20.741Z",
+          "durationMs": 29431
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T13:50:20.741Z",
+          "completedAt": "2026-08-18T13:50:48.265Z",
+          "durationMs": 27524
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T13:50:48.265Z",
+          "completedAt": "2026-08-18T13:51:07.936Z",
+          "durationMs": 19671
         },
         {
           "nodeId": "copy_regenerator",
@@ -2231,15 +3164,24 @@
         },
         {
           "nodeId": "capture_emit_live",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T13:51:07.936Z",
+          "completedAt": "2026-08-18T13:51:47.214Z",
+          "durationMs": 39278
         },
         {
           "nodeId": "capture_score",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T13:51:47.214Z",
+          "completedAt": "2026-08-18T13:52:13.145Z",
+          "durationMs": 25931
         },
         {
           "nodeId": "gap_adjudicator",
-          "status": "running"
+          "status": "running",
+          "startedAt": "2026-08-18T13:52:13.145Z",
+          "completedAt": "2026-08-18T13:52:41.464Z",
+          "durationMs": 28319
         },
         {
           "nodeId": "capture_report",
@@ -2270,27 +3212,45 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:09:38.582Z",
+          "completedAt": "2026-08-18T12:10:20.230Z",
+          "durationMs": 41648
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:10:20.230Z",
+          "completedAt": "2026-08-18T12:10:50.134Z",
+          "durationMs": 29904
         },
         {
           "nodeId": "block_classifier",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:10:50.134Z",
+          "completedAt": "2026-08-18T12:11:15.673Z",
+          "durationMs": 25539
         },
         {
           "nodeId": "capture_map_refine",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:11:15.673Z",
+          "completedAt": "2026-08-18T12:11:26.753Z",
+          "durationMs": 11080
         },
         {
           "nodeId": "capture_theme",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:11:26.753Z",
+          "completedAt": "2026-08-18T12:11:59.288Z",
+          "durationMs": 32535
         },
         {
           "nodeId": "capture_emit_dry",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:11:59.288Z",
+          "completedAt": "2026-08-18T12:12:38.093Z",
+          "durationMs": 38805
         },
         {
           "nodeId": "copy_regenerator",
@@ -2298,19 +3258,31 @@
         },
         {
           "nodeId": "capture_emit_live",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:12:38.093Z",
+          "completedAt": "2026-08-18T12:13:06.072Z",
+          "durationMs": 27979
         },
         {
           "nodeId": "capture_score",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:13:06.072Z",
+          "completedAt": "2026-08-18T12:13:40.504Z",
+          "durationMs": 34432
         },
         {
           "nodeId": "gap_adjudicator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:13:40.504Z",
+          "completedAt": "2026-08-18T12:14:07.136Z",
+          "durationMs": 26632
         },
         {
           "nodeId": "capture_report",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T12:14:07.136Z",
+          "completedAt": "2026-08-18T12:14:25.661Z",
+          "durationMs": 18525
         }
       ]
     },
@@ -2337,15 +3309,24 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T10:52:06.311Z",
+          "completedAt": "2026-08-18T10:52:46.358Z",
+          "durationMs": 40047
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-18T10:52:46.358Z",
+          "completedAt": "2026-08-18T10:53:16.896Z",
+          "durationMs": 30538
         },
         {
           "nodeId": "block_classifier",
-          "status": "running"
+          "status": "running",
+          "startedAt": "2026-08-18T10:53:16.896Z",
+          "completedAt": "2026-08-18T10:53:30.928Z",
+          "durationMs": 14032
         },
         {
           "nodeId": "capture_map_refine",
@@ -2404,7 +3385,10 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-18T10:47:10.246Z",
+          "completedAt": "2026-08-18T10:47:26.731Z",
+          "durationMs": 16485
         },
         {
           "nodeId": "capture_map",
@@ -2537,15 +3521,24 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T17:48:54.342Z",
+          "completedAt": "2026-08-17T17:49:03.563Z",
+          "durationMs": 9221
         },
         {
           "nodeId": "capture_map",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T17:49:03.563Z",
+          "completedAt": "2026-08-17T17:49:20.207Z",
+          "durationMs": 16644
         },
         {
           "nodeId": "block_classifier",
-          "status": "running"
+          "status": "running",
+          "startedAt": "2026-08-17T17:49:20.207Z",
+          "completedAt": "2026-08-17T17:49:37.371Z",
+          "durationMs": 17164
         },
         {
           "nodeId": "capture_map_refine",
@@ -2604,7 +3597,10 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-17T17:47:43.244Z",
+          "completedAt": "2026-08-17T17:47:56.031Z",
+          "durationMs": 12787
         },
         {
           "nodeId": "capture_map",
@@ -2678,87 +3674,150 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:26:24.617Z",
+          "completedAt": "2026-08-17T15:26:35.764Z",
+          "durationMs": 11147
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:26:35.764Z",
+          "completedAt": "2026-08-17T15:26:43.379Z",
+          "durationMs": 7615
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:26:43.379Z",
+          "completedAt": "2026-08-17T15:27:02.184Z",
+          "durationMs": 18805
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:27:02.184Z",
+          "completedAt": "2026-08-17T15:27:28.385Z",
+          "durationMs": 26201
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:27:28.385Z",
+          "completedAt": "2026-08-17T15:27:38.114Z",
+          "durationMs": 9729
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:27:38.114Z",
+          "completedAt": "2026-08-17T15:28:10.965Z",
+          "durationMs": 32851
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:28:10.965Z",
+          "completedAt": "2026-08-17T15:28:36.948Z",
+          "durationMs": 25983
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:28:36.948Z",
+          "completedAt": "2026-08-17T15:28:56.587Z",
+          "durationMs": 19639
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:28:56.587Z",
+          "completedAt": "2026-08-17T15:29:05.127Z",
+          "durationMs": 8540
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:29:05.127Z",
+          "completedAt": "2026-08-17T15:29:15.344Z",
+          "durationMs": 10217
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:29:15.344Z",
+          "completedAt": "2026-08-17T15:29:25.812Z",
+          "durationMs": 10468
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:29:25.812Z",
+          "completedAt": "2026-08-17T15:29:49.416Z",
+          "durationMs": 23604
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:29:49.416Z",
+          "completedAt": "2026-08-17T15:30:25.712Z",
+          "durationMs": 36296
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:30:25.712Z",
+          "completedAt": "2026-08-17T15:30:53.704Z",
+          "durationMs": 27992
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:30:53.704Z",
+          "completedAt": "2026-08-17T15:31:37.585Z",
+          "durationMs": 43881
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:31:37.585Z",
+          "completedAt": "2026-08-17T15:31:44.746Z",
+          "durationMs": 7161
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:31:44.746Z",
+          "completedAt": "2026-08-17T15:31:46.012Z",
+          "durationMs": 1266
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:31:46.012Z",
+          "completedAt": "2026-08-17T15:31:59.020Z",
+          "durationMs": 13008
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:31:59.020Z",
+          "completedAt": "2026-08-17T15:32:42.246Z",
+          "durationMs": 43226
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:32:42.246Z",
+          "completedAt": "2026-08-17T15:32:59.821Z",
+          "durationMs": 17575
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-17T15:32:59.821Z",
+          "completedAt": "2026-08-17T15:33:23.272Z",
+          "durationMs": 23451
         },
         {
           "nodeId": "publish_executor",
@@ -2766,7 +3825,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T15:33:23.272Z",
+          "completedAt": "2026-08-17T15:33:33.902Z",
+          "durationMs": 10630
         }
       ]
     },
@@ -2796,7 +3858,10 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-08-17T12:37:50.844Z",
+          "completedAt": "2026-08-17T12:37:54.497Z",
+          "durationMs": 3653
         },
         {
           "nodeId": "placement_resolver",
@@ -2913,75 +3978,129 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:24:09.203Z",
+          "completedAt": "2026-08-17T12:24:15.011Z",
+          "durationMs": 5808
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:24:15.011Z",
+          "completedAt": "2026-08-17T12:24:40.522Z",
+          "durationMs": 25511
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:24:40.522Z",
+          "completedAt": "2026-08-17T12:25:12.194Z",
+          "durationMs": 31672
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:25:12.194Z",
+          "completedAt": "2026-08-17T12:25:19.193Z",
+          "durationMs": 6999
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:25:19.193Z",
+          "completedAt": "2026-08-17T12:25:23.446Z",
+          "durationMs": 4253
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:25:23.446Z",
+          "completedAt": "2026-08-17T12:25:49.772Z",
+          "durationMs": 26326
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:25:49.772Z",
+          "completedAt": "2026-08-17T12:26:32.067Z",
+          "durationMs": 42295
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:26:32.067Z",
+          "completedAt": "2026-08-17T12:27:01.773Z",
+          "durationMs": 29706
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:27:01.773Z",
+          "completedAt": "2026-08-17T12:27:34.919Z",
+          "durationMs": 33146
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:27:34.919Z",
+          "completedAt": "2026-08-17T12:27:53.673Z",
+          "durationMs": 18754
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:27:53.673Z",
+          "completedAt": "2026-08-17T12:28:19.111Z",
+          "durationMs": 25438
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:28:19.111Z",
+          "completedAt": "2026-08-17T12:28:51.949Z",
+          "durationMs": 32838
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:28:51.949Z",
+          "completedAt": "2026-08-17T12:29:20.644Z",
+          "durationMs": 28695
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:29:20.644Z",
+          "completedAt": "2026-08-17T12:29:23.826Z",
+          "durationMs": 3182
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:29:23.826Z",
+          "completedAt": "2026-08-17T12:29:52.296Z",
+          "durationMs": 28470
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:29:52.296Z",
+          "completedAt": "2026-08-17T12:30:35.346Z",
+          "durationMs": 43050
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:30:35.346Z",
+          "completedAt": "2026-08-17T12:30:43.999Z",
+          "durationMs": 8653
         },
         {
           "nodeId": "artifact_plan",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-08-17T12:30:43.999Z",
+          "completedAt": "2026-08-17T12:30:47.817Z",
+          "durationMs": 3818
         },
         {
           "nodeId": "article_body",
@@ -3037,87 +4156,150 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:23:45.799Z",
+          "completedAt": "2026-08-17T12:24:27.462Z",
+          "durationMs": 41663
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:24:27.462Z",
+          "completedAt": "2026-08-17T12:24:47.801Z",
+          "durationMs": 20339
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:24:47.801Z",
+          "completedAt": "2026-08-17T12:25:06.340Z",
+          "durationMs": 18539
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:25:06.340Z",
+          "completedAt": "2026-08-17T12:25:21.253Z",
+          "durationMs": 14913
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:25:21.253Z",
+          "completedAt": "2026-08-17T12:26:02.482Z",
+          "durationMs": 41229
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:26:02.482Z",
+          "completedAt": "2026-08-17T12:26:22.087Z",
+          "durationMs": 19605
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:26:22.087Z",
+          "completedAt": "2026-08-17T12:26:47.663Z",
+          "durationMs": 25576
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:26:47.663Z",
+          "completedAt": "2026-08-17T12:27:27.639Z",
+          "durationMs": 39976
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:27:27.639Z",
+          "completedAt": "2026-08-17T12:27:34.275Z",
+          "durationMs": 6636
         },
         {
           "nodeId": "brief_architect",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-08-17T12:27:34.275Z",
+          "completedAt": "2026-08-17T12:28:10.894Z",
+          "durationMs": 36619
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:28:10.894Z",
+          "completedAt": "2026-08-17T12:28:44.398Z",
+          "durationMs": 33504
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:28:44.398Z",
+          "completedAt": "2026-08-17T12:28:47.854Z",
+          "durationMs": 3456
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:28:47.854Z",
+          "completedAt": "2026-08-17T12:29:22.668Z",
+          "durationMs": 34814
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:29:22.668Z",
+          "completedAt": "2026-08-17T12:29:56.037Z",
+          "durationMs": 33369
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:29:56.037Z",
+          "completedAt": "2026-08-17T12:30:26.708Z",
+          "durationMs": 30671
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:30:26.708Z",
+          "completedAt": "2026-08-17T12:30:32.701Z",
+          "durationMs": 5993
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:30:32.701Z",
+          "completedAt": "2026-08-17T12:30:45.082Z",
+          "durationMs": 12381
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:30:45.082Z",
+          "completedAt": "2026-08-17T12:31:26.286Z",
+          "durationMs": 41204
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:31:26.286Z",
+          "completedAt": "2026-08-17T12:31:56.390Z",
+          "durationMs": 30104
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:31:56.390Z",
+          "completedAt": "2026-08-17T12:32:16.481Z",
+          "durationMs": 20091
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-17T12:32:16.481Z",
+          "completedAt": "2026-08-17T12:32:38.054Z",
+          "durationMs": 21573
         },
         {
           "nodeId": "publish_executor",
@@ -3125,7 +4307,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-17T12:32:38.054Z",
+          "completedAt": "2026-08-17T12:32:58.386Z",
+          "durationMs": 20332
         }
       ]
     },
@@ -3152,7 +4337,10 @@
       "nodes": [
         {
           "nodeId": "capture_crawl",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-17T11:15:04.795Z",
+          "completedAt": "2026-08-17T11:15:37.000Z",
+          "durationMs": 32205
         },
         {
           "nodeId": "capture_map",
@@ -3226,15 +4414,24 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:00:30.195Z",
+          "completedAt": "2026-08-14T07:00:40.559Z",
+          "durationMs": 10364
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:00:40.559Z",
+          "completedAt": "2026-08-14T07:00:58.241Z",
+          "durationMs": 17682
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:00:58.241Z",
+          "completedAt": "2026-08-14T07:01:06.219Z",
+          "durationMs": 7978
         },
         {
           "nodeId": "monetization_strategy",
@@ -3242,7 +4439,10 @@
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:01:06.219Z",
+          "completedAt": "2026-08-14T07:01:34.778Z",
+          "durationMs": 28559
         },
         {
           "nodeId": "research",
@@ -3250,63 +4450,108 @@
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:01:34.778Z",
+          "completedAt": "2026-08-14T07:02:01.935Z",
+          "durationMs": 27157
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:02:01.935Z",
+          "completedAt": "2026-08-14T07:02:46.805Z",
+          "durationMs": 44870
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:02:46.805Z",
+          "completedAt": "2026-08-14T07:03:05.657Z",
+          "durationMs": 18852
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:03:05.657Z",
+          "completedAt": "2026-08-14T07:03:09.559Z",
+          "durationMs": 3902
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:03:09.559Z",
+          "completedAt": "2026-08-14T07:03:51.660Z",
+          "durationMs": 42101
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:03:51.660Z",
+          "completedAt": "2026-08-14T07:04:21.647Z",
+          "durationMs": 29987
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:04:21.647Z",
+          "completedAt": "2026-08-14T07:04:26.804Z",
+          "durationMs": 5157
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:04:26.804Z",
+          "completedAt": "2026-08-14T07:05:05.074Z",
+          "durationMs": 38270
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:05:05.074Z",
+          "completedAt": "2026-08-14T07:05:26.251Z",
+          "durationMs": 21177
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:05:26.251Z",
+          "completedAt": "2026-08-14T07:05:57.183Z",
+          "durationMs": 30932
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:05:57.183Z",
+          "completedAt": "2026-08-14T07:06:38.169Z",
+          "durationMs": 40986
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:06:38.169Z",
+          "completedAt": "2026-08-14T07:06:56.788Z",
+          "durationMs": 18619
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:06:56.788Z",
+          "completedAt": "2026-08-14T07:07:30.287Z",
+          "durationMs": 33499
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:07:30.287Z",
+          "completedAt": "2026-08-14T07:07:38.243Z",
+          "durationMs": 7956
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-14T07:07:38.243Z",
+          "completedAt": "2026-08-14T07:08:08.722Z",
+          "durationMs": 30479
         },
         {
           "nodeId": "publish_executor",
@@ -3314,7 +4559,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-14T07:08:08.722Z",
+          "completedAt": "2026-08-14T07:08:36.401Z",
+          "durationMs": 27679
         }
       ]
     },
@@ -3348,15 +4596,24 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:44:27.132Z",
+          "completedAt": "2026-08-13T17:44:32.156Z",
+          "durationMs": 5024
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:44:32.156Z",
+          "completedAt": "2026-08-13T17:45:10.552Z",
+          "durationMs": 38396
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:45:10.552Z",
+          "completedAt": "2026-08-13T17:45:27.372Z",
+          "durationMs": 16820
         },
         {
           "nodeId": "monetization_strategy",
@@ -3364,7 +4621,10 @@
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:45:27.372Z",
+          "completedAt": "2026-08-13T17:46:00.390Z",
+          "durationMs": 33018
         },
         {
           "nodeId": "research",
@@ -3372,63 +4632,108 @@
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:46:00.390Z",
+          "completedAt": "2026-08-13T17:46:07.797Z",
+          "durationMs": 7407
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:46:07.797Z",
+          "completedAt": "2026-08-13T17:46:21.322Z",
+          "durationMs": 13525
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:46:21.322Z",
+          "completedAt": "2026-08-13T17:46:43.123Z",
+          "durationMs": 21801
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:46:43.123Z",
+          "completedAt": "2026-08-13T17:47:17.412Z",
+          "durationMs": 34289
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:47:17.412Z",
+          "completedAt": "2026-08-13T17:47:53.498Z",
+          "durationMs": 36086
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:47:53.498Z",
+          "completedAt": "2026-08-13T17:48:06.142Z",
+          "durationMs": 12644
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:48:06.142Z",
+          "completedAt": "2026-08-13T17:48:10.387Z",
+          "durationMs": 4245
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:48:10.387Z",
+          "completedAt": "2026-08-13T17:48:16.707Z",
+          "durationMs": 6320
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:48:16.707Z",
+          "completedAt": "2026-08-13T17:48:33.516Z",
+          "durationMs": 16809
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:48:33.516Z",
+          "completedAt": "2026-08-13T17:48:42.104Z",
+          "durationMs": 8588
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:48:42.104Z",
+          "completedAt": "2026-08-13T17:48:58.652Z",
+          "durationMs": 16548
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:48:58.652Z",
+          "completedAt": "2026-08-13T17:49:37.736Z",
+          "durationMs": 39084
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:49:37.736Z",
+          "completedAt": "2026-08-13T17:50:01.019Z",
+          "durationMs": 23283
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:50:01.019Z",
+          "completedAt": "2026-08-13T17:50:27.555Z",
+          "durationMs": 26536
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-13T17:50:27.555Z",
+          "completedAt": "2026-08-13T17:51:03.264Z",
+          "durationMs": 35709
         },
         {
           "nodeId": "publish_executor",
@@ -3436,7 +4741,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-13T17:51:03.264Z",
+          "completedAt": "2026-08-13T17:51:23.836Z",
+          "durationMs": 20572
         }
       ]
     },
@@ -3465,15 +4773,24 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:04:57.658Z",
+          "completedAt": "2026-08-12T18:05:27.771Z",
+          "durationMs": 30113
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:05:27.771Z",
+          "completedAt": "2026-08-12T18:05:43.865Z",
+          "durationMs": 16094
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:05:43.865Z",
+          "completedAt": "2026-08-12T18:06:09.783Z",
+          "durationMs": 25918
         },
         {
           "nodeId": "monetization_strategy",
@@ -3481,7 +4798,10 @@
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:06:09.783Z",
+          "completedAt": "2026-08-12T18:06:40.920Z",
+          "durationMs": 31137
         },
         {
           "nodeId": "research",
@@ -3489,51 +4809,87 @@
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:06:40.920Z",
+          "completedAt": "2026-08-12T18:06:50.757Z",
+          "durationMs": 9837
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:06:50.757Z",
+          "completedAt": "2026-08-12T18:07:31.558Z",
+          "durationMs": 40801
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:07:31.558Z",
+          "completedAt": "2026-08-12T18:08:13.022Z",
+          "durationMs": 41464
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:08:13.022Z",
+          "completedAt": "2026-08-12T18:08:30.505Z",
+          "durationMs": 17483
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:08:30.505Z",
+          "completedAt": "2026-08-12T18:09:00.939Z",
+          "durationMs": 30434
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:09:00.939Z",
+          "completedAt": "2026-08-12T18:09:21.002Z",
+          "durationMs": 20063
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:09:21.002Z",
+          "completedAt": "2026-08-12T18:09:33.855Z",
+          "durationMs": 12853
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:09:33.855Z",
+          "completedAt": "2026-08-12T18:10:17.030Z",
+          "durationMs": 43175
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:10:17.030Z",
+          "completedAt": "2026-08-12T18:10:45.182Z",
+          "durationMs": 28152
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:10:45.182Z",
+          "completedAt": "2026-08-12T18:11:24.623Z",
+          "durationMs": 39441
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:11:24.623Z",
+          "completedAt": "2026-08-12T18:11:54.708Z",
+          "durationMs": 30085
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:11:54.708Z",
+          "completedAt": "2026-08-12T18:12:28.145Z",
+          "durationMs": 33437
         },
         {
           "nodeId": "artifact_plan",
@@ -3541,19 +4897,31 @@
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:12:28.145Z",
+          "completedAt": "2026-08-12T18:12:31.275Z",
+          "durationMs": 3130
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:12:31.275Z",
+          "completedAt": "2026-08-12T18:12:46.145Z",
+          "durationMs": 14870
         },
         {
           "nodeId": "publish_executor",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:12:46.145Z",
+          "completedAt": "2026-08-12T18:13:26.905Z",
+          "durationMs": 40760
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T18:13:26.905Z",
+          "completedAt": "2026-08-12T18:13:44.777Z",
+          "durationMs": 17872
         }
       ]
     },
@@ -3581,15 +4949,24 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:25:53.280Z",
+          "completedAt": "2026-08-12T17:26:02.937Z",
+          "durationMs": 9657
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:26:02.937Z",
+          "completedAt": "2026-08-12T17:26:36.798Z",
+          "durationMs": 33861
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:26:36.798Z",
+          "completedAt": "2026-08-12T17:27:02.133Z",
+          "durationMs": 25335
         },
         {
           "nodeId": "monetization_strategy",
@@ -3597,7 +4974,10 @@
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:27:02.133Z",
+          "completedAt": "2026-08-12T17:27:15.421Z",
+          "durationMs": 13288
         },
         {
           "nodeId": "research",
@@ -3605,51 +4985,87 @@
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:27:15.421Z",
+          "completedAt": "2026-08-12T17:27:48.265Z",
+          "durationMs": 32844
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:27:48.265Z",
+          "completedAt": "2026-08-12T17:28:01.098Z",
+          "durationMs": 12833
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:28:01.098Z",
+          "completedAt": "2026-08-12T17:28:15.383Z",
+          "durationMs": 14285
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:28:15.383Z",
+          "completedAt": "2026-08-12T17:28:17.556Z",
+          "durationMs": 2173
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:28:17.556Z",
+          "completedAt": "2026-08-12T17:28:35.839Z",
+          "durationMs": 18283
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:28:35.839Z",
+          "completedAt": "2026-08-12T17:28:55.646Z",
+          "durationMs": 19807
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:28:55.646Z",
+          "completedAt": "2026-08-12T17:29:38.404Z",
+          "durationMs": 42758
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:29:38.404Z",
+          "completedAt": "2026-08-12T17:30:02.196Z",
+          "durationMs": 23792
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:30:02.196Z",
+          "completedAt": "2026-08-12T17:30:03.599Z",
+          "durationMs": 1403
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:30:03.599Z",
+          "completedAt": "2026-08-12T17:30:14.461Z",
+          "durationMs": 10862
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:30:14.461Z",
+          "completedAt": "2026-08-12T17:30:58.341Z",
+          "durationMs": 43880
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:30:58.341Z",
+          "completedAt": "2026-08-12T17:31:22.395Z",
+          "durationMs": 24054
         },
         {
           "nodeId": "artifact_plan",
@@ -3657,19 +5073,31 @@
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:31:22.395Z",
+          "completedAt": "2026-08-12T17:31:28.319Z",
+          "durationMs": 5924
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:31:28.319Z",
+          "completedAt": "2026-08-12T17:31:32.917Z",
+          "durationMs": 4598
         },
         {
           "nodeId": "publish_executor",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-12T17:31:32.917Z",
+          "completedAt": "2026-08-12T17:32:12.470Z",
+          "durationMs": 39553
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T17:32:12.470Z",
+          "completedAt": "2026-08-12T17:32:36.589Z",
+          "durationMs": 24119
         }
       ]
     },
@@ -3697,75 +5125,129 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:51:47.146Z",
+          "completedAt": "2026-08-12T15:52:23.227Z",
+          "durationMs": 36081
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:52:23.227Z",
+          "completedAt": "2026-08-12T15:53:00.477Z",
+          "durationMs": 37250
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:53:00.477Z",
+          "completedAt": "2026-08-12T15:53:29.445Z",
+          "durationMs": 28968
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:53:29.445Z",
+          "completedAt": "2026-08-12T15:54:13.053Z",
+          "durationMs": 43608
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:54:13.053Z",
+          "completedAt": "2026-08-12T15:54:30.182Z",
+          "durationMs": 17129
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:54:30.182Z",
+          "completedAt": "2026-08-12T15:55:02.853Z",
+          "durationMs": 32671
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:55:02.853Z",
+          "completedAt": "2026-08-12T15:55:08.649Z",
+          "durationMs": 5796
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:55:08.649Z",
+          "completedAt": "2026-08-12T15:55:49.993Z",
+          "durationMs": 41344
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:55:49.993Z",
+          "completedAt": "2026-08-12T15:56:19.437Z",
+          "durationMs": 29444
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:56:19.437Z",
+          "completedAt": "2026-08-12T15:56:42.307Z",
+          "durationMs": 22870
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:56:42.307Z",
+          "completedAt": "2026-08-12T15:57:20.442Z",
+          "durationMs": 38135
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:57:20.442Z",
+          "completedAt": "2026-08-12T15:57:44.087Z",
+          "durationMs": 23645
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:57:44.087Z",
+          "completedAt": "2026-08-12T15:57:49.338Z",
+          "durationMs": 5251
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:57:49.338Z",
+          "completedAt": "2026-08-12T15:58:13.381Z",
+          "durationMs": 24043
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:58:13.381Z",
+          "completedAt": "2026-08-12T15:58:44.716Z",
+          "durationMs": 31335
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:58:44.716Z",
+          "completedAt": "2026-08-12T15:59:09.948Z",
+          "durationMs": 25232
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:59:09.948Z",
+          "completedAt": "2026-08-12T15:59:24.125Z",
+          "durationMs": 14177
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T15:59:24.125Z",
+          "completedAt": "2026-08-12T16:00:04.860Z",
+          "durationMs": 40735
         },
         {
           "nodeId": "artifact_plan",
@@ -3773,19 +5255,31 @@
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T16:00:04.860Z",
+          "completedAt": "2026-08-12T16:00:47.135Z",
+          "durationMs": 42275
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T16:00:47.135Z",
+          "completedAt": "2026-08-12T16:01:23.629Z",
+          "durationMs": 36494
         },
         {
           "nodeId": "publish_executor",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-08-12T16:01:23.629Z",
+          "completedAt": "2026-08-12T16:01:26.376Z",
+          "durationMs": 2747
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-12T16:01:26.376Z",
+          "completedAt": "2026-08-12T16:01:32.327Z",
+          "durationMs": 5951
         }
       ]
     },
@@ -3814,95 +5308,164 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:08:46.136Z",
+          "completedAt": "2026-08-11T17:09:15.530Z",
+          "durationMs": 29394
         },
         {
           "nodeId": "placement_resolver",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:09:15.530Z",
+          "completedAt": "2026-08-11T17:09:50.383Z",
+          "durationMs": 34853
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:09:50.383Z",
+          "completedAt": "2026-08-11T17:10:17.945Z",
+          "durationMs": 27562
         },
         {
           "nodeId": "monetization_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:10:17.945Z",
+          "completedAt": "2026-08-11T17:10:29.084Z",
+          "durationMs": 11139
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:10:29.084Z",
+          "completedAt": "2026-08-11T17:10:40.213Z",
+          "durationMs": 11129
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:10:40.213Z",
+          "completedAt": "2026-08-11T17:11:06.432Z",
+          "durationMs": 26219
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:11:06.432Z",
+          "completedAt": "2026-08-11T17:11:20.611Z",
+          "durationMs": 14179
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:11:20.611Z",
+          "completedAt": "2026-08-11T17:11:47.930Z",
+          "durationMs": 27319
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:11:47.930Z",
+          "completedAt": "2026-08-11T17:11:49.802Z",
+          "durationMs": 1872
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:11:49.802Z",
+          "completedAt": "2026-08-11T17:12:24.949Z",
+          "durationMs": 35147
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:12:24.949Z",
+          "completedAt": "2026-08-11T17:13:00.329Z",
+          "durationMs": 35380
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:13:00.329Z",
+          "completedAt": "2026-08-11T17:13:14.984Z",
+          "durationMs": 14655
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:13:14.984Z",
+          "completedAt": "2026-08-11T17:13:49.154Z",
+          "durationMs": 34170
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:13:49.154Z",
+          "completedAt": "2026-08-11T17:13:54.877Z",
+          "durationMs": 5723
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:13:54.877Z",
+          "completedAt": "2026-08-11T17:14:21.068Z",
+          "durationMs": 26191
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:14:21.068Z",
+          "completedAt": "2026-08-11T17:15:01.991Z",
+          "durationMs": 40923
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:15:01.991Z",
+          "completedAt": "2026-08-11T17:15:21.476Z",
+          "durationMs": 19485
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:15:21.476Z",
+          "completedAt": "2026-08-11T17:15:28.457Z",
+          "durationMs": 6981
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:15:28.457Z",
+          "completedAt": "2026-08-11T17:15:31.277Z",
+          "durationMs": 2820
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:15:31.277Z",
+          "completedAt": "2026-08-11T17:15:59.893Z",
+          "durationMs": 28616
         },
         {
           "nodeId": "publication_controller",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:15:59.893Z",
+          "completedAt": "2026-08-11T17:16:28.605Z",
+          "durationMs": 28712
         },
         {
           "nodeId": "publish_executor",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:16:28.605Z",
+          "completedAt": "2026-08-11T17:16:40.130Z",
+          "durationMs": 11525
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-11T17:16:40.130Z",
+          "completedAt": "2026-08-11T17:16:44.475Z",
+          "durationMs": 4345
         }
       ]
     },
@@ -3929,71 +5492,122 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:20:30.907Z",
+          "completedAt": "2026-08-04T11:20:51.606Z",
+          "durationMs": 20699
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:20:51.606Z",
+          "completedAt": "2026-08-04T11:20:54.778Z",
+          "durationMs": 3172
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:20:54.778Z",
+          "completedAt": "2026-08-04T11:21:26.670Z",
+          "durationMs": 31892
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:21:26.670Z",
+          "completedAt": "2026-08-04T11:22:02.727Z",
+          "durationMs": 36057
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:22:02.727Z",
+          "completedAt": "2026-08-04T11:22:12.282Z",
+          "durationMs": 9555
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:22:12.282Z",
+          "completedAt": "2026-08-04T11:22:42.107Z",
+          "durationMs": 29825
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:22:42.107Z",
+          "completedAt": "2026-08-04T11:23:13.011Z",
+          "durationMs": 30904
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:23:13.011Z",
+          "completedAt": "2026-08-04T11:23:22.828Z",
+          "durationMs": 9817
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:23:22.828Z",
+          "completedAt": "2026-08-04T11:23:25.172Z",
+          "durationMs": 2344
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:23:25.172Z",
+          "completedAt": "2026-08-04T11:23:42.957Z",
+          "durationMs": 17785
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:23:42.957Z",
+          "completedAt": "2026-08-04T11:24:19.921Z",
+          "durationMs": 36964
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:24:19.921Z",
+          "completedAt": "2026-08-04T11:24:48.346Z",
+          "durationMs": 28425
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:24:48.346Z",
+          "completedAt": "2026-08-04T11:24:54.478Z",
+          "durationMs": 6132
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:24:54.478Z",
+          "completedAt": "2026-08-04T11:25:07.469Z",
+          "durationMs": 12991
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:25:07.469Z",
+          "completedAt": "2026-08-04T11:25:25.527Z",
+          "durationMs": 18058
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:25:25.527Z",
+          "completedAt": "2026-08-04T11:25:56.621Z",
+          "durationMs": 31094
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:25:56.621Z",
+          "completedAt": "2026-08-04T11:26:33.307Z",
+          "durationMs": 36686
         },
         {
           "nodeId": "publish_payload",
@@ -4005,7 +5619,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-08-04T11:26:33.307Z",
+          "completedAt": "2026-08-04T11:26:57.629Z",
+          "durationMs": 24322
         },
         {
           "nodeId": "publish_executor",
@@ -4038,75 +5655,129 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:25:47.311Z",
+          "completedAt": "2026-07-30T18:26:29.641Z",
+          "durationMs": 42330
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:26:29.641Z",
+          "completedAt": "2026-07-30T18:26:44.689Z",
+          "durationMs": 15048
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:26:44.689Z",
+          "completedAt": "2026-07-30T18:27:24.333Z",
+          "durationMs": 39644
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:27:24.333Z",
+          "completedAt": "2026-07-30T18:27:38.241Z",
+          "durationMs": 13908
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:27:38.241Z",
+          "completedAt": "2026-07-30T18:28:20.459Z",
+          "durationMs": 42218
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:28:20.459Z",
+          "completedAt": "2026-07-30T18:28:54.090Z",
+          "durationMs": 33631
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:28:54.090Z",
+          "completedAt": "2026-07-30T18:29:03.739Z",
+          "durationMs": 9649
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:29:03.739Z",
+          "completedAt": "2026-07-30T18:29:13.994Z",
+          "durationMs": 10255
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:29:13.994Z",
+          "completedAt": "2026-07-30T18:29:21.506Z",
+          "durationMs": 7512
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:29:21.506Z",
+          "completedAt": "2026-07-30T18:29:43.305Z",
+          "durationMs": 21799
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:29:43.305Z",
+          "completedAt": "2026-07-30T18:30:05.693Z",
+          "durationMs": 22388
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:30:05.693Z",
+          "completedAt": "2026-07-30T18:30:28.109Z",
+          "durationMs": 22416
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:30:28.109Z",
+          "completedAt": "2026-07-30T18:31:06.220Z",
+          "durationMs": 38111
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:31:06.220Z",
+          "completedAt": "2026-07-30T18:31:49.012Z",
+          "durationMs": 42792
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:31:49.012Z",
+          "completedAt": "2026-07-30T18:32:26.621Z",
+          "durationMs": 37609
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:32:26.621Z",
+          "completedAt": "2026-07-30T18:32:35.108Z",
+          "durationMs": 8487
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T18:32:35.108Z",
+          "completedAt": "2026-07-30T18:32:54.298Z",
+          "durationMs": 19190
         },
         {
           "nodeId": "publish_payload",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-07-30T18:32:54.298Z",
+          "completedAt": "2026-07-30T18:33:36.028Z",
+          "durationMs": 41730
         },
         {
           "nodeId": "publication_controller",
@@ -4114,7 +5785,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-07-30T18:33:36.028Z",
+          "completedAt": "2026-07-30T18:33:43.621Z",
+          "durationMs": 7593
         },
         {
           "nodeId": "publish_executor",
@@ -4154,75 +5828,129 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:55:50.649Z",
+          "completedAt": "2026-07-30T09:56:13.282Z",
+          "durationMs": 22633
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:56:13.282Z",
+          "completedAt": "2026-07-30T09:56:50.945Z",
+          "durationMs": 37663
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:56:50.945Z",
+          "completedAt": "2026-07-30T09:56:52.750Z",
+          "durationMs": 1805
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:56:52.750Z",
+          "completedAt": "2026-07-30T09:56:56.472Z",
+          "durationMs": 3722
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:56:56.472Z",
+          "completedAt": "2026-07-30T09:57:35.931Z",
+          "durationMs": 39459
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:57:35.931Z",
+          "completedAt": "2026-07-30T09:57:41.240Z",
+          "durationMs": 5309
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:57:41.240Z",
+          "completedAt": "2026-07-30T09:58:16.068Z",
+          "durationMs": 34828
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:58:16.068Z",
+          "completedAt": "2026-07-30T09:58:48.503Z",
+          "durationMs": 32435
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:58:48.503Z",
+          "completedAt": "2026-07-30T09:59:25.980Z",
+          "durationMs": 37477
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T09:59:25.980Z",
+          "completedAt": "2026-07-30T10:00:02.032Z",
+          "durationMs": 36052
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T10:00:02.032Z",
+          "completedAt": "2026-07-30T10:00:14.844Z",
+          "durationMs": 12812
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T10:00:14.844Z",
+          "completedAt": "2026-07-30T10:00:52.206Z",
+          "durationMs": 37362
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T10:00:52.206Z",
+          "completedAt": "2026-07-30T10:01:19.114Z",
+          "durationMs": 26908
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T10:01:19.114Z",
+          "completedAt": "2026-07-30T10:01:48.063Z",
+          "durationMs": 28949
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T10:01:48.063Z",
+          "completedAt": "2026-07-30T10:02:27.167Z",
+          "durationMs": 39104
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T10:02:27.167Z",
+          "completedAt": "2026-07-30T10:03:00.573Z",
+          "durationMs": 33406
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T10:03:00.573Z",
+          "completedAt": "2026-07-30T10:03:36.347Z",
+          "durationMs": 35774
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-30T10:03:36.347Z",
+          "completedAt": "2026-07-30T10:03:57.858Z",
+          "durationMs": 21511
         },
         {
           "nodeId": "publication_controller",
@@ -4230,7 +5958,10 @@
         },
         {
           "nodeId": "learning_recorder",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-07-30T10:03:57.858Z",
+          "completedAt": "2026-07-30T10:04:13.387Z",
+          "durationMs": 15529
         },
         {
           "nodeId": "publish_executor",
@@ -4270,83 +6001,143 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:20:38.155Z",
+          "completedAt": "2026-07-29T19:20:41.682Z",
+          "durationMs": 3527
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:20:41.682Z",
+          "completedAt": "2026-07-29T19:21:03.053Z",
+          "durationMs": 21371
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:21:03.053Z",
+          "completedAt": "2026-07-29T19:21:05.196Z",
+          "durationMs": 2143
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:21:05.196Z",
+          "completedAt": "2026-07-29T19:21:47.901Z",
+          "durationMs": 42705
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:21:47.901Z",
+          "completedAt": "2026-07-29T19:22:29.170Z",
+          "durationMs": 41269
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:22:29.170Z",
+          "completedAt": "2026-07-29T19:22:38.186Z",
+          "durationMs": 9016
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:22:38.186Z",
+          "completedAt": "2026-07-29T19:22:52.734Z",
+          "durationMs": 14548
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:22:52.734Z",
+          "completedAt": "2026-07-29T19:23:18.228Z",
+          "durationMs": 25494
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:23:18.228Z",
+          "completedAt": "2026-07-29T19:23:36.833Z",
+          "durationMs": 18605
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:23:36.833Z",
+          "completedAt": "2026-07-29T19:24:05.673Z",
+          "durationMs": 28840
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:24:05.673Z",
+          "completedAt": "2026-07-29T19:24:23.339Z",
+          "durationMs": 17666
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:24:23.339Z",
+          "completedAt": "2026-07-29T19:24:46.283Z",
+          "durationMs": 22944
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:24:46.283Z",
+          "completedAt": "2026-07-29T19:25:27.079Z",
+          "durationMs": 40796
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:25:27.079Z",
+          "completedAt": "2026-07-29T19:25:48.216Z",
+          "durationMs": 21137
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:25:48.216Z",
+          "completedAt": "2026-07-29T19:25:57.974Z",
+          "durationMs": 9758
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:25:57.974Z",
+          "completedAt": "2026-07-29T19:26:08.178Z",
+          "durationMs": 10204
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:26:08.178Z",
+          "completedAt": "2026-07-29T19:26:47.959Z",
+          "durationMs": 39781
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T19:26:47.959Z",
+          "completedAt": "2026-07-29T19:26:50.750Z",
+          "durationMs": 2791
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-07-29T19:26:50.750Z",
+          "completedAt": "2026-07-29T19:26:59.574Z",
+          "durationMs": 8824
         },
         {
           "nodeId": "learning_recorder",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-07-29T19:26:59.574Z",
+          "completedAt": "2026-07-29T19:27:26.262Z",
+          "durationMs": 26688
         },
         {
           "nodeId": "publish_executor",
@@ -4383,79 +6174,136 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:46:51.864Z",
+          "completedAt": "2026-07-29T15:47:34.594Z",
+          "durationMs": 42730
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:47:34.594Z",
+          "completedAt": "2026-07-29T15:47:40.578Z",
+          "durationMs": 5984
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:47:40.578Z",
+          "completedAt": "2026-07-29T15:48:04.410Z",
+          "durationMs": 23832
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:48:04.410Z",
+          "completedAt": "2026-07-29T15:48:18.292Z",
+          "durationMs": 13882
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:48:18.292Z",
+          "completedAt": "2026-07-29T15:48:29.892Z",
+          "durationMs": 11600
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:48:29.892Z",
+          "completedAt": "2026-07-29T15:48:36.334Z",
+          "durationMs": 6442
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:48:36.334Z",
+          "completedAt": "2026-07-29T15:49:09.680Z",
+          "durationMs": 33346
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:49:09.680Z",
+          "completedAt": "2026-07-29T15:49:51.898Z",
+          "durationMs": 42218
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:49:51.898Z",
+          "completedAt": "2026-07-29T15:50:32.165Z",
+          "durationMs": 40267
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:50:32.165Z",
+          "completedAt": "2026-07-29T15:50:45.457Z",
+          "durationMs": 13292
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:50:45.457Z",
+          "completedAt": "2026-07-29T15:50:52.532Z",
+          "durationMs": 7075
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:50:52.532Z",
+          "completedAt": "2026-07-29T15:51:18.427Z",
+          "durationMs": 25895
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:51:18.427Z",
+          "completedAt": "2026-07-29T15:51:28.924Z",
+          "durationMs": 10497
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:51:28.924Z",
+          "completedAt": "2026-07-29T15:51:56.831Z",
+          "durationMs": 27907
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:51:56.831Z",
+          "completedAt": "2026-07-29T15:52:02.081Z",
+          "durationMs": 5250
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:52:02.081Z",
+          "completedAt": "2026-07-29T15:52:03.885Z",
+          "durationMs": 1804
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:52:03.885Z",
+          "completedAt": "2026-07-29T15:52:45.680Z",
+          "durationMs": 41795
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-29T15:52:45.680Z",
+          "completedAt": "2026-07-29T15:53:28.632Z",
+          "durationMs": 42952
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-07-29T15:53:28.632Z",
+          "completedAt": "2026-07-29T15:53:33.384Z",
+          "durationMs": 4752
         },
         {
           "nodeId": "learning_recorder",
@@ -4496,79 +6344,136 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:00:55.518Z",
+          "completedAt": "2026-07-28T14:01:01.229Z",
+          "durationMs": 5711
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:01:01.229Z",
+          "completedAt": "2026-07-28T14:01:12.272Z",
+          "durationMs": 11043
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:01:12.272Z",
+          "completedAt": "2026-07-28T14:01:34.601Z",
+          "durationMs": 22329
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:01:34.601Z",
+          "completedAt": "2026-07-28T14:02:00.238Z",
+          "durationMs": 25637
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:02:00.238Z",
+          "completedAt": "2026-07-28T14:02:43.020Z",
+          "durationMs": 42782
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:02:43.020Z",
+          "completedAt": "2026-07-28T14:02:59.459Z",
+          "durationMs": 16439
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:02:59.459Z",
+          "completedAt": "2026-07-28T14:03:11.204Z",
+          "durationMs": 11745
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:03:11.204Z",
+          "completedAt": "2026-07-28T14:03:28.764Z",
+          "durationMs": 17560
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:03:28.764Z",
+          "completedAt": "2026-07-28T14:04:11.626Z",
+          "durationMs": 42862
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:04:11.626Z",
+          "completedAt": "2026-07-28T14:04:48.592Z",
+          "durationMs": 36966
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:04:48.592Z",
+          "completedAt": "2026-07-28T14:04:50.870Z",
+          "durationMs": 2278
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:04:50.870Z",
+          "completedAt": "2026-07-28T14:04:58.514Z",
+          "durationMs": 7644
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:04:58.514Z",
+          "completedAt": "2026-07-28T14:05:34.135Z",
+          "durationMs": 35621
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:05:34.135Z",
+          "completedAt": "2026-07-28T14:05:50.670Z",
+          "durationMs": 16535
         },
         {
           "nodeId": "contract_intelligence",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:05:50.670Z",
+          "completedAt": "2026-07-28T14:06:21.497Z",
+          "durationMs": 30827
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:06:21.497Z",
+          "completedAt": "2026-07-28T14:06:53.192Z",
+          "durationMs": 31695
         },
         {
           "nodeId": "artifact_plan",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:06:53.192Z",
+          "completedAt": "2026-07-28T14:07:17.900Z",
+          "durationMs": 24708
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T14:07:17.900Z",
+          "completedAt": "2026-07-28T14:07:47.936Z",
+          "durationMs": 30036
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-07-28T14:07:47.936Z",
+          "completedAt": "2026-07-28T14:08:32.269Z",
+          "durationMs": 44333
         },
         {
           "nodeId": "learning_recorder",
@@ -4698,19 +6603,31 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T10:49:27.862Z",
+          "completedAt": "2026-07-28T10:49:46.025Z",
+          "durationMs": 18163
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T10:49:46.025Z",
+          "completedAt": "2026-07-28T10:50:01.000Z",
+          "durationMs": 14975
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T10:50:01.000Z",
+          "completedAt": "2026-07-28T10:50:28.464Z",
+          "durationMs": 27464
         },
         {
           "nodeId": "research",
-          "status": "failed"
+          "status": "failed",
+          "startedAt": "2026-07-28T10:50:28.464Z",
+          "completedAt": "2026-07-28T10:50:44.433Z",
+          "durationMs": 15969
         },
         {
           "nodeId": "objection_mapping",
@@ -4799,71 +6716,122 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:15:04.649Z",
+          "completedAt": "2026-07-28T09:15:06.170Z",
+          "durationMs": 1521
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:15:06.170Z",
+          "completedAt": "2026-07-28T09:15:16.380Z",
+          "durationMs": 10210
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:15:16.380Z",
+          "completedAt": "2026-07-28T09:15:50.874Z",
+          "durationMs": 34494
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:15:50.874Z",
+          "completedAt": "2026-07-28T09:16:03.751Z",
+          "durationMs": 12877
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:16:03.751Z",
+          "completedAt": "2026-07-28T09:16:06.152Z",
+          "durationMs": 2401
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:16:06.152Z",
+          "completedAt": "2026-07-28T09:16:47.022Z",
+          "durationMs": 40870
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:16:47.022Z",
+          "completedAt": "2026-07-28T09:16:55.584Z",
+          "durationMs": 8562
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:16:55.584Z",
+          "completedAt": "2026-07-28T09:17:27.774Z",
+          "durationMs": 32190
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:17:27.774Z",
+          "completedAt": "2026-07-28T09:17:45.122Z",
+          "durationMs": 17348
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:17:45.122Z",
+          "completedAt": "2026-07-28T09:18:14.882Z",
+          "durationMs": 29760
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:18:14.882Z",
+          "completedAt": "2026-07-28T09:18:56.643Z",
+          "durationMs": 41761
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:18:56.643Z",
+          "completedAt": "2026-07-28T09:19:31.093Z",
+          "durationMs": 34450
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:19:31.093Z",
+          "completedAt": "2026-07-28T09:19:38.763Z",
+          "durationMs": 7670
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:19:38.763Z",
+          "completedAt": "2026-07-28T09:20:00.381Z",
+          "durationMs": 21618
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:20:00.381Z",
+          "completedAt": "2026-07-28T09:20:25.794Z",
+          "durationMs": 25413
         },
         {
           "nodeId": "publish_payload",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-28T09:20:25.794Z",
+          "completedAt": "2026-07-28T09:20:41.338Z",
+          "durationMs": 15544
         },
         {
           "nodeId": "publication_controller",
-          "status": "blocked"
+          "status": "blocked",
+          "startedAt": "2026-07-28T09:20:41.338Z",
+          "completedAt": "2026-07-28T09:21:03.747Z",
+          "durationMs": 22409
         },
         {
           "nodeId": "learning_recorder",
@@ -4987,63 +6955,108 @@
       "nodes": [
         {
           "nodeId": "input_triage",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:07:52.610Z",
+          "completedAt": "2026-07-27T12:08:23.167Z",
+          "durationMs": 30557
         },
         {
           "nodeId": "topic_opportunity",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:08:23.167Z",
+          "completedAt": "2026-07-27T12:08:51.289Z",
+          "durationMs": 28122
         },
         {
           "nodeId": "reader_insight",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:08:51.289Z",
+          "completedAt": "2026-07-27T12:09:19.559Z",
+          "durationMs": 28270
         },
         {
           "nodeId": "research",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:09:19.559Z",
+          "completedAt": "2026-07-27T12:09:46.717Z",
+          "durationMs": 27158
         },
         {
           "nodeId": "objection_mapping",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:09:46.717Z",
+          "completedAt": "2026-07-27T12:10:29.694Z",
+          "durationMs": 42977
         },
         {
           "nodeId": "narrative_movement",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:10:29.694Z",
+          "completedAt": "2026-07-27T12:10:39.695Z",
+          "durationMs": 10001
         },
         {
           "nodeId": "angle_strategy",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:10:39.695Z",
+          "completedAt": "2026-07-27T12:11:05.473Z",
+          "durationMs": 25778
         },
         {
           "nodeId": "brief_architect",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:11:05.473Z",
+          "completedAt": "2026-07-27T12:11:30.309Z",
+          "durationMs": 24836
         },
         {
           "nodeId": "draft_writer",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:11:30.309Z",
+          "completedAt": "2026-07-27T12:12:13.535Z",
+          "durationMs": 43226
         },
         {
           "nodeId": "human_texture",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:12:13.535Z",
+          "completedAt": "2026-07-27T12:12:34.811Z",
+          "durationMs": 21276
         },
         {
           "nodeId": "trust_factual",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:12:34.811Z",
+          "completedAt": "2026-07-27T12:12:42.655Z",
+          "durationMs": 7844
         },
         {
           "nodeId": "emotional_resonance",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:12:42.655Z",
+          "completedAt": "2026-07-27T12:12:47.416Z",
+          "durationMs": 4761
         },
         {
           "nodeId": "reader_simulation",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:12:47.416Z",
+          "completedAt": "2026-07-27T12:13:00.046Z",
+          "durationMs": 12630
         },
         {
           "nodeId": "review_aggregator",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:13:00.046Z",
+          "completedAt": "2026-07-27T12:13:11.415Z",
+          "durationMs": 11369
         },
         {
           "nodeId": "article_body",
-          "status": "completed"
+          "status": "completed",
+          "startedAt": "2026-07-27T12:13:11.415Z",
+          "completedAt": "2026-07-27T12:13:49.659Z",
+          "durationMs": 38244
         },
         {
           "nodeId": "publish_payload",

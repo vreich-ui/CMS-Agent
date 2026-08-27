@@ -66,10 +66,11 @@ export function resetConfirmHandler(): void {
  */
 export async function confirmAction<T>(opts: ConfirmOptions, fn: () => Promise<T>): Promise<T> {
   if (IS_READ_ONLY) {
-    throw new ReadOnlyError(
-      opts.verb,
-      `"${opts.verb}" is disabled — the workbench is running read-only. Ask the operator to set VITE_READ_ONLY=0 to enable mutations.`,
-    );
+    // U7 polish — this used to pass its own developer-facing message
+    // (naming VITE_READ_ONLY), which shadowed ReadOnlyError's own P2-06
+    // operator-copy default in client.ts. Passing nothing lets that good
+    // default through instead.
+    throw new ReadOnlyError(opts.verb);
   }
 
   const ok = await confirmHandler(opts);

@@ -7,11 +7,15 @@ export default defineConfig({
   fullyParallel: true,
   webServer: {
     command: 'npm run dev',
-    port: 5173,
+    // Pinned off the Vite default (5173) — see vite.config.ts's own note:
+    // sibling worktrees run their own dev servers, and a port collision
+    // with `reuseExistingServer: true` means this suite would silently test
+    // whatever already happens to be listening, not this worktree's build.
+    port: 5183,
     reuseExistingServer: true,
   },
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://localhost:5183',
   },
   projects: [
     {

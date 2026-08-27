@@ -1,38 +1,48 @@
-// History tab — WP-34. The full change feed for this node: every locally
-// recorded edit from the Prompt/Tools/Skills/Schemas/Model tabs (Shared.tsx's
-// change log — changes_list always returns [] in fixture mode, see its doc
-// comment) merged with whatever changes_list actually returns, each row
-// diffable (changes_compare backstopped by a local line diff) and
-// restorable (changes_restore). Optimizer promotions render their trial
-// attribution + score delta wherever an entry actually carries one — never
-// fabricated, since none exist in this fixture set today.
+// History tab — WP-34, reworked for U2. The full change feed for this
+// node: every locally recorded edit from the Prompt/Tools/Skills/Schemas/
+// Model tabs (Shared.tsx's change log) merged with whatever changes_list
+// actually returns (real fixture events now — five authored cases, see
+// api/fixtures/changes.json), each row diffable and restorable
+// (changes_restore). Optimizer promotions render their trial attribution +
+// score delta wherever an entry actually carries one.
+//
+// U2 — the JSON-wall-with-strikethrough diff view is gone. Every
+// API-backed row (a real change event, with real parent→resulting
+// revision ids) opens the diff & merge studio in 'revisions' mode instead
+// — the readable, type-aware, editable surface. Locally-recorded rows (an
+// unsaved-to-server session edit from another tab, with no revision id of
+// its own to look up) get the SAME diff engine, rendered inline right here
+// — never the studio's full three-pane chrome (there is nothing to
+// restore-to or open by URL for a change that was never actually
+// persisted), but never a raw JSON dump either.
 //
 // Restore applies the entry's prior value straight into the field's own
 // editor/query cache and jumps the operator there, so "the operator sees
 // the restored value immediately" is literal, not just a toast.
 
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ActionCancelledError } from '../../../api/confirmAction';
 import { IS_READ_ONLY } from '../../../api/client';
-import { changesRestore, type ChangeRecord, type JSONSchema } from '../../../api/verbs';
+import { changesListEvents, changesRestore, type ChangeRecord, type JSONSchema } from '../../../api/verbs';
 import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
 import { Card } from '../../../components/primitives';
 import { toast } from '../../../components/Toasts';
 import { useStore } from '../../../store';
 import type { NodeTab, WorkflowNode } from '../../../types';
 import { useChangesList } from '../queries';
+import { ProseDiffView } from '../../../components/diff/ProseDiffView';
+import { FieldRow } from '../../../components/diff/FieldsDiffView';
+import { classifyValueDiff } from '../../../components/diff/structuredDiff';
+import { computeProseDiff } from '../../../components/diff/textDiff';
 import {
   clearLocalDraft,
-  DiffLines,
-  diffLines,
   ErrorNote,
   LoadingNote,
   READONLY_REASON,
   recordChange,
   setLocalDraft,
   setSchemaOverlay,
-  stringifyForDiff,
   useLocalHistory,
   type ChangeKind,
   type HistoryEntry,
@@ -73,16 +83,61 @@ function fromApiRecord(r: ChangeRecord): HistoryEntry {
   };
 }
 
+/** Renders one entry's before/after with the same engine the diff studio
+ * uses: prose (word-level) for a prompt, a single structured field row for
+ * everything else. */
+function InlineEntryDiff({ entry }: { entry: HistoryEntry }) {
+  if (entry.kind === 'prompt') {
+    const before = typeof entry.before === 'string' ? entry.before : '';
+    const after = typeof entry.after === 'string' ? entry.after : '';
+    return (
+      <ProseDiffView
+        lines={computeProseDiff(before, after)}
+        layout="inline"
+        leftLabel="before"
+        rightLabel="after"
+      />
+    );
+  }
+  return <FieldRow row={classifyValueDiff(entry.label, entry.before, entry.after)} />;
+}
+
 export function HistoryTab({ nodeId }: { nodeId: string }) {
   const changesQ = useChangesList(nodeId);
+  // Full events (not the flattened ChangeRecord shape) so a "diff" click on
+  // an API-backed row can open the studio on the real parent→resulting
+  // revision pair — the exact surface Wolf asked for on History rows.
+  const eventsQ = useQuery({
+    queryKey: ['changeEvents', nodeId],
+    queryFn: () => changesListEvents({ nodeId }),
+    enabled: Boolean(nodeId),
+  });
+  const parentByResulting = new Map<string, string | undefined>();
+  for (const e of eventsQ.data?.events ?? []) {
+    if (e.resultingRevisionId) parentByResulting.set(e.resultingRevisionId, e.parentRevisionId);
+  }
+
   const localEntries = useLocalHistory(nodeId);
   const apiEntries = (changesQ.data ?? []).map(fromApiRecord);
   const entries = [...localEntries, ...apiEntries].sort((a, b) => (a.whenIso < b.whenIso ? 1 : -1));
 
   const qc = useQueryClient();
   const setTab = useStore((s) => s.setTab);
+  const openModal = useStore((s) => s.openModal);
   const [openDiff, setOpenDiff] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
+
+  function openStudio(entry: HistoryEntry) {
+    const parent = parentByResulting.get(entry.id);
+    if (!parent) {
+      toast(
+        'No comparable revision',
+        'This entry has no recorded parent revision to compare against (changes_list didn\'t carry one for it).',
+      );
+      return;
+    }
+    openModal('diff', { mode: 'revisions', node: nodeId, revA: parent, revB: entry.id });
+  }
 
   async function handleRestore(entry: HistoryEntry, triggerEl: HTMLElement | null) {
     if (restoring) return;
@@ -128,12 +183,16 @@ export function HistoryTab({ nodeId }: { nodeId: string }) {
         !changesQ.isError &&
         entries.map((entry) => {
           const open = openDiff === entry.id;
+          const isApi = entry.source === 'api';
           return (
             <div key={entry.id}>
               <div className="histrow">
                 <span className="when">{entry.when}</span>
                 <span className="what">
                   {entry.label}
+                  <span className="chip" style={{ marginLeft: 8 }}>
+                    {entry.author}
+                  </span>
                   {entry.trial && (
                     <span className="mono" style={{ color: 'var(--acc)', marginLeft: 8 }}>
                       trial {entry.trial.id} · Δ{entry.trial.scoreDelta >= 0 ? '+' : ''}
@@ -141,9 +200,15 @@ export function HistoryTab({ nodeId }: { nodeId: string }) {
                     </span>
                   )}
                 </span>
-                <button className="act" onClick={() => setOpenDiff(open ? null : entry.id)}>
-                  diff
-                </button>
+                {isApi ? (
+                  <button className="act" onClick={() => openStudio(entry)}>
+                    diff & merge studio
+                  </button>
+                ) : (
+                  <button className="act" onClick={() => setOpenDiff(open ? null : entry.id)}>
+                    {open ? 'hide diff' : 'diff'}
+                  </button>
+                )}
                 <button
                   className="act"
                   disabled={Boolean(restoring) || IS_READ_ONLY}
@@ -153,9 +218,9 @@ export function HistoryTab({ nodeId }: { nodeId: string }) {
                   {restoring === entry.id ? 'restoring…' : 'restore'}
                 </button>
               </div>
-              {open && (
+              {!isApi && open && (
                 <div style={{ padding: '0 4px 10px' }}>
-                  <DiffLines ops={diffLines(stringifyForDiff(entry.before), stringifyForDiff(entry.after))} />
+                  <InlineEntryDiff entry={entry} />
                 </div>
               )}
             </div>

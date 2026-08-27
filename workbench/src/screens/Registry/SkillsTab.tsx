@@ -39,7 +39,13 @@ export function SkillsTab() {
             {s.assignedTo.length > 0 ? `assigned to ${s.assignedTo.join(', ')}` : 'assigned to nobody'}
           </span>
           {s.assignedTo.length === 0 && <Chip>unused</Chip>}
-          <Btn style={{ padding: '2px 9px', fontSize: 11 }} disabled title="Phase 3">
+          {/* U7 polish — operator copy, not an internal roadmap phase label:
+              says what's not available and why, not just "Phase 3". */}
+          <Btn
+            style={{ padding: '2px 9px', fontSize: 11 }}
+            disabled
+            title="Version history for this skill isn't viewable from this screen yet."
+          >
             versions
           </Btn>
         </div>

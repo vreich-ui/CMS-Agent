@@ -1,0 +1,21 @@
+# Builds the Conductor Workbench Cloud Run image from Dockerfile.workbench (Pass 2 Track A —
+# docs/plan/TRACK-A-RUNBOOK.md). `gcloud builds submit --tag` only builds a file named `Dockerfile`,
+# so this config selects Dockerfile.workbench explicitly, mirroring cloudbuild.mcp.yaml's own
+# reasoning. Usage: gcloud builds submit --config cloudbuild.workbench.yaml --substitutions _IMAGE=<ref>
+#
+# THIS CONFIG ONLY BUILDS AND PUSHES AN IMAGE. It does not deploy. See
+# docs/plan/TRACK-A-RUNBOOK.md for the `gcloud run deploy` step — deliberately kept out of this
+# file for the same reason cloudbuild.mcp.yaml keeps deploying out of scripts/deploy-mcp.sh: a
+# build config re-run automatically by a trigger must never be the thing that can silently drop a
+# service's env vars or secrets with a bare `--set-env-vars`. Any deploy step added here later must
+# use `--update-env-vars` / `--update-secrets`, never `--set-env-vars` / `--set-secrets`.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Dockerfile.workbench", "-t", "${_IMAGE}", "."]
+images: ["${_IMAGE}"]
+
+# Same reasoning as cloudbuild.mcp.yaml: a build running under a specified service account
+# (a trigger-level setting) must name where its logs go, and CLOUD_LOGGING_ONLY is the
+# least-setup choice that keeps them readable in the Console without provisioning a bucket.
+options:
+  logging: CLOUD_LOGGING_ONLY

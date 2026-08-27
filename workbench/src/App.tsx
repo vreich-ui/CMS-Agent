@@ -1,7 +1,13 @@
-import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  MutationCache,
+  QueryCache,
+  QueryClient,
+  QueryClientProvider,
+  keepPreviousData,
+} from '@tanstack/react-query';
 import './styles/tokens.css';
 import './styles/base.css';
-import { AuthError, IS_MOCK, IS_READ_ONLY } from './api/client';
+import { AuthError, IS_MOCK } from './api/client';
 import { setConfirmHandler } from './api/confirmAction';
 import { IconSprite } from './components/Icons';
 import { TopBar } from './components/TopBar';
@@ -11,6 +17,7 @@ import { StartRunModal } from './components/StartRunModal';
 import { CommandPalette } from './components/CommandPalette';
 import { GraphOverlay } from './components/GraphOverlay';
 import { LoginGate, reportAuthExpired } from './components/LoginGate';
+import { OverlayHost } from './components/overlay/OverlayHost';
 import { Workbench } from './screens/Workbench';
 import { Runs } from './screens/Runs';
 import { Library } from './screens/Library';
@@ -35,13 +42,36 @@ function handleQueryError(error: unknown): void {
   if (error instanceof AuthError) reportAuthExpired(error.message);
 }
 
+// P2-02 — query policy. TanStack v5's defaults (retry: 3 + exponential
+// backoff) turned every failing verb into 4 requests and a 7-10s
+// `isLoading`, which is most of what "very slow, some parts never load"
+// actually was. The budget this policy has to hit: a failing verb shows
+// its error inside 1.5s, and switching screens refetches nothing warm.
+//
+//   retry: 1 + retryDelay 1000 -> worst case 2 requests, error visible in
+//     ~1s + one round trip, instead of ~7-10s.
+//   staleTime 5min             -> screen switches read cache, no refetch.
+//   gcTime 30min               -> cache survives a detour to another screen
+//                                 and back for a whole working session.
+//   placeholderData: keepPreviousData -> changing a query key (workflow,
+//     node, run) keeps the last good data on screen while the next loads,
+//     so a panel never flashes back to a skeleton it already filled.
+//   mutations retry 0          -> a mutation is a decision the operator
+//     made once; silently repeating it is never the right default.
 const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: handleQueryError }),
   mutationCache: new MutationCache({ onError: handleQueryError }),
   defaultOptions: {
     queries: {
-      staleTime: 30_000,
+      retry: 1,
+      retryDelay: 1000,
+      staleTime: 5 * 60_000,
+      gcTime: 30 * 60_000,
+      placeholderData: keepPreviousData,
       refetchOnWindowFocus: false,
+    },
+    mutations: {
+      retry: 0,
     },
   },
 });
@@ -85,8 +115,13 @@ function BackgroundArea() {
 // mock success for a real one" — and the mirror case, a real broker running
 // read-only. Fixed-position `.chip` reuses existing CSS; no new stylesheet
 // rules.
+// P2-06 — one status, one home. The read-only state is already reported by
+// TopBar's own read-only/read-write pill; a second floating copy of it
+// bottom-right was the same fact told twice in two places. Only the
+// fixture-mode badge survives here, because that one has no other home and
+// says something TopBar does not: the data on screen is not real.
 function ModeBadge() {
-  if (!IS_MOCK && !IS_READ_ONLY) return null;
+  if (!IS_MOCK) return null;
   return (
     <div style={{ position: 'fixed', right: 12, bottom: 12, zIndex: 90, display: 'flex', gap: 6 }}>
       {IS_MOCK && (
@@ -98,18 +133,14 @@ function ModeBadge() {
           fixture data · mutations are local only
         </span>
       )}
-      {IS_READ_ONLY && (
-        <span
-          className="chip"
-          title="Mutations are disabled. The broker's READ_ONLY env flag must be set to 0 to enable them."
-        >
-          read-only
-        </span>
-      )}
     </div>
   );
 }
 
+// U6 — one host for every addressable modal. Kinds are registered in
+// components/overlay/OverlayHost.tsx; the URL sync lives in
+// overlay/useOverlayUrl.ts. Mounted inside LoginGate for the same reason
+// the other overlays are: nothing should be deep-linkable past the gate.
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -144,6 +175,7 @@ function App() {
         <ConfirmDialog />
         <CommandPalette />
         <GraphOverlay />
+        <OverlayHost />
         <ModeBadge />
       </LoginGate>
     </QueryClientProvider>

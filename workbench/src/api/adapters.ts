@@ -167,6 +167,12 @@ export function toNode(raw: RawWorkflowNode): WorkflowNode {
 export interface RawRunNode {
   nodeId: string;
   status: string;
+  /** P2-05 — real, live-carried per-node timings. Absent while queued. */
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  warnings?: string[];
+  produces?: string[];
   [key: string]: unknown;
 }
 
@@ -242,6 +248,17 @@ export function toRun(raw: RawRun, cost?: RawRunCostLedger): Run {
     err: raw.errors.length,
     done: raw.nodes.filter((n) => n.status === 'completed').length,
     stall: raw.stall != null ? true : undefined,
+    // P2-05 — carried through verbatim. `durationMs` is only ever a number
+    // the workspace measured; a node that has not run yet simply has none.
+    nodes: (raw.nodes ?? []).map((n) => ({
+      nodeId: n.nodeId,
+      status: n.status,
+      startedAt: n.startedAt ?? null,
+      completedAt: n.completedAt ?? null,
+      durationMs: typeof n.durationMs === 'number' ? n.durationMs : null,
+      warnings: Array.isArray(n.warnings) ? n.warnings : undefined,
+      produces: Array.isArray(n.produces) ? n.produces : undefined,
+    })),
     requestId: raw.requestId,
   };
 }

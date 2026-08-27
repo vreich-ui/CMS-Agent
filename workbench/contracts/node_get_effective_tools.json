@@ -1,0 +1,55 @@
+{
+  "verb": "node_get_effective_tools",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "nodeId": "draft_writer"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "tools": [
+            {
+              "toolId": "string",
+              "name": "string",
+              "category": "string",
+              "riskLevel": "string",
+              "allowed": "boolean",
+              "denialReasons": []
+            }
+          ],
+          "_note": "string"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "tools": [
+            {
+              "toolId": "workspace.get_node",
+              "name": "workspace.get_node",
+              "category": "workspace",
+              "riskLevel": "read",
+              "allowed": true,
+              "denialReasons": []
+            },
+            {
+              "toolId": "workspace.get_nodes",
+              "name": "workspace.get_nodes",
+              "category": "workspace",
+              "riskLevel": "read",
+              "allowed": false,
+              "denialReasons": [
+                "node_tool_not_allowed"
+              ]
+            }
+          ],
+          "_note": "full list enumerates all ~48 registered tools for this node with allowed:boolean and denialReasons[]; truncated to 3 representative entries here."
+        }
+      },
+      "notes": "[draft_writer] enumerates ~49 registry tools each with allowed:boolean + denialReasons[]"
+    }
+  ]
+}

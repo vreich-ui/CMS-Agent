@@ -1,0 +1,62 @@
+{
+  "ok": true,
+  "data": {
+    "context": {
+      "projectId": "dr-lurie",
+      "projectContract": {
+        "contentContract": "content_source.v1",
+        "publishingPolicy": {
+          "publishEnabled": true,
+          "requiresExplicitPublish": false,
+          "description": "Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off.",
+          "operatorDefault": "approved"
+        }
+      },
+      "articleBodySchema": {
+        "type": "object",
+        "required": ["artifact", "summary", "clientProjectId", "clientObjectType", "contractSource", "body"],
+        "additionalProperties": true,
+        "properties": {
+          "artifact": {"const": "client_object.v1"},
+          "summary": {"type": "string", "minLength": 1},
+          "clientProjectId": {"type": "string", "minLength": 1},
+          "clientObjectType": {"type": "string", "minLength": 1},
+          "contractSource": {"type": "object", "additionalProperties": true},
+          "body": {"type": "object", "minProperties": 1, "additionalProperties": true},
+          "clientValidation": {"type": "object", "additionalProperties": true},
+          "artifactReferences": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+          "mediaPathConvention": {"type": "string"},
+          "assumptions": {"type": "array", "items": {"type": "string"}},
+          "blockers": {"type": "array", "items": {"type": "string"}},
+          "notes": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "projectToolPolicy": {
+        "defaultToolPolicy": "allowed",
+        "allowedTools": ["ping", "registry_get", "object_inventory", "object_contract", "get_pdf_tool_storage_grant", "..."],
+        "toolPolicies": {"...": "per-tool allowed/needs_approval/blocked map, ~40 entries"}
+      },
+      "objectContracts": {
+        "projectId": "dr-lurie",
+        "editorial": {"voiceObjectId": "voice_drlurie", "fallback": {"...": "full editorial voice fallback object: audience, tone, cadence, lexicon, claim_policy, cta_policy, reader_safety_notes, frameworks[4], default_framework"}},
+        "sources": ["https://github.com/vreich-ui/Dr-Lurie-Blog/docs/agents/publishing-policy.md", "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/cms-architecture/", "CMS-Agent/docs/projects/dr-lurie-agent-publishing-policy.md"],
+        "site": {"siteObjectId": "site_drlurie", "taxonomyRegistryObjectId": "tax_drlurie", "requestIdPattern": "^req_[a-z0-9_]+_\\d{8}_\\d{2}$"},
+        "rules": {"...": "objectSubstrate, noLegacyPath, identityAndIds, bodyMapping, judgementsStayWorkspaceSide, artifacts, validationAndTaxonomy, publishVsRelease — each an array of policy-rule strings"}
+      },
+      "registry": [
+        {"id": "input_triage", "produces": ["content_source.v1"], "riskLevel": "read", "dependsOn": []},
+        {"id": "placement_resolver", "produces": ["placement_resolution.v1"], "riskLevel": "read", "dependsOn": ["input_triage"]},
+        {"id": "draft_writer", "produces": ["draft.v1"], "riskLevel": "read", "dependsOn": ["brief_architect"]},
+        {"id": "article_body", "produces": ["client_object.v1"], "riskLevel": "write", "dependsOn": ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_plan"]},
+        {"id": "publish_payload", "produces": ["dry_run_publish_payload.v1"], "riskLevel": "write", "dependsOn": ["article_body", "artifact_plan"]},
+        {"id": "publication_controller", "produces": ["publication_decision.v1"], "riskLevel": "publish", "dependsOn": ["publish_payload"]},
+        {"id": "publish_executor", "produces": ["publish_execution.v1"], "riskLevel": "publish", "dependsOn": ["publication_controller"]},
+        {"id": "release_executor", "produces": ["release_execution.v1"], "riskLevel": "publish", "dependsOn": ["publish_executor"]},
+        {"id": "learning_recorder", "produces": ["learning_observations.v1"], "riskLevel": "write", "dependsOn": ["publication_controller", "publish_executor", "release_executor"]}
+      ],
+      "_registry_note": "registry carries all 24 publishing_conductor nodes with {id, produces, riskLevel, dependsOn} — truncated here to a representative subset."
+    },
+    "cacheHit": false
+  },
+  "_truncation_note": "This raw capture is hand-condensed from the live tool result (which was ~9KB and returned inline, not auto-saved to a file) to keep the raw JSON compact; field names and structure are verbatim, but projectToolPolicy.toolPolicies, objectContracts.editorial.fallback, objectContracts.rules, and registry were abbreviated with '...' placeholders where noted."
+}

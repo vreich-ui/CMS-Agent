@@ -1,0 +1,12 @@
+{
+  "verb": "constellation_get_attention",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": "see notes",
+      "ok": false,
+      "error": "no successful payload captured in this session",
+      "notes": "Every call attempted (no-args, projectId:'dr-lurie') failed 100% of the time with the SAME proxy-layer error: 'Error POSTing to endpoint: ... {\"code\":-32600,\"message\":\"Anthropic Proxy: Invalid content from server\"}'. No successful payload was ever obtained. See raw/error-shapes.json.proxy_layer_errors_not_true_MCP_errors for the exact error text and reproduction detail."
+    }
+  ]
+}
