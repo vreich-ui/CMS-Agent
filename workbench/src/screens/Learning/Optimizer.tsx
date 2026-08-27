@@ -13,12 +13,14 @@ import { Btn, Card } from '../../components/primitives';
 import { toast } from '../../components/Toasts';
 import { setNextConfirmTrigger } from '../../components/ConfirmDialog';
 import { ActionCancelledError } from '../../api/confirmAction';
+import { useStore } from '../../store';
 
 const NODES_WITH_RUBRICS = ['contract_intelligence', 'draft_writer', 'research', 'article_body', 'publish_payload', 'artifact_plan'];
 
 export function Optimizer() {
   const [nodeId, setNodeId] = useState('draft_writer');
   const [lastProposal, setLastProposal] = useState<verbs.OptimizerProposal | null>(null);
+  const openModal = useStore((s) => s.openModal);
 
   const statusQ = useQuery({
     queryKey: ['optimizerStatus', nodeId],
@@ -80,7 +82,13 @@ export function Optimizer() {
             {new Date(lastProposal.createdAt).toLocaleTimeString()}
             {IS_MOCK
               ? ' — fixtures don’t compute a real prompt diff or trial score for it; see the worked example below for what a live one carries.'
-              : '.'}
+              : '.'}{' '}
+            <Btn
+              style={{ padding: '1px 8px', fontSize: 11 }}
+              onClick={() => openModal('diff', { mode: 'proposal', node: nodeId, proposalId: lastProposal.proposalId })}
+            >
+              open in diff & merge studio
+            </Btn>
           </p>
         )}
         <div className="editnote">

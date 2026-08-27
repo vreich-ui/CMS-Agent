@@ -1,0 +1,128 @@
+{
+  "verb": "constellation_get_summary",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "projectId": "dr-lurie"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "summary": {
+            "agents": {
+              "total": "number",
+              "byStatus": {
+                "active": "number"
+              },
+              "byRisk": {
+                "read": "number",
+                "write": "number",
+                "publish": "number"
+              }
+            },
+            "relationships": {
+              "stored": "number",
+              "derivedExecutionEdges": "number",
+              "disabled": "number"
+            },
+            "runs": {
+              "total": "number",
+              "byStatus": {
+                "failed": "number",
+                "cancelled": "number",
+                "blocked": "number",
+                "completed": "number"
+              }
+            },
+            "usage": {
+              "estimated": {
+                "inputTokens": "number",
+                "outputTokens": "number",
+                "totalTokens": "number",
+                "reasoningTokens": "number",
+                "costUsdEstimate": "number",
+                "recordCount": "number",
+                "unknownModelRecordCount": "number"
+              },
+              "actual": {
+                "inputTokens": "number",
+                "outputTokens": "number",
+                "totalTokens": "number",
+                "reasoningTokens": "number",
+                "costUsdEstimate": "number",
+                "recordCount": "number",
+                "unknownModelRecordCount": "number"
+              },
+              "unattributedRecordCount": "number"
+            },
+            "generatedAt": "string",
+            "caveats": [
+              "string"
+            ]
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "summary": {
+            "agents": {
+              "total": 48,
+              "byStatus": {
+                "active": 48
+              },
+              "byRisk": {
+                "read": 33,
+                "write": 11,
+                "publish": 4
+              }
+            },
+            "relationships": {
+              "stored": 0,
+              "derivedExecutionEdges": 92,
+              "disabled": 0
+            },
+            "runs": {
+              "total": 18,
+              "byStatus": {
+                "failed": 6,
+                "cancelled": 3,
+                "blocked": 8,
+                "completed": 1
+              }
+            },
+            "usage": {
+              "estimated": {
+                "inputTokens": 44550,
+                "outputTokens": 868,
+                "totalTokens": 45418,
+                "reasoningTokens": 0,
+                "costUsdEstimate": 0.24879,
+                "recordCount": 14,
+                "unknownModelRecordCount": 0
+              },
+              "actual": {
+                "inputTokens": 6919919,
+                "outputTokens": 451454,
+                "totalTokens": 7371373,
+                "reasoningTokens": 0,
+                "costUsdEstimate": 34.230951,
+                "recordCount": 406,
+                "unknownModelRecordCount": 0
+              },
+              "unattributedRecordCount": 183
+            },
+            "generatedAt": "2026-08-26T12:33:22.004Z",
+            "caveats": [
+              "Costs are placeholder estimates from a local pricing catalog; not billing-grade.",
+              "Tool error counts reflect only the current process; tool executions are not persisted."
+            ]
+          }
+        }
+      },
+      "notes": "[projectId=dr-lurie] no-args variant failed identically to constellation_get_attention (see error-shapes.json) on first attempt; projectId-qualified retry succeeded"
+    }
+  ]
+}

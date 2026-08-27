@@ -77,19 +77,26 @@ test('verb argument regression guard — workspace_get_node/_effective_config se
   expect(r.effectiveConfig).toEqual({ nodeId: 'input_triage' });
 });
 
-test('verb argument regression guard — workspace_get_nodes takes no server args; workflowId filters client-side', async ({
+test('verb argument regression guard — workspace_get_nodes workflowId now resolves through workspace_get_graph', async ({
   page,
 }) => {
   const r = await loadVerbs(page);
   expect(r.allNodesCount).toBeGreaterThan(0);
   expect(r.filteredNodesCount).toBeGreaterThan(0);
-  // workbench-verb-fixes: workspace_get_nodes only ever returns
-  // publishing_conductor's nodes live (clone/capture are invisible to it —
-  // see fixtures/README.md), so filtering by workflowId:'publishing_conductor'
-  // no longer narrows anything — every node IS in that workflow. The filter
-  // still runs (filteredNodesAllInAll proves it didn't just return
-  // everything unfiltered by accident); it just has nothing to exclude.
-  expect(r.filteredNodesCount).toBe(r.allNodesCount);
+  // WP-00 CORRECTION: "clone/capture are invisible to workspace_get_nodes"
+  // was wrong. Live, that verb returns all 48 nodes across all three
+  // conductors, and it accepts no arguments at all. Per-workflow node sets
+  // now come from workspace_get_graph({workflowId}) instead — see
+  // verbs.workspaceGetNodes. The fixture workspace is now a verbatim live
+  // capture of all 48 nodes too (api/fixtures/README.md — it used to hold
+  // only publishing_conductor's 23, which is why this used to assert
+  // filteredNodesCount === allNodesCount: there was nothing else to
+  // exclude). Filtering to publishing_conductor now genuinely narrows to
+  // its own 24 nodes (contracts/README.md) out of the 48-node whole;
+  // filteredNodesAllInAll proves the filter ran and returned a real subset
+  // rather than everything unfiltered by accident.
+  expect(r.filteredNodesCount).toBe(24);
+  expect(r.filteredNodesCount).toBeLessThan(r.allNodesCount);
   expect(r.filteredNodesAllInAll).toBe(true);
 });
 

@@ -15,7 +15,7 @@
   # became the sole control plane. workbench-broker/ is still not deployed here.
   # workbench/dist is copied into ui/dist/workbench so one `publish` dir
   # serves both apps.
-  command = "npm install --no-fund --no-audit && npm --prefix ui install --no-fund --no-audit && npm run ui:build && npm --prefix workbench install --no-fund --no-audit && WORKBENCH_BASE=/workbench/ VITE_MCP_TRANSPORT=cloudrun npm --prefix workbench run build && mkdir -p ui/dist/workbench && cp -r workbench/dist/. ui/dist/workbench/"
+  command = "npm install --no-fund --no-audit && npm --prefix ui install --no-fund --no-audit && npm run ui:build && npm --prefix workbench install --no-fund --no-audit && WORKBENCH_BASE=/workbench/ VITE_MCP_TRANSPORT=cloudrun VITE_READ_ONLY=0 npm --prefix workbench run build && mkdir -p ui/dist/workbench && cp -r workbench/dist/. ui/dist/workbench/"
   publish = "ui/dist"
   functions = "netlify/functions"
 

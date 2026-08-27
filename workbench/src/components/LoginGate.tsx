@@ -209,7 +209,13 @@ function TokenEntryGate({ notice }: { notice: string | null }) {
     setError(null);
     try {
       await submitLogin(value);
-      queryClient.clear(); // nothing fetched pre-auth is trustworthy to keep
+      // P2-02 — do NOT clear the cache here. Wiping every cached query on a
+      // successful credential entry meant a single mid-load 403 (which used
+      // to masquerade as an expired session, see PermissionError) emptied
+      // everything the operator had already loaded and made re-entry cost a
+      // full cold start. Nothing cached before auth is wrong — the pre-auth
+      // app fetches nothing — so there is nothing to throw away.
+      await queryClient.invalidateQueries();
     } catch (err) {
       setError(err instanceof AuthError ? err.message : 'Could not reach the Cloud Run MCP endpoint. Try again.');
     } finally {
@@ -299,7 +305,8 @@ function LoginForm({ notice }: { notice: string | null }) {
     setError(null);
     try {
       await submitLogin(pw);
-      queryClient.clear(); // nothing fetched pre-auth is trustworthy to keep
+      // P2-02 — refresh rather than discard; see TokenEntryGate above.
+      await queryClient.invalidateQueries();
     } catch (err) {
       setError(err instanceof AuthError ? err.message : 'Could not reach the broker. Try again.');
     } finally {

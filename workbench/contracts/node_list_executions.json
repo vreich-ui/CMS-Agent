@@ -1,0 +1,113 @@
+{
+  "verb": "node_list_executions",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "runId": "run_1787678554270_stw73q"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "executions": [
+            {
+              "runId": "string",
+              "requestId": "string",
+              "workflowId": "string",
+              "projectId": "string",
+              "status": "string",
+              "currentNodeId": "string",
+              "startedAt": "string",
+              "updatedAt": "string",
+              "nodes": [
+                "string"
+              ],
+              "artifacts": [
+                "string"
+              ],
+              "errors": [],
+              "approvalsRequired": [
+                {
+                  "nodeId": "string",
+                  "type": "string",
+                  "reason": "string",
+                  "requestedAt": "string"
+                }
+              ],
+              "initialInput": "string",
+              "stageOutputs": {
+                "...": "string"
+              },
+              "dryRun": "boolean",
+              "executionMode": "string",
+              "entrypoint": {
+                "nodeId": "string",
+                "output": {
+                  "...": "string"
+                }
+              },
+              "budgetUsd": "number",
+              "operatorPublishDecision": "string",
+              "operatorDecisionSource": "string",
+              "rev": "number",
+              "publishRequestId": "string"
+            }
+          ]
+        },
+        "NOTE": "string"
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "executions": [
+            {
+              "runId": "run_1787678554270_stw73q",
+              "requestId": "req_probe_t11_mechanics_20260825_01",
+              "workflowId": "publishing_conductor",
+              "projectId": "dr-lurie",
+              "status": "cancelled",
+              "currentNodeId": "publication_controller",
+              "startedAt": "2026-08-25T17:22:34.271Z",
+              "updatedAt": "2026-08-25T17:23:36.781Z",
+              "nodes": [
+                "...(22 node entries, same shape as workflow_get_run.data.run.nodes)"
+              ],
+              "artifacts": [
+                "...(4 artifact entries)"
+              ],
+              "errors": [],
+              "approvalsRequired": [
+                {
+                  "nodeId": "publication_controller",
+                  "type": "approval_required",
+                  "reason": "...",
+                  "requestedAt": "2026-08-25T17:23:11.516Z"
+                }
+              ],
+              "initialInput": "T11(a) $0 publish-mechanics probe. Seeded lorem body; must reach the executor gate and stop there.",
+              "stageOutputs": {
+                "...": "..."
+              },
+              "dryRun": true,
+              "executionMode": "openai",
+              "entrypoint": {
+                "nodeId": "article_body",
+                "output": {
+                  "...": "..."
+                }
+              },
+              "budgetUsd": 2,
+              "operatorPublishDecision": "approved",
+              "operatorDecisionSource": "project_policy_default",
+              "rev": 7,
+              "publishRequestId": "req_probe_t11_mechanics_20260825_01"
+            }
+          ]
+        },
+        "NOTE": "node_list_executions({runId}) returns { executions: [ <full run record, identical shape to workflow_get_run's run object> ] } \u2014 i.e. ONE element that is the whole run, not a per-node execution list. T\u2026"
+      },
+      "notes": "[runId only (WORKS)] Returns {executions:[<one element, identical shape to workflow_get_run's run object>]}. This is the only args shape that worked reliably in this session."
+    }
+  ]
+}

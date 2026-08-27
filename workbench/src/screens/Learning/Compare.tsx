@@ -86,7 +86,20 @@ export function Compare() {
     return () => setConfirmHandler(requestConfirm);
   }, []);
 
+  const openModal = useStore((s) => s.openModal);
   const pair = QUEUE[cmpIdx % QUEUE.length];
+
+  // U2 — "edit on top of the winner": opens the diff & merge studio on this
+  // pair (mode: 'pair'), seeded from the champion. Only text candidates are
+  // editable prose — a template/image pair has nothing for a prompt-style
+  // word diff to work on.
+  function editOnTopOfWinner() {
+    if (pair.kind !== 'text') {
+      toast('Not editable here', `This pair is a "${pair.kind}" candidate — edit-on-top only works for text.`);
+      return;
+    }
+    openModal('diff', { mode: 'pair', node: pair.node, pairIndex: String(cmpIdx % QUEUE.length) });
+  }
 
   function submit(v: Verdict) {
     if (busyRef.current) return; // guard a double keydown firing in the same frame
@@ -179,6 +192,12 @@ export function Compare() {
           </div>
           {candidateBody(pair, 'B')}
         </div>
+      </div>
+
+      <div style={{ textAlign: 'center', marginBottom: 10 }}>
+        <Btn onClick={editOnTopOfWinner} title="Open the diff & merge studio on this pair, seeded from the champion.">
+          ✎ edit on top of winner
+        </Btn>
       </div>
 
       <div className="verdicts">

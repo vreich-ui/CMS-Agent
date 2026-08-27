@@ -118,6 +118,36 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
     expect(ids).toEqual(expect.arrayContaining(["input_triage", "block_classifier", "clone_intake"]));
   });
 
+  // B1 (Pass 2, WP-00) — live capture found workspace.get_nodes could not filter by conductor (its
+  // schema took no arguments at all). This adds the SAME optional workflowId filter workspace.get_graph
+  // already implements, resolved through the identical resolveConductorNodes path — same 24/16/18
+  // per-conductor topology, same fallback for an unregistered id, no client-side filtering required.
+  it("workspace.get_nodes({workflowId}) scopes to one conductor's actual node set, same resolution as workspace.get_graph", async () => {
+    const publishing = await call("workspace.get_nodes", { workflowId: "publishing_conductor" });
+    const capture = await call("workspace.get_nodes", { workflowId: "capture_conductor" });
+    const clone = await call("workspace.get_nodes", { workflowId: "clone_conductor" });
+    expect(structured(publishing).data.nodes).toHaveLength(24);
+    expect(structured(capture).data.nodes).toHaveLength(16);
+    expect(structured(clone).data.nodes).toHaveLength(18);
+
+    // Identical node set AND identical per-conductor rebinding to workspace.get_graph({workflowId}) —
+    // not just the same count.
+    const graphClone = await call("workspace.get_graph", { workflowId: "clone_conductor" });
+    expect(structured(clone).data.nodes).toEqual(structured(graphClone).data.nodes);
+    const publishPayload = structured(clone).data.nodes.find((node: { id: string }) => node.id === "publish_payload");
+    expect(publishPayload.dependsOn).toEqual(["recipe_mint", "theme_bind", "layout_restamp"]);
+  });
+
+  it("workspace.get_nodes with no workflowId is unchanged: still the flat 48-node union", async () => {
+    const res = await call("workspace.get_nodes", {});
+    expect(structured(res).data.nodes).toHaveLength(48);
+  });
+
+  it("workspace.get_nodes rejects an unknown argument, same additionalProperties:false discipline as before", async () => {
+    const res = await call("workspace.get_nodes", { bogus: true });
+    expect(res.error).toBeDefined();
+  });
+
   it("workspace.get_graph with no workflowId merges every registered workflow's nodes/edges", async () => {
     const res = await call("workspace.get_graph");
     const data = structured(res).data;

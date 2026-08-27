@@ -152,10 +152,12 @@ test('registry: skills library flags the 5 skills assigned to zero nodes', async
   await expect(used).toContainText('brief_architect');
   await expect(used.locator('.chip')).toHaveCount(0);
 
-  // Version editing is Phase 3 — disabled with a title, not a silent toast.
+  // Version editing isn't built yet — disabled with an operator-worded
+  // title, not a silent toast. U7 polish: was the bare internal roadmap
+  // label "Phase 3", which said nothing an operator could act on.
   const versionsBtn = page.locator('.toolrow button', { hasText: 'versions' }).first();
   await expect(versionsBtn).toBeDisabled();
-  await expect(versionsBtn).toHaveAttribute('title', 'Phase 3');
+  await expect(versionsBtn).toHaveAttribute('title', "Version history for this skill isn't viewable from this screen yet.");
 });
 
 test('registry: agents and usage sections render live data honestly', async ({ page }) => {

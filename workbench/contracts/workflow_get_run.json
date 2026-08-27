@@ -1,0 +1,383 @@
+{
+  "verb": "workflow_get_run",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "runId": "run_1787690045355_411vjm"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "run": {
+            "runId": "string",
+            "requestId": "string",
+            "workflowId": "string",
+            "projectId": "string",
+            "status": "string",
+            "currentNodeId": "string",
+            "startedAt": "string",
+            "updatedAt": "string",
+            "nodes": [
+              {
+                "nodeId": "string",
+                "status": "string",
+                "produces": [
+                  "string"
+                ],
+                "startedAt": "string",
+                "input": {
+                  "initialInput": {
+                    "instructions": "string",
+                    "trafficSource": "string",
+                    "awarenessStage": "string"
+                  },
+                  "dependencies": {},
+                  "clientProjectId": "string",
+                  "runContext": {
+                    "clientProjectId": "string",
+                    "operatorPublishDecision": "string",
+                    "operatorDecisionSource": "string"
+                  }
+                },
+                "completedAt": "string",
+                "durationMs": "number",
+                "errors": [
+                  "string"
+                ],
+                "output": {
+                  "error": {
+                    "code": "string",
+                    "message": "string"
+                  }
+                }
+              }
+            ],
+            "artifacts": [],
+            "errors": [
+              "string"
+            ],
+            "approvalsRequired": [],
+            "initialInput": {
+              "instructions": "string",
+              "trafficSource": "string",
+              "awarenessStage": "string"
+            },
+            "stageOutputs": {},
+            "dryRun": "boolean",
+            "executionMode": "string",
+            "operatorPublishDecision": "string",
+            "operatorDecisionSource": "string",
+            "rev": "number"
+          },
+          "mode": {
+            "executionMode": "string",
+            "live": "boolean",
+            "declared": "boolean",
+            "nodeSource": "string",
+            "notice": "string"
+          },
+          "stall": "null"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "run": {
+            "runId": "run_1787690045355_411vjm",
+            "requestId": "req_article_testlorem_20240711_01",
+            "workflowId": "publishing_conductor",
+            "projectId": "dr-lurie",
+            "status": "failed",
+            "currentNodeId": "input_triage",
+            "startedAt": "2026-08-25T20:34:05.355Z",
+            "updatedAt": "2026-08-25T20:34:37.816Z",
+            "nodes": [
+              {
+                "nodeId": "input_triage",
+                "status": "failed",
+                "produces": [
+                  "content_source.v1"
+                ],
+                "startedAt": "2026-08-25T20:34:37.105Z",
+                "input": {
+                  "initialInput": {
+                    "instructions": "Minimal test article using lorem ipsum placeholder text. No real medical content \u2014 just a test of the publishing workflow. Topic: Test Article. Angle: Minimal placeholder. Draft and publish as soon as\u2026",
+                    "trafficSource": "search",
+                    "awarenessStage": "just learning"
+                  },
+                  "dependencies": {},
+                  "clientProjectId": "dr-lurie",
+                  "runContext": {
+                    "clientProjectId": "dr-lurie",
+                    "operatorPublishDecision": "approved",
+                    "operatorDecisionSource": "project_policy_default"
+                  }
+                },
+                "completedAt": "2026-08-25T20:34:37.816Z",
+                "durationMs": 711,
+                "errors": [
+                  "driver_auth_failed:DR_LURIE_MCP_TOKEN",
+                  "Project \"dr-lurie\" rejected this driver's credential with HTTP 401 on an authenticated registry_get read, so no node was dispatched and nothing was spent. The credential this driver presented came fro\u2026"
+                ],
+                "output": {
+                  "error": {
+                    "code": "driver_auth_failed:DR_LURIE_MCP_TOKEN",
+                    "message": "Project \"dr-lurie\" rejected this driver's credential with HTTP 401 on an authenticated registry_get read, so no node was dispatched and nothing was spent. The credential this driver presented came fro\u2026"
+                  }
+                }
+              },
+              {
+                "nodeId": "placement_resolver",
+                "status": "queued",
+                "produces": [
+                  "placement_resolution.v1"
+                ]
+              }
+            ],
+            "artifacts": [],
+            "errors": [
+              "input_triage:driver_auth_failed:DR_LURIE_MCP_TOKEN"
+            ],
+            "approvalsRequired": [],
+            "initialInput": {
+              "instructions": "Minimal test article using lorem ipsum placeholder text. No real medical content \u2014 just a test of the publishing workflow. Topic: Test Article. Angle: Minimal placeholder. Draft and publish as soon as\u2026",
+              "trafficSource": "search",
+              "awarenessStage": "just learning"
+            },
+            "stageOutputs": {},
+            "dryRun": true,
+            "executionMode": "openai",
+            "operatorPublishDecision": "approved",
+            "operatorDecisionSource": "project_policy_default",
+            "rev": 1
+          },
+          "mode": {
+            "executionMode": "openai",
+            "live": true,
+            "declared": true,
+            "nodeSource": "store",
+            "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in \u2026"
+          },
+          "stall": null
+        }
+      },
+      "notes": "[newest failed run] per-node timing fields are startedAt/completedAt/durationMs, sitting directly on each element of data.run.nodes[]"
+    },
+    {
+      "args": {
+        "runId": "run_1787678554270_stw73q"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "run": {
+            "runId": "string",
+            "requestId": "string",
+            "workflowId": "string",
+            "projectId": "string",
+            "status": "string",
+            "currentNodeId": "string",
+            "startedAt": "string",
+            "updatedAt": "string",
+            "nodes": [
+              {
+                "nodeId": "string",
+                "status": "string",
+                "output": {
+                  "seeded": "boolean",
+                  "skipped": "boolean",
+                  "reason": "string",
+                  "nodeId": "string"
+                },
+                "startedAt": "string",
+                "completedAt": "string",
+                "durationMs": "number",
+                "produces": [
+                  "string"
+                ],
+                "warnings": [
+                  "string"
+                ]
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "string",
+                "nodeId": "string",
+                "type": "string",
+                "createdAt": "string"
+              }
+            ],
+            "errors": [],
+            "approvalsRequired": [
+              {
+                "nodeId": "string",
+                "type": "string",
+                "reason": "string",
+                "requestedAt": "string"
+              }
+            ],
+            "initialInput": "string",
+            "stageOutputs": {
+              "article_body": {
+                "artifact": "string"
+              },
+              "publish_payload": {
+                "artifact": "string"
+              },
+              "publication_controller": {
+                "artifact": "string",
+                "dryRun": "boolean",
+                "decision": "string"
+              },
+              "learning_recorder": {
+                "artifact": "string"
+              }
+            },
+            "dryRun": "boolean",
+            "executionMode": "string",
+            "entrypoint": {
+              "nodeId": "string",
+              "output": {
+                "artifact": "string"
+              }
+            },
+            "budgetUsd": "number",
+            "operatorPublishDecision": "string",
+            "operatorDecisionSource": "string",
+            "rev": "number",
+            "publishRequestId": "string"
+          },
+          "mode": {
+            "executionMode": "string",
+            "live": "boolean",
+            "declared": "boolean",
+            "nodeSource": "string",
+            "notice": "string"
+          },
+          "stall": "null"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "run": {
+            "runId": "run_1787678554270_stw73q",
+            "requestId": "req_probe_t11_mechanics_20260825_01",
+            "workflowId": "publishing_conductor",
+            "projectId": "dr-lurie",
+            "status": "cancelled",
+            "currentNodeId": "publication_controller",
+            "startedAt": "2026-08-25T17:22:34.271Z",
+            "updatedAt": "2026-08-25T17:23:36.781Z",
+            "nodes": [
+              {
+                "nodeId": "input_triage",
+                "status": "completed",
+                "output": {
+                  "seeded": true,
+                  "skipped": true,
+                  "reason": "late_stage_entry",
+                  "nodeId": "input_triage"
+                },
+                "startedAt": "2026-08-25T17:22:34.271Z",
+                "completedAt": "2026-08-25T17:22:34.271Z",
+                "durationMs": 0,
+                "produces": [
+                  "content_source.v1"
+                ],
+                "warnings": [
+                  "late_stage_entry_skipped"
+                ]
+              },
+              {
+                "nodeId": "placement_resolver",
+                "status": "completed",
+                "output": {
+                  "seeded": true,
+                  "skipped": true,
+                  "reason": "late_stage_entry",
+                  "nodeId": "placement_resolver"
+                },
+                "startedAt": "2026-08-25T17:22:34.271Z",
+                "completedAt": "2026-08-25T17:22:34.271Z",
+                "durationMs": 0,
+                "produces": [
+                  "placement_resolution.v1"
+                ],
+                "warnings": [
+                  "late_stage_entry_skipped"
+                ]
+              }
+            ],
+            "artifacts": [
+              {
+                "id": "artifact_article_body_1787678554273",
+                "nodeId": "article_body",
+                "type": "client_object.v1",
+                "createdAt": "2026-08-25T17:22:34.273Z"
+              },
+              {
+                "id": "artifact_publish_payload_1787678590592",
+                "nodeId": "publish_payload",
+                "type": "dry_run_publish_payload.v1",
+                "createdAt": "2026-08-25T17:23:10.592Z"
+              }
+            ],
+            "errors": [],
+            "approvalsRequired": [
+              {
+                "nodeId": "publication_controller",
+                "type": "approval_required",
+                "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+                "requestedAt": "2026-08-25T17:23:11.516Z"
+              }
+            ],
+            "initialInput": "T11(a) $0 publish-mechanics probe. Seeded lorem body; must reach the executor gate and stop there.",
+            "stageOutputs": {
+              "article_body": {
+                "artifact": "client_object.v1"
+              },
+              "publish_payload": {
+                "artifact": "dry_run_publish_payload.v1"
+              },
+              "publication_controller": {
+                "artifact": "publication_decision.v1",
+                "dryRun": true,
+                "decision": "blocked"
+              },
+              "learning_recorder": {
+                "artifact": "learning_observations.v1"
+              }
+            },
+            "dryRun": true,
+            "executionMode": "openai",
+            "entrypoint": {
+              "nodeId": "article_body",
+              "output": {
+                "artifact": "client_object.v1"
+              }
+            },
+            "budgetUsd": 2,
+            "operatorPublishDecision": "approved",
+            "operatorDecisionSource": "project_policy_default",
+            "rev": 7,
+            "publishRequestId": "req_probe_t11_mechanics_20260825_01"
+          },
+          "mode": {
+            "executionMode": "openai",
+            "live": true,
+            "declared": true,
+            "nodeSource": "store",
+            "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in \u2026"
+          },
+          "stall": null
+        }
+      },
+      "notes": "[2nd-newest cancelled run] same per-node timing shape; also carries data.mode{executionMode,live,declared,nodeSource,notice} and data.stall"
+    }
+  ]
+}

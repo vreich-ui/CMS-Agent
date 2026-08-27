@@ -1,0 +1,129 @@
+{
+  "verb": "evaluation_list_rubrics",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "rubrics": [
+            {
+              "nodeId": "string",
+              "name": "string",
+              "description": "string",
+              "status": "string",
+              "criteria": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "description": "string",
+                  "weight": "number",
+                  "scaleMax": "number",
+                  "guidance": "string"
+                }
+              ],
+              "passThreshold": "number",
+              "metadata": {
+                "authoredBy": "string",
+                "phase": "string",
+                "activationStatus": "string",
+                "proposedWeightRationale": "string",
+                "nodeReadNotes": "string",
+                "criteriaSource": "string",
+                "sessionB2FollowupRevision": "string"
+              },
+              "rubricId": "string",
+              "createdAt": "string",
+              "updatedAt": "string"
+            }
+          ]
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "rubrics": [
+            {
+              "nodeId": "contract_intelligence",
+              "name": "contract_intelligence.v1 \u2014 Contract Fidelity Rubric (DRAFT)",
+              "description": "Scores a contract_intelligence.v1 artifact on whether it is a faithful, provenanced, non-inventive carry-through of the client's fetched publishing contract. Every criterion binds to a field that actu\u2026",
+              "status": "active",
+              "criteria": [
+                {
+                  "id": "contract_fidelity",
+                  "name": "Contract fidelity \u2014 declared rules reproduced, not rewritten",
+                  "description": "Every rule, field, pattern, literal and constraint the contract declares is reproduced in the output as the contract states it. Structural payloads (bodySchema) are carried whole; rules are carried in\u2026",
+                  "weight": 3,
+                  "scaleMax": 10,
+                  "guidance": "WHAT THIS HUNTS: the pass-through that 'tidies' the contract. A cheaper model summarizing a regex into 'lowercase slug', rounding a byte budget, collapsing two constraints into one, dropping the 'uniq\u2026"
+                },
+                {
+                  "id": "severity_enforced_live_mapping",
+                  "name": "Severity and enforcedLive carried through without downgrade",
+                  "description": "Each entry in constraints[] carries both the severity the contract assigned and whether it is enforced live, unchanged. A rule the contract declares blocking is never presented as advisory, warning, o\u2026",
+                  "weight": 2.5,
+                  "scaleMax": 10,
+                  "guidance": "WHAT THIS HUNTS: the single most expensive regression this node can produce \u2014 a blocking rule that reaches downstream nodes as advice. Downstream obeys this output, so a downgraded severity ships a re\u2026"
+                }
+              ],
+              "passThreshold": 0.85,
+              "metadata": {
+                "authoredBy": "CMS Agent Session B (2026-08-03), Opus/high subagent per rubric",
+                "phase": "2026-08 improvement phase",
+                "activationStatus": "DRAFT \u2014 weights are Wolf's call; not active",
+                "proposedWeightRationale": "HIGHEST WEIGHT, and my recommendation to you: contract_fidelity (3.0) and severity_enforced_live_mapping (2.5) together carry 44% of the rubric. Reason: after the deterministic prefetch landed, this n\u2026",
+                "nodeReadNotes": "READ: the live node record (prompt, input/output schema, allowedTools, modelConfig, 16 version snapshots), the output schema on its own, the assigned contract_intelligence skill, and the most recent r\u2026",
+                "criteriaSource": "claude/cms-agent-improvement-phase-plan-2026-08.md \u00a72",
+                "sessionB2FollowupRevision": "Added criticalMin:0 to contract_source_provenance so a hollow-provenance output fails outright, matching the guidance's own stated intent (previously contradicted by the arithmetic: 0.88 > 0.85 passTh\u2026"
+              },
+              "rubricId": "rubric_1785773022345_jzc74l",
+              "createdAt": "2026-08-03T16:03:42.345Z",
+              "updatedAt": "2026-08-05T12:42:01.341Z"
+            },
+            {
+              "nodeId": "research",
+              "name": "research_brief.v1 \u2014 Evidence Integrity Rubric (draft)",
+              "description": "Scores the `research` node's research_brief.v1 output on whether the evidence it hands to downstream editorial nodes is actually load-bearing: sources proportionate to claim stakes, every substantive \u2026",
+              "status": "active",
+              "criteria": [
+                {
+                  "id": "per_claim_support",
+                  "name": "Per-Claim Attribution",
+                  "description": "Each substantive factual claim in the brief carries its own named source at the point the claim is made, rather than the brief presenting assertions alongside a detached source list. Judged over the c\u2026",
+                  "weight": 1.8,
+                  "scaleMax": 5,
+                  "guidance": "5 = every substantive factual entry names its own source inline (the observed convention is a sourced-fact entry that states the finding and then names the source and, where relevant, its date/version\u2026"
+                },
+                {
+                  "id": "citation_integrity",
+                  "name": "Attribution Integrity (sources say what they are said to say)",
+                  "description": "Cited sources are represented accurately and within their actual scope \u2014 no misattribution, no inflation of a source's authority or specificity, no claim stretched beyond what the cited material suppo\u2026",
+                  "weight": 2,
+                  "scaleMax": 5,
+                  "guidance": "5 = every attribution is specific enough to be checked (named artifact/document/body plus date, version, or identifier), the strength of each claim matches the strength of the cited material, sources \u2026",
+                  "criticalMin": 2
+                }
+              ],
+              "passThreshold": 0.78,
+              "metadata": {
+                "authoredBy": "CMS Agent Session B (2026-08-03), Opus/high subagent per rubric",
+                "phase": "2026-08 improvement phase",
+                "activationStatus": "DRAFT \u2014 weights are Wolf's call; not active",
+                "proposedWeightRationale": "Highest weight goes to ATTRIBUTION INTEGRITY (2.0) and PER-CLAIM ATTRIBUTION (1.8) \u2014 together 40% of the normalized total. Reasoning: this node is upstream of every editorial node, and downstream node\u2026",
+                "nodeReadNotes": "Read the live node record (prompt, input/output schema, allowed tools, model limits, revision history) and one real research_brief.v1 artifact from the most recent run, to bind criteria to fields that\u2026",
+                "criteriaSource": "claude/cms-agent-improvement-phase-plan-2026-08.md \u00a72",
+                "sessionB2FollowupRevision": "Added criticalMin:2 to citation_integrity (a fabricated or unfalsifiably vague citation now vetoes regardless of the mean) and raised passThreshold 0.72 -> 0.78. Left below the 0.85 used by the more m\u2026"
+              },
+              "rubricId": "rubric_1785773086490_hmrj61",
+              "createdAt": "2026-08-03T16:04:46.490Z",
+              "updatedAt": "2026-08-05T12:42:02.809Z"
+            }
+          ]
+        }
+      },
+      "notes": "[no-args] 5 rubrics"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "verb": "workspace_validate_graph",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "validation": {
+            "valid": "boolean",
+            "issues": []
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "validation": {
+            "valid": true,
+            "issues": []
+          }
+        }
+      },
+      "notes": "[no-args]"
+    }
+  ]
+}

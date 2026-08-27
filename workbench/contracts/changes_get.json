@@ -1,0 +1,81 @@
+{
+  "verb": "changes_get",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "eventId": "evt_1786467679822_ybk8py"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "event": {
+            "eventId": "string",
+            "type": "string",
+            "operation": "string",
+            "target": {
+              "type": "string",
+              "id": "string"
+            },
+            "actor": {
+              "kind": "string",
+              "label": "string"
+            },
+            "source": "string",
+            "reason": "string",
+            "parentRevisionId": "string",
+            "resultingRevisionId": "string",
+            "workspaceVersion": "number",
+            "riskLevel": "string",
+            "before": {
+              "...": "string"
+            },
+            "after": {
+              "...": "string"
+            },
+            "correlation": {
+              "requestId": "string"
+            },
+            "createdAt": "string"
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "event": {
+            "eventId": "evt_1786467679822_ybk8py",
+            "type": "node.prompt_updated",
+            "operation": "update",
+            "target": {
+              "type": "node",
+              "id": "draft_writer"
+            },
+            "actor": {
+              "kind": "agent",
+              "label": "Claude (oauth)"
+            },
+            "source": "mcp",
+            "reason": "Handoff 2.2 \u2014 the writer never saw the dials; now consumes resolved from article_brief.v1.",
+            "parentRevisionId": "rev_1786467662906_mqcu7h",
+            "resultingRevisionId": "rev_1786467679535_3jtm1x",
+            "workspaceVersion": 327,
+            "riskLevel": "read",
+            "before": {
+              "...": "full node object"
+            },
+            "after": {
+              "...": "full node object"
+            },
+            "correlation": {
+              "requestId": "req_1786467679133_56qun6"
+            },
+            "createdAt": "2026-08-11T17:01:19.520Z"
+          }
+        }
+      },
+      "notes": "[real eventId]"
+    }
+  ]
+}

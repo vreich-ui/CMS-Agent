@@ -5,12 +5,55 @@
 // `.grid` (already `overflow-x:auto` in base.css) does.
 
 import { Card, Note } from '../../components/primitives';
+import { QuickLookPopover } from '../../components/quicklook/QuickLookPopover';
+import { useNodeQuickLook } from '../../components/quicklook/useNodeQuickLook';
 import type { Run, Workflow } from '../../types';
 import type { RunFilters } from './index';
 import { nodeRunStatus, orderedNodes, runTimestamp, shortId } from './helpers';
 
 const GRID_CAP = 9;
 const DEFAULT_WORKFLOW = 'publishing_conductor';
+
+/** U5 — one grid row (a node across the recent runs). Its own component so
+ * the quick-look hover trigger (one per node) can be a single hook instance
+ * shared by every cell in the row — hovering ANY cell in this row opens the
+ * same node's quick-look, anchored to whichever cell the pointer is over. */
+function GridRow({
+  nid,
+  wfId,
+  recent,
+  order,
+  onOpen,
+}: {
+  nid: string;
+  wfId: string;
+  recent: Run[];
+  order: string[];
+  onOpen: (run: Run) => void;
+}) {
+  const ql = useNodeQuickLook(nid, wfId);
+  return (
+    <tr>
+      <th {...ql.triggerProps}>{nid}</th>
+      {recent.map((r) => {
+        const st = nodeRunStatus(order, r, nid);
+        return (
+          <td key={r.id}>
+            <button
+              type="button"
+              className={`cell ${st}`}
+              title={`${nid} · ${st} · ${r.id.slice(-6)}`}
+              aria-label={`${nid} — ${st} — run ${shortId(r.id)}`}
+              onClick={() => onOpen(r)}
+              {...ql.triggerProps}
+            />
+          </td>
+        );
+      })}
+      <QuickLookPopover nodeId={nid} workflowId={wfId} anchor={ql.anchor} onClose={ql.close} />
+    </tr>
+  );
+}
 
 export function GridTab({
   runs,
@@ -65,23 +108,7 @@ export function GridTab({
             </thead>
             <tbody>
               {order.map((nid) => (
-                <tr key={nid}>
-                  <th>{nid}</th>
-                  {recent.map((r) => {
-                    const st = nodeRunStatus(order, r, nid);
-                    return (
-                      <td key={r.id}>
-                        <button
-                          type="button"
-                          className={`cell ${st}`}
-                          title={`${nid} · ${st} · ${r.id.slice(-6)}`}
-                          aria-label={`${nid} — ${st} — run ${shortId(r.id)}`}
-                          onClick={() => onOpen(r)}
-                        />
-                      </td>
-                    );
-                  })}
-                </tr>
+                <GridRow key={nid} nid={nid} wfId={wfId} recent={recent} order={order} onOpen={onOpen} />
               ))}
             </tbody>
           </table>

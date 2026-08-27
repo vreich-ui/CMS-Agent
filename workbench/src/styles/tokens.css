@@ -17,6 +17,11 @@
        a second, weaker one. */
     --cell-ok:var(--ok); --cell-gate:var(--acc); --cell-bad:var(--bad);
     --shadow:0 14px 40px #00000022;
+    /* U7 hygiene fix — modal scrim was a bare hex literal in base.css
+       (`.scrim{background:#00000066}`) instead of a token; a scrim sits
+       over rendered content in both themes so it deliberately does NOT
+       vary by theme (unlike --shadow above), same value either way. */
+    --scrim:#00000066;
     --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
     --sans:'IBM Plex Sans',system-ui,sans-serif;
   }

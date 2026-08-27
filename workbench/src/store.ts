@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ModalKind, OverlayState } from './overlay/types';
 import type {
   BenchMode,
   LearnTab,
@@ -69,6 +70,13 @@ interface WorkbenchState {
    * paletteOpen/startModalOpen/graphOverlayOpen and ConfirmDialog's own
    * (module-external) pending state. */
   registryPickerOpen: boolean;
+  /** U6 — the one addressable modal, if any. Every focused task with its
+   * own commit routes through here so it can be deep-linked
+   * (`?modal=diff&m.node=…`), reopened, and dismissed by one rule. The four
+   * booleans above predate this and stay as they are: they are not
+   * addressable surfaces and rewriting them would churn working code and
+   * its tests for no operator-visible gain. */
+  overlay: OverlayState | null;
 
   setScreen: (screen: ScreenId) => void;
   setWf: (wf: string) => void;
@@ -79,7 +87,13 @@ interface WorkbenchState {
   setReg: (reg: RegTab) => void;
   setLearn: (lrn: LearnTab) => void;
   setShowUneng: (v: boolean) => void;
+  adoptNode: (node: string) => void;
   bindRun: (runId: string, wf: string, node: string) => void;
+  /** U3 — bind a run and land straight in drive mode, in one atomic update
+   * (rather than bindRun's always-'run' + a separate setMode('drive'),
+   * which would flash through 'run' first). Used by drive mode's own
+   * empty-state "bind an existing run" list. */
+  bindRunForDrive: (runId: string, wf: string, node: string) => void;
   unbindRun: () => void;
   cycleTheme: () => void;
   setTheme: (pref: ThemePref) => void;
@@ -91,15 +105,26 @@ interface WorkbenchState {
   openGraphOverlay: () => void;
   closeGraphOverlay: () => void;
   setRegistryPickerOpen: (open: boolean) => void;
+  openModal: (kind: ModalKind, params?: Record<string, string>) => void;
+  closeModal: () => void;
+  /** Used by the URL sync only — sets overlay state WITHOUT writing history. */
+  syncModalFromUrl: (overlay: OverlayState | null) => void;
 }
 
 export const useStore = create<WorkbenchState>((set) => ({
   screen: 'bench',
   wf: 'publishing_conductor',
-  mode: 'run',
-  runId: 'run_1787492010814_kxdbeb',
-  node: 'publish_executor',
-  tab: 'thisrun',
+  // P2-01 — boot into a state that is true before any data arrives. The
+  // old initial state named a fixture run id that does not exist upstream,
+  // so every cold load fired a `workflow_get_run` that failed (×4, with
+  // backoff) while Rail/Center/Dock/TopBar all sat on that query. Nothing
+  // here may reference an id the workspace has not confirmed exists:
+  // `node` is empty until the loaded workflow's nodes arrive (Rail's
+  // adoptFirstNode), and `runId` is null until a run is deliberately bound.
+  mode: 'build',
+  runId: null,
+  node: '',
+  tab: 'prompt',
   runtab: 'live',
   reg: 'projects',
   lrn: 'fly',
@@ -112,6 +137,7 @@ export const useStore = create<WorkbenchState>((set) => ({
   paletteOpen: false,
   graphOverlayOpen: false,
   registryPickerOpen: false,
+  overlay: null,
 
   setScreen: (screen) => set({ screen }),
   setWf: (wf) => set({ wf }),
@@ -123,8 +149,16 @@ export const useStore = create<WorkbenchState>((set) => ({
   setLearn: (lrn) => set({ lrn }),
   setShowUneng: (showUneng) => set({ showUneng }),
 
+  /** P2-01 — first-node adoption. Called by Rail once the active workflow's
+   * nodes have actually loaded; only fills an empty selection, so it can
+   * never stomp a node the operator (or a run binding) already chose. */
+  adoptNode: (node) => set((s) => (s.node ? {} : { node })),
+
   bindRun: (runId, wf, node) =>
     set({ wf, runId, mode: 'run', node, tab: 'thisrun', screen: 'bench' }),
+
+  bindRunForDrive: (runId, wf, node) =>
+    set({ wf, runId, mode: 'drive', node, tab: 'thisrun', screen: 'bench' }),
 
   unbindRun: () => set({ runId: null, mode: 'build', tab: 'prompt' }),
 
@@ -155,4 +189,8 @@ export const useStore = create<WorkbenchState>((set) => ({
   openGraphOverlay: () => set({ graphOverlayOpen: true }),
   closeGraphOverlay: () => set({ graphOverlayOpen: false }),
   setRegistryPickerOpen: (registryPickerOpen) => set({ registryPickerOpen }),
+
+  openModal: (kind, params = {}) => set({ overlay: { kind, params } }),
+  closeModal: () => set({ overlay: null }),
+  syncModalFromUrl: (overlay) => set({ overlay }),
 }));

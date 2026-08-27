@@ -96,11 +96,20 @@ test.describe('WP-31 prompt editing', () => {
     await expect(page.locator('.center .lbl', { hasText: 'playbook lessons' })).toBeVisible();
 
     // --- History: the save is recorded, with a working diff ---
+    // Was: asserted `.diffline.add`, the OLD Shared.tsx DiffLines engine's
+    // class (still correct above, for PromptTab's own "Diff vs canonical"
+    // disclosure — that one intentionally wasn't touched). HistoryTab.tsx's
+    // own doc comment says a locally-recorded row's inline diff now uses
+    // "the SAME diff engine" as the diff & merge studio — ProseDiffView
+    // (components/diff/ProseDiffView.tsx), which renders `.dsline`
+    // add/remove/modify divs, not `.diffline`. This is the U2 rework
+    // working as designed, not a regression — the test just wasn't updated
+    // for it.
     await page.locator('.tabs button', { hasText: 'History' }).click();
     const row = page.locator('.histrow', { hasText: 'prompt edited' });
     await expect(row).toBeVisible();
     await row.locator('button', { hasText: 'diff' }).click();
-    await expect(page.locator('.diffline.add').first()).toBeVisible();
+    await expect(page.locator('.dsline.add').first()).toBeVisible();
     await page.screenshot({ path: 'shots/history-diff.png' });
 
     // --- Restore round-trips the value back into the Prompt editor ---

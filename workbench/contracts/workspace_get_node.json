@@ -1,0 +1,226 @@
+{
+  "verb": "workspace_get_node",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "id": "draft_writer"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "node": {
+            "id": "string",
+            "name": "string",
+            "kind": "string",
+            "description": "string",
+            "prompt": "string",
+            "schema": {
+              "type": "string",
+              "required": [
+                "string"
+              ],
+              "additionalProperties": "boolean",
+              "properties": {
+                "artifact": {
+                  "const": "string"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": "number"
+                },
+                "notes": {
+                  "type": "string",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "inputSchema": {
+              "type": "string",
+              "additionalProperties": "boolean",
+              "properties": {
+                "stageOutputs": {
+                  "type": "string"
+                },
+                "contentSource": {
+                  "type": "string"
+                },
+                "instructions": {
+                  "type": "string"
+                }
+              }
+            },
+            "outputSchema": {
+              "type": "string",
+              "required": [
+                "string"
+              ],
+              "additionalProperties": "boolean",
+              "properties": {
+                "artifact": {
+                  "const": "string"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": "number"
+                },
+                "notes": {
+                  "type": "string",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "allowedTools": [
+              "string"
+            ],
+            "assignedSkills": [
+              "string"
+            ],
+            "requiredInputs": [
+              "string"
+            ],
+            "produces": [
+              "string"
+            ],
+            "riskLevel": "string",
+            "dependsOn": [
+              "string"
+            ],
+            "status": "string",
+            "position": {
+              "x": "number",
+              "y": "number"
+            },
+            "updatedAt": "string",
+            "metadata": {
+              "externalStageMapping": "string",
+              "approvalRequired": "boolean"
+            },
+            "modelConfig": {
+              "maxTurns": "number",
+              "toolCallLimit": "number",
+              "timeout": "number",
+              "budgetUsd": "number",
+              "maxOutputTokens": "number",
+              "retryCount": "number"
+            }
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "node": {
+            "id": "draft_writer",
+            "name": "Full Draft Writer",
+            "kind": "drafting",
+            "description": "Write a complete draft from the approved brief while preserving canonical structured artifacts over Markdown.",
+            "prompt": "<full prompt string>",
+            "schema": {
+              "type": "object",
+              "required": [
+                "artifact",
+                "summary"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "artifact": {
+                  "const": "draft.v1"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "notes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "inputSchema": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "stageOutputs": {
+                  "type": "object"
+                },
+                "contentSource": {
+                  "type": "object"
+                },
+                "instructions": {
+                  "type": "string"
+                }
+              }
+            },
+            "outputSchema": {
+              "type": "object",
+              "required": [
+                "artifact",
+                "summary"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "artifact": {
+                  "const": "draft.v1"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "notes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "allowedTools": [
+              "workspace.get_node",
+              "stage.get_output"
+            ],
+            "assignedSkills": [
+              "editorial_craft"
+            ],
+            "requiredInputs": [
+              "brief_architect"
+            ],
+            "produces": [
+              "draft.v1"
+            ],
+            "riskLevel": "read",
+            "dependsOn": [
+              "brief_architect"
+            ],
+            "status": "active",
+            "position": {
+              "x": 840,
+              "y": 180
+            },
+            "updatedAt": "2026-08-11T17:01:19.519Z",
+            "metadata": {
+              "externalStageMapping": "draft",
+              "approvalRequired": false
+            },
+            "modelConfig": {
+              "maxTurns": 4,
+              "toolCallLimit": 2,
+              "timeout": 300000,
+              "budgetUsd": 0.5,
+              "maxOutputTokens": 8000,
+              "retryCount": 1
+            }
+          }
+        }
+      },
+      "notes": "[draft_writer (publishing_conductor)]"
+    }
+  ]
+}

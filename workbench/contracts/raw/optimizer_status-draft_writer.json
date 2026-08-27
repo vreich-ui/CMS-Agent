@@ -1,0 +1,1 @@
+{"ok":true,"data":{"status":{"nodeId":"draft_writer","proposals":[],"trials":[],"modelLadder":{"nodeId":"draft_writer","threshold":0.7,"minSamples":3,"reason":"No model-attributed eval results yet; run evaluations with subject model attribution first.","candidates":[]}}}}

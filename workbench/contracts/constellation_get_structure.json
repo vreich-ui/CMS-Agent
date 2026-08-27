@@ -1,0 +1,83 @@
+{
+  "verb": "constellation_get_structure",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "agents": [
+            {
+              "id": "string",
+              "name": "string",
+              "kind": "string",
+              "status": "string",
+              "riskLevel": "string",
+              "dependsOn": [],
+              "position": {
+                "x": "number",
+                "y": "number"
+              }
+            }
+          ],
+          "relationships": [],
+          "derivedExecutionEdges": [
+            {
+              "kind": "string",
+              "sourceId": "string",
+              "targetId": "string",
+              "derivedFrom": "string"
+            }
+          ]
+        },
+        "_note": "string"
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "agents": [
+            {
+              "id": "input_triage",
+              "name": "CMS Input Triage",
+              "kind": "intake",
+              "status": "active",
+              "riskLevel": "read",
+              "dependsOn": [],
+              "position": {
+                "x": -407,
+                "y": 159
+              }
+            },
+            {
+              "id": "draft_writer",
+              "name": "Full Draft Writer",
+              "kind": "drafting",
+              "status": "active",
+              "riskLevel": "read",
+              "dependsOn": [
+                "brief_architect"
+              ],
+              "position": {
+                "x": 840,
+                "y": 180
+              }
+            }
+          ],
+          "relationships": [],
+          "derivedExecutionEdges": [
+            {
+              "kind": "execution",
+              "sourceId": "input_triage",
+              "targetId": "placement_resolver",
+              "derivedFrom": "dependsOn"
+            }
+          ]
+        },
+        "_note": "48 agents total (one per workspace node), matching workspace_get_nodes/workspace_get_graph counts exactly. relationships[] (stored typed relationships) was empty in this workspace; derivedExecutionEdg\u2026"
+      },
+      "notes": "[no-args] 48 agents (== workspace node count), relationships:[] empty, derivedExecutionEdges: 92 entries (== flat workspace_get_graph edge count)"
+    }
+  ]
+}

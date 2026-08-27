@@ -1,0 +1,216 @@
+{
+  "verb": "workflow_get_run_cost",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "runId": "run_1787678554270_stw73q"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "ledger": {
+            "runId": "string",
+            "status": "string",
+            "totalInputTokens": "number",
+            "totalOutputTokens": "number",
+            "totalTokens": "number",
+            "totalCostUsdEstimate": "number",
+            "stages": [
+              {
+                "nodeId": "string",
+                "status": "string",
+                "inputTokens": "number",
+                "outputTokens": "number",
+                "totalTokens": "number",
+                "costUsdEstimate": "number",
+                "reusable": "boolean"
+              }
+            ],
+            "mostExpensiveNodeId": "string",
+            "reusableNodeIds": [
+              "string"
+            ],
+            "remainingNodeIds": [
+              "string"
+            ],
+            "budget": {
+              "budgetUsd": "number",
+              "spentUsdEstimate": "number",
+              "remainingUsdEstimate": "number",
+              "percentUsed": "number",
+              "overBudget": "boolean",
+              "status": "string",
+              "blocked": "boolean"
+            }
+          },
+          "plan": {
+            "runId": "string",
+            "reusableStages": [
+              "string"
+            ],
+            "remainingStages": [
+              "string"
+            ],
+            "strategy": "string",
+            "reason": "string",
+            "narrowerThanFullRun": "boolean",
+            "nodeTimingAggregates": {
+              "input_triage": {
+                "nodeId": "string",
+                "count": "number",
+                "emaDurationMs": "number",
+                "p50DurationMs": "number",
+                "p95DurationMs": "number"
+              },
+              "draft_writer": {
+                "nodeId": "string",
+                "count": "number",
+                "emaDurationMs": "number",
+                "p50DurationMs": "number",
+                "p95DurationMs": "number"
+              },
+              "publish_payload": {
+                "nodeId": "string",
+                "count": "number",
+                "emaDurationMs": "number",
+                "p50DurationMs": "number",
+                "p95DurationMs": "number"
+              },
+              "publication_controller": {
+                "nodeId": "string",
+                "count": "number",
+                "emaDurationMs": "number",
+                "p50DurationMs": "number",
+                "p95DurationMs": "number"
+              },
+              "learning_recorder": {
+                "nodeId": "string",
+                "count": "number",
+                "emaDurationMs": "number",
+                "p50DurationMs": "number",
+                "p95DurationMs": "number"
+              },
+              "publish_executor": {
+                "nodeId": "string",
+                "count": "number",
+                "emaDurationMs": "number",
+                "p50DurationMs": "number",
+                "p95DurationMs": "number"
+              }
+            }
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "ledger": {
+            "runId": "run_1787678554270_stw73q",
+            "status": "cancelled",
+            "totalInputTokens": 1801,
+            "totalOutputTokens": 60,
+            "totalTokens": 1861,
+            "totalCostUsdEstimate": 0.010805,
+            "stages": [
+              {
+                "nodeId": "input_triage",
+                "status": "completed",
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "totalTokens": 0,
+                "costUsdEstimate": 0,
+                "reusable": true
+              },
+              {
+                "nodeId": "publication_controller",
+                "status": "blocked",
+                "inputTokens": 1801,
+                "outputTokens": 60,
+                "totalTokens": 1861,
+                "costUsdEstimate": 0.010805,
+                "reusable": false
+              }
+            ],
+            "mostExpensiveNodeId": "publication_controller",
+            "reusableNodeIds": [
+              "input_triage",
+              "placement_resolver"
+            ],
+            "remainingNodeIds": [
+              "publish_executor"
+            ],
+            "budget": {
+              "budgetUsd": 2,
+              "spentUsdEstimate": 0,
+              "remainingUsdEstimate": 2,
+              "percentUsed": 0,
+              "overBudget": false,
+              "status": "ok",
+              "blocked": false
+            }
+          },
+          "plan": {
+            "runId": "run_1787678554270_stw73q",
+            "reusableStages": [
+              "input_triage",
+              "...(21 items)"
+            ],
+            "remainingStages": [
+              "publish_executor"
+            ],
+            "strategy": "poll",
+            "reason": "Run is terminal; poll status and artifacts instead of rerunning.",
+            "narrowerThanFullRun": true,
+            "nodeTimingAggregates": {
+              "input_triage": {
+                "nodeId": "input_triage",
+                "count": 16,
+                "emaDurationMs": 5719,
+                "p50DurationMs": 6973,
+                "p95DurationMs": 13266
+              },
+              "draft_writer": {
+                "nodeId": "draft_writer",
+                "count": 14,
+                "emaDurationMs": 37583,
+                "p50DurationMs": 45110,
+                "p95DurationMs": 65322
+              },
+              "publish_payload": {
+                "nodeId": "publish_payload",
+                "count": 14,
+                "emaDurationMs": 963,
+                "p50DurationMs": 158,
+                "p95DurationMs": 2448
+              },
+              "publication_controller": {
+                "nodeId": "publication_controller",
+                "count": 19,
+                "emaDurationMs": 15,
+                "p50DurationMs": 1,
+                "p95DurationMs": 64
+              },
+              "learning_recorder": {
+                "nodeId": "learning_recorder",
+                "count": 14,
+                "emaDurationMs": 87,
+                "p50DurationMs": 95,
+                "p95DurationMs": 150
+              },
+              "publish_executor": {
+                "nodeId": "publish_executor",
+                "count": 8,
+                "emaDurationMs": 2248,
+                "p50DurationMs": 1,
+                "p95DurationMs": 21830
+              }
+            }
+          }
+        }
+      },
+      "notes": "[run_1787678554270_stw73q] plan.nodeTimingAggregates{<nodeId>: {nodeId,count,emaDurationMs,p50DurationMs,p95DurationMs}} is the WORKFLOW-WIDE historical timing-aggregate source (distinct from per-run per-node startedAt/completedAt/durationMs on workflow_get_run)"
+    }
+  ]
+}

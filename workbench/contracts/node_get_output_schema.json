@@ -1,0 +1,68 @@
+{
+  "verb": "node_get_output_schema",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "nodeId": "draft_writer"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "schema": {
+            "type": "string",
+            "required": [
+              "string"
+            ],
+            "additionalProperties": "boolean",
+            "properties": {
+              "artifact": {
+                "const": "string"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": "number"
+              },
+              "notes": {
+                "type": "string",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "schema": {
+            "type": "object",
+            "required": [
+              "artifact",
+              "summary"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "artifact": {
+                "const": "draft.v1"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "notes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "notes": "[draft_writer]"
+    }
+  ]
+}

@@ -39,6 +39,69 @@ export function fallbackBarHeight(index: number, status: NodeRunStatus): number 
   return 8 + ((index * 37) % 30);
 }
 
+/** Smallest and largest bar a measured duration can produce, in px. */
+const BAR_MIN = 6;
+const BAR_MAX = 38;
+
+export interface TimelineBar {
+  nodeId: string;
+  /** px height for the bar */
+  height: number;
+  /** measured duration, or null when the node has not run */
+  durationMs: number | null;
+  /** what the bar means, for the tooltip */
+  title: string;
+}
+
+function humanMs(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.round((ms % 60_000) / 1000);
+  return `${m}m ${s}s`;
+}
+
+/**
+ * P2-05 — the dock timeline, built from measured durations.
+ *
+ * Heights are scaled against the slowest node in THIS run, on a square-root
+ * curve: a run where one node takes 60× another still has to show both, and
+ * a linear scale renders every fast node as a 1px stub. A node with no
+ * measured duration (queued, or still running) gets the minimum bar and
+ * says so in its tooltip — it is never given a fabricated height.
+ */
+export function timelineBars(
+  nodeTimings: Array<{ nodeId: string; durationMs?: number | null; status?: string }>,
+  order: string[],
+): TimelineBar[] {
+  const byId = new Map(nodeTimings.map((n) => [n.nodeId, n]));
+  const ids = order.length > 0 ? order : nodeTimings.map((n) => n.nodeId);
+  const durations = ids
+    .map((id) => byId.get(id)?.durationMs)
+    .filter((d): d is number => typeof d === 'number' && d > 0);
+  const max = durations.length > 0 ? Math.max(...durations) : 0;
+
+  return ids.map((nodeId) => {
+    const t = byId.get(nodeId);
+    const d = typeof t?.durationMs === 'number' ? t.durationMs : null;
+    if (d === null) {
+      return {
+        nodeId,
+        height: BAR_MIN,
+        durationMs: null,
+        title: `${nodeId} — not timed yet (${t?.status ?? 'queued'})`,
+      };
+    }
+    const ratio = max > 0 ? Math.sqrt(d / max) : 0;
+    return {
+      nodeId,
+      height: Math.round(BAR_MIN + ratio * (BAR_MAX - BAR_MIN)),
+      durationMs: d,
+      title: `${nodeId} — ${humanMs(d)}`,
+    };
+  });
+}
+
 /**
  * Gate copy per gate node — the mockup only wrote theme_bind's; WP-23
  * (Phase 2 gate panel) fills in the other two real cases from the node
@@ -137,4 +200,153 @@ export function formatDurationMs(ms: number): string {
   const m = Math.floor(s / 60);
   const rs = Math.round(s % 60);
   return `${m}m ${rs}s`;
+}
+
+/* ============================== U5 additions ================================
+ * Navigation & visualization — the graph overlay's layering, per-node run
+ * status read straight off a run's real node records (rather than inferred
+ * from position relative to run.cur, which nodeRunStatus() above does for
+ * the rail's simpler "before/at/after the stopped node" picture), and a
+ * couple of small triage-signal derivations the rail's health chips need.
+ * Every function below is new — nothing above this line was touched.
+ */
+
+export interface GraphLayerResult {
+  /** nodeId -> layer index (0 = a root, no unresolved dependency). */
+  layerOf: Record<string, number>;
+  /** Node ids grouped by layer, each group in the input's original order. */
+  layers: string[][];
+  maxLayer: number;
+  /** True when the edge set contained a cycle — see the function doc below. */
+  hadCycle: boolean;
+}
+
+/**
+ * U5 — layered-DAG layout for the graph overlay: a node sits one layer
+ * below its deepest dependency (longest-path-from-roots), computed with a
+ * Kahn's-algorithm topological sweep so every node's layer is only ever
+ * finalized after all of its known dependencies have been. Edges naming an
+ * id outside `nodeIds`, or a self-edge, are dropped rather than trusted —
+ * the graph this draws is only ever as good as the ids it was actually
+ * given.
+ *
+ * Cycles are handled defensively, not detected-and-thrown: if the sweep
+ * finishes without reaching every node, the remainder can only be a cycle
+ * (everything reachable via a genuine DAG path from a root always gets
+ * processed). Every unresolved node is placed one layer past whatever was
+ * reached, in input order, so the diagram still terminates and renders
+ * instead of looping forever chasing a resolved layer that will never
+ * come — `hadCycle: true` is the signal callers use to say so rather than
+ * silently presenting a cyclic graph as a clean DAG.
+ */
+export function layerGraph(nodeIds: string[], edges: Array<{ from: string; to: string }>): GraphLayerResult {
+  const known = new Set(nodeIds);
+  const adj = new Map<string, string[]>();
+  const remaining = new Map<string, number>();
+  for (const id of nodeIds) {
+    adj.set(id, []);
+    remaining.set(id, 0);
+  }
+  for (const e of edges) {
+    if (e.from === e.to || !known.has(e.from) || !known.has(e.to)) continue;
+    adj.get(e.from)!.push(e.to);
+    remaining.set(e.to, (remaining.get(e.to) ?? 0) + 1);
+  }
+
+  const layerOf = new Map<string, number>();
+  const queue: string[] = [];
+  for (const id of nodeIds) {
+    if ((remaining.get(id) ?? 0) === 0) {
+      layerOf.set(id, 0);
+      queue.push(id);
+    }
+  }
+
+  let head = 0;
+  let processed = 0;
+  while (head < queue.length) {
+    const u = queue[head++];
+    processed++;
+    const l = layerOf.get(u) ?? 0;
+    for (const v of adj.get(u) ?? []) {
+      layerOf.set(v, Math.max(layerOf.get(v) ?? 0, l + 1));
+      const r = (remaining.get(v) ?? 0) - 1;
+      remaining.set(v, r);
+      if (r === 0) queue.push(v);
+    }
+  }
+
+  const hadCycle = processed < nodeIds.length;
+  if (hadCycle) {
+    let nextLayer = 1 + Math.max(0, ...[...layerOf.values()]);
+    for (const id of nodeIds) {
+      if (!layerOf.has(id)) layerOf.set(id, nextLayer);
+    }
+  }
+
+  const maxLayer = Math.max(0, ...[...layerOf.values()]);
+  const layers: string[][] = Array.from({ length: maxLayer + 1 }, () => []);
+  for (const id of nodeIds) layers[layerOf.get(id) ?? 0].push(id);
+
+  return { layerOf: Object.fromEntries(layerOf), layers, maxLayer, hadCycle };
+}
+
+/**
+ * U5 — a node's ACTUAL status within a bound run, read straight off
+ * `run.nodes[]` rather than inferred from position relative to `run.cur`
+ * the way `nodeRunStatus()` above does. The graph overlay and the trace
+ * waterfall both need the real per-node status (a node upstream of `cur`
+ * that was actually skipped must not be painted "completed"), so this is
+ * additive rather than a change to the existing inference. A node with no
+ * entry in `run.nodes[]` at all has honestly not been reached yet —
+ * 'queued', not a guess.
+ */
+export function nodeStatusFromRun(run: Run | null | undefined, nodeId: string): NodeRunStatus {
+  const entry = run?.nodes.find((n) => n.nodeId === nodeId);
+  if (!entry) return 'queued';
+  switch (entry.status) {
+    case 'completed':
+      return 'completed';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+    case 'skipped':
+      return 'cancelled';
+    case 'running':
+      return 'running';
+    case 'paused':
+    case 'blocked':
+      return 'blocked';
+    default:
+      return 'queued';
+  }
+}
+
+/** U5 — the phase label a node belongs to per the (presentation-only) workflow
+ * catalog, or null when the catalog's phase lists don't claim it (see
+ * workflowCatalog.ts's own honesty note about stale node lists — a node not
+ * found here still exists, it's just ungrouped). */
+export function phaseLabelForNode(wf: Workflow, nodeId: string): string | null {
+  for (const [label, ids] of wf.phases) {
+    if (ids.includes(nodeId)) return label;
+  }
+  return null;
+}
+
+/**
+ * U5 — rail health chip: how many of the `limit` most recent runs for this
+ * workflow show this node as 'failed'. Reuses whatever run list the caller
+ * already fetched (the rail's own `useRuns({workflowId})`) — no extra call.
+ * `runs` need not be sorted; recency is taken from the run id's own
+ * embedded timestamp (`run_<epochMs>_<rand>`, the one reliable chronological
+ * key — see Runs/helpers.ts's runTimestamp for the same convention).
+ */
+export function nodeErrorFrequency(runs: Run[], nodeId: string, limit = 8): number {
+  const ts = (r: Run) => Number(/^run_(\d+)_/.exec(r.id)?.[1] ?? 0);
+  const recent = [...runs].sort((a, b) => ts(b) - ts(a)).slice(0, limit);
+  let count = 0;
+  for (const r of recent) {
+    if (r.nodes.some((n) => n.nodeId === nodeId && n.status === 'failed')) count++;
+  }
+  return count;
 }

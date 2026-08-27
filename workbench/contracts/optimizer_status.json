@@ -1,0 +1,47 @@
+{
+  "verb": "optimizer_status",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "nodeId": "draft_writer"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "status": {
+            "nodeId": "string",
+            "proposals": [],
+            "trials": [],
+            "modelLadder": {
+              "nodeId": "string",
+              "threshold": "number",
+              "minSamples": "number",
+              "reason": "string",
+              "candidates": []
+            }
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "status": {
+            "nodeId": "draft_writer",
+            "proposals": [],
+            "trials": [],
+            "modelLadder": {
+              "nodeId": "draft_writer",
+              "threshold": 0.7,
+              "minSamples": 3,
+              "reason": "No model-attributed eval results yet; run evaluations with subject model attribution first.",
+              "candidates": []
+            }
+          }
+        }
+      },
+      "notes": "[draft_writer] confirmed read-only/read-shaped"
+    }
+  ]
+}

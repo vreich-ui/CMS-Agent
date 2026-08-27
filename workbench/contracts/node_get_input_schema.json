@@ -1,0 +1,53 @@
+{
+  "verb": "node_get_input_schema",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "nodeId": "draft_writer"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "schema": {
+            "type": "string",
+            "additionalProperties": "boolean",
+            "properties": {
+              "stageOutputs": {
+                "type": "string"
+              },
+              "contentSource": {
+                "type": "string"
+              },
+              "instructions": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "stageOutputs": {
+                "type": "object"
+              },
+              "contentSource": {
+                "type": "object"
+              },
+              "instructions": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "notes": "[draft_writer]"
+    }
+  ]
+}

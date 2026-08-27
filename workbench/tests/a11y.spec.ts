@@ -56,6 +56,15 @@ test.describe('a11y — command palette (C2/C3)', () => {
 
   test('the palette input has a real focus ring, not outline:none with nothing replacing it', async ({ page }) => {
     await page.goto('/');
+    // U7 — real bug, not a stale assertion: found by running the full
+    // suite (this test isn't in the U7 brief's named-10). Confirmed via
+    // `git stash` that it fails identically on the pre-U7 baseline, so
+    // it's pre-existing, not a U7 regression. Same cold-start race the
+    // sibling test three lines up already names and guards against
+    // ("App must be mounted... before the shortcut can do anything — on a
+    // cold dev-server first load this can lose the race if fired
+    // immediately after goto()") — this test just never had the guard.
+    await expect(page.locator('.rail')).toBeVisible();
     // Control+K is a keyboard interaction, so the auto-focus that follows
     // (CommandPalette.tsx's requestAnimationFrame focus() call) qualifies
     // for :focus-visible in Chromium's heuristic.

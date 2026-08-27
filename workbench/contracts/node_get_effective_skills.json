@@ -1,0 +1,85 @@
+{
+  "verb": "node_get_effective_skills",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "nodeId": "draft_writer"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "policy": {
+            "nodeId": "string",
+            "skillIds": [
+              "string"
+            ],
+            "inputSchema": {
+              "type": "string",
+              "additionalProperties": "boolean"
+            },
+            "outputSchema": {
+              "type": "string"
+            },
+            "effectiveTools": [],
+            "requestedTools": [],
+            "deniedTools": [],
+            "deniedToolReasons": {},
+            "riskLevel": "string",
+            "conflicts": [],
+            "instructions": "string",
+            "memoryPolicies": [
+              {
+                "namespaces": [
+                  "string"
+                ],
+                "read": "boolean",
+                "write": "boolean"
+              }
+            ],
+            "requiredArtifacts": [],
+            "producedArtifacts": []
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "policy": {
+            "nodeId": "draft_writer",
+            "skillIds": [
+              "editorial_craft"
+            ],
+            "inputSchema": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "outputSchema": {
+              "type": "object"
+            },
+            "effectiveTools": [],
+            "requestedTools": [],
+            "deniedTools": [],
+            "deniedToolReasons": {},
+            "riskLevel": "read",
+            "conflicts": [],
+            "instructions": "<node prompt + rendered skill text, string>",
+            "memoryPolicies": [
+              {
+                "namespaces": [
+                  "editorial_craft"
+                ],
+                "read": true,
+                "write": false
+              }
+            ],
+            "requiredArtifacts": [],
+            "producedArtifacts": []
+          }
+        }
+      },
+      "notes": "[draft_writer]"
+    }
+  ]
+}

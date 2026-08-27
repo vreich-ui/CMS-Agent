@@ -135,7 +135,9 @@ export function checkPolicy(verb: string, readOnly: boolean): PolicyDecision {
     return {
       allowed: false,
       code: "read_only",
-      message: `Verb "${verb}" is mutating and this broker is running with READ_ONLY on. Set READ_ONLY=0 to allow mutations.`,
+      // Operator-worded (Track A, A1.6): whoever reads this on the workbench screen is Wolf, not a
+      // developer — no env var names, just what happened and what to do about it.
+      message: `This workspace is in read-only mode right now, so "${verb}" can't run. Turn off read-only mode for this deployment when you're ready to make changes.`,
     };
   }
 

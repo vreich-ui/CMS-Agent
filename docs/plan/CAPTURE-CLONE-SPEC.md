@@ -119,10 +119,12 @@ Given a capture emission, author recipes (structure diffs) and bound themes, min
 4. **recipe_mint** (det) — re-validate; reject unregistered; write to draft storage
 5. **theme_reconciler** (AI) — final bounded palette (the last token set)
 6. **theme_bind** (det) — write the theme via site_apply_theme (the path that was missing)
-7. **fit_adjudicator** (det) — does what we minted fit the live restamp?
+7. **fit_adjudicator** (AI) — for each ledger entry the mint/bind stages could not place as-is, chooses the nearest registered stand-in or declines, naming the fidelity cost. (Corrected from "(det)" — Pass 2 Track B1: this node judges, it does not just re-validate; see `CLONE_AI_NODE_IDS` in `cloneConductorNodes.ts`, which lists it as one of the five AI nodes.)
 8. **layout_restamp** (det) — re-assemble operations onto what actually minted
 9. **[shared publish segment]** (det, T15) — compose `publish_payload → publication_controller → publish_executor → release_executor → learning_recorder`; policy-driven autonomy
 10. **clone_report** (det) — terminal: verdict, recipe ledger, theme ledger, restamp ops, human summary
+
+_(T15.34/#210 added a fourth branch after `layout_restamp` and before `clone_report` — `pdf_template_intake` (det), `pdf_template_designer` (AI), `pdf_template_mint` (det), `pdf_template_publish` (det) — not renumbered into the list above to avoid reflowing every reference to steps 9–10; see `cloneConductorNodes.ts` for its current position in the composed array and `CLONE_AI_NODE_IDS` for the authoritative AI-node roster.)
 
 ### Governance
 

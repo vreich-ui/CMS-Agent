@@ -1,0 +1,1476 @@
+{
+  "verb": "workspace_get_graph",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "nodes": [
+            {
+              "id": "string",
+              "name": "string",
+              "kind": "string",
+              "description": "string",
+              "prompt": "string",
+              "schema": {
+                "type": "string",
+                "required": [
+                  "string"
+                ],
+                "additionalProperties": "boolean",
+                "properties": {
+                  "artifact": {
+                    "const": "string"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "inputSchema": {
+                "type": "string",
+                "additionalProperties": "boolean",
+                "properties": {
+                  "stageOutputs": {
+                    "type": "string"
+                  },
+                  "contentSource": {
+                    "type": "string"
+                  },
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": "number"
+                  }
+                }
+              },
+              "outputSchema": {
+                "type": "string",
+                "required": [
+                  "string"
+                ],
+                "additionalProperties": "boolean",
+                "properties": {
+                  "artifact": {
+                    "const": "string"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "allowedTools": [
+                "string"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [
+                "string"
+              ],
+              "produces": [
+                "string"
+              ],
+              "riskLevel": "string",
+              "dependsOn": [],
+              "status": "string",
+              "position": {
+                "x": "number",
+                "y": "number"
+              },
+              "updatedAt": "string",
+              "metadata": {
+                "approvalRequired": "boolean"
+              },
+              "modelConfig": {
+                "maxTurns": "number",
+                "toolCallLimit": "number",
+                "timeout": "number",
+                "budgetUsd": "number",
+                "maxOutputTokens": "number"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "string",
+              "to": "string"
+            }
+          ],
+          "registeredWorkflowIds": [
+            "string"
+          ]
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "nodes": [
+            {
+              "id": "input_triage",
+              "name": "CMS Input Triage",
+              "kind": "intake",
+              "description": "Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.",
+              "prompt": "Objective: Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.\nInputs expected: user request and any supplied content_source.v1 envelope; the\u2026",
+              "schema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "content_source.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "inputSchema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "stageOutputs": {
+                    "type": "object"
+                  },
+                  "contentSource": {
+                    "type": "object"
+                  },
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "outputSchema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "content_source.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "allowedTools": [
+                "workspace.get_node",
+                "stage.get_output"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [
+                "content_source.v1"
+              ],
+              "produces": [
+                "content_source.v1"
+              ],
+              "riskLevel": "read",
+              "dependsOn": [],
+              "status": "active",
+              "position": {
+                "x": -407,
+                "y": 159
+              },
+              "updatedAt": "2026-08-11T16:58:47.266Z",
+              "metadata": {
+                "approvalRequired": false
+              },
+              "modelConfig": {
+                "maxTurns": 3,
+                "toolCallLimit": 2,
+                "timeout": 90000,
+                "budgetUsd": 0.1,
+                "maxOutputTokens": 2000
+              }
+            },
+            {
+              "id": "placement_resolver",
+              "name": "Placement Resolver",
+              "kind": "strategy",
+              "description": "Compute the aggression TARGET vector \u2014 claim_strength, urgency, emotional_agitation, cta_density on a 0-1 scale \u2014 deterministically from the request's traffic source and awareness stage. The target is\u2026",
+              "prompt": "Objective: Establish the aggression TARGET vector for this placement \u2014 four dials (claim_strength, urgency, emotional_agitation, cta_density), each 0-1 \u2014 from the request's trafficSource and awareness\u2026",
+              "schema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "placement_resolution.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": [
+                      "claim_strength",
+                      "urgency"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "claim_strength": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "urgency": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "emotional_agitation": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "cta_density": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "inputSchema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "stageOutputs": {
+                    "type": "object"
+                  },
+                  "contentSource": {
+                    "type": "object"
+                  },
+                  "instructions": {
+                    "type": "string"
+                  }
+                }
+              },
+              "outputSchema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "placement_resolution.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": [
+                      "claim_strength",
+                      "urgency"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "claim_strength": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "urgency": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "emotional_agitation": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "cta_density": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "allowedTools": [
+                "workspace.get_node",
+                "stage.get_output"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [
+                "input_triage"
+              ],
+              "produces": [
+                "placement_resolution.v1"
+              ],
+              "riskLevel": "read",
+              "dependsOn": [
+                "input_triage"
+              ],
+              "status": "active",
+              "position": {
+                "x": -60,
+                "y": 0
+              },
+              "updatedAt": "2026-08-10T17:24:39.917Z",
+              "metadata": {
+                "approvalRequired": false,
+                "placementResolverDeterministic": true
+              },
+              "modelConfig": {
+                "maxTurns": 2,
+                "toolCallLimit": 1,
+                "timeout": 60000,
+                "budgetUsd": 0.05,
+                "maxOutputTokens": 1500
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "input_triage",
+              "to": "placement_resolver"
+            },
+            {
+              "from": "input_triage",
+              "to": "topic_opportunity"
+            }
+          ],
+          "registeredWorkflowIds": [
+            "publishing_conductor",
+            "capture_conductor"
+          ]
+        }
+      },
+      "notes": "[no-args (flat store view)] registeredWorkflowIds always present; 48 nodes / 92 edges = union of all 3 conductors"
+    },
+    {
+      "args": {
+        "workflowId": "publishing_conductor"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "nodes": [
+            {
+              "id": "string",
+              "name": "string",
+              "kind": "string",
+              "description": "string",
+              "prompt": "string",
+              "schema": {
+                "type": "string",
+                "required": [
+                  "string"
+                ],
+                "additionalProperties": "boolean",
+                "properties": {
+                  "artifact": {
+                    "const": "string"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "inputSchema": {
+                "type": "string",
+                "additionalProperties": "boolean",
+                "properties": {
+                  "stageOutputs": {
+                    "type": "string"
+                  },
+                  "contentSource": {
+                    "type": "string"
+                  },
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": "number"
+                  }
+                }
+              },
+              "outputSchema": {
+                "type": "string",
+                "required": [
+                  "string"
+                ],
+                "additionalProperties": "boolean",
+                "properties": {
+                  "artifact": {
+                    "const": "string"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "allowedTools": [
+                "string"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [
+                "string"
+              ],
+              "produces": [
+                "string"
+              ],
+              "riskLevel": "string",
+              "dependsOn": [],
+              "status": "string",
+              "position": {
+                "x": "number",
+                "y": "number"
+              },
+              "updatedAt": "string",
+              "metadata": {
+                "approvalRequired": "boolean"
+              },
+              "modelConfig": {
+                "maxTurns": "number",
+                "toolCallLimit": "number",
+                "timeout": "number",
+                "budgetUsd": "number",
+                "maxOutputTokens": "number"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "string",
+              "to": "string"
+            }
+          ],
+          "workflowId": "string",
+          "registeredWorkflowIds": [
+            "string"
+          ]
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "nodes": [
+            {
+              "id": "input_triage",
+              "name": "CMS Input Triage",
+              "kind": "intake",
+              "description": "Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.",
+              "prompt": "Objective: Clarify the publishing request, identify missing inputs, and establish the working content_source.v1 envelope.\nInputs expected: user request and any supplied content_source.v1 envelope; the\u2026",
+              "schema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "content_source.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "inputSchema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "stageOutputs": {
+                    "type": "object"
+                  },
+                  "contentSource": {
+                    "type": "object"
+                  },
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "outputSchema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "content_source.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "allowedTools": [
+                "workspace.get_node",
+                "stage.get_output"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [
+                "content_source.v1"
+              ],
+              "produces": [
+                "content_source.v1"
+              ],
+              "riskLevel": "read",
+              "dependsOn": [],
+              "status": "active",
+              "position": {
+                "x": -391,
+                "y": 148
+              },
+              "updatedAt": "2026-08-11T16:58:47.266Z",
+              "metadata": {
+                "approvalRequired": false
+              },
+              "modelConfig": {
+                "maxTurns": 3,
+                "toolCallLimit": 2,
+                "timeout": 90000,
+                "budgetUsd": 0.1,
+                "maxOutputTokens": 2000
+              }
+            },
+            {
+              "id": "placement_resolver",
+              "name": "Placement Resolver",
+              "kind": "strategy",
+              "description": "Compute the aggression TARGET vector \u2014 claim_strength, urgency, emotional_agitation, cta_density on a 0-1 scale \u2014 deterministically from the request's traffic source and awareness stage. The target is\u2026",
+              "prompt": "Objective: Establish the aggression TARGET vector for this placement \u2014 four dials (claim_strength, urgency, emotional_agitation, cta_density), each 0-1 \u2014 from the request's trafficSource and awareness\u2026",
+              "schema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "placement_resolution.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": [
+                      "claim_strength",
+                      "urgency"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "claim_strength": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "urgency": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "emotional_agitation": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "cta_density": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "inputSchema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "stageOutputs": {
+                    "type": "object"
+                  },
+                  "contentSource": {
+                    "type": "object"
+                  },
+                  "instructions": {
+                    "type": "string"
+                  }
+                }
+              },
+              "outputSchema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "placement_resolution.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trafficSource": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "awarenessStage": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": [
+                      "claim_strength",
+                      "urgency"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "claim_strength": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "urgency": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "emotional_agitation": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "cta_density": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "allowedTools": [
+                "workspace.get_node",
+                "stage.get_output"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [
+                "input_triage"
+              ],
+              "produces": [
+                "placement_resolution.v1"
+              ],
+              "riskLevel": "read",
+              "dependsOn": [
+                "input_triage"
+              ],
+              "status": "active",
+              "position": {
+                "x": -60,
+                "y": 0
+              },
+              "updatedAt": "2026-08-10T17:24:39.917Z",
+              "metadata": {
+                "approvalRequired": false,
+                "placementResolverDeterministic": true
+              },
+              "modelConfig": {
+                "maxTurns": 2,
+                "toolCallLimit": 1,
+                "timeout": 60000,
+                "budgetUsd": 0.05,
+                "maxOutputTokens": 1500
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "input_triage",
+              "to": "placement_resolver"
+            },
+            {
+              "from": "input_triage",
+              "to": "topic_opportunity"
+            }
+          ],
+          "workflowId": "publishing_conductor",
+          "registeredWorkflowIds": [
+            "publishing_conductor",
+            "capture_conductor"
+          ]
+        }
+      },
+      "notes": "[workflowId=publishing_conductor] 24 nodes / 50 edges; adds workflowId key to data"
+    },
+    {
+      "args": {
+        "workflowId": "capture_conductor"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "nodes": [
+            {
+              "id": "string",
+              "name": "string",
+              "kind": "string",
+              "description": "string",
+              "prompt": "string",
+              "inputSchema": {
+                "type": "string",
+                "additionalProperties": "boolean"
+              },
+              "outputSchema": {
+                "type": "string",
+                "required": [
+                  "string"
+                ],
+                "additionalProperties": "boolean",
+                "properties": {
+                  "artifact": {
+                    "const": "string"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "snapshot": {
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "type": "string"
+                  },
+                  "policy": {
+                    "type": "string"
+                  }
+                }
+              },
+              "allowedTools": [
+                "string"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [],
+              "produces": [
+                "string"
+              ],
+              "riskLevel": "string",
+              "dependsOn": [],
+              "status": "string",
+              "position": {
+                "x": "number",
+                "y": "number"
+              },
+              "updatedAt": "string",
+              "metadata": {
+                "captureStageDeterministic": "string"
+              },
+              "modelConfig": {
+                "maxTurns": "number",
+                "toolCallLimit": "number",
+                "timeout": "number",
+                "budgetUsd": "number",
+                "maxOutputTokens": "number"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "string",
+              "to": "string"
+            }
+          ],
+          "workflowId": "string",
+          "registeredWorkflowIds": [
+            "string"
+          ]
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "nodes": [
+            {
+              "id": "capture_crawl",
+              "name": "Capture Crawl (pdf-tool job plane)",
+              "kind": "capture",
+              "description": "Create the pdf-tool capture job for the run's source URL under the target project's capture policy, then poll it to a terminal state across advances (the long-run planes re-drive this node until the p\u2026",
+              "prompt": "Objective: obtain the snapshot.v1 capture of the run's sourceUrl through the pdf-tool capture job plane (create_capture_job / get_capture_job_status), bounded by the target project's ProjectCapturePol\u2026",
+              "inputSchema": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "outputSchema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "capture_snapshot.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "snapshot": {
+                    "type": "object"
+                  },
+                  "jobId": {
+                    "type": "string"
+                  },
+                  "policy": {
+                    "type": "object"
+                  }
+                }
+              },
+              "allowedTools": [
+                "capture.crawl",
+                "stage.get_output"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [],
+              "produces": [
+                "capture_snapshot.v1"
+              ],
+              "riskLevel": "write",
+              "dependsOn": [],
+              "status": "active",
+              "position": {
+                "x": 0,
+                "y": 0
+              },
+              "updatedAt": "2026-08-13T00:00:00.000Z",
+              "metadata": {
+                "captureStageDeterministic": "crawl"
+              },
+              "modelConfig": {
+                "maxTurns": 2,
+                "toolCallLimit": 2,
+                "timeout": 90000,
+                "budgetUsd": 0.05,
+                "maxOutputTokens": 2000
+              }
+            },
+            {
+              "id": "capture_map",
+              "name": "Capture Heuristic Mapper",
+              "kind": "capture",
+              "description": "Deterministic heuristic mapping of the snapshot into governed section/page/navigation candidates (vendored map.mjs). Emits the declined-block ledger block_classifier is allowed to judge.",
+              "prompt": "Objective: map the captured snapshot into capture-map.v1 candidates and gaps with the deterministic heuristic mapper; enumerate the blocks the mapper DECLINED (the only blocks the classifier may judge\u2026",
+              "inputSchema": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "outputSchema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "capture_map.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "mapping": {
+                    "type": "object"
+                  },
+                  "coverage": {
+                    "type": "object"
+                  },
+                  "declinedBlocks": {
+                    "type": "array"
+                  },
+                  "policy": {
+                    "type": "object"
+                  }
+                }
+              },
+              "allowedTools": [
+                "capture.map",
+                "stage.get_output"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [
+                "capture_crawl"
+              ],
+              "produces": [
+                "capture_map.v1"
+              ],
+              "riskLevel": "read",
+              "dependsOn": [
+                "capture_crawl"
+              ],
+              "status": "active",
+              "position": {
+                "x": 220,
+                "y": 0
+              },
+              "updatedAt": "2026-08-13T00:00:00.000Z",
+              "metadata": {
+                "captureStageDeterministic": "map"
+              },
+              "modelConfig": {
+                "maxTurns": 2,
+                "toolCallLimit": 2,
+                "timeout": 60000,
+                "budgetUsd": 0.05,
+                "maxOutputTokens": 2000
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "capture_crawl",
+              "to": "capture_map"
+            },
+            {
+              "from": "capture_map",
+              "to": "block_classifier"
+            }
+          ],
+          "workflowId": "capture_conductor",
+          "registeredWorkflowIds": [
+            "publishing_conductor",
+            "capture_conductor"
+          ]
+        }
+      },
+      "notes": "[workflowId=capture_conductor] 16 nodes / 28 edges"
+    },
+    {
+      "args": {
+        "workflowId": "clone_conductor"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "nodes": [
+            {
+              "id": "string",
+              "name": "string",
+              "kind": "string",
+              "description": "string",
+              "prompt": "string",
+              "inputSchema": {
+                "type": "string",
+                "additionalProperties": "boolean"
+              },
+              "outputSchema": {
+                "type": "string",
+                "required": [
+                  "string"
+                ],
+                "additionalProperties": "boolean",
+                "properties": {
+                  "artifact": {
+                    "const": "string"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": "number"
+                  },
+                  "site": {
+                    "type": "string"
+                  },
+                  "theme": {
+                    "type": "string"
+                  },
+                  "registry": {
+                    "type": "string"
+                  },
+                  "pages": {
+                    "type": "string"
+                  },
+                  "recipes": {
+                    "type": "string"
+                  },
+                  "budget": {
+                    "type": "string"
+                  },
+                  "policy": {
+                    "type": "string"
+                  }
+                }
+              },
+              "allowedTools": [
+                "string"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [],
+              "produces": [
+                "string"
+              ],
+              "riskLevel": "string",
+              "dependsOn": [],
+              "status": "string",
+              "position": {
+                "x": "number",
+                "y": "number"
+              },
+              "updatedAt": "string",
+              "metadata": {
+                "cloneStageDeterministic": "string"
+              },
+              "modelConfig": {
+                "maxTurns": "number",
+                "toolCallLimit": "number",
+                "timeout": "number",
+                "budgetUsd": "number",
+                "maxOutputTokens": "number"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "string",
+              "to": "string"
+            }
+          ],
+          "workflowId": "string",
+          "registeredWorkflowIds": [
+            "string"
+          ]
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "nodes": [
+            {
+              "id": "clone_intake",
+              "name": "Clone Intake (source, emission, and LIVE registry)",
+              "kind": "intake",
+              "description": "Assembles the BOUNDED BRIEFING the judgment nodes read: the target's live component and page-type registries, the site's own palette, the captured theme's palette, and one compact shape record per pag\u2026",
+              "prompt": "Objective: assemble the bounded clone briefing for targetProjectId, from EITHER the run's captureRunId (clone-driven) or its structureBrief (demand-driven, T15.30) \u2014 exactly one is supplied.\nContents:\u2026",
+              "inputSchema": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "outputSchema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "clone_intake.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "site": {
+                    "type": "object"
+                  },
+                  "theme": {
+                    "type": "object"
+                  },
+                  "registry": {
+                    "type": "object"
+                  },
+                  "pages": {
+                    "type": "array"
+                  },
+                  "recipes": {
+                    "type": "object"
+                  },
+                  "budget": {
+                    "type": "object"
+                  },
+                  "policy": {
+                    "type": "object"
+                  }
+                }
+              },
+              "allowedTools": [
+                "clone.intake",
+                "stage.get_output"
+              ],
+              "assignedSkills": [],
+              "requiredInputs": [],
+              "produces": [
+                "clone_intake.v1"
+              ],
+              "riskLevel": "read",
+              "dependsOn": [],
+              "status": "active",
+              "position": {
+                "x": 0,
+                "y": 80
+              },
+              "updatedAt": "2026-08-23T00:00:00.000Z",
+              "metadata": {
+                "cloneStageDeterministic": "intake"
+              },
+              "modelConfig": {
+                "maxTurns": 2,
+                "toolCallLimit": 2,
+                "timeout": 90000,
+                "budgetUsd": 0.05,
+                "maxOutputTokens": 2000
+              }
+            },
+            {
+              "id": "layout_analyst",
+              "name": "Layout Analyst (AI judgment 1 of 3)",
+              "kind": "judgment",
+              "description": "Judges where the emitted page structure diverges from the source's structure, and which of those divergences a NEW RECIPE could actually close. Names problems only \u2014 it designs nothing and writes noth\u2026",
+              "prompt": "Objective: for EACH entry in clone_intake's pages array, compare the SOURCE shape against the EMITTED shape and report where they diverge.\nEach page record gives you: route, sourceShape (the source's \u2026",
+              "inputSchema": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "outputSchema": {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "summary"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "artifact": {
+                    "const": "clone_layout_analysis.v1"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "mismatches": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "pageRef",
+                        "missingRecipeKind"
+                      ],
+                      "additionalProperties": true,
+                      "properties": {
+                        "pageRef": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sourceShape": {
+                          "type": "string"
+                        },
+                        "emittedShape": {
+                          "type": "string"
+                        },
+                        "missingRecipeKind": {
+                          "enum": [
+                            "...",
+                            "..."
+                          ]
+                        },
+                        "rationale": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "allowedTools": [
+                "stage.get_output",
+                "stage.list_outputs"
+              ],
+              "assignedSkills": [
+                "structure_studio_standards_pack"
+              ],
+              "requiredInputs": [
+                "clone_intake"
+              ],
+              "produces": [
+                "clone_layout_analysis.v1"
+              ],
+              "riskLevel": "read",
+              "dependsOn": [
+                "clone_intake"
+              ],
+              "status": "active",
+              "position": {
+                "x": 240,
+                "y": 0
+              },
+              "updatedAt": "2026-08-23T00:00:00.000Z",
+              "metadata": {
+                "skipWhen": [
+                  {
+                    "when": "clone_demand_driven_entry"
+                  }
+                ]
+              },
+              "modelConfig": {
+                "maxTurns": 4,
+                "toolCallLimit": 3,
+                "timeout": 240000,
+                "budgetUsd": 0.6,
+                "maxOutputTokens": 8000
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "clone_intake",
+              "to": "layout_analyst"
+            },
+            {
+              "from": "clone_intake",
+              "to": "recipe_designer"
+            }
+          ],
+          "workflowId": "clone_conductor",
+          "registeredWorkflowIds": [
+            "publishing_conductor",
+            "capture_conductor"
+          ]
+        }
+      },
+      "notes": "[workflowId=clone_conductor] 18 nodes / 35 edges"
+    }
+  ]
+}

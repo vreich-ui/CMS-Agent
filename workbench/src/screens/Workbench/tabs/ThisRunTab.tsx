@@ -19,7 +19,7 @@
 // does (see handleRetry below).
 
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRetryNode } from '../../../api/hooks';
 import * as verbs from '../../../api/verbs';
 import { ActionCancelledError } from '../../../api/confirmAction';
@@ -33,9 +33,18 @@ import { DEFAULT_GATE_COPY_CENTER, GATE_COPY, optimisticRunControl, type NodeRun
 import { useEffectivePrompt, useInputSchema, useNodeExecutions, useStageOutput } from '../queries';
 import { bumpApprovedExamples } from '../../Learning/overlay';
 import { Disclosure, ErrorNote, LoadingNote } from './Shared';
+// U3 — "an overridden node wears a distinct marker... 'This run' for an
+// overridden node must say the output was supplied by the operator, when,
+// and with what note — never present an override as if the node produced
+// it." Same node_list_outputs reading, same ⎘ vocabulary, as Rail.tsx's
+// marker and the override modal.
+import { extractOutputList, findOverride, formatWhen } from '../../../components/drive/overrideStatus';
 
+// U7 polish — operator copy, not developer copy (see tabs/Shared.tsx's
+// own READONLY_REASON, kept as a separate local copy per this file's
+// existing pattern rather than importing across that boundary).
 const READONLY_REASON =
-  'Mutations are disabled — the workbench is running read-only. The broker’s READ_ONLY env flag must be set to 0 to enable them.';
+  'This workbench is connected read-only right now, so nothing here can be saved or run. Ask whoever administers this deployment to switch it to read-write.';
 
 function CaptureButtons({ nodeId, runId }: { nodeId: string; runId: string }) {
   const qc = useQueryClient();
@@ -109,7 +118,7 @@ function CaptureButtons({ nodeId, runId }: { nodeId: string; runId: string }) {
       <div className="editnote">
         <Btn
           disabled={IS_READ_ONLY || busy}
-          title={IS_READ_ONLY ? READONLY_REASON : 'feedback_record → verdict:approved'}
+          title={IS_READ_ONLY ? READONLY_REASON : 'Record this output as approved.'}
           onClick={(e) => approve(e.currentTarget)}
         >
           ✓ Approve output
@@ -117,21 +126,21 @@ function CaptureButtons({ nodeId, runId }: { nodeId: string; runId: string }) {
         <Btn
           variant="danger"
           disabled={IS_READ_ONLY || busy}
-          title={IS_READ_ONLY ? READONLY_REASON : 'feedback_record → verdict:rejected'}
+          title={IS_READ_ONLY ? READONLY_REASON : 'Record this output as rejected.'}
           onClick={(e) => reject(e.currentTarget)}
         >
           ✗ Reject
         </Btn>
         <Btn
           disabled={IS_READ_ONLY || busy}
-          title={IS_READ_ONLY ? READONLY_REASON : 'feedback_record → verdict:edited_approved'}
+          title={IS_READ_ONLY ? READONLY_REASON : 'Edit the output, then record your edited version as approved.'}
           onClick={() => setEditing((v) => !v)}
         >
           ✎ Edit &amp; approve
         </Btn>
         <Btn
           disabled={IS_READ_ONLY || busy}
-          title={IS_READ_ONLY ? READONLY_REASON : 'learning_record_observation'}
+          title={IS_READ_ONLY ? READONLY_REASON : "Add a note about this node's behavior for the learning system."}
           onClick={() => setRecordingObs((v) => !v)}
         >
           + Record observation
@@ -172,6 +181,7 @@ function CaptureButtons({ nodeId, runId }: { nodeId: string; runId: string }) {
 
 export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; nodeId: string; run: Run; status: NodeRunStatus }) {
   const setTab = useStore((s) => s.setTab);
+  const openModal = useStore((s) => s.openModal);
   const qc = useQueryClient();
   const retryM = useRetryNode();
   const [retrying, setRetrying] = useState(false);
@@ -180,6 +190,16 @@ export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; 
   const promptQ = useEffectivePrompt(nodeId);
   const schemaQ = useInputSchema(nodeId);
   const outputQ = useStageOutput(run.id, nodeId);
+  // U3 — same query key Rail.tsx's override marker and the override modal
+  // use, so this banner, the rail chip, and the modal's own "already
+  // carries an override" note all agree, refreshed by the same invalidation.
+  const outputsQ = useQuery({
+    queryKey: ['nodeOutputs', nodeId, run.id],
+    queryFn: () => verbs.nodeListOutputs({ nodeId, runId: run.id }),
+    enabled: status === 'completed',
+    retry: false,
+  });
+  const override = findOverride(extractOutputList(outputsQ.data));
 
   // WP-21: "↻ Retry this node" wired to the same confirm-gated useRetryNode
   // the dock's own Retry control uses — same optimistic-patch-then-rollback
@@ -309,13 +329,23 @@ export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; 
       )}
 
       <Card label="output">
+        {override && (
+          // U3 — never presented as if the node produced it: says who, when,
+          // and with what note, every time this banner shows at all.
+          <p className="note" style={{ color: 'var(--run)', marginTop: 0 }}>
+            ⎘ this output was supplied by the operator, {formatWhen(override.createdAt)}
+            {override.note ? ` — note: "${override.note}"` : ' — no note given'}.
+          </p>
+        )}
         {outputQ.isLoading ? (
           <LoadingNote>loading stage output…</LoadingNote>
         ) : outputQ.isError ? (
           <ErrorNote message={outputQ.error?.message} />
         ) : (
           <div className="promptbox" style={{ maxHeight: 130 }}>
-            {outputQ.data?.note ?? JSON.stringify(outputQ.data?.output ?? {}, null, 2)}
+            {override
+              ? JSON.stringify(override.value, null, 2)
+              : outputQ.data?.note ?? JSON.stringify(outputQ.data?.output ?? {}, null, 2)}
           </div>
         )}
         {status === 'completed' ? (
@@ -327,6 +357,7 @@ export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; 
         )}
         <div className="editnote">
           <Btn onClick={() => setTab('prompt')}>Edit prompt</Btn>
+          <Btn onClick={() => openModal('override', { node: nodeId, run: run.id })}>⎘ Override output…</Btn>
           <Btn
             variant="pri"
             disabled={IS_READ_ONLY}

@@ -1,0 +1,767 @@
+{
+  "verb": "changes_list",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "limit": 5
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "events": [
+            {
+              "eventId": "string",
+              "type": "string",
+              "operation": "string",
+              "target": {
+                "type": "string"
+              },
+              "actor": {
+                "kind": "string"
+              },
+              "source": "string",
+              "reason": "string",
+              "parentRevisionId": "string",
+              "resultingRevisionId": "string",
+              "workspaceVersion": "number",
+              "before": {
+                "nodes": []
+              },
+              "after": {
+                "nodes": [
+                  {
+                    "id": "string",
+                    "name": "string",
+                    "kind": "string",
+                    "description": "string",
+                    "prompt": "string",
+                    "schema": {
+                      "type": "string",
+                      "additionalProperties": "boolean",
+                      "required": [
+                        "string"
+                      ],
+                      "if": {
+                        "required": [
+                          "string"
+                        ],
+                        "properties": {
+                          "status": {
+                            "const": "string"
+                          }
+                        }
+                      },
+                      "then": {
+                        "required": [
+                          "string"
+                        ],
+                        "properties": {
+                          "verification": {
+                            "type": "string",
+                            "required": [
+                              "string"
+                            ],
+                            "properties": {
+                              "deployStatus": {
+                                "const": "string"
+                              },
+                              "productionConfirmed": {
+                                "const": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "properties": {
+                        "artifact": {
+                          "const": "string"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "status": {
+                          "enum": [
+                            "string"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "releaseId": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "deployedSha": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "approvalMatched": {
+                          "type": "string"
+                        },
+                        "publishAuthority": {
+                          "type": "string",
+                          "additionalProperties": "boolean"
+                        },
+                        "verification": {
+                          "type": "string",
+                          "additionalProperties": "boolean",
+                          "properties": {
+                            "deployStatus": {
+                              "type": "string",
+                              "description": "string"
+                            },
+                            "productionConfirmed": {
+                              "type": "string",
+                              "description": "string"
+                            }
+                          }
+                        },
+                        "result": {
+                          "type": "string",
+                          "additionalProperties": "boolean"
+                        },
+                        "blockers": {
+                          "type": "string",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "notes": {
+                          "type": "string",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "inputSchema": {
+                      "additionalProperties": "boolean",
+                      "properties": {
+                        "contentSource": {
+                          "type": "string"
+                        },
+                        "instructions": {
+                          "type": "string"
+                        },
+                        "stageOutputs": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "string"
+                    },
+                    "outputSchema": {
+                      "type": "string",
+                      "additionalProperties": "boolean",
+                      "required": [
+                        "string"
+                      ],
+                      "if": {
+                        "required": [
+                          "string"
+                        ],
+                        "properties": {
+                          "status": {
+                            "const": "string"
+                          }
+                        }
+                      },
+                      "then": {
+                        "required": [
+                          "string"
+                        ],
+                        "properties": {
+                          "verification": {
+                            "type": "string",
+                            "required": [
+                              "string"
+                            ],
+                            "properties": {
+                              "deployStatus": {
+                                "const": "string"
+                              },
+                              "productionConfirmed": {
+                                "const": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "properties": {
+                        "artifact": {
+                          "const": "string"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "status": {
+                          "enum": [
+                            "string"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "releaseId": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "deployedSha": {
+                          "type": "string",
+                          "minLength": "number"
+                        },
+                        "approvalMatched": {
+                          "type": "string"
+                        },
+                        "publishAuthority": {
+                          "type": "string",
+                          "additionalProperties": "boolean"
+                        },
+                        "verification": {
+                          "type": "string",
+                          "additionalProperties": "boolean",
+                          "properties": {
+                            "deployStatus": {
+                              "type": "string",
+                              "description": "string"
+                            },
+                            "productionConfirmed": {
+                              "type": "string",
+                              "description": "string"
+                            }
+                          }
+                        },
+                        "result": {
+                          "type": "string",
+                          "additionalProperties": "boolean"
+                        },
+                        "blockers": {
+                          "type": "string",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "notes": {
+                          "type": "string",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "allowedTools": [
+                      "string"
+                    ],
+                    "assignedSkills": [],
+                    "requiredInputs": [
+                      "string"
+                    ],
+                    "produces": [
+                      "string"
+                    ],
+                    "riskLevel": "string",
+                    "dependsOn": [
+                      "string"
+                    ],
+                    "status": "string",
+                    "position": {
+                      "x": "number",
+                      "y": "number"
+                    },
+                    "updatedAt": "string",
+                    "metadata": {
+                      "activationRequired": "boolean",
+                      "approvalRequired": "boolean",
+                      "releaseExecutorDeterministic": "boolean",
+                      "canonicalRules": [
+                        "string"
+                      ]
+                    },
+                    "modelConfig": {
+                      "maxTurns": "number",
+                      "toolCallLimit": "number",
+                      "timeout": "number",
+                      "budgetUsd": "number",
+                      "maxOutputTokens": "string"
+                    }
+                  }
+                ]
+              },
+              "createdAt": "string"
+            }
+          ],
+          "nextCursor": "string"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "events": [
+            {
+              "eventId": "evt_1787746008047_9g4hbt",
+              "type": "node.seeded",
+              "operation": "update",
+              "target": {
+                "type": "workspace"
+              },
+              "actor": {
+                "kind": "system"
+              },
+              "source": "system",
+              "reason": "Seed capture/clone governance-visible nodes (#195)",
+              "parentRevisionId": "rev_1787656850176_sv8h93",
+              "resultingRevisionId": "rev_1787746007713_5kw9o5",
+              "workspaceVersion": 697,
+              "before": {
+                "nodes": []
+              },
+              "after": {
+                "nodes": [
+                  {
+                    "id": "release_executor",
+                    "name": "Release Executor",
+                    "kind": "releaser",
+                    "description": "Deterministic, idempotent release of what publish_executor committed: calls release_to_production at most once for this run, then confirms production is serving the deployed commit before this node ev\u2026",
+                    "prompt": "Objective: Release what publish_executor committed and confirm production is actually serving it. This node is a governed release step, not a publish step \u2014 it never creates, patches or publishes a cl\u2026",
+                    "schema": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "required": [
+                        "artifact",
+                        "summary"
+                      ],
+                      "if": {
+                        "required": [
+                          "status"
+                        ],
+                        "properties": {
+                          "status": {
+                            "const": "..."
+                          }
+                        }
+                      },
+                      "then": {
+                        "required": [
+                          "result",
+                          "verification"
+                        ],
+                        "properties": {
+                          "verification": {
+                            "type": "...",
+                            "required": "...",
+                            "properties": "..."
+                          }
+                        }
+                      },
+                      "properties": {
+                        "artifact": {
+                          "const": "release_execution.v1"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "status": {
+                          "enum": [
+                            "...",
+                            "..."
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "releaseId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deployedSha": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "approvalMatched": {
+                          "type": "boolean"
+                        },
+                        "publishAuthority": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "verification": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "properties": {
+                            "deployStatus": "...",
+                            "productionConfirmed": "..."
+                          }
+                        },
+                        "result": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "blockers": {
+                          "type": "array",
+                          "items": {
+                            "type": "..."
+                          }
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "..."
+                          }
+                        }
+                      }
+                    },
+                    "inputSchema": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "contentSource": {
+                          "type": "object"
+                        },
+                        "instructions": {
+                          "type": "string"
+                        },
+                        "stageOutputs": {
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "outputSchema": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "required": [
+                        "artifact",
+                        "summary"
+                      ],
+                      "if": {
+                        "required": [
+                          "status"
+                        ],
+                        "properties": {
+                          "status": {
+                            "const": "..."
+                          }
+                        }
+                      },
+                      "then": {
+                        "required": [
+                          "result",
+                          "verification"
+                        ],
+                        "properties": {
+                          "verification": {
+                            "type": "...",
+                            "required": "...",
+                            "properties": "..."
+                          }
+                        }
+                      },
+                      "properties": {
+                        "artifact": {
+                          "const": "release_execution.v1"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "status": {
+                          "enum": [
+                            "...",
+                            "..."
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "releaseId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deployedSha": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "approvalMatched": {
+                          "type": "boolean"
+                        },
+                        "publishAuthority": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "verification": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "properties": {
+                            "deployStatus": "...",
+                            "productionConfirmed": "..."
+                          }
+                        },
+                        "result": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "blockers": {
+                          "type": "array",
+                          "items": {
+                            "type": "..."
+                          }
+                        },
+                        "notes": {
+                          "type": "array",
+                          "items": {
+                            "type": "..."
+                          }
+                        }
+                      }
+                    },
+                    "allowedTools": [
+                      "workspace.get_node",
+                      "stage.get_output"
+                    ],
+                    "assignedSkills": [],
+                    "requiredInputs": [
+                      "publish_executor"
+                    ],
+                    "produces": [
+                      "release_execution.v1"
+                    ],
+                    "riskLevel": "publish",
+                    "dependsOn": [
+                      "publish_executor"
+                    ],
+                    "status": "active",
+                    "position": {
+                      "x": 560,
+                      "y": 1060
+                    },
+                    "updatedAt": "2026-08-25T00:00:00.000Z",
+                    "metadata": {
+                      "activationRequired": false,
+                      "approvalRequired": false,
+                      "releaseExecutorDeterministic": true,
+                      "canonicalRules": [
+                        "release_to_production is reachable from exactly this node (Board decision B2, amended by ADR-2026-08-25-publish-autonomy \u00a74)",
+                        "trigger_netlify_build and deploy are never reachable from any node, including this one"
+                      ]
+                    },
+                    "modelConfig": {
+                      "maxTurns": 3,
+                      "toolCallLimit": 2,
+                      "timeout": 120000,
+                      "budgetUsd": 0.25,
+                      "maxOutputTokens": "[REDACTED]"
+                    }
+                  },
+                  {
+                    "id": "capture_crawl",
+                    "name": "Capture Crawl (pdf-tool job plane)",
+                    "kind": "capture",
+                    "description": "Create the pdf-tool capture job for the run's source URL under the target project's capture policy, then poll it to a terminal state across advances (the long-run planes re-drive this node until the p\u2026",
+                    "prompt": "Objective: obtain the snapshot.v1 capture of the run's sourceUrl through the pdf-tool capture job plane (create_capture_job / get_capture_job_status), bounded by the target project's ProjectCapturePol\u2026",
+                    "inputSchema": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "outputSchema": {
+                      "type": "object",
+                      "required": [
+                        "artifact",
+                        "summary"
+                      ],
+                      "additionalProperties": true,
+                      "properties": {
+                        "artifact": {
+                          "const": "capture_snapshot.v1"
+                        },
+                        "summary": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "snapshot": {
+                          "type": "object"
+                        },
+                        "jobId": {
+                          "type": "string"
+                        },
+                        "policy": {
+                          "type": "object"
+                        }
+                      }
+                    },
+                    "allowedTools": [
+                      "capture.crawl",
+                      "stage.get_output"
+                    ],
+                    "assignedSkills": [],
+                    "requiredInputs": [],
+                    "produces": [
+                      "capture_snapshot.v1"
+                    ],
+                    "riskLevel": "write",
+                    "dependsOn": [],
+                    "status": "active",
+                    "position": {
+                      "x": 0,
+                      "y": 0
+                    },
+                    "updatedAt": "2026-08-13T00:00:00.000Z",
+                    "metadata": {
+                      "captureStageDeterministic": "crawl"
+                    },
+                    "modelConfig": {
+                      "maxTurns": 2,
+                      "toolCallLimit": 2,
+                      "timeout": 90000,
+                      "budgetUsd": 0.05,
+                      "maxOutputTokens": "[REDACTED]"
+                    }
+                  }
+                ]
+              },
+              "createdAt": "2026-08-26T12:06:47.659Z"
+            },
+            {
+              "eventId": "evt_1787680359183_fzwcw5",
+              "type": "stage.output_saved",
+              "operation": "record",
+              "target": {
+                "type": "workspace"
+              },
+              "actor": {
+                "kind": "system"
+              },
+              "source": "system",
+              "parentRevisionId": "rev_1787656850176_sv8h93",
+              "resultingRevisionId": "rev_1787656850176_sv8h93",
+              "workspaceVersion": 696,
+              "createdAt": "2026-08-25T17:52:38.804Z"
+            }
+          ],
+          "nextCursor": "eyJjcmVhdGVkQXQiOiIyMDI2LTA4LTI1VDE0OjU4OjMyLjkwNFoiLCJldmVudElkIjoiZXZ0XzE3ODc2Njk5MTMyNjNfcHk1cTdvIn0"
+        }
+      },
+      "notes": "[no filter, limit 5] 5 events returned"
+    },
+    {
+      "args": {
+        "nodeId": "draft_writer",
+        "limit": 5
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "events": [
+            {
+              "eventId": "string",
+              "type": "string",
+              "operation": "string",
+              "target": {
+                "type": "string",
+                "id": "string"
+              },
+              "actor": {
+                "kind": "string",
+                "label": "string"
+              },
+              "source": "string",
+              "reason": "string",
+              "parentRevisionId": "string",
+              "resultingRevisionId": "string",
+              "workspaceVersion": "number",
+              "riskLevel": "string",
+              "before": {
+                "...": "string"
+              },
+              "after": {
+                "...": "string"
+              },
+              "correlation": {
+                "requestId": "string"
+              },
+              "createdAt": "string"
+            }
+          ],
+          "nextCursor": "null"
+        },
+        "_note": "string"
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "events": [
+            {
+              "eventId": "evt_1786467679822_ybk8py",
+              "type": "node.prompt_updated",
+              "operation": "update",
+              "target": {
+                "type": "node",
+                "id": "draft_writer"
+              },
+              "actor": {
+                "kind": "agent",
+                "label": "Claude (oauth)"
+              },
+              "source": "mcp",
+              "reason": "Handoff 2.2 \u2014 the writer never saw the dials; now consumes resolved from article_brief.v1.",
+              "parentRevisionId": "rev_1786467662906_mqcu7h",
+              "resultingRevisionId": "rev_1786467679535_3jtm1x",
+              "workspaceVersion": 327,
+              "riskLevel": "read",
+              "before": {
+                "...": "full node object before"
+              },
+              "after": {
+                "...": "full node object after"
+              },
+              "correlation": {
+                "requestId": "req_1786467679133_56qun6"
+              },
+              "createdAt": "2026-08-11T17:01:19.520Z"
+            },
+            {
+              "eventId": "evt_1785137456329_81q3dq",
+              "type": "node.updated",
+              "operation": "update",
+              "target": {
+                "type": "node",
+                "id": "draft_writer"
+              },
+              "actor": {
+                "kind": "agent",
+                "id": "cowork-wave",
+                "label": "Cowork execution session"
+              },
+              "source": "mcp",
+              "reason": "CHANGE-PLAN T2.6 cleanup: ungrantable write-risk grant on a read-risk node; executor persists stage outputs, so removal is behaviour-preserving.",
+              "parentRevisionId": "rev_1785137453824_c1ue6g",
+              "resultingRevisionId": "rev_1785137456203_39avb7",
+              "workspaceVersion": 79,
+              "riskLevel": "read",
+              "before": {
+                "...": "..."
+              },
+              "after": {
+                "...": "..."
+              },
+              "correlation": {
+                "requestId": "req_1785137455895_lm2oyy"
+              },
+              "createdAt": "2026-07-27T07:30:56.192Z"
+            }
+          ],
+          "nextCursor": null
+        },
+        "_note": "actor.kind observed values: 'agent' (with optional actor.id, always actor.label), and per changes_list schema actorKind enum also allows 'human' and 'system'. Full node before/after objects truncated \u2026"
+      },
+      "notes": "[nodeId=draft_writer, limit 5] actor field confirmed present: {kind: 'human'|'agent'|'system', id?, label}"
+    }
+  ]
+}

@@ -88,7 +88,10 @@ test.describe('Learning', () => {
     await expect(page.locator('.fstage', { hasText: 'Curate' }).locator('.big')).toHaveText('1');
 
     // The lesson shows up on publish_executor's own Learning tab.
+    // P2-01 — the workbench no longer boots with publish_executor selected,
+    // so select it the way the rail does.
     await page.locator('nav.main button[data-s="bench"]').click();
+    await page.locator('.rail .nrow', { hasText: 'publish_executor' }).click();
     await expect(page.locator('.nhead .id')).toHaveText('publish_executor');
     await page.locator('.center .tabs button', { hasText: 'Learning' }).click();
     await expect(page.locator('.card', { hasText: 'playbook · injected lessons' })).toContainText('1 lesson curated');

@@ -210,8 +210,11 @@ export function StartRunModal() {
         <div className="sub">The only place a client enters the picture. Every knob, no hidden defaults.</div>
 
         {IS_READ_ONLY && (
+          // U7 polish — operator copy, not developer copy (same fix as
+          // tabs/Shared.tsx's READONLY_REASON).
           <p className="note" style={{ color: 'var(--acc)' }}>
-            read-only — starting a run is disabled. Set the broker&rsquo;s READ_ONLY env flag to 0 to enable it.
+            This workbench is connected read-only right now, so a run can&rsquo;t be started. Ask whoever administers
+            this deployment to switch it to read-write.
           </p>
         )}
 

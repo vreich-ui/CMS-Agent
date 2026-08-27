@@ -1,0 +1,37 @@
+{
+  "verb": "usage_get_budget_status",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "runId": "run_1787678554270_stw73q"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "budgetStatus": {
+            "spentUsdEstimate": "number",
+            "remainingUsdEstimate": "number",
+            "budgetUsd": "number",
+            "percentUsed": "number",
+            "status": "string"
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "budgetStatus": {
+            "spentUsdEstimate": 0,
+            "remainingUsdEstimate": 0,
+            "budgetUsd": 0,
+            "percentUsed": 0,
+            "status": "ok"
+          }
+        }
+      },
+      "notes": "[run_1787678554270_stw73q] first attempt hit a transient Cloudflare 502 from api.anthropic.com; retry succeeded"
+    }
+  ]
+}

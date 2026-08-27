@@ -1,0 +1,64 @@
+{
+  "not_found_examples": [
+    {
+      "verb": "workflow_get_run",
+      "args": {"runId": "run_does_not_exist"},
+      "response": {"ok": true, "data": {"run": null, "mode": null, "stall": null}}
+    },
+    {
+      "verb": "workspace_get_node",
+      "args": {"id": "node_does_not_exist"},
+      "response": {"ok": true, "data": {"node": null}}
+    },
+    {
+      "verb": "node_get_input_schema",
+      "args": {"nodeId": "node_does_not_exist"},
+      "response": {"ok": true, "data": {"schema": null}}
+    },
+    {
+      "verb": "stage_get_output",
+      "args": {"id": "not_a_real_stage_output_id"},
+      "response": {"ok": true, "data": {"output": null}}
+    },
+    {
+      "verb": "changes_get",
+      "args": {"eventId": "evt_does_not_exist"},
+      "response": {"ok": true, "data": {"event": null}}
+    },
+    {
+      "verb": "changes_compare",
+      "args": {"fromRevisionId": "rev_does_not_exist_1", "toRevisionId": "rev_does_not_exist_2"},
+      "response_type": "thrown_error",
+      "error_text": "unknown_revision: rev_does_not_exist_1",
+      "note": "The ONE exception found to the 'ok:true, data.<key>:null' not-found pattern: changes_compare throws a bare, unstructured string error (no JSON envelope, no code field, no issues array) when a revision id is unknown."
+    }
+  ],
+  "missing_required_arg_examples": [
+    {
+      "verb": "workspace_get_node",
+      "args": {},
+      "response_type": "thrown_error",
+      "error_text": "validation_error: input did not match the tool schema.",
+      "note": "Caught client-side (by the MCP tool-calling harness against the tool's JSON Schema) before any request reaches the CMS_Agent server. The error is a bare string 'validation_error: input did not match the tool schema.' — there is NO structured envelope with a code, a field name, or an issues[] array of the kind the WP-00 brief anticipated. This exact same generic string is returned for every schema violation observed in this session: a missing required property (workspace_get_node with no id, workflow_get_run_context with no projectId), and an extra/unknown property forbidden by additionalProperties:false (workspace_get_nodes called with a workflowId arg)."
+    },
+    {
+      "verb": "workflow_get_run_context",
+      "args": {"runId": "run_does_not_exist"},
+      "note": "projectId omitted (required) -> same generic validation_error string as above."
+    },
+    {
+      "verb": "workspace_get_nodes",
+      "args": {"workflowId": "publishing_conductor"},
+      "note": "workspace_get_nodes' schema is {additionalProperties:false, properties:{}} — it accepts NO arguments at all. Passing workflowId (even though workspace_get_graph accepts it) is rejected with the same generic validation_error string. This directly answers the WP-00 question: workspace_get_nodes does NOT accept workflowId; only workspace_get_graph does."
+    }
+  ],
+  "proxy_layer_errors_not_true_MCP_errors": {
+    "description": "Several verbs consistently fail with a transport-level error from the Anthropic proxy in front of the MCP session, distinct from both of the above categories: 'Error POSTing to endpoint: event: message\\ndata: {\"jsonrpc\":\"2.0\",\"id\":<n>,\"error\":{\"code\":-32600,\"message\":\"Anthropic Proxy: Invalid content from server\",\"data\":null}}'. This is JSON-RPC code -32600 (Invalid Request) raised by the proxy about the SERVER's response content, i.e. the CMS_Agent MCP server sent back something the proxy could not accept as valid MCP content (most likely a literal JSON `null` at the top level, or a non-object/non-string content block) rather than a well-formed tool result or a well-formed JSON-RPC error. This was 100% reproducible (5+ consecutive attempts each) for two call shapes:",
+    "affected_calls": [
+      {"verb": "node_list_executions", "args_that_fail": "any call where `nodeId` is present (with or without runId/executionId)", "args_that_succeed": "runId alone (no nodeId) -> returns {executions:[<full run record>]}"},
+      {"verb": "node_get_latest_output", "args_that_fail": "nodeId alone (no runId)", "args_that_succeed": "nodeId + runId together -> also failed once in this session (see below) but a retry combining nodeId+runId still failed consistently; only never actually returned data for this verb in this session"},
+      {"verb": "constellation_get_attention", "args_that_fail": "no args, and projectId:'dr-lurie' — both failed identically and repeatedly", "args_that_succeed": "none found in this session"},
+      {"verb": "constellation_get_metrics", "args_that_fail": "no args", "args_that_succeed": "not tested further after workflow_get_run_cost's plan.nodeTimingAggregates was found to cover the same timing-history need"}
+    ]
+  }
+}

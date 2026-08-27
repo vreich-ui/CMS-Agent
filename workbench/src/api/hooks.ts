@@ -39,11 +39,49 @@ export function useNodes(workflowId?: string, options?: Options<WorkflowNode[]>)
   });
 }
 
+/**
+ * P2-03 — the node the rail just selected is, in almost every case, already
+ * in the `['nodes', wf]` list this screen fetched a moment ago. Seeding
+ * `initialData` from that cache means selecting a node paints instantly
+ * from data the app already holds, and the `workspace_get_node` call
+ * becomes a background refresh rather than a gate in front of the
+ * inspector. `initialDataUpdatedAt` is carried across so the seeded value
+ * is aged correctly rather than looking eternally fresh.
+ */
 export function useNode(nodeId: string | null | undefined, options?: Options<WorkflowNode | null>) {
+  const qc = useQueryClient();
   return useQuery({
     queryKey: ['node', nodeId],
     queryFn: () => verbs.workspaceGetNode({ nodeId: nodeId as string }),
     enabled: Boolean(nodeId),
+    initialData: () => {
+      if (!nodeId) return undefined;
+      for (const [, data] of qc.getQueriesData<WorkflowNode[]>({ queryKey: ['nodes'] })) {
+        const hit = data?.find((n) => n.id === nodeId);
+        if (hit) return hit;
+      }
+      return undefined;
+    },
+    initialDataUpdatedAt: () => {
+      const entry = qc.getQueryCache().findAll({ queryKey: ['nodes'] })[0];
+      return entry?.state.dataUpdatedAt;
+    },
+    ...options,
+  });
+}
+
+/**
+ * The active workflow's real topology — nodes AND edges — from
+ * `workspace_get_graph({workflowId})`. This is the only verb that answers
+ * "what does this conductor actually look like"; see workspaceGetGraph()'s
+ * doc comment for why the previous no-argument call made the rail lie
+ * about two of the three workflows.
+ */
+export function useWorkflowGraph(workflowId: string | null | undefined, options?: Options<verbs.WorkspaceGraph>) {
+  return useQuery({
+    queryKey: ['graph', workflowId ?? 'all'],
+    queryFn: () => verbs.workspaceGetGraph(workflowId ? { workflowId } : undefined),
+    enabled: workflowId !== null,
     ...options,
   });
 }
@@ -80,8 +118,22 @@ export function useTools(options?: Options<ToolDef[]>) {
   return useQuery({ queryKey: ['tools'], queryFn: verbs.toolList, ...options });
 }
 
+/**
+ * P2-03 — `skill_list` carries no `assignedTo`, so it has to be joined
+ * against the workspace node list. That join used to trigger a second live
+ * `workspace_get_nodes` every time. It now reuses whatever node list is
+ * already cached and only fetches when there is none.
+ */
 export function useSkills(options?: Options<Skill[]>) {
-  return useQuery({ queryKey: ['skills'], queryFn: verbs.skillList, ...options });
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: ['skills'],
+    queryFn: () => {
+      const cached = qc.getQueryData<WorkflowNode[]>(['nodes', 'all']);
+      return verbs.skillList(cached);
+    },
+    ...options,
+  });
 }
 
 export function useObservations(nodeId?: string, options?: Options<Observation[]>) {
@@ -120,6 +172,24 @@ export function useAgents(options?: Options<Agent[]>) {
   return useQuery({ queryKey: ['agents'], queryFn: verbs.agentList, ...options });
 }
 
+/**
+ * P2-03 — the run cost ledger, split out of `workflowGetRun` into its own
+ * lazy query. Nothing above the fold on a run needs it, so it must not sit
+ * in front of the run itself. Pass `enabled: false` (or simply do not
+ * mount this hook) on surfaces that never show cost.
+ */
+export function useRunCost(
+  runId: string | null | undefined,
+  options?: Options<Awaited<ReturnType<typeof verbs.workflowGetRunCost>>>,
+) {
+  return useQuery({
+    queryKey: ['runCost', runId],
+    queryFn: () => verbs.workflowGetRunCost({ runId: runId as string }),
+    enabled: Boolean(runId),
+    ...options,
+  });
+}
+
 export function useSession(options?: Options<SessionInfo>) {
   return useQuery({ queryKey: ['session'], queryFn: getSession, ...options });
 }
@@ -132,7 +202,16 @@ export function useSession(options?: Options<SessionInfo>) {
 
 function invalidateRun(qc: ReturnType<typeof useQueryClient>, runId: string | undefined) {
   qc.invalidateQueries({ queryKey: ['runs'] });
-  if (runId) qc.invalidateQueries({ queryKey: ['run', runId] });
+  if (runId) {
+    qc.invalidateQueries({ queryKey: ['run', runId] });
+    // The cost ledger (useRunCost, P2-03) is its own lazy query, keyed
+    // separately from the run itself — every mutation that can change a
+    // run's progress (pause/resume/run-next/run-until/retry/cancel/reset)
+    // can also change what it's spent, so it has to be invalidated
+    // alongside ['run', runId] or the dock's cost-vs-budget display goes
+    // stale the moment it first loads and never updates again.
+    qc.invalidateQueries({ queryKey: ['runCost', runId] });
+  }
 }
 
 export function usePauseRun() {

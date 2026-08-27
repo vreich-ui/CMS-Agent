@@ -1,0 +1,13 @@
+{
+  "verb": "stage_get_output",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "id": "node_run_1784645900041_k30xkq:node_exec_1784645900041_jpukvo:input_triage"
+      },
+      "ok": null,
+      "notes": "[real id from stage_list_outputs] raw file not found: N/A (returned inline, see workflow_get_run_cost sibling capture in session); returned {ok:true,data:{output:{id,stage,value,createdAt}}} inline; not separately saved to raw/ due to small size \u2014 captured verbatim in session transcript"
+    }
+  ]
+}

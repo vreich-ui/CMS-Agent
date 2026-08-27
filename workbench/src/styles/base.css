@@ -38,7 +38,13 @@
 
   /* ---------- generic ---------- */
   .dot{width:8px;height:8px;border-radius:99px;flex:none; background:var(--faint);}
-  .dot.completed{background:var(--ok);} .dot.running{background:var(--run); box-shadow:0 0 0 3px #6aa3e030;}
+  .dot.completed{background:var(--ok);}
+  /* U7 hygiene fix — this glow was the DARK theme's --run blue baked in
+     as a literal hex+alpha, so in light mode the dot's glow stayed the
+     dark-mode blue instead of following --run (light mode's --run is a
+     darker, more saturated blue) — color-mix keeps the same ring color
+     as the dot itself in both themes. */
+  .dot.running{background:var(--run); box-shadow:0 0 0 3px color-mix(in srgb, var(--run) 30%, transparent);}
   .dot.blocked{background:var(--acc);} .dot.failed{background:var(--bad);}
   .dot.queued{background:var(--faint); opacity:.55;} .dot.cancelled{background:var(--faint);}
   .dot.paused{background:var(--paused);}
@@ -235,7 +241,7 @@
   .keyrow .src{color:var(--faint); font-size:10.5px;}
 
   /* ---------- modal / palette / toast ---------- */
-  .scrim{position:fixed; inset:0; background:#00000066; display:none; z-index:80; align-items:flex-start; justify-content:center; padding-top:9vh;}
+  .scrim{position:fixed; inset:0; background:var(--scrim); display:none; z-index:80; align-items:flex-start; justify-content:center; padding-top:9vh;}
   .scrim.open{display:flex;}
   .modal{background:var(--panel2); border:1px solid var(--line2); border-radius:14px; width:min(520px,92vw); padding:22px 24px; box-shadow:var(--shadow); max-height:80vh; overflow-y:auto;}
   .modal h3{margin:0 0 4px; font-size:17px;}
@@ -266,3 +272,207 @@
   .toast .mono{color:var(--acc); font-size:11px;}
   @keyframes tin{from{transform:translateY(8px); opacity:0}}
   @media (prefers-reduced-motion:reduce){.toast{animation:none}}
+
+  /* ================= U7 — shared loading skeleton ================= */
+  /* One skeleton treatment for every panel waiting on a query, replacing
+     the mix of bare "Loading…" text, ad hoc spinners, and (in a few
+     places) nothing at all this pass found. Pure CSS, no image/animation
+     asset to fetch, so it's on screen well inside the 200ms budget.
+     prefers-reduced-motion gets a static (non-shimmering) bar instead of
+     the animation, same policy as .toast's tin keyframe above. */
+  .skel{display:flex; flex-direction:column; gap:8px;}
+  .skel-line{height:11px; border-radius:5px; background:linear-gradient(90deg,var(--line2) 25%,var(--panel3) 37%,var(--line2) 63%); background-size:400% 100%; animation:skelshimmer 1.4s ease infinite;}
+  @keyframes skelshimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+  @media (prefers-reduced-motion:reduce){.skel-line{animation:none; background:var(--line2);}}
+
+  /* ================= U1 — command deck (home screen) ================= */
+  /* "Resume where I left off" — a small pill under the pagehead, hidden
+     entirely (component returns null) when there's nothing to resume. */
+  .resume-chip{display:inline-flex; align-items:center; gap:9px; border:1px solid var(--line2); background:var(--panel2); border-radius:99px; padding:6px 15px 6px 13px; color:var(--ink); font-size:12.5px; margin:14px 0 0;}
+  .resume-chip:hover{border-color:var(--acc-dim); color:var(--acc);}
+  .resume-chip:focus-visible{outline:2px solid var(--acc); outline-offset:2px;}
+  .resume-chip .k{font-family:var(--mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint);}
+
+  /* Attention strip — every item keeps kind/severity/evidence visible with
+     no click, plus a one-click jump. Four distinct DOM shapes (loading /
+     error / empty / items) so a failed verb can never look like an
+     all-clear. */
+  .attn-strip{margin-top:14px;}
+  .attn-strip .lbl{display:block; margin-bottom:10px;}
+  .attn-error-msg{margin:0 0 6px; color:var(--ink); font-size:12.5px; max-width:64ch;}
+  .attn-error-detail{margin:0 0 12px; color:var(--bad); font-size:11.5px; overflow-wrap:anywhere;}
+  .attn-allclear{margin:0; color:var(--ok); font-size:12.5px;}
+  .attn-list{display:flex; flex-direction:column; gap:10px;}
+  .attn-item{border:1px solid var(--line); background:var(--panel2); border-radius:9px; padding:12px 14px; display:flex; flex-direction:column; gap:7px;}
+  .attn-item-head{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .chip.attn-sev{font-weight:600;}
+  .attn-kind{margin:0;}
+  .attn-title{font-size:13px; color:var(--ink); font-weight:500;}
+  .attn-evidence{font-size:11.5px; color:var(--muted); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:7px 10px; overflow-wrap:anywhere; line-height:1.5;}
+  .attn-jump{align-self:flex-start; font-size:11.5px; padding:4px 11px;}
+
+  /* ================= U2 — diff & merge studio ================= */
+  /* Type-aware diffing: prose gets word-level highlighting inside changed
+     lines, structured fields get one row each, a deep object gets a
+     pretty-printed + line/word-diffed fallback — never a JSON.stringify
+     wall with plain strikethrough (see src/components/diff/*.tsx). Colour
+     is never the only cue: every add/remove line and word also carries a
+     +/− marker or line-through/underline. */
+  .dsmeta{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:12px;}
+  @media(max-width:760px){.dsmeta{grid-template-columns:1fr;}}
+  .dsmetaside{background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:10px 12px;}
+  .dscontrols{display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;}
+  .dssplit{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media(max-width:820px){.dssplit{grid-template-columns:1fr;}}
+  .dspane{background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; max-height:340px; overflow:auto;}
+  .dsprose{font-size:12px; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere;}
+  .dsline{display:flex; gap:8px; padding:1px 4px; border-radius:4px;}
+  .dsline .dsmk{flex:none; width:14px; text-align:center; font-weight:700; color:var(--faint);}
+  .dsline.add{background:color-mix(in srgb,var(--ok) 10%,transparent);}
+  .dsline.add .dsmk{color:var(--ok);}
+  .dsline.remove{background:color-mix(in srgb,var(--bad) 8%,transparent);}
+  .dsline.remove .dsmk{color:var(--bad);}
+  .dsline.modify.before{background:color-mix(in srgb,var(--bad) 8%,transparent);}
+  .dsline.modify.before .dsmk{color:var(--bad);}
+  .dsline.modify.after{background:color-mix(in srgb,var(--ok) 10%,transparent);}
+  .dsline.modify.after .dsmk{color:var(--ok);}
+  .dsline.playbook{background:color-mix(in srgb,var(--run) 12%,transparent); border-left:3px solid var(--run);}
+  .dsline.playbook .dsmk{color:var(--run);}
+  .dspbtag{margin-left:8px; font-family:var(--mono); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--run); border:1px solid var(--run); border-radius:99px; padding:0 7px; white-space:nowrap;}
+  .dsgroup{border-left:2px solid var(--line2); margin:2px 0; padding-left:2px;}
+  .dsword.rm{background:color-mix(in srgb,var(--bad) 22%,transparent); color:var(--bad); text-decoration:line-through; border-radius:3px; padding:0 1px;}
+  .dsword.add{background:color-mix(in srgb,var(--ok) 22%,transparent); color:var(--ok-ink); text-decoration:underline; border-radius:3px; padding:0 1px;}
+
+  .dsfields{display:flex; flex-direction:column; gap:10px;}
+  .dsfieldrow{display:grid; grid-template-columns:150px 1fr; gap:10px; align-items:start; border-bottom:1px solid var(--line); padding-bottom:8px;}
+  .dsfieldrow:last-child{border-bottom:0; padding-bottom:0;}
+  .dsfieldkey{color:var(--muted); font-size:11.5px; padding-top:2px;}
+  .dsfieldval{font-size:12.5px;}
+  .dsarrow{color:var(--faint);}
+  .dsarr{display:flex; flex-wrap:wrap; gap:5px;}
+  .dsarrchip.rm{color:var(--bad); border-color:var(--bad);}
+  .dsarrchip.add{color:var(--ok); border-color:var(--ok);}
+  .dsfieldjson{margin-top:2px;}
+  .dsfieldjson .dsprose{font-size:11px;}
+
+  /* ================= U3 — drive mode: step debugger & output override ================= */
+  /* The node grid (DriveCenter.tsx): one row per node — breakpoint toggle,
+     status dot, id, publish-risk badge, the rail's own ⎘ override chip
+     (see .chip-override above — not redefined, just reused), duration.
+     Selection uses a real class, not an inline style, so it composes with
+     the row's own hover state below instead of fighting it. */
+  .drive-gridrow:hover td{background:var(--panel2);}
+  .drive-gridrow.sel td{background:var(--panel3);}
+  .drive-gridrow td{border-bottom:1px solid var(--line);}
+  .drive-gridrow:last-child td{border-bottom:0;}
+
+  /* The override modal's own second, explicit, issue-naming confirmation
+     for a schema-invalid-but-parseable save — distinct from (and rendered
+     inside, never instead of) the standard confirmAction dialog that
+     follows it. Reuses .card's shape, just with a bad-tinted border so it
+     reads as "stop and read this" without relying on color alone (the
+     heading text says "second confirmation" in words too). */
+  .drive-invalid-confirm{border-color:color-mix(in srgb,var(--bad) 45%,transparent);}
+
+  /* "Up next" / "just ran" cards get a faint accent rail on the left so the
+     step-by-step flow reads top-to-bottom as one sequence rather than a
+     stack of unrelated cards. */
+  .drive-step-card{border-left:3px solid var(--acc-dim);}
+
+  /* ==================== U4 — learning activity feed ==================== */
+  /* Reuses .card/.filters/.note/.chip-learned/.attn-error-… /.mono wherever
+     the shape already matches (see AttentionStrip's four-state pattern,
+     which this mirrors: loading / error+retry / empty / items are
+     deliberately distinct DOM shapes so a failed changes_list call can
+     never look like "nothing changed"). Everything below is new markup
+     this feed alone needs: rows, the actor badge, and the small numeral
+     badge on the Activity subtab label. */
+  .act-strip .lbl{display:block; margin-bottom:10px;}
+  .act-strip .filters{margin-bottom:12px;}
+  .filters input[type="date"]{background:var(--panel2); color:var(--ink); border:1px solid var(--line2); border-radius:7px; padding:5px 9px; font:inherit; font-size:12.5px;}
+
+  .actlist{display:flex; flex-direction:column;}
+  .actrow{display:flex; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line); align-items:flex-start;}
+  .actrow:last-child{border-bottom:0;}
+  .actrow.compact{padding:8px 4px;}
+  .actrow .when{font-family:var(--mono); font-size:10.5px; color:var(--faint); width:96px; flex:none; padding-top:2px;}
+  .actrow-body{flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;}
+  .actrow-head{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .actrow-node{font-size:11.5px; color:var(--ink);}
+  .actrow-kind{font-size:12.5px; color:var(--muted);}
+  .actrow-reason{margin:2px 0 0; font-size:12.5px; color:var(--muted); overflow-wrap:anywhere;}
+  .actrow.compact .actrow-reason{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .actrow.act-new{border-left:2px solid var(--acc); padding-left:8px; margin-left:-10px;}
+  .actrow-diffbtn{flex:none; font-size:11.5px; padding:4px 10px; align-self:flex-start;}
+
+  /* Actor kind: never color-only — a glyph AND a word ride along with the
+     tint (human/agent/system each get a distinct hue AND a distinct
+     glyph/word, satisfying the "obvious at a glance" requirement two ways
+     over). */
+  .actor-badge{display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:10.5px; letter-spacing:.03em; border:1px solid var(--line2); border-radius:99px; padding:2px 9px 2px 7px; white-space:nowrap;}
+  .actor-glyph{font-size:11px;}
+  .actor-kind{text-transform:uppercase; letter-spacing:.06em; font-size:9px;}
+  .actor-label{color:var(--ink); font-family:var(--sans); font-size:11.5px; letter-spacing:normal;}
+  .actor-human{border-color:color-mix(in srgb,var(--ok) 45%,var(--line2)); color:var(--ok);}
+  .actor-agent{border-color:color-mix(in srgb,var(--run) 45%,var(--line2)); color:var(--run);}
+  .actor-system{border-color:color-mix(in srgb,var(--acc) 45%,var(--line2)); color:var(--acc-ink);}
+  .actor-unknown{color:var(--faint);}
+
+  /* The Activity subtab's own "N new" numeral — same tint/shape family as
+     .chip-learned (the rail's per-node badge this count is defined to
+     agree with; see activityNav.ts), scaled for sitting inside a subtab
+     label instead of a rail row. */
+  .act-tab-badge{display:inline-block; margin-left:6px; background:var(--acc); color:var(--bg); font-family:var(--mono); font-size:10px; font-weight:600; line-height:1; border-radius:99px; padding:2px 6px; vertical-align:middle;}
+
+  /* ==================== U5 — navigation & visualization ==================== */
+  /* Rail health chips (Rail.tsx): compact and digit/glyph-bearing so nothing
+     here is color-only — a number, a count, or a word rides along with every
+     tint. Sized to sit alongside the existing .fan/.risk badges without
+     growing the ~28px row. */
+  .chip-eval,.chip-err,.chip-learned,.chip-override{font-family:var(--mono); font-size:9.5px; letter-spacing:.02em; flex:none; white-space:nowrap;}
+  .chip-eval{min-width:15px; text-align:right;}
+  .chip-err{color:var(--bad);}
+  .chip-learned{background:color-mix(in srgb,var(--acc) 16%,transparent); color:var(--acc-ink); border-radius:4px; padding:1px 5px; text-transform:uppercase; letter-spacing:.08em; font-size:8.5px;}
+  .chip-override{color:var(--run);}
+
+  /* Trace waterfall rows (trace/TraceWaterfallModal.tsx) — one clickable
+     row per node span, laid out as a grid so id / bar-track / status+duration
+     line up across every row. */
+  .wf-row{display:grid; width:100%; gap:10px; align-items:center; padding:4px 6px; border-radius:6px; text-align:left; border:1px solid transparent; background:var(--panel);}
+  .wf-row:hover{background:var(--panel2); border-color:var(--line2);}
+  .wf-row:focus-visible{outline:2px solid var(--acc); outline-offset:1px;}
+
+  /* ================= U6 — modal & layering system ================= */
+  /* Three layers, one rule-set. See src/overlay/types.ts.
+     The size classes are the layout rule that answers the "center is
+     width-capped while the diff needs the room" complaint: READING panes
+     cap at measure, WORKING panes take the viewport. */
+  .ovl-scrim{align-items:flex-start; padding:5vh 3vw; z-index:100;}
+  .modal.ovl-read{width:min(680px,92vw);}
+  .modal.ovl-work{width:min(1180px,94vw); max-height:88vh;}
+  .modal.ovl-full{width:96vw; max-height:92vh;}
+  .modal.ovl-work, .modal.ovl-full{display:flex; flex-direction:column; padding:16px 18px;}
+  .ovl-head{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:12px;}
+  .ovl-head h3{margin:0;}
+  .ovl-head .sub{margin:2px 0 0;}
+  .ovl-body{flex:1; min-height:0; overflow:auto;}
+  .ovl-foot{margin-top:14px; border-top:1px solid var(--line); padding-top:12px;}
+
+  /* Reading vs working panes — the cap belongs to prose, not to layout. */
+  .pane-read{max-width:74ch;}
+  .pane-work{max-width:none; width:100%;}
+
+  .ovl-pop{background:var(--panel2); border:1px solid var(--line2); border-radius:11px; padding:12px 14px; box-shadow:var(--shadow); z-index:110; font-size:12.5px;}
+  .ovl-pop .lbl{display:block; margin-bottom:6px;}
+  .ovl-pop dl{display:grid; grid-template-columns:auto 1fr; gap:4px 10px; margin:0;}
+  .ovl-pop dt{color:var(--muted); font-size:11.5px;}
+  .ovl-pop dd{margin:0; font-family:var(--mono); font-size:11.5px; overflow-wrap:anywhere;}
+
+  /* Stacking-order fix, discovered by this studio's own Save flow:
+     ConfirmDialog.tsx (not ours to edit) renders the pre-U6 z-index:80
+     .scrim; the U6 overlay system's own .ovl-scrim sits above it at
+     z-index:100 (see that block above). Any mutating action confirmed from
+     inside an open overlay modal — this studio's Save/Restore included —
+     needs the confirm dialog on top, so it's buried today. Scoped to
+     ConfirmDialog's own stable id so nothing else is affected. */
+  .scrim:has(#confirmdialog-title){z-index:200;}

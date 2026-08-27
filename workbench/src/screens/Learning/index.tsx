@@ -3,6 +3,7 @@
 // and renderLearning()'s seven S.lrn tabs exactly. Every tab is its own file
 // here; this shell just owns the subtab bar and routing (store's `lrn`).
 
+import type { ReactNode } from 'react';
 import { TabBar } from '../../components/primitives';
 import { useStore } from '../../store';
 import type { LearnTab } from '../../types';
@@ -13,6 +14,8 @@ import { Compare } from './Compare';
 import { Evaluate } from './Evaluate';
 import { Optimizer } from './Optimizer';
 import { Datasets } from './Datasets';
+import { Activity } from './Activity';
+import { closeActivity, openActivity, useActivityOpen, useUnseenActivityCount, type LrnTabExt } from './activityNav';
 
 const SUBTABS: Array<[LearnTab, string]> = [
   ['fly', 'Flywheel'],
@@ -27,6 +30,39 @@ const SUBTABS: Array<[LearnTab, string]> = [
 export function Learning() {
   const lrn = useStore((s) => s.lrn);
   const setLearn = useStore((s) => s.setLearn);
+  // U4 — Activity is an 8th subtab that lives OUTSIDE the store's LearnTab
+  // union (src/types.ts/src/store.ts are out of scope for this WP — see
+  // activityNav.ts's own comment). `active`/`select` below layer it over
+  // the store's own `lrn` without changing how any other tab navigates.
+  const activityOpen = useActivityOpen();
+  const unseenCount = useUnseenActivityCount();
+
+  const active: LrnTabExt = activityOpen ? 'act' : lrn;
+  function select(id: LrnTabExt) {
+    if (id === 'act') {
+      openActivity();
+    } else {
+      closeActivity();
+      setLearn(id);
+    }
+  }
+
+  const tabs: Array<{ id: LrnTabExt; label: ReactNode }> = [
+    ...SUBTABS.map(([id, label]) => ({ id: id as LrnTabExt, label: label as ReactNode })),
+    {
+      id: 'act',
+      label: (
+        <>
+          Activity
+          {unseenCount != null && unseenCount > 0 && (
+            <span className="act-tab-badge" aria-label={`${unseenCount} new since your last visit`}>
+              {unseenCount}
+            </span>
+          )}
+        </>
+      ),
+    },
+  ];
 
   return (
     <main className="pagewrap">
@@ -34,22 +70,21 @@ export function Learning() {
         <h1>Learning</h1>
         <span className="sub">the improvement flywheel — visibility above, capture below</span>
       </div>
-      <TabBar
-        id="lrntabs"
-        className="subtabs"
-        idPrefix="lrn-tab"
-        active={lrn}
-        onSelect={setLearn}
-        tabs={SUBTABS.map(([id, label]) => ({ id, label }))}
-      />
+      <TabBar id="lrntabs" className="subtabs" idPrefix="lrn-tab" active={active} onSelect={select} tabs={tabs} />
       <div id="lrnbody">
-        {lrn === 'fly' && <Flywheel />}
-        {lrn === 'obs' && <Observations />}
-        {lrn === 'pb' && <Playbooks />}
-        {lrn === 'cmp' && <Compare />}
-        {lrn === 'eval' && <Evaluate />}
-        {lrn === 'opt' && <Optimizer />}
-        {lrn === 'ds' && <Datasets />}
+        {activityOpen ? (
+          <Activity />
+        ) : (
+          <>
+            {lrn === 'fly' && <Flywheel />}
+            {lrn === 'obs' && <Observations />}
+            {lrn === 'pb' && <Playbooks />}
+            {lrn === 'cmp' && <Compare />}
+            {lrn === 'eval' && <Evaluate />}
+            {lrn === 'opt' && <Optimizer />}
+            {lrn === 'ds' && <Datasets />}
+          </>
+        )}
       </div>
     </main>
   );

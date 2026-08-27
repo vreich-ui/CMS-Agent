@@ -15,7 +15,12 @@ export type Risk = 'read' | 'write' | 'publish';
 
 export type ScreenId = 'library' | 'bench' | 'runs' | 'learning' | 'registry';
 
-export type BenchMode = 'build' | 'run';
+// U3 — 'drive' added alongside the existing two: hand-driving a bound run
+// one node at a time (step, retry-with-edit, override output), distinct
+// from 'run' (the read-only run-following mode) and 'build' (no run
+// bound). Additive — 'build'/'run' and every switch on them elsewhere are
+// unchanged.
+export type BenchMode = 'build' | 'run' | 'drive';
 
 export type NodeTab =
   | 'thisrun'
@@ -96,6 +101,28 @@ export interface Project {
   endpointSource?: string;
 }
 
+/**
+ * P2-05 — one node's slice of a run, carried straight off the run record.
+ *
+ * The Pass 1 report concluded "no per-node timing data exists anywhere".
+ * That was wrong, and the placeholder timeline in the dock was built on
+ * it. `workflow_get_run`'s `run.nodes[]` has carried `startedAt`,
+ * `completedAt` and `durationMs` all along (live-verified: run
+ * …stw73q, 22 of 23 nodes timed; e.g. clone_intake 11 242 ms,
+ * layout_analyst 14 929 ms). The timings are absent only while a node is
+ * still queued, which is the honest reason for a missing bar rather than a
+ * reason to fake every bar.
+ */
+export interface RunNode {
+  nodeId: string;
+  status: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  warnings?: string[];
+  produces?: string[];
+}
+
 export interface Run {
   id: string;
   wf: string;
@@ -111,6 +138,9 @@ export interface Run {
   err: number;
   done: number;
   stall?: boolean;
+  /** P2-05 — per-node timings/status off the run record. Empty on a list
+   * row that carried none; never fabricated. */
+  nodes: RunNode[];
   // --- Additive (workbench-verb-fixes). requestId is the caller-supplied
   // id a run was started with — live-carried, no prior fixture equivalent.
   requestId?: string;

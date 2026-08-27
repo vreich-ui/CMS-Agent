@@ -1,0 +1,275 @@
+{
+  "verb": "workflow_get_run_context",
+  "capturedAt": "2026-08-26T12:23:14Z",
+  "calls": [
+    {
+      "args": {
+        "runId": "run_1787678554270_stw73q",
+        "projectId": "dr-lurie"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "context": {
+            "projectId": "string",
+            "projectContract": {
+              "contentContract": "string",
+              "publishingPolicy": {
+                "publishEnabled": "boolean",
+                "requiresExplicitPublish": "boolean",
+                "description": "string",
+                "operatorDefault": "string"
+              }
+            },
+            "articleBodySchema": {
+              "type": "string",
+              "required": [
+                "string"
+              ],
+              "additionalProperties": "boolean",
+              "properties": {
+                "artifact": {
+                  "const": "string"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": "number"
+                },
+                "clientProjectId": {
+                  "type": "string",
+                  "minLength": "number"
+                },
+                "clientObjectType": {
+                  "type": "string",
+                  "minLength": "number"
+                },
+                "contractSource": {
+                  "type": "string",
+                  "additionalProperties": "boolean"
+                },
+                "body": {
+                  "type": "string",
+                  "minProperties": "number",
+                  "additionalProperties": "boolean"
+                },
+                "clientValidation": {
+                  "type": "string",
+                  "additionalProperties": "boolean"
+                },
+                "artifactReferences": {
+                  "type": "string",
+                  "items": {
+                    "type": "string",
+                    "additionalProperties": "boolean"
+                  }
+                },
+                "mediaPathConvention": {
+                  "type": "string"
+                },
+                "assumptions": {
+                  "type": "string",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "blockers": {
+                  "type": "string",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "notes": {
+                  "type": "string",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "projectToolPolicy": {
+              "defaultToolPolicy": "string",
+              "allowedTools": [
+                "string"
+              ],
+              "toolPolicies": {
+                "...": "string"
+              }
+            },
+            "objectContracts": {
+              "projectId": "string",
+              "editorial": {
+                "voiceObjectId": "string",
+                "fallback": {
+                  "...": "string"
+                }
+              },
+              "sources": [
+                "string"
+              ],
+              "site": {
+                "siteObjectId": "string",
+                "taxonomyRegistryObjectId": "string",
+                "requestIdPattern": "string"
+              },
+              "rules": {
+                "...": "string"
+              }
+            },
+            "registry": [
+              {
+                "id": "string",
+                "produces": [
+                  "string"
+                ],
+                "riskLevel": "string",
+                "dependsOn": []
+              }
+            ],
+            "_registry_note": "string"
+          },
+          "cacheHit": "boolean"
+        },
+        "_truncation_note": "string"
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "context": {
+            "projectId": "dr-lurie",
+            "projectContract": {
+              "contentContract": "content_source.v1",
+              "publishingPolicy": {
+                "publishEnabled": true,
+                "requiresExplicitPublish": false,
+                "description": "Publishing is enabled (go-live 2026-07-31, operator decision). Set the per-project *_PUBLISH_ENABLED=false env flag to force publishing off.",
+                "operatorDefault": "approved"
+              }
+            },
+            "articleBodySchema": {
+              "type": "object",
+              "required": [
+                "artifact",
+                "summary"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "artifact": {
+                  "const": "client_object.v1"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "clientProjectId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "clientObjectType": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contractSource": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "body": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": true
+                },
+                "clientValidation": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "artifactReferences": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "mediaPathConvention": {
+                  "type": "string"
+                },
+                "assumptions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "blockers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "notes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "projectToolPolicy": {
+              "defaultToolPolicy": "allowed",
+              "allowedTools": [
+                "ping",
+                "registry_get"
+              ],
+              "toolPolicies": {
+                "...": "per-tool allowed/needs_approval/blocked map, ~40 entries"
+              }
+            },
+            "objectContracts": {
+              "projectId": "dr-lurie",
+              "editorial": {
+                "voiceObjectId": "voice_drlurie",
+                "fallback": {
+                  "...": "full editorial voice fallback object: audience, tone, cadence, lexicon, claim_policy, cta_policy, reader_safety_notes, frameworks[4], default_framework"
+                }
+              },
+              "sources": [
+                "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/agents/publishing-policy.md",
+                "https://github.com/vreich-ui/Dr-Lurie-Blog/docs/cms-architecture/"
+              ],
+              "site": {
+                "siteObjectId": "site_drlurie",
+                "taxonomyRegistryObjectId": "tax_drlurie",
+                "requestIdPattern": "^req_[a-z0-9_]+_\\d{8}_\\d{2}$"
+              },
+              "rules": {
+                "...": "objectSubstrate, noLegacyPath, identityAndIds, bodyMapping, judgementsStayWorkspaceSide, artifacts, validationAndTaxonomy, publishVsRelease \u2014 each an array of policy-rule strings"
+              }
+            },
+            "registry": [
+              {
+                "id": "input_triage",
+                "produces": [
+                  "content_source.v1"
+                ],
+                "riskLevel": "read",
+                "dependsOn": []
+              },
+              {
+                "id": "placement_resolver",
+                "produces": [
+                  "placement_resolution.v1"
+                ],
+                "riskLevel": "read",
+                "dependsOn": [
+                  "input_triage"
+                ]
+              }
+            ],
+            "_registry_note": "registry carries all 24 publishing_conductor nodes with {id, produces, riskLevel, dependsOn} \u2014 truncated here to a representative subset."
+          },
+          "cacheHit": false
+        },
+        "_truncation_note": "This raw capture is hand-condensed from the live tool result (which was ~9KB and returned inline, not auto-saved to a file) to keep the raw JSON compact; field names and structure are verbatim, but pr\u2026"
+      },
+      "notes": "[run_1787678554270_stw73q / dr-lurie] both runId AND projectId are required; registry[] carries the full node dependsOn/riskLevel/produces list for the run's workflow"
+    }
+  ]
+}

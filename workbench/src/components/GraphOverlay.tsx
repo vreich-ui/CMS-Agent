@@ -1,185 +1,329 @@
-// WP-42b — the graph overlay: a read-only rendering of `workspace_get_graph`,
-// deliberately an *overlay* (a `.scrim`/`.modal`), never a screen — the
-// demoted constellation view is not coming back as the home screen. Opens
-// with "G" (from the rail's "⌗ graph overlay" ghost button, or the bare key
-// from anywhere), closes with Escape, scrim click, or picking a node.
+// U5 — the graph overlay: a real, navigable rendering of the ACTIVE
+// workflow's live topology, not a "this is a gap" notice. Opens with "G"
+// (from the rail's "⌗ graph overlay" ghost button, or the bare key from
+// anywhere), closes with Escape, scrim click, or picking a node.
 //
-// Layout: the cheapest correct option named in the WP brief — a layered DAG,
-// columns = the workflow's own phases (the same grouping the rail already
-// shows, so this reads as "the rail's shape, drawn out" rather than a new
-// invented structure), edges = the literal `from`/`to` pairs
-// `workspace_get_graph` returns, drawn as SVG paths between each node's
-// column/row position. Node boxes are plain HTML buttons absolutely
-// positioned over the SVG (real click targets, real tab order) — the SVG
-// itself only draws edges, using inline `var(--…)` tokens per the "no new
-// CSS" rule's stated exception for this component.
+// Data: `useWorkflowGraph(wf)` -> `workspace_get_graph({workflowId})`, the
+// one verb that answers "what does this workflow actually look like" (see
+// api/hooks.ts's own doc comment). Layout is computed fresh from each
+// node's own `dependsOn` list rather than the graph call's separate `edges`
+// array — the two are supposed to agree (and do, live), but a node's
+// `dependsOn` is the one field every code path (live AND the fixture mock)
+// keeps in sync with the node record itself, so it is the more trustworthy
+// source to lay a DAG out from. Layers come from helpers.layerGraph()
+// (longest-path-from-roots, cycles broken defensively — see its doc
+// comment). If the workflow's own graph genuinely has no nodes yet
+// (workspace_get_graph can honestly return an empty set for a workflow this
+// environment has no live/fixture data for), that is shown as an honest
+// empty state, never a fabricated diagram.
 //
-// Honest gap: `workspace_get_graph` only returns publishing_conductor's
-// 23-node graph today (HANDOFF's own note, confirmed against server/) —
-// clone_conductor and capture_conductor are not represented there. Rather
-// than call the verb anyway and either render nothing (reads as "empty
-// workflow") or a stale/partial shape, this component checks the active
-// workflow *before* querying and shows a plain explanation instead for
-// anything other than publishing_conductor.
+// Phase tint (from the catalog's phase groupings — presentation only, see
+// workflowCatalog.ts), risk badge (unmistakable on 'publish'), and — when a
+// run is bound — real per-node run status (helpers.nodeStatusFromRun, not
+// position-inferred) are all shown with text/glyphs alongside color, never
+// color alone. The run's current/stopped node gets an extra ring and is
+// scrolled into view on open — the whole point of this overlay, per the
+// brief, is landing the operator's eye on the node that matters without
+// hunting.
 
-import { useEffect, useMemo, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useRun, useWorkflows } from '../api/hooks';
-import { workspaceGetGraph } from '../api/verbs';
-import { nodeRunStatus, orderedNodes, type NodeRunStatus } from '../screens/Workbench/helpers';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import * as adapters from '../api/adapters';
+import { useRun, useWorkflowGraph, useWorkflows } from '../api/hooks';
+import { RiskBadge } from './primitives';
+import { Skeleton } from './Skeleton';
+import { layerGraph, nodeStatusFromRun, phaseLabelForNode, type NodeRunStatus } from '../screens/Workbench/helpers';
 import { useStore } from '../store';
-import type { Run, Workflow } from '../types';
+import type { Run, Workflow, WorkflowNode } from '../types';
 
-const GRAPH_WORKFLOW_ID = 'publishing_conductor';
-const COL_W = 172;
-const ROW_H = 48;
-const PAD_TOP = 30;
-const PAD_X = 14;
-const NODE_W = 148;
-const NODE_H = 32;
+const COL_W = 190;
+const ROW_H = 58;
+const PAD_TOP = 34;
+const PAD_X = 18;
+const NODE_W = 164;
+const NODE_H = 42;
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 1.75;
 
-const STATUS_COLOR: Record<NodeRunStatus, string> = {
-  completed: 'var(--ok)',
-  running: 'var(--run)',
-  blocked: 'var(--acc)',
-  failed: 'var(--bad)',
-  cancelled: 'var(--faint)',
-  queued: 'var(--line2)',
+const STATUS_META: Record<NodeRunStatus, { color: string; glyph: string; label: string }> = {
+  completed: { color: 'var(--ok)', glyph: '✓', label: 'completed' },
+  running: { color: 'var(--run)', glyph: '▶', label: 'running' },
+  blocked: { color: 'var(--acc)', glyph: '⛔', label: 'blocked' },
+  failed: { color: 'var(--bad)', glyph: '✕', label: 'failed' },
+  cancelled: { color: 'var(--faint)', glyph: '∅', label: 'cancelled' },
+  queued: { color: 'var(--line2)', glyph: '·', label: 'queued' },
 };
 
-function edgePath(ax: number, ay: number, bx: number, by: number): string {
-  const dx = Math.max(36, (bx - ax) / 2);
-  return `M ${ax} ${ay} C ${ax + dx} ${ay}, ${bx - dx} ${by}, ${bx} ${by}`;
-}
+// Cycled per phase index — a decorative grouping wash, never the only
+// signal (every node also carries its phase name in a caption + title).
+const PHASE_TINTS = ['var(--acc)', 'var(--run)', 'var(--ok)', 'var(--paused)', 'var(--bad)'];
 
 interface Pos {
   x: number;
   y: number;
+  layer: number;
 }
 
-function GapNotice({ workflow, workflowId }: { workflow: Workflow | undefined; workflowId: string }) {
+interface GraphNode {
+  node: WorkflowNode;
+  deps: string[];
+}
+
+function EmptyNotice({ workflowName }: { workflowName: string }) {
   return (
-    <div className="card" style={{ borderColor: 'var(--bad)' }}>
-      <span className="lbl" style={{ color: 'var(--bad)' }}>
-        graph unavailable — {workflow?.name ?? workflowId}
-      </span>
+    <div className="card" style={{ borderColor: 'var(--line2)' }}>
+      <span className="lbl">no live graph for {workflowName}</span>
       <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>
-        <code className="mono">workspace_get_graph</code> only returns publishing_conductor's 23-node graph today.{' '}
-        {workflow?.name ?? workflowId} isn't represented there yet, so this overlay shows nothing rather than a
-        misleading empty or partial diagram. Switch to Publishing conductor (⌘K → "Publishing conductor") to see the
-        graph.
+        <code className="mono">workspace_get_graph</code> returned no nodes for this workflow in this environment —
+        shown honestly rather than a fabricated diagram. Switch workflow (⌘K → a workflow name) to see a graph that
+        has data.
       </p>
     </div>
   );
 }
 
+function NodeBox({
+  gn,
+  pos,
+  phaseIdx,
+  phaseLabel,
+  status,
+  isCurrent,
+  onSelect,
+}: {
+  gn: GraphNode;
+  pos: Pos;
+  phaseIdx: number;
+  phaseLabel: string | null;
+  status: NodeRunStatus | null;
+  isCurrent: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const meta = status ? STATUS_META[status] : null;
+  const tint = PHASE_TINTS[phaseIdx % PHASE_TINTS.length];
+  const label = [
+    gn.node.id,
+    phaseLabel ? `phase: ${phaseLabel}` : 'ungrouped',
+    `risk: ${gn.node.risk}`,
+    meta ? `status: ${meta.label}` : null,
+    isCurrent ? 'current node' : null,
+  ]
+    .filter(Boolean)
+    .join(' — ');
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(gn.node.id)}
+      title={gn.node.id}
+      aria-label={label}
+      style={{
+        position: 'absolute',
+        left: pos.x - NODE_W / 2,
+        top: pos.y - NODE_H / 2,
+        width: NODE_W,
+        height: NODE_H,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        gap: 2,
+        padding: '5px 9px',
+        background: `color-mix(in srgb, ${tint} 10%, var(--panel2))`,
+        border: `1.5px solid ${meta ? meta.color : 'var(--line2)'}`,
+        borderRadius: 8,
+        boxShadow: isCurrent ? `0 0 0 3px color-mix(in srgb, var(--acc) 45%, transparent)` : undefined,
+        color: 'var(--ink)',
+        textAlign: 'left',
+        overflow: 'hidden',
+        cursor: 'pointer',
+      }}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {meta && (
+          <span aria-hidden="true" style={{ color: meta.color, fontSize: 10, flex: 'none' }}>
+            {meta.glyph}
+          </span>
+        )}
+        <span
+          className="mono"
+          style={{ fontSize: 10.5, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
+          {gn.node.id}
+        </span>
+        <RiskBadge risk={gn.node.risk} />
+      </span>
+      <span
+        className="mono"
+        style={{ fontSize: 9, color: 'var(--faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+      >
+        {phaseLabel ?? 'ungrouped'}
+      </span>
+    </button>
+  );
+}
+
 function GraphCanvas({
   workflow,
-  edges,
+  nodes,
   run,
   onSelect,
 }: {
   workflow: Workflow;
-  edges: Array<{ from: string; to: string }>;
+  nodes: GraphNode[];
   run: Run | null;
   onSelect: (nodeId: string) => void;
 }) {
-  const order = useMemo(() => orderedNodes(workflow), [workflow]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+  const [fitted, setFitted] = useState(false);
+
+  const nodeIds = useMemo(() => nodes.map((n) => n.node.id), [nodes]);
+  const edges = useMemo(
+    () => nodes.flatMap((n) => n.deps.map((dep) => ({ from: dep, to: n.node.id }))),
+    [nodes],
+  );
+  const layering = useMemo(() => layerGraph(nodeIds, edges), [nodeIds, edges]);
 
   const positions = useMemo(() => {
     const map = new Map<string, Pos>();
-    workflow.phases.forEach(([, ids], colIdx) => {
-      ids.forEach((id, rowIdx) => {
-        map.set(id, { x: PAD_X + colIdx * COL_W + COL_W / 2, y: PAD_TOP + rowIdx * ROW_H + ROW_H / 2 });
+    layering.layers.forEach((layerIds, layerIdx) => {
+      layerIds.forEach((id, rowIdx) => {
+        map.set(id, {
+          x: PAD_X + layerIdx * COL_W + COL_W / 2,
+          y: PAD_TOP + rowIdx * ROW_H + ROW_H / 2,
+          layer: layerIdx,
+        });
       });
     });
     return map;
-  }, [workflow]);
+  }, [layering]);
 
-  const maxRows = Math.max(1, ...workflow.phases.map(([, ids]) => ids.length));
-  const width = PAD_X * 2 + workflow.phases.length * COL_W;
-  const height = PAD_TOP + maxRows * ROW_H + 16;
+  const maxRows = Math.max(1, ...layering.layers.map((l) => l.length));
+  const diagramWidth = PAD_X * 2 + (layering.maxLayer + 1) * COL_W;
+  const diagramHeight = PAD_TOP + maxRows * ROW_H + 20;
+
+  const phaseByNode = useMemo(() => {
+    const map = new Map<string, { label: string | null; idx: number }>();
+    const labelOrder: string[] = [];
+    for (const gn of nodes) {
+      const label = phaseLabelForNode(workflow, gn.node.id);
+      if (label && !labelOrder.includes(label)) labelOrder.push(label);
+      map.set(gn.node.id, { label, idx: 0 });
+    }
+    for (const [id, entry] of map) {
+      entry.idx = entry.label ? labelOrder.indexOf(entry.label) : labelOrder.length;
+      map.set(id, entry);
+    }
+    return map;
+  }, [nodes, workflow]);
+
+  function fitToWidth() {
+    const containerWidth = scrollRef.current?.clientWidth ?? diagramWidth;
+    const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, containerWidth / diagramWidth));
+    setScale(next);
+  }
+
+  // Fit once when the graph first has real dimensions, then leave the
+  // operator's own zoom alone.
+  useEffect(() => {
+    if (fitted || diagramWidth <= 0) return;
+    fitToWidth();
+    setFitted(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diagramWidth, fitted]);
+
+  // Land the operator's eye on the node that matters: the run's current/
+  // stopped node, scrolled into view once positions are known.
+  useEffect(() => {
+    if (!run?.cur) return;
+    const id = run.cur;
+    const raf = requestAnimationFrame(() => {
+      scrollRef.current
+        ?.querySelector<HTMLElement>(`button[title="${CSS.escape(id)}"]`)
+        ?.scrollIntoView({ block: 'center', inline: 'center' });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [run?.cur, positions]);
 
   return (
-    <div style={{ overflow: 'auto', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--bg)' }}>
-      <div style={{ position: 'relative', width, height, minWidth: '100%' }}>
-        {workflow.phases.map(([label], colIdx) => (
+    <div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+        <button type="button" className="btn" onClick={() => setScale((s) => Math.max(MIN_SCALE, s - 0.15))}>
+          − zoom out
+        </button>
+        <button type="button" className="btn" onClick={() => setScale((s) => Math.min(MAX_SCALE, s + 0.15))}>
+          + zoom in
+        </button>
+        <button type="button" className="btn" onClick={fitToWidth}>
+          fit to width
+        </button>
+        <span className="note" style={{ margin: 0 }}>
+          {Math.round(scale * 100)}% · {nodes.length} nodes · {layering.maxLayer + 1} layers
+          {layering.hadCycle ? ' · a cycle was detected and broken so this still renders' : ''}
+        </span>
+      </div>
+      <div
+        ref={scrollRef}
+        style={{
+          overflow: 'auto',
+          maxHeight: '62vh',
+          border: '1px solid var(--line)',
+          borderRadius: 10,
+          background: 'var(--bg)',
+        }}
+      >
+        <div style={{ width: diagramWidth * scale, height: diagramHeight * scale, position: 'relative' }}>
           <div
-            key={label}
             style={{
+              width: diagramWidth,
+              height: diagramHeight,
               position: 'absolute',
-              left: PAD_X + colIdx * COL_W,
-              top: 4,
-              width: COL_W,
-              textAlign: 'center',
-              fontFamily: 'var(--mono)',
-              fontSize: 9.5,
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              color: 'var(--faint)',
+              left: 0,
+              top: 0,
+              transform: `scale(${scale})`,
+              transformOrigin: '0 0',
             }}
           >
-            {label}
-          </div>
-        ))}
-        <svg width={width} height={height} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
-          {edges.map((e, i) => {
-            const a = positions.get(e.from);
-            const b = positions.get(e.to);
-            if (!a || !b) return null;
-            return (
-              <path
-                key={`${e.from}-${e.to}-${i}`}
-                d={edgePath(a.x, a.y, b.x, b.y)}
-                fill="none"
-                stroke="var(--line2)"
-                strokeWidth={1.4}
-              />
-            );
-          })}
-        </svg>
-        {[...positions.entries()].map(([id, p]) => {
-          const status = run ? nodeRunStatus(run, id, order) : null;
-          const borderColor = status ? STATUS_COLOR[status] : 'var(--line2)';
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => onSelect(id)}
-              title={id}
-              style={{
-                position: 'absolute',
-                left: p.x - NODE_W / 2,
-                top: p.y - NODE_H / 2,
-                width: NODE_W,
-                minHeight: NODE_H,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '4px 8px',
-                background: 'var(--panel2)',
-                border: `1px solid ${borderColor}`,
-                borderRadius: 7,
-                color: 'var(--ink)',
-                fontFamily: 'var(--mono)',
-                fontSize: 9.5,
-                textAlign: 'left',
-                overflow: 'hidden',
-              }}
+            <svg
+              width={diagramWidth}
+              height={diagramHeight}
+              style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
             >
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: 99,
-                  flex: 'none',
-                  background: status ? STATUS_COLOR[status] : 'var(--faint)',
-                }}
-              />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{id}</span>
-            </button>
-          );
-        })}
+              {edges.map((e, i) => {
+                const a = positions.get(e.from);
+                const b = positions.get(e.to);
+                if (!a || !b) return null;
+                const dx = Math.max(30, (b.x - a.x) / 2);
+                return (
+                  <path
+                    key={`${e.from}-${e.to}-${i}`}
+                    d={`M ${a.x + NODE_W / 2} ${a.y} C ${a.x + NODE_W / 2 + dx} ${a.y}, ${b.x - NODE_W / 2 - dx} ${b.y}, ${b.x - NODE_W / 2} ${b.y}`}
+                    fill="none"
+                    stroke="var(--line2)"
+                    strokeWidth={1.4}
+                  />
+                );
+              })}
+            </svg>
+            {nodes.map((gn) => {
+              const pos = positions.get(gn.node.id);
+              if (!pos) return null;
+              const phase = phaseByNode.get(gn.node.id) ?? { label: null, idx: 0 };
+              const status = run ? nodeStatusFromRun(run, gn.node.id) : null;
+              return (
+                <NodeBox
+                  key={gn.node.id}
+                  gn={gn}
+                  pos={pos}
+                  phaseIdx={phase.idx}
+                  phaseLabel={phase.label}
+                  status={status}
+                  isCurrent={run?.cur === gn.node.id}
+                  onSelect={onSelect}
+                />
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -202,16 +346,16 @@ export function GraphOverlay() {
 
   const workflowsQ = useWorkflows();
   const workflow = workflowsQ.data?.find((w) => w.id === wf);
-  const isGraphable = wf === GRAPH_WORKFLOW_ID;
 
   const boundRunQ = useRun(mode === 'run' ? runId : null);
   const run = mode === 'run' ? (boundRunQ.data ?? null) : null;
 
-  const graphQ = useQuery({
-    queryKey: ['workspace_get_graph', wf],
-    queryFn: () => workspaceGetGraph({ workflowId: wf }),
-    enabled: open && isGraphable,
-  });
+  const graphQ = useWorkflowGraph(open ? wf : null);
+
+  const graphNodes = useMemo<GraphNode[]>(() => {
+    const raw = graphQ.data?.nodes ?? [];
+    return raw.map((n) => ({ node: adapters.toNode(n), deps: n.dependsOn }));
+  }, [graphQ.data]);
 
   // "G" opens from anywhere (never while typing); Escape/scrim-click/node-
   // click close. Mirrors CommandPalette.tsx's guard exactly.
@@ -282,7 +426,7 @@ export function GraphOverlay() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="graphoverlay-title"
-        style={{ width: 'min(960px, 94vw)' }}
+        style={{ width: 'min(1180px, 96vw)' }}
         onKeyDown={onKeyDown}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
@@ -292,20 +436,31 @@ export function GraphOverlay() {
           </button>
         </div>
         <div className="sub">
-          Read-only rendering of workspace_get_graph, grouped by phase. An overlay, not a screen — click a node to
-          jump to it.
+          Real topology from workspace_get_graph, layered by dependency depth. Click a node (or Tab to it, Enter to
+          pick) to jump to it in the rail and close this overlay.
         </div>
 
-        {!isGraphable ? (
-          <GapNotice workflow={workflow} workflowId={wf} />
-        ) : graphQ.isLoading || workflowsQ.isLoading ? (
-          <p className="note">loading graph…</p>
-        ) : graphQ.isError || !workflow ? (
+        {/* U7 polish — error checked before loading (mirrors Rail.tsx's
+            P2-02 fix). Two independent queries: checking the combined
+            isLoading first used to leave workflowsQ's error invisible
+            (falling only into the honest-but-wrong `!workflow` branch)
+            for as long as graphQ was still loading or retrying. */}
+        {graphQ.isError || workflowsQ.isError ? (
           <p className="note" style={{ color: 'var(--bad)' }}>
-            {graphQ.error instanceof Error ? graphQ.error.message : 'Could not load the graph.'}
+            {graphQ.error instanceof Error
+              ? graphQ.error.message
+              : workflowsQ.error instanceof Error
+                ? workflowsQ.error.message
+                : 'Could not load the graph.'}
           </p>
+        ) : graphQ.isLoading || workflowsQ.isLoading ? (
+          <Skeleton lines={5} />
+        ) : !workflow ? (
+          <p className="note" style={{ color: 'var(--bad)' }}>Could not load the graph.</p>
+        ) : graphNodes.length === 0 ? (
+          <EmptyNotice workflowName={workflow.name} />
         ) : (
-          <GraphCanvas workflow={workflow} edges={graphQ.data?.edges ?? []} run={run} onSelect={selectNode} />
+          <GraphCanvas workflow={workflow} nodes={graphNodes} run={run} onSelect={selectNode} />
         )}
       </div>
     </div>

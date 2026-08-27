@@ -4,13 +4,17 @@
 // every empty stage says what feeds it and links there, since per this
 // surface's whole reason for existing, the zeros ARE the story.
 
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useObservations, useReadiness, useRubrics } from '../../api/hooks';
 import * as verbs from '../../api/verbs';
-import { Card } from '../../components/primitives';
+import { Btn, Card } from '../../components/primitives';
+import { Skeleton } from '../../components/Skeleton';
 import { useStore } from '../../store';
 import type { LearnTab } from '../../types';
 import { useApprovedDelta, useCuratedNodeIds } from './overlay';
+import { ActivityRow } from './Activity';
+import { openActivity, readLastVisit, useActivityBaseline } from './activityNav';
 
 function FlyStage({
   label,
@@ -60,6 +64,21 @@ export function Flywheel() {
   const approved = (readinessQ.data?.approvedExamples ?? 0) + approvedDelta;
   const approvedThreshold = readinessQ.data?.approvedThreshold ?? 500;
   const pairThreshold = readinessQ.data?.pairThreshold ?? 200;
+
+  // U4 — "recent activity" column: the flywheel used to be seven counts
+  // with no narrative underneath. Same read the Activity subtab's own
+  // "new" marking and tab badge use (activityBaseline), so a broken
+  // changes_list call shows up here too instead of quietly rendering an
+  // empty flywheel that looks intentional.
+  const activityQ = useActivityBaseline();
+  const lastVisit = readLastVisit();
+  const recentEvents = useMemo(
+    () =>
+      [...(activityQ.data?.events ?? [])]
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+        .slice(0, 5),
+    [activityQ.data],
+  );
 
   return (
     <>
@@ -115,6 +134,37 @@ export function Flywheel() {
           arrow={false}
         />
       </div>
+
+      <Card label="recent activity — what the system changed on its own, and what you changed">
+        {activityQ.isLoading && <Skeleton lines={3} />}
+        {activityQ.isError && (
+          <>
+            <p className="attn-error-msg">
+              The activity feed could not load — that is not the same thing as nothing having changed.
+            </p>
+            <p className="mono attn-error-detail">
+              {activityQ.error instanceof Error ? activityQ.error.message : 'changes_list failed.'}
+            </p>
+            <Btn onClick={() => activityQ.refetch()}>Retry</Btn>
+          </>
+        )}
+        {!activityQ.isLoading && !activityQ.isError && recentEvents.length === 0 && (
+          <p className="note" style={{ marginTop: 0 }}>
+            Nothing recorded yet — every prompt edit, playbook delta, promotion, and model-ladder step will show up
+            here as it happens.
+          </p>
+        )}
+        {recentEvents.length > 0 && (
+          <div className="actlist">
+            {recentEvents.map((e) => (
+              <ActivityRow key={e.eventId} event={e} isNew={Date.parse(e.createdAt) > lastVisit} compact />
+            ))}
+          </div>
+        )}
+        <Btn onClick={openActivity} style={{ marginTop: 10 }}>
+          Open full activity feed →
+        </Btn>
+      </Card>
 
       <Card label="how learning changes the workflow — three paths, all inspectable">
         <div className="kv" style={{ gridTemplateColumns: '210px 1fr' }}>

@@ -124,9 +124,17 @@ export interface StageOutput {
   note?: string;
 }
 
+/**
+ * WP-00 CORRECTION (live capture). `workspace_get_graph` returns FULL node
+ * objects — the same fields `workspace_get_nodes` returns, minus its legacy
+ * `schema` alias — not the `{id, deps}` stub previously declared here. Typed
+ * as `RawWorkflowNode & {deps?}` so the graph can feed the same adapter the
+ * node list does; `deps` is kept optional because the live payload expresses
+ * dependencies as `dependsOn` on the node plus a top-level `edges` array.
+ */
 export interface WorkspaceGraph {
-  workflowId: string;
-  nodes: Array<{ id: string; deps: string[] }>;
+  workflowId?: string;
+  nodes: Array<adapters.RawWorkflowNode & { deps?: string[] }>;
   edges: Array<{ from: string; to: string }>;
 }
 
@@ -266,13 +274,27 @@ export interface SchemaUpdateResult {
 // ============================== workspace ====================================
 
 /**
- * `workspace_get_graph` takes NO arguments live (`additionalProperties:
- * false` on an empty schema, verified) — like `workspace_get_nodes`, it
- * always returns the full graph. `workflowId` is accepted here only to
- * keep this call-site-compatible with GraphOverlay.tsx; it is not sent.
+ * WP-00 CORRECTION (live capture, 2026-08-26). The previous comment here —
+ * "`workspace_get_graph` takes NO arguments live" — was wrong, and it is
+ * the reason the rail lied about two of the three conductors.
+ *
+ * Live behaviour: called with no arguments it returns the flat store view
+ * (48 nodes, 92 edges, every conductor merged). Called with a `workflowId`
+ * it returns THAT conductor's real run topology — canonical `dependsOn`
+ * overlaid with store-edited prompt/schema/tools, i.e. exactly what the
+ * executor is handed. Per-conductor counts as captured:
+ * publishing_conductor 24 nodes / 50 edges, capture_conductor 16 / 28,
+ * clone_conductor 18 / 35 (they share the publish tail:
+ * publish_payload, publication_controller, publish_executor,
+ * release_executor, learning_recorder).
+ *
+ * So this is the one verb that can answer "what does this workflow
+ * actually look like", and it is now sent the argument it always
+ * accepted. Node objects come back with the same fields
+ * `workspace_get_nodes` returns (minus the legacy `schema` alias).
  */
-export const workspaceGetGraph = (_args: { workflowId: string }) =>
-  callVerb<WorkspaceGraph>('workspace_get_graph', {});
+export const workspaceGetGraph = (args?: { workflowId?: string }) =>
+  callVerb<WorkspaceGraph>('workspace_get_graph', args?.workflowId ? { workflowId: args.workflowId } : {});
 
 /** nodeId -> workflowId, from each workflow's phases (mirrors mockStore.ts). */
 function nodeIdsForWorkflow(workflowId: string): Set<string> | null {
@@ -286,12 +308,38 @@ function nodeIdsForWorkflow(workflowId: string): Set<string> | null {
 }
 
 /**
- * `workspace_get_nodes` takes NO arguments live (`additionalProperties:
- * false` on an empty schema) — it always returns every node across every
- * workflow, wrapped as `{ nodes: [...] }`. `workflowId` filtering, when
- * requested, happens client-side here instead.
+ * P2-03 / rail truth.
+ *
+ * Without a `workflowId` this is the flat store view: every node in the
+ * workspace, wrapped as `{ nodes: [...] }` (`workspace_get_nodes` accepts
+ * no arguments live — its schema is literally `{properties:{}}`).
+ *
+ * WITH a `workflowId` it now asks `workspace_get_graph({workflowId})`,
+ * which returns that conductor's real topology. This replaces a
+ * client-side filter against WORKFLOW_CATALOG's hardcoded id lists — and
+ * that filter was wrong: the catalog claimed 9 nodes for clone_conductor
+ * where the live graph has 18 (the four `pdf_template_*` nodes and the
+ * whole shared publish tail were simply missing), and 11 for
+ * capture_conductor where live has 16. Two of the three workflows showed
+ * the operator a rail that did not match the pipeline that actually runs.
+ *
+ * The catalog survives as presentation config only — phase names and
+ * ordering (see workflowCatalog.ts) — never again as the source of truth
+ * for which nodes exist.
+ *
+ * The fallback matters: if the graph call fails for one workflow, the flat
+ * node list still answers, filtered by the catalog, rather than leaving
+ * the rail empty.
  */
 export const workspaceGetNodes = async (args?: { workflowId?: string }): Promise<WorkflowNode[]> => {
+  if (args?.workflowId) {
+    try {
+      const graph = await workspaceGetGraph({ workflowId: args.workflowId });
+      if (graph?.nodes?.length) return graph.nodes.map((n) => adapters.toNode(n));
+    } catch {
+      // fall through to the flat list below
+    }
+  }
   const raw = await callVerb<{ nodes: adapters.RawWorkflowNode[] }>('workspace_get_nodes', {});
   const nodes = raw.nodes.map(adapters.toNode);
   if (!args?.workflowId) return nodes;
@@ -415,8 +463,16 @@ export const workflowListRuns = async (args?: {
  * `workflow_get_run` wraps `{ run, mode, stall }` — `mode`/`stall` are
  * siblings of `run`, not nested inside it (unlike a list row, which carries
  * its own `mode`/`stall` inline) — folded onto `run` here before adapting
- * so toRun() only ever has to read one shape. Also composes the run's real
- * cost via `workflow_get_run_cost`, the one place this app fetches it.
+ * so toRun() only ever has to read one shape.
+ *
+ * P2-03 — this no longer inline-awaits `workflow_get_run_cost`. Opening a
+ * run used to mean two sequential round trips before anything could paint,
+ * the second one (a cost ledger nothing above the fold displays) gating
+ * the first. Cost is now its own lazy query — see useRunCost() in
+ * api/hooks.ts — so the run paints on one round trip and the ledger fills
+ * in when a surface actually asks for it. toRun() already defaults cost to
+ * its "nothing spent yet" value, which is the right placeholder for the
+ * moment before the ledger lands.
  */
 export const workflowGetRun = async (args: { runId: string }): Promise<Run | null> => {
   const raw = await callVerb<{ run: adapters.RawRun; mode?: { executionMode?: string }; stall?: unknown } | null>(
@@ -425,18 +481,7 @@ export const workflowGetRun = async (args: { runId: string }): Promise<Run | nul
   );
   if (!raw?.run) return null;
   const merged: adapters.RawRun = { ...raw.run, mode: raw.mode ?? raw.run.mode, stall: raw.stall ?? raw.run.stall };
-  let cost: adapters.RawRunCostLedger | undefined;
-  try {
-    const costRaw = await callVerb<{ ledger: adapters.RawRunCostLedger; plan?: unknown }>('workflow_get_run_cost', {
-      runId: args.runId,
-    });
-    cost = costRaw.ledger;
-  } catch {
-    // Cost is a best-effort enrichment — a run whose cost lookup fails
-    // still renders via toRun()'s own "unknown" default (0 / null), not a
-    // hard failure of the run fetch itself.
-  }
-  return adapters.toRun(merged, cost);
+  return adapters.toRun(merged);
 };
 
 /**
@@ -597,6 +642,67 @@ export const workflowPublishRun = (args: { runId: string }) =>
     true,
   );
 
+// =========================== attention & metrics =============================
+// U1/U5 — `constellation_get_attention` is the workspace's own list of
+// things that need a person: failed runs, pending approvals, output
+// validation failures, pricing caveats, relationship issues, and
+// configuration defects. Every item carries an evidence string, which is
+// what makes the Attention strip actionable rather than decorative.
+//
+// HONESTY NOTE (WP-00, 2026-08-26): this verb was returning protocol-invalid
+// content through the MCP proxy and failed 100% of calls. Track B fixed the
+// server side (an unguarded read of `run.errors` on a record that had none);
+// until that fix is deployed to Cloud Run, this call can still fail live.
+// Every caller must therefore treat "no attention data" as a state to show
+// honestly, never as "nothing needs attention" — silently reporting an all-
+// clear because a verb failed is the one failure mode this surface cannot
+// have.
+
+export interface AttentionItem {
+  kind: string;
+  severity?: string;
+  nodeId?: string;
+  runId?: string;
+  projectId?: string;
+  title?: string;
+  reason?: string;
+  evidence?: string | string[];
+  [key: string]: unknown;
+}
+
+export const constellationGetAttention = async (args?: { projectId?: string }): Promise<AttentionItem[]> => {
+  const raw = await callVerb<{ items?: AttentionItem[]; attention?: AttentionItem[] } | AttentionItem[]>(
+    'constellation_get_attention',
+    args ?? {},
+  );
+  if (Array.isArray(raw)) return raw;
+  return raw?.items ?? raw?.attention ?? [];
+};
+
+export const constellationGetMetrics = (args?: { projectId?: string; runId?: string; from?: string; to?: string }) =>
+  callVerb<Record<string, unknown>>('constellation_get_metrics', args ?? {});
+
+// ============================== stage outputs ================================
+// U3 — drive mode's output override. `stage_save_output` is what makes
+// "insert manually the output variant I prefer" a real thing the pipeline
+// consumes rather than a note to self: the operator's chosen output is
+// written into the run's stage outputs, marked as an operator override, and
+// every downstream node reads it as the upstream result.
+
+export const nodeValidateOutput = (args: { nodeId: string; output: unknown }) =>
+  callVerb<{ valid: boolean; issues?: unknown[] }>('node_validate_output', args);
+
+export const nodeListOutputs = (args: { nodeId?: string; runId?: string; artifactType?: string; limit?: number }) =>
+  callVerb<{ outputs?: unknown[] } | unknown[]>('node_list_outputs', args);
+
+export const stageSaveOutput = (args: { runId: string; nodeId: string; stage?: string; value: unknown; note?: string }) =>
+  mutate<unknown>(
+    'stage_save_output',
+    `Replace ${args.nodeId}'s output in run ${args.runId} with the variant you supplied. Every downstream node in this run will read YOUR value as this node's result, and the run record will record it as an operator override.`,
+    args,
+    true,
+  );
+
 // ================================ changes ====================================
 // Live change events (`changes_list`/`changes_get`) carry a full before/after
 // node snapshot, an `eventId`, and separate `parentRevisionId` /
@@ -635,6 +741,52 @@ export const changesList = async (args: { nodeId: string }): Promise<ChangeRecor
     when: e.createdAt,
     author: e.actor?.label ?? e.actor?.id ?? e.actor?.kind,
   }));
+};
+
+/**
+ * U4 — the full change event, not the flattened `ChangeRecord` above.
+ *
+ * The learning activity feed has to answer "what did it learn, and what did
+ * it change" — which needs the things the flat shape drops: who did it
+ * (`actor.kind` distinguishes a human edit from an agent's promotion from
+ * a system migration), why (`reason`), and which two revisions to compare
+ * (`parentRevisionId` -> `resultingRevisionId`, the exact pair the diff &
+ * merge studio opens on).
+ *
+ * `actorKind` / `operation` / `source` are real server-side filters
+ * (live-verified, WP-00), so a feed filtered to learning-attributed actors
+ * is one call, not a client-side sift through everything.
+ */
+export interface ChangeEvent {
+  eventId: string;
+  type: string;
+  operation?: string;
+  target?: { type: string; id: string };
+  actor?: { kind: string; id?: string; label?: string };
+  source?: string;
+  reason?: string;
+  parentRevisionId?: string;
+  resultingRevisionId?: string;
+  workspaceVersion?: string;
+  riskLevel?: string;
+  before?: unknown;
+  after?: unknown;
+  correlation?: { requestId?: string };
+  createdAt: string;
+}
+
+export const changesListEvents = async (args?: {
+  nodeId?: string;
+  actorKind?: 'human' | 'agent' | 'system';
+  operation?: string;
+  source?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  cursor?: string;
+}): Promise<{ events: ChangeEvent[]; nextCursor?: string }> => {
+  const raw = await callVerb<{ events: ChangeEvent[]; nextCursor?: string }>('changes_list', args ?? {});
+  return { events: raw.events ?? [], nextCursor: raw.nextCursor };
 };
 
 export const changesGet = async (args: { changeId: string }): Promise<ChangeRecord | null> => {
@@ -689,10 +841,13 @@ export const toolList = async (): Promise<ToolDef[]> => {
  * one workspaceGetNodes() itself wraps, so this is a second live/fixture
  * round-trip, not a reuse of some cache.
  */
-export const skillList = async (): Promise<Skill[]> => {
+export const skillList = async (knownNodes?: WorkflowNode[]): Promise<Skill[]> => {
+  // P2-03 — when the caller already holds the workspace node list (useSkills()
+  // reads it straight out of the query cache), this stops being a second
+  // live round trip for data the app already has.
   const [raw, nodes] = await Promise.all([
     callVerb<{ skills: adapters.RawSkill[] }>('skill_list'),
-    workspaceGetNodes(),
+    knownNodes ? Promise.resolve(knownNodes) : workspaceGetNodes(),
   ]);
   const assigned = adapters.assignedSkillsByNode(nodes);
   return raw.skills.map((s) => adapters.toSkill(s, assigned.get(s.skillId) ?? []));

@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useProjects, useRuns, useWorkflows } from '../../api/hooks';
 import { Card, TabBar } from '../../components/primitives';
+import { Skeleton } from '../../components/Skeleton';
 import { useStore } from '../../store';
 import type { Run, RunTab, Workflow } from '../../types';
 import { LiveTab } from './LiveTab';
@@ -69,22 +70,27 @@ export function Runs() {
     bindRun(run.id, run.wf, stoppedNode(run, workflowById[run.wf]));
   }
 
-  const loading = runsQ.isLoading || workflowsQ.isLoading;
+  // U7 polish — error checked before loading (mirrors Rail.tsx's P2-02
+  // fix). Two independent queries: with the naive `loading` OR checked
+  // first, a runsQ that has already failed for good stays hidden behind
+  // "Loading runs…" for as long as workflowsQ (or vice versa) is still
+  // in flight or retrying, instead of surfacing the real failure.
   const criticalError = runsQ.error ?? workflowsQ.error;
+  const loading = !criticalError && (runsQ.isLoading || workflowsQ.isLoading);
 
   let body: ReactNode;
-  if (loading) {
-    body = (
-      <Card label="runs">
-        <p style={{ margin: 0, color: 'var(--muted)' }}>Loading runs…</p>
-      </Card>
-    );
-  } else if (criticalError) {
+  if (criticalError) {
     body = (
       <Card label="runs">
         <p style={{ margin: 0, color: 'var(--bad)' }}>
           {criticalError instanceof Error ? criticalError.message : 'Failed to load runs.'}
         </p>
+      </Card>
+    );
+  } else if (loading) {
+    body = (
+      <Card label="runs">
+        <Skeleton lines={4} />
       </Card>
     );
   } else if (runtab === 'live') {
