@@ -56,6 +56,7 @@ import { describeOperatorDecisionSource, findPublicationDecision, readPublicatio
 import { publishRun, type PublisherDeps, type PublishResult, type PublishStep } from "./publisher.js";
 import { findDeep } from "../projects/toolResultSearch.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
+import type { PublishObjectOrigin } from "../projects/projectHooks.js";
 
 export const PUBLISH_EXECUTION_ARTIFACT = "publish_execution.v1";
 
@@ -282,7 +283,15 @@ export const renderPublishExecutionBlocker = (blocker: PublishExecutionBlocker):
 export type PublishExecutionReceipts = {
   // Absent only on the one refusal that exists BECAUSE it is absent (publish_request_id_absent).
   requestId?: string;
+  // The client object this publish addressed. Present on a COMMITTED publish and — since 2026-08-27
+  // — on a FAILED one too, whenever the sequence got far enough to create or adopt an object before
+  // it stopped: run_1787862284296_x53xz0 created the object, died at object_checkout, and named
+  // nothing, so the run read "Nothing was published" for an article that was sitting on the client
+  // and could only be found by hand. An id is recorded here exactly when the sequence proved one.
   objectId?: string;
+  // Where that id came from: "created" here, "adopted_existing" (this run re-entered over the object
+  // its own request id already named), or "conductor_shell". Absent when the hook did not say.
+  objectOrigin?: PublishObjectOrigin;
   commitSha?: string;
   contentRevision?: string | number;
   publishedTime: string | null;
@@ -393,7 +402,11 @@ export function buildEnginePublishExecution(sources: EnginePublishExecutionSourc
         `${receipts.objectId ? ` (object ${receipts.objectId})` : ""} via ${ran} client call(s) [${receipts.toolSequence.join(" -> ")}], request ${receipts.requestId ?? "(none)"}. ` +
         `Go-live is NOT yet confirmed — release_executor performs the release and production verification next, downstream in the shared tail (board decision B2: this stage never releases) — so this record is "published_pending_release", not "executed". No model call.`
       : `Publish did NOT complete for ${sources.clientProjectId}/${sources.envelope.clientObjectType}: stopped at ${blocker?.step ?? "unknown"} (${blocker?.code ?? "unknown"}) after ${ran} client call(s)` +
-        `${ran ? ` [${receipts.toolSequence.join(" -> ")}]` : ""}. Nothing was published. No model call.`,
+        `${ran ? ` [${receipts.toolSequence.join(" -> ")}]` : ""}. Nothing was published.` +
+        // The object a failed sequence LEFT BEHIND, named in the first sentence a human reads. Without
+        // it, run_1787862284296_x53xz0 read as "Nothing was published" for an object that existed.
+        `${receipts.objectId ? ` A client object DOES exist for this request (${receipts.objectId}, ${receipts.objectOrigin ?? "created"}) and is unpublished; a retry re-enters on that object rather than creating another.` : ""}` +
+        ` No model call.`,
     status: sources.publishCommitted ? "published_pending_release" : "blocked",
     clientProjectId: sources.clientProjectId,
     clientObjectType: sources.envelope.clientObjectType,
@@ -424,9 +437,14 @@ export function buildEnginePublishExecution(sources: EnginePublishExecutionSourc
     notes: [
       "Executed by the conductor (publishExecution.ts) as a direct function call into publisher.ts publishRun — the SAME sequence workflow.publish_run drives, in the project's own dialect, with no MCP transport hop and no model turn. The gate that authorized it is the two exact comparisons at the top of this module, and publishRun re-checked its own five gates (including the per-project publishEnabled kill-switch) over the persisted run before calling anything.",
       `receipts.toolSequence is what ACTUALLY ran, in order, taken from the steps publishRun recorded — not the project's declared publishToolSequence, which is a plan.${sources.publishCommitted ? "" : " The sequence stopped at the first failure; no later step was attempted."}`,
+      ...(receipts.objectOrigin === "adopted_existing"
+        ? [`RE-ENTRY, not a first attempt: object_create was refused "already exists" (409) and the object this request already names (${receipts.objectId}) was adopted and carried through the rest of the sequence. An earlier attempt of this run created it.`]
+        : []),
       ...(sources.publishCommitted
         ? ["A client object EXISTS and was published. Do not re-run this node to \"finish\" the publish: release_executor performs the release exactly once, downstream in the tail — retrying THIS node would drive the create step again."]
-        : [])
+        : receipts.objectId
+          ? [`A client object EXISTS but was NOT published: ${receipts.objectId} (${receipts.objectOrigin ?? "created"}). The sequence created or adopted it and then stopped, so this run mutated the client without publishing. A retry does NOT create a second object — on a dialect that mints the object id from the request id the create is refused "already exists" and the sequence re-enters on this same object.`]
+          : [])
     ]
   };
 }
@@ -500,6 +518,9 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
     // partially-executed sequence must never be summarised as "no publication performed".
     warnings: [
       `publish_execution_blocked:${blocker.code}`,
+      // A created-but-unpublished object is the single most actionable fact a failed publish can
+      // carry, so it is run-visible and not only inside the record.
+      ...(receipts.objectId ? [`publish_left_client_object:${receipts.objectId}`] : []),
       ...(receipts.steps.length ? [`publish_partial_client_writes:${receipts.steps.length}`] : ["no_publication_performed"])
     ]
   });
@@ -540,6 +561,7 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
     const contentRevision = findContentRevision(result.result);
     const receipts = receiptsFor(result.steps, {
       ...(result.objectId ? { objectId: result.objectId } : {}),
+      ...(result.objectOrigin ? { objectOrigin: result.objectOrigin } : {}),
       ...(commitSha ? { commitSha } : {}),
       ...(contentRevision !== undefined ? { contentRevision } : {})
     });
@@ -594,8 +616,14 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
   const failed = lastFailedStep(result.steps);
   return blocked(
     failed
-      ? { code: "publish_step_failed", step: failed.tool, message: `the publish sequence stopped at ${failed.tool} and no later step was attempted; ${result.steps.length} client call(s) ran in total.`, clientError: failed.error ?? result.error }
-      : { code: "publish_sequence_error", step: /^[a-z0-9_]+(?=:)/.exec(result.error)?.[0] ?? "publish_sequence", message: `the publish sequence did not complete; ${result.steps.length} client call(s) ran in total.`, clientError: result.error },
-    receiptsFor(result.steps)
+      ? { code: "publish_step_failed", step: failed.tool, message: `the publish sequence stopped at ${failed.tool} and no later step was attempted; ${result.steps.length} client call(s) ran in total.${result.objectId ? ` A client object EXISTS for this request (${result.objectId}) and is unpublished.` : ""}`, clientError: failed.error ?? result.error }
+      : { code: "publish_sequence_error", step: /^[a-z0-9_]+(?=:)/.exec(result.error)?.[0] ?? "publish_sequence", message: `the publish sequence did not complete; ${result.steps.length} client call(s) ran in total.${result.objectId ? ` A client object EXISTS for this request (${result.objectId}) and is unpublished.` : ""}`, clientError: result.error },
+    // THE OBJECT A FAILED PUBLISH LEFT BEHIND. publishRun carries it out of the throw (see its
+    // PublishResult "error" variant); recording it here is what lets approvedAction.clientObjectId
+    // name the object on a blocked record, so a human — and a re-entering retry — can find it.
+    receiptsFor(result.steps, {
+      ...(result.objectId ? { objectId: result.objectId } : {}),
+      ...(result.objectOrigin ? { objectOrigin: result.objectOrigin } : {})
+    })
   );
 }

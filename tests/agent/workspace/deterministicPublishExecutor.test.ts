@@ -457,10 +457,16 @@ describe("T4 — a failure stops the sequence dead", () => {
     expect(output.blockers[0]).toContain("publish_step_failed at object_patch");
     expect(output.blockers[0]).toContain("lock_conflict");
     expect(output.receipts.toolSequence).toEqual(["object_create", "object_checkout", "object_validate", "object_patch"]);
-    expect(output.receipts.objectId).toBeUndefined();
+    // The object this failed sequence LEFT BEHIND is named (2026-08-27, run_1787862284296_x53xz0).
+    // It used to be absent here — the hook returned the id only on the success path — so a run that
+    // created an object and then died reported "Nothing was published" for an object that existed,
+    // and nobody could find it without querying the tenant by hand.
+    expect(output.receipts.objectId).toBe("obj_platform_9912");
+    expect(output.receipts.objectOrigin).toBe("created");
     expect(validateOutput(output, getWorkspaceNode("publish_executor")?.outputSchema).ok).toBe(true);
-    // The run-visible warnings say a partial write happened — never "no publication performed".
-    expect((result as { warnings: string[] }).warnings).toEqual(["publish_execution_blocked:publish_step_failed", "publish_partial_client_writes:4"]);
+    // The run-visible warnings say a partial write happened — never "no publication performed" — and
+    // name the object it wrote.
+    expect((result as { warnings: string[] }).warnings).toEqual(["publish_execution_blocked:publish_step_failed", "publish_left_client_object:obj_platform_9912", "publish_partial_client_writes:4"]);
   });
 
   it("names the phase when the sequence refuses BETWEEN calls (no failing tool to point at)", async () => {

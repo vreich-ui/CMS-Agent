@@ -14,6 +14,10 @@ import { drLurieProjectHooks } from "./drLurie/hooks.js";
 import { platformProjectHooks } from "./platform/hooks.js";
 import { fernwellProjectHooks } from "./fernwell/hooks.js";
 import type { ProjectObjectDialect } from "./projectTypes.js";
+// Re-exported so the generic publisher/executor can name where a publish's object came from without
+// importing the object-dialect module a client hook happens to share.
+export type { PublishObjectOrigin } from "./objectDialect.js";
+import type { PublishObjectOrigin } from "./objectDialect.js";
 
 // Re-exported so the generic workspace layer (voicePrefetch.ts) can type the fallback voice a hook
 // contributes without ever importing from a client folder directly — the same boundary getProjectHooks
@@ -53,10 +57,22 @@ export type PublishExecutionContext = {
   // (./clientToolResult.ts) rather than calling this directly — see that module for the live publish
   // a bare call silently mis-reported.
   call: (tool: string, args: Record<string, unknown>) => Promise<unknown>;
+  // THE OBJECT ID, HANDED BACK THE MOMENT IT IS KNOWN — before any step that can throw.
+  //
+  // PublishExecutionOutcome.objectId only ever reaches the publisher on the SUCCESS path, so an
+  // attempt that created the object and then died at a later verb left the run with no record of it
+  // (live, 2026-08-27: run_1787862284296_x53xz0 died at object_checkout with the object already
+  // minted, and the blocked node named no object at all). A hook MUST call this as soon as it has
+  // resolved the object id, so the failure record the executor writes can name the object a failed
+  // publish left behind. It is a pure notification: it never throws and never changes the sequence.
+  noteObjectId?: (note: { objectId: string; origin: PublishObjectOrigin }) => void;
 };
 export type PublishExecutionOutcome = {
   result: unknown;
   objectId?: string;                      // server-minted id when the dialect mints one
+  // Where that id came from — created here, adopted from an earlier attempt of the SAME request, or
+  // the conductor's content-item shell. Absent when the hook did not say.
+  objectOrigin?: PublishObjectOrigin;
   clientValidation?: { tool: string; candidate_patch_summary: string; valid: boolean; issues: unknown[] };
 };
 

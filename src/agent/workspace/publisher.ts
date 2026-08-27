@@ -25,7 +25,7 @@ import { redactSensitiveKeys } from "../observability/redaction.js";
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
-import { getProjectHooks, type PublishExecutionOutcome, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
+import { getProjectHooks, type PublishExecutionOutcome, type PublishObjectOrigin, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
 import { describeOperatorDecisionSource, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
 import { ClientToolRefusalError } from "../projects/clientToolResult.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
@@ -88,9 +88,14 @@ export type PublishResult =
   // object id as a receipt, and the only honest source for it is the id the sequence actually created
   // or minted; re-deriving it by re-reading `result` is exactly the "model re-derives a fact the
   // engine already holds" failure T4 exists to remove. Optional because a dialect need not mint one.
-  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; objectId?: string; clientValidation?: NonNullable<PublishExecutionOutcome["clientValidation"]>; readiness?: PublishReadinessResult }
+  | { published: true; mode: "live"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; result: unknown; objectId?: string; objectOrigin?: PublishObjectOrigin; clientValidation?: NonNullable<PublishExecutionOutcome["clientValidation"]>; readiness?: PublishReadinessResult }
   | { published: false; mode: "blocked_for_publish_execution"; gates: PublishGates; plan: PublishPlan; steps: PublishStep[]; readiness: PublishReadinessResult; blocked: PublishBlockedState }
-  | { published: false; mode: "error"; gates: PublishGates; plan: PublishPlan | null; steps: PublishStep[]; error: string };
+  // `objectId` on a FAILED publish (2026-08-27, run_1787862284296_x53xz0): the sequence created the
+  // object and then died at object_checkout, so the id existed for a moment and was lost with the
+  // throw — the run reported "Nothing was published" for an object that was sitting on the client,
+  // and no reader could name it. The hook now hands the id over through ctx.noteObjectId the moment
+  // it resolves one, and it rides home on the failure like any other fact the sequence proved.
+  | { published: false; mode: "error"; gates: PublishGates; plan: PublishPlan | null; steps: PublishStep[]; error: string; objectId?: string; objectOrigin?: PublishObjectOrigin };
 
 export type CallToolFn = (tool: string, args: Record<string, unknown>) => Promise<CallToolResult>;
 export type PublishRunInput = { runId: string; projectId?: string; requestId: string; approved?: boolean; live?: boolean; publishedTime?: string | null; readiness?: PublishReadinessInput };
@@ -340,6 +345,11 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     step.error = error.clientError;
   };
 
+  // What the hook told us about the object BEFORE it finished — see PublishResult's "error" variant.
+  // Notification only: it can never change the sequence, and a hook that never calls it leaves this
+  // undefined exactly as before.
+  let noted: { objectId: string; origin: PublishObjectOrigin } | undefined;
+
   try {
     const outcome = await hooks.executePublish({
       requestId: input.requestId,
@@ -355,16 +365,21 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
       // S3 item 8: the content-item shell the conductor created before artifact_plan (if any) — the
       // hook patches that object instead of creating a second one under the same request id.
       ...(shell && shell.requestId === input.requestId ? { existingObjectId: shell.objectId } : {}),
+      noteObjectId: (note) => { noted = note; },
       call
     });
 
     await learningRepository.recordObservation(`Live publish executed for ${projectId} request ${input.requestId}.`, { type: "publish_executed", projectId, requestId: input.requestId, runId: input.runId });
-    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(outcome.result), ...(outcome.objectId ? { objectId: outcome.objectId } : {}), ...(outcome.clientValidation ? { clientValidation: outcome.clientValidation } : {}), readiness };
+    const objectId = outcome.objectId ?? noted?.objectId;
+    const objectOrigin = outcome.objectOrigin ?? noted?.origin;
+    return { published: true, mode: "live", gates, plan, steps, result: redactSensitiveKeys(outcome.result), ...(objectId ? { objectId } : {}), ...(objectOrigin ? { objectOrigin } : {}), ...(outcome.clientValidation ? { clientValidation: outcome.clientValidation } : {}), readiness };
   } catch (error) {
     recordClientRefusal(error);
     const message = error instanceof Error ? error.message : "publish_failed";
     await learningRepository.recordObservation(`Live publish failed for ${projectId} request ${input.requestId}: ${message}`, { type: "publish_failed", projectId, requestId: input.requestId, runId: input.runId }).catch(() => undefined);
-    return { published: false, mode: "error", gates, plan, steps, error: message };
+    // The object the failed sequence left behind, when it got far enough to have one. This is the
+    // difference between a run an operator can re-enter and the one that had to be published by hand.
+    return { published: false, mode: "error", gates, plan, steps, error: message, ...(noted ? { objectId: noted.objectId, objectOrigin: noted.origin } : {}) };
   }
 }
 
