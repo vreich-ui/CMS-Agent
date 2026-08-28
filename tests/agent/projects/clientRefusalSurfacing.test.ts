@@ -61,13 +61,14 @@ const BODY = {
 
 // A publish context whose `call` answers each tool from a table. The default table is a healthy
 // client; `refuseAt` swaps in the live refusal for exactly one tool.
-const makeCtx = (opts: { refuseAt?: string; overrides?: Record<string, unknown>; objectDialect?: boolean; dialect?: ProjectObjectDialect; refusalResult?: unknown } = {}) => {
+const makeCtx = (opts: { refuseAt?: string; overrides?: Record<string, unknown>; objectDialect?: boolean; dialect?: ProjectObjectDialect; refusalResult?: unknown; requestId?: string } = {}) => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   // Everything the hook handed back through ctx.noteObjectId, in order. This is the seam that keeps a
   // created object id from dying with the throw.
   const notes: Array<{ objectId: string; origin: PublishObjectOrigin }> = [];
+  const requestId = opts.requestId ?? REQUEST_ID;
   const ok: Record<string, unknown> = {
-    object_create: { structuredContent: { object_id: REQUEST_ID } },
+    object_create: { structuredContent: { object_id: requestId } },
     object_checkout: { structuredContent: { lock_token: "lock_123", record_version: 2 } },
     object_validate: { structuredContent: { valid: true, issues: [] } },
     object_patch: { structuredContent: { ok: true } },
@@ -80,7 +81,7 @@ const makeCtx = (opts: { refuseAt?: string; overrides?: Record<string, unknown>;
     return ok[tool] ?? { structuredContent: { ok: true } };
   };
   const ctx: PublishExecutionContext = {
-    requestId: REQUEST_ID,
+    requestId,
     envelope: { clientObjectType: "content_item", body: BODY },
     body: BODY,
     clientObjectType: "content_item",
@@ -376,7 +377,7 @@ describe("a clean publish is byte-for-byte what it always was", () => {
       { op: "upsert_node", node: BODY.nodes[0] }
     ];
     expect(calls).toEqual([
-      { tool: "object_create", args: { object_type: "content_item", site: "site_drlurie", body: { slug: "live-title", title: "Live Title", nodes: BODY.nodes }, requested_id: REQUEST_ID } },
+      { tool: "object_create", args: { object_type: "content_item", site: "site_drlurie", body: { slug: "live-title", title: "Live Title", nodes: BODY.nodes }, requested_id: REQUEST_ID, idempotency_key: REQUEST_ID } },
       { tool: "object_checkout", args: { object_type: "content_item", object_id: REQUEST_ID, owner_id: "cms-agent", owner_label: "CMS-Agent Publishing Conductor" } },
       { tool: "object_validate", args: { object_type: "content_item", object_id: REQUEST_ID, candidate_patch: patch } },
       { tool: "object_patch", args: { object_type: "content_item", object_id: REQUEST_ID, lock_token: "lock_123", expected_record_version: 2, patch } },
@@ -387,5 +388,37 @@ describe("a clean publish is byte-for-byte what it always was", () => {
     expect(JSON.stringify(calls)).not.toContain("client_object.v1");
     expect(outcome.objectOrigin).toBe("created");
     expect(notes).toEqual([{ objectId: REQUEST_ID, origin: "created" }]);
+  });
+});
+
+// -------------------------------------------------------------------------------------------------
+// SILENT FORKING (platform, server_minted — no live incident yet on this dialect, but the same shape
+// as run_1787862284296_x53xz0 with no 409 to catch it): a create that dies after minting leaves the
+// run with no record of the object, and every retry mints ANOTHER fresh id. Nothing here recreates
+// that failure end-to-end (this substrate is exercised through a fake `call`, not the platform's real
+// idempotency store) — what this asserts is the one thing that has to be true for the platform-side
+// store to close the gap: object_create must carry the SAME key on every retry of the SAME publish,
+// and a DIFFERENT key for a different one, so the store can tell "replay this" from "this is new".
+describe.each([
+  { name: "dr-lurie", hooks: drLurieProjectHooks },
+  { name: "platform", hooks: platformProjectHooks }
+])("$name object_create carries a stable, per-request idempotency_key", ({ hooks }) => {
+  it("is present, identical across two attempts for the same request, and differs across a different request", async () => {
+    const first = makeCtx();
+    await hooks.executePublish!(first.ctx);
+    const firstKey = first.calls[0]!.args.idempotency_key;
+    expect(firstKey).toBe(REQUEST_ID);
+
+    // A second attempt of the SAME publish (a workflow_retry_node re-entry) is handed the identical
+    // requestId, so createOrAdoptObject must derive the identical key — never a fresh one.
+    const retry = makeCtx();
+    await hooks.executePublish!(retry.ctx);
+    expect(retry.calls[0]!.args.idempotency_key).toBe(firstKey);
+
+    // A genuinely different publish request gets its own key.
+    const other = makeCtx({ requestId: "req_publish_test_20260825_02" });
+    await hooks.executePublish!(other.ctx);
+    expect(other.calls[0]!.args.idempotency_key).toBe("req_publish_test_20260825_02");
+    expect(other.calls[0]!.args.idempotency_key).not.toBe(firstKey);
   });
 });
