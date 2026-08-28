@@ -30,7 +30,7 @@ import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, 
 import { runDeterministicReleaseExecutor } from "./releaseExecution.js";
 import { buildLearningObservations } from "./learningRecord.js";
 import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
-import { enforcePublishExecutionEvidence, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
+import { articleBodyFingerprint, enforcePublishExecutionEvidence, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority, PUBLICATION_CONTROLLER_NODE_ID } from "./publishDecision.js";
 import { getWorkflowDefinition } from "./workflowRegistry.js";
 import { resolvePublishableTypeCharter } from "./publishableTypeCharter.js";
 // T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
@@ -1850,7 +1850,39 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   const operatorVeto = authority !== undefined && !authority.authorized && authority.code === "operator_withheld";
   const approvalMissing = authority !== undefined && !authority.authorized;
   const liveRun = ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock";
-  const controllerDecision = isPublishExecutorNode(nextNode) && liveRun ? readPublicationDecision(findPublicationDecision(run)) : undefined;
+  const controllerDecision = isPublishExecutorNode(nextNode) && liveRun
+    ? readPublicationDecision(findPublicationDecision(run), { bodyFingerprint: articleBodyFingerprint(findArticleBodyEnvelope(run)) })
+    : undefined;
+  // A STALE decision is not a refusal — it is an out-of-date answer, and blocking the run on it is
+  // what left run_1787919896283_yybhg0 unpublishable with a fully green checklist. The body changed
+  // after the controller last spoke (an upstream node was fixed and re-run), so the honest move is to
+  // ask it again: reset publication_controller to queued and let the very next dispatch decide on the
+  // body that actually exists. This is self-clearing by construction — the re-decision is computed
+  // from current readiness, so it either authorizes or refuses with reasons an operator can act on,
+  // and it needs no surface to offer a "re-run this step" button that none of them has.
+  const staleRequeueWarning = "decision_stale_requeued";
+  if (controllerDecision && !controllerDecision.authorized && controllerDecision.stale) {
+    const controllerState = run.nodes.find((node) => node.nodeId === PUBLICATION_CONTROLLER_NODE_ID);
+    // BOUNDED TO ONCE PER RUN. A re-decision computes its fingerprint from the same body this gate
+    // reads, so the second read matches — unless something upstream declines to record one at all, and
+    // an unbounded rule would then requeue forever, burning the tick on a run that can never move.
+    // Once is enough to clear the real case; a decision still stale afterwards blocks with the reason
+    // named, which is a state an operator can see and act on.
+    if (controllerState && !(controllerState.warnings ?? []).includes(staleRequeueWarning)) {
+      const requeuedAt = now();
+      controllerState.status = "queued";
+      controllerState.output = undefined;
+      controllerState.startedAt = undefined;
+      controllerState.completedAt = undefined;
+      controllerState.durationMs = undefined;
+      controllerState.warnings = [...new Set([...(controllerState.warnings ?? []), staleRequeueWarning])];
+      delete run.stageOutputs[PUBLICATION_CONTROLLER_NODE_ID];
+      state.status = "queued";
+      run.status = "running";
+      run.updatedAt = requeuedAt;
+      return { run, commit: async () => {} };
+    }
+  }
   const publishRefusals: string[] = [
     ...(approvalMissing ? [`${authority!.code}: ${authority!.reason}`] : []),
     ...(controllerDecision && !controllerDecision.authorized ? [`publication_decision_not_affirmative (${controllerDecision.code}): ${controllerDecision.reason}`] : [])

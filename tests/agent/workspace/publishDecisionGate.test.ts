@@ -476,3 +476,153 @@ describe("T15.5 — resolvePublishAuthority: the six-row precedence table, in is
     expect(resolvePublishAuthority({ operatorPublishDecision: undefined, publishingPolicySnapshot: undefined })).toMatchObject({ authorized: false, code: "operator_approval_absent" });
   });
 });
+
+// 2026-08-28, run_1787919896283_yybhg0 — a decision that outlived the body it judged.
+//
+// The gate reads the recorded publication_decision.v1, not the readiness it was computed from. So
+// after an upstream fix rebuilt the article body, the run carried a decision made hours earlier
+// against a body with no hero image: readiness said "go" with zero blockers, and the gate went on
+// refusing with `controller_decision_not_go`. That reason sent the operator to a checklist that was
+// entirely green, and no surface — admin chat included — offered the one action that would have
+// cleared it, re-running the controller.
+//
+// A stale decision is therefore neither an approval nor a refusal of the current body. It is reported
+// as its own condition, and the executor re-decides instead of blocking.
+describe("stale publication decision — the executor re-decides instead of blocking", () => {
+  const savedKey2 = process.env.OPENAI_API_KEY;
+  beforeEach(() => { delete process.env.OPENAI_API_KEY; });
+  afterEach(() => { if (savedKey2 !== undefined) process.env.OPENAI_API_KEY = savedKey2; });
+
+  // Park a live run in front of publish_executor holding a body AND a controller decision that names
+  // a different body — exactly the shape run_1787919896283_yybhg0 was in after its upstream fix.
+  const parkWithStaleDecision = async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    const run = await startDryRun({ executionMode: "openai", projectId: "dr-lurie", input: "live publish", entrypoint: { nodeId: "article_body", output: textBody } }, store);
+    const record = (await store.getRun(run.runId))!;
+    for (const node of record.nodes) {
+      if (node.nodeId === "publish_executor") continue;
+      node.status = "completed";
+      node.startedAt = record.startedAt;
+      node.completedAt = record.startedAt;
+    }
+    record.stageOutputs.article_body = textBody;
+    record.stageOutputs.publication_controller = { artifact: "publication_decision.v1", decision: "no_go", blockers: ["publish_readiness: media_requested_vs_delivered"], decidedFor: { bodyFingerprint: "0000000000000000" } };
+    record.operatorPublishDecision = "approved";
+    record.operatorDecisionSource = "explicit";
+    record.status = "queued";
+    record.currentNodeId = "publish_executor";
+    await store.saveRun(record);
+    return { runId: run.runId, store };
+  };
+
+  it("requeues publication_controller and leaves the run running, rather than blocking on an answer about another body", async () => {
+    const { runId, store } = await parkWithStaleDecision();
+    const after = await runNextNode(runId, { executionRepository: store });
+
+    const controller = after.nodes.find((node) => node.nodeId === "publication_controller")!;
+    expect(controller.status, "the controller must be asked again").toBe("queued");
+    expect(controller.warnings ?? []).toContain("decision_stale_requeued");
+    // The out-of-date answer must be GONE, not left for the next reader to trip over.
+    expect(after.stageOutputs.publication_controller).toBeUndefined();
+    // And the run must not be parked as blocked — a blocked run is what needed a human to notice.
+    expect(after.status).toBe("running");
+    const executor = after.nodes.find((node) => node.nodeId === "publish_executor")!;
+    expect(executor.warnings ?? []).not.toContain("publication_decision_not_affirmative");
+  });
+
+  // The bound, stated as a test because an unbounded version of this rule burns the continuation tick
+  // forever on a run that can never move.
+  it("re-decides at most once per run, then blocks with the reason named", async () => {
+    const { runId, store } = await parkWithStaleDecision();
+    const first = await runNextNode(runId, { executionRepository: store });
+    expect(first.nodes.find((node) => node.nodeId === "publication_controller")!.status).toBe("queued");
+
+    // Simulate a re-decision that is STILL stale (a fingerprint that does not match) — the shape that
+    // would loop without the bound.
+    const record = (await store.getRun(runId))!;
+    const controller = record.nodes.find((node) => node.nodeId === "publication_controller")!;
+    controller.status = "completed";
+    record.stageOutputs.publication_controller = { artifact: "publication_decision.v1", decision: "go", blockers: [], decidedFor: { bodyFingerprint: "1111111111111111" } };
+    record.currentNodeId = "publish_executor";
+    record.status = "queued";
+    await store.saveRun(record);
+
+    const second = await runNextNode(runId, { executionRepository: store });
+    expect(second.nodes.find((node) => node.nodeId === "publication_controller")!.status, "must not requeue twice").toBe("completed");
+  });
+
+  // The guard must not turn into a re-decide loop: a decision about THIS body is enforced as written.
+  it("still blocks on a current no_go, and does not requeue the controller", async () => {
+    const { runId, store } = await parkWithStaleDecision();
+    const record = (await store.getRun(runId))!;
+    const { articleBodyFingerprint } = await import("../../../src/agent/workspace/publishDecision.js");
+    record.stageOutputs.publication_controller = { artifact: "publication_decision.v1", decision: "no_go", blockers: ["publish_readiness: media_requested_vs_delivered"], decidedFor: { bodyFingerprint: articleBodyFingerprint(textBody)! } };
+    await store.saveRun(record);
+
+    const after = await runNextNode(runId, { executionRepository: store });
+    expect(after.nodes.find((node) => node.nodeId === "publication_controller")!.status).toBe("completed");
+    expect(after.nodes.find((node) => node.nodeId === "publish_executor")!.warnings ?? []).toContain("publication_decision_not_affirmative");
+    expect(after.status).toBe("blocked");
+  });
+});
+
+describe("stale publication decision (run_1787919896283_yybhg0)", () => {
+  const decision = (fingerprint?: string, verdict: string = "go") => ({
+    artifact: "publication_decision.v1",
+    decision: verdict,
+    blockers: [],
+    ...(fingerprint ? { decidedFor: { bodyFingerprint: fingerprint } } : {})
+  });
+
+  it("reads as stale — not as a verdict — when the fingerprints differ", () => {
+    const read = readPublicationDecision(decision("aaaaaaaaaaaaaaaa"), { bodyFingerprint: "bbbbbbbbbbbbbbbb" });
+    expect(read.authorized).toBe(false);
+    expect(read.authorized === false && read.code).toBe("controller_decision_stale");
+    expect(read.authorized === false && read.stale).toBe(true);
+    expect(read.authorized === false && read.reason).toContain("aaaaaaaaaaaaaaaa");
+    expect(read.authorized === false && read.reason).toContain("bbbbbbbbbbbbbbbb");
+  });
+
+  // The case that actually bit: a stale NO_GO must not keep reporting itself as a refusal of a body
+  // it never saw. This is the assertion that would have caught the original defect.
+  it("reports a stale no_go as stale, never as controller_decision_not_go", () => {
+    const read = readPublicationDecision(decision("aaaaaaaaaaaaaaaa", "no_go"), { bodyFingerprint: "bbbbbbbbbbbbbbbb" });
+    expect(read.authorized === false && read.code).toBe("controller_decision_stale");
+  });
+
+  it("authorizes normally when the fingerprints match", () => {
+    expect(readPublicationDecision(decision("aaaaaaaaaaaaaaaa"), { bodyFingerprint: "aaaaaaaaaaaaaaaa" }).authorized).toBe(true);
+  });
+
+  // Backward compatibility, in both directions: a decision recorded before decidedFor existed, and a
+  // caller that supplies no expectation, are both read exactly as they always were. Nothing already in
+  // flight starts refusing on a field it never had.
+  it("reads a decision with no recorded fingerprint exactly as before", () => {
+    expect(readPublicationDecision(decision(undefined), { bodyFingerprint: "bbbbbbbbbbbbbbbb" }).authorized).toBe(true);
+    expect(readPublicationDecision(decision("aaaaaaaaaaaaaaaa")).authorized).toBe(true);
+  });
+
+  // Only a MISMATCH is stale, never a missing fingerprint. Treating "unknown" as stale would force a
+  // re-decision on every run already in flight — including seeded and late-entry runs — which is churn
+  // in exchange for nothing the mismatch rule does not already catch.
+  it("never calls an unfingerprinted decision stale", () => {
+    expect(readPublicationDecision(decision(undefined), { bodyFingerprint: "bbbbbbbbbbbbbbbb" }).authorized).toBe(true);
+  });
+
+  // The fingerprint must track what a READER sees, and nothing else: article_body re-emits
+  // clientValidation, notes and assumptions on every run, and if those moved the fingerprint every
+  // decision would look stale forever — the opposite failure, and a louder one.
+  it("fingerprints the client object only, and is stable across key order", async () => {
+    const { articleBodyFingerprint } = await import("../../../src/agent/workspace/publishDecision.js");
+    const body = { slug: "a", title: "T", nodes: [{ id: "n_001", public: { body: "x" } }] };
+    const base = articleBodyFingerprint({ artifact: "client_object.v1", body });
+    expect(base).toBeDefined();
+    expect(articleBodyFingerprint({ artifact: "client_object.v1", body, clientValidation: { valid: true }, notes: ["anything"] })).toBe(base);
+    expect(articleBodyFingerprint({ body: { title: "T", nodes: body.nodes, slug: "a" } })).toBe(base);
+    expect(articleBodyFingerprint({ body: { ...body, title: "CHANGED" } })).not.toBe(base);
+    // No body to fingerprint is undefined — never a hash of `undefined`, which would compare equal
+    // across two different absent bodies and read as "still fresh".
+    expect(articleBodyFingerprint({ artifact: "client_object.v1" })).toBeUndefined();
+    expect(articleBodyFingerprint(undefined)).toBeUndefined();
+  });
+});

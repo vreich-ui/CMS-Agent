@@ -29,6 +29,7 @@
 //        refuses a FORGED authority claim (§8): a receipt may never assert an explicit operator
 //        decision that run.operatorPublishDecision does not actually hold.
 
+import { createHash } from "node:crypto";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 
 export const PUBLICATION_CONTROLLER_NODE_ID = "publication_controller";
@@ -48,11 +49,50 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 export const findPublicationDecision = (run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes">): unknown =>
   run.stageOutputs?.[PUBLICATION_CONTROLLER_NODE_ID] ?? run.nodes.find((node) => node.nodeId === PUBLICATION_CONTROLLER_NODE_ID)?.output;
 
+// STALENESS (2026-08-28, run_1787919896283_yybhg0). The decision is a RECORD, and the gate below
+// reads the record — not the readiness it was computed from. So a decision outlives the facts behind
+// it: fix an upstream node, rebuild the body, and the gate goes on refusing with the reasons of a
+// body that no longer exists. That run reached readiness "go" with zero blockers and still could not
+// publish, because publication_controller had last spoken hours earlier against a body with no hero
+// image. Worse, the refusal it produced named `controller_decision_not_go`, which sent the operator
+// to look at a checklist that was entirely green, and no surface offered the one action that would
+// have cleared it — re-running the controller.
+//
+// So a decision now records WHAT IT JUDGED, and a decision judged against a different body is
+// reported as stale rather than as a verdict. Stale is a distinct, self-clearing condition: the
+// executor re-dispatches publication_controller instead of blocking the run on it.
+//
+// The fingerprint is over the CLIENT OBJECT (envelope.body), not the envelope: the envelope also
+// carries clientValidation, notes and assumptions, which change without changing a single reader-
+// visible byte and would make every decision look stale. Keys are sorted so serialization order can
+// never masquerade as a content change.
+const stableStringify = (value: unknown): string => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).filter(([, child]) => child !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${stableStringify(child)}`).join(",")}}`;
+};
+
+/** The article_body envelope a run currently holds. Lives here rather than in publisher.ts because the
+ *  executor's publish gate needs it too, and publisher.ts already imports this module — putting it the
+ *  other way round would close an import cycle. */
+export const findArticleBodyEnvelope = (run: Pick<WorkflowExecutionRecord, "stageOutputs" | "nodes" | "entrypoint">): unknown =>
+  run.stageOutputs?.article_body ?? run.nodes.find((node) => node.nodeId === "article_body")?.output ?? run.entrypoint?.output;
+
+/** Fingerprint of the client object an article_body envelope carries. Undefined when there is no body
+ *  to fingerprint — never a hash of `undefined`, which would compare equal across two absent bodies. */
+export const articleBodyFingerprint = (envelope: unknown): string | undefined => {
+  const body = isPlainObject(envelope) ? envelope.body : undefined;
+  if (!isPlainObject(body)) return undefined;
+  return createHash("sha256").update(stableStringify(body)).digest("hex").slice(0, 16);
+};
+
 export type PublicationDecisionRead =
   | { authorized: true; decision: "go" }
-  | { authorized: false; code: string; reason: string };
+  | { authorized: false; code: string; reason: string; stale?: true };
 
 const refuse = (code: string, reason: string): PublicationDecisionRead => ({ authorized: false, code, reason });
+const refuseStale = (reason: string): PublicationDecisionRead => ({ authorized: false, code: "controller_decision_stale", reason, stale: true });
 
 // The affirmative shape, and the ONLY shape that authorizes a publish:
 //   { artifact: "publication_decision.v1", decision: "go", blockers: [] (or absent) }
@@ -62,7 +102,10 @@ const refuse = (code: string, reason: string): PublicationDecisionRead => ({ aut
 // placeholder all refuse with a named reason. In particular the acceptance fixture
 // {"artifact":"publication_decision.v1","summary":"Looks fine."} refuses: prose approval is not a
 // decision.
-export function readPublicationDecision(record: unknown): PublicationDecisionRead {
+export function readPublicationDecision(
+  record: unknown,
+  expected?: { bodyFingerprint?: string }
+): PublicationDecisionRead {
   let value = record;
   if (typeof value === "string") {
     try { value = JSON.parse(value); } catch { return refuse("controller_decision_unparseable", "publication_controller output is a string that is not valid JSON; refusing to treat it as an authorization."); }
@@ -71,6 +114,22 @@ export function readPublicationDecision(record: unknown): PublicationDecisionRea
   if (!isPlainObject(value)) return refuse("controller_decision_unparseable", "publication_controller output is not an object; refusing to treat it as an authorization.");
   if (value.dryRun === true) return refuse("controller_decision_placeholder", "the publication_controller record is a dry-run/mock placeholder (dryRun: true), which can never authorize a publish.");
   if (value.artifact !== PUBLICATION_DECISION_ARTIFACT) return refuse("controller_decision_wrong_artifact", `the record's artifact is ${JSON.stringify(value.artifact)} instead of "${PUBLICATION_DECISION_ARTIFACT}"; refusing to treat it as a publication decision.`);
+  // Staleness is checked BEFORE the verdict is read, and applies to every verdict: a stale "no_go" is
+  // the case that motivated this, and reporting it as a no_go is precisely the misdirection. Both
+  // fingerprints must be present to compare — a decision recorded before this field existed is read
+  // exactly as it always was, so nothing already in flight starts refusing on a field it never had.
+  const decidedFor = isPlainObject(value.decidedFor) ? value.decidedFor : undefined;
+  const decidedForFingerprint = typeof decidedFor?.bodyFingerprint === "string" ? decidedFor.bodyFingerprint : undefined;
+  // Only a MISMATCH is stale. A decision that records no fingerprint at all — every decision written
+  // before this field existed — is read exactly as it always was. That is deliberate: an
+  // unfingerprinted decision cannot be shown to be about the current body, but it cannot be shown to
+  // be about a different one either, and treating "unknown" as "stale" would force a re-decision on
+  // every run already in flight, on surfaces that have no way to trigger one. The precise rule catches
+  // the real defect with no false positives; the migration cost is one re-run of the controller on the
+  // runs that predate it, which is deterministic and free.
+  if (expected?.bodyFingerprint && decidedForFingerprint && expected.bodyFingerprint !== decidedForFingerprint) {
+    return refuseStale(`the publication decision was computed against a different article body (decided for ${decidedForFingerprint}, the run now holds ${expected.bodyFingerprint}); it judged facts that no longer exist. publication_controller must decide again before this run can publish — the decision itself is neither an approval nor a refusal of the current body.`);
+  }
   const decision = typeof value.decision === "string" ? value.decision.trim().toLowerCase() : undefined;
   if (decision === undefined) return refuse("controller_decision_absent", "the decision record carries no `decision` field; an explicit decision: \"go\" is required — silence or prose approval refuses by default.");
   if (decision !== "go") return refuse("controller_decision_not_go", `the controller decided ${JSON.stringify(value.decision)}, not "go"; only an explicit "go" authorizes a publish.`);

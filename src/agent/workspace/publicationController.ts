@@ -48,6 +48,7 @@
 
 import { evaluatePublishReadiness } from "./publisher.js";
 import { classifyBlockerSource, type BlockerClass } from "./blockerClassification.js";
+import { articleBodyFingerprint } from "./publishDecision.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { PublishReadinessResult } from "../projects/projectHooks.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
@@ -85,6 +86,10 @@ export type PublicationDecisionOutput = {
   checklist: PublishReadinessResult["checklist"];
   nextAction: string;
   notes: string[];
+  // What this decision judged. The publish gate compares it against the body the run currently holds,
+  // so a decision that outlived its facts is reported as stale and re-decided, not enforced as a
+  // verdict on a body it never saw. Absent when the caller had no body to fingerprint.
+  decidedFor?: { bodyFingerprint: string };
 };
 
 export type PublicationControllerResult =
@@ -264,6 +269,11 @@ export function buildPublicationDecision(params: {
   // W7 — the project's promotion list (publishingPolicy.hardBlockerSources). Absent means the engine's
   // classification stands; it can only ever add hardness, never remove it.
   hardBlockerSources?: readonly string[];
+  // The fingerprint of the client object this decision judged (publishDecision.articleBodyFingerprint).
+  // Recorded so the publish gate can tell a verdict from a stale one: fix an upstream node, rebuild the
+  // body, and this decision is about a body that no longer exists. Optional so a caller with no body in
+  // hand still produces a decision — it is simply one the gate will read the old way.
+  bodyFingerprint?: string;
   // W7 — appended verbatim to notes. The one caller that reads project policy uses this to record a
   // policy read it could not complete, so a decision never silently claims to have applied an override
   // it never saw.
@@ -314,7 +324,8 @@ export function buildPublicationDecision(params: {
     contentClass,
     checklist: readiness.checklist,
     nextAction,
-    notes
+    notes,
+    ...(params.bodyFingerprint ? { decidedFor: { bodyFingerprint: params.bodyFingerprint } } : {})
   };
 }
 
@@ -389,7 +400,8 @@ export async function runDeterministicPublicationController(sources: Publication
       contentClass,
       upstreamBlockers,
       hardBlockerSources: policy.sources,
-      policyNotes: policy.notes
+      policyNotes: policy.notes,
+      ...(articleBodyFingerprint(sources.articleBody) ? { bodyFingerprint: articleBodyFingerprint(sources.articleBody)! } : {})
     })
   };
 }
