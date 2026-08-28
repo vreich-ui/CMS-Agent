@@ -217,9 +217,17 @@ const requireCredentialFreeEndpoint = (mcpEndpoint: string | undefined) => {
   }
 };
 
-const requireTokenEnvVarForBearer = (authMode: string, tokenEnvVar: string | undefined) => {
-  if (authMode === "bearer_env" && !tokenEnvVar) {
-    throw new ProjectAdminError("token_env_var_required", "authMode \"bearer_env\" requires tokenEnvVar (the NAME of the env var holding the bearer token).");
+// A bearer project needs a token SOURCE, not specifically an env var. Since T12.20 there are two,
+// and the registration contract calls the second one PREFERRED: tokenSecretRef resolves on any plane
+// running as a Google service account, while tokenEnvVar has to be present on EVERY plane that
+// executes work — including the continuation-tick Cloud Run job, which carries no tenant environment
+// at all and is exactly the plane people forget. Demanding tokenEnvVar regardless made the preferred
+// path unregisterable on its own and pushed every new tenant back onto the per-plane treadmill this
+// replaced. The error code is unchanged because it is catalogued; only the condition and the
+// message widen.
+const requireTokenSourceForBearer = (authMode: string, tokenEnvVar: string | undefined, tokenSecretRef: string | undefined) => {
+  if (authMode === "bearer_env" && !tokenEnvVar && !tokenSecretRef) {
+    throw new ProjectAdminError("token_env_var_required", "authMode \"bearer_env\" requires a token source: tokenSecretRef (a Secret Manager version resource name — preferred, since it resolves on every executor plane with no deployment change) or tokenEnvVar (the NAME of the env var holding the bearer token, which must then be set on every plane that executes work).");
   }
 };
 
@@ -231,7 +239,7 @@ const requireValidClientSiteBinding = (binding: ClientSiteBinding | undefined) =
 };
 
 export async function createProject(repository: ProjectRepository, input: ProjectCreateInput): Promise<ProjectSummary> {
-  requireTokenEnvVarForBearer(input.authMode, input.tokenEnvVar);
+  requireTokenSourceForBearer(input.authMode, input.tokenEnvVar, input.tokenSecretRef);
   requireCredentialFreeEndpoint(input.mcpEndpoint);
   requireValidClientSiteBinding(input.clientSiteBinding);
   if (await repository.get(input.projectId)) {
@@ -294,7 +302,7 @@ export async function updateProject(repository: ProjectRepository, projectId: st
     if (patch.tokenEnvVar === null) delete next.tokenEnvVar;
     else next.tokenEnvVar = patch.tokenEnvVar;
   }
-  requireTokenEnvVarForBearer(next.authMode, next.tokenEnvVar);
+  requireTokenSourceForBearer(next.authMode, next.tokenEnvVar, next.tokenSecretRef);
   requireCredentialFreeEndpoint(next.mcpEndpoint);
   return toProjectSummary(await repository.save(next));
 }
@@ -327,7 +335,8 @@ export function projectRegistrationContract() {
       mcpEndpointEnvVar: { required: true, example: "ACME_DAILY_MCP_ENDPOINT", note: "Env var NAME. Still required (it is the override channel), but you no longer have to SET it if you pass mcpEndpoint." },
       mcpEndpoint: { required: false, example: "https://acme-daily.netlify.app/mcp", note: "The endpoint URL itself, stored on the record — an endpoint is not a secret. https only, no credentials, no query, no fragment. Omit it to keep pure env-var resolution. site.duplicate genesis derives this automatically from the Netlify site it just created, so a minted tenant needs no endpoint step at all." },
       authMode: { required: false, default: "bearer_env", enum: [...projectAuthModes] },
-      tokenEnvVar: { required: "when authMode is bearer_env", example: "ACME_DAILY_MCP_TOKEN" },
+      tokenEnvVar: { required: "only when authMode is bearer_env AND no tokenSecretRef is supplied", example: "ACME_DAILY_MCP_TOKEN", note: "Env var NAME. Its VALUE must then exist on every plane that executes work — the cms-agent-mcp service AND the continuation-tick Cloud Run job, which carries no tenant environment unless someone adds it. That is the treadmill tokenSecretRef exists to end." },
+      tokenSecretRef: { required: false, example: "projects/cms-agent-503015/secrets/tenant-acme-mcp-token/versions/latest", note: "PREFERRED token source for bearer_env. A Secret Manager version RESOURCE NAME — a pointer, never a value — resolved with each executing plane's own service-account identity, so a plane that carries no tenant environment still authenticates. Supplying it satisfies the bearer_env token requirement on its own; supplying both leaves the env var winning wherever it is populated. On project.update, null clears it." },
       allowedTools: { required: false, default: [], note: "Deny-all until remote tool names are explicitly allow-listed; project.call_tool refuses anything else." },
       contentContract: { required: false, default: { contentContract: "content_source.v1" } },
       capturePolicy: { required: false, default: DEFAULT_PROJECT_CAPTURE_POLICY, note: "Per-project capture governance. Missing policy denies all capture (maxPages=0, no origins); design references may never contribute copied content or media." },
@@ -335,10 +344,10 @@ export function projectRegistrationContract() {
     },
     publishingPolicy: "Server-enforced: publishEnabled=true by default (go-live 2026-07-31). The per-project *_PUBLISH_ENABLED=false env flag is the operator kill-switch.",
     onboardingSteps: [
-      "1. project.create with projectId, name, mcpEndpointEnvVar (+ tokenEnvVar for bearer_env), and — recommended — mcpEndpoint, the endpoint URL itself.",
+      "1. project.create with projectId, name, mcpEndpointEnvVar, a token source for bearer_env (tokenSecretRef preferred, tokenEnvVar otherwise — either satisfies the requirement), and — recommended — mcpEndpoint, the endpoint URL itself.",
       "2. Supply the TOKEN one of two ways. PREFERRED: create the secret in Secret Manager and pass tokenSecretRef — no deployment change on any plane, now or later, and a new plane inherits it automatically. ALTERNATIVE: set the env var named by tokenEnvVar on every plane that executes work (there is more than one; the continuation-tick job is easy to forget). Either way a secret VALUE never passes through MCP. The endpoint needs no deployment change when mcpEndpoint was supplied; set <CLIENT>_MCP_ENDPOINT only to override it.",
-      "3. project.get — connection.endpointConfigured/tokenConfigured turn true once the deploy sees the env vars.",
-      "4. project.test_connection — primitive MCP initialize against the client's server.",
+      "3. project.get — connection.endpointConfigured/tokenConfigured turn true once a source resolves, and endpointSource/tokenSource name WHICH one answered on the plane serving that call. Read them per plane: \"env\" means only planes carrying that variable are configured, while \"secret\"/\"registry\" mean every plane is.",
+      "4. project.test_connection — a primitive MCP initialize against the client's server. These servers answer initialize WITHOUT a valid credential, so a green result proves reachability and NOT that any plane can read anything; project.call_read_tool {tool:\"registry_get\"} is the smallest authenticated proof, and is the same read the run-time driver auth preflight performs.",
       "5. project.list_tools, then project.update to allow-list the safe read-only tool names.",
       "6. project.validate_handoff — dry structural validation of content_source.v1 / client_object.v1 payloads."
     ]
