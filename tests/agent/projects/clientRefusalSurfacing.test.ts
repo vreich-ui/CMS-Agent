@@ -378,7 +378,7 @@ describe("a clean publish is byte-for-byte what it always was", () => {
     ];
     expect(calls).toEqual([
       { tool: "object_create", args: { object_type: "content_item", site: "site_drlurie", body: { slug: "live-title", title: "Live Title", nodes: BODY.nodes }, requested_id: REQUEST_ID, idempotency_key: REQUEST_ID } },
-      { tool: "object_checkout", args: { object_type: "content_item", object_id: REQUEST_ID, owner_id: "cms-agent", owner_label: "CMS-Agent Publishing Conductor" } },
+      { tool: "object_checkout", args: { object_type: "content_item", object_id: REQUEST_ID, agent_name: "cms-agent", owner_id: "cms-agent", owner_label: "CMS-Agent Publishing Conductor" } },
       { tool: "object_validate", args: { object_type: "content_item", object_id: REQUEST_ID, candidate_patch: patch } },
       { tool: "object_patch", args: { object_type: "content_item", object_id: REQUEST_ID, lock_token: "lock_123", expected_record_version: 2, patch } },
       { tool: "object_publish", args: { object_type: "content_item", object_id: REQUEST_ID, lock_token: "lock_123" } },
