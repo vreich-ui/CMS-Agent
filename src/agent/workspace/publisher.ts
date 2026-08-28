@@ -25,7 +25,7 @@ import { redactSensitiveKeys } from "../observability/redaction.js";
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
-import { getProjectHooks, type PublishExecutionOutcome, type PublishObjectOrigin, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
+import { getProjectHooks, type PublishExecutionOutcome, type PublishObjectOrigin, type PublishProducerContext, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
 import { articleBodyFingerprint, describeOperatorDecisionSource, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
 import { ClientToolRefusalError } from "../projects/clientToolResult.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
@@ -106,6 +106,44 @@ export type PublisherDeps = {
   learningRepository?: LearningRepository;
   // Injectable so tests exercise the gate + sequence against a fake adapter and never touch a live site.
   callTool?: CallToolFn;
+  // Internal provenance seam for a caller that captured the content producer's immutable prompt
+  // version and actual model at execution time. Deliberately absent from PublishRunInput and the MCP
+  // schema: an operator/model invoking workflow.publish_run must not be able to author attribution.
+  // publishRun still verifies run_id and node_id against the persisted run before forwarding it.
+  producerContext?: PublishProducerContext;
+};
+
+const PRODUCER_KEYS = ["run_id", "node_id", "prompt_version", "model"] as const;
+
+const parseProducerContext = (value: unknown): PublishProducerContext | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== PRODUCER_KEYS.length || !Object.keys(record).every((key) => (PRODUCER_KEYS as readonly string[]).includes(key))) return undefined;
+  for (const key of PRODUCER_KEYS) {
+    const field = record[key];
+    if (typeof field !== "string" || field.trim().length === 0 || field.length > 128) return undefined;
+  }
+  return record as PublishProducerContext;
+};
+
+const sameJson = (left: unknown, right: unknown): boolean => {
+  try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
+};
+
+// Bind a caller-captured prompt/model pair to facts this publisher can prove itself. We intentionally
+// do NOT consult the current workspace node definition: it is mutable and may no longer be the prompt
+// that produced this run. A complete context for a different run/node is omitted, never repaired.
+const producerContextForPublish = (value: unknown, run: WorkflowExecutionRecord, envelope: unknown): PublishProducerContext | undefined => {
+  const producer = parseProducerContext(value);
+  if (!producer || producer.run_id !== run.runId) return undefined;
+  const state = run.nodes.find((candidate) => candidate.nodeId === producer.node_id && candidate.status === "completed");
+  if (!state) return undefined;
+  // A stage output is a delivery carrier, not provenance: a later pass-through node can persist the
+  // same JSON byte-for-byte without having produced the client object. Require the run's immutable
+  // artifact ledger to name this node as the client_object.v1 producer.
+  const artifactMatches = run.artifacts.some((artifact) => artifact.nodeId === producer.node_id && artifact.type === "client_object.v1" && sameJson(artifact.value, envelope));
+  if (!artifactMatches) return undefined;
+  return producer;
 };
 
 // The per-project operator enable flag env var name, derived from the connection endpoint env var
@@ -350,6 +388,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   // Notification only: it can never change the sequence, and a hook that never calls it leaves this
   // undefined exactly as before.
   let noted: { objectId: string; origin: PublishObjectOrigin } | undefined;
+  const producer = producerContextForPublish(deps.producerContext, run, envelope);
 
   try {
     const outcome = await hooks.executePublish({
@@ -366,6 +405,9 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
       // S3 item 8: the content-item shell the conductor created before artifact_plan (if any) — the
       // hook patches that object instead of creating a second one under the same request id.
       ...(shell && shell.requestId === input.requestId ? { existingObjectId: shell.objectId } : {}),
+      // T20.6b: complete, run-bound content-producer provenance only. Most current runs omit this
+      // because their persisted state predates prompt-version capture; absence is the honest value.
+      ...(producer ? { producer } : {}),
       noteObjectId: (note) => { noted = note; },
       call
     });
