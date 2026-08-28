@@ -31,6 +31,18 @@ export type ProjectHandoffPayload = { contentSource?: unknown; articleBody?: unk
 
 export type ProjectCallToolRequest = { tool: string; arguments?: Record<string, unknown> };
 
+// Optional attribution attached to platform object_publish. Every field is required together: a
+// partial producer record is worse than no record because downstream analytics would treat the
+// invented/defaulted dimensions as evidence. The publisher therefore accepts this only through its
+// internal deps seam (never the public workflow.publish_run input) and validates it against the run
+// and the client-object-producing node before a project hook can see it.
+export type PublishProducerContext = {
+  run_id: string;
+  node_id: string;
+  prompt_version: string;
+  model: string;
+};
+
 // Re-exported so the generic publisher can consume readiness types without importing a client folder.
 export type { PublishReadinessInput, PublishReadinessResult } from "./drLurie/publishReadiness.js";
 
@@ -51,6 +63,9 @@ export type PublishExecutionContext = {
   // S3 item 8: an object the conductor already created for this request (the content-item shell made
   // before artifact_plan ran). When present the hook MUST skip object_create and patch this object.
   existingObjectId?: string;
+  // Genuine, already-captured execution provenance only. Absent when the run record cannot prove
+  // all four dimensions; hooks must omit producer rather than fill any missing field.
+  producer?: PublishProducerContext;
   // Records a step and throws when the TRANSPORT fails. It does NOT throw when the client REFUSES:
   // an MCP refusal (isError: true) rides home on a successful transport, so it is returned like any
   // other result. Hooks must therefore route every call through checkedClientCall

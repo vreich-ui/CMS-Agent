@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
 import type { ExecutionRepository } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import { getRun, runNextNode, startDryRun } from "../../src/agent/workspace/executor.js";
 import { repositoryManager } from "../../src/agent/runtime/repositories.js";
 import { validateOutput } from "../../src/agent/execution/outputValidator.js";
 import { listWorkspaceNodes } from "../../src/agent/workspace/nodes.js";
+import * as registry from "../../src/agent/execution/runnerRegistry.js";
+import { promptVersionIdForNode } from "../../src/agent/workspace/nodeExecutionProvenance.js";
 
 const completeUntil = async (runId: string, targetNodeId: string, store: ExecutionRepository) => {
   let run = await getRun(runId, store);
@@ -113,6 +115,34 @@ describe("Publishing Conductor dry-run execution", () => {
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ runId: run.runId, projectId: "project-a", nodeId: "input_triage", status: "estimated", provider: "openai" });
     expect(records[0].totalTokens).toBe(records[0].inputTokens + records[0].outputTokens);
+  });
+
+  it("live node execution persists the exact prompt-version identity and actual model", async () => {
+    const store = new RepositoryManager().getExecutionRepository();
+    const run = await startDryRun({ executionMode: "openai", projectId: "project-a", input: "Draft this" }, store);
+    const node = listWorkspaceNodes().find((candidate) => candidate.id === "input_triage")!;
+    const spy = vi.spyOn(registry, "getNodeRunner").mockReturnValue({
+      supports: () => true,
+      validateConfiguration: () => ({ ok: true }),
+      run: async () => ({
+        ok: true,
+        output: { artifact: "content_source.v1", summary: "Live model output." },
+        model: "gpt-t20-actual"
+      })
+    });
+
+    try {
+      const advanced = await runNextNode(run.runId, { executionRepository: store });
+      const state = advanced.nodes.find((candidate) => candidate.nodeId === "input_triage");
+
+      expect(state?.provenance).toMatchObject({
+        promptVersion: promptVersionIdForNode(node),
+        model: "gpt-t20-actual"
+      });
+      expect(state?.provenance?.capturedAt).toBe(state?.completedAt);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // W-4 (run_1785405350649_9u5mjz): client identity is run state the conductor delivers to every

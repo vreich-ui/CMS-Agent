@@ -25,7 +25,7 @@ import { redactSensitiveKeys } from "../observability/redaction.js";
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
-import { getProjectHooks, type PublishExecutionOutcome, type PublishObjectOrigin, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
+import { getProjectHooks, type PublishExecutionOutcome, type PublishObjectOrigin, type PublishProducerContext, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
 import { articleBodyFingerprint, describeOperatorDecisionSource, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
 import { ClientToolRefusalError } from "../projects/clientToolResult.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
@@ -35,6 +35,7 @@ import type { LearningRepository } from "../repository/interfaces/LearningReposi
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import { assertRecipeAuthorshipAllowed } from "./publishableTypeCharter.js";
+import { producerContextForPublish } from "./nodeExecutionProvenance.js";
 
 // request_id contract: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, supplied by the
 // caller (never auto-generated). A malformed id is accepted at create but breaks every later step.
@@ -106,6 +107,11 @@ export type PublisherDeps = {
   learningRepository?: LearningRepository;
   // Injectable so tests exercise the gate + sequence against a fake adapter and never touch a live site.
   callTool?: CallToolFn;
+  // Internal provenance seam for a caller that captured the content producer's immutable prompt
+  // version and actual model at execution time. Deliberately absent from PublishRunInput and the MCP
+  // schema: an operator/model invoking workflow.publish_run must not be able to author attribution.
+  // publishRun still verifies run_id and node_id against the persisted run before forwarding it.
+  producerContext?: PublishProducerContext;
 };
 
 // The per-project operator enable flag env var name, derived from the connection endpoint env var
@@ -350,6 +356,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   // Notification only: it can never change the sequence, and a hook that never calls it leaves this
   // undefined exactly as before.
   let noted: { objectId: string; origin: PublishObjectOrigin } | undefined;
+  const producer = producerContextForPublish(run, envelope, deps.producerContext);
 
   try {
     const outcome = await hooks.executePublish({
@@ -366,6 +373,9 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
       // S3 item 8: the content-item shell the conductor created before artifact_plan (if any) — the
       // hook patches that object instead of creating a second one under the same request id.
       ...(shell && shell.requestId === input.requestId ? { existingObjectId: shell.objectId } : {}),
+      // T20.6b: complete, run-bound content-producer provenance only. Most current runs omit this
+      // because their persisted state predates prompt-version capture; absence is the honest value.
+      ...(producer ? { producer } : {}),
       noteObjectId: (note) => { noted = note; },
       call
     });

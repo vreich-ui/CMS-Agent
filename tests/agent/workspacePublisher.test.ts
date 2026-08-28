@@ -8,6 +8,7 @@ import type { CallToolResult } from "../../src/agent/projects/projectMcpAdapter.
 import type { ProjectConnectionConfig } from "../../src/agent/projects/projectTypes.js";
 import { handler } from "../../netlify/functions/mcp.mjs";
 import { resetRepositoryManager } from "../../src/agent/runtime/repositories.js";
+import { promptVersionIdForNode } from "../../src/agent/workspace/nodeExecutionProvenance.js";
 // S3 item 7: readiness now requires reader-visible content (article_has_content, >= 200 visible
 // chars), so the fixtures carry a realistic paragraph rather than a stub.
 const PAD = " This paragraph exists so the fixture reads as a real article rather than a stub: it explains the claim, names the tradeoff, and gives the reader one concrete next step to take today.".repeat(2);
@@ -439,6 +440,107 @@ describe("per-project publish execution hooks", () => {
       expect(result.clientValidation).toMatchObject({ tool: "object_validate", valid: true, issues: [] });
       expect(result.clientValidation?.candidate_patch_summary).toBe("3 ops: 1 set_article_meta + 2 upsert_node");
     }
+  });
+
+  it("T20.6b — forwards complete, captured client-object producer context on object_publish only", async () => {
+    const ctx = await seedRun(platformTextBody, "platform");
+    const adapter = fakePlatformCallTool();
+    const producerContext = {
+      run_id: ctx.runId,
+      node_id: "article_body",
+      prompt_version: "workspace-revision-314",
+      model: "gpt-5.5"
+    };
+
+    const result = await publishRun(
+      { runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY },
+      { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: adapter.fn, producerContext }
+    );
+
+    expect(result.mode).toBe("live");
+    const publish = adapter.calls.find((call) => call.tool === "object_publish")!;
+    expect(publish.args.producer).toEqual(producerContext);
+    expect(adapter.calls.filter((call) => call.tool !== "object_publish").every((call) => !("producer" in call.args))).toBe(true);
+  });
+
+  it("T20.6c — derives producer from the persisted client-object producer state on workflow.publish_run", async () => {
+    const ctx = await seedRun(platformTextBody, "platform");
+    const persisted = await ctx.executionRepository.getRun(ctx.runId);
+    if (!persisted) throw new Error("seeded run missing");
+    const state = persisted.nodes.find((candidate) => candidate.nodeId === "article_body");
+    const node = listWorkspaceNodes().find((candidate) => candidate.id === "article_body")!;
+    if (!state) throw new Error("article_body state missing");
+    state.provenance = {
+      promptVersion: promptVersionIdForNode(node),
+      model: "gpt-5.6-sol",
+      capturedAt: state.completedAt ?? new Date().toISOString()
+    };
+    await ctx.executionRepository.saveRun(persisted);
+    const adapter = fakePlatformCallTool();
+
+    const result = await publishRun(
+      { runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY },
+      { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: adapter.fn }
+    );
+
+    expect(result.mode).toBe("live");
+    const publish = adapter.calls.find((call) => call.tool === "object_publish")!;
+    expect(publish.args.producer).toEqual({
+      run_id: ctx.runId,
+      node_id: "article_body",
+      prompt_version: promptVersionIdForNode(node),
+      model: "gpt-5.6-sol"
+    });
+  });
+
+  it("T20.6b — omits producer unless all four bounded fields belong to this run's real client-object producer", async () => {
+    const cases: Array<{ name: string; context?: Record<string, unknown> }> = [
+      { name: "absent" },
+      { name: "partial", context: { run_id: "filled-per-run", node_id: "article_body", model: "gpt-5.5" } },
+      { name: "extra key", context: { run_id: "filled-per-run", node_id: "article_body", prompt_version: "rev-1", model: "gpt-5.5", guessed: true } },
+      { name: "different run", context: { run_id: "run_other", node_id: "article_body", prompt_version: "rev-1", model: "gpt-5.5" } },
+      { name: "non-producer node", context: { run_id: "filled-per-run", node_id: "publication_controller", prompt_version: "rev-1", model: "gpt-5.5" } },
+      { name: "oversized", context: { run_id: "filled-per-run", node_id: "article_body", prompt_version: "x".repeat(129), model: "gpt-5.5" } }
+    ];
+
+    for (const testCase of cases) {
+      const ctx = await seedRun(platformTextBody, "platform");
+      const adapter = fakePlatformCallTool();
+      const context = testCase.context
+        ? Object.fromEntries(Object.entries(testCase.context).map(([key, value]) => [key, value === "filled-per-run" ? ctx.runId : value]))
+        : undefined;
+      const result = await publishRun(
+        { runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY },
+        { ...ctx, env: PLATFORM_ENABLED_ENV, callTool: adapter.fn, ...(context ? { producerContext: context as any } : {}) }
+      );
+      expect(result.mode, testCase.name).toBe("live");
+      expect(adapter.calls.find((call) => call.tool === "object_publish")!.args, testCase.name).not.toHaveProperty("producer");
+    }
+  });
+
+  it("T20.6b — identical pass-through output without a client_object.v1 artifact is not producer provenance", async () => {
+    const ctx = await seedRun(platformTextBody, "platform");
+    const persisted = await ctx.executionRepository.getRun(ctx.runId);
+    if (!persisted) throw new Error("seeded run missing");
+    persisted.nodes.push({ nodeId: "pass_through", status: "completed", output: platformTextBody });
+    persisted.stageOutputs.pass_through = platformTextBody;
+    // Deliberately no client_object.v1 artifact for pass_through: it copied the value but did not
+    // produce it. The existing article_body artifact remains the only real provenance record.
+    await ctx.executionRepository.saveRun(persisted);
+    const adapter = fakePlatformCallTool();
+
+    const result = await publishRun(
+      { runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: PLATFORM_READY },
+      {
+        ...ctx,
+        env: PLATFORM_ENABLED_ENV,
+        callTool: adapter.fn,
+        producerContext: { run_id: ctx.runId, node_id: "pass_through", prompt_version: "rev-pass-through", model: "gpt-5.5" }
+      }
+    );
+
+    expect(result.mode).toBe("live");
+    expect(adapter.calls.find((call) => call.tool === "object_publish")!.args).not.toHaveProperty("producer");
   });
 
   it("validates BEFORE any patch (board B1) and never sends requested_id on create (board D2c)", async () => {

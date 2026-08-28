@@ -154,7 +154,15 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
 
   // f. Publish (commit the export — NOT a release; board B2). Omitting published_time means
   // "immediate" per the client's M-6 pin rules, so it is only sent when the caller pinned a time.
-  const publishResult = await call("object_publish", { object_type: ctx.clientObjectType, object_id: objectId, lock_token: lockToken, ...(ctx.publishedTime ? { published_time: ctx.publishedTime } : {}) });
+  const publishResult = await call("object_publish", {
+    object_type: ctx.clientObjectType,
+    object_id: objectId,
+    lock_token: lockToken,
+    ...(ctx.publishedTime ? { published_time: ctx.publishedTime } : {}),
+    // T20.6b: attribution is all-or-nothing and arrives pre-validated from publisher.ts. Do not
+    // derive a model or prompt version here: this deterministic hook has neither fact.
+    ...(ctx.producer ? { producer: ctx.producer } : {})
+  });
 
   // g. Best-effort lock release. The export is already committed, so a refused checkin must never
   // turn a landed publish into a failure — the lease expires on its own. It must not be SILENT
