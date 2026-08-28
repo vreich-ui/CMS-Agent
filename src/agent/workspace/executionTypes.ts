@@ -72,6 +72,14 @@ export type NodeExecutionState = {
   lastDispatch?: NodeDispatchProvenance;
   // Present only on a node whose status is "skipped" (W4).
   skip?: NodeSkipRecord;
+  // Execution-time identity for the exact node definition/model that produced this state. This is
+  // stamped after the runner returns, before the output is persisted, and is never recomputed from a
+  // later workspace node edit.
+  provenance?: {
+    promptVersion: string;
+    model: string;
+    capturedAt: string;
+  };
   // Set when an operator explicitly retried a node the conductor had skipped: the retry IS the
   // operator saying "run this one", so the predicate is not re-evaluated on the next dispatch. Durable
   // (a retry that only cleared the skip record would be re-skipped immediately, forever).

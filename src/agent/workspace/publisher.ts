@@ -35,6 +35,7 @@ import type { LearningRepository } from "../repository/interfaces/LearningReposi
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import { assertRecipeAuthorshipAllowed } from "./publishableTypeCharter.js";
+import { producerContextForPublish } from "./nodeExecutionProvenance.js";
 
 // request_id contract: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, supplied by the
 // caller (never auto-generated). A malformed id is accepted at create but breaks every later step.
@@ -111,39 +112,6 @@ export type PublisherDeps = {
   // schema: an operator/model invoking workflow.publish_run must not be able to author attribution.
   // publishRun still verifies run_id and node_id against the persisted run before forwarding it.
   producerContext?: PublishProducerContext;
-};
-
-const PRODUCER_KEYS = ["run_id", "node_id", "prompt_version", "model"] as const;
-
-const parseProducerContext = (value: unknown): PublishProducerContext | undefined => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).length !== PRODUCER_KEYS.length || !Object.keys(record).every((key) => (PRODUCER_KEYS as readonly string[]).includes(key))) return undefined;
-  for (const key of PRODUCER_KEYS) {
-    const field = record[key];
-    if (typeof field !== "string" || field.trim().length === 0 || field.length > 128) return undefined;
-  }
-  return record as PublishProducerContext;
-};
-
-const sameJson = (left: unknown, right: unknown): boolean => {
-  try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
-};
-
-// Bind a caller-captured prompt/model pair to facts this publisher can prove itself. We intentionally
-// do NOT consult the current workspace node definition: it is mutable and may no longer be the prompt
-// that produced this run. A complete context for a different run/node is omitted, never repaired.
-const producerContextForPublish = (value: unknown, run: WorkflowExecutionRecord, envelope: unknown): PublishProducerContext | undefined => {
-  const producer = parseProducerContext(value);
-  if (!producer || producer.run_id !== run.runId) return undefined;
-  const state = run.nodes.find((candidate) => candidate.nodeId === producer.node_id && candidate.status === "completed");
-  if (!state) return undefined;
-  // A stage output is a delivery carrier, not provenance: a later pass-through node can persist the
-  // same JSON byte-for-byte without having produced the client object. Require the run's immutable
-  // artifact ledger to name this node as the client_object.v1 producer.
-  const artifactMatches = run.artifacts.some((artifact) => artifact.nodeId === producer.node_id && artifact.type === "client_object.v1" && sameJson(artifact.value, envelope));
-  if (!artifactMatches) return undefined;
-  return producer;
 };
 
 // The per-project operator enable flag env var name, derived from the connection endpoint env var
@@ -388,7 +356,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   // Notification only: it can never change the sequence, and a hook that never calls it leaves this
   // undefined exactly as before.
   let noted: { objectId: string; origin: PublishObjectOrigin } | undefined;
-  const producer = producerContextForPublish(deps.producerContext, run, envelope);
+  const producer = producerContextForPublish(run, envelope, deps.producerContext);
 
   try {
     const outcome = await hooks.executePublish({

@@ -8,6 +8,9 @@ export type NodeRunnerResult = {
   ok: true;
   output: unknown;
   usage?: { inputTokens: number; outputTokens: number; totalTokens?: number; reasoningTokens?: number; actual: boolean };
+  // The concrete model identifier selected for this execution, after node/env defaults and any
+  // provider routing. Omitted by runners that did not call a real model.
+  model?: string;
   trace?: unknown;
   toolCalls?: NodeToolCallRecord[];
   // R-16's generic executor-level output-schema gate (executor.ts's executeRunnableNode) and a

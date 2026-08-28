@@ -44,6 +44,7 @@ import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependency
 import { declaresContractPrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
+import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -2705,6 +2706,8 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
 
   state.status = "completed";
   state.output = output;
+  const provenance = buildNodeExecutionProvenance(effectiveNode, result.model, completedAt);
+  if (provenance) state.provenance = provenance;
   run.stageOutputs[nextNode.id] = output;
   run.artifacts.push(buildArtifact(nextNode, output));
   // Defect (T-2, run_1785352838155_l544ye): retryNode resets a node's OWN state (node.errors, output,

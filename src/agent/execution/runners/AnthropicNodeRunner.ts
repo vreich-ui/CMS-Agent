@@ -141,7 +141,7 @@ export class AnthropicNodeRunner implements NodeRunner {
         // already validated `output` against `node.outputSchema` immediately above (to decide whether
         // to retry), so the executor's own generic output-schema gate can skip re-running the identical
         // check against the identical (output, schema) pair.
-        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: data.id, provider: "anthropic" }, outputValidated: true };
+        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, model, trace: { responseId: data.id, provider: "anthropic" }, outputValidated: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (context.signal?.aborted) return { ok: false, code: "cancelled", message: "Anthropic node execution was cancelled." };

@@ -478,7 +478,7 @@ export class OpenAINodeRunner implements NodeRunner {
         // Telemetry is non-authoritative: the validated output is the deliverable, so a usage-record
         // write failure must never discard a successful node (matches the workflow executor's pattern).
         await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId, attempt: attempt + 1, attemptsTotal: attempt + 1, turnCount, toolCallCount } }).catch(() => undefined);
-        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, trace: { responseId: result.lastResponseId, toolCount: effective.length }, toolCalls, outputValidated: true };
+        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, model, trace: { responseId: result.lastResponseId, toolCount: effective.length }, toolCalls, outputValidated: true };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         // Checked before the generic cancellation/abort branch below: the guard throws from inside the

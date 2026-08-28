@@ -18,6 +18,7 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 import { resolveNodeForExecution } from "./nodeResolution.js";
 import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
 import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
+import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
 
 const now = () => new Date().toISOString();
 const makeRunId = () => `node_run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -179,7 +180,8 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   // promptOverride is an internal replay lever (improvement trials run prompt variants against
   // frozen inputs); it is deliberately NOT exposed on the public node.execute MCP tool — the
   // sanctioned public mutation path stays workspace.update_node_prompt.
-  const result = await runner.run({ node: { ...node, prompt: data.promptOverride ?? node.prompt, modelConfig: { ...node.modelConfig, ...data.modelConfig } }, input: state.input }, { run, executionRepository: repos.executionRepository, workspaceRepository: repos.workspaceRepository, suppliedDependencies: data.dependencyOutputs });
+  const effectiveNode = { ...node, prompt: data.promptOverride ?? node.prompt, modelConfig: { ...node.modelConfig, ...data.modelConfig } };
+  const result = await runner.run({ node: effectiveNode, input: state.input }, { run, executionRepository: repos.executionRepository, workspaceRepository: repos.workspaceRepository, suppliedDependencies: data.dependencyOutputs });
   const endedAt = now();
   state.completedAt = endedAt; state.durationMs = duration(startedAt, endedAt);
   if (result.toolCalls?.length) state.toolCalls = result.toolCalls;
@@ -187,7 +189,7 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   else {
     const outputValidation = validateAgainstNodeSchema(result.output, node.outputSchema);
     if (!outputValidation.valid) { state.status = "failed"; state.errors = outputValidation.issues; run.status = "failed"; run.errors = outputValidation.issues; }
-    else { state.status = "completed"; state.output = outputValidation.value; run.status = "completed"; run.completedAt = endedAt; run.stageOutputs[node.id] = outputValidation.value; const artifact: ExecutionArtifact & { runId: string; executionId: string } = { id: `artifact_${executionId}`, nodeId: node.id, type: node.produces[0] ?? node.id, value: outputValidation.value, createdAt: endedAt, runId, executionId }; run.artifacts.push(artifact); await repos.workspaceRepository.saveStageOutput(node.id, outputValidation.value, `${runId}:${executionId}:${node.id}`); }
+    else { state.status = "completed"; state.output = outputValidation.value; const provenance = buildNodeExecutionProvenance(effectiveNode, result.model, endedAt); if (provenance) state.provenance = provenance; run.status = "completed"; run.completedAt = endedAt; run.stageOutputs[node.id] = outputValidation.value; const artifact: ExecutionArtifact & { runId: string; executionId: string } = { id: `artifact_${executionId}`, nodeId: node.id, type: node.produces[0] ?? node.id, value: outputValidation.value, createdAt: endedAt, runId, executionId }; run.artifacts.push(artifact); await repos.workspaceRepository.saveStageOutput(node.id, outputValidation.value, `${runId}:${executionId}:${node.id}`); }
   }
   run.updatedAt = endedAt; run.currentNodeId = undefined;
   // In openai mode the runner records real usage itself (OpenAINodeRunner); recording here too
