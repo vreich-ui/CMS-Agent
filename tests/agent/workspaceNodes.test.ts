@@ -156,16 +156,55 @@ describe("Publishing Conductor workspace nodes", () => {
       expect(node("artifact_plan").metadata?.projectId).toBeUndefined();
     });
 
-    // 2.25: ONE project.call_tool policy across the four client-reaching nodes: reads go via
+    // 2.25: ONE project.call_tool policy across the client-reaching nodes: reads go via
     // project.call_read_tool; project.call_tool is approval-gated and for writes only.
-    it("all four client-reaching prompts state the same call_tool policy (2.25)", () => {
-      for (const id of ["artifact_plan", "article_body", "publish_payload", "contract_intelligence"]) {
+    //
+    // artifact_plan is deliberately NOT in that set (2026-08-28). "Reads go via call_read_tool" is
+    // true only of the verbs on call_read_tool's FIXED server-side allowlist (object_contract,
+    // registry_get, object_inventory, object_get, object_list, object_validate, ping). The artifact
+    // bridge's verbs are not on it, and two of them — get_agent_artifact_job_status and
+    // get_agent_artifact_by_slot — only read. Routing those through call_read_tool is refused before
+    // any transport with read_tool_operation_not_permitted, so artifact_plan must send them through
+    // call_tool. Asserting the blanket writes-only sentence here forced the prompt to state a rule
+    // that is false for this node, which is how the node came to be told nothing about polling an
+    // asynchronous job at all.
+    it("the three read-only client-reaching prompts state the same call_tool policy (2.25)", () => {
+      for (const id of ["article_body", "publish_payload", "contract_intelligence"]) {
         const prompt = node(id).prompt;
         expect(prompt, `${id} names the read surface`).toContain("project.call_read_tool");
         expect(prompt, `${id} states the approval-gated writes-only rule`).toMatch(/approval-gated and (?:reserved )?for writes only|approval-gated and reserved for writes/);
         expect(prompt, `${id} carries no future-write grant language`).not.toContain("granted for a future write");
         expect(prompt).not.toContain("Reach external services only through project.call_tool");
       }
+    });
+
+    // artifact_plan's own routing rule, stated because the shared one does not fit it.
+    it("artifact_plan routes the artifact bridge's own read verbs through call_tool (2.25b)", () => {
+      const prompt = node("artifact_plan").prompt;
+      expect(prompt, "names the read surface it still uses for contract/registry reads").toContain("project.call_read_tool");
+      for (const verb of ["create_agent_artifact_job", "get_agent_artifact_job_status", "get_agent_artifact_by_slot"]) {
+        expect(prompt, `names ${verb}`).toContain(verb);
+      }
+      expect(prompt, "says the bridge verbs are not on call_read_tool's allowlist").toContain("read_tool_operation_not_permitted");
+      expect(prompt, "carries no future-write grant language").not.toContain("granted for a future write");
+      expect(prompt).not.toContain("Reach external services only through project.call_tool");
+    });
+
+    // The defect this pair of assertions exists to prevent (2026-08-28, run_1787919896283_yybhg0):
+    // the prompt asserted that create_agent_artifact_job "GENERATES the artifact AND VERIFIES it was
+    // materialized ... before returning, so its response IS the verification evidence". It does not —
+    // it returns a job whose terminal statuses are complete|failed. Believing the create response,
+    // the node stopped after ~16s of polling and reported the hero slot blocked; the image
+    // materialized nine seconds later and article_body was built with no media, so the run died at
+    // the publish gate on media_requested_vs_delivered. A re-run then made a SECOND image, because
+    // nothing told the node to adopt the artifact that already existed for the slot.
+    it("artifact_plan treats artifact generation as asynchronous, and adopts before generating (2.25c)", () => {
+      const prompt = node("artifact_plan").prompt;
+      expect(prompt, "must not claim the create call returns verified").not.toMatch(/GENERATES the artifact AND VERIFIES/);
+      expect(prompt, "names the create call as asynchronous").toMatch(/create_agent_artifact_job is ASYNCHRONOUS/);
+      expect(prompt, "adopts an existing slot artifact before creating a job").toMatch(/get_agent_artifact_by_slot[\s\S]{0,600}CREATE NOTHING/);
+      expect(prompt, "polls the job id to a terminal state").toMatch(/get_agent_artifact_job_status[\s\S]{0,400}terminal state/);
+      expect(prompt, "an in-flight job is needs_generation, not blocked").toMatch(/still RUNNING[\s\S]{0,300}needs_generation/);
     });
 
     // 2.26: artifact_plan performs approval-gated writes (artifact generation) — the one pre-executor

@@ -33,7 +33,10 @@ export const MIN_VISIBLE_CONTENT_CHARS = 200;
 export const UNWAIVABLE_UPSTREAM_BLOCKERS: readonly string[] = ["aggression_ceiling_missing"];
 
 type ClientNode = { public?: Record<string, unknown>; [key: string]: unknown };
-type ClientObject = { nodes?: ClientNode[] };
+// The body root is client-shaped and open: a client may root its rendered media here (Dr. Lurie's
+// content_item declares `image {src, alt}` at the root and no media field on any node), so the
+// index signature is what lets mediaRefsOf read those fields without pinning one client's names.
+type ClientObject = { nodes?: ClientNode[] } & Record<string, unknown>;
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -62,12 +65,31 @@ export const visibleContentCharsOf = (envelope: unknown): { nodes: number; chars
 
 const PDF_REF = /\.pdf(?:$|[?#])/i;
 
-// Every media reference a node carries: `media.src` (image) — under `public` or on the node — plus any
-// string under `media` that references a pdf (`pdf`, `href`, `file` — client field naming varies), a
-// pdf `href` on the public block, and a `featuredImage` key.
+// Every media reference the body carries. TWO places, because clients root media in two different
+// ways and this scan used to know only one of them:
+//
+//   PER NODE — `media.src` (image) under `public` or on the node itself, plus any string under
+//   `media` that references a pdf (`pdf`, `href`, `file` — client field naming varies), a pdf `href`
+//   on the public block, and a `featuredImage` key.
+//
+//   ON THE BODY ROOT — the contract's own rendered image field. Dr. Lurie's content_item declares
+//   exactly this: one `image {src, alt}` at the root, and NO media field on any node. Scanning only
+//   nodes therefore found nothing on a body whose hero was bound perfectly, and reported it two ways
+//   at once — "no media artifacts" (a pass, on a body that has one) and "the body carries 0 verified
+//   media reference(s)" (a fail, on a body that carries one). run_1787919896283_yybhg0 sat at the
+//   publish gate on that second one with its hero image bound, verified, and in the right field.
 export const mediaRefsOf = (envelope: unknown): string[] => {
   const refs: string[] = [];
   const add = (value: unknown) => { if (typeof value === "string" && value.trim()) refs.push(value.trim()); };
+  const addMediaObject = (media: unknown) => {
+    if (!isObject(media)) return;
+    add(media.src);
+    for (const [key, value] of Object.entries(media)) if (key !== "src" && typeof value === "string" && PDF_REF.test(value)) add(value);
+  };
+  const root = clientObjectOf(envelope);
+  addMediaObject(root.image);
+  addMediaObject(root.media);
+  add(root.featuredImage);
   for (const node of nodesOf(clientObjectOf(envelope))) {
     const scopes = [isObject(node.public) ? node.public : undefined, node as Record<string, unknown>].filter(isObject);
     for (const scope of scopes) {
@@ -79,6 +101,26 @@ export const mediaRefsOf = (envelope: unknown): string[] => {
       if (typeof scope.href === "string" && PDF_REF.test(scope.href)) add(scope.href);
       add(scope.featuredImage);
     }
+  }
+  return [...new Set(refs)];
+};
+
+// The verification evidence the ENVELOPE itself carries. artifact_plan materializes and verifies each
+// slot, and article_body carries that record forward as `artifactReferences[]`, every entry holding
+// both forms of the same artifact plus the `verified` flag artifact_plan set. That record is the
+// system's own evidence, so a caller that does not separately pass verifiedMediaRefs (project.get's
+// readiness call, the publication controller, an operator asking "is this ready?") should not be told
+// the body's media is unverified. Only entries explicitly marked verified count — an unverified or
+// in-flight slot contributes nothing, which keeps "a pattern-valid key is never proof of
+// materialization" intact: this trusts a recorded verification, never a key's shape.
+export const envelopeVerifiedMediaRefsOf = (envelope: unknown): string[] => {
+  if (!isObject(envelope) || !Array.isArray(envelope.artifactReferences)) return [];
+  const refs: string[] = [];
+  for (const entry of envelope.artifactReferences) {
+    if (!isObject(entry) || entry.verified !== true) continue;
+    if (typeof entry.publicPath === "string" && entry.publicPath.trim()) refs.push(entry.publicPath.trim());
+    const reference = entry.artifactReference;
+    if (isObject(reference) && typeof reference.blobKey === "string" && reference.blobKey.trim()) refs.push(reference.blobKey.trim());
   }
   return [...new Set(refs)];
 };
@@ -120,9 +162,11 @@ export function evaluateContentReadiness(input: ContentReadinessInput): Readines
   const acceptedEmpty = (key: string, label: string, detail?: string) => checks.push({ key, label, status: "accepted_empty", detail });
   const fail = (key: string, label: string, detail: string) => checks.push({ key, label, status: "fail", detail });
 
-  // media_artifacts_verified — every reference in the body, confirmed by the caller.
+  // media_artifacts_verified — every reference in the body, confirmed by the caller OR by the
+  // envelope's own artifactReferences record (see envelopeVerifiedMediaRefsOf).
   const mediaRefs = input.articleBodyValid ? mediaRefsOf(input.articleBody) : [];
-  const unverified = mediaRefs.filter((ref) => !isVerifiedMediaRef(ref, input.verifiedMediaRefs));
+  const verifiedRefs = [...(input.verifiedMediaRefs ?? []), ...(input.articleBodyValid ? envelopeVerifiedMediaRefsOf(input.articleBody) : [])];
+  const unverified = mediaRefs.filter((ref) => !isVerifiedMediaRef(ref, verifiedRefs));
   if (mediaRefs.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", "no media artifacts");
   else if (unverified.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", `${mediaRefs.length} media reference(s) confirmed`);
   else fail("media_artifacts_verified", "Blob artifacts verified", `unverified media (pdf-tool materialization for this request not confirmed): ${unverified.join(", ")}`);
@@ -153,7 +197,7 @@ export function evaluateContentReadiness(input: ContentReadinessInput): Readines
 
   const brief = stages.brief_architect;
   const requested = isObject(brief) && Array.isArray(brief.mediaSlots) ? brief.mediaSlots.length : undefined;
-  const delivered = mediaRefs.filter((ref) => isVerifiedMediaRef(ref, input.verifiedMediaRefs)).length;
+  const delivered = mediaRefs.filter((ref) => isVerifiedMediaRef(ref, verifiedRefs)).length;
   if (requested === undefined) acceptedEmpty("media_requested_vs_delivered", "Requested media was delivered", "brief_architect declared no mediaSlots array; not evaluated");
   else if (requested > 0 && delivered === 0) fail("media_requested_vs_delivered", "Requested media was delivered", `brief_architect requested ${requested} media slot(s); the body carries 0 verified media reference(s)`);
   else pass("media_requested_vs_delivered", "Requested media was delivered", `${requested} requested, ${delivered} verified in body`);
