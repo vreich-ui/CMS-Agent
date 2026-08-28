@@ -100,7 +100,15 @@ export async function createOrAdoptObject(params: {
   const { project, call, dialect, requestId, args } = params;
   let created: unknown;
   try {
-    created = await call("object_create", args);
+    // idempotency_key is the run's own requestId, unmodified: stable across every retry of THIS
+    // publish (a workflow_retry_node re-entry hands createOrAdoptObject the SAME requestId it used
+    // the first time, exactly like requested_id above already relies on for the request_id dialect),
+    // and distinct per request (a different article/run gets its own requestId). A timestamp or
+    // attempt counter would defeat the point — either would mint a NEW key on the very retry this
+    // exists to catch. On the server_minted dialect (platform), where a 409 cannot be adopted (see
+    // the guard below), this is what actually closes the gap: a retry now replays the first attempt's
+    // stored object_create result instead of minting a second object.
+    created = await call("object_create", { ...args, idempotency_key: requestId });
   } catch (error) {
     if (dialect.objectIdSource !== "request_id" || !isAlreadyExistsRefusal(error)) throw error;
     // Named on the run log, not swallowed: "this run re-entered" and "this run created" are different
