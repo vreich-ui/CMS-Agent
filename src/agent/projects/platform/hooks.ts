@@ -144,7 +144,13 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   if (!clientValidation.valid) throw new Error(`object_validate_rejected: ${formatValidationIssues(clientValidation.issues)}`);
 
   // e. Patch under the lock, pinned to the checked-out record version.
-  await call("object_patch", { object_type: ctx.clientObjectType, object_id: objectId, lock_token: lockToken, expected_record_version: recordVersion, patch: candidatePatch });
+  // The arg is `ops`, NOT `patch`. object_validate takes `candidate_patch` and object_patch takes
+  // `ops` — the same array under two different names on two adjacent calls, which is exactly how this
+  // was written as `patch` on both and refused with
+  //   status 400: Invalid request fields. (issues: ops: Invalid input: expected array, received undefined)
+  // The client's schema declares `ops` required (mcp-tool-definitions-2.ts, object_patch), so an
+  // unknown `patch` key is dropped and the required one is simply missing.
+  await call("object_patch", { object_type: ctx.clientObjectType, object_id: objectId, lock_token: lockToken, expected_record_version: recordVersion, ops: candidatePatch });
 
   // f. Publish (commit the export — NOT a release; board B2). Omitting published_time means
   // "immediate" per the client's M-6 pin rules, so it is only sent when the caller pinned a time.

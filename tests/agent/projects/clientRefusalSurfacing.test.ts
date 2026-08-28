@@ -380,10 +380,28 @@ describe("a clean publish is byte-for-byte what it always was", () => {
       { tool: "object_create", args: { object_type: "content_item", site: "site_drlurie", body: { slug: "live-title", title: "Live Title", nodes: BODY.nodes }, requested_id: REQUEST_ID, idempotency_key: REQUEST_ID } },
       { tool: "object_checkout", args: { object_type: "content_item", object_id: REQUEST_ID, agent_name: "cms-agent", owner_id: "cms-agent", owner_label: "CMS-Agent Publishing Conductor" } },
       { tool: "object_validate", args: { object_type: "content_item", object_id: REQUEST_ID, candidate_patch: patch } },
-      { tool: "object_patch", args: { object_type: "content_item", object_id: REQUEST_ID, lock_token: "lock_123", expected_record_version: 2, patch } },
+      // `ops`, not `patch`. This fixture said `patch` for months because it was written from the code
+      // rather than from the client's advertised schema, so it pinned the defect in place instead of
+      // catching it: object_patch declares `ops` REQUIRED, and every real publish was refused with
+      // "ops: Invalid input: expected array, received undefined" (2026-08-28,
+      // run_1787930929962_njffct). The array is identical to object_validate's `candidate_patch` —
+      // one array, two arg names on adjacent calls, which is what made the slip so easy.
+      { tool: "object_patch", args: { object_type: "content_item", object_id: REQUEST_ID, lock_token: "lock_123", expected_record_version: 2, ops: patch } },
       { tool: "object_publish", args: { object_type: "content_item", object_id: REQUEST_ID, lock_token: "lock_123" } },
       { tool: "object_checkin", args: { object_type: "content_item", object_id: REQUEST_ID, lock_token: "lock_123" } }
     ]);
+    // The names the CLIENT requires, asserted as names rather than trusted from the fixture above.
+    // Every publish defect this file records has been a wire-shape mismatch — a missing object_type,
+    // a lock token read under the wrong key, this `ops`. The arg names are the contract, so they get
+    // an assertion of their own that reads as a statement about the client, not about our code.
+    const argKeys = (tool: string) => Object.keys(calls.find((entry) => entry.tool === tool)!.args).sort();
+    expect(argKeys("object_patch"), "object_patch declares ops REQUIRED and does not know `patch`")
+      .toEqual(["expected_record_version", "lock_token", "object_id", "object_type", "ops"]);
+    expect(argKeys("object_validate"), "object_validate takes candidate_patch, not ops")
+      .toEqual(["candidate_patch", "object_id", "object_type"]);
+    expect(JSON.stringify(calls.find((entry) => entry.tool === "object_patch")), "no stray `patch` key survives")
+      .not.toContain("\"patch\"");
+
     // `schema_version` never crosses the wire, and the create is a create — not an adoption.
     expect(JSON.stringify(calls)).not.toContain("client_object.v1");
     expect(outcome.objectOrigin).toBe("created");
