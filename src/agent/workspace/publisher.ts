@@ -26,7 +26,7 @@ import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks, type PublishExecutionOutcome, type PublishObjectOrigin, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
-import { describeOperatorDecisionSource, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
+import { articleBodyFingerprint, describeOperatorDecisionSource, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
 import { ClientToolRefusalError } from "../projects/clientToolResult.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
 import { repositoryManager } from "../runtime/repositories.js";
@@ -157,7 +157,9 @@ const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, 
   // structurally-present affirmative decision record (decision: "go") from publication_controller;
   // an absent record, prose-only approval, hedging, or malformed output closes the gate with the
   // reason named. This inverts the old prompt-side "execute unless explicitly withheld" posture.
-  const decision = readPublicationDecision(findPublicationDecision(run));
+  // The expected fingerprint turns "the controller said no" into "the controller has not judged THIS
+  // body" where those differ — see publishDecision's staleness note.
+  const decision = readPublicationDecision(findPublicationDecision(run), { bodyFingerprint: articleBodyFingerprint(findArticleBodyEnvelope(run)) });
   const gates: PublishGate[] = [
     { name: "operator_enabled", passed: operatorEnabled, reason: operatorEnabled ? undefined : `Publishing is not enabled for ${config.projectId}; set ${publishEnabledEnvVar(config)}=true in the deployment.` },
     { name: "publish_authorized", passed: authority.authorized, reason: authority.authorized ? undefined : `${authority.code}: ${authority.reason}` },
@@ -189,8 +191,7 @@ const evaluateGates = (config: ProjectConnectionConfig, input: PublishRunInput, 
   };
 };
 
-const findArticleBody = (run: WorkflowExecutionRecord): unknown =>
-  run.stageOutputs?.article_body ?? run.nodes.find((node) => node.nodeId === "article_body")?.output ?? run.entrypoint?.output;
+const findArticleBody = (run: WorkflowExecutionRecord): unknown => findArticleBodyEnvelope(run);
 
 // R-23 — the article_body node emits the CLIENT-shaped envelope
 // ({artifact, summary, clientProjectId, clientObjectType, contractSource, body}), and the client's own
