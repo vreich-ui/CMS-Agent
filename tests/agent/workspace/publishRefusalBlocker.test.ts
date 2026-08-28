@@ -150,6 +150,36 @@ describe("a client refusal reaches the operator as a typed blocker with the clie
     expect(validateOutput(output, getWorkspaceNode("publish_executor")?.outputSchema).ok).toBe(true);
   });
 
+  // -----------------------------------------------------------------------------------------------
+  // run_1787862284296_x53xz0 (dr-lurie, 2026-08-27): object_create SUCCEEDED — the object was minted —
+  // and object_checkout then refused. The hook threw before it could return the id, which it only ever
+  // returned on the SUCCESS path, so the blocked record named NO object: the run read "Nothing was
+  // published" for an object sitting on the client, and the retry re-created and 409'd forever. The
+  // id now rides home on the failure like any other fact the sequence proved.
+  it("names the object a FAILED publish left behind, so a human and a retry can find it", async () => {
+    const { result, client, output } = await runEngine({ object_checkout: clientRefusal("object is checked out by another owner") });
+
+    // The create landed — this run mutated the client — and stopped at the very next verb.
+    expect(client.calls).toEqual(["object_create", "object_checkout"]);
+    expect(output.publishCommitted).toBe(false);
+    expect(output.blocker!.step).toBe("object_checkout");
+
+    // THE FIX: the created object is named on the record the operator reads.
+    expect(output.receipts.objectId).toBe("obj_platform_9912");
+    expect(output.receipts.objectOrigin).toBe("created");
+    expect(output.approvedAction.clientObjectId).toBe("obj_platform_9912");
+    expect(output.summary).toContain("A client object DOES exist for this request (obj_platform_9912");
+    expect(output.blocker!.message).toContain("A client object EXISTS for this request (obj_platform_9912)");
+    expect(output.notes.some((note) => note.includes("A client object EXISTS but was NOT published: obj_platform_9912"))).toBe(true);
+    // …and run-visibly, next to the partial-write count that used to be the only hint anything landed.
+    expect((result as { warnings: string[] }).warnings).toEqual([
+      "publish_execution_blocked:publish_step_failed",
+      "publish_left_client_object:obj_platform_9912",
+      "publish_partial_client_writes:2"
+    ]);
+    expect(validateOutput(output, getWorkspaceNode("publish_executor")?.outputSchema).ok).toBe(true);
+  });
+
   it("leaves the healthy path untouched: every step lands and the receipts are the client's own facts", async () => {
     const { client, output } = await runEngine({});
 

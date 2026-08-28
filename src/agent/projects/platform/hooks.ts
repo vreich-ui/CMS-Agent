@@ -11,15 +11,15 @@ import {
   JUDGEMENT_SUBSTRATE_KEYS,
   buildArticleCandidatePatch,
   buildCreateBody,
+  createOrAdoptObject,
   describeCandidatePatch,
-  findObjectId,
   findRecordVersion,
   formatValidationIssues,
   parseValidateResult
 } from "../objectDialect.js";
 import { checkedClientCall, describeClientCallFailure } from "../clientToolResult.js";
 import { findLockToken } from "../toolResultSearch.js";
-import type { PublishExecutionContext, PublishExecutionOutcome } from "../projectHooks.js";
+import type { PublishExecutionContext, PublishExecutionOutcome, PublishObjectOrigin } from "../projectHooks.js";
 
 // The object-native publish dialect agreed on the alignment board:
 //   object_create -> object_checkout -> object_validate -> object_patch -> object_publish -> object_checkin
@@ -62,22 +62,34 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   //    and still carries the full candidate — it is what keeps re-entry idempotent.
   //
   //    S3 item 8: a shell the conductor already created for this request is patched, not re-created.
+//    RE-ENTRY: createOrAdoptObject (../objectDialect.ts) is the shared create step, so both tenants
+//    of this substrate speak one code path. Its already-exists adoption is guarded on
+//    objectIdSource === "request_id" and therefore NEVER fires for platform: this client's ids are
+//    server-minted (D2c), so a 409 identifies no particular object — we never told the server which
+//    id to use — and there is nothing this run could safely adopt. The refusal is rethrown as before.
   let objectId: string;
+  let objectOrigin: PublishObjectOrigin;
   if (ctx.existingObjectId) {
     objectId = ctx.existingObjectId;
+    objectOrigin = "conductor_shell";
   } else {
-    const created = await call("object_create", {
-      object_type: ctx.clientObjectType,
-      site: dialect.siteObjectId,
-      body: buildCreateBody(ctx.body, EXCLUDED_CLIENT_BODY_KEYS)
+    const creation = await createOrAdoptObject({
+      project: "platform",
+      call,
+      dialect,
+      requestId: ctx.requestId,
+      args: {
+        object_type: ctx.clientObjectType,
+        site: dialect.siteObjectId,
+        body: buildCreateBody(ctx.body, EXCLUDED_CLIENT_BODY_KEYS)
+      }
     });
-    // Reached ONLY when the client did not signal an error — so this now means what it says: the
-    // create SUCCEEDED and the success carried no id. It is not the catch-all it used to be; a
-    // refusal is a ClientToolRefusalError naming object_create and quoting the client.
-    const mintedId = findObjectId(created);
-    if (mintedId === undefined) throw new Error("create_missing_object_id: object_create returned a SUCCESS result (no isError) that carries no server-minted object id (object_id/id).");
-    objectId = String(mintedId);
+    objectId = creation.objectId;
+    objectOrigin = creation.origin;
   }
+  // Handed to the run HERE, before any step that can throw: a publish that dies after the create must
+  // still name the object it left behind (run_1787862284296_x53xz0 named none).
+  ctx.noteObjectId?.({ objectId, origin: objectOrigin });
 
   // b. Checkout: take the edit lock and learn the record version the patch must expect.
   const checkout = await call("object_checkout", { object_type: ctx.clientObjectType, object_id: objectId, ...ctx.owner });
@@ -140,7 +152,7 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
     console.warn("platform.object_checkin_refused", JSON.stringify({ objectId, clientError: describeClientCallFailure(error) }));
   }
 
-  return { result: publishResult, objectId, clientValidation };
+  return { result: publishResult, objectId, objectOrigin, clientValidation };
 };
 
 export const platformProjectHooks = {

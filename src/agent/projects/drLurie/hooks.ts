@@ -12,15 +12,15 @@ import {
   JUDGEMENT_SUBSTRATE_KEYS,
   buildArticleCandidatePatch,
   buildCreateBody,
+  createOrAdoptObject,
   describeCandidatePatch,
-  findObjectId,
   findRecordVersion,
   formatValidationIssues,
   parseValidateResult
 } from "../objectDialect.js";
 import { checkedClientCall, describeClientCallFailure } from "../clientToolResult.js";
 import { findLockToken } from "../toolResultSearch.js";
-import type { PublishExecutionContext, PublishExecutionOutcome } from "../projectHooks.js";
+import type { PublishExecutionContext, PublishExecutionOutcome, PublishObjectOrigin } from "../projectHooks.js";
 
 const validateHandoffPolicy = (payload: { contentSource?: unknown; articleBody?: unknown }): ArtifactPolicyWarning[] => [
   // Article bodies get the full artifact policy: inline image placement + raw artifact URL rules
@@ -77,28 +77,40 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   //    S3 item 8: when the conductor already created the content-item shell for this request (before
   //    artifact_plan), that object is patched — a second object_create under the same requested_id
   //    would either collide or fork the request.
+//    RE-ENTRY (2026-08-27, run_1787862284296_x53xz0): a create refused with the client's own
+//    `status 409: Object already exists` is ADOPTED rather than thrown, because this dialect mints
+//    the object id from the request id — so that 409 can only mean "this exact request's object is
+//    already there", i.e. an earlier attempt of this run created it and died before it could say so.
+//    createOrAdoptObject owns both guards (../objectDialect.ts); a server-minted dialect never
+//    adopts, and any other refusal still stops the sequence exactly as before.
   let objectId: string;
+  let objectOrigin: PublishObjectOrigin;
   if (ctx.existingObjectId) {
     objectId = ctx.existingObjectId;
+    objectOrigin = "conductor_shell";
   } else {
-    const created = await call("object_create", {
-      object_type: ctx.clientObjectType,
-      site: dialect.siteObjectId,
-      // The body is REQUIRED at create time: this platform validates it BEFORE persisting
-      // (content_item requires slug/title/nodes), so the create-empty-then-patch dialect this hook
-      // used to speak was a 422 that never made an object. The patch step below is unchanged and
-      // still carries the full candidate, which is what keeps re-entry idempotent.
-      body: buildCreateBody(ctx.body, EXCLUDED_META_KEYS),
-      ...(dialect.objectIdSource === "request_id" ? { requested_id: ctx.requestId } : {})
+    const creation = await createOrAdoptObject({
+      project: "dr_lurie",
+      call,
+      dialect,
+      requestId: ctx.requestId,
+      args: {
+        object_type: ctx.clientObjectType,
+        site: dialect.siteObjectId,
+        // The body is REQUIRED at create time: this platform validates it BEFORE persisting
+        // (content_item requires slug/title/nodes), so the create-empty-then-patch dialect this hook
+        // used to speak was a 422 that never made an object. The patch step below is unchanged and
+        // still carries the full candidate, which is what keeps re-entry idempotent.
+        body: buildCreateBody(ctx.body, EXCLUDED_META_KEYS),
+        ...(dialect.objectIdSource === "request_id" ? { requested_id: ctx.requestId } : {})
+      }
     });
-    // Reached ONLY when the client did not signal an error — so this now means what it says: the
-    // create SUCCEEDED and the success carried no id. On run_1787656120374_18bobg it was raised for
-    // a create the client had refused outright (object_inventory proved no object existed), which is
-    // how a refusal came to be reported as an unfamiliar response shape. It is meant to be rare.
-    const mintedId = findObjectId(created);
-    if (mintedId === undefined) throw new Error("create_missing_object_id: object_create returned a SUCCESS result (no isError) that carries no object id (object_id/id).");
-    objectId = String(mintedId);
+    objectId = creation.objectId;
+    objectOrigin = creation.origin;
   }
+  // The id is handed to the run HERE, before any step that can throw — the whole point of S3's
+  // successor fix: a publish that dies at object_checkout must still name the object it left behind.
+  ctx.noteObjectId?.({ objectId, origin: objectOrigin });
 
   // b. Checkout: take the edit lock and learn the record version the patch must expect.
   const checkout = await call("object_checkout", { object_type: ctx.clientObjectType, object_id: objectId, ...ctx.owner });
@@ -145,7 +157,7 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
     console.warn("dr_lurie.object_checkin_refused", JSON.stringify({ objectId, clientError: describeClientCallFailure(error) }));
   }
 
-  return { result: publishResult, objectId, clientValidation };
+  return { result: publishResult, objectId, objectOrigin, clientValidation };
 };
 
 export const drLurieProjectHooks = {

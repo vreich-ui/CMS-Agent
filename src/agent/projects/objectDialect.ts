@@ -9,6 +9,8 @@
 // shapes. Those are per-site parameters and come from the project config's objectDialect block.
 
 import { findDeep } from "./toolResultSearch.js";
+import { isAlreadyExistsRefusal, type ClientToolCall } from "./clientToolResult.js";
+import type { ProjectObjectDialect } from "./projectTypes.js";
 
 // D7 (Wolf, alignment board 2026-07-28): the client's judgement substrate. The engine must never
 // write these into a client object, even though set_article_meta's open `fields` map would accept
@@ -59,6 +61,62 @@ export const buildCreateBody = (
   body: Record<string, unknown>,
   excludedKeys: ReadonlySet<string> = EXCLUDED_CLIENT_BODY_KEYS
 ): Record<string, unknown> => Object.fromEntries(Object.entries(body).filter(([key]) => !excludedKeys.has(key)));
+
+// WHERE THE OBJECT ID COMES FROM, recorded so a receipt reader can tell a first attempt from a
+// re-entry. "created" is the ordinary path; "adopted_existing" means this run found the object its
+// own request id names already there and continued over it; "conductor_shell" is the content-item
+// shell artifact_plan made before this publish began (S3 item 8).
+export type PublishObjectOrigin = "created" | "adopted_existing" | "conductor_shell";
+
+export type ObjectCreation = { objectId: string; origin: Extract<PublishObjectOrigin, "created" | "adopted_existing"> };
+
+/**
+ * object_create for a publish that may be a RE-ENTRY — the shared half of both tenants' step (a).
+ *
+ * Live, 2026-08-27 (run_1787862284296_x53xz0, dr-lurie): object_create SUCCEEDED and object_checkout
+ * then refused, so the attempt threw before it could return the id it had just minted. The run kept
+ * no record of the object, and every retry re-created and 409'd — the run was unrecoverable through
+ * the pipeline for an article that already existed.
+ *
+ * TWO GUARDS, both required, because adopting the WRONG object would publish somebody else's article
+ * under this request's approval:
+ *   1. the dialect must mint the object id from the request id (objectIdSource "request_id"). On a
+ *      server-minted dialect a 409 identifies no object at all — we never told the server which id to
+ *      use — so there is nothing to adopt and the refusal is rethrown untouched.
+ *   2. the refusal must be the client's genuine already-exists answer: status 409 AND its own
+ *      "already exists" sentence (isAlreadyExistsRefusal).
+ * The adopted id is then the id the create REQUESTED — `requestId`, the exact value sent as
+ * `requested_id` — never an id read back out of an error, and never a guess.
+ */
+export async function createOrAdoptObject(params: {
+  // Log prefix, e.g. "dr_lurie" — the same convention the hooks' checkin warning uses.
+  project: string;
+  // The CHECKED call (checkedClientCall), so a refusal arrives as a typed ClientToolRefusalError.
+  call: ClientToolCall;
+  dialect: ProjectObjectDialect;
+  requestId: string;
+  args: Record<string, unknown>;
+}): Promise<ObjectCreation> {
+  const { project, call, dialect, requestId, args } = params;
+  let created: unknown;
+  try {
+    created = await call("object_create", args);
+  } catch (error) {
+    if (dialect.objectIdSource !== "request_id" || !isAlreadyExistsRefusal(error)) throw error;
+    // Named on the run log, not swallowed: "this run re-entered" and "this run created" are different
+    // facts about a live site, and only one of them left an object behind on an earlier attempt. The
+    // structured counterpart travels home on the publish record (PublishExecutionReceipts.objectOrigin).
+    console.warn(`${project}.object_create_adopted_existing`, JSON.stringify({ objectId: requestId, clientError: error.clientError }));
+    return { objectId: requestId, origin: "adopted_existing" };
+  }
+  // Reached ONLY when the client did not signal an error — so this means what it says: the create
+  // SUCCEEDED and the success carried no id.
+  const mintedId = findObjectId(created);
+  if (mintedId === undefined) {
+    throw new Error(`create_missing_object_id: object_create returned a SUCCESS result (no isError) that carries no ${dialect.objectIdSource === "server_minted" ? "server-minted " : ""}object id (object_id/id).`);
+  }
+  return { objectId: String(mintedId), origin: "created" };
+}
 
 // What an object_create answer actually says, read at EVERY envelope level this substrate uses.
 // The platform answers {content:[{type:"text",text:JSON}], structuredContent:{record:{object_id,…}}},

@@ -156,6 +156,35 @@ export class ClientToolRefusalError extends Error {
   }
 }
 
+// THE ONE REFUSAL A RE-ENTERING PUBLISH MAY ADOPT RATHER THAN FAIL ON.
+//
+// Live, 2026-08-27: run_1787862284296_x53xz0 (dr-lurie) got through object_create — which SUCCEEDED,
+// minting the object — and then died at object_checkout, so the run held no record of the object it
+// had just made. Every `workflow_retry_node publish_executor` after that called object_create again
+// and got `status 409: Object already exists`, and the run was permanently unrecoverable through the
+// pipeline. For a dialect that mints the object id DETERMINISTICALLY from the request id, that 409
+// says something precise and useful: "the object THIS request names already exists" — which is the
+// re-entry case, not a collision with somebody else's work.
+//
+// Matched on the STRUCTURED status the client attached (409) AND its own sentence, never on a loose
+// substring of any error: this substrate answers with 409 for several distinct facts, and only the
+// duplicate-object-id one carries "already exists". The client's documented answers on object_create
+// are an invalid `requested_id` 400, `creation_restricted` 403, and — the case here — duplicate
+// object id 409 `{error:'Object already exists'}` (docs/projects/dr-lurie-agent-publishing-policy.md
+// §9.3). The other 409s on this substrate (`duplicate_target`, `blind_revert_refused`, a
+// record-version conflict) belong to object_patch and say something else entirely, so requiring the
+// sentence as well as the status is what keeps this from widening into "any conflict is a re-entry".
+const ALREADY_EXISTS_SENTENCE = /\balready exists\b/i;
+
+/**
+ * True when the client refused BECAUSE the object it was asked to create is already there — status
+ * 409 plus its own "already exists" sentence. It says nothing about WHICH object: only a caller that
+ * knows the id it requested (a deterministic request-id dialect) may read it as re-entry, and that
+ * judgement deliberately stays at the call site.
+ */
+export const isAlreadyExistsRefusal = (error: unknown): error is ClientToolRefusalError =>
+  error instanceof ClientToolRefusalError && error.statusCode === 409 && ALREADY_EXISTS_SENTENCE.test(error.clientError);
+
 /**
  * Pass a client tool result through, or throw the client's own refusal. The ONLY thing that makes a
  * result a refusal is `isError`; a result whose shape we cannot read is NOT one, and must keep
