@@ -92,7 +92,16 @@ const executePublish = async (ctx: PublishExecutionContext): Promise<PublishExec
   ctx.noteObjectId?.({ objectId, origin: objectOrigin });
 
   // b. Checkout: take the edit lock and learn the record version the patch must expect.
-  const checkout = await call("object_checkout", { object_type: ctx.clientObjectType, object_id: objectId, ...ctx.owner });
+  // agent_name (not owner_id/owner_label — the platform never reads those on this verb, by
+  // design: a caller-set owner_id would let anyone claim any lock) is what platform's
+  // object_checkout actually records as lock.owner_id. Without it every checkout recorded
+  // the object-store.ts fallback sentinel "unattributed-agent" (2026-08-28 finding).
+  const checkout = await call("object_checkout", {
+    object_type: ctx.clientObjectType,
+    object_id: objectId,
+    agent_name: ctx.owner.owner_id,
+    ...ctx.owner
+  });
   const lockToken = findLockToken(checkout);
   if (!lockToken) throw new Error("checkout_missing_lock_token: object_checkout returned a SUCCESS result (no isError) that carries no lock_token.");
   const recordVersion = findRecordVersion(checkout);
