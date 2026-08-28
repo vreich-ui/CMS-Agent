@@ -189,8 +189,8 @@ describe("live publish gates", () => {
     // and record version.
     const patch = adapter.calls.find((call) => call.tool === "object_patch")!.args as any;
     expect(patch).toMatchObject({ object_id: REQUEST_ID, lock_token: "lock_123", expected_record_version: 2 });
-    expect(patch.patch[0]).toMatchObject({ op: "set_article_meta" });
-    expect(patch.patch.slice(1).every((op: any) => op.op === "upsert_node")).toBe(true);
+    expect(patch.ops[0]).toMatchObject({ op: "set_article_meta" });
+    expect(patch.ops.slice(1).every((op: any) => op.op === "upsert_node")).toBe(true);
     if (result.mode === "live") {
       expect((result.result as any).statusCode).toBe(201);
       expect(result.clientValidation).toMatchObject({ tool: "object_validate", valid: true, issues: [] });
@@ -203,10 +203,10 @@ describe("live publish gates", () => {
     await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
 
     const patch = adapter.calls.find((call) => call.tool === "object_patch")!.args as any;
-    const meta = patch.patch[0].fields as Record<string, unknown>;
+    const meta = patch.ops[0].fields as Record<string, unknown>;
     expect(meta).not.toHaveProperty("schema_version");
     expect(meta).not.toHaveProperty("nodes");
-    expect(JSON.stringify(patch.patch[0])).not.toContain("client_object.v1");
+    expect(JSON.stringify(patch.ops[0])).not.toContain("client_object.v1");
   });
 
   it("aborts before object_patch/object_publish when the client validator rejects, and names the taxonomy registry on a taxonomy blocker", async () => {
@@ -457,9 +457,9 @@ describe("per-project publish execution hooks", () => {
     expect(patch).toMatchObject({ object_id: "obj_srv_991", lock_token: "lock_p1", expected_record_version: 3 });
     // `fields` is the contract-required key (live arg_schema via the alignment board, platform#014);
     // `meta` would be refused as invalid_op with `fields` missing.
-    expect(patch.patch[0]).toMatchObject({ op: "set_article_meta", fields: { slug: "live-title", title: "Live Title", deck: "A deck line." } });
-    expect(patch.patch[0].fields.nodes).toBeUndefined();
-    expect(patch.patch.slice(1).map((op: any) => op.op)).toEqual(["upsert_node", "upsert_node"]);
+    expect(patch.ops[0]).toMatchObject({ op: "set_article_meta", fields: { slug: "live-title", title: "Live Title", deck: "A deck line." } });
+    expect(patch.ops[0].fields.nodes).toBeUndefined();
+    expect(patch.ops.slice(1).map((op: any) => op.op)).toEqual(["upsert_node", "upsert_node"]);
   });
 
   it("passes clientObjectType through to object_create verbatim", async () => {
@@ -708,7 +708,7 @@ describe("D7 — the engine never writes judgements into a client object", () =>
 
     expect(result.published).toBe(true);
     const patchCall = adapter.calls.find((call) => call.tool === "object_patch")!;
-    const ops = patchCall.args.patch as Array<Record<string, unknown>>;
+    const ops = patchCall.args.ops as Array<Record<string, unknown>>;
     const meta = ops.find((op) => op.op === "set_article_meta")!.fields as Record<string, unknown>;
     for (const key of ["scores", "claims", "sources", "compliance", "emotional_strategy", "lineage"]) {
       expect(meta, `judgement key ${key} must never reach the client`).not.toHaveProperty(key);
