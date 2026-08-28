@@ -89,3 +89,58 @@ describe("readiness content checks (S3 item 7)", () => {
     expect(checks.find((c) => c.key === "media_artifacts_verified")?.detail).toContain("/pdf/req_x/b.pdf");
   });
 });
+
+// 2026-08-28, run_1787919896283_yybhg0 — the media scan walked body.nodes[*] only.
+//
+// Dr. Lurie's content_item contract declares ONE rendered image, at the body ROOT (`image {src, alt}`),
+// and no media field on any node. So a run whose hero was generated, verified, and bound into exactly
+// the field the contract names was reported two contradictory ways at once: media_artifacts_verified
+// "no media artifacts" (a pass, on a body that has one) and media_requested_vs_delivered "the body
+// carries 0 verified media reference(s)" (a fail, on a body that carries one). The deterministic
+// publication_controller then returned decision "no_go" with the single blocker
+// "publish_readiness: media_requested_vs_delivered", and the run sat at the publish gate with a
+// perfectly good article.
+//
+// Two halves to the fix, and both are pinned here: the scan has to LOOK at the body root, and the
+// envelope's own artifactReferences record — written by artifact_plan, which is the node whose job is
+// to verify — has to count as verification evidence when a caller passes no verifiedMediaRefs of its
+// own. That second half never relaxes the rule it looks like it relaxes: only entries explicitly
+// marked verified:true count, so an in-flight or unverified slot still fails exactly as before.
+describe("root-level rendered media (run_1787919896283_yybhg0)", () => {
+  const HERO_PUBLIC = "/img/req_agent_snake_oil_skincare_scams_history_20260828_01/260c0d5cc8d81f113f8c9f067ae67ce7dd5b98c2e71ea7e497cb6d24dc1f177f.webp";
+  const HERO_BLOB = "image/req_agent_snake_oil_skincare_scams_history_20260828_01/260c0d5cc8d81f113f8c9f067ae67ce7dd5b98c2e71ea7e497cb6d24dc1f177f.webp";
+  const rootImageBody = (extra: Record<string, unknown> = {}) => envelope({
+    slug: "snake-oil-skincare-scams-history",
+    title: "What beauty marketing keeps promising",
+    image: { src: HERO_PUBLIC, alt: "An archival-inspired arrangement of vintage beauty jars." },
+    nodes: [{ id: "n_001", kind: "content", public: { title: "T", body: PARAGRAPH }, private: { strategy: "hook", intent: "reassure" } }]
+  }, extra);
+  const verifiedEnvelope = { artifactReferences: [{ slotId: "hero_historical_beauty_claims", artifactReference: { blobKey: HERO_BLOB }, publicPath: HERO_PUBLIC, verified: true }] };
+  const briefAskedForOne = { stageOutputs: { brief_architect: { mediaSlots: [{ slotId: "hero_historical_beauty_claims" }] } } };
+
+  it("finds a rendered image bound at the body root, not only on nodes", () => {
+    expect(mediaRefsOf(rootImageBody())).toContain(HERO_PUBLIC);
+  });
+
+  it("counts the envelope's own verified artifactReferences as evidence when the caller passes none", () => {
+    const r = evaluateDrLuriePublishReadiness({ ...ready, ...briefAskedForOne, articleBody: rootImageBody(verifiedEnvelope) });
+    expect(check(r, "media_artifacts_verified")?.status).toBe("pass");
+    expect(check(r, "media_requested_vs_delivered")?.status, JSON.stringify(check(r, "media_requested_vs_delivered"))).toBe("pass");
+    expect(r.blockers).not.toContain("media_requested_vs_delivered");
+  });
+
+  // The half that must NOT get looser: an artifactReferences entry that is not verified is not evidence.
+  it("still fails when the envelope's reference is present but not marked verified", () => {
+    const inFlight = { artifactReferences: [{ slotId: "hero_historical_beauty_claims", artifactReference: { blobKey: HERO_BLOB }, publicPath: HERO_PUBLIC, verified: false }] };
+    const r = evaluateDrLuriePublishReadiness({ ...ready, ...briefAskedForOne, articleBody: rootImageBody(inFlight) });
+    expect(r.status).toBe("no_go");
+    expect(r.blockers).toContain("media_artifacts_verified");
+  });
+
+  // And a root image with no evidence at all is exactly as unacceptable as the node-level probe above.
+  it("still fails when a root image is bound with no verification evidence anywhere", () => {
+    const r = evaluateDrLuriePublishReadiness({ ...ready, ...briefAskedForOne, articleBody: rootImageBody() });
+    expect(r.status).toBe("no_go");
+    expect(r.blockers).toContain("media_artifacts_verified");
+  });
+});
