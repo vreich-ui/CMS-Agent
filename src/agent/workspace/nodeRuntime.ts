@@ -237,6 +237,26 @@ const filterRunsForNodeQuery = (runs: WorkflowExecutionRecord[], filters: NodeEx
     (!filters.to || run.startedAt <= filters.to)
   );
 
+// W1.4 (list-serialization P0) — a `runId` filter used to fall through to the exact same
+// `executionRepository.listRuns({})` call as an unscoped query: every run blob in the ENTIRE
+// workspace, across every project, fetched in full and JSON-parsed via Promise.all, THEN filtered
+// down to the one run actually asked for. Fine against the handful of synthetic runs any unit test
+// seeds; against the real store (54+ runs across dr-lurie/zilberman alone, individual runs 100KB–
+// 1.2MB per workflow_get_run's own documented size) this is tens of MB fetched and parsed on every
+// node.list_executions / node.get_latest_output / node.list_outputs call — live reproduction (see
+// run_1788011844073_ipwrnx) shows this consistently fails the MCP round trip with a proxy-level
+// "Invalid content from server" (the caller times out or the process is starved before the
+// (small, well-formed) compact response can even be constructed) on EVERY call, regardless of
+// runId, because ALL of them paid the full unscoped fetch. A `runId` narrows the answer to exactly
+// one run — ExecutionRepository.getRun is a single targeted blob read for precisely that, already
+// used by workflow.get_run. Route through it instead of the fan-out whenever runId is known; only
+// a query with no runId (spanning runs, e.g. nodeId alone) still needs the broader list.
+const resolveCandidateRuns = async (filters: NodeExecutionFilters, executionRepository: ExecutionRepository): Promise<WorkflowExecutionRecord[]> => {
+  if (!filters.runId) return filterRunsForNodeQuery(await executionRepository.listRuns({}), filters);
+  const run = await executionRepository.getRun(filters.runId);
+  return run ? filterRunsForNodeQuery([run], filters) : [];
+};
+
 const round6 = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
 
 export async function listNodeExecutions(
@@ -244,7 +264,7 @@ export async function listNodeExecutions(
   executionRepository: ExecutionRepository = repositoryManager.getExecutionRepository(),
   usageRepository: UsageRepository = repositoryManager.getUsageRepository()
 ): Promise<NodeExecutionEntry[]> {
-  const runs = filterRunsForNodeQuery(await executionRepository.listRuns({}), filters);
+  const runs = await resolveCandidateRuns(filters, executionRepository);
   // One usage read for the whole call, scoped by whatever of runId/nodeId the caller supplied — the
   // per-entry cost/token join below is then an in-memory match, not N repository round-trips.
   const usageRecords = await usageRepository.list({ runId: filters.runId, nodeId: filters.nodeId });
@@ -280,8 +300,10 @@ export async function listNodeExecutions(
 export async function listNodeOutputs(filters: NodeExecutionFilters = {}, executionRepository: ExecutionRepository = repositoryManager.getExecutionRepository()) {
   // Deliberately independent of listNodeExecutions (which now returns compact status entries, not
   // full run records) — outputs are artifacts, joined from the run list directly, with the same
-  // `?? []` defensiveness so a run missing `.artifacts` can never crash this read.
-  const runs = filterRunsForNodeQuery(await executionRepository.listRuns({}), filters);
+  // `?? []` defensiveness so a run missing `.artifacts` can never crash this read. Same runId
+  // fast-path as listNodeExecutions above (resolveCandidateRuns) — node.get_latest_output is a thin
+  // wrapper over this and is called with a runId far more often than not.
+  const runs = await resolveCandidateRuns(filters, executionRepository);
   return runs
     .flatMap((run) => (run.artifacts ?? []).map((artifact: any) => ({ ...artifact, runId: artifact.runId ?? run.runId })))
     .filter((artifact: any) => (!filters.nodeId || artifact.nodeId === filters.nodeId) && (!filters.artifactType || artifact.type === filters.artifactType) && (!filters.executionId || artifact.executionId === filters.executionId) && (!filters.from || artifact.createdAt >= filters.from) && (!filters.to || artifact.createdAt <= filters.to))
