@@ -205,6 +205,70 @@ export function resolveMaxTurns(config: Record<string, unknown>, toolCount: numb
 const isMaxTurnsExceeded = (error: unknown, message: string): boolean =>
   (error as { name?: string })?.name === "MaxTurnsExceededError" || /max turns?\b.*exceeded/i.test(message);
 
+// W12 — truncation retry (run_1787953591700_nla80z, run_1788011844073_ipwrnx).
+//
+// A model node whose structured output exceeds modelConfig.maxOutputTokens gets its JSON cut off
+// mid-string. The SDK's structured-output parser (agents-core's turnResolution.js) then throws a
+// ModelBehaviorError reading "Invalid output type: Unterminated string in JSON at position N" —
+// indistinguishable, by message alone, from any other malformed-output model_error. Two problems
+// this section fixes: classifying that failure by name, and not retrying it against the SAME cap
+// (which can only truncate again).
+//
+// DETECTION. The SDK exposes a documented `errorHandlers.invalidFinalOutput` hook on run() options
+// (agents-core/dist/runner/errorHandlers.d.ts's RunErrorHandlers) specifically for this error kind.
+// It receives `runData.rawResponses` — the SAME array `state._modelResponses` this dispatch just
+// pushed the failing turn's raw response onto (run.js:455, BEFORE resolveTurnAfterModelResponse can
+// throw at run.js:467) — before the SDK decides what to do with the error. Returning `undefined`
+// from the handler declines to override the outcome (resolveRunErrorHandler treats a falsy result as
+// "not handled"), so the SDK still throws exactly as before; the handler is used purely as a
+// side-channel tap to read the raw response the thrown error itself does not carry (the
+// ModelBehaviorError turnResolution.js constructs at line ~742 is `new ModelBehaviorError(message)` —
+// ONE arg, so its inherited `.state` is `undefined`, not the RunState `resolveTurnAfterModelResponse`
+// had in scope; there is no other way to reach the raw response from outside the SDK).
+//
+// The raw response's `providerData` is the untouched provider payload (openaiResponsesModel.js's
+// getResponse: `providerData: response` — the full OpenAI Responses API object; equally for
+// openaiChatCompletionsModel.js on an openai_compatible/google provider). That is the PROVIDER'S OWN
+// signal: Responses API truncation is `response.status === "incomplete"` with
+// `response.incomplete_details.reason === "max_output_tokens"` (openai's responses.d.ts); a Chat
+// Completions-shaped provider reports it as `choices[0].finish_reason === "length"`.
+//
+// FALLBACK. Not every provider path is guaranteed to carry that signal (a proxy that drops it, a
+// provider this runner has not been taught the shape of yet), so the JSON-parse failure itself is a
+// second, weaker signal — but ONLY when the observed output is at or near the cap that was actually
+// sent. A malformed-JSON response from a model that stopped well under its cap is a real (and
+// different) model defect, not truncation, and must not be relabeled — hence the NEAR_CAP_RATIO gate
+// below, checked against the SAME response's own usage.outputTokens.
+type RawTruncationResponse = { usage?: { outputTokens?: number }; providerData?: unknown };
+
+function providerSignalsTruncation(response: RawTruncationResponse | undefined): boolean {
+  const pd = response?.providerData as Record<string, unknown> | undefined;
+  if (!pd || typeof pd !== "object") return false;
+  const incompleteDetails = pd.incomplete_details as { reason?: string } | undefined;
+  if (pd.status === "incomplete" && incompleteDetails?.reason === "max_output_tokens") return true;
+  const choices = pd.choices as Array<{ finish_reason?: string }> | undefined;
+  if (Array.isArray(choices) && choices[0]?.finish_reason === "length") return true;
+  return pd.finish_reason === "length";
+}
+
+// The parse-failure SHAPE that a mid-string cutoff produces. Deliberately narrow: "Unexpected token"/
+// "Expected ',' or '}'"-style messages indicate genuinely malformed content, not necessarily a cutoff,
+// and must keep failing as model_error — only these two V8 JSON.parse messages are cutoff-shaped.
+const JSON_TRUNCATION_SHAPE = /Unterminated string in JSON|Unexpected end of JSON input/i;
+// How close to the cap the observed output has to be for the parse-failure shape to count as
+// truncation evidence on its own (no provider signal). 90%: comfortably past "the model just
+// happened to stop mid-string for an unrelated reason" while tolerant of the cap/observed-token
+// accounting not lining up to the last token.
+const NEAR_CAP_TRUNCATION_RATIO = 0.9;
+
+// Upper bound on how far the truncation retry may double a node's configured cap. Override per
+// deployment via OPENAI_MAX_OUTPUT_TOKENS_CEILING if a model's real ceiling differs.
+export const DEFAULT_MAX_OUTPUT_TOKENS_CEILING = 128000;
+export const maxOutputTokensCeiling = (): number => {
+  const configured = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS_CEILING);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_MAX_OUTPUT_TOKENS_CEILING;
+};
+
 function instructions(node: WorkspaceNode, deps: unknown, observations: unknown) {
   return [
     "You are the CMS-Agent node runner. Return only structured JSON matching the output schema.",
@@ -321,10 +385,15 @@ export class OpenAINodeRunner implements NodeRunner {
     // BEFORE every request with real accumulated usage. The default provider path resolves the model
     // through the SDK's own OpenAIProvider (same Responses API the bare model-name string uses).
     const guardState: BudgetGuardState = { accrued: { inputTokens: 0, outputTokens: 0 } };
+    // A plain mutable object (not spread into the wrapper): the truncation retry below doubles
+    // settings.maxTokens and updates this SAME object's maxOutputTokens field so the guard's
+    // per-turn cost estimate (budgetGuard.ts's gate(), which reads config.maxOutputTokens on every
+    // call) reflects the larger cap actually being sent, instead of silently under-pricing the retry.
+    const budgetGuardConfig = { nodeId: node.id, model, nodeBudgetUsd, runBudgetUsd, priorSpendUsd, maxOutputTokens };
     let agentModel = buildAgentModel(provider, model);
     if (budgetGuardEngaged) {
       const innerModel = typeof agentModel === "string" ? await new OpenAIProvider().getModel(agentModel) : agentModel;
-      agentModel = wrapModelWithBudgetGuard(innerModel, { nodeId: node.id, model, nodeBudgetUsd, runBudgetUsd, priorSpendUsd, maxOutputTokens }, guardState);
+      agentModel = wrapModelWithBudgetGuard(innerModel, budgetGuardConfig, guardState);
     }
     const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, playbookText), model: agentModel, modelSettings: settings, tools: sdkTools, outputType });
     // Dependency outputs used to be serialized TWICE into every prompt: once inside `input` (the
@@ -353,7 +422,7 @@ export class OpenAINodeRunner implements NodeRunner {
     // exactly the overshoot it was supposed to stop. The guard accumulates actual usage per model
     // response; any exit that leaves accrued usage behind records it (best-effort, like the success
     // path's own telemetry).
-    const recordAccruedUsage = async (failureCode: string, attempt: number): Promise<void> => {
+    const recordAccruedUsage = async (failureCode: string, attempt: number, extraMetadata?: Record<string, unknown>): Promise<void> => {
       // Session E: prefer the SDK-accumulated total across every attempt this dispatch actually
       // completed a response for (cumulativeUsage) over the budget guard's own accrued figure
       // (guardState.accrued), which is populated only when a run budget is configured at all. Both
@@ -371,7 +440,7 @@ export class OpenAINodeRunner implements NodeRunner {
         reasoningTokens: "reasoningTokens" in usable ? (usable as typeof cumulativeUsage).reasoningTokens : undefined,
         cachedInputTokens: "cachedInputTokens" in usable ? (usable as typeof cumulativeUsage).cachedInputTokens : undefined,
         status: "actual",
-        metadata: { executionMode: "openai", partial: true, failureCode, attempt: attempt + 1, attemptsTotal: attempt + 1, turnCount, toolCallCount }
+        metadata: { executionMode: "openai", partial: true, failureCode, attempt: attempt + 1, attemptsTotal: attempt + 1, turnCount, toolCallCount, ...extraMetadata }
       }).catch(() => undefined);
     };
     // Session E: accumulates every ATTEMPT this dispatch obtained a real SDK result for — including a
@@ -398,7 +467,29 @@ export class OpenAINodeRunner implements NodeRunner {
       attempt: String(attempt + 1)
     });
     let turnCount = 0;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // W12 truncation retry — see the DETECTION comment above providerSignalsTruncation. Tracked
+    // outside the loop: `initialMaxOutputTokens` is the node's ORIGINAL configured cap (for the
+    // failure message, even after settings.maxTokens has been doubled); `truncationRetryUsed` grants
+    // exactly ONE doubled-cap retry for the whole dispatch, independently of maxRetries/retryCount —
+    // a second truncation (or a first one with no cap left to raise) fails the node instead of
+    // burning the ordinary validation-retry budget on a request that can only fail the same way
+    // again. `lastInvalidOutputResponses` is the side-channel the invalidFinalOutput errorHandler
+    // (passed to run() below) writes the failing turn's raw response array into; reset before every
+    // attempt so a stale response from an earlier attempt can never be misread as this one's.
+    const initialMaxOutputTokens = numberFrom(settings.maxTokens);
+    let truncationRetryUsed = false;
+    let lastInvalidOutputResponses: RawTruncationResponse[] | undefined;
+    // The loop's normal bound is attempt<=maxRetries, exactly as before; +1 accommodates the single
+    // bonus truncation retry, which can land on any attempt (including the last "normal" one) and
+    // must get one more iteration regardless of retryCount/maxRetries. truncationRetryUsed guarantees
+    // that bonus is spent at most once, so this remains a bounded, terminating loop.
+    for (let attempt = 0; attempt <= maxRetries + 1; attempt++) {
+      // Cast (not a bare `= undefined`): TS's control-flow narrowing otherwise fixes this variable's
+      // type to the literal `undefined` at this assignment and never widens it back after the
+      // errorHandler closure below reassigns it mid-attempt (a call boundary TS's CFA does not model
+      // for captured `let`s) — `.at()` below would then be type-checked against `never`, not the
+      // real union type.
+      lastInvalidOutputResponses = undefined as RawTruncationResponse[] | undefined;
       try {
         // T12.22 — the timeout has to CANCEL, not just stop waiting.
         //
@@ -425,6 +516,12 @@ export class OpenAINodeRunner implements NodeRunner {
         const runOnce = run(agent, prompt, {
           maxTurns, signal: attemptAbort.signal as any,
           tracingDisabled: !tracingEnabled, traceIncludeSensitiveData: false,
+          // Detection-only tap (see the truncation retry comment above the loop): the SDK calls this
+          // BEFORE throwing its "Invalid output type" ModelBehaviorError, handing over the raw
+          // response the thrown error itself does not carry. Returning undefined declines to
+          // override the SDK's own behavior — it still throws exactly as it would with no handler
+          // configured at all; this only lets the catch block below see WHY.
+          errorHandlers: { invalidFinalOutput: ({ runData }: any) => { lastInvalidOutputResponses = runData?.rawResponses; return undefined; } },
           ...(tracingEnabled ? { workflowName: context.run.workflowId, traceMetadata: tracingMetadataFor(attempt) } : {})
         } as any);
         let result: any;
@@ -508,6 +605,57 @@ export class OpenAINodeRunner implements NodeRunner {
             details: { nodeId: node.id, maxTurns, toolCount: effective.length, toolCallLimit: numberFrom(c.toolCallLimit), configuredMaxTurns: numberFrom(c.maxTurns) },
             toolCalls
           };
+        }
+        // W12 truncation classification. Only reachable when the invalidFinalOutput errorHandler
+        // actually fired for THIS attempt (lastInvalidOutputResponses set) — already narrows this to
+        // "the SDK rejected the model's final output", not any other failure shape.
+        const lastRawResponse = lastInvalidOutputResponses?.at(-1);
+        if (lastRawResponse) {
+          const capUsedThisAttempt = numberFrom(settings.maxTokens);
+          const observedOutputTokens = numberFrom(lastRawResponse.usage?.outputTokens);
+          const providerTruncated = providerSignalsTruncation(lastRawResponse);
+          const fallbackTruncated = !providerTruncated && JSON_TRUNCATION_SHAPE.test(msg) &&
+            capUsedThisAttempt !== undefined && observedOutputTokens !== undefined &&
+            observedOutputTokens >= capUsedThisAttempt * NEAR_CAP_TRUNCATION_RATIO;
+          if (providerTruncated || fallbackTruncated) {
+            const ceiling = maxOutputTokensCeiling();
+            const doubledCap = capUsedThisAttempt !== undefined ? Math.min(capUsedThisAttempt * 2, ceiling) : undefined;
+            const canRetryWithDoubledCap = !truncationRetryUsed && capUsedThisAttempt !== undefined &&
+              doubledCap !== undefined && doubledCap > capUsedThisAttempt;
+            if (canRetryWithDoubledCap) {
+              truncationRetryUsed = true;
+              settings.maxTokens = doubledCap;
+              if (budgetGuardEngaged) budgetGuardConfig.maxOutputTokens = doubledCap as number;
+              continue;
+            }
+            const signal = providerTruncated ? "the provider reported the response was cut off at its output-token limit" : `its output (~${observedOutputTokens} tokens) was at or near the ${capUsedThisAttempt}-token cap sent`;
+            const remedy = capUsedThisAttempt === undefined
+              ? `Set modelConfig.maxOutputTokens for this node (no cap was configured, so there is nothing this retry could raise) and retry via workflow_retry_node.`
+              : truncationRetryUsed
+                ? `This dispatch already retried once at double the cap (${capUsedThisAttempt} tokens) and was still truncated. Raise modelConfig.maxOutputTokens above ${capUsedThisAttempt} for this node and retry via workflow_retry_node.`
+                : `Raise modelConfig.maxOutputTokens above ${capUsedThisAttempt} for this node — it is already at or above this runner's ${ceiling}-token retry ceiling, so no automatic retry was attempted — and retry via workflow_retry_node.`;
+            const details = {
+              nodeId: node.id,
+              attempt: attempt + 1,
+              initialMaxOutputTokens,
+              cap: capUsedThisAttempt,
+              outputTokens: observedOutputTokens,
+              retriedAtDoubledCap: truncationRetryUsed,
+              providerSignal: providerTruncated
+            };
+            // Requirement: node.list_executions/node_get must show WHY — attempt, cap used, output
+            // tokens — not just the generic model_error bucket. `details` above lands on the failed
+            // node's execution state (executor.ts: state.output.error.details); this puts the SAME
+            // figures on the usage ledger too, alongside the real token spend that attempt cost.
+            await recordAccruedUsage("truncated", attempt, { cap: capUsedThisAttempt, initialMaxOutputTokens, outputTokens: observedOutputTokens, retriedAtDoubledCap: truncationRetryUsed, providerSignal: providerTruncated });
+            return {
+              ok: false,
+              code: "truncated",
+              message: `Node "${node.id}" produced structured output truncated at its output-token cap (attempt ${attempt + 1}): ${signal}. ${remedy}`,
+              details,
+              toolCalls
+            };
+          }
         }
         if (/aborted|cancel/i.test(msg)) { await recordAccruedUsage("cancelled", attempt); return { ok: false, code: "cancelled", message: "OpenAI node execution was cancelled.", toolCalls }; }
         if (/tool_denied/.test(msg)) { await recordAccruedUsage("tool_denied", attempt); return { ok: false, code: "tool_denied", message: msg, toolCalls }; }
