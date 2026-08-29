@@ -258,3 +258,68 @@ describe("release_executor — the ledger key", () => {
     expect(releaseLedgerKey("run_b", "req_1")).not.toBe(releaseLedgerKey("run_a", "req_1"));
   });
 });
+
+// ---------------------------------------------------------------------------
+// W1.1 regression (2026-08-29, run_1787930929962_njffct): a release that was
+// never confirmed to have landed must NOT be ledgered terminal. The release DID
+// land, the serverless wait cap returned HTTP 504, the 504 was ledgered
+// terminal, and every later retry replayed the stored 504 verbatim and called
+// nothing — while production was already serving the commit. blockedOutput's
+// own note has always promised "nothing here was ledgered as released, so a
+// retry may call release_to_production again"; these tests hold the code to it.
+// ---------------------------------------------------------------------------
+describe("W1.1 — a recoverable release failure is never ledgered terminal", () => {
+  it('ledger:"none" when release_to_production throws (the HTTP 504 wait-cap case)', async () => {
+    const { callTool, calls } = stubCallTool({
+      release_to_production: () => new Error("MCP request failed with HTTP 504.")
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun() as WorkflowExecutionRecord, deps: { callTool } });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.status).toBe("blocked");
+    expect(outcome.output.reason).toBe("release_call_failed");
+    // The whole point: the executor must write NOTHING to the ledger for this.
+    expect(outcome.ledger).toBe("none");
+    expect(calls).toEqual(["release_to_production"]);
+  });
+
+  it('ledger:"none" when the client declines the release (released !== true)', async () => {
+    const { callTool } = stubCallTool({ release_to_production: () => ({ released: false, status: "build_not_confirmed_live" }) });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun() as WorkflowExecutionRecord, deps: { callTool } });
+
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.reason).toBe("release_not_confirmed");
+    expect(outcome.ledger).toBe("none");
+  });
+
+  it('ledger:"pending" when the release landed but verification gave up — re-pollable, never re-released', async () => {
+    const { callTool, calls } = stubCallTool({
+      release_to_production: () => ({ released: true, releaseId: "dep_1", targetCommit: "abc123" }),
+      deploy_status: () => ({ deployStatus: "building", productionConfirmed: false })
+    });
+    const outcome = await runDeterministicReleaseExecutor({
+      run: committedRun() as WorkflowExecutionRecord,
+      deps: { callTool, maxPollAttempts: 1 }
+    });
+
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.reason).toBe("deploy_not_confirmed_after_max_attempts");
+    // pending, not terminal: a later retry re-polls deploy_status and can still reach "executed".
+    expect(outcome.ledger).toBe("pending");
+    expect(outcome.ledgerEntry.status).toBe("pending");
+    expect(calls).toEqual(["release_to_production", "deploy_status"]);
+  });
+
+  it('a genuinely executed release is still ledgered terminal', async () => {
+    const { callTool } = stubCallTool({
+      release_to_production: () => ({ released: true, releaseId: "dep_2", targetCommit: "abc123" }),
+      deploy_status: () => ({ deployStatus: "ready", productionConfirmed: true })
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun() as WorkflowExecutionRecord, deps: { callTool } });
+
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.status).toBe("executed");
+    expect(outcome.ledger).toBe("terminal");
+  });
+});
