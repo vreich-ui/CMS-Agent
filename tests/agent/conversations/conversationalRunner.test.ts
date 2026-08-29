@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanonicalClientManagerAgent } from "../../../src/agent/conversations/agentDefinitions.js";
 import { assembleConversationPrompt, ConversationalRunner } from "../../../src/agent/conversations/conversationalRunner.js";
 import { ConverseError, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_MESSAGES, parseAgentConverseInput, type AgentConverseInput } from "../../../src/agent/conversations/conversationContract.js";
-import type { ConversationProvider } from "../../../src/agent/conversations/conversationProviders.js";
+import { createConversationProvider, type ConversationProvider } from "../../../src/agent/conversations/conversationProviders.js";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 
 // Derived, not hardcoded: bumping the canonical prompt bumps rev and must not break these.
@@ -136,6 +136,28 @@ describe("ConversationalRunner client_manager.turn.v1", () => {
     await expect(runnerFor(new RepositoryManager(), async () => { throw new ConverseError("model_timeout", "late"); }).run(request({ turn_id: "timeout" }))).rejects.toMatchObject({ code: "model_timeout" });
     await expect(runnerFor(new RepositoryManager(), async () => { throw new ConverseError("model_error", "bad"); }).run(request({ turn_id: "model" }))).rejects.toMatchObject({ code: "model_error" });
     await expect(runnerFor(new RepositoryManager(), async () => { throw new ConverseError("budget_exceeded", "provider constraint"); }).run(request({ turn_id: "budget" }))).rejects.toMatchObject({ code: "budget_exceeded" });
+  });
+
+  // Provider-error-details (2026-08-29 incident), end-to-end through agent_converse: wires the REAL
+  // createConversationProvider (an injected fetch stands in for the network) into ConversationalRunner,
+  // rather than a stub that throws the code directly — this proves the HTTP-body classification itself
+  // runs on this path, not just that ConverseError's extra fields pass through.
+  it("classifies a real 429 credit_balance_exhausted body as provider_quota through the full agent_converse path, never budget_exceeded", async () => {
+    const saved = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    try {
+      const fetchImpl: typeof fetch = async () => new Response(JSON.stringify({ error: { type: "invalid_request_error", code: "credit_balance_exhausted", message: "Your credit balance is too low" } }), { status: 429, headers: { "content-type": "application/json" } });
+      const runner = runnerFor(new RepositoryManager(), createConversationProvider(fetchImpl));
+
+      await expect(runner.run(request({ turn_id: "quota" }))).rejects.toMatchObject({
+        code: "provider_quota",
+        providerStatus: 429,
+        providerMessage: expect.stringContaining("credit balance"),
+        operatorAction: expect.stringContaining("Top up")
+      });
+    } finally {
+      if (saved === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = saved;
+    }
   });
 });
 

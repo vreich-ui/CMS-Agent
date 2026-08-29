@@ -30,14 +30,32 @@ export const converseErrorCodes = [
   "model_timeout",
   "model_error",
   "budget_exceeded",
-  "invalid_turn_request"
+  "invalid_turn_request",
+  // Provider-error-details (2026-08-29 incident): a provider's own 429 is now split by WHY, so the
+  // chat shows the real cause instead of a generic model_error/"service unavailable". budget_exceeded
+  // stays reserved for OUR OWN usd budget guard — it is never produced from a provider signal.
+  "provider_quota",
+  "provider_rate_limit"
 ] as const;
 export type ConverseErrorCode = typeof converseErrorCodes[number];
 
+// Provider-error-details fields, present when the failure came from an identifiable provider HTTP
+// response (provider_quota/provider_rate_limit) or from our own budget guard (budget_exceeded);
+// absent for every other code. Own properties (not nested under a generic `details` bag) so callers
+// that merely spread an Error's own keys — see toolKit.ts's toolError() — pick them up automatically.
+export type ConverseErrorDetails = { providerStatus?: number; providerMessage?: string; operatorAction?: string };
+
 export class ConverseError extends Error {
-  constructor(public readonly code: ConverseErrorCode, message: string) {
+  readonly providerStatus?: number;
+  readonly providerMessage?: string;
+  readonly operatorAction?: string;
+
+  constructor(public readonly code: ConverseErrorCode, message: string, details: ConverseErrorDetails = {}) {
     super(`${code}: ${message}`);
     this.name = "ConverseError";
+    this.providerStatus = details.providerStatus;
+    this.providerMessage = details.providerMessage;
+    this.operatorAction = details.operatorAction;
   }
 }
 

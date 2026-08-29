@@ -138,4 +138,33 @@ describe("planRun", () => {
     expect(plan.strategy).toBe("full_run");
     expect(plan.narrowerThanFullRun).toBe(false);
   });
+
+  // Provider-error-details: the failure reason must show WHY, not just the bare code, when the failed
+  // node's persisted output carries a classified provider error or our own budget guard's remedy.
+  it("recommends retry_node and appends the provider's own message + operator remedy for a classified provider error", () => {
+    const failed: NodeExecutionState = {
+      nodeId: "article_body", status: "failed", errors: ["provider_quota", "Node received 429 ..."],
+      output: { error: { code: "provider_quota", message: "Node received 429 ...", providerStatus: 429, providerMessage: "Your credit balance is too low", operatorAction: "Top up openai credit for this project's key, then workflow.retry_node article_body." } }
+    };
+    const plan = planRun(run({ nodes: [failed], status: "failed" }));
+    expect(plan.strategy).toBe("retry_node");
+    expect(plan.retryNodeId).toBe("article_body");
+    expect(plan.reason).toContain("Run failed at article_body (provider_quota) — Your credit balance is too low. Top up openai credit");
+  });
+
+  it("appends only the operator remedy (no dangling dash) for budget_exceeded, which never carries a providerMessage", () => {
+    const failed: NodeExecutionState = {
+      nodeId: "article_body", status: "failed", errors: ["budget_exceeded", "Node stopped before the model turn..."],
+      output: { error: { code: "budget_exceeded", message: "Node stopped before the model turn...", operatorAction: "Run budget 0.5 USD reached (spent 0.5). Raise the budget or stop." } }
+    };
+    const plan = planRun(run({ nodes: [failed], status: "failed" }));
+    expect(plan.reason).toContain("Run failed at article_body (budget_exceeded) — Run budget 0.5 USD reached");
+    expect(plan.reason).not.toContain("undefined");
+  });
+
+  it("leaves the reason exactly as before for a failure with no provider-error fields", () => {
+    const failed: NodeExecutionState = { nodeId: "article_body", status: "failed", errors: ["max_turns_exceeded", "exhausted its agent-loop turn budget"], output: { error: { code: "max_turns_exceeded", message: "exhausted its agent-loop turn budget" } } };
+    const plan = planRun(run({ nodes: [failed], status: "failed" }));
+    expect(plan.reason).toBe(`Run failed at article_body (max_turns_exceeded) with 0 completed stage(s) intact. workflow.retry_node with nodeId "article_body" re-runs just that node and continues; nothing completed is recomputed.`);
+  });
 });

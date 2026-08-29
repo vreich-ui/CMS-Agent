@@ -1,6 +1,7 @@
 import type { ConversationalAgentDefinition } from "./agentDefinitions.js";
 import { ConverseError, type ConversationMessage, type ConversationTool, type ConversationToolCall } from "./conversationContract.js";
 import { resolveProvider } from "../execution/providers/providerRegistry.js";
+import { classifyProviderHttpError, operatorActionForProviderHttpError, truncateProviderMessage } from "../execution/runners/providerHttpErrors.js";
 
 export type ConversationProviderResult = {
   assistantText?: string;
@@ -64,7 +65,13 @@ const errorCodeFrom = (value: unknown): string | undefined => {
   return typeof body?.error?.code === "string" ? body.error.code : typeof body?.code === "string" ? body.code : undefined;
 };
 
-const requestJson = async (fetchImpl: typeof fetch, url: string, init: RequestInit, timeoutMs: number): Promise<unknown> => {
+const errorMessageFrom = (value: unknown): string | undefined => {
+  const body = value as { error?: { message?: unknown }; message?: unknown };
+  const message = body?.error?.message ?? body?.message;
+  return typeof message === "string" && message.trim() ? message.trim() : undefined;
+};
+
+const requestJson = async (fetchImpl: typeof fetch, url: string, init: RequestInit, timeoutMs: number, providerLabel: string): Promise<unknown> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -72,7 +79,19 @@ const requestJson = async (fetchImpl: typeof fetch, url: string, init: RequestIn
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       const providerCode = errorCodeFrom(body);
-      if (providerCode === "budget_exceeded") throw new ConverseError("budget_exceeded", "The provider rejected the request under its configured budget constraint.");
+      // Provider-error-details (2026-08-29 incident): budget_exceeded is reserved for OUR OWN usd
+      // budget guard — it must never be produced from a provider-reported code again (the previous
+      // `providerCode === "budget_exceeded"` special case did exactly that). A provider 429 is now
+      // classified by what it actually says: out-of-credit vs. merely rate-limited.
+      const classified = classifyProviderHttpError(response.status, `${providerCode ?? ""} ${JSON.stringify(body)}`);
+      if (classified) {
+        const providerMessage = truncateProviderMessage(errorMessageFrom(body) ?? `provider_http_${response.status}${providerCode ? `:${providerCode}` : ""}`);
+        throw new ConverseError(classified, providerMessage, {
+          providerStatus: response.status,
+          providerMessage,
+          operatorAction: operatorActionForProviderHttpError(classified, providerLabel, "retrying the turn")
+        });
+      }
       throw new ConverseError("model_error", `provider_http_${response.status}${providerCode ? `:${providerCode}` : ""}`);
     }
     return body;
@@ -104,7 +123,7 @@ export const createConversationProvider = (fetchImpl: typeof fetch = fetch): Con
         messages: anthropicMessages(input.messages),
         ...(input.tools.length ? { tools: input.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.input_schema })) } : {})
       })
-    }, input.timeoutMs) as { content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: unknown }>; usage?: { input_tokens?: number; output_tokens?: number } };
+    }, input.timeoutMs, resolved.label) as { content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: unknown }>; usage?: { input_tokens?: number; output_tokens?: number } };
     const assistantText = (data.content ?? []).filter((block) => block.type === "text").map((block) => block.text ?? "").filter(Boolean).join("\n") || undefined;
     const toolCalls = (data.content ?? []).filter((block) => block.type === "tool_use" && block.id && block.name).map((block) => ({ id: block.id!, name: block.name!, args: block.input && typeof block.input === "object" && !Array.isArray(block.input) ? block.input as Record<string, unknown> : {} }));
     if (!assistantText && toolCalls.length === 0) throw new ConverseError("model_error", "Anthropic returned neither assistant text nor tool calls.");
@@ -121,7 +140,7 @@ export const createConversationProvider = (fetchImpl: typeof fetch = fetch): Con
       messages: openAiMessages(input.systemPrompt, input.messages),
       ...(input.tools.length ? { tools: input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.input_schema } })) } : {})
     })
-  }, input.timeoutMs) as { choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+  }, input.timeoutMs, resolved.label) as { choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
   const message = data.choices?.[0]?.message;
   const assistantText = message?.content || undefined;
   const toolCalls = (message?.tool_calls ?? []).filter((call) => call.type === "function" && call.id && call.function?.name).map((call) => ({ id: call.id!, name: call.function!.name!, args: parseObject(call.function?.arguments) }));

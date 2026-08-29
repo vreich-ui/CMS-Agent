@@ -2507,7 +2507,11 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   if (!result.ok) {
     state.status = result.code === "approval_required" ? "blocked" : result.code === "cancelled" ? "cancelled" : "failed";
     state.errors = [result.code, result.message];
-    state.output = { error: { code: result.code, message: result.message, details: result.details } };
+    // Provider-error-details: providerStatus/providerMessage/operatorAction ride along on the
+    // persisted error so every reader of this node's output (workflow_get_run, node_get_latest_output,
+    // planRun's failure reason) sees WHY a provider call failed, not just that it did. Absent on any
+    // runner result that never set them (undefined keys serialize away, matching the pre-existing shape).
+    state.output = { error: { code: result.code, message: result.message, details: result.details, providerStatus: result.providerStatus, providerMessage: result.providerMessage, operatorAction: result.operatorAction } };
     run.status = state.status;
     run.errors = [...run.errors, `${nextNode.id}:${result.code}`];
     run.updatedAt = completedAt;

@@ -38,10 +38,21 @@ export const tool = (definition: WorkspaceTool) => definition;
 
 // Anything carrying a string `code` is treated as already-typed — this picks up ProjectAdminError
 // (default_project_protected, unknown_project, project_exists) without coupling this module to it.
-const codedError = (error: unknown): { code: string; message: string } | null => {
+// Provider-error-details: ConverseError (agent_converse's thrown error) carries providerStatus/
+// providerMessage/operatorAction as own properties rather than a nested `details` bag (see
+// conversationContract.ts) — duck-typed here, same as `code`, so the chat sees WHY a provider call
+// failed instead of a bare code + message, without this module importing the conversations layer.
+const codedError = (error: unknown): { code: string; message: string } & Record<string, unknown> | null => {
   if (!(error instanceof Error)) return null;
   const code = (error as { code?: unknown }).code;
-  return typeof code === "string" && code.length > 0 ? { code, message: error.message } : null;
+  if (typeof code !== "string" || !code.length) return null;
+  const extra = error as { providerStatus?: unknown; providerMessage?: unknown; operatorAction?: unknown };
+  return {
+    code, message: error.message,
+    ...(typeof extra.providerStatus === "number" ? { providerStatus: extra.providerStatus } : {}),
+    ...(typeof extra.providerMessage === "string" ? { providerMessage: extra.providerMessage } : {}),
+    ...(typeof extra.operatorAction === "string" ? { operatorAction: extra.operatorAction } : {})
+  };
 };
 
 export type ToolErrorEnvelope = { ok: false; error: { code: string; message?: string; issues?: unknown } & Record<string, unknown> };
@@ -50,7 +61,7 @@ export const toolError = (error: unknown): ToolErrorEnvelope => {
   if (error instanceof ZodError) return { ok: false, error: { code: "validation_error", issues: error.issues } };
   if (error instanceof WorkspaceToolError) return { ok: false, error: { code: error.code, message: error.message, ...error.details } };
   const coded = codedError(error);
-  if (coded) return { ok: false, error: { code: coded.code, message: coded.message } };
+  if (coded) return { ok: false, error: coded };
   return { ok: false, error: { code: "tool_error", message: error instanceof Error ? error.message : "Unknown error" } };
 };
 

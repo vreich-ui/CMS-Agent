@@ -23,6 +23,7 @@ import { validateOutput } from "../outputValidator.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { boundDependencyOutput, dependencyOutputMaxChars } from "./OpenAINodeRunner.js";
+import { classifyProviderHttpError, operatorActionForProviderHttpError, truncateProviderMessage } from "./providerHttpErrors.js";
 
 const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
@@ -143,6 +144,24 @@ export class AnthropicNodeRunner implements NodeRunner {
         if (!response.ok) {
           const detail = await response.text().catch(() => "");
           if (attempt < maxRetries && response.status >= 500) continue;
+          // Provider-error-details (2026-08-29 incident): a 429 must never fall into the opaque
+          // model_error bucket below (or, worse, our own budget_exceeded — reserved for OUR usd
+          // budget guard) without saying WHY, so the operator does not lose an hour hunting a code
+          // bug that is actually an empty provider wallet.
+          const classified = classifyProviderHttpError(response.status, detail);
+          if (classified) {
+            const parsedBody = (() => { try { return JSON.parse(detail) as { error?: { message?: unknown } }; } catch { return undefined; } })();
+            const rawMessage = parsedBody?.error?.message;
+            const providerMessage = truncateProviderMessage(typeof rawMessage === "string" && rawMessage.trim() ? rawMessage.trim() : detail);
+            return {
+              ok: false,
+              code: classified,
+              message: `Node "${node.id}" received ${response.status} from anthropic: ${providerMessage}`,
+              providerStatus: response.status,
+              providerMessage,
+              operatorAction: operatorActionForProviderHttpError(classified, "anthropic", `workflow.retry_node ${node.id}`)
+            };
+          }
           return { ok: false, code: "model_error", message: `anthropic_http_${response.status}: ${detail.slice(0, 300)}`, retryable: response.status >= 500 || response.status === 429 };
         }
         const data = await response.json() as AnthropicMessagesResponse;
