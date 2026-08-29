@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { toolError, toolErrorSummary, MissingPatchFieldError, WorkspaceVersionConflictError, WorkspaceToolError } from "../../../src/agent/mcp/workspace/toolKit.js";
+import { ConverseError } from "../../../src/agent/conversations/conversationContract.js";
 
 const call = async (name: string, args: Record<string, unknown> = {}) => {
   process.env.MCP_API_TOKEN = "test-token";
@@ -191,5 +192,28 @@ describe("toolError classification", () => {
 
     expect(summary).toBe("workspace_version_conflict: expected 1, current 2. Reload and re-apply.");
     expect(summary).not.toContain("version_conflict: workspace_version_conflict");
+  });
+
+  // Provider-error-details: agent_converse's thrown ConverseError carries providerStatus/
+  // providerMessage/operatorAction as own properties (never nested under `details`), and toolError's
+  // generic codedError() branch must pick them up by duck-typing, the same way it already picks up
+  // `code` — so the chat sees the provider's real error, not a bare code + message.
+  it("surfaces a ConverseError's providerStatus/providerMessage/operatorAction, not just its code", () => {
+    const error = new ConverseError("provider_quota", "Your credit balance is too low", {
+      providerStatus: 429,
+      providerMessage: "Your credit balance is too low",
+      operatorAction: "Top up openai credit for this project's key, then retrying the turn."
+    });
+
+    expect(toolError(error)).toEqual({
+      ok: false,
+      error: {
+        code: "provider_quota",
+        message: "provider_quota: Your credit balance is too low",
+        providerStatus: 429,
+        providerMessage: "Your credit balance is too low",
+        operatorAction: "Top up openai credit for this project's key, then retrying the turn."
+      }
+    });
   });
 });

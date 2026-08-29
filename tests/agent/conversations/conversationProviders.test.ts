@@ -62,7 +62,7 @@ describe("one-turn conversational providers", () => {
     expect(body).not.toHaveProperty("tools");
   });
 
-  it("maps provider timeout, provider error, and explicit provider budget signals", async () => {
+  it("maps provider timeout and a generic provider error", async () => {
     process.env.OPENAI_API_KEY = "test-key";
     const timeoutFetch: typeof fetch = async (_url, init) => new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
@@ -71,8 +71,29 @@ describe("one-turn conversational providers", () => {
 
     const errorFetch: typeof fetch = async () => new Response(JSON.stringify({ error: { code: "upstream_error" } }), { status: 500, headers: { "content-type": "application/json" } });
     await expect(createConversationProvider(errorFetch)(input())).rejects.toMatchObject({ code: "model_error" });
+  });
 
-    const budgetFetch: typeof fetch = async () => new Response(JSON.stringify({ error: { code: "budget_exceeded" } }), { status: 429, headers: { "content-type": "application/json" } });
-    await expect(createConversationProvider(budgetFetch)(input())).rejects.toEqual(expect.objectContaining<Partial<ConverseError>>({ code: "budget_exceeded" }));
+  // Provider-error-details (2026-08-29 incident): OpenAI returned 429 credit_balance_exhausted; it
+  // surfaced as budget_exceeded on the run and a generic "service unavailable" in the chat. This is
+  // the same real fixture, through agent_converse's own HTTP layer. budget_exceeded must NEVER be
+  // produced from a provider signal again — that code is reserved for OUR OWN usd budget guard (which
+  // ConversationalRunner does not even wire up), so the previous `providerCode === "budget_exceeded"`
+  // special case is gone; every provider 429 is now classified by what it actually says.
+  it("classifies a 429 credit_balance_exhausted as provider_quota (never budget_exceeded), and a plain 429 as provider_rate_limit", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const quotaFetch: typeof fetch = async () => new Response(JSON.stringify({ error: { type: "invalid_request_error", code: "credit_balance_exhausted", message: "Your credit balance is too low" } }), { status: 429, headers: { "content-type": "application/json" } });
+    await expect(createConversationProvider(quotaFetch)(input())).rejects.toEqual(expect.objectContaining<Partial<ConverseError>>({
+      code: "provider_quota",
+      providerStatus: 429,
+      providerMessage: expect.stringContaining("credit balance"),
+      operatorAction: expect.stringContaining("Top up")
+    }));
+
+    const rateLimitFetch: typeof fetch = async () => new Response(JSON.stringify({ error: { type: "rate_limit_error", message: "Too many requests" } }), { status: 429, headers: { "content-type": "application/json" } });
+    await expect(createConversationProvider(rateLimitFetch)(input())).rejects.toEqual(expect.objectContaining<Partial<ConverseError>>({
+      code: "provider_rate_limit",
+      providerStatus: 429,
+      operatorAction: expect.stringContaining("Wait and retry")
+    }));
   });
 });

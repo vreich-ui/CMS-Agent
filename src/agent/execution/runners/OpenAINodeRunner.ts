@@ -12,6 +12,7 @@ import { validateOutput } from "../outputValidator.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult, NodeToolCallRecord } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { NodeBudgetExceededError, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
+import { classifyProviderHttpError, operatorActionForBudgetExceeded, operatorActionForProviderHttpError, truncateProviderMessage } from "./providerHttpErrors.js";
 
 const forbidden = /api[_-]?key|authorization|bearer|jwt|cookie|token|secret|blob.*credential/i;
 const redact = (v: unknown): unknown => typeof v === "string" ? v.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]") : Array.isArray(v) ? v.map(redact) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k,val]) => [k, forbidden.test(k) ? "[REDACTED]" : redact(val)])) : v;
@@ -325,10 +326,10 @@ export class OpenAINodeRunner implements NodeRunner {
       priorSpendUsd = precomputed !== undefined ? precomputed : (await summarizeModelUsage({ runId: context.run.runId })).actualCostUsdEstimate;
       const reserve = estimateModelCost({ model, inputTokens: 1000, outputTokens: maxOutputTokens });
       if (nodeBudgetUsd !== undefined && reserve > nodeBudgetUsd) {
-        return { ok: false, code: "budget_exceeded", message: `Node "${node.id}"'s own budgetUsd ($${nodeBudgetUsd}) cannot cover even one model turn's reserve (~$${reserve}); raise modelConfig.budgetUsd or lower maxOutputTokens.`, details: { reserveUsdEstimate: reserve, nodeBudgetUsd, ceiling: "node" } };
+        return { ok: false, code: "budget_exceeded", message: `Node "${node.id}"'s own budgetUsd ($${nodeBudgetUsd}) cannot cover even one model turn's reserve (~$${reserve}); raise modelConfig.budgetUsd or lower maxOutputTokens.`, details: { reserveUsdEstimate: reserve, nodeBudgetUsd, ceiling: "node" }, operatorAction: operatorActionForBudgetExceeded(nodeBudgetUsd, 0) };
       }
       if (runBudgetUsd !== undefined && priorSpendUsd + reserve > runBudgetUsd) {
-        return { ok: false, code: "budget_exceeded", message: "Estimated node budget would be exceeded.", details: { spentUsdEstimate: priorSpendUsd, reserveUsdEstimate: reserve, budgetUsd: runBudgetUsd, ceiling: "run" } };
+        return { ok: false, code: "budget_exceeded", message: "Estimated node budget would be exceeded.", details: { spentUsdEstimate: priorSpendUsd, reserveUsdEstimate: reserve, budgetUsd: runBudgetUsd, ceiling: "run" }, operatorAction: operatorActionForBudgetExceeded(runBudgetUsd, priorSpendUsd) };
       }
     }
     // Empty allowedTools short-circuits tool resolution: the policy layer denies every tool for
@@ -589,8 +590,34 @@ export class OpenAINodeRunner implements NodeRunner {
             code: "budget_exceeded",
             message: `Node "${node.id}" stopped before the model turn that would cross the ${details.ceiling} budget: estimated spend $${details.spentUsdEstimate} plus ~$${details.prospectiveTurnUsd} for the upcoming turn exceeds the $${details.budgetUsd} ceiling. Caught inside the agent loop before the turn ran, not after.`,
             details: { ...details, stage: "mid_loop" },
+            operatorAction: operatorActionForBudgetExceeded(details.budgetUsd, details.spentUsdEstimate),
             toolCalls
           };
+        }
+        // Provider-error-details (2026-08-29 incident): the openai SDK's APIError (status + the
+        // response body's unwrapped `error` object) propagates straight through the Agents SDK's own
+        // retry wrapper unmodified once it declines to retry (agents-core's getResponseWithRetry
+        // re-throws the exact error `model.getResponse` threw) — so it is still THIS error, not some
+        // SDK-repackaged shape, when it reaches this catch. A 429 must never fall into budget_exceeded
+        // (that code is reserved for OUR OWN guard above) or the opaque model_error bucket below —
+        // classify it by what the provider actually said.
+        const providerStatus = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : undefined;
+        if (providerStatus !== undefined) {
+          const providerBody = (error as { error?: unknown }).error as { message?: unknown } | undefined;
+          const classified = classifyProviderHttpError(providerStatus, `${msg} ${JSON.stringify(providerBody ?? {})}`);
+          if (classified) {
+            const providerMessage = truncateProviderMessage(typeof providerBody?.message === "string" && providerBody.message.trim() ? providerBody.message.trim() : msg);
+            await recordAccruedUsage(classified, attempt);
+            return {
+              ok: false,
+              code: classified,
+              message: `Node "${node.id}" received ${providerStatus} from ${provider.label}: ${providerMessage}`,
+              providerStatus,
+              providerMessage,
+              operatorAction: operatorActionForProviderHttpError(classified, provider.label, `workflow.retry_node ${node.id}`),
+              toolCalls
+            };
+          }
         }
         if (msg === "model_timeout") { await recordAccruedUsage("model_timeout", attempt); return { ok: false, code: "model_timeout", message: "OpenAI node execution timed out.", toolCalls }; }
         // Distinct and actionable: an exhausted turn budget is a configuration problem with one

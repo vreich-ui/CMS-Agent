@@ -177,6 +177,20 @@ export type RunPlan = {
 
 const TERMINAL_NON_RETRYABLE = new Set<ExecutionStatus>(["completed", "cancelled"]);
 
+// Provider-error-details: the failed node's persisted output.error (see executor.ts's
+// executeRunnableNode) carries providerMessage/operatorAction when the failure was a classified
+// provider HTTP error or our own budget guard — everything else (max_turns_exceeded, tool_denied,
+// output_validation_failed, ...) has neither, so this stays a no-op suffix for them, exactly as
+// before. providerMessage is absent for budget_exceeded (it is never a provider signal), so that case
+// still gets its operatorAction without a dangling "— undefined".
+function providerErrorSuffix(output: unknown): string {
+  const error = (output as { error?: { providerMessage?: unknown; operatorAction?: unknown } } | undefined)?.error;
+  const operatorAction = typeof error?.operatorAction === "string" ? error.operatorAction : undefined;
+  if (!operatorAction) return "";
+  const providerMessage = typeof error?.providerMessage === "string" ? error.providerMessage : undefined;
+  return providerMessage ? ` — ${providerMessage}. ${operatorAction}` : ` — ${operatorAction}`;
+}
+
 // Recommend the cheapest way to make progress on a run. Prefers polling/resuming/retrying/late-stage
 // reuse over a full rerun; a full run is recommended only when no reusable late-stage artifact
 // exists yet.
@@ -197,7 +211,7 @@ export function planRun(run: WorkflowExecutionRecord): RunPlan {
         ...base,
         strategy: "retry_node",
         retryNodeId: failedNode.nodeId,
-        reason: `Run failed at ${failedNode.nodeId} (${failedNode.errors?.[0] ?? "unnamed error"}) with ${reusableStages.length} completed stage(s) intact. workflow.retry_node with nodeId "${failedNode.nodeId}" re-runs just that node and continues; nothing completed is recomputed.`,
+        reason: `Run failed at ${failedNode.nodeId} (${failedNode.errors?.[0] ?? "unnamed error"})${providerErrorSuffix(failedNode.output)} with ${reusableStages.length} completed stage(s) intact. workflow.retry_node with nodeId "${failedNode.nodeId}" re-runs just that node and continues; nothing completed is recomputed.`,
         narrowerThanFullRun: true
       };
     }

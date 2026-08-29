@@ -23,5 +23,12 @@ export type NodeRunnerResult = {
   // for a runner) honest — see outputSchemaEnforcement.test.ts's "the executor enforces the schema"
   // case, which deliberately uses such a stand-in and must keep failing a schema-violating output.
   outputValidated?: boolean;
-} | { ok: false; code: string; message: string; retryable?: boolean; details?: unknown; toolCalls?: NodeToolCallRecord[] };
+} | {
+  ok: false; code: string; message: string; retryable?: boolean; details?: unknown; toolCalls?: NodeToolCallRecord[];
+  // Provider-error-details (2026-08-29): set on a classified provider HTTP error (provider_quota,
+  // provider_rate_limit) and on budget_exceeded, so the run and the chat show WHY, not just that
+  // something failed. providerStatus/providerMessage are absent for budget_exceeded — that code is
+  // never a provider signal, it is only ever our own usd budget guard.
+  providerStatus?: number; providerMessage?: string; operatorAction?: string;
+};
 export interface NodeRunner { run(input: NodeRunnerInput, context: NodeRunnerContext): Promise<NodeRunnerResult>; validateConfiguration(node: WorkspaceNode): { ok: true } | { ok: false; errors: string[] }; supports(mode: ExecutionMode): boolean; }
