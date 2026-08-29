@@ -3,7 +3,12 @@ import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepo
 import type { WorkflowExecutionRecord } from "../workspace/executionTypes.js";
 
 export type ExecutionMode = "mock" | "openai";
-export type ExecutionErrorCode = "invalid_node_configuration" | "missing_input" | "output_validation_failed" | "tool_denied" | "tool_failed" | "model_timeout" | "model_error" | "budget_exceeded" | "approval_required" | "cancelled" | "stale_workspace_version";
+// "truncated" (W12): a model node's structured output was cut off mid-string by its own
+// maxOutputTokens cap (or the provider's own ceiling) — distinct from the generic "model_error"
+// bucket a raw "Invalid output type: Unterminated string in JSON..." parse failure used to fall
+// into. See OpenAINodeRunner.ts / AnthropicNodeRunner.ts's truncation detection and the one-shot
+// doubled-cap retry both runners attempt before returning this code.
+export type ExecutionErrorCode = "invalid_node_configuration" | "missing_input" | "output_validation_failed" | "tool_denied" | "tool_failed" | "model_timeout" | "model_error" | "budget_exceeded" | "approval_required" | "cancelled" | "stale_workspace_version" | "truncated";
 
 export type NodeRunnerContext = {
   run: WorkflowExecutionRecord;

@@ -28,6 +28,20 @@ const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 const ANTHROPIC_VERSION = "2023-06-01";
 
+// W12 truncation retry (see OpenAINodeRunner.ts's matching header comment for the incident and the
+// full detection rationale). Ceiling on how far the truncation retry may double this node's
+// configured max_tokens; override per deployment via ANTHROPIC_MAX_OUTPUT_TOKENS_CEILING if a
+// model's real ceiling differs.
+export const DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS_CEILING = 64000;
+export const anthropicMaxOutputTokensCeiling = (): number => {
+  const configured = Number(process.env.ANTHROPIC_MAX_OUTPUT_TOKENS_CEILING);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS_CEILING;
+};
+// Same ratio and rationale as OpenAINodeRunner's NEAR_CAP_TRUNCATION_RATIO: the fallback signal
+// (no emit_output tool call — see below) only counts as truncation evidence when the response
+// actually spent close to the cap it was given.
+const NEAR_CAP_TRUNCATION_RATIO = 0.9;
+
 const forbidden = /api[_-]?key|authorization|bearer|jwt|cookie|token|secret|blob.*credential/i;
 const redact = (value: unknown): unknown => typeof value === "string" ? value.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]") : Array.isArray(value) ? value.map(redact) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, val]) => [key, forbidden.test(key) ? "[REDACTED]" : redact(val)])) : value;
 const numberFrom = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -105,8 +119,18 @@ export class AnthropicNodeRunner implements NodeRunner {
     // for parity in case a node's provider is switched to anthropic.
     const timeoutMs = numberFrom(c.timeout) ?? 120000;
     const maxRetries = Math.max(0, Math.floor(numberFrom(c.retryCount) ?? 0));
+    // W12 — tracked outside the loop for the same reason as OpenAINodeRunner: the truncation retry is
+    // ONE bonus attempt at double the cap, granted independently of maxRetries/retryCount, and
+    // `initialMaxOutputTokens` preserves the node's ORIGINAL configured cap for the failure message
+    // even after body.max_tokens has been doubled.
+    const initialMaxOutputTokens = body.max_tokens;
+    let truncationRetryUsed = false;
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // The loop's normal bound is attempt<=maxRetries, exactly as before; +1 accommodates the single
+    // bonus truncation retry (see OpenAINodeRunner.ts's identical widened bound for the termination
+    // proof — this loop has the same shape: every branch either returns or bounds its own continue by
+    // maxRetries, except the new truncation branch, which bounds itself by truncationRetryUsed).
+    for (let attempt = 0; attempt <= maxRetries + 1; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -123,7 +147,50 @@ export class AnthropicNodeRunner implements NodeRunner {
         }
         const data = await response.json() as AnthropicMessagesResponse;
         if (data.stop_reason === "refusal") return { ok: false, code: "model_error", message: "anthropic_refusal: the request was declined by the model's safety classifiers." };
+
+        // W12 truncation classification. PRIMARY signal: the Messages API's own stop_reason — "the
+        // request must be prefilled with a maximally verbose completion" is never why stop_reason is
+        // "max_tokens"; that value means exactly one thing, hitting the token cap mid-generation, so
+        // it is checked regardless of whether a tool_use block happened to come back at all.
+        // FALLBACK: unlike the OpenAI Responses/Chat Completions APIs, Anthropic parses tool arguments
+        // server-side, so a cutoff here does not surface as a client-side JSON.parse failure — the
+        // nearest equivalent evidence is "no emit_output call came back AND the response spent
+        // near-cap output tokens getting there" (the same near-cap safety gate as the OpenAI runner's
+        // parse-failure fallback, applied to the closest signal this API actually exposes).
         const toolUse = (data.content ?? []).find((block) => block.type === "tool_use" && block.name === "emit_output");
+        const observedOutputTokens = numberFrom(data.usage?.output_tokens);
+        const providerTruncated = data.stop_reason === "max_tokens";
+        const capUsedThisAttempt = body.max_tokens;
+        const fallbackTruncated = !providerTruncated && !toolUse &&
+          observedOutputTokens !== undefined && observedOutputTokens >= capUsedThisAttempt * NEAR_CAP_TRUNCATION_RATIO;
+        if (providerTruncated || fallbackTruncated) {
+          const ceiling = anthropicMaxOutputTokensCeiling();
+          const doubledCap = Math.min(capUsedThisAttempt * 2, ceiling);
+          if (!truncationRetryUsed && doubledCap > capUsedThisAttempt) {
+            truncationRetryUsed = true;
+            body.max_tokens = doubledCap;
+            continue;
+          }
+          const signal = providerTruncated
+            ? "the provider reported stop_reason=max_tokens"
+            : `no emit_output call was returned and its output (~${observedOutputTokens} tokens) was at or near the ${capUsedThisAttempt}-token cap sent`;
+          const remedy = truncationRetryUsed
+            ? `This dispatch already retried once at double the cap (${capUsedThisAttempt} tokens) and was still truncated. Raise modelConfig.maxOutputTokens above ${capUsedThisAttempt} for this node and retry via workflow_retry_node.`
+            : `Raise modelConfig.maxOutputTokens above ${capUsedThisAttempt} for this node — it is already at or above this runner's ${ceiling}-token retry ceiling, so no automatic retry was attempted — and retry via workflow_retry_node.`;
+          const details = { nodeId: node.id, attempt: attempt + 1, initialMaxOutputTokens, cap: capUsedThisAttempt, outputTokens: observedOutputTokens, retriedAtDoubledCap: truncationRetryUsed, providerSignal: providerTruncated };
+          const inputTokensSoFar = data.usage?.input_tokens ?? 0;
+          const outputTokensSoFar = data.usage?.output_tokens ?? 0;
+          if (inputTokensSoFar > 0 || outputTokensSoFar > 0) {
+            await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "anthropic", inputTokens: inputTokensSoFar, outputTokens: outputTokensSoFar, totalTokens: inputTokensSoFar + outputTokensSoFar, status: "actual", metadata: { executionMode: "anthropic", partial: true, failureCode: "truncated", attempt: attempt + 1, cap: capUsedThisAttempt, initialMaxOutputTokens, retriedAtDoubledCap: truncationRetryUsed, providerSignal: providerTruncated } }).catch(() => undefined);
+          }
+          return {
+            ok: false,
+            code: "truncated",
+            message: `Node "${node.id}" produced structured output truncated at its output-token cap (attempt ${attempt + 1}): ${signal}. ${remedy}`,
+            details
+          };
+        }
+
         if (!toolUse) {
           if (attempt < maxRetries) continue;
           return { ok: false, code: "output_validation_failed", message: "Anthropic response contained no emit_output tool call." };

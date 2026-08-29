@@ -150,3 +150,96 @@ describe("AnthropicNodeRunner.run (injected fetch)", () => {
     expect(result).toMatchObject({ ok: false, code: "cancelled" });
   });
 });
+
+// A fetch double that returns a DIFFERENT queued response on each successive call (fetchStub above
+// always returns the same one) — needed to exercise a truncated-then-retried-then-succeeded sequence.
+const sequentialFetchStub = (responses: Array<{ status?: number; json?: unknown; text?: string }>, captured?: Captured[]) => {
+  let i = 0;
+  return (async (url: string, init: RequestInit) => {
+    captured?.push({ url, init });
+    const opts = responses[Math.min(i, responses.length - 1)];
+    i += 1;
+    const status = opts.status ?? 200;
+    return { ok: status >= 200 && status < 300, status, json: async () => opts.json, text: async () => opts.text ?? "" };
+  }) as unknown as typeof fetch;
+};
+
+describe("AnthropicNodeRunner truncation retry (W12)", () => {
+  beforeEach(() => { resetRepositoryManager(); process.env.ANTHROPIC_API_KEY = "sk-test"; });
+  afterEach(() => { resetRepositoryManager(); delete process.env.ANTHROPIC_API_KEY; });
+
+  const truncatedNode = () => node({ modelConfig: { provider: "anthropic", model: "claude-opus-4-8", maxOutputTokens: 500 } } as Partial<WorkspaceNode>);
+
+  it("provider-signaled truncation (stop_reason=max_tokens) once, then success: retries exactly once at double the cap and completes", async () => {
+    const captured: Captured[] = [];
+    const runner = new AnthropicNodeRunner(sequentialFetchStub([
+      { json: messagesResponse({ stop_reason: "max_tokens", content: [], usage: { input_tokens: 12, output_tokens: 500 } }) },
+      { json: messagesResponse() }
+    ], captured));
+    const result = await runner.run({ node: truncatedNode(), input: {} }, context());
+
+    expect(result.ok).toBe(true);
+    expect(captured).toHaveLength(2);
+    const secondBody = JSON.parse(captured[1]!.init.body as string);
+    expect(secondBody.max_tokens).toBe(1000); // doubled from the node's configured 500
+  });
+
+  it("provider-signaled truncation twice in a row fails with code 'truncated', naming the node, the cap, and the operator remedy", async () => {
+    const runner = new AnthropicNodeRunner(sequentialFetchStub([
+      { json: messagesResponse({ stop_reason: "max_tokens", content: [], usage: { input_tokens: 12, output_tokens: 500 } }) },
+      { json: messagesResponse({ stop_reason: "max_tokens", content: [], usage: { input_tokens: 12, output_tokens: 1000 } }) }
+    ]));
+    const result = await runner.run({ node: truncatedNode(), input: {} }, context());
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("truncated");
+    expect(result.message).toContain("anthropic_node");
+    expect(result.message).toContain("1000");
+    expect(result.message).toContain("modelConfig.maxOutputTokens");
+    expect(result.details).toMatchObject({ nodeId: "anthropic_node", attempt: 2, cap: 1000, initialMaxOutputTokens: 500, outputTokens: 1000, retriedAtDoubledCap: true, providerSignal: true });
+  });
+
+  it("fallback: no stop_reason=max_tokens, but no tool call and output at/near the cap — still classified as truncated (and still retried once)", async () => {
+    const captured: Captured[] = [];
+    const runner = new AnthropicNodeRunner(sequentialFetchStub([
+      // stop_reason "end_turn" (not max_tokens) but no emit_output call and 480/500 tokens spent —
+      // the fallback near-cap signal, mirroring the OpenAI runner's parse-failure-shape fallback with
+      // the closest evidence THIS API actually exposes (Anthropic parses tool args server-side, so
+      // there is no client-visible JSON.parse failure to key off).
+      { json: messagesResponse({ stop_reason: "end_turn", content: [{ type: "text", text: "ran out of room" }], usage: { input_tokens: 12, output_tokens: 480 } }) },
+      { json: messagesResponse() }
+    ], captured));
+    const result = await runner.run({ node: truncatedNode(), input: {} }, context());
+
+    expect(result.ok).toBe(true);
+    expect(captured).toHaveLength(2);
+    const secondBody = JSON.parse(captured[1]!.init.body as string);
+    expect(secondBody.max_tokens).toBe(1000);
+  });
+
+  it("no tool call and output well UNDER the cap stays 'output_validation_failed', not 'truncated' (the near-cap safety gate)", async () => {
+    const runner = new AnthropicNodeRunner(sequentialFetchStub([
+      { json: messagesResponse({ stop_reason: "end_turn", content: [{ type: "text", text: "short answer" }], usage: { input_tokens: 12, output_tokens: 5 } }) }
+    ]));
+    const result = await runner.run({ node: truncatedNode(), input: {} }, context());
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("output_validation_failed");
+    expect(result.code).not.toBe("truncated");
+  });
+
+  it("no modelConfig.maxOutputTokens configured: truncation is still classified against the runner's 4096-token default cap", async () => {
+    const runner = new AnthropicNodeRunner(sequentialFetchStub([
+      { json: messagesResponse({ stop_reason: "max_tokens", content: [], usage: { input_tokens: 12, output_tokens: 4096 } }) },
+      { json: messagesResponse({ stop_reason: "max_tokens", content: [], usage: { input_tokens: 12, output_tokens: 8192 } }) }
+    ]));
+    const result = await runner.run({ node: node(), input: {} }, context()); // node() carries no maxOutputTokens
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("truncated");
+    expect(result.details).toMatchObject({ initialMaxOutputTokens: 4096, cap: 8192, retriedAtDoubledCap: true });
+  });
+});
