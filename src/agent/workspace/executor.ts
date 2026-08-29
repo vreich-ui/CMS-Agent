@@ -2237,7 +2237,16 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         run.stageOutputs[nextNode.id] = output;
         run.artifacts.push(buildArtifact(nextNode, output));
         run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
-        run.releaseLedger = { ...(run.releaseLedger ?? {}), [released.ledgerKey]: { status: "terminal", requestId: released.ledgerEntry.requestId, performedAt: released.ledgerEntry.status === "terminal" ? released.ledgerEntry.performedAt : now(), output: output as Record<string, unknown> } };
+        // Only a TERMINAL outcome may be ledgered terminal. `ledger: "none"` is the recoverable case
+        // (release_to_production never confirmed it landed) and must leave the ledger untouched so the
+        // next dispatch can call it again; `ledger: "pending"` keeps release_to_production unreachable
+        // while leaving deploy_status re-pollable. Writing every completed outcome terminal here is
+        // what made a released-but-504'd run replay its own 504 forever (2026-08-29).
+        if (released.ledger === "terminal") {
+          run.releaseLedger = { ...(run.releaseLedger ?? {}), [released.ledgerKey]: { status: "terminal", requestId: released.ledgerEntry.requestId, performedAt: released.ledgerEntry.status === "terminal" ? released.ledgerEntry.performedAt : now(), output: output as Record<string, unknown> } };
+        } else if (released.ledger === "pending") {
+          run.releaseLedger = { ...(run.releaseLedger ?? {}), [released.ledgerKey]: released.ledgerEntry };
+        }
         run.updatedAt = completedAt;
         run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
         // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).

@@ -94,7 +94,14 @@ export type RunDeterministicReleaseExecutorParams = {
 };
 
 export type ReleaseExecutorOutcome =
-  | { kind: "completed"; ok: true; output: ReleaseExecutionOutput; warnings: string[]; ledgerKey: string; ledgerEntry: ReleaseLedgerEntry }
+  // `ledger` says whether this outcome may be written to the run's release ledger as TERMINAL.
+  // "none" is the recoverable case: release_to_production was never confirmed to have landed, so the
+  // next dispatch must be free to call it again. Writing those outcomes terminal is what made
+  // run_1787930929962_njffct unrecoverable on 2026-08-29 — the release DID land (production served
+  // the commit), the wait cap returned HTTP 504, the 504 was ledgered terminal, and every later
+  // retry replayed the stored 504 verbatim and called nothing. The comment on blockedOutput's
+  // recoverable note has always claimed "nothing here was ledgered"; now the code agrees with it.
+  | { kind: "completed"; ok: true; output: ReleaseExecutionOutput; warnings: string[]; ledgerKey: string; ledgerEntry: ReleaseLedgerEntry; ledger: "terminal" | "pending" | "none" }
   | { kind: "pending"; ok: true; warnings: string[]; ledgerKey: string; ledgerEntry: ReleaseLedgerEntry }
   | { ok: false; code: string; error: string };
 
@@ -143,14 +150,14 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
 
   // TERMINAL replay — the strong idempotency guarantee. Zero calls, ever again, for this key.
   if (existing && existing.status === "terminal") {
-    return { kind: "completed", ok: true, output: existing.output as ReleaseExecutionOutput, warnings: ["release_execution_idempotent_replay"], ledgerKey: key, ledgerEntry: existing };
+    return { kind: "completed", ok: true, output: existing.output as ReleaseExecutionOutput, warnings: ["release_execution_idempotent_replay"], ledgerKey: key, ledgerEntry: existing, ledger: "terminal" };
   }
 
   const publishCommitted = publishExecutorOutput?.publishCommitted === true;
   if (!existing && !publishCommitted) {
     const output = skippedOutput("nothing_published");
     const entry: ReleaseLedgerEntry = { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output };
-    return { kind: "completed", ok: true, output, warnings: ["release_execution_skipped"], ledgerKey: key, ledgerEntry: entry };
+    return { kind: "completed", ok: true, output, warnings: ["release_execution_skipped"], ledgerKey: key, ledgerEntry: entry, ledger: "terminal" };
   }
 
   const callTool = deps.callTool;
@@ -169,14 +176,14 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
       raw = await callTool("release_to_production", {});
     } catch (error) {
       const output = blockedOutput({ reason: "release_call_failed", detail: errorText(error), recoverable: true });
-      return { kind: "completed", ok: true, output, warnings: ["release_call_failed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output } };
+      return { kind: "completed", ok: true, output, warnings: ["release_call_failed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output }, ledger: "none" };
     }
     const record = payloadOf(raw.ok ? raw.result : raw);
     if (record.released !== true) {
       // The call landed but the client declined — nothing was actually released, so this is SAFE to
       // retry (not ledgered as a release), matching publish.mjs's own "release_failed ... recoverable".
       const output = blockedOutput({ reason: "release_not_confirmed", detail: nonEmptyString(raw.error) ? raw.error : undefined, recoverable: true });
-      return { kind: "completed", ok: true, output, warnings: ["release_not_confirmed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output } };
+      return { kind: "completed", ok: true, output, warnings: ["release_not_confirmed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output }, ledger: "none" };
     }
     const deploy = isRecord(record.deploy) ? record.deploy : undefined;
     releaseId = nonEmptyString(deploy?.deployId) ? (deploy!.deployId as string) : nonEmptyString(record.releaseId) ? (record.releaseId as string) : undefined;
@@ -197,7 +204,7 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
         blockers: [],
         notes: ["release_to_production confirmed production in its own response; no separate deploy_status poll was needed."]
       };
-      return { kind: "completed", ok: true, output, warnings: ["release_executed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output } };
+      return { kind: "completed", ok: true, output, warnings: ["release_executed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output }, ledger: "terminal" };
     }
     // Fall through to the poll below with attempts starting at 0.
   }
@@ -233,7 +240,7 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
       blockers: [],
       notes: [`Confirmed via deploy_status after ${attempts} poll(s) across dispatch(es) — release_to_production was called exactly once for this run.`]
     };
-    return { kind: "completed", ok: true, output, warnings: ["release_executed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output } };
+    return { kind: "completed", ok: true, output, warnings: ["release_executed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output }, ledger: "terminal" };
   }
 
   if (attempts >= maxPollAttempts) {
@@ -244,7 +251,12 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
       releaseId,
       deployedSha
     });
-    return { kind: "completed", ok: true, output, warnings: ["deploy_not_confirmed"], ledgerKey: key, ledgerEntry: { status: "terminal", requestId: requestId ?? "", performedAt: nowIso(), output } };
+    // The release LANDED — only verification gave up. Ledger PENDING, not terminal: release_to_production
+    // stays unreachable for this key (the `existing.status === "pending"` branch above skips it), but a
+    // later workflow_retry_node can still re-poll deploy_status and flip this to "executed". A build that
+    // finishes one minute after the last poll must not leave the run permanently reporting "not live".
+    const entry: ReleaseLedgerEntry = { status: "pending", requestId: requestId ?? "", performedAt: nowIso(), releaseId, deployedSha, attempts: 0 };
+    return { kind: "completed", ok: true, output, warnings: ["deploy_not_confirmed"], ledgerKey: key, ledgerEntry: entry, ledger: "pending" };
   }
 
   const entry: ReleaseLedgerEntry = { status: "pending", requestId: requestId ?? "", performedAt: nowIso(), releaseId, deployedSha, attempts };
