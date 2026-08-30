@@ -27,6 +27,7 @@
 // deploy failed, and that is recoverable by calling release again").
 
 import type { CallToolFn } from "./publisher.js";
+import { describeMcpErrorResult, isMcpErrorResult } from "../projects/clientToolResult.js";
 import { resolvePublishAuthority, type PublishAuthority } from "./publishDecision.js";
 import type { ReleaseLedgerEntry, WorkflowExecutionRecord } from "./executionTypes.js";
 
@@ -53,6 +54,20 @@ const payloadOf = (value: unknown): Record<string, unknown> => {
   if (!isRecord(value)) return {};
   if (isRecord(value.structuredContent)) return value.structuredContent as Record<string, unknown>;
   return value;
+};
+// Bounded single-line rendering of an unrecognised deploy_status body, so a "unknown" verdict carries
+// the evidence it was derived from instead of being undiagnosable (W1.3: 7 polls on
+// run_1788011844073_ipwrnx all said `deploy_status_not_ready:unknown` while the page was live).
+const RAW_RESPONSE_MAX = 500;
+const truncatedRaw = (value: unknown): string => {
+  let text: string;
+  try {
+    text = JSON.stringify(value) ?? String(value);
+  } catch {
+    text = String(value);
+  }
+  const flattened = text.replace(/\s+/g, " ");
+  return flattened.length > RAW_RESPONSE_MAX ? `${flattened.slice(0, RAW_RESPONSE_MAX)}…` : flattened;
 };
 
 export type ReleaseExecutionOutput = {
@@ -145,6 +160,11 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
   const publishExecutorOutput = isRecord(run.stageOutputs?.publish_executor) ? (run.stageOutputs.publish_executor as Record<string, unknown>) : undefined;
   const receipts = isRecord(publishExecutorOutput?.receipts) ? (publishExecutorOutput!.receipts as Record<string, unknown>) : undefined;
   const requestId = nonEmptyString(params.requestId) ? params.requestId.trim() : nonEmptyString(receipts?.requestId) ? (receipts!.requestId as string) : undefined;
+  // The commit publish_executor actually committed — publish_execution.v1's receipts.commitSha
+  // (publishExecution.ts reads it off the client's own publish result via findCommitSha). This is the
+  // sha deploy_status's schema wants under `commit`; it is the fallback identity for the poll whenever
+  // release_to_production did not name a deploy id or target commit of its own. Never invented here.
+  const receiptCommitSha = nonEmptyString(receipts?.commitSha) ? (receipts!.commitSha as string).trim() : undefined;
   const key = releaseLedgerKey(run.runId, requestId);
   const existing = run.releaseLedger?.[key];
 
@@ -165,7 +185,10 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
 
   const authority = resolvePublishAuthority(run);
   let releaseId: string | undefined = existing && existing.status === "pending" ? existing.releaseId : undefined;
-  let deployedSha: string | undefined = existing && existing.status === "pending" ? existing.deployedSha : undefined;
+  // On a re-poll dispatch an older pending entry may predate commit tracking — fall back to the
+  // publish receipt's commit so the poll still names the release instead of degrading to a bare call.
+  let deployedSha: string | undefined =
+    existing && existing.status === "pending" ? (nonEmptyString(existing.deployedSha) ? existing.deployedSha : receiptCommitSha) : undefined;
   const priorAttempts = existing && existing.status === "pending" ? existing.attempts : 0;
 
   if (!existing) {
@@ -187,7 +210,10 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
     }
     const deploy = isRecord(record.deploy) ? record.deploy : undefined;
     releaseId = nonEmptyString(deploy?.deployId) ? (deploy!.deployId as string) : nonEmptyString(record.releaseId) ? (record.releaseId as string) : undefined;
-    deployedSha = nonEmptyString(record.targetCommit) ? (record.targetCommit as string) : nonEmptyString(record.commit) ? (record.commit as string) : undefined;
+    // Prefer the sha release_to_production itself named; fall back to the publish receipt's
+    // commitSha (publish_execution.v1) so the deploy_status poll below can always ask about THE
+    // commit this run published rather than calling bare.
+    deployedSha = nonEmptyString(record.targetCommit) ? (record.targetCommit as string) : nonEmptyString(record.commit) ? (record.commit as string) : receiptCommitSha;
     // release_to_production sometimes confirms production immediately in its own response (small
     // sites, fast builds) — go straight to executed without a separate deploy_status round trip.
     if (record.productionConfirmed === true && (record.deployStatus === "ready" || record.status === "ready")) {
@@ -216,7 +242,9 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
   // deploy_status's own schema declares only `commit`/`deployId` (additionalProperties:false) — a
   // `release_id` key is rejected outright, which used to make every poll read as "not ready" instead
   // of surfacing the reject. Prefer deployId (what release_to_production actually returned); fall back
-  // to the commit when no deploy id was reported.
+  // to the commit when no deploy id was reported — the release response's own sha first, else the
+  // publish receipt's commitSha (folded into deployedSha above). A bare {} only when NO identity
+  // exists anywhere (both deploy_status fields are optional, so a bare call is schema-valid).
   const pollArgs: Record<string, unknown> = releaseId ? { deployId: releaseId } : deployedSha ? { commit: deployedSha } : {};
   let pollRaw: Awaited<ReturnType<CallToolFn>>;
   try {
@@ -234,9 +262,30 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
     const entry: ReleaseLedgerEntry = { status: "pending", requestId: requestId ?? "", performedAt: nowIso(), releaseId, deployedSha, attempts };
     return { kind: "pending", ok: true, warnings: [`deploy_status_poll_failed:${nonEmptyString(pollRaw.error) ? pollRaw.error : "deploy_status call was rejected"}`], ledgerKey: key, ledgerEntry: entry };
   }
+  // A client REFUSAL rides home as ok:true (the transport succeeded; the MCP result carries
+  // isError) — see publisher.ts's own note on `ok` being the TRANSPORT's verdict. W1.3
+  // (run_1788011844073_ipwrnx): the site's deploy_status schema (additionalProperties:false) rejected
+  // every poll and this module read the refusal as "not ready" — 7 polls of
+  // `deploy_status_not_ready:unknown` while the page was live. A rejected CALL is evidence about the
+  // call's shape, never about the deploy: report it as its own retryable verification failure and
+  // ledger PENDING so the next dispatch re-polls (release_to_production stays unreachable).
+  if (isMcpErrorResult(pollRaw.result)) {
+    const entry: ReleaseLedgerEntry = { status: "pending", requestId: requestId ?? "", performedAt: nowIso(), releaseId, deployedSha, attempts };
+    return { kind: "pending", ok: true, warnings: [`deploy_status_call_rejected:${describeMcpErrorResult(pollRaw.result as Record<string, unknown>)}`], ledgerKey: key, ledgerEntry: entry };
+  }
   const pollRecord = payloadOf(pollRaw.result);
   const deployStatus = nonEmptyString(pollRecord.deployStatus) ? (pollRecord.deployStatus as string) : nonEmptyString(pollRecord.status) ? (pollRecord.status as string) : undefined;
   const productionConfirmed = pollRecord.productionConfirmed === true;
+  // Error-shaped without the isError flag: no deployStatus at all but the body DOES carry an error
+  // message. Same verdict as the isError case above — the call was rejected, the deploy's state is
+  // simply unknown, and "unknown" must never be spelled "not ready".
+  if (!deployStatus) {
+    const rejectionMessage = nonEmptyString(pollRecord.error) ? (pollRecord.error as string) : nonEmptyString(pollRecord.message) ? (pollRecord.message as string) : undefined;
+    if (rejectionMessage) {
+      const entry: ReleaseLedgerEntry = { status: "pending", requestId: requestId ?? "", performedAt: nowIso(), releaseId, deployedSha, attempts };
+      return { kind: "pending", ok: true, warnings: [`deploy_status_call_rejected:${truncatedRaw(rejectionMessage)}`], ledgerKey: key, ledgerEntry: entry };
+    }
+  }
 
   if (deployStatus === "ready" && productionConfirmed) {
     const output: ReleaseExecutionOutput = {
@@ -272,5 +321,9 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
   }
 
   const entry: ReleaseLedgerEntry = { status: "pending", requestId: requestId ?? "", performedAt: nowIso(), releaseId, deployedSha, attempts };
-  return { kind: "pending", ok: true, warnings: [`deploy_status_not_ready:${deployStatus ?? "unknown"}`], ledgerKey: key, ledgerEntry: entry };
+  // A genuinely unknown verdict (no deployStatus AND no error anywhere in the body — the rejection
+  // branches above caught everything error-shaped) carries the raw response so it is diagnosable
+  // instead of a bare "unknown" that names nothing.
+  const notReadyWarning = deployStatus ? `deploy_status_not_ready:${deployStatus}` : `deploy_status_not_ready:unknown raw=${truncatedRaw(pollRaw.result)}`;
+  return { kind: "pending", ok: true, warnings: [notReadyWarning], ledgerKey: key, ledgerEntry: entry };
 }
