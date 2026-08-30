@@ -213,16 +213,28 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
   // line for this key, whether this is the first dispatch (just released) or a later one (already
   // ledgered pending).
   const attempts = priorAttempts + 1;
+  // deploy_status's own schema declares only `commit`/`deployId` (additionalProperties:false) — a
+  // `release_id` key is rejected outright, which used to make every poll read as "not ready" instead
+  // of surfacing the reject. Prefer deployId (what release_to_production actually returned); fall back
+  // to the commit when no deploy id was reported.
+  const pollArgs: Record<string, unknown> = releaseId ? { deployId: releaseId } : deployedSha ? { commit: deployedSha } : {};
   let pollRaw: Awaited<ReturnType<CallToolFn>>;
   try {
-    pollRaw = await callTool("deploy_status", releaseId ? { release_id: releaseId } : {});
+    pollRaw = await callTool("deploy_status", pollArgs);
   } catch (error) {
     // release_to_production already succeeded — this is a VERIFICATION hiccup, not an unreleased
     // state. Ledger PENDING (never terminal) so the next dispatch polls again instead of re-releasing.
     const entry: ReleaseLedgerEntry = { status: "pending", requestId: requestId ?? "", performedAt: nowIso(), releaseId, deployedSha, attempts };
     return { kind: "pending", ok: true, warnings: [`deploy_status_poll_failed:${errorText(error)}`], ledgerKey: key, ledgerEntry: entry };
   }
-  const pollRecord = payloadOf(pollRaw.ok ? pollRaw.result : pollRaw);
+  if (!pollRaw.ok) {
+    // The call itself was rejected (e.g. a request shape the site's schema does not accept, or an
+    // auth failure) — that is a verification failure, never evidence the deploy isn't ready. Report it
+    // under the same poll-failed warning a thrown transport error gets, not "not ready".
+    const entry: ReleaseLedgerEntry = { status: "pending", requestId: requestId ?? "", performedAt: nowIso(), releaseId, deployedSha, attempts };
+    return { kind: "pending", ok: true, warnings: [`deploy_status_poll_failed:${nonEmptyString(pollRaw.error) ? pollRaw.error : "deploy_status call was rejected"}`], ledgerKey: key, ledgerEntry: entry };
+  }
+  const pollRecord = payloadOf(pollRaw.result);
   const deployStatus = nonEmptyString(pollRecord.deployStatus) ? (pollRecord.deployStatus as string) : nonEmptyString(pollRecord.status) ? (pollRecord.status as string) : undefined;
   const productionConfirmed = pollRecord.productionConfirmed === true;
 
