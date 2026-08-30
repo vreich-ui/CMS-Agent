@@ -15,6 +15,7 @@ import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/execu
 
 const fakeStore = (records: WorkflowExecutionRecord[]): ExecutionRepository => ({
   listRuns: async () => records,
+  listRunsPage: async () => ({ runs: records, matchedCount: records.length, hasMore: false }),
   getRun: async (runId: string) => records.find((record) => record.runId === runId),
   createRun: async (record) => record,
   saveRun: async (record) => { const index = records.findIndex((candidate) => candidate.runId === record.runId); records[index] = record; return record; },

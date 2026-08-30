@@ -119,6 +119,7 @@ describe("node.list_executions / node.list_outputs use targeted getRun when runI
     async createRun(run) { return run; },
     async getRun(runId) { this.getRunCalls.push(runId); return runs.find((run) => run.runId === runId); },
     async listRuns() { this.listRunsCalls += 1; return runs; },
+    async listRunsPage() { this.listRunsCalls += 1; return { runs, matchedCount: runs.length, hasMore: false }; },
     async saveRun(run) { return run; },
     async resetRun(_runId, run) { return run; },
     async health() { return { ok: true, backend: "spy", version: "spy.v1" } as any; }

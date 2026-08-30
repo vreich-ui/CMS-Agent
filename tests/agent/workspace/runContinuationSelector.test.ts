@@ -109,6 +109,7 @@ describe("T5 continuation selector — which runs a scheduled tick re-enters", (
 // advance. Everything else on the interface would be unused ceremony.
 const fakeStore = (records: WorkflowExecutionRecord[]): ExecutionRepository => ({
   listRuns: async () => records,
+  listRunsPage: async () => ({ runs: records, matchedCount: records.length, hasMore: false }),
   getRun: async (runId: string) => records.find((record) => record.runId === runId),
   createRun: async (record) => record,
   saveRun: async (record) => record,
