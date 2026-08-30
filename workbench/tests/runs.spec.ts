@@ -207,3 +207,48 @@ test('Runs: Grid screenshots in both themes', async ({ page }) => {
   const bodyOverflowsX = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
   expect(bodyOverflowsX).toBe(false);
 });
+
+// W1.2 (corroborated in PR #232's "documented residual") — `workflow_list_runs` with no `projectId`
+// pays a full-fleet fetch server-side, which is what made the Runs page, Drive's bind-run panel, and
+// the recent-runs panels fail outright live. Fixture mode has no full-fleet cost to reproduce that
+// failure with, so the mock's `workflow_list_runs` handler throws on a missing `projectId` instead
+// (mock/handlers.ts) — turning "the client regressed to an unscoped call" into a hard failure here,
+// on this test and on every other spec in this suite that touches runs.
+test('Runs: an unscoped runs query is served entirely from per-project calls, never one unscoped call', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const verbs = await import('/src/api/verbs.ts');
+    const projects = await verbs.projectList();
+
+    // The direct verb path: a real regression back to an unscoped call throws (the mock's own guard).
+    let threwOnUnscoped = false;
+    try {
+      // @ts-expect-error — deliberately calling the internal verb bypassing workflowListRuns' fan-out.
+      await (await import('/src/api/client.ts')).callVerb('workflow_list_runs', {});
+    } catch {
+      threwOnUnscoped = true;
+    }
+
+    // workflowListRuns() itself must still succeed unscoped — proving it never issues the call that
+    // throws above, and instead fans out one scoped call per configured project and merges them.
+    const allRuns = await verbs.workflowListRuns();
+    const fixtureRuns = ((await import('/src/api/fixtures/runs.json')) as { default: { runs: unknown[] } }).default.runs;
+
+    return {
+      threwOnUnscoped,
+      configuredProjectCount: projects.length,
+      allRunsCount: allRuns.length,
+      fixtureRunsCount: fixtureRuns.length,
+      distinctProjectsInResult: new Set(allRuns.map((r) => r.proj)).size,
+    };
+  });
+
+  expect(result.threwOnUnscoped).toBe(true);
+  expect(result.configuredProjectCount).toBeGreaterThan(1);
+  // Every run in the fixture is still reachable through the per-project fan-out — none silently
+  // dropped by scoping the query.
+  expect(result.allRunsCount).toBe(result.fixtureRunsCount);
+  expect(result.distinctProjectsInResult).toBeGreaterThan(1);
+});

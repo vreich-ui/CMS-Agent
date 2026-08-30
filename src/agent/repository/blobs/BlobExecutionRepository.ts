@@ -8,8 +8,40 @@ const runKey = (runId: string) => `runs/${runId}.json`;
 const artifactKey = (artifactId: string) => `artifacts/${artifactId}.json`;
 const revOf = (run: WorkflowExecutionRecord | null | undefined): number => run?.rev ?? 0;
 
+// W1.2 (documented residual from W1.4/#232) — listRuns fetches EVERY run blob before any filter is
+// applied, so a call with no projectId (workflow.list_runs unscoped, constellation tools, node's own
+// fallback listing) pays that full-fleet fetch every single time, which is what let an unscoped call
+// alone starve or OOM the instance. Cache the full-fleet fetch itself (not the filtered/sorted
+// result — filters differ per call) for a short TTL so a burst of calls within the window — the
+// common case, since several unscoped queries typically land within the same second — collapse into
+// one blob-store round trip. Caching the in-flight PROMISE (not just the resolved value) also
+// dedupes concurrent callers against each other, not only sequential ones.
+const FULL_FLEET_CACHE_TTL_MS = 5_000;
+
 export class BlobExecutionRepository implements ExecutionRepository {
   constructor(private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
+
+  private fullFleetCache: { expiresAt: number; runs: Promise<WorkflowExecutionRecord[]> } | null = null;
+
+  private fetchAllRuns(): Promise<WorkflowExecutionRecord[]> {
+    const cached = this.fullFleetCache;
+    if (cached && cached.expiresAt > Date.now()) return cached.runs;
+    const fetch = (async () => {
+      const result = await this.store.list({ prefix: "runs/" });
+      const runs = await Promise.all(result.blobs.map((blob) => getBlobJson<WorkflowExecutionRecord>(this.store, blob.key)));
+      return runs.filter((run): run is WorkflowExecutionRecord => run !== null);
+    })();
+    this.fullFleetCache = { expiresAt: Date.now() + FULL_FLEET_CACHE_TTL_MS, runs: fetch };
+    // A failed fetch must not poison the cache for the rest of the TTL window — clear it so the very
+    // next call retries instead of replaying the same rejection.
+    fetch.catch(() => { if (this.fullFleetCache?.runs === fetch) this.fullFleetCache = null; });
+    return fetch;
+  }
+
+  // Every write invalidates the cache so a caller never sees its own write as stale — this only
+  // covers writes made through THIS repository instance (in-process, per Cloud Run instance), which
+  // is the same scope the cache itself operates at.
+  private invalidateFullFleetCache(): void { this.fullFleetCache = null; }
 
   private async persistArtifacts(run: WorkflowExecutionRecord) {
     await Promise.all(run.artifacts.map((artifact) => this.store.setJSON(artifactKey(artifact.id), { runId: run.runId, artifact })));
@@ -19,6 +51,7 @@ export class BlobExecutionRepository implements ExecutionRepository {
     const seeded = { ...clone(run), rev: revOf(run) };
     await this.store.setJSON(runKey(seeded.runId), seeded);
     await this.persistArtifacts(seeded);
+    this.invalidateFullFleetCache();
     return clone(seeded);
   }
 
@@ -28,9 +61,8 @@ export class BlobExecutionRepository implements ExecutionRepository {
   }
 
   async listRuns(filters: { projectId?: string; workflowId?: string } = {}): Promise<WorkflowExecutionRecord[]> {
-    const result = await this.store.list({ prefix: "runs/" });
-    const runs = await Promise.all(result.blobs.map((blob) => getBlobJson<WorkflowExecutionRecord>(this.store, blob.key)));
-    return runs.filter((run): run is WorkflowExecutionRecord => run !== null)
+    const runs = await this.fetchAllRuns();
+    return runs
       .filter((run) => !filters.projectId || run.projectId === filters.projectId)
       .filter((run) => !filters.workflowId || run.workflowId === filters.workflowId)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
@@ -52,6 +84,7 @@ export class BlobExecutionRepository implements ExecutionRepository {
     const write = await this.store.setJSON(key, next, options);
     if (write && (write as { modified?: boolean }).modified === false) throw new RunConcurrencyError(run.runId, base, revOf(current.data));
     await this.persistArtifacts(next);
+    this.invalidateFullFleetCache();
     return clone(next);
   }
 
@@ -60,6 +93,7 @@ export class BlobExecutionRepository implements ExecutionRepository {
     const current = await getBlobJson<WorkflowExecutionRecord>(this.store, key);
     const next = { ...clone(nextRun), rev: revOf(current) + 1 };
     await this.store.setJSON(key, next);
+    this.invalidateFullFleetCache();
     // A reset must clear prior artifacts too: the run record's artifact array is already empty, but
     // each artifact was also written to its own `artifacts/<id>.json` blob that node-output queries
     // scan by runId. Delete those so no pre-reset output survives the reset.
