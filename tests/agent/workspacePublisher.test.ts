@@ -32,6 +32,39 @@ const textBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n
 const imageBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_x", kind: "content", visibility: "public", public: { title: "T", body: "B" + PAD, media: { type: "image", src: "/media/req/x.png", alt: "x" } } }] });
 const blobMediaBody = envelope({ schema_version: "client_object.v1", nodes: [{ id: "n_img", kind: "content", visibility: "public", public: { title: "T", body: "B" + PAD, media: { type: "image", src: "image/req_x/abc123.png", alt: "x" } } }] });
 const REQUEST_ID = "req_publish_test_20260716_01";
+
+// W6 (run_1788023523567_qdv9et) — a body whose three image slots were materialized via the artifact
+// bridge BEFORE publish: artifact_plan produced one verified reference per slot (rawReference.blobKey,
+// sha256, contentType, sizeBytes, verified:true, publicPath — the live run's artifactSet shapes), and
+// article_body bound the client's rendered PUBLIC paths into the body and carried the reference set
+// forward as artifactReferences. Nothing uploads at publish time; the media rides inside the body ops.
+const W6_SHAS = [
+  "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdefabcd01",
+  "b2c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdefabcdef02",
+  "c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdefabcdefab03"
+];
+const w6PublicPath = (sha: string) => `/img/${REQUEST_ID}/${sha}.webp`;
+const w6ArtifactSet = W6_SHAS.map((sha, index) => ({
+  slotId: `slot_${index + 1}`,
+  rawReference: { blobKey: `image/${REQUEST_ID}/${sha}.webp` },
+  sha256: sha,
+  contentType: "image/webp",
+  sizeBytes: 34210 + index,
+  verified: true,
+  publicPath: w6PublicPath(sha)
+}));
+const w6ImageNodes = (srcs: string[]) => srcs.map((src, index) => ({
+  id: `n_img_${index + 1}`,
+  kind: "content",
+  visibility: "public",
+  public: { title: `Figure ${index + 1}`, body: "Reader-facing image context." + PAD, media: { type: "image", src, alt: `figure ${index + 1}` } },
+  rendering: { placement: "inline" }
+}));
+const w6MediaEnvelope = (srcs: string[], artifactReferences?: unknown[]) => ({
+  ...envelope({ schema_version: "client_object.v1", nodes: w6ImageNodes(srcs) }),
+  ...(artifactReferences ? { artifactReferences } : {})
+});
+const verifiedMediaBody = w6MediaEnvelope(W6_SHAS.map(w6PublicPath), w6ArtifactSet);
 const ENABLED_ENV = { [publishEnabledEnvVar(drLurieProjectConfig)]: "true" } as NodeJS.ProcessEnv;
 // P0 §2.1 — publishRun now refuses unless the run carries an EXPLICIT affirmative
 // publication_controller decision (decision: "go"). This is the affirmative shape; the fixtures
@@ -41,6 +74,13 @@ const GO_DECISION = { artifact: "publication_decision.v1", summary: "Controller 
 const seedControllerDecision = async (executionRepository: { getRun: (id: string) => Promise<any>; saveRun: (run: any) => Promise<any> }, runId: string, decision: unknown = GO_DECISION) => {
   const run = await executionRepository.getRun(runId);
   run.stageOutputs.publication_controller = decision;
+  await executionRepository.saveRun(run);
+};
+// W6 — seed a stage output on an existing run (e.g. artifact_plan's verified reference set), the
+// same way seedControllerDecision seeds the controller's decision record.
+const seedStageOutput = async (executionRepository: { getRun: (id: string) => Promise<any>; saveRun: (run: any) => Promise<any> }, runId: string, nodeId: string, output: unknown) => {
+  const run = await executionRepository.getRun(runId);
+  run.stageOutputs[nodeId] = output;
   await executionRepository.saveRun(run);
 };
 // Satisfies Dr. Lurie's publish-readiness policy (GO) so the underlying gate logic can be exercised.
@@ -259,15 +299,18 @@ describe("live publish gates", () => {
     }
   });
 
-  it("blocks unverified Blob-shaped media and names the artifact slot", async () => {
+  // W6: a raw Blob-shaped key in a rendered field now refuses at the media gate with the client's
+  // own blocker code (raw check fires FIRST — before verification could bless it), still with zero
+  // client calls. This body's key is also unverified; the raw refusal takes precedence.
+  it("refuses a raw Blob-shaped media key in a rendered field before any call", async () => {
     const ctx = await seedRun(blobMediaBody);
     const adapter = fakeCallTool();
     const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
 
-    expect(result.mode).toBe("blocked_for_publish_execution");
-    if (result.mode === "blocked_for_publish_execution") {
-      expect(result.readiness.blockers).toContain("media_artifacts_verified");
-      expect(result.blocked.artifactSlot).toBe("node:n_img/public.media");
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") {
+      expect(result.error).toContain("raw_image_artifact_public_url");
+      expect(result.error).toContain("image/req_x/abc123.png");
     }
     expect(adapter.calls).toHaveLength(0);
   });
@@ -281,14 +324,93 @@ describe("live publish gates", () => {
     expect(adapter.calls).toHaveLength(0);
   });
 
-  it("refuses to execute a body carrying media on this text-only path even when readiness is GO", async () => {
+  // W6 media gate — the blanket "image_media_unsupported" text-only refusal is replaced by a
+  // verification gate: a body may carry image/document media IFF every media reference resolves to
+  // a verified current-request artifact (envelope artifactReferences, the run's artifact_plan
+  // output, or caller-confirmed verifiedMediaRefs). Verified media publishes through the normal
+  // dialect sequence unchanged; anything less still refuses with zero client calls.
+  it("publishes a media body whose refs the caller confirmed as materialized — sequence proceeds", async () => {
     const ctx = await seedRun(imageBody);
     const adapter = fakeCallTool();
-    // S3 item 7: readiness now verifies EVERY media reference (public paths included), so the caller
-    // confirms imageBody's /media/... src as materialized; execution is still text-only and refuses.
     const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: { ...READY, verifiedMediaRefs: ["/media/req/x.png"] } }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+    expect(result.published).toBe(true);
+    expect(adapter.calls.map((call) => call.tool)).toEqual(DR_LURIE_PUBLISH_SEQUENCE);
+  });
+
+  it("W6: publishes a body with three verified image slots (live artifactSet shapes) — full sequence, media inside the body ops", async () => {
+    const ctx = await seedRun(verifiedMediaBody);
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.published).toBe(true);
+    expect(adapter.calls.map((call) => call.tool)).toEqual(DR_LURIE_PUBLISH_SEQUENCE);
+    // The media travels INSIDE the body ops — no separate upload step: the create body and the patch
+    // ops carry the bound public paths.
+    const create = adapter.calls.find((call) => call.tool === "object_create");
+    const patch = adapter.calls.find((call) => call.tool === "object_patch");
+    for (const sha of W6_SHAS) {
+      expect(JSON.stringify(create?.args)).toContain(w6PublicPath(sha));
+      expect(JSON.stringify(patch?.args)).toContain(w6PublicPath(sha));
+    }
+  });
+
+  it("W6: accepts the run's own artifact_plan output as verification evidence when the envelope dropped artifactReferences", async () => {
+    const ctx = await seedRun(w6MediaEnvelope(W6_SHAS.map(w6PublicPath)));
+    await seedStageOutput(ctx.executionRepository, ctx.runId, "artifact_plan", {
+      artifact: "artifact_plan.v1",
+      summary: "Three slots materialized and verified via the artifact bridge.",
+      clientProjectId: "dr-lurie",
+      clientObjectType: "content_item",
+      artifactProtocol: "pdf_tool_dr_lurie_blob.v1",
+      requestId: REQUEST_ID,
+      media_slots: W6_SHAS.map((sha, index) => ({ slotId: `slot_${index + 1}`, purpose: `figure ${index + 1}`, status: "has_trusted_artifact", publicPath: w6PublicPath(sha), rawReference: { blobKey: `image/${REQUEST_ID}/${sha}.webp` }, sha256: sha })),
+      artifactReferences: w6ArtifactSet
+    });
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.published).toBe(true);
+    expect(adapter.calls.map((call) => call.tool)).toEqual(DR_LURIE_PUBLISH_SEQUENCE);
+  });
+
+  it("W6: one unverified src refuses with unverified_media, names the src, zero client calls", async () => {
+    const rogue = `/img/${REQUEST_ID}/0000000000000000000000000000000000000000000000000000000000000bad.webp`;
+    const ctx = await seedRun(w6MediaEnvelope([...W6_SHAS.map(w6PublicPath), rogue], w6ArtifactSet));
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
     expect(result.mode).toBe("error");
-    if (result.mode === "error") expect(result.error).toContain("image_media_unsupported");
+    if (result.mode === "error") {
+      expect(result.error).toContain("unverified_media");
+      expect(result.error).toContain(rogue);
+      // The verified three are NOT in the offending list.
+      for (const sha of W6_SHAS) expect(result.error).not.toContain(w6PublicPath(sha));
+    }
+    expect(adapter.calls).toHaveLength(0);
+  });
+
+  it("W6: a verified artifact from ANOTHER request does not satisfy this body's reference", async () => {
+    const foreign = `/img/req_other_flow_20260101_01/${W6_SHAS[0]}.webp`;
+    const ctx = await seedRun(w6MediaEnvelope([foreign], w6ArtifactSet));
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") expect(result.error).toContain("unverified_media");
+    expect(adapter.calls).toHaveLength(0);
+  });
+
+  it("W6: a raw blobKey leaking into a rendered field refuses even when the artifact itself is verified", async () => {
+    const rawKey = `image/${REQUEST_ID}/${W6_SHAS[0]}.webp`;
+    const ctx = await seedRun(w6MediaEnvelope([rawKey, w6PublicPath(W6_SHAS[1]!), w6PublicPath(W6_SHAS[2]!)], w6ArtifactSet));
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") {
+      expect(result.error).toContain("raw_image_artifact_public_url");
+      expect(result.error).toContain(rawKey);
+    }
     expect(adapter.calls).toHaveLength(0);
   });
 

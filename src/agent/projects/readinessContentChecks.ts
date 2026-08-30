@@ -118,9 +118,41 @@ export const envelopeVerifiedMediaRefsOf = (envelope: unknown): string[] => {
   const refs: string[] = [];
   for (const entry of envelope.artifactReferences) {
     if (!isObject(entry) || entry.verified !== true) continue;
-    if (typeof entry.publicPath === "string" && entry.publicPath.trim()) refs.push(entry.publicPath.trim());
-    const reference = entry.artifactReference;
+    collectArtifactEntryRefs(entry, refs);
+  }
+  return [...new Set(refs)];
+};
+
+// Both forms of one verified artifact, whatever the carrier called its raw-reference field. The
+// artifact bridge has emitted the raw key under `artifactReference.blobKey` and (verified live,
+// run_1788023523567_qdv9et) under `rawReference.blobKey`; a bare `blobKey` shows up on flattened
+// entries. Reading all three is shape tolerance, not trust widening — the caller has already
+// checked the entry's own verification evidence before asking for its refs.
+const collectArtifactEntryRefs = (entry: Record<string, unknown>, refs: string[]): void => {
+  if (typeof entry.publicPath === "string" && entry.publicPath.trim()) refs.push(entry.publicPath.trim());
+  for (const key of ["artifactReference", "rawReference"]) {
+    const reference = entry[key];
     if (isObject(reference) && typeof reference.blobKey === "string" && reference.blobKey.trim()) refs.push(reference.blobKey.trim());
+  }
+  if (typeof entry.blobKey === "string" && entry.blobKey.trim()) refs.push(entry.blobKey.trim());
+};
+
+// W6 — the verification evidence the RUN's own artifact_plan stage output carries: its top-level
+// artifactReferences (entries explicitly marked verified) plus every media slot whose status is
+// has_trusted_artifact — the status artifact_plan may only set on an adoption response or a
+// terminal-success job status (its prompt's materialization policy), never on a pattern-valid key.
+// This is the same system-evidence principle as envelopeVerifiedMediaRefsOf: article_body normally
+// carries the plan's record forward as artifactReferences[], but a run whose envelope dropped that
+// array still HOLDS the evidence in the plan output, and a publisher that holds the run should not
+// report the body's media unverified because one copy of the same record went missing.
+export const artifactPlanVerifiedMediaRefsOf = (stageOutputs: Record<string, unknown> | undefined): string[] => {
+  const plan = stageOutputs?.artifact_plan;
+  if (!isObject(plan)) return [];
+  const refs: string[] = [...envelopeVerifiedMediaRefsOf(plan)];
+  const slots = Array.isArray(plan.media_slots) ? plan.media_slots : [];
+  for (const slot of slots) {
+    if (!isObject(slot) || slot.status !== "has_trusted_artifact") continue;
+    collectArtifactEntryRefs(slot, refs);
   }
   return [...new Set(refs)];
 };
@@ -163,9 +195,14 @@ export function evaluateContentReadiness(input: ContentReadinessInput): Readines
   const fail = (key: string, label: string, detail: string) => checks.push({ key, label, status: "fail", detail });
 
   // media_artifacts_verified — every reference in the body, confirmed by the caller OR by the
-  // envelope's own artifactReferences record (see envelopeVerifiedMediaRefsOf).
+  // envelope's own artifactReferences record (see envelopeVerifiedMediaRefsOf) OR by the run's own
+  // artifact_plan output (W6, artifactPlanVerifiedMediaRefsOf) when the caller supplied stageOutputs.
   const mediaRefs = input.articleBodyValid ? mediaRefsOf(input.articleBody) : [];
-  const verifiedRefs = [...(input.verifiedMediaRefs ?? []), ...(input.articleBodyValid ? envelopeVerifiedMediaRefsOf(input.articleBody) : [])];
+  const verifiedRefs = [
+    ...(input.verifiedMediaRefs ?? []),
+    ...(input.articleBodyValid ? envelopeVerifiedMediaRefsOf(input.articleBody) : []),
+    ...artifactPlanVerifiedMediaRefsOf(input.stageOutputs)
+  ];
   const unverified = mediaRefs.filter((ref) => !isVerifiedMediaRef(ref, verifiedRefs));
   if (mediaRefs.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", "no media artifacts");
   else if (unverified.length === 0) pass("media_artifacts_verified", "Blob artifacts verified", `${mediaRefs.length} media reference(s) confirmed`);
