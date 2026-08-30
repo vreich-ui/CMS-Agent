@@ -448,15 +448,38 @@ export const nodeListExecutions = (args: { nodeId: string; runId?: string }) =>
  * lookup, not a bulk one. So a list row's `cost` reports 0 (the type's own
  * "nothing spent yet" default) until that run is opened — see
  * workflowGetRun() below, the one place cost IS composed in.
+ *
+ * W1.2 (corroborated in PR #232's "documented residual") — `workflow_list_runs`
+ * with no `projectId` pays a full-fleet fetch server-side: BlobExecutionRepository.listRuns
+ * fetches every run blob across every project before any filter is applied, which is what made
+ * the Runs page, Drive's bind-run panel, and the recent-runs panels fail outright ("Failed to
+ * fetch") while a projectId-scoped call returns fast. An explicit `projectId` still goes straight
+ * through; an unscoped call fans out one scoped call per project this workspace has configured and
+ * merges the results, so this client never makes the unscoped call at all.
  */
+const rawWorkflowListRuns = (args?: { workflowId?: string; projectId?: string; status?: RunStatus; limit?: number }) =>
+  callVerb<{ runs: adapters.RawRun[]; page?: unknown }>('workflow_list_runs', args);
+
 export const workflowListRuns = async (args?: {
   workflowId?: string;
   projectId?: string;
   status?: RunStatus;
   limit?: number;
 }): Promise<Run[]> => {
-  const raw = await callVerb<{ runs: adapters.RawRun[]; page?: unknown }>('workflow_list_runs', args);
-  return raw.runs.map((r) => adapters.toRun(r));
+  if (args?.projectId) {
+    const raw = await rawWorkflowListRuns(args);
+    return raw.runs.map((r) => adapters.toRun(r));
+  }
+  const projects = await projectList();
+  const perProject = await Promise.all(projects.map((project) => rawWorkflowListRuns({ ...args, projectId: project.id })));
+  // Sort the RAW rows on their ISO `startedAt` before adapting — toRun()'s `started` is a display
+  // string ("30 Jul"), not chronologically comparable (lexicographic order puts "30 Jul" ahead of
+  // "25 Aug"); sorting post-adaptation silently scrambled the merged list into date-string order.
+  const merged = perProject
+    .flatMap((page) => page.runs)
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  const limited = args?.limit ? merged.slice(0, args.limit) : merged;
+  return limited.map((r) => adapters.toRun(r));
 };
 
 /**
@@ -1105,13 +1128,22 @@ export const usageGetSummary = async (args?: { workflowId?: string }): Promise<U
     args?.workflowId ? { workflowId: args.workflowId } : {},
   );
   const workflowIds = Object.keys(WORKFLOWS);
+  const projects = await projectList();
   const perWorkflow = await Promise.all(
     workflowIds.map(async (workflowId) => {
-      const [summary, runsPage] = await Promise.all([
+      const [summary, runCountsByProject] = await Promise.all([
         callVerb<adapters.RawUsageSummary>('usage_get_summary', { workflowId }),
-        callVerb<{ page?: { matchedCount?: number } }>('workflow_list_runs', { workflowId, limit: 1 }),
+        // See workflowListRuns()'s doc comment: an unscoped workflow_list_runs pays a full-fleet
+        // fetch server-side, so this count is summed from one projectId-scoped call per configured
+        // project rather than the one unscoped call this used to make.
+        Promise.all(
+          projects.map((project) =>
+            callVerb<{ page?: { matchedCount?: number } }>('workflow_list_runs', { workflowId, projectId: project.id, limit: 1 }),
+          ),
+        ),
       ]);
-      return { workflowId, summary, runCount: runsPage.page?.matchedCount ?? 0 };
+      const runCount = runCountsByProject.reduce((sum, page) => sum + (page.page?.matchedCount ?? 0), 0);
+      return { workflowId, summary, runCount };
     }),
   );
   return adapters.toUsageSummary(overall, perWorkflow);

@@ -187,10 +187,22 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   },
 
   // -- workflow / run reads --
+  // W1.2 — live pays a full-fleet blob fetch for every call with no `projectId` (every run blob
+  // across every project, filtered only afterward), which is what made the Runs page, Drive's
+  // bind-run panel, and the recent-runs panels fail outright ("Failed to fetch"). Fixture mode has
+  // no such cost to reproduce, so this throws instead: the one signal that would otherwise be
+  // invisible here is verbs.ts regressing to an unscoped call. workflowListRuns() (and
+  // usageGetSummary()'s per-workflow run count) always fan out one call per configured project.
   workflow_list_runs: (a) => {
+    const projectId = optStr(a, 'projectId');
+    if (!projectId) {
+      throw new Error(
+        '[api mock] workflow_list_runs called with no projectId — this client must always scope this call per project (see verbs.ts workflowListRuns()); an unscoped call is what made the Runs page, Drive bind-run panel, and recent-runs panels fail live.',
+      );
+    }
     const runs = mockStore.getRuns({
       workflowId: optStr(a, 'workflowId'),
-      projectId: optStr(a, 'projectId'),
+      projectId,
       status: optStr(a, 'status'),
       limit: optNum(a, 'limit'),
     });

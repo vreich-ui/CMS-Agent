@@ -251,6 +251,59 @@ describe("release_executor — never throws past its own try/catch", () => {
   });
 });
 
+// W1.3 (corroborated in PR #232): deploy_status's own schema declares only `commit`/`deployId`
+// (additionalProperties:false) and rejects a `release_id` key outright. That rejection surfaced as a
+// clean `{ ok: false, error }` response (never a thrown exception — see projectMcpAdapter.callTool),
+// which the poll folded into "not ready" instead of reporting the reject.
+describe("release_executor — deploy_status is polled with the site's declared schema, never release_id", () => {
+  it("polls with deployId when release_to_production reported one", async () => {
+    const deployStatusArgs: Record<string, unknown>[] = [];
+    const { callTool, calls } = stubCallTool({
+      release_to_production: () => ({ released: true, deploy: { deployId: "deploy_7" }, targetCommit: "sha_ghi" }),
+      deploy_status: (args) => {
+        deployStatusArgs.push(args);
+        return { deployStatus: "ready", productionConfirmed: true };
+      }
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun(), deps: { callTool } });
+
+    expect(calls).toEqual(["release_to_production", "deploy_status"]);
+    expect(deployStatusArgs).toEqual([{ deployId: "deploy_7" }]);
+    expect((outcome as { kind: string }).kind).toBe("completed");
+  });
+
+  it("falls back to commit when release_to_production reported no deploy id", async () => {
+    const deployStatusArgs: Record<string, unknown>[] = [];
+    const { callTool } = stubCallTool({
+      release_to_production: () => ({ released: true, targetCommit: "sha_jkl" }),
+      deploy_status: (args) => {
+        deployStatusArgs.push(args);
+        return { deployStatus: "ready", productionConfirmed: true };
+      }
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun(), deps: { callTool } });
+
+    expect(deployStatusArgs).toEqual([{ commit: "sha_jkl" }]);
+    expect((outcome as { kind: string }).kind).toBe("completed");
+  });
+
+  it("a request shape the site's schema rejects is reported as its own poll failure, never deploy_not_ready", async () => {
+    const callTool: CallToolFn = (async (tool: string) => {
+      if (tool === "release_to_production") return { ok: true, projectId: "dr-lurie", tool, result: { released: true, deploy: { deployId: "deploy_8" } } };
+      // Mirrors a real additionalProperties:false rejection: the call fails cleanly, it never throws.
+      return { ok: false, projectId: "dr-lurie", tool, error: "Unrecognized key(s) in object: 'release_id'", httpStatus: 400 };
+    }) as unknown as CallToolFn;
+
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun(), deps: { callTool } });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok || outcome.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(outcome.warnings.join(" ")).toMatch(/deploy_status_poll_failed/);
+    expect(outcome.warnings.join(" ")).toMatch(/Unrecognized key/);
+    expect(outcome.warnings.join(" ")).not.toMatch(/deploy_status_not_ready/);
+  });
+});
+
 describe("release_executor — the ledger key", () => {
   it("is scoped to (runId, requestId)", () => {
     expect(releaseLedgerKey("run_a", "req_1")).toBe("run_a:req_1");
