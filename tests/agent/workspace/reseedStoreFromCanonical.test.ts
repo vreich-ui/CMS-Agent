@@ -43,7 +43,13 @@ const baseCanonical = (): WorkspaceNode[] => [
   }),
   makeNode({
     id: "artifact_plan",
-    prompt: "Artifact plan canonical prompt describing create_agent_artifact_job materialization in detail."
+    prompt: "Artifact plan canonical prompt describing the one-turn materialization spec it emits, in reasonable detail.",
+    // W8 — the five fields the store overrides wholesale and that a redeploy alone does not move.
+    outputSchema: { type: "object", required: ["slots"] },
+    schema: { type: "object", required: ["slots"] },
+    allowedTools: ["stage.get_output", "stage.list_outputs"],
+    assignedSkills: ["contract_intelligence"],
+    modelConfig: { maxTurns: 1, toolCallLimit: 0, budgetUsd: 0.5 }
   }),
   makeNode({
     id: "article_body",
@@ -67,6 +73,12 @@ const mutateField = (node: WorkspaceNode, field: string): WorkspaceNode => {
     case "allowedTools": return { ...node, allowedTools: node.allowedTools.slice(0, -1) };
     case "prompt": return { ...node, prompt: `${node.prompt} (stale store copy)` };
     case "outputSchema": return { ...node, outputSchema: { type: "object" } };
+    // W8 fields. Like allowedTools above, the two list-valued ones drift by the STORE holding MORE
+    // than canonical, so this generic loop never trips the capability-loss guard — that guard has its
+    // own dedicated tests, and W8's real re-seed does trip it on purpose.
+    case "schema": return { ...node, schema: { type: "object" } };
+    case "assignedSkills": return { ...node, assignedSkills: [...(node.assignedSkills ?? []), "stale_skill"] };
+    case "modelConfig": return { ...node, modelConfig: { ...(node.modelConfig ?? {}), toolCallLimit: 8, budgetUsd: 2 } };
     default: throw new Error(`no mutator for field "${field}"`);
   }
 };

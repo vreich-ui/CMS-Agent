@@ -93,7 +93,26 @@ export const RESEED_ALLOWLIST: ReseedAllowlistEntry[] = [
   // Wave 3 T8 — materialize slots via create_agent_artifact_job.
   { nodeId: "artifact_plan", field: "prompt", note: "Wave 3 T8 — materialize slots via create_agent_artifact_job" },
   // Wave 3 T8 — bind verified refs into body.image.
-  { nodeId: "article_body", field: "prompt", note: "Wave 3 T8 — bind verified refs into body.image" }
+  { nodeId: "article_body", field: "prompt", note: "Wave 3 T8 — bind verified refs into body.image" },
+  // W8 (2026-08-31) — artifact_plan stops materializing and becomes ONE tool-less planning turn.
+  //
+  // Topology travelled with the redeploy (overlayStoreNode pins it), so artifact_materializer is live
+  // the moment the code is. These five fields did NOT: overlayStoreNode lets the store's copy override
+  // canonical outright, and the store still holds the gpt-5.5 tool-loop row. Without these writes a
+  // live run dispatches artifact_plan with the OLD prompt, the OLD project.call_tool grant and the OLD
+  // 8-call/$2 budget, validates its output against the OLD artifact_plan.v1 schema — which the new
+  // materialization_spec.v1 fails — and the whole point of W8 is bought and not delivered. The
+  // outputSchema entry is the one that turns a wasted run into a failed node, so it is not optional.
+  //
+  // Two of these are CAPABILITY LOSSES by this script's own definition and will refuse without
+  // --allow-capability-loss: allowedTools drops project.call_tool (deliberate — a planner that can call
+  // the bridge is the tool loop W8 removed) and assignedSkills drops contract_intelligence (its skill
+  // requests project.call_tool, which this node now denies). Say it out loud, as the flag intends.
+  { nodeId: "artifact_plan", field: "outputSchema", note: "W8 — emits materialization_spec.v1; the old schema rejects it" },
+  { nodeId: "artifact_plan", field: "schema", note: "W8 — the legacy alias must not disagree with outputSchema" },
+  { nodeId: "artifact_plan", field: "allowedTools", note: "W8 — plans only; allowedTools is empty by design (capability loss, deliberate)" },
+  { nodeId: "artifact_plan", field: "assignedSkills", note: "W8 — the contract skill requests a tool this node now denies (capability loss, deliberate)" },
+  { nodeId: "artifact_plan", field: "modelConfig", note: "W8 — maxTurns 1, toolCallLimit 0, budget $0.50" }
   // NOT HERE: publish_executor.metadata (Wave 2a T4's publishExecutorDeterministic flag). `grep -oE
   // '"[a-zA-Z]*Deterministic": [a-z"]+' src/agent/workspace/nodes.ts` shows canonical never set that
   // flag (or publicationControllerDeterministic) — only contractIntelligenceDeterministic,
