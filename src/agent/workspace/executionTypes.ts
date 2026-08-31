@@ -238,6 +238,18 @@ export type WorkflowExecutionRecord = {
   // Present only while the run is paused for budget (see RunBudgetBlock). Cleared the moment the
   // run advances past the budget check (e.g. after the ceiling is raised and the run resumes).
   budgetBlock?: RunBudgetBlock;
+  // budget-override-and-ui-save — per-run, per-node budget overrides (keyed by nodeId), set ONLY by
+  // workflow.set_node_budget_override (executor.setNodeBudgetOverride). Exists for exactly the
+  // recovery this run's own budget_exceeded error argues for (its suggestedBudgetUsd, see
+  // budgetGuard.ts): an operator raises THIS node's ceiling for THIS run without touching the node's
+  // own modelConfig.budgetUsd — which would raise it for every future run too — and without any
+  // side effect on the run's status; the node still has to be retried separately
+  // (workflow.retry_node) for the raise to take effect. Read by wrapModelWithBudgetGuard's config in
+  // preference to the node's modelConfig.budgetUsd for that run only (OpenAINodeRunner.ts); the
+  // node's stored config is never mutated. Preserved across workflow.reset_run for the same reason
+  // requestId and operatorPublishDecision are: a reset retries the same request, not a new one, and
+  // an operator-raised ceiling for this run should survive that retry.
+  nodeBudgetOverrides?: Record<string, number>;
   // P0 §2.2 — THE operator publish veto/approval field: ONE named field, ONE setter, ONE reader.
   // Set ONLY by workflow.set_operator_publish_decision (executor.setOperatorPublishDecision); read
   // ONLY through publishDecision.isOperatorPublishWithheld / resolvePublishAuthority, consumed by

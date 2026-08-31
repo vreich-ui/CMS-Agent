@@ -20,6 +20,15 @@
 import type { Model, ModelRequest, ModelResponse, StreamEvent } from "@openai/agents";
 import { estimateModelCost, estimatePricedCost } from "../../observability/modelUsage.js";
 
+// budget-override-and-ui-save: round a raw dollar figure up to the nearest $0.50 — a suggested
+// budget the operator can type straight into modelConfig.budgetUsd or a run override without doing
+// their own arithmetic. 50% headroom on top of what this attempt actually needed (spent + the one
+// turn that tripped the ceiling), because the turn that trips the guard is rarely the node's last —
+// a bare "just enough to have covered this one turn" figure would very likely trip again on the
+// very next turn.
+export const suggestBudgetUsd = (spentUsd: number, nextTurnEstimateUsd: number): number =>
+  Math.ceil((spentUsd + nextTurnEstimateUsd) * 1.5 * 2) / 2;
+
 export class NodeBudgetExceededError extends Error {
   readonly code = "budget_exceeded";
   constructor(
@@ -35,6 +44,13 @@ export class NodeBudgetExceededError extends Error {
       // below says so instead of quoting them.
       pricingUnknown?: true;
       reason?: string;
+      // budget-override-and-ui-save: same figures as spentUsdEstimate/prospectiveTurnUsd, named to
+      // match the operator-facing contract (`spentUsd`/`nextTurnEstimateUsd`), plus the raise this
+      // node's own numbers argue for. Absent alongside pricingUnknown — there is no real rate to
+      // suggest a budget against.
+      spentUsd?: number;
+      nextTurnEstimateUsd?: number;
+      suggestedBudgetUsd?: number;
     }
   ) {
     super(
@@ -42,7 +58,10 @@ export class NodeBudgetExceededError extends Error {
         ? `budget_exceeded: node "${details.nodeId}" stopped before its first model turn. ${details.reason}`
         : `budget_exceeded: node "${details.nodeId}" stopped before the model turn that would cross the ${details.ceiling} ceiling: ` +
           `$${details.spentUsdEstimate.toFixed(4)} already spent (actual, ${details.ceiling === "node" ? "this node" : "run-wide"}) + ~$${details.prospectiveTurnUsd.toFixed(4)} for the upcoming turn ` +
-          `exceeds the $${details.budgetUsd} ${details.ceiling} budget. Caught before the turn ran, not after.`
+          `exceeds the $${details.budgetUsd} ${details.ceiling} budget. Caught before the turn ran, not after.` +
+          (details.suggestedBudgetUsd !== undefined
+            ? ` Raise ${details.nodeId} budget to $${details.suggestedBudgetUsd} (this run or default) and retry the node.`
+            : "")
     );
     this.name = "NodeBudgetExceededError";
   }
@@ -142,13 +161,19 @@ export function wrapModelWithBudgetGuard(inner: Model, config: BudgetGuardConfig
     const nodeCeilingTripped = config.nodeBudgetUsd !== undefined && accruedNodeUsd + prospectiveTurnUsd > config.nodeBudgetUsd;
     const runCeilingTripped = config.runBudgetUsd !== undefined && config.priorSpendUsd + accruedNodeUsd + prospectiveTurnUsd > config.runBudgetUsd;
     if (nodeCeilingTripped || runCeilingTripped) {
+      const spentUsd = Number((nodeCeilingTripped ? accruedNodeUsd : config.priorSpendUsd + accruedNodeUsd).toFixed(6));
+      const nextTurnEstimateUsd = Number(prospectiveTurnUsd.toFixed(6));
       const details = {
         nodeId: config.nodeId,
         budgetUsd: (nodeCeilingTripped ? config.nodeBudgetUsd : config.runBudgetUsd)!,
         ceiling: nodeCeilingTripped ? ("node" as const) : ("run" as const),
-        spentUsdEstimate: Number((nodeCeilingTripped ? accruedNodeUsd : config.priorSpendUsd + accruedNodeUsd).toFixed(6)),
-        prospectiveTurnUsd: Number(prospectiveTurnUsd.toFixed(6)),
-        accruedNodeUsage: { ...state.accrued }
+        spentUsdEstimate: spentUsd,
+        prospectiveTurnUsd: nextTurnEstimateUsd,
+        accruedNodeUsage: { ...state.accrued },
+        // budget-override-and-ui-save — see suggestBudgetUsd's doc comment.
+        spentUsd,
+        nextTurnEstimateUsd,
+        suggestedBudgetUsd: suggestBudgetUsd(spentUsd, nextTurnEstimateUsd)
       };
       state.exceeded = details;
       throw new NodeBudgetExceededError(details);

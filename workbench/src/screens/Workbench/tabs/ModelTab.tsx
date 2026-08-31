@@ -48,6 +48,44 @@ function formToDraft(m: ModelConfig): DraftForm {
   };
 }
 
+/**
+ * Server wire units for every field the form edits — see verbs.ts's
+ * workspaceUpdateNodeModelConfig doc comment. Every field is a 1:1 pass-
+ * through except `timeout`, which the server stores in milliseconds while
+ * the form edits seconds (`timeoutSeconds`).
+ */
+type RawPatchFields = {
+  budgetUsd: number;
+  maxTurns: number;
+  toolCallLimit: number;
+  timeout: number;
+  maxOutputTokens: number;
+  retryCount: number;
+};
+
+function formToRaw(form: DraftForm): RawPatchFields {
+  return {
+    budgetUsd: Number(form.budgetUsd),
+    maxTurns: Number(form.maxTurns),
+    toolCallLimit: Number(form.toolCallLimit),
+    timeout: Math.round(Number(form.timeoutSeconds) * 1000),
+    maxOutputTokens: Number(form.maxOutputTokens),
+    retryCount: Number(form.retryCount),
+  };
+}
+
+/** Only the keys whose raw (server-unit) value actually changed — the patch
+ * this tool sends is merged onto the node's existing modelConfig server-side
+ * (deepMergeRecords in tools.ts), so an unmentioned key is left exactly as
+ * it was; there's no need to (and no reason to risk) resending every field. */
+function diffRawPatch(before: RawPatchFields, after: RawPatchFields): Partial<RawPatchFields> {
+  const patch: Partial<RawPatchFields> = {};
+  (Object.keys(after) as (keyof RawPatchFields)[]).forEach((key) => {
+    if (after[key] !== before[key]) patch[key] = after[key];
+  });
+  return patch;
+}
+
 interface FieldSpec {
   key: keyof DraftForm;
   label: string;
@@ -136,10 +174,12 @@ export function ModelTab({ node }: { node: WorkflowNode }) {
       retryCount: Number(form.retryCount),
     };
 
+    const patch = diffRawPatch(formToRaw(serverForm), formToRaw(form));
+
     setNextConfirmTrigger(triggerEl);
     setSaving(true);
     try {
-      await workspaceUpdateNodeModelConfig({ nodeId, model: nextModel });
+      await workspaceUpdateNodeModelConfig({ nodeId, patch });
       recordChange({ nodeId, kind: 'model', label: 'model & limits edited', before: serverModel, after: nextModel });
       clearLocalDraft(nodeId, 'model');
       setEditing(false);
@@ -147,6 +187,9 @@ export function ModelTab({ node }: { node: WorkflowNode }) {
       toast('Model & limits saved', 'workspace_update_node_model_config → recorded in History');
     } catch (err) {
       if (err instanceof ActionCancelledError) return;
+      // The server's own validation_error detail (issues, at path — see
+      // client.ts's describeErrorEnvelope) is the whole point of surfacing
+      // this: keep it verbatim rather than collapsing to a generic message.
       toast('Save failed', err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setSaving(false);

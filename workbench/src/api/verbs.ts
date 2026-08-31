@@ -380,11 +380,25 @@ export const workspaceUpdateNodeSkills = (args: { nodeId: string; skills: string
     args,
   );
 
-export const workspaceUpdateNodeModelConfig = (args: { nodeId: string; model: ModelConfig }) =>
+/**
+ * LIVE-VERIFIED CORRECTION (budget-override-and-ui-save): the live tool's
+ * input schema is `updateNodeInput` (tools.ts) — `{ id, patch }`, `.strict()`
+ * — same as every other `workspace_update_node_*` verb in this file. This
+ * verb alone used to send a bespoke flat `{ nodeId, model }`, which the live
+ * server refused outright: `additionalProperties: false` means an unknown
+ * top-level key doesn't get ignored, and `requirePatchField(data.patch,
+ * "modelConfig", ...)` throws `missing_patch_field` when `patch` itself is
+ * absent. Every mutation lands on the WIRE shape `{ id, patch: { modelConfig:
+ * {...} } }`; the server deep-merges `patch.modelConfig` onto the node's
+ * existing config (tools.ts's deepMergeRecords), so `patch` here only needs
+ * to carry the fields that actually changed — ModelTab.tsx builds exactly
+ * that diff, in server units (`timeout` in ms, not the UI's "Ns" string).
+ */
+export const workspaceUpdateNodeModelConfig = (args: { nodeId: string; patch: Partial<adapters.RawModelConfig> }) =>
   mutate<WorkflowNode | null>(
     'workspace_update_node_model_config',
     `Update model & limits for node ${args.nodeId}.`,
-    args,
+    { id: args.nodeId, patch: { modelConfig: args.patch } },
   );
 
 export const workspaceUpdateNodeInputSchema = (args: { nodeId: string; schema: JSONSchema }) =>

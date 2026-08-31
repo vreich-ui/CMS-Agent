@@ -261,4 +261,67 @@ test.describe('WP-33 model & limits', () => {
     await expect(page.locator('#toasts')).toContainText('workspace_update_node_model_config');
     await expect(page.locator('.center .kv .num').first()).toHaveText('0.75');
   });
+
+  // budget-override-and-ui-save — live regression guard. The server tool's
+  // input schema is `{id, patch: {modelConfig: {...}}}` (`.strict()`, so an
+  // extra top-level key like the old flat `{nodeId, model}` payload is a
+  // hard reject: `additionalProperties: false`), and `patch.modelConfig`
+  // must be present at all (`requirePatchField` throws `missing_patch_field`
+  // otherwise). Reproduced live via MCP: `patch: {budgetUsd: 3}` refused
+  // with `missing_patch_field`; `patch: {modelConfig: {budgetUsd: 3}}`
+  // succeeded. This pins the CORRECTED wire shape by capturing the exact
+  // object the mock transport receives (`runMockVerb`'s own
+  // `console.log('[api mock] <verb>', args)` for every mutating verb,
+  // handlers.ts) — the same object a real network transport would place in
+  // its POST body — rather than only asserting on the post-save UI, which
+  // can't tell a correct payload from one the mock happened to tolerate.
+  function captureMockPayloads(page: Page, verb: string): unknown[] {
+    const captured: unknown[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() !== 'log' || !msg.text().startsWith(`[api mock] ${verb}`)) return;
+      const args = msg.args();
+      if (args.length > 1) void args[1].jsonValue().then((v) => captured.push(v));
+    });
+    return captured;
+  }
+
+  test('a budget-only change sends {id, patch: {modelConfig: {budgetUsd}}} — no other field', async ({ page }) => {
+    const captured = captureMockPayloads(page, 'workspace_update_node_model_config');
+    await openWorkbenchNode(page, 'draft_writer'); // fixture budgetUsd 0.5, timeout 300000ms
+    await page.locator('.tabs button', { hasText: 'Model & limits' }).click();
+    await page.locator('.editnote button', { hasText: 'Edit' }).click();
+
+    await page.locator('#model-budgetUsd').fill('1.25');
+    await page.locator('.editnote button', { hasText: 'Save' }).click();
+    await expectConfirmVerb(page, 'workspace_update_node_model_config');
+    await page.locator('.modal button', { hasText: 'Confirm' }).click();
+    await expect(page.locator('#toasts')).toContainText('workspace_update_node_model_config');
+
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured[captured.length - 1]).toEqual({
+      id: 'draft_writer',
+      patch: { modelConfig: { budgetUsd: 1.25 } },
+    });
+  });
+
+  test('a timeout-only change sends {id, patch: {modelConfig: {timeout}}} converted seconds→ms — no other field', async ({
+    page,
+  }) => {
+    const captured = captureMockPayloads(page, 'workspace_update_node_model_config');
+    await openWorkbenchNode(page, 'draft_writer'); // fixture budgetUsd 0.5, timeout 300000ms
+    await page.locator('.tabs button', { hasText: 'Model & limits' }).click();
+    await page.locator('.editnote button', { hasText: 'Edit' }).click();
+
+    await page.locator('#model-timeoutSeconds').fill('120');
+    await page.locator('.editnote button', { hasText: 'Save' }).click();
+    await expectConfirmVerb(page, 'workspace_update_node_model_config');
+    await page.locator('.modal button', { hasText: 'Confirm' }).click();
+    await expect(page.locator('#toasts')).toContainText('workspace_update_node_model_config');
+
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured[captured.length - 1]).toEqual({
+      id: 'draft_writer',
+      patch: { modelConfig: { timeout: 120000 } },
+    });
+  });
 });

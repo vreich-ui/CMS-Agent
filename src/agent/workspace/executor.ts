@@ -852,7 +852,10 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     return store.resetRun(runId, {
       ...rebuilt,
       ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision, operatorDecisionSource: existing.operatorDecisionSource ?? "explicit" } : {}),
-      ...(existing.publishingPolicySnapshot ? { publishingPolicySnapshot: existing.publishingPolicySnapshot } : {})
+      ...(existing.publishingPolicySnapshot ? { publishingPolicySnapshot: existing.publishingPolicySnapshot } : {}),
+      // budget-override-and-ui-save — same reason requestId/operatorPublishDecision survive above: a
+      // reset retries the SAME request, it does not un-say an operator's per-run budget raise.
+      ...(existing.nodeBudgetOverrides ? { nodeBudgetOverrides: existing.nodeBudgetOverrides } : {})
     });
   });
 }
@@ -2785,6 +2788,34 @@ export async function setOperatorPublishDecision(runId: string, decision: "appro
       if (!run) return undefined;
       try {
         return await store.saveRun({ ...run, operatorPublishDecision: decision, operatorDecisionSource: "explicit", updatedAt: now() });
+      } catch (error) {
+        if (isConcurrencyConflict(error)) continue;
+        throw error;
+      }
+    }
+    return store.getRun(runId);
+  });
+}
+
+// budget-override-and-ui-save — the ONE setter for run.nodeBudgetOverrides. Exposed as the MCP tool
+// workflow.set_node_budget_override; read by the budget guard's config (OpenAINodeRunner.ts) in
+// PREFERENCE to the node's own modelConfig.budgetUsd, for THIS run only — the node's stored config
+// is never touched, so every other run keeps the node's normal ceiling. Same lock + CAS discipline
+// as setOperatorPublishDecision so a concurrent run advance can never lose the override or clobber
+// a different node's override written a moment earlier (a shallow-merge onto the EXISTING map, not
+// a wholesale replace — this setter is called once per (run, node) pair, but nothing stops an
+// operator raising two different nodes' budgets for the same run in quick succession).
+//
+// Deliberately does NOT retry the node itself — retryNode is workflow.retry_node's own job, and a
+// silent auto-retry here would hide a raise that failed to fix anything (a genuinely runaway node)
+// behind a SECOND dispatch the operator never asked for. The two verbs stay separate on purpose.
+export async function setNodeBudgetOverride(runId: string, nodeId: string, budgetUsd: number, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<WorkflowExecutionRecord | undefined> {
+  return withRunLock(runId, async () => {
+    for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
+      const run = await store.getRun(runId);
+      if (!run) return undefined;
+      try {
+        return await store.saveRun({ ...run, nodeBudgetOverrides: { ...(run.nodeBudgetOverrides ?? {}), [nodeId]: budgetUsd }, updatedAt: now() });
       } catch (error) {
         if (isConcurrencyConflict(error)) continue;
         throw error;
