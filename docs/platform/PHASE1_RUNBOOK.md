@@ -199,6 +199,42 @@ npm run job:monetizer-ingest -- --dry-run
 This block is documentation only — nothing above runs as part of any build or deploy;
 no live deploy behavior changes until an operator runs these commands by hand.
 
+## …and `job:tracking-ingest` (T21.7)
+
+`src/agent/entrypoints/trackingIngestJob.ts` (+ `trackingIngestJobMain.ts`) is the same
+pattern again for the SECOND outer loop: it calls `feedback.ingest_tracking`
+(`ingestTrackingRollups`), which reads the tracking sink's per-producer engagement
+rollups (`GET /rollups?by=producer`) and records each row as a feedback OUTCOME with
+source `tracking:engagement.v1`. Meant to run DAILY — with no `--from`/`--to` it pulls
+the previous whole UTC day, which is the window a once-a-day schedule should ask for.
+
+It is safe to deploy and schedule BEFORE `TRACKING_SINK_URL` / `TRACKING_SINK_TOKEN` /
+`TRACKING_PROJECT_ID` are set (site genesis provisions the sink pair per tenant): with any
+of them unset the job exits 0 having done nothing, with `status: "skipped_unconfigured"`
+and a named reason in its JSON summary.
+
+```bash
+# Local smoke — reports the connection state and the resolved window; ingests nothing:
+npm run job:tracking-ingest -- --dry-run
+
+# Same three build/secret/create steps as above, with its own Cloud Run Job resource:
+#   gcloud run jobs create tracking-ingest-run \
+#     --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
+#     --cpu 1 --memory 512Mi --max-retries 0 --task-timeout 300 \
+#     --set-env-vars "WORKSPACE_STORE=blobs,NETLIFY_BLOBS_SITE_ID=<site-api-id>,TRACKING_PROJECT_ID=<trk_...>" \
+#     --set-secrets "NETLIFY_BLOBS_TOKEN=netlify-blobs-token:latest,TRACKING_SINK_URL=tracking-sink-url:latest,TRACKING_SINK_TOKEN=tracking-sink-token:latest" \
+#     --command "npm" --args "run,job:tracking-ingest,--"
+#
+# Scheduled DAILY (the rollups are day-grained):
+#   gcloud scheduler jobs create http tracking-ingest-daily \
+#     --schedule="30 3 * * *" \
+#     --uri="https://<region>-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/<project>/jobs/tracking-ingest-run:run" \
+#     --http-method=POST \
+#     --oauth-service-account-email="<job-runtime-sa>"
+```
+
+Documentation only, same as the block above.
+
 ## Known limits (accepted for Phase 1, resolved in Phase 2)
 
 - Cross-cloud storage: the job talks to Netlify Blobs over HTTPS — fine for batch;
