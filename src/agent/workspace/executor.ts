@@ -232,25 +232,27 @@ const decodeRunCursor = (cursor: string): RunCursor => {
     throw new InvalidListRunsCursorError(cursor);
   }
 };
-// Newest-first, runId as deterministic tiebreak so paging is stable across same-millisecond starts.
-const compareRunsNewestFirst = (a: Pick<WorkflowExecutionRecord, "startedAt" | "runId">, b: Pick<WorkflowExecutionRecord, "startedAt" | "runId">): number =>
-  b.startedAt.localeCompare(a.startedAt) || b.runId.localeCompare(a.runId);
-
+// W1.5 — the whole page window (status/time filters, decoded cursor, limit) is pushed down into the
+// repository, which owns the newest-first + runId-tiebreak ordering (compareRunsNewestFirst in the
+// ExecutionRepository contract). That lets the blob backend answer from its per-project run index
+// and fetch only the ≤limit run blobs the page will return, instead of fetching the entire fleet
+// and windowing here. Cursor ENCODING stays here: the opaque token is a tool-schema concern, and the
+// repository only ever sees its decoded sort key.
 export async function listRunsPage(filters: ListRunsPageInput = {}, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<ListRunsPage> {
   const limit = Math.max(1, Math.min(MAX_LIST_RUNS_LIMIT, Math.floor(filters.limit ?? DEFAULT_LIST_RUNS_LIMIT)));
-  const cursor = filters.cursor ? decodeRunCursor(filters.cursor) : undefined;
-  const matched = (await store.listRuns({ projectId: filters.projectId, workflowId: filters.workflowId }))
-    .filter((run) => !filters.status || run.status === filters.status)
-    .filter((run) => !filters.from || run.startedAt >= filters.from)
-    .filter((run) => !filters.to || run.startedAt <= filters.to)
-    .sort(compareRunsNewestFirst);
-  const start = cursor ? matched.findIndex((run) => compareRunsNewestFirst(cursor, run) < 0) : 0;
-  const windowStart = start === -1 ? matched.length : start;
-  const runs = matched.slice(windowStart, windowStart + limit);
-  const hasMore = windowStart + runs.length < matched.length;
+  const after = filters.cursor ? decodeRunCursor(filters.cursor) : undefined;
+  const { runs, matchedCount, hasMore } = await store.listRunsPage({
+    projectId: filters.projectId,
+    workflowId: filters.workflowId,
+    status: filters.status,
+    from: filters.from,
+    to: filters.to,
+    after,
+    limit
+  });
   return {
     runs,
-    page: { limit, matchedCount: matched.length, hasMore, ...(hasMore && runs.length ? { nextCursor: encodeRunCursor(runs[runs.length - 1]) } : {}) }
+    page: { limit, matchedCount, hasMore, ...(hasMore && runs.length ? { nextCursor: encodeRunCursor(runs[runs.length - 1]) } : {}) }
   };
 }
 

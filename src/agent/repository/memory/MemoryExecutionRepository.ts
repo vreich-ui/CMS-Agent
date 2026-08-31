@@ -1,7 +1,7 @@
 import type { WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
 import type { RepositoryBackend } from "../RepositoryManager.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
-import { RunConcurrencyError, type ExecutionRepository } from "../interfaces/ExecutionRepository.js";
+import { RunConcurrencyError, windowRunRows, type ExecutionRepository, type ListRunsFilters, type ListRunsPageResult } from "../interfaces/ExecutionRepository.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 const revOf = (run: WorkflowExecutionRecord | undefined): number => run?.rev ?? 0;
@@ -22,12 +22,15 @@ export class MemoryExecutionRepository implements ExecutionRepository {
     return run ? clone(run) : undefined;
   }
 
-  async listRuns(filters: { projectId?: string; workflowId?: string } = {}): Promise<WorkflowExecutionRecord[]> {
-    return [...this.runs.values()]
-      .filter((run) => !filters.projectId || run.projectId === filters.projectId)
-      .filter((run) => !filters.workflowId || run.workflowId === filters.workflowId)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-      .map((run) => clone(run));
+  // Mirrors the blob repository's windowed contract (W1.5) so tests exercising either backend see
+  // identical filter/sort/pagination semantics; here the window is applied over the in-memory map.
+  async listRuns(filters: ListRunsFilters = {}): Promise<WorkflowExecutionRecord[]> {
+    return (await this.listRunsPage(filters)).runs;
+  }
+
+  async listRunsPage(filters: ListRunsFilters = {}): Promise<ListRunsPageResult> {
+    const { window, matchedCount, hasMore } = windowRunRows([...this.runs.values()], filters);
+    return { runs: window.map((run) => clone(run)), matchedCount, hasMore };
   }
 
   // Compare-and-swap: the whole map operation runs synchronously (no await between the read and the
