@@ -58,6 +58,10 @@
 // run-visible warning rather than silently resolved. The emitted envelope then carries the id the
 // artifacts actually live under, which is the id runContext lifts and the publisher patches.
 //
+// RETRYING. A retry of this node re-attempts every BLOCKED slot and nothing else: an in-flight job keeps
+// its id and is polled, a materialized one keeps its evidence and is skipped. See the retry block in
+// runArtifactMaterialization for why the absent envelope is the signal.
+//
 // WHAT IS A SLOT FAILURE AND WHAT IS A NODE FAILURE. A slot whose job terminally failed, or whose
 // create was refused, is a BLOCKED SLOT carrying the bridge's own error verbatim (including
 // `renderer_unavailable:*` and `RENDERER_MISMATCH` — a renderer problem is the operator's to read, not
@@ -560,6 +564,30 @@ export async function runArtifactMaterialization(
   const effective: MaterializationSpec = { ...spec, requestId };
 
   const jobState = readJobState(run);
+
+  // A RETRY MUST RECONSIDER A BLOCKED SLOT — found live, run_1788189874186_5973sq (2026-08-31).
+  //
+  // retryNode clears `stageOutputs[<nodeId>]` but NOT `stageOutputs["<nodeId>:jobs"]`, and it cannot:
+  // that key is deliberately separate so an IN-FLIGHT job survives a retry and gets polled instead of
+  // re-created (the same reason capture_crawl keeps its own). The cost was that a slot this node had
+  // already marked `blocked` stayed blocked forever: the next dispatch read it back as terminal, skipped
+  // it, and completed instantly with the identical failure — so an operator who FIXED the cause (a
+  // mis-shaped requirements object, a renderer brought back up) retried and got the old error verbatim,
+  // which reads as "the fix did nothing".
+  //
+  // The absent envelope beside a present job state is exactly the retry signal, and it is the only state
+  // retryNode can produce. Blocked slots are dropped so they re-adopt and re-create; `running` slots keep
+  // their jobId (polled, never duplicated) and `adopted`/`materialized` slots keep their evidence (skipped
+  // as terminal, still zero creates). So a retry costs a re-attempt of exactly what failed, and nothing
+  // that succeeded is bought twice.
+  if (run.stageOutputs?.[ARTIFACT_MATERIALIZER_NODE_ID] === undefined) {
+    for (const [slotId, slotState] of Object.entries(jobState.slots)) {
+      if (slotState.phase !== "blocked") continue;
+      delete jobState.slots[slotId];
+      warnings.push(`artifact_slot_retried:${slotId}`);
+    }
+  }
+
   jobState.dispatches += 1;
   const maxDispatches = readMaxPollDispatches(node);
 
