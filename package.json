@@ -40,6 +40,7 @@
     "job:conversation-turn-gc": "tsx src/agent/entrypoints/conversationTurnGcJobMain.ts",
     "job:migrate-store": "tsx src/agent/entrypoints/migrateStoreJobMain.ts",
     "job:monetizer-ingest": "tsx src/agent/entrypoints/monetizerIngestJobMain.ts",
+    "job:tracking-ingest": "tsx src/agent/entrypoints/trackingIngestJobMain.ts",
     "serve:mcp": "tsx src/agent/entrypoints/mcpServerMainRun.ts",
     "job:continuation-tick": "tsx src/agent/entrypoints/runContinuationTickMain.ts",
     "job:reconcile-site-credentials": "tsx src/agent/entrypoints/reconcileSiteCredentialsMain.ts"
