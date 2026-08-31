@@ -291,9 +291,19 @@ export type WorkflowExecutionRecord = {
 
 // T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3) — see WorkflowExecutionRecord.releaseLedger
 // above and releaseExecution.ts for the module that reads and writes it.
+//
+// W7 (2026-08-31, run_1788023523567_qdv9et): `idempotencyKey` is the client-side key release_executor
+// passes to release_to_production (releaseExecution.ts releaseIdempotencyKey — `release:<runId>:
+// <publishCommitSha|objectId>`), persisted on FIRST use and reused verbatim on every later dispatch
+// for the same ledger key, so a retry after an HTTP 504/transport failure replays the site's
+// ORIGINAL receipt instead of re-POSTing the production build hook. `releaseUnconfirmed: true`
+// marks a pending entry whose release_to_production call was never acknowledged (the 504 case): the
+// hook MAY have fired, so the next dispatch polls deploy_status by commit first and only then re-calls
+// release_to_production — with the SAME key. Absent (an entry written before W7, or one whose release
+// call was acknowledged) means the release landed and release_to_production is unreachable again.
 export type ReleaseLedgerEntry =
   | { status: "terminal"; requestId: string; performedAt: string; output: Record<string, unknown> }
-  | { status: "pending"; requestId: string; performedAt: string; releaseId?: string; deployedSha?: string; attempts: number };
+  | { status: "pending"; requestId: string; performedAt: string; releaseId?: string; deployedSha?: string; attempts: number; idempotencyKey?: string; releaseUnconfirmed?: boolean };
 
 // T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2.5) — see WorkflowExecutionRecord.
 // publishingPolicySnapshot above. `publishEnabled` rides along for audit/UI completeness (ADR §2.5's
