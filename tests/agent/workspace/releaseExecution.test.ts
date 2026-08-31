@@ -376,3 +376,112 @@ describe("W1.1 — a recoverable release failure is never ledgered terminal", ()
     expect(outcome.ledger).toBe("terminal");
   });
 });
+
+// W1.3 (run_1788011844073_ipwrnx, 2026-08-30): the site's deploy_status schema accepts ONLY
+// `commit`/`deployId` (additionalProperties:false). Every poll was rejected by schema, the refusal
+// rode home as ok:true with isError inside the result, and the executor filed 7 polls of
+// `deploy_status_not_ready:unknown` while the page was actually live. The executor must (1) poll
+// with the publish receipt's own commit sha when the release response named nothing, and (2) never
+// read a rejected CALL as evidence about the deploy's state.
+describe("W1.3 — deploy_status polls the publish receipt's commit and surfaces rejections as rejections", () => {
+  const committedRunWithCommitReceipt = (): RunFixture =>
+    committedRun({
+      stageOutputs: {
+        publish_executor: {
+          artifact: "publish_execution.v1",
+          status: "published_pending_release",
+          publishCommitted: true,
+          receipts: { requestId: "req_release_20260825_01", commitSha: "sha_from_publish_receipt" }
+        }
+      }
+    });
+
+  it("polls with {commit: <receipts.commitSha>} when release_to_production named no deploy id or commit — never release_id", async () => {
+    const deployStatusArgs: Record<string, unknown>[] = [];
+    const { callTool, calls } = stubCallTool({
+      release_to_production: () => ({ released: true }),
+      deploy_status: (args) => {
+        deployStatusArgs.push(args);
+        return { deployStatus: "ready", productionConfirmed: true };
+      }
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRunWithCommitReceipt(), deps: { callTool } });
+
+    expect(calls).toEqual(["release_to_production", "deploy_status"]);
+    expect(deployStatusArgs).toEqual([{ commit: "sha_from_publish_receipt" }]);
+    expect(deployStatusArgs[0]).not.toHaveProperty("release_id");
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.status).toBe("executed");
+  });
+
+  it("a re-poll dispatch whose pending ledger entry predates commit tracking still polls with the receipt's commit", async () => {
+    const deployStatusArgs: Record<string, unknown>[] = [];
+    const { callTool, calls } = stubCallTool({
+      deploy_status: (args) => {
+        deployStatusArgs.push(args);
+        return { deployStatus: "ready", productionConfirmed: true };
+      }
+    });
+    const run = withLedger(committedRunWithCommitReceipt(), {
+      status: "pending",
+      requestId: "req_release_20260825_01",
+      performedAt: new Date().toISOString(),
+      attempts: 1
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+
+    expect(calls).toEqual(["deploy_status"]);
+    expect(deployStatusArgs).toEqual([{ commit: "sha_from_publish_receipt" }]);
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.status).toBe("executed");
+  });
+
+  it("a schema rejection delivered as an isError MCP result (transport ok:true) is deploy_status_call_rejected, never not_ready:unknown", async () => {
+    const { callTool } = stubCallTool({
+      release_to_production: () => ({ released: true, deploy: { deployId: "deploy_w13" } }),
+      // The transport succeeded; the CLIENT refused — exactly how an additionalProperties:false
+      // rejection actually arrives (publisher.ts: "`ok` here is the TRANSPORT's verdict").
+      deploy_status: () => ({
+        isError: true,
+        content: [{ type: "text", text: "Unrecognized key(s) in object: 'release_id'" }],
+        structuredContent: { error: "Unrecognized key(s) in object: 'release_id'", statusCode: 400 }
+      })
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun(), deps: { callTool } });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok || outcome.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(outcome.warnings.join(" ")).toMatch(/deploy_status_call_rejected/);
+    expect(outcome.warnings.join(" ")).toMatch(/Unrecognized key/);
+    expect(outcome.warnings.join(" ")).not.toMatch(/deploy_status_not_ready/);
+    expect(outcome.warnings.join(" ")).not.toMatch(/not_ready:unknown/);
+    // Retryable: pending ledger entry, so the next dispatch re-polls and never re-releases.
+    expect(outcome.ledgerEntry.status).toBe("pending");
+  });
+
+  it("an error-shaped body WITHOUT the isError flag (no deployStatus, an error message) is also deploy_status_call_rejected", async () => {
+    const { callTool } = stubCallTool({
+      release_to_production: () => ({ released: true, deploy: { deployId: "deploy_w13b" } }),
+      deploy_status: () => ({ error: "deploy_status: request did not match the declared schema" })
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun(), deps: { callTool } });
+
+    if (!outcome.ok || outcome.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(outcome.warnings.join(" ")).toMatch(/deploy_status_call_rejected/);
+    expect(outcome.warnings.join(" ")).toMatch(/did not match the declared schema/);
+    expect(outcome.warnings.join(" ")).not.toMatch(/deploy_status_not_ready/);
+  });
+
+  it("a response with neither deployStatus nor any error is unknown WITH the raw response appended, so it is diagnosable", async () => {
+    const { callTool } = stubCallTool({
+      release_to_production: () => ({ released: true, deploy: { deployId: "deploy_w13c" } }),
+      deploy_status: () => ({ somethingElse: true })
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun(), deps: { callTool } });
+
+    if (!outcome.ok || outcome.kind !== "pending") throw new Error("expected a pending outcome");
+    const joined = outcome.warnings.join(" ");
+    expect(joined).toMatch(/deploy_status_not_ready:unknown raw=/);
+    expect(joined).toMatch(/somethingElse/);
+  });
+});
