@@ -28,6 +28,8 @@ import { applyRunContextEnvelope, buildRunContext } from "./runContext.js";
 import { runDeterministicPublicationController } from "./publicationController.js";
 import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
 import { runDeterministicReleaseExecutor } from "./releaseExecution.js";
+import { checkEditorialSubject } from "./editorialSubject.js";
+import { WorkspaceToolError } from "./workspaceErrors.js";
 import { ARTIFACT_MATERIALIZER_NODE_ID, readArtifactMaterializer, runArtifactMaterialization } from "./artifactMaterialization.js";
 import { buildLearningObservations } from "./learningRecord.js";
 import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
@@ -814,6 +816,17 @@ export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date
 }
 
 export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository, projectRepository: ProjectRepository = repositoryManager.getProjectRepository()): Promise<WorkflowExecutionRecord> {
+  // W10 — THE SUBJECT GATE, before the run record exists and therefore before anything can be spent.
+  // A live editorial run that names no subject cannot succeed: it reaches article_body with nothing to
+  // write about, emits an empty body, and is correctly refused at the publish gate having paid for the
+  // whole pipeline to find out. run_1788207377621_behzkh did exactly that on taxonomy alone, and read
+  // to the operator as a broken approve button. See editorialSubject.ts for why this is a structural
+  // check on initialInput rather than a read of input_triage's own (correct, model-authored) blocker.
+  //
+  // Placed here rather than in the MCP tool so every plane is gated by one check — the same reasoning
+  // that put preflightDriverAuth in the executor instead of in each driver's entry.
+  const subject = checkEditorialSubject(data);
+  if (!subject.ok) throw new WorkspaceToolError(subject.code, subject.message, subject.details);
   // S1 — a caller-supplied requestId (validated by the tool layer against the project's pattern)
   // becomes the run's requestId; absent, the auto-minted join key is used as before.
   const initial = buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID), makeRunId(), data.requestId?.trim() || makeRequestId());
