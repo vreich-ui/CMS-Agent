@@ -543,10 +543,13 @@ export async function runEnginePublishExecution(params: EnginePublishExecutionPa
     // operator veto, the controller decision again, the request-id contract, the body contract, the
     // readiness policy, the media refusal — is publishRun's own and is deliberately left to it.
     //
-    // No `readiness` input is supplied on purpose: verifiedMediaRefs is the operator's evidence that
-    // pdf-tool materialized each artifact, and an engine that hands itself that evidence has waived
-    // the check. A media-carrying body therefore blocks here (publishRun refuses one outright), which
-    // is the fail-closed direction.
+    // No `readiness` input is supplied on purpose: caller-supplied verifiedMediaRefs is the
+    // OPERATOR's evidence that pdf-tool materialized each artifact, and an engine that hands itself
+    // that evidence has waived the check. What publishRun uses instead is the SYSTEM's own recorded
+    // evidence — the envelope's artifactReferences and the run's artifact_plan output (W6 media
+    // gate) — so a body whose every media reference resolves to a verified current-request artifact
+    // publishes through the normal dialect sequence, and anything less still blocks here
+    // (unverified_media / raw_image_artifact_public_url), which is the fail-closed direction.
     result = await (params.publish ?? publishRun)(
       { runId: params.run.runId, projectId: params.run.projectId, requestId, approved: true, live: true, publishedTime },
       params.deps ?? {}

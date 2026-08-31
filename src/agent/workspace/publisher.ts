@@ -12,8 +12,11 @@
 // through the project's own MCP tools. This publisher owns everything dialect-independent — gates,
 // request-id contract, body validation, readiness, step recording, learning observations — and
 // REFUSES to publish for a project with no execution hook rather than guess another client's
-// dialect. Image materialization is out of scope for this path (it needs the artifact upload flow);
-// a body carrying image/document media is rejected with a clear reason.
+// dialect. Image materialization is out of scope for this path — it happens UPSTREAM, through the
+// artifact bridge (artifact_plan adopts/generates and verifies each slot; article_body binds the
+// rendered public paths) — so a body may carry image/document media here IFF every media reference
+// resolves to a verified current-request artifact (see the W6 media gate in publishRun); an
+// unverified reference, or a raw blob key in a rendered field, is rejected with a clear reason.
 //
 // Board decision B2: publishRun never releases — releasing to production is a SEPARATE gate whose
 // verb must appear nowhere in this file or in any project's publish execution hook.
@@ -36,6 +39,7 @@ import type { ProjectRepository } from "../repository/interfaces/ProjectReposito
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import { assertRecipeAuthorshipAllowed } from "./publishableTypeCharter.js";
 import { producerContextForPublish } from "./nodeExecutionProvenance.js";
+import { artifactPlanVerifiedMediaRefsOf, envelopeVerifiedMediaRefsOf, isVerifiedMediaRef, mediaRefsOf } from "../projects/readinessContentChecks.js";
 
 // request_id contract: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, supplied by the
 // caller (never auto-generated). A malformed id is accepted at create but breaks every later step.
@@ -216,7 +220,13 @@ const clientObjectOf = (envelope: unknown): ClientObject =>
   (envelope && typeof envelope === "object" ? ((envelope as Record<string, unknown>).body as ClientObject) : undefined) ?? {};
 const blocksOf = (body: ClientObject) => Array.isArray(body.nodes) ? body.nodes : [];
 
-const bodyHasMedia = (body: ClientObject): boolean => blocksOf(body).some((node) => node?.public?.media !== undefined);
+// W6 — a RAW artifact key in a rendered field. Renderable fields carry the client's PUBLIC path
+// (Dr. Lurie: /img/{req}/{sha}.ext, /pdf/{req}/{sha}.pdf); the raw blob key ("image/req_x/<sha>.webp",
+// "document/req_x/<sha>.pdf") belongs only in *AssetRef / artifact_ref carrier fields, and leaking one
+// into a rendered src breaks the client build even when the artifact behind it is verified. Detected
+// by the key's own namespace prefix — a public path always starts with "/", a raw key never does.
+const RAW_ARTIFACT_KEY = /^(?:image|document|pdf)\//i;
+const isRawArtifactKey = (ref: string): boolean => RAW_ARTIFACT_KEY.test(ref);
 
 // Identify the first media slot whose reference is not among the pdf-tool-verified refs, so a blocked
 // state can point at exactly which artifact slot needs materialization.
@@ -275,6 +285,51 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   const hooks = getProjectHooks(projectId);
   const plan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: blocksOf(body).length, publishedTime: input.publishedTime ?? null, toolSequence: hooks?.publishToolSequence ?? [] };
 
+  // W6 (run_1788023523567_qdv9et) — the media verification gate. This path used to refuse ANY body
+  // carrying image/document media ("image_media_unsupported: ... requires the Dr. Lurie artifact
+  // upload flow"), a guard from before the artifact bridge existed. Media is now materialized on the
+  // client BEFORE publish — artifact_plan adopts or generates each slot, verifies it, and
+  // article_body binds the client's rendered public path into the body — so at publish time the
+  // media travels INSIDE the body ops of the normal dialect sequence (object_create body ->
+  // object_patch ops) and there is no upload step left to perform. What this gate verifies instead:
+  //
+  //   1. No RAW artifact key sits in a rendered field. A raw key breaks the client build even when
+  //      the artifact behind it is verified, so this refuses FIRST, before the verification check
+  //      can bless it (raw_image_artifact_public_url — the client's own blocker code for it).
+  //   2. Every media reference in the body resolves to a verified current-request artifact: its src
+  //      matches the system's own recorded evidence (verifiedMediaRefs below) exactly or by its
+  //      <request>/<file> tail — which pins the request id, so a verified artifact from ANOTHER
+  //      request never satisfies this body's reference. Anything else refuses with the offending
+  //      src named (unverified_media).
+  //
+  // The gate sits BEFORE the readiness hook on purpose: media the system cannot vouch for refuses
+  // with its precise code and the offending refs listed, rather than surfacing as one line in a
+  // generic readiness NO-GO — and the gate runs for EVERY project, including one that contributes no
+  // readiness policy at all. A text-only body has no media references and passes untouched. Past the
+  // gate, the sequence below runs unchanged; object_validate remains the client-side authority on
+  // the body shape and its refusal passes through verbatim.
+  //
+  // verifiedMediaRefs — every verification evidence source this publisher holds, resolved ONCE: the
+  // caller's confirmed refs, the envelope's own artifactReferences record, and the run's
+  // artifact_plan output (the same three sources the readiness hook's media scan accepts via
+  // readinessContentChecks, so this gate and that checklist cannot disagree about the same body).
+  const verifiedMediaRefs = [
+    ...(input.readiness?.verifiedMediaRefs ?? []),
+    ...envelopeVerifiedMediaRefsOf(envelope),
+    ...artifactPlanVerifiedMediaRefsOf(run.stageOutputs as Record<string, unknown> | undefined)
+  ];
+  const mediaRefs = mediaRefsOf(envelope);
+  if (mediaRefs.length > 0) {
+    const rawRefs = mediaRefs.filter(isRawArtifactKey);
+    if (rawRefs.length > 0) {
+      return { published: false, mode: "error", gates, plan: emptyPlan, steps: [], error: `raw_image_artifact_public_url: raw artifact key(s) in rendered field(s): ${rawRefs.join(", ")}. Rendered fields carry the client's PUBLIC path (e.g. /img/{req}/{sha}.ext); raw blob keys belong only in *AssetRef/artifact_ref carrier fields, and a raw key in a rendered field breaks the client build. Rebind the public path from the run's artifact_plan and retry.` };
+    }
+    const unverified = mediaRefs.filter((ref) => !isVerifiedMediaRef(ref, verifiedMediaRefs));
+    if (unverified.length > 0) {
+      return { published: false, mode: "error", gates, plan: emptyPlan, steps: [], error: `unverified_media: media reference(s) not backed by a verified current-request artifact: ${unverified.join(", ")}. Every media src must appear in the run's artifact_plan verified artifact set (or the envelope's artifactReferences, or caller-confirmed verifiedMediaRefs) for THIS request; materialize the slot through the artifact bridge (artifact_plan) and rebind, rather than publishing an unverified reference.` };
+    }
+  }
+
   // Project publish-readiness policy (GO/NO-GO). Layered via the hook registry so other projects
   // hosted by this workspace are NOT subject to Dr. Lurie's readiness rules. A NO-GO is an expected
   // safety state (blocked_for_publish_execution), surfaced as a resumable blocked state — not a failure.
@@ -287,7 +342,7 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   // blockers. A caller-supplied stageOutputs (tests, replays) still wins.
   const readiness = readinessHook ? readinessHook({ articleBody: envelope, stageOutputs: run.stageOutputs, ...input.readiness }) : undefined;
   if (readiness && readiness.status === "no_go") {
-    const artifactSlot = readiness.blockers.includes("media_artifacts_verified") ? firstUnverifiedMediaSlot(body, input.readiness?.verifiedMediaRefs) : null;
+    const artifactSlot = readiness.blockers.includes("media_artifacts_verified") ? firstUnverifiedMediaSlot(body, verifiedMediaRefs) : null;
     return {
       published: false,
       mode: "blocked_for_publish_execution",
@@ -297,11 +352,6 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
       readiness,
       blocked: { requestId: input.requestId, nodeAwaitingApproval: "publication_controller", artifactSlot, requiredAction: readiness.requiredAction ?? `Resolve: ${readiness.blockers.join(", ")}.`, resumable: true }
     };
-  }
-
-  // This path executes text-only publishes; image/document media needs the artifact upload flow.
-  if (bodyHasMedia(body)) {
-    return { published: false, mode: "error", gates, plan: emptyPlan, steps: [], error: "image_media_unsupported: this publish path handles text-only bodies; image/document media requires the Dr. Lurie artifact upload flow and is not published here." };
   }
 
   if (!gates.allPassed) {
