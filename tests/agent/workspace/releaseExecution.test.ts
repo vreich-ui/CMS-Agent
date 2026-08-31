@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  RELEASE_CALL_TIMEOUT_MARGIN_SECONDS,
+  RELEASE_CALL_TIMEOUT_SECONDS,
   RELEASE_EXECUTION_ARTIFACT,
+  releaseIdempotencyKey,
   releaseLedgerKey,
   runDeterministicReleaseExecutor,
   type ReleaseExecutionOutput
 } from "../../../src/agent/workspace/releaseExecution.js";
+import { RUN_DRIVER_TIME_BUDGET_CEILING_MS } from "../../../src/agent/mcp/workspace/tools.js";
 import { enforcePublishExecutionEvidence } from "../../../src/agent/workspace/publishDecision.js";
 import { getWorkspaceNode } from "../../../src/agent/workspace/nodes.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
@@ -44,17 +48,19 @@ const uncommittedRun = (): RunFixture => ({
   operatorPublishDecision: "approved"
 });
 
-const stubCallTool = (handlers: Partial<Record<string, (args: Record<string, unknown>) => unknown>>): { callTool: CallToolFn; calls: string[] } => {
+const stubCallTool = (handlers: Partial<Record<string, (args: Record<string, unknown>) => unknown>>): { callTool: CallToolFn; calls: string[]; argsOf: (tool: string) => Record<string, unknown>[] } => {
   const calls: string[] = [];
+  const argsLog: { tool: string; args: Record<string, unknown> }[] = [];
   const callTool: CallToolFn = (async (tool: string, args: Record<string, unknown>) => {
     calls.push(tool);
+    argsLog.push({ tool, args });
     const handler = handlers[tool];
     if (!handler) throw new Error(`unexpected tool ${tool}`);
     const outcome = handler(args);
     if (outcome instanceof Error) throw outcome;
     return { ok: true, projectId: "dr-lurie", tool, result: outcome };
   }) as unknown as CallToolFn;
-  return { callTool, calls };
+  return { callTool, calls, argsOf: (tool) => argsLog.filter((entry) => entry.tool === tool).map((entry) => entry.args) };
 };
 
 // A run that already carries a ledger entry — the "second dispatch" shape a retry/stale-claim reclaim
@@ -163,7 +169,7 @@ describe("release_executor — idempotent: call twice, one release", () => {
     expect(calls.filter((tool) => tool === "deploy_status")).toHaveLength(3);
   });
 
-  it("a release call that genuinely FAILS is not ledgered as released — a retry may call it again", async () => {
+  it("a release call that genuinely FAILS is not ledgered as released — a retry may call it again (W7: with the SAME key)", async () => {
     let attempts = 0;
     const { callTool, calls } = stubCallTool({
       release_to_production: () => {
@@ -175,13 +181,13 @@ describe("release_executor — idempotent: call twice, one release", () => {
     const run = committedRun();
 
     const first = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
-    const firstOutput = (first as { output: ReleaseExecutionOutput }).output;
-    expect(firstOutput.status).toBe("blocked");
-    expect(firstOutput.reason).toBe("release_call_failed");
-    expect(firstOutput.notes.join(" ")).toMatch(/Recoverable/);
+    // W7: an unacknowledged call is PENDING (the hook may have fired), never a terminal blocker.
+    if (!first.ok || first.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(first.warnings.join(" ")).toMatch(/release_call_failed:network timeout/);
+    expect(first.ledgerEntry).toMatchObject({ status: "pending", releaseUnconfirmed: true });
 
-    // Nothing was ledgered as a real release, so a retry (no ledger entry supplied) calls it again.
-    const second = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+    // Not ledgered as an acknowledged release, so a retry calls it again — with the same key.
+    const second = await runDeterministicReleaseExecutor({ run: withLedger(run, first.ledgerEntry), deps: { callTool } });
     const secondOutput = (second as { output: ReleaseExecutionOutput }).output;
     expect(secondOutput.status).toBe("executed");
     expect(calls).toEqual(["release_to_production", "release_to_production"]);
@@ -224,14 +230,12 @@ describe("release_executor — evidence: an executed claim without go-live evide
 });
 
 describe("release_executor — never throws past its own try/catch", () => {
-  it("a transport that throws on release_to_production is reported as a typed blocker, not an exception", async () => {
+  it("a transport that throws on release_to_production is reported as a typed pending outcome, not an exception", async () => {
     const callTool: CallToolFn = (async () => { throw new Error("ECONNRESET"); }) as unknown as CallToolFn;
     const run = committedRun();
-    await expect(runDeterministicReleaseExecutor({ run, deps: { callTool } })).resolves.toMatchObject({
-      ok: true,
-      kind: "completed",
-      output: { status: "blocked", reason: "release_call_failed" }
-    });
+    const outcome = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+    expect(outcome).toMatchObject({ ok: true, kind: "pending" });
+    expect((outcome as { warnings: string[] }).warnings.join(" ")).toMatch(/release_call_failed:ECONNRESET/);
   });
 
   it("a transport that throws on deploy_status is reported as pending, not an exception", async () => {
@@ -322,28 +326,44 @@ describe("release_executor — the ledger key", () => {
 // retry may call release_to_production again"; these tests hold the code to it.
 // ---------------------------------------------------------------------------
 describe("W1.1 — a recoverable release failure is never ledgered terminal", () => {
-  it('ledger:"none" when release_to_production throws (the HTTP 504 wait-cap case)', async () => {
+  it("never terminal when release_to_production throws (the HTTP 504 wait-cap case) — W7: pending, key stored, re-pollable", async () => {
     const { callTool, calls } = stubCallTool({
       release_to_production: () => new Error("MCP request failed with HTTP 504.")
     });
     const outcome = await runDeterministicReleaseExecutor({ run: committedRun() as WorkflowExecutionRecord, deps: { callTool } });
 
     expect(outcome.ok).toBe(true);
-    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
-    expect(outcome.output.status).toBe("blocked");
-    expect(outcome.output.reason).toBe("release_call_failed");
-    // The whole point: the executor must write NOTHING to the ledger for this.
-    expect(outcome.ledger).toBe("none");
+    // The whole point: the executor must never write this TERMINAL. W7 replaces "none" with a pending
+    // entry that remembers the key the (possibly fired) hook went out under.
+    if (!outcome.ok || outcome.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(outcome.ledgerEntry).toMatchObject({ status: "pending", releaseUnconfirmed: true, idempotencyKey: releaseIdempotencyKey("run_release_1", "req_release_20260825_01") });
     expect(calls).toEqual(["release_to_production"]);
   });
 
-  it('ledger:"none" when the client declines the release (released !== true)', async () => {
-    const { callTool } = stubCallTool({ release_to_production: () => ({ released: false, status: "build_not_confirmed_live" }) });
+  it('ledger:"none" when the client genuinely declines the release (released:false, no hook-fired status)', async () => {
+    const { callTool } = stubCallTool({ release_to_production: () => ({ released: false, status: "release_refused", error: "nothing to release" }) });
     const outcome = await runDeterministicReleaseExecutor({ run: committedRun() as WorkflowExecutionRecord, deps: { callTool } });
 
     if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
     expect(outcome.output.reason).toBe("release_not_confirmed");
+    expect(outcome.output.blockers.join(" ")).toMatch(/nothing to release/);
     expect(outcome.ledger).toBe("none");
+  });
+
+  it('a structured build_not_confirmed_live receipt (released:false, hook fired) is ledgered pending — re-pollable, never re-released', async () => {
+    const { callTool, calls } = stubCallTool({
+      release_to_production: () => ({ released: false, status: "build_not_confirmed_live", targetCommit: "sha_w7_live" }),
+      deploy_status: () => ({ deployStatus: "building" })
+    });
+    const run = committedRun();
+    const first = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+    if (!first.ok || first.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(first.ledgerEntry).toMatchObject({ status: "pending", deployedSha: "sha_w7_live" });
+    expect(first.ledgerEntry).not.toHaveProperty("releaseUnconfirmed");
+
+    const second = await runDeterministicReleaseExecutor({ run: withLedger(run, first.ledgerEntry), deps: { callTool } });
+    expect((second as { kind: string }).kind).toBe("pending");
+    expect(calls).toEqual(["release_to_production", "deploy_status", "deploy_status"]);
   });
 
   it('ledger:"pending" when the release landed but verification gave up — re-pollable, never re-released', async () => {
@@ -483,5 +503,196 @@ describe("W1.3 — deploy_status polls the publish receipt's commit and surfaces
     const joined = outcome.warnings.join(" ");
     expect(joined).toMatch(/deploy_status_not_ready:unknown raw=/);
     expect(joined).toMatch(/somethingElse/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W7 (run_1788023523567_qdv9et, 2026-08-31, project dr-lurie): release_to_production hit the site's
+// serverless cap and returned HTTP 504 AFTER the build hook had fired (deploy 6a952b5e, 07:21:02 ->
+// 07:21:54). The executor ledgered "none" and the next dispatch called release_to_production AGAIN —
+// a second production build (6a952b93, 07:21:55). Every call now carries a stable idempotency_key
+// (the site replays the original receipt for the same key) and a timeout_seconds under this
+// executor's own request window; a 504 is ledgered pending with the key, and the re-dispatch polls
+// deploy_status by commit before re-calling with the SAME key.
+// ---------------------------------------------------------------------------
+describe("W7 — one build per release attempt, even across a 504", () => {
+  const runWithReceipt = (receipts: Record<string, unknown>, runId = "run_1788023523567_qdv9et"): RunFixture =>
+    committedRun({
+      runId,
+      stageOutputs: {
+        publish_executor: { artifact: "publish_execution.v1", status: "published_pending_release", publishCommitted: true, receipts: { requestId: "req_release_20260825_01", ...receipts } }
+      }
+    });
+
+  it("(a) the release call carries idempotency_key = release:<runId>:<publishCommitSha>", async () => {
+    const { callTool, argsOf } = stubCallTool({
+      release_to_production: () => ({ released: true, deploy: { deployId: "deploy_w7" }, deployStatus: "ready", productionConfirmed: true })
+    });
+    const outcome = await runDeterministicReleaseExecutor({ run: runWithReceipt({ commitSha: "6a952b5e" }), deps: { callTool } });
+
+    expect(argsOf("release_to_production")).toHaveLength(1);
+    expect(argsOf("release_to_production")[0]).toMatchObject({ idempotency_key: "release:run_1788023523567_qdv9et:6a952b5e" });
+    expect(releaseIdempotencyKey("run_1788023523567_qdv9et", "6a952b5e")).toBe("release:run_1788023523567_qdv9et:6a952b5e");
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.status).toBe("executed");
+    expect(outcome.output.idempotencyKey).toBe("release:run_1788023523567_qdv9et:6a952b5e");
+    expect(validateOutput(outcome.output, getWorkspaceNode("release_executor")?.outputSchema).ok).toBe(true);
+  });
+
+  it("(a) falls back to the published objectId when the receipt names no commit sha", async () => {
+    const { callTool, argsOf } = stubCallTool({
+      release_to_production: () => ({ released: true, deployStatus: "ready", productionConfirmed: true })
+    });
+    await runDeterministicReleaseExecutor({ run: runWithReceipt({ objectId: "page_bruxism_guide" }), deps: { callTool } });
+    expect(argsOf("release_to_production")[0]).toMatchObject({ idempotency_key: "release:run_1788023523567_qdv9et:page_bruxism_guide" });
+  });
+
+  it("(b) a 504 on the first attempt, then a re-dispatch: the SAME key is sent, unchanged, and the build hook fires once", async () => {
+    let releaseCalls = 0;
+    const { callTool, calls, argsOf } = stubCallTool({
+      release_to_production: () => {
+        releaseCalls += 1;
+        // First call: the platform killed the site's function after the hook fired.
+        if (releaseCalls === 1) return new Error("MCP request failed with HTTP 504.");
+        // Second call, same key: the site replays the ORIGINAL receipt rather than re-firing.
+        return { released: true, deploy: { deployId: "6a952b5e" }, targetCommit: "6a952b5e", replayed_from_idempotency_key: "release:run_1788023523567_qdv9et:6a952b5e" };
+      },
+      deploy_status: () => ({ deployStatus: "ready", productionConfirmed: true })
+    });
+    const run = runWithReceipt({ commitSha: "6a952b5e" });
+
+    const first = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+    if (!first.ok || first.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(first.warnings.join(" ")).toMatch(/release_call_failed:MCP request failed with HTTP 504/);
+    expect(first.ledgerEntry).toMatchObject({ status: "pending", releaseUnconfirmed: true, attempts: 1, deployedSha: "6a952b5e", idempotencyKey: "release:run_1788023523567_qdv9et:6a952b5e" });
+
+    // Re-dispatch with a deploy_status that is NOT yet live, so the keyed re-call is actually reached.
+    let polls = 0;
+    const second = await runDeterministicReleaseExecutor({
+      run: withLedger(run, first.ledgerEntry),
+      deps: {
+        callTool: (async (tool: string, args: Record<string, unknown>) => {
+          if (tool === "deploy_status") {
+            polls += 1;
+            return { ok: true, projectId: "dr-lurie", tool, result: polls === 1 ? { deployStatus: "building" } : { deployStatus: "ready", productionConfirmed: true } };
+          }
+          return callTool(tool, args);
+        }) as unknown as CallToolFn
+      }
+    });
+    if (!second.ok || second.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(second.output.status).toBe("executed");
+    expect(second.output.notes.join(" ")).toMatch(/replayed the original receipt/);
+    expect(second.output.notes.join(" ")).toMatch(/SAME idempotency_key/);
+
+    const keys = argsOf("release_to_production").map((args) => args.idempotency_key);
+    expect(keys).toEqual(["release:run_1788023523567_qdv9et:6a952b5e", "release:run_1788023523567_qdv9et:6a952b5e"]);
+    expect(calls.filter((tool) => tool === "release_to_production")).toHaveLength(2);
+  });
+
+  it("(b) a re-dispatch after a 504 polls deploy_status by commit FIRST and never re-calls when production is already live", async () => {
+    const { callTool, calls, argsOf } = stubCallTool({
+      release_to_production: () => new Error("MCP request failed with HTTP 504."),
+      deploy_status: () => ({ deployStatus: "ready", productionConfirmed: true, deployId: "6a952b5e" })
+    });
+    const run = runWithReceipt({ commitSha: "6a952b5e" });
+    const first = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+    if (!first.ok || first.kind !== "pending") throw new Error("expected a pending outcome");
+
+    const second = await runDeterministicReleaseExecutor({ run: withLedger(run, first.ledgerEntry), deps: { callTool } });
+    if (!second.ok || second.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(second.output.status).toBe("executed");
+    expect(second.output.releaseId).toBe("6a952b5e");
+    expect(second.output.notes.join(" ")).toMatch(/NOT called again/);
+    expect(argsOf("deploy_status")).toEqual([{ commit: "6a952b5e" }]);
+    // release_to_production: the one 504'd call, and nothing after it.
+    expect(calls).toEqual(["release_to_production", "deploy_status"]);
+    expect(second.ledger).toBe("terminal");
+  });
+
+  it("(b) the persisted key wins over a re-derived one: a commitSha that appears later never changes the key already fired under", async () => {
+    const { callTool, argsOf } = stubCallTool({
+      release_to_production: () => ({ released: true, deployStatus: "ready", productionConfirmed: true })
+    });
+    const run = withLedger(runWithReceipt({ commitSha: "sha_resolved_late" }), {
+      status: "pending",
+      requestId: "req_release_20260825_01",
+      performedAt: new Date().toISOString(),
+      attempts: 1,
+      releaseUnconfirmed: true,
+      idempotencyKey: "release:run_1788023523567_qdv9et:page_bruxism_guide"
+    });
+    // No deployedSha on the entry and the receipt's commit is what the pre-poll would use; make it
+    // not-ready so the keyed re-call is reached.
+    const outcome = await runDeterministicReleaseExecutor({
+      run,
+      deps: {
+        callTool: (async (tool: string, args: Record<string, unknown>) => {
+          if (tool === "deploy_status") return { ok: true, projectId: "dr-lurie", tool, result: { deployStatus: "building" } };
+          return callTool(tool, args);
+        }) as unknown as CallToolFn
+      }
+    });
+    expect(argsOf("release_to_production")[0]).toMatchObject({ idempotency_key: "release:run_1788023523567_qdv9et:page_bruxism_guide" });
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.idempotencyKey).toBe("release:run_1788023523567_qdv9et:page_bruxism_guide");
+  });
+
+  it("an HTTP 504 delivered as a clean ok:false (projectMcpAdapter.callTool never throws) is unacknowledged, not a decline", async () => {
+    const callTool: CallToolFn = (async (tool: string) => ({ ok: false, projectId: "dr-lurie", tool, error: "MCP request failed with HTTP 504.", httpStatus: 504 })) as unknown as CallToolFn;
+    const outcome = await runDeterministicReleaseExecutor({ run: runWithReceipt({ commitSha: "6a952b5e" }), deps: { callTool } });
+    if (!outcome.ok || outcome.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(outcome.ledgerEntry).toMatchObject({ status: "pending", releaseUnconfirmed: true, idempotencyKey: "release:run_1788023523567_qdv9et:6a952b5e" });
+  });
+
+  it("a 4xx / permission refusal is a decline (nothing fired): ledger none, blocked release_not_confirmed", async () => {
+    const callTool: CallToolFn = (async (tool: string) => ({ ok: false, projectId: "dr-lurie", tool, error: "Tool requires approval before it can run: release_to_production", permission: "needs_approval", requiresApproval: true })) as unknown as CallToolFn;
+    const outcome = await runDeterministicReleaseExecutor({ run: runWithReceipt({ commitSha: "6a952b5e" }), deps: { callTool } });
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.reason).toBe("release_not_confirmed");
+    expect(outcome.ledger).toBe("none");
+  });
+
+  it("repeated unacknowledged calls are bounded: at maxPollAttempts the run is handed over blocked, still pending-ledgered with the key", async () => {
+    const { callTool, argsOf } = stubCallTool({
+      release_to_production: () => new Error("MCP request failed with HTTP 504."),
+      deploy_status: () => ({ deployStatus: "building" })
+    });
+    const run = runWithReceipt({ commitSha: "6a952b5e" });
+    const first = await runDeterministicReleaseExecutor({ run, deps: { callTool, maxPollAttempts: 2 } });
+    if (!first.ok || first.kind !== "pending") throw new Error("expected a pending outcome");
+    const second = await runDeterministicReleaseExecutor({ run: withLedger(run, first.ledgerEntry), deps: { callTool, maxPollAttempts: 2 } });
+    if (!second.ok || second.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(second.output.status).toBe("blocked");
+    expect(second.output.reason).toBe("release_not_acknowledged_after_max_attempts");
+    expect(second.ledger).toBe("pending");
+    expect(second.ledgerEntry).toMatchObject({ status: "pending", releaseUnconfirmed: true, idempotencyKey: "release:run_1788023523567_qdv9et:6a952b5e" });
+    expect(new Set(argsOf("release_to_production").map((args) => args.idempotency_key)).size).toBe(1);
+    expect(validateOutput(second.output, getWorkspaceNode("release_executor")?.outputSchema).ok).toBe(true);
+  });
+
+  it("(c) every release call carries timeout_seconds, sized under this executor's own request window with the margin", async () => {
+    const { callTool, argsOf } = stubCallTool({
+      release_to_production: () => ({ released: true, deployStatus: "ready", productionConfirmed: true })
+    });
+    await runDeterministicReleaseExecutor({ run: runWithReceipt({ commitSha: "6a952b5e" }), deps: { callTool } });
+
+    const args = argsOf("release_to_production")[0];
+    expect(args.timeout_seconds).toBe(RELEASE_CALL_TIMEOUT_SECONDS);
+    expect(Number.isInteger(args.timeout_seconds)).toBe(true);
+    expect(args.timeout_seconds as number).toBeGreaterThan(0);
+    // The relation the constant's comment promises: in-call wait + margin fits inside the 45s window
+    // every real driver of this dispatch enforces (RUN_DRIVER_TIME_BUDGET_CEILING_MS).
+    expect((RELEASE_CALL_TIMEOUT_SECONDS + RELEASE_CALL_TIMEOUT_MARGIN_SECONDS) * 1000).toBeLessThanOrEqual(RUN_DRIVER_TIME_BUDGET_CEILING_MS);
+    expect(RELEASE_CALL_TIMEOUT_MARGIN_SECONDS).toBeGreaterThanOrEqual(5);
+  });
+
+  it("a pending entry written before W7 (no idempotencyKey, no releaseUnconfirmed) still only re-polls — never re-releases", async () => {
+    const { callTool, calls } = stubCallTool({ deploy_status: () => ({ deployStatus: "ready", productionConfirmed: true }) });
+    const run = withLedger(runWithReceipt({ commitSha: "6a952b5e" }), { status: "pending", requestId: "req_release_20260825_01", performedAt: new Date().toISOString(), releaseId: "deploy_pre_w7", attempts: 2 });
+    const outcome = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+    expect(calls).toEqual(["deploy_status"]);
+    if (!outcome.ok || outcome.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(outcome.output.status).toBe("executed");
   });
 });

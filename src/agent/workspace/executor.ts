@@ -2188,8 +2188,10 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
 
   // T15.6 (ADR-2026-08-25-publish-autonomy §4.3) — release_executor: DETERMINISTIC, no model turn,
   // idempotent keyed on (runId, requestId) via run.releaseLedger. Positioned after publish_executor,
-  // before learning_recorder. Reads publish_executor's own record; calls release_to_production AT MOST
-  // ONCE for this run; polls deploy_status once per dispatch (create-or-poll, the same idiom
+  // before learning_recorder. Reads publish_executor's own record; calls release_to_production at most
+  // once per ACKNOWLEDGED release for this run — W7: an unacknowledged call (HTTP 504 after the build
+  // hook fired) is ledgered pending with its idempotency_key, and the re-call carries the SAME key so
+  // the site replays instead of re-firing; polls deploy_status once per dispatch (create-or-poll, the same idiom
   // captureStage's pdf-tool jobs use — never a wait loop inside one call); skips honestly when nothing
   // was published. Scoped to LIVE runs and to the releaser node, same reasons the sibling publish-path
   // routes are: a mock run has no client reach.
