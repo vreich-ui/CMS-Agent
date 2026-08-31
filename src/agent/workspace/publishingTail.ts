@@ -102,7 +102,10 @@ const publishSegmentIdSet = new Set<string>(publishingPublishSegmentIds);
 export const publishingTailDeclaration: Record<PublishingTailNodeId, { dependsOn: readonly string[]; requiredInputs: readonly string[]; produces: readonly string[]; riskLevel: WorkspaceRiskLevel }> = {
   contract_intelligence: { dependsOn: ["brief_architect"], requiredInputs: ["brief_architect"], produces: ["contract_intelligence.v1"], riskLevel: "write" },
   artifact_plan: { dependsOn: ["brief_architect", "contract_intelligence", "draft_writer"], requiredInputs: ["brief_architect", "contract_intelligence", "draft_writer"], produces: ["materialization_spec.v1"], riskLevel: "read" },
-  artifact_materializer: { dependsOn: ["artifact_plan", "contract_intelligence"], requiredInputs: ["artifact_plan", "contract_intelligence"], produces: ["artifact_plan.v1"], riskLevel: "write" },
+  // brief_architect is a dependency for ONE reason and it is not data: the no_media_slots predicate
+  // reads a node's own dependsOn as its carriers, so without this edge a text-only run skips
+  // artifact_plan and then dispatches THIS node into a spec that was never written. Both skip together.
+  artifact_materializer: { dependsOn: ["artifact_plan", "contract_intelligence", "brief_architect"], requiredInputs: ["artifact_plan", "contract_intelligence", "brief_architect"], produces: ["artifact_plan.v1"], riskLevel: "write" },
   article_body: { dependsOn: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_materializer"], requiredInputs: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_materializer"], produces: ["client_object.v1"], riskLevel: "write" },
   publish_payload: { dependsOn: ["article_body", "artifact_materializer"], requiredInputs: ["article_body", "artifact_materializer"], produces: ["dry_run_publish_payload.v1"], riskLevel: "write" },
   publication_controller: { dependsOn: ["publish_payload"], requiredInputs: ["publish_payload"], produces: ["publication_decision.v1"], riskLevel: "publish" },

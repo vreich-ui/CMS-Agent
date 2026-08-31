@@ -53,6 +53,9 @@ const syntheticUpstream = (): WorkspaceNode[] => {
 const syntheticBinding = {
   contract_intelligence: ["money_brief"],
   artifact_plan: ["money_brief", "money_draft"],
+  // artifact_materializer's one upstream edge is the brief, and it is there for the skip predicate
+  // rather than for data — so a composed workflow binds it to whatever plays the brief's role.
+  artifact_materializer: ["money_brief"],
   article_body: ["money_review", "money_draft", "money_brief"]
 } as const;
 
@@ -71,7 +74,7 @@ describe("§2.23 publishing tail declaration", () => {
     expect(publishingTailBoundary).toEqual({
       contract_intelligence: ["brief_architect"],
       artifact_plan: ["brief_architect", "draft_writer"],
-      artifact_materializer: [],
+      artifact_materializer: ["brief_architect"],
       article_body: ["review_aggregator", "draft_writer", "narrative_movement", "angle_strategy"],
       publish_payload: [],
       publication_controller: [],
@@ -80,8 +83,9 @@ describe("§2.23 publishing tail declaration", () => {
       learning_recorder: []
     });
     expect(tailBoundary("artifact_plan")).toEqual(["brief_architect", "draft_writer"]);
-    // W8: the materializer is purely tail-internal — it reads the plan and the contract, nothing upstream.
-    expect(tailBoundary("artifact_materializer")).toEqual([]);
+    // W8: the materializer's one upstream edge is brief_architect, and it is there for the skip
+    // predicate rather than for data — a text-only run must skip it alongside artifact_plan.
+    expect(tailBoundary("artifact_materializer")).toEqual(["brief_architect"]);
     expect(tailBoundary("article_body")).toEqual(["review_aggregator", "draft_writer", "narrative_movement", "angle_strategy"]);
     expect(tailBoundary("publish_payload")).toEqual([]);
     expect(tailBoundary("release_executor")).toEqual([]);
@@ -168,7 +172,7 @@ describe("§2.23 composeWorkflowNodes", () => {
     // Boundary edges bound to the second workflow's own upstream; internal edges untouched.
     expect(byId.get("contract_intelligence")?.dependsOn).toEqual(["money_brief"]);
     expect(byId.get("artifact_plan")?.dependsOn).toEqual(["money_brief", "money_draft", "contract_intelligence"]);
-    expect(byId.get("artifact_materializer")?.dependsOn).toEqual(["artifact_plan", "contract_intelligence"]);
+    expect(byId.get("artifact_materializer")?.dependsOn).toEqual(["money_brief", "artifact_plan", "contract_intelligence"]);
     expect(byId.get("article_body")?.dependsOn).toEqual(["money_review", "money_draft", "money_brief", "contract_intelligence", "artifact_materializer"]);
     expect(byId.get("article_body")?.requiredInputs).toEqual(["money_review", "money_draft", "money_brief", "contract_intelligence", "artifact_materializer"]);
     expect(byId.get("publish_payload")?.dependsOn).toEqual(["article_body", "artifact_materializer"]);

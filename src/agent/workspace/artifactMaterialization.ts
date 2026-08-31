@@ -218,6 +218,19 @@ export const readMaterializationSpec = (run: Pick<WorkflowExecutionRecord, "stag
   };
 };
 
+/** Did artifact_plan SKIP (rather than fail, or never run)? A skipped node writes no stage output, so
+ * this is the only way to tell "there was nothing to plan" from "the plan is missing". */
+const plannerWasSkipped = (run: Pick<WorkflowExecutionRecord, "nodes">): boolean =>
+  (run.nodes ?? []).some((state) => state.nodeId === "artifact_plan" && state.status === "skipped");
+
+const readRunRequestId = (run: Pick<WorkflowExecutionRecord, "requestId" | "publishRequestId">): string | undefined =>
+  trimmed((run as { publishRequestId?: unknown }).publishRequestId);
+
+const readClientObjectType = (run: Pick<WorkflowExecutionRecord, "stageOutputs">): string | undefined => {
+  const intelligence = run.stageOutputs?.contract_intelligence;
+  return isRecord(intelligence) ? trimmed(intelligence.clientObjectType) : undefined;
+};
+
 export const readJobState = (run: Pick<WorkflowExecutionRecord, "stageOutputs">): MaterializerJobState => {
   const raw = run.stageOutputs?.[ARTIFACT_MATERIALIZER_JOB_STAGE_KEY];
   if (!isRecord(raw)) return { dispatches: 0, slots: {} };
@@ -453,11 +466,11 @@ export const buildArtifactPlanEnvelope = (params: { spec: MaterializationSpec; j
     artifact: ARTIFACT_PLAN_ARTIFACT,
     summary:
       spec.slots.length === 0
-        ? `No media slots were requested for ${spec.requestId}; nothing was generated.`
+        ? `No media slots were requested${spec.requestId ? ` for ${spec.requestId}` : ""}; nothing was generated.`
         : `${verified} of ${spec.slots.length} slot(s) materialized and verified for ${spec.requestId} across ${jobState.dispatches} deterministic dispatch(es), with no model turn.`,
     clientProjectId: params.clientProjectId,
     clientObjectType: params.clientObjectType,
-    requestId: spec.requestId,
+    ...(spec.requestId ? { requestId: spec.requestId } : {}),
     media_slots: mediaSlots,
     artifactReferences,
     requiredArtifactCapabilities: [],
@@ -488,9 +501,28 @@ export async function runArtifactMaterialization(
 
   const spec = readMaterializationSpec(run);
   if (!spec) {
+    // THE ZERO-MEDIA FLOOR. A SKIPPED artifact_plan wrote no stage output by construction ("a skipped
+    // node asserted nothing"), and that absence is not a missing spec — it is the run saying there was
+    // never any media to plan. Refusing here would block every text-only article at a node whose entire
+    // job is media. The node's own no_media_slots predicate normally skips it alongside the planner;
+    // this is the second lock, for the run whose media declaration the predicate could not see.
+    if (plannerWasSkipped(run)) {
+      return {
+        kind: "completed",
+        output: buildArtifactPlanEnvelope({
+          spec: { requestId: readRunRequestId(run) ?? "", slots: [], notes: ["artifact_plan was skipped for this run (no media slots declared), so there was nothing to materialize."] },
+          jobState: { dispatches: 0, slots: {} },
+          clientProjectId: run.projectId,
+          clientObjectType: readClientObjectType(run) ?? "content_item"
+        }),
+        jobStateKey: ARTIFACT_MATERIALIZER_JOB_STAGE_KEY,
+        jobState: { dispatches: 0, slots: {} },
+        warnings: ["artifact_materialization_skipped:planner_skipped"]
+      };
+    }
     return refused(
       "materialization_spec_missing",
-      `artifact_materializer found no usable ${MATERIALIZATION_SPEC_ARTIFACT} under stageOutputs.artifact_plan (an envelope with a non-empty requestId). It executes a plan; it never authors one.`
+      `artifact_materializer found no usable ${MATERIALIZATION_SPEC_ARTIFACT} under stageOutputs.artifact_plan (an envelope with a non-empty requestId), and artifact_plan did not skip. It executes a plan; it never authors one.`
     );
   }
 
