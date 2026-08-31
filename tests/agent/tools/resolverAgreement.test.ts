@@ -9,12 +9,18 @@ import { resetRepositoryManager } from "../../../src/agent/runtime/repositories.
 // ladder, and requiresApproval) and said approval_required. Both were "the answer" depending on
 // which tool you asked. There is now one implementation and the other delegates to it.
 const NODES_THAT_DISAGREED = ["article_body", "contract_intelligence", "publish_payload", "artifact_plan"];
-// The two publish-risk nodes hold the project.call_tool GRANT but no longer carry the contract
+// W8 — artifact_plan left this set. It became a tool-less planning turn (allowedTools: []), so the
+// contract skill it used to carry requested project.call_tool from a node that now denies everything.
+// Resolved the same way this file's own precedent says to resolve it: by unassigning the mismatched
+// skill, never by widening the node's grant back.
+const SKILL_BEARING_CALL_TOOL_NODES = NODES_THAT_DISAGREED.filter((nodeId) => nodeId !== "artifact_plan");
+// The publish-risk nodes hold the project.call_tool GRANT but no longer carry the contract
 // skill (node-system overhaul): the skill's instructions center on project.call_read_tool
 // discovery, which those nodes rightly deny — the standing "skill requests a tool the node denies"
 // warnings were resolved by unassigning the mismatched skill, not by widening the nodes' grants.
-const SKILL_BEARING_CALL_TOOL_NODES = NODES_THAT_DISAGREED;
-const PUBLISH_RISK_GRANT_ONLY_NODES = ["publication_controller", "publish_executor"];
+// artifact_materializer joins them for the same reason: it holds the grant it needs for the artifact
+// bridge and carries no skill at all, because it takes no model turn to guide.
+const PUBLISH_RISK_GRANT_ONLY_NODES = ["publication_controller", "publish_executor", "artifact_materializer"];
 
 describe("one authority for whether a node may reach a tool", () => {
   const call = async (name: string, args: Record<string, unknown> = {}) => {

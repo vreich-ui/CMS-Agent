@@ -329,7 +329,9 @@ describe("review quartet tiering — operator policy (Wolf, 2026-08-12), three t
 describe("the gating seed carries the policy, and the store outranks it", () => {
   it("gates exactly the nodes W4 names, and nothing else", () => {
     const gated = listWorkspaceNodes().filter((node) => gatedMetadata(node)?.skipWhen !== undefined).map((node) => node.id).sort();
-    expect(gated).toEqual(["artifact_plan", "emotional_resonance", "human_texture", "monetization_strategy", "reader_simulation", "research"]);
+    // W8 — artifact_materializer carries the same no_media_slots predicate as artifact_plan: a zero-media
+    // run must skip BOTH, so the run's shape (and publishRequestId's mint-at-skip path) is unchanged.
+    expect(gated).toEqual(["artifact_materializer", "artifact_plan", "emotional_resonance", "human_texture", "monetization_strategy", "reader_simulation", "research"]);
     // Every seeded node is a real conductor node — a typo in an id would seed a policy onto nothing.
     const ids = new Set(listWorkspaceNodes().map((node) => node.id));
     for (const seededId of Object.keys(NODE_GATING_SEED)) expect(ids.has(seededId), `${seededId} is not a conductor node`).toBe(true);

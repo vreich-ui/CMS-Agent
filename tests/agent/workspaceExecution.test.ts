@@ -35,11 +35,11 @@ describe("Publishing Conductor dry-run execution", () => {
   // was executing a July 3 snapshot rather than the pipeline the alignment wave rebuilt. §2.16: 23 with
   // placement_resolver and monetization_strategy. T15.6: 24 with release_executor (ADR-2026-08-25
   // §4.3 — lands after publish_executor, before learning_recorder).
-  it("run has 24 conductor nodes", async () => {
+  it("run has 25 conductor nodes", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const run = await startDryRun({ executionMode: "mock", projectId: "project-a", input: "Draft this" }, store);
 
-    expect(run.nodes).toHaveLength(24);
+    expect(run.nodes).toHaveLength(25);
   });
 
   it("run_next_node advances state", async () => {

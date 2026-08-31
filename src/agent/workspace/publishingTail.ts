@@ -43,12 +43,19 @@ import type { WorkspaceNode, WorkspaceRiskLevel } from "./nodeTypes.js";
 // brief_architect (mediaSlots, the desired-media declaration) and contract_intelligence (the artifact
 // protocol) instead of article_body, generates and verifies the artifact BEFORE the body is built, and
 // article_body binds artifact_plan's verified references rather than planning its own media.
+// W8 (2026-08-31): artifact_plan SPLITS. It keeps its id and becomes one tool-less model turn emitting
+// materialization_spec.v1 (planning only), and the new deterministic artifact_materializer executes that
+// spec — adopt/create/poll against the artifact bridge, no model turn — and emits the SAME
+// artifact_plan.v1 the tail always carried. Everything T8 established about ordering is unchanged; what
+// changed is that the polling is no longer bought at model prices. artifact_plan gains draft_writer as a
+// dependency because a PDF slot's renderData is filled from the written prose (W9).
 // T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3): release_executor lands after
 // publish_executor and before learning_recorder — "publish_payload → publication_controller →
 // publish_executor → release_executor → learning_recorder".
 export const publishingTailNodeIds = [
   "contract_intelligence",
   "artifact_plan",
+  "artifact_materializer",
   "article_body",
   "publish_payload",
   "publication_controller",
@@ -70,7 +77,7 @@ export const isTailNode = (nodeId: string): nodeId is PublishingTailNodeId => ta
 // that publishes anything, not optional, not forkable, not substitutable. Both are exact partitions of
 // publishingTailNodeIds (asserted at module load below), so composeWorkflowNodes's segment selector can
 // never disagree with the drift guard about which node belongs to which segment.
-export const publishingAuthoringSegmentIds = ["contract_intelligence", "artifact_plan", "article_body"] as const;
+export const publishingAuthoringSegmentIds = ["contract_intelligence", "artifact_plan", "artifact_materializer", "article_body"] as const;
 export const publishingPublishSegmentIds = ["publish_payload", "publication_controller", "publish_executor", "release_executor", "learning_recorder"] as const;
 
 const authoringIdSet = new Set<string>(publishingAuthoringSegmentIds);
@@ -94,9 +101,10 @@ const publishSegmentIdSet = new Set<string>(publishingPublishSegmentIds);
 // drift apart silently.
 export const publishingTailDeclaration: Record<PublishingTailNodeId, { dependsOn: readonly string[]; requiredInputs: readonly string[]; produces: readonly string[]; riskLevel: WorkspaceRiskLevel }> = {
   contract_intelligence: { dependsOn: ["brief_architect"], requiredInputs: ["brief_architect"], produces: ["contract_intelligence.v1"], riskLevel: "write" },
-  artifact_plan: { dependsOn: ["brief_architect", "contract_intelligence"], requiredInputs: ["brief_architect", "contract_intelligence"], produces: ["artifact_plan.v1"], riskLevel: "write" },
-  article_body: { dependsOn: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_plan"], requiredInputs: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_plan"], produces: ["client_object.v1"], riskLevel: "write" },
-  publish_payload: { dependsOn: ["article_body", "artifact_plan"], requiredInputs: ["article_body", "artifact_plan"], produces: ["dry_run_publish_payload.v1"], riskLevel: "write" },
+  artifact_plan: { dependsOn: ["brief_architect", "contract_intelligence", "draft_writer"], requiredInputs: ["brief_architect", "contract_intelligence", "draft_writer"], produces: ["materialization_spec.v1"], riskLevel: "read" },
+  artifact_materializer: { dependsOn: ["artifact_plan", "contract_intelligence"], requiredInputs: ["artifact_plan", "contract_intelligence"], produces: ["artifact_plan.v1"], riskLevel: "write" },
+  article_body: { dependsOn: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_materializer"], requiredInputs: ["review_aggregator", "draft_writer", "contract_intelligence", "narrative_movement", "angle_strategy", "artifact_materializer"], produces: ["client_object.v1"], riskLevel: "write" },
+  publish_payload: { dependsOn: ["article_body", "artifact_materializer"], requiredInputs: ["article_body", "artifact_materializer"], produces: ["dry_run_publish_payload.v1"], riskLevel: "write" },
   publication_controller: { dependsOn: ["publish_payload"], requiredInputs: ["publish_payload"], produces: ["publication_decision.v1"], riskLevel: "publish" },
   publish_executor: { dependsOn: ["publication_controller"], requiredInputs: ["publication_controller"], produces: ["publish_execution.v1"], riskLevel: "publish" },
   release_executor: { dependsOn: ["publish_executor"], requiredInputs: ["publish_executor"], produces: ["release_execution.v1"], riskLevel: "publish" },
@@ -125,7 +133,8 @@ export const tailBoundary = (nodeId: string): readonly string[] => (isTailNode(n
 
 // Every upstream node id the tail consumes under the default (publishing_conductor) binding, in
 // first-appearance order: the tail's entry contract. brief_architect's article_brief.v1 (with its
-// mediaSlots) feeds BOTH contract_intelligence and artifact_plan; review_aggregator, draft_writer,
+// mediaSlots) feeds BOTH contract_intelligence and artifact_plan; draft_writer feeds artifact_plan
+// (a PDF slot's renderData comes from the written prose); review_aggregator, draft_writer,
 // narrative_movement and angle_strategy feed article_body.
 export const publishingTailUpstreamIds: readonly string[] = [...new Set(publishingTailNodeIds.flatMap((nodeId) => publishingTailBoundary[nodeId]))];
 

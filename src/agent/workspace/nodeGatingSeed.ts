@@ -67,6 +67,14 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
     skipWhen: [{ when: "no_media_slots" }],
     rationale: "artifact_plan is dispatched only when there is an artifact to plan: an explicit media declaration, or a client object that actually carries a media reference. An unscannable body or a mock placeholder is never evidence of absence."
   },
+  // W8 — the materializer carries the SAME predicate, for the same reason and off the same signal. It is
+  // free (no model turn), so skipping it saves no money; what it saves is a node that would dispatch,
+  // find an empty spec and complete with an empty plan, and a `publishRequestId` mint path that keys on
+  // artifact_plan skipping. Both nodes skipping together keeps the zero-media run's shape as it was.
+  artifact_materializer: {
+    skipWhen: [{ when: "no_media_slots" }],
+    rationale: "artifact_materializer executes artifact_plan's spec; when there is no media declared there is no spec, and the node it would execute for was itself skipped."
+  },
   // REVIEW QUARTET TIERING — operator policy, Wolf 2026-08-12. The tier table lives in
   // skipPredicates.ts; these three entries only ask whether the node is in the selected tier.
   // trust_factual deliberately has NO entry: it is the one reviewer every tier runs.

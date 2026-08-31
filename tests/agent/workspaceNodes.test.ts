@@ -12,8 +12,10 @@ describe("Publishing Conductor workspace nodes", () => {
   // re-seed + redeploy (Wolf's coordinated step).
   // T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3) adds release_executor between
   // publish_executor and learning_recorder: 24.
-  it("defines the full 24-node graph", () => {
-    expect(listWorkspaceNodes()).toHaveLength(24);
+  // W8 (2026-08-31) splits artifact_plan into a tool-less planning turn plus the deterministic
+  // artifact_materializer that executes its spec: 25.
+  it("defines the full 25-node graph", () => {
+    expect(listWorkspaceNodes()).toHaveLength(25);
   });
 
   // §2.16 — the two new scaffolds and their edges.
@@ -46,7 +48,7 @@ describe("Publishing Conductor workspace nodes", () => {
     const nodes = listWorkspaceNodes();
     // The four edges overlayStoreNode pins to canonical, and therefore would also have discarded.
     expect(nodes.find((node) => node.id === "article_body")?.dependsOn).toContain("contract_intelligence");
-    expect(nodes.find((node) => node.id === "publish_payload")?.dependsOn).toContain("artifact_plan");
+    expect(nodes.find((node) => node.id === "publish_payload")?.dependsOn).toContain("artifact_materializer");
     expect(nodes.find((node) => node.id === "trust_factual")?.dependsOn).toContain("research");
     expect(nodes.find((node) => node.id === "emotional_resonance")?.dependsOn).toContain("input_triage");
   });
@@ -178,9 +180,10 @@ describe("Publishing Conductor workspace nodes", () => {
       }
     });
 
-    // artifact_plan's own routing rule, stated because the shared one does not fit it.
-    it("artifact_plan routes the artifact bridge's own read verbs through call_tool (2.25b)", () => {
-      const prompt = node("artifact_plan").prompt;
+    // W8 — this rule moved with the bridge calls: artifact_plan no longer touches the client at all
+    // (allowedTools: []), and artifact_materializer is the node that does.
+    it("artifact_materializer routes the artifact bridge's own read verbs through call_tool (2.25b)", () => {
+      const prompt = node("artifact_materializer").prompt;
       expect(prompt, "names the read surface it still uses for contract/registry reads").toContain("project.call_read_tool");
       for (const verb of ["create_agent_artifact_job", "get_agent_artifact_job_status", "get_agent_artifact_by_slot"]) {
         expect(prompt, `names ${verb}`).toContain(verb);
@@ -198,38 +201,73 @@ describe("Publishing Conductor workspace nodes", () => {
     // materialized nine seconds later and article_body was built with no media, so the run died at
     // the publish gate on media_requested_vs_delivered. A re-run then made a SECOND image, because
     // nothing told the node to adopt the artifact that already existed for the slot.
-    it("artifact_plan treats artifact generation as asynchronous, and adopts before generating (2.25c)", () => {
-      const prompt = node("artifact_plan").prompt;
+    // W8 strengthens the last assertion rather than moving it verbatim. The old rule was "an in-flight
+    // job is needs_generation, not blocked" — the best a model with a finite tool budget could do. The
+    // deterministic node does not have a tool budget to run out of: it RE-QUEUES and polls again, so a
+    // running job is never reported as a finished plan at all, in either state.
+    it("artifact_materializer treats artifact generation as asynchronous, and adopts before generating (2.25c)", () => {
+      const prompt = node("artifact_materializer").prompt;
       expect(prompt, "must not claim the create call returns verified").not.toMatch(/GENERATES the artifact AND VERIFIES/);
       expect(prompt, "names the create call as asynchronous").toMatch(/create_agent_artifact_job is ASYNCHRONOUS/);
       expect(prompt, "adopts an existing slot artifact before creating a job").toMatch(/get_agent_artifact_by_slot[\s\S]{0,600}CREATE NOTHING/);
       expect(prompt, "polls the job id to a terminal state").toMatch(/get_agent_artifact_job_status[\s\S]{0,400}terminal state/);
-      expect(prompt, "an in-flight job is needs_generation, not blocked").toMatch(/still RUNNING[\s\S]{0,300}needs_generation/);
+      expect(prompt, "an in-flight job re-queues rather than being reported at all").toMatch(/still RUNNING[\s\S]{0,400}RE-QUEUES/);
+      expect(prompt, "blocked is reserved for terminal failure, never for a working job").toMatch(/never for a job that is merely still working/);
     });
 
     // 2.26: artifact_plan performs approval-gated writes (artifact generation) — the one pre-executor
     // node that does — so its approval flag matches the other approval-carrying nodes, and it holds
     // the read grant it needs to confirm the request id with the client.
-    it("artifact_plan carries approvalRequired and the client read grant (2.26)", () => {
-      expect(node("artifact_plan").metadata?.approvalRequired).toBe(true);
-      expect(node("artifact_plan").allowedTools).toContain("project.call_read_tool");
+    it("artifact_materializer carries approvalRequired and the client read grant (2.26)", () => {
+      expect(node("artifact_materializer").metadata?.approvalRequired).toBe(true);
+      expect(node("artifact_materializer").allowedTools).toContain("project.call_read_tool");
+    });
+
+    // W8's other half of 2.26: the planning turn writes nothing and reaches nothing, so it holds no
+    // grant at all. An empty allowedTools is the enforcement, not a convention — a planner that could
+    // call the bridge would go straight back to being the tool loop this split removed.
+    it("artifact_plan holds no tools and no approval, because it only plans (W8)", () => {
+      expect(node("artifact_plan").allowedTools).toEqual([]);
+      expect(node("artifact_plan").metadata?.approvalRequired).toBe(false);
+      expect(node("artifact_plan").riskLevel).toBe("read");
+      expect(node("artifact_plan").modelConfig?.maxTurns).toBe(1);
+      expect(node("artifact_plan").modelConfig?.toolCallLimit).toBe(0);
+      expect(node("artifact_plan").produces).toEqual(["materialization_spec.v1"]);
     });
 
     // 2.28: the zero-media shortcut ("emit the plan immediately... with zero tool calls") used to
     // collide with a schema requiring artifactProtocol minLength 1 — a text-only article had to
     // invent a protocol string it never consulted. The schema is now honest: artifactProtocol may be
     // absent for a zero-media plan, and is still required the moment any media slot exists.
-    it("artifact_plan's schema permits a protocol-less zero-media plan but requires the protocol once media exists (2.28)", () => {
-      const artifactPlan = node("artifact_plan");
+    // W8 — the property is asserted on BOTH halves of the split, because both carry it: the planner's
+    // materialization_spec.v1 (slots) and the materializer's unchanged artifact_plan.v1 (media_slots).
+    it("artifact_materializer's schema permits a protocol-less zero-media plan but requires the protocol once media exists (2.28)", () => {
+      const materializer = node("artifact_materializer");
       const zeroMedia = { artifact: "artifact_plan.v1", summary: "Text-only object; no media slots.", clientProjectId: "client-x", clientObjectType: "content_item", media_slots: [] };
       const withMedia = { ...zeroMedia, media_slots: [{ slotId: "hero", purpose: "hero image", status: "needs_generation" }] };
-      for (const schema of [artifactPlan.outputSchema, artifactPlan.schema]) {
+      for (const schema of [materializer.outputSchema, materializer.schema]) {
         expect(validateOutput(zeroMedia, schema).ok).toBe(true);
         expect(validateOutput({ ...zeroMedia, artifactProtocol: "" }, schema).ok).toBe(false); // present must still be non-empty
         expect(validateOutput(withMedia, schema).ok).toBe(false); // media without a protocol
         expect(validateOutput({ ...withMedia, artifactProtocol: "agent_artifact_jobs" }, schema).ok).toBe(true);
       }
       // Both schema copies stay in sync.
+      expect(materializer.schema).toEqual(materializer.outputSchema);
+    });
+
+    it("artifact_plan's spec schema carries the same protocol rule (2.28, W8)", () => {
+      const artifactPlan = node("artifact_plan");
+      const zeroMedia = { artifact: "materialization_spec.v1", summary: "Text-only object; no media slots.", clientProjectId: "client-x", clientObjectType: "content_item", requestId: "req_conductor_x_20260831_01", slots: [] };
+      const withMedia = { ...zeroMedia, slots: [{ slotId: "hero", purpose: "hero image", desiredKind: "image", prompt: "a jar of moisturizer on a marble countertop" }] };
+      for (const schema of [artifactPlan.outputSchema, artifactPlan.schema]) {
+        expect(validateOutput(zeroMedia, schema).ok).toBe(true);
+        expect(validateOutput({ ...zeroMedia, artifactProtocol: "" }, schema).ok).toBe(false);
+        expect(validateOutput(withMedia, schema).ok).toBe(false);
+        expect(validateOutput({ ...withMedia, artifactProtocol: "agent_artifact_jobs" }, schema).ok).toBe(true);
+        // A slot with no kind is not executable, so the schema refuses it rather than letting the
+        // materializer discover the gap against a live bridge.
+        expect(validateOutput({ ...withMedia, artifactProtocol: "agent_artifact_jobs", slots: [{ slotId: "hero", purpose: "hero image" }] }, schema).ok).toBe(false);
+      }
       expect(artifactPlan.schema).toEqual(artifactPlan.outputSchema);
     });
 

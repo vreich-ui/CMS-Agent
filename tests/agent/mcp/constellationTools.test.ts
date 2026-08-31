@@ -26,7 +26,7 @@ describe("constellation.* MCP tools", () => {
     // capture/clone joined the governance-visible workspace store seed, so they are now first-class
     // constellation agents too, not just publishing_conductor's; clone_conductor's own upstream grew
     // from 9 to 13 with T15.34/#210's four pdf-template nodes).
-    expect(structure.agents).toHaveLength(48);
+    expect(structure.agents).toHaveLength(49);
     expect(structure.relationships).toEqual([]);
     const graph = await data("workspace.get_graph");
     expect(structure.derivedExecutionEdges).toHaveLength(graph.edges.length);
@@ -37,7 +37,7 @@ describe("constellation.* MCP tools", () => {
 
   it("returns honest empty-system shapes before any runs or usage exist", async () => {
     const metrics = await data("constellation.get_metrics");
-    expect(metrics.agents).toHaveLength(48); // see the 48-node breakdown above (T15.16 / #195; T15.34 / #210)
+    expect(metrics.agents).toHaveLength(49); // see the node breakdown above (T15.16 / #195; T15.34 / #210; W8 adds artifact_materializer)
     for (const agent of metrics.agents) {
       expect(agent.usage.estimated.recordCount).toBe(0);
       expect(agent.usage.actual.recordCount).toBe(0);

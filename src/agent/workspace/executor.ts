@@ -28,6 +28,7 @@ import { applyRunContextEnvelope, buildRunContext } from "./runContext.js";
 import { runDeterministicPublicationController } from "./publicationController.js";
 import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
 import { runDeterministicReleaseExecutor } from "./releaseExecution.js";
+import { ARTIFACT_MATERIALIZER_NODE_ID, readArtifactMaterializer, runArtifactMaterialization } from "./artifactMaterialization.js";
 import { buildLearningObservations } from "./learningRecord.js";
 import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
 import { articleBodyFingerprint, enforcePublishExecutionEvidence, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority, PUBLICATION_CONTROLLER_NODE_ID } from "./publishDecision.js";
@@ -1673,12 +1674,16 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   }
 
   // S3 item 8 — the content-item shell. On an object-substrate client the artifact bridge indexes
-  // media against the owning object, so artifact_plan's generation must find a content_item under the
-  // run's request id ALREADY THERE. One idempotent object_create here, right before artifact_plan
+  // media against the owning object, so the generation must find a content_item under the run's request
+  // id ALREADY THERE. One idempotent object_create here, right before the node that generates
   // dispatches, recorded in its input as `contentItemShell` (the publisher later patches that object
   // instead of creating a second one). Best-effort: every failure is the named warning
   // `content_item_shell_failed:<code>` on this node — never a throw, never a failed node.
-  if (nextNode.id === "artifact_plan" && (run.executionMode ?? DEFAULT_EXECUTION_MODE) !== "mock") {
+  //
+  // W8.3 — this moved from artifact_plan to artifact_materializer along with the generation itself.
+  // artifact_plan is now one tool-less model turn that only PLANS; the first bridge call of the run is
+  // the materializer's adopt, so the shell has to exist by then and not a node earlier.
+  if (nextNode.id === ARTIFACT_MATERIALIZER_NODE_ID && (run.executionMode ?? DEFAULT_EXECUTION_MODE) !== "mock") {
     try {
       const shell = await ensureContentItemShell(
         { run, prefetchedContract: run.stageOutputs.contract_intelligence && typeof run.stageOutputs.contract_intelligence === "object" ? { clientObjectType: (run.stageOutputs.contract_intelligence as Record<string, unknown>).clientObjectType } : undefined },
@@ -2314,7 +2319,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // state.status/startedAt are already "running" by this point, which is what assessRunStall matches
   // on together with the dispatch stamp. Every terminal path out of both branches deletes it again
   // (the capture "pending" re-queue already did), so no branch can leave a lease-shaped ghost behind.
-  if (claim && (readCaptureStage(nextNode) !== undefined || readCloneStage(nextNode) !== undefined)) {
+  if (claim && (readCaptureStage(nextNode) !== undefined || readCloneStage(nextNode) !== undefined || readArtifactMaterializer(nextNode))) {
     stampDispatch(state, startedAt, deterministicStageTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
     run = await store.saveRun(run);
     state = stateById(run).get(nextNode.id) as NodeExecutionState;
@@ -2423,6 +2428,79 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       const completedAt = now();
       state.status = "blocked";
       delete state.dispatch;  // T14.4: terminal — the claim this stage published goes with it.
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = { error: { code: refusal.code, message: refusal.message } };
+      run.status = "blocked";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = completedAt;
+      return { run };
+    }
+    // Mock run: fall through to the MockNodeRunner placeholder below so CI traversal keeps working.
+  }
+
+  // W8.3 (2026-08-31) — artifact_materializer: DETERMINISTIC, no model turn. It executes the
+  // `materialization_spec.v1` artifact_plan's single turn produced (adopt -> create -> poll, one bounded
+  // pass per dispatch) and emits `artifact_plan.v1` unchanged, so article_body, the publisher's W6 media
+  // evidence and the readiness checks read exactly what they always read. Three outcomes, the same three
+  // the capture route above has:
+  //   pending   — a job is still running. RE-QUEUE with the job ids persisted in stageOutputs, so the
+  //               long-run planes re-drive this node until every slot is terminal. Never a wait loop
+  //               inside one 30s project-call window, and never a second job for a key.
+  //   completed — every slot terminal. Validate against the node's OWN outputSchema and complete with
+  //               zero usage recorded (the R-20 $0 rule).
+  //   refused   — typed refusal. A LIVE run BLOCKS (a model must never fabricate an artifact reference);
+  //               a MOCK run falls through to MockNodeRunner so CI graph traversal keeps working.
+  if (readArtifactMaterializer(nextNode)) {
+    let materialized: Awaited<ReturnType<typeof runArtifactMaterialization>>;
+    try {
+      materialized = await runArtifactMaterialization({ run, node: nextNode });
+    } catch (error) {
+      materialized = { kind: "refused", code: "threw", message: error instanceof Error ? error.message : String(error) };
+    }
+    if (materialized.kind === "pending") {
+      const pendingAt = now();
+      state.status = "queued";
+      delete state.startedAt;
+      delete state.dispatch;
+      state.warnings = [...(state.warnings ?? []), ...materialized.warnings];
+      run.stageOutputs[materialized.jobStateKey] = materialized.jobState as unknown as Record<string, unknown>;
+      run.status = "running";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = pendingAt;
+      return { run };
+    }
+    let refusal: { code: string; message: string } | undefined;
+    if (materialized.kind === "completed") {
+      // The job bookkeeping is persisted on EVERY terminal outcome too, not just on pending: a retry of
+      // this node must still find the jobs it already created, or it would create them again.
+      run.stageOutputs[materialized.jobStateKey] = materialized.jobState as unknown as Record<string, unknown>;
+      const materializedValidation = validateOutput(materialized.output, nextNode.outputSchema);
+      if (materializedValidation.ok) {
+        const completedAt = now();
+        state.status = "completed";
+        delete state.dispatch;
+        state.completedAt = completedAt;
+        state.durationMs = duration(startedAt, completedAt);
+        state.output = materialized.output;
+        state.warnings = [...(state.warnings ?? []), ...materialized.warnings];
+        run.stageOutputs[nextNode.id] = materialized.output;
+        run.artifacts.push(buildArtifact(nextNode, materialized.output));
+        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.updatedAt = completedAt;
+        run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+        // No model call happened, so no usage record is written (the R-20 rule).
+        return { run };
+      }
+      refusal = { code: "output_schema_invalid", message: `artifact_materializer produced an envelope its own node schema rejects: ${materializedValidation.errors[0] ?? "schema_invalid"}` };
+    } else {
+      refusal = { code: materialized.code, message: materialized.message };
+    }
+    state.warnings = [...(state.warnings ?? []), `artifact_materializer_deterministic_unavailable:${refusal.code}`];
+    if (((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+      const completedAt = now();
+      state.status = "blocked";
+      delete state.dispatch;
       state.completedAt = completedAt;
       state.durationMs = duration(startedAt, completedAt);
       state.output = { error: { code: refusal.code, message: refusal.message } };
