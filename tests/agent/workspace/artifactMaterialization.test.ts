@@ -10,6 +10,7 @@ import {
   type MaterializerJobState
 } from "../../../src/agent/workspace/artifactMaterialization.js";
 import { getWorkspaceNode } from "../../../src/agent/workspace/nodes.js";
+import { evaluateNodeSkip } from "../../../src/agent/workspace/skipPredicates.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
 import { materializedPlanOf } from "../../../src/agent/workspace/materializedPlan.js";
 import { artifactPlanVerifiedMediaRefsOf } from "../../../src/agent/projects/readinessContentChecks.js";
@@ -258,6 +259,52 @@ describe("artifact_materializer — the deterministic materialization loop (W8.3
     }
     expect(last).toMatchObject({ kind: "refused", code: "artifact_materialization_poll_budget_exhausted" });
     expect(createCalls(stuck.calls)).toHaveLength(4);
+  });
+
+  // THE ZERO-MEDIA FLOOR — the regression W8 nearly shipped. A text-only run declares mediaSlots: []
+  // on brief_architect, artifact_plan skips, and a skipped node writes no stage output. Before this
+  // pair of locks the materializer dispatched into that absence and refused, blocking every text-only
+  // article at a node whose entire job is media.
+  it("skips alongside its planner on a zero-media run, because it shares the planner's carrier", () => {
+    const stageOutputs = { brief_architect: { artifact: "article_brief.v1", mediaSlots: [] }, contract_intelligence: { artifact: "contract_intelligence.v1", clientObjectType: "content_item" } };
+    const initialInput = { topic: "barrier repair", contentClass: "editorial" };
+    // brief_architect is on this node's dependsOn for exactly this reason — carriersFor reads a node's
+    // own dependencies, so without that edge the predicate cannot see the declaration.
+    expect(node.dependsOn).toContain("brief_architect");
+    expect(evaluateNodeSkip(getWorkspaceNode("artifact_plan")!, { initialInput, stageOutputs })?.skip).toBe(true);
+    expect(evaluateNodeSkip(node, { initialInput, stageOutputs })?.skip).toBe(true);
+  });
+
+  it("completes with an empty plan — never refuses — when it dispatches anyway and the planner was skipped", async () => {
+    const deps = bridge();
+    const run = {
+      runId: "run_text_only",
+      projectId: "dr-lurie",
+      executionMode: "openai",
+      stageOutputs: { contract_intelligence: { artifact: "contract_intelligence.v1", clientObjectType: "content_item" } },
+      nodes: [{ nodeId: "artifact_plan", status: "skipped" }]
+    } as unknown as WorkflowExecutionRecord;
+    const outcome = await runArtifactMaterialization({ run, node }, { projectRepository, callTool: deps.callTool });
+    expect(outcome.kind).toBe("completed");
+    expect(deps.calls).toHaveLength(0);
+    const output = outcome.kind === "completed" ? outcome.output : {};
+    expect(output.media_slots).toEqual([]);
+    expect(validateOutput(output, node.outputSchema).ok).toBe(true);
+    // A skipped planner may precede the publishRequestId mint, so the empty plan claims no id it does
+    // not have — and must still validate.
+    expect(output.requestId).toBeUndefined();
+  });
+
+  it("still refuses when the spec is absent and the planner did NOT skip — that is a real gap", async () => {
+    const deps = bridge();
+    const run = {
+      runId: "run_broken",
+      projectId: "dr-lurie",
+      executionMode: "openai",
+      stageOutputs: {},
+      nodes: [{ nodeId: "artifact_plan", status: "failed" }]
+    } as unknown as WorkflowExecutionRecord;
+    expect(await runArtifactMaterialization({ run, node }, { projectRepository, callTool: deps.callTool })).toMatchObject({ kind: "refused", code: "materialization_spec_missing" });
   });
 
   it("a zero-slot spec completes with an empty plan and touches the bridge not at all", async () => {

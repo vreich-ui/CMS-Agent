@@ -2850,7 +2850,8 @@ export const publishingConductorNodes = [
     "assignedSkills": [],
     "requiredInputs": [
       "artifact_plan",
-      "contract_intelligence"
+      "contract_intelligence",
+      "brief_architect"
     ],
     "produces": [
       "artifact_plan.v1"
@@ -2858,7 +2859,8 @@ export const publishingConductorNodes = [
     "riskLevel": "write",
     "dependsOn": [
       "artifact_plan",
-      "contract_intelligence"
+      "contract_intelligence",
+      "brief_architect"
     ],
     "status": "active",
     "position": {
