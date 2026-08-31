@@ -81,4 +81,37 @@ describe("in-loop budget circuit breaker reserves against the UPCOMING turn's ow
     expect(details.prospectiveTurnUsd).toBeGreaterThan(1);
     expect(details.spentUsdEstimate).toBeLessThan(0.1);
   });
+
+  // budget-override-and-ui-save — the SAME trip above must also carry a structured, actionable
+  // suggestion: {nodeId, budgetUsd, spentUsd, nextTurnEstimateUsd, suggestedBudgetUsd} plus an
+  // operatorAction naming the raise, WITHOUT changing the existing human `message` sentence.
+  it("also carries a structured suggestedBudgetUsd/operatorAction, and leaves the human message unchanged", async () => {
+    const runner = new OpenAINodeRunner();
+    const result = await runner.run({ node: PROBE_NODE, input: {} }, { run: makeRun(), executionRepository: repositoryManager.getExecutionRepository() });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("budget_exceeded");
+    // Human sentence is unchanged — same shape asserted by the test above, verified verbatim here.
+    const details = result.details as {
+      nodeId: string; ceiling: string; budgetUsd: number; spentUsd: number; nextTurnEstimateUsd: number; suggestedBudgetUsd: number;
+      spentUsdEstimate: number; prospectiveTurnUsd: number;
+    };
+    expect(result.message).toBe(
+      `Node "${PROBE_NODE.id}" stopped before the model turn that would cross the ${details.ceiling} budget: ` +
+        `estimated spend $${details.spentUsdEstimate} plus ` +
+        `~$${details.prospectiveTurnUsd} for the upcoming turn ` +
+        `exceeds the $1 ceiling. Caught inside the agent loop before the turn ran, not after.`
+    );
+    expect(details.nodeId).toBe(PROBE_NODE.id);
+    expect(details.budgetUsd).toBe(1);
+    // spentUsd/nextTurnEstimateUsd are the operator-facing names for the same figures already
+    // asserted above as spentUsdEstimate/prospectiveTurnUsd — not a re-derivation.
+    expect(details.spentUsd).toBe(details.spentUsdEstimate);
+    expect(details.nextTurnEstimateUsd).toBe(details.prospectiveTurnUsd);
+    expect(details.suggestedBudgetUsd).toBe(Math.ceil((details.spentUsd + details.nextTurnEstimateUsd) * 1.5 * 2) / 2);
+    // A round, typeable $0.50-increment figure — never the raw multiplied float.
+    expect(Number.isInteger(details.suggestedBudgetUsd * 2)).toBe(true);
+    expect(result.operatorAction).toBe(`Raise ${PROBE_NODE.id} budget to $${details.suggestedBudgetUsd} (this run or default) and retry the node.`);
+  });
 });

@@ -10,7 +10,7 @@ import { createConstellationTools } from "./constellationTools.js";
 import { createImprovementTools } from "./improvementTools.js";
 import { createAgentTools } from "./agentTools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
-import { DEFAULT_EXECUTION_MODE, MAX_LIST_RUNS_LIMIT, assessRunStall, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, resetRun, retryNode, resolveConductorNodes, runModeSummary, runNextNode, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
+import { DEFAULT_EXECUTION_MODE, MAX_LIST_RUNS_LIMIT, assessRunStall, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, resetRun, retryNode, resolveConductorNodes, runModeSummary, runNextNode, setNodeBudgetOverride, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
 import { listRegisteredWorkflowIds } from "../../workspace/workflowRegistry.js";
 import { resolvePublishAuthority } from "../../workspace/publishDecision.js";
 import { conductorCache, getRunContext, planRun, summarizeRunCost, RUN_CONTEXT_KEY } from "../../workspace/conductor.js";
@@ -322,6 +322,8 @@ const resumeRunInput = z.object({ runId: z.string().min(1), budgetUsd: z.number(
 const runNextNodeInput = z.object({ runId: z.string().min(1), approved: z.boolean().optional() }).strict();
 // P0 §2.2 — the ONE setter for the operator's durable publish decision (run.operatorPublishDecision).
 const operatorPublishDecisionInput = z.object({ runId: z.string().min(1), decision: z.enum(["approved", "withheld"]) }).strict();
+// budget-override-and-ui-save — the ONE setter for run.nodeBudgetOverrides (executor.setNodeBudgetOverride).
+const setNodeBudgetOverrideInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), budgetUsd: z.number().positive() }).strict();
 const listRunsInput = z.object({
   projectId: z.string().min(1).optional(),
   workflowId: z.string().min(1).optional(),
@@ -412,6 +414,7 @@ const getRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 },
 const resumeRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0, description: "Optional: raise (or set) the run's per-run cost ceiling in the same call that resumes it. Omit to resume unchanged — this is what makes the budget gate's own remedy (\"raise budgetUsd and resume\") actually reachable; previously resume_run took only runId and there was no way to raise the ceiling that blocked the run." } }, ["runId"]);
 const runNextNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
 const operatorPublishDecisionJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, decision: { type: "string", enum: ["approved", "withheld"], description: "\"withheld\" is a durable operator veto: it blocks workflow.publish_run and every publish-risk node for this run regardless of approved/live flags, until replaced. \"approved\" records explicit, durable operator approval — the record an executed publish_execution.v1's approvalMatched must match." } }, ["runId", "decision"]);
+const setNodeBudgetOverrideJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", exclusiveMinimum: 0, description: "The node's new per-run budget ceiling in USD, in place of its own modelConfig.budgetUsd for THIS run only — see a budget_exceeded error's own details.suggestedBudgetUsd for a computed raise. The node's stored modelConfig is never touched (every other run keeps its normal ceiling), and this does NOT retry the node — call workflow.retry_node separately once the override is set." } }, ["runId", "nodeId", "budgetUsd"]);
 
 // R-19 — the run-advancing tools used to advertise mutationJsonSchema, the WORKSPACE-mutation shape. That
 // schema has no `runId` property, lists nothing as required, and (like every objectSchema) sets
@@ -811,6 +814,15 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // (this tool), ONE reader (publishDecision.isOperatorPublishWithheld, consumed by the publish
     // gates and the executor's publish-risk dispatch guard).
     tool({ name: "workflow.set_operator_publish_decision", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Record the operator's durable publish decision for a run (run.operatorPublishDecision) — the ONLY thing that ever writes this field, in every project autonomy mode. \"withheld\" is the operator VETO: it blocks workflow.publish_run and every publish-risk node for this run regardless of approved/live flags or the project's autonomyMode policy, until the operator replaces it. \"approved\" records explicit durable operator approval — the referent an executed publish_execution.v1's approvalMatched must match. The decision survives workflow.reset_run.", zodSchema: operatorPublishDecisionInput, inputSchema: operatorPublishDecisionJsonSchema, execute: async (input) => { const data = operatorPublishDecisionInput.parse(input); return ok({ run: await setOperatorPublishDecision(data.runId, data.decision, executionRepository) ?? null }); } }),
+    // budget-override-and-ui-save — the ONE setter for run.nodeBudgetOverrides (executor.setNodeBudgetOverride),
+    // same one-field/one-setter shape as the operator publish decision tool just above. A budget_exceeded
+    // error's own details.suggestedBudgetUsd names the raise this tool is FOR; this tool only records the
+    // raise — it never retries the node itself (call workflow.retry_node separately once the override is
+    // set, exactly like raising a run's budgetUsd via workflow.resume_run does not itself advance the run).
+    // Deliberately absent from siteGenesis.ts's SITE_CLIENT_MANAGER_TOOLS allowlist, same as
+    // workflow.retry_node/reset_run/set_operator_publish_decision above — a scoped client_manager
+    // credential can drive a run but cannot rewrite what it costs to.
+    tool({ name: "workflow.set_node_budget_override", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Set a per-run override for one node's budget ceiling (run.nodeBudgetOverrides[nodeId]) — read by the budget guard in PREFERENCE to the node's own modelConfig.budgetUsd, for THIS run only; the node's stored modelConfig is never touched, so every other run keeps the node's normal ceiling. Use a budget_exceeded error's own details.suggestedBudgetUsd as the figure. Does NOT retry the node — call workflow.retry_node afterward to actually re-run it under the new ceiling.", zodSchema: setNodeBudgetOverrideInput, inputSchema: setNodeBudgetOverrideJsonSchema, execute: async (input) => { const data = setNodeBudgetOverrideInput.parse(input); return ok({ run: await setNodeBudgetOverride(data.runId, data.nodeId, data.budgetUsd, executionRepository) ?? null }); } }),
     // S3 — the operator's publish id survives a reset, for the same reason requestId and the operator's
     // durable publish decision do: a reset RETRIES the same publish request, it does not become a new
     // one. Re-stamped here (rather than inside resetRun's rebuild) because this tool is the field's one

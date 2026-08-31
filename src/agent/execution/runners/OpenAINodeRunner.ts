@@ -308,7 +308,13 @@ export class OpenAINodeRunner implements NodeRunner {
     // run-wide prior spend — harmless while no node declared a budget, but with every canonical node
     // now carrying one, that conflation would refuse to run any node dispatched after cumulative run
     // spend passed its own small per-node ceiling.
-    const nodeBudgetUsd = numberFrom(c.budgetUsd);
+    // budget-override-and-ui-save — an operator-set per-run override (workflow.set_node_budget_override,
+    // run.nodeBudgetOverrides) takes precedence over the node's own stored modelConfig.budgetUsd for
+    // THIS run only; every other run still sees the node's normal ceiling. The node's stored config is
+    // never mutated by an override, and this preference applies to every node-ceiling budget check
+    // below and inside wrapModelWithBudgetGuard, not just the guard's mid-loop gate.
+    const nodeBudgetOverride = numberFrom(context.run.nodeBudgetOverrides?.[node.id]);
+    const nodeBudgetUsd = nodeBudgetOverride !== undefined ? nodeBudgetOverride : numberFrom(c.budgetUsd);
     const runBudgetUsd = numberFrom(context.run.budgetUsd);
     const budgetGuardEngaged = nodeBudgetUsd !== undefined || runBudgetUsd !== undefined;
     const { model, settings } = modelSettings(node);
@@ -585,12 +591,20 @@ export class OpenAINodeRunner implements NodeRunner {
         if (guardState.exceeded || error instanceof NodeBudgetExceededError) {
           const details = guardState.exceeded ?? (error as NodeBudgetExceededError).details;
           await recordAccruedUsage("budget_exceeded", attempt);
+          // budget-override-and-ui-save — the human sentence above is unchanged; a stated raise is
+          // appended as its own field (operatorAction) rather than folded into that sentence, same
+          // split every other budget_exceeded/provider-error return already uses. Absent only
+          // alongside pricingUnknown, where there is no real rate to size a suggestion against —
+          // operatorActionForBudgetExceeded's plainer "raise the budget or stop" still applies there.
+          const operatorAction = details.suggestedBudgetUsd !== undefined
+            ? `Raise ${node.id} budget to $${details.suggestedBudgetUsd} (this run or default) and retry the node.`
+            : operatorActionForBudgetExceeded(details.budgetUsd, details.spentUsdEstimate);
           return {
             ok: false,
             code: "budget_exceeded",
             message: `Node "${node.id}" stopped before the model turn that would cross the ${details.ceiling} budget: estimated spend $${details.spentUsdEstimate} plus ~$${details.prospectiveTurnUsd} for the upcoming turn exceeds the $${details.budgetUsd} ceiling. Caught inside the agent loop before the turn ran, not after.`,
             details: { ...details, stage: "mid_loop" },
-            operatorAction: operatorActionForBudgetExceeded(details.budgetUsd, details.spentUsdEstimate),
+            operatorAction,
             toolCalls
           };
         }

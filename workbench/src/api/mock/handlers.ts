@@ -484,8 +484,20 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
     mockStore.updateNode(str(a, 'nodeId'), { allowedTools: (a.tools as string[]) ?? [] }) ?? null,
   workspace_update_node_skills: (a) =>
     mockStore.updateNode(str(a, 'nodeId'), { assignedSkills: (a.skills as string[]) ?? [] }) ?? null,
-  workspace_update_node_model_config: (a) =>
-    mockStore.updateNode(str(a, 'nodeId'), { modelConfig: a.model as adapters.RawModelConfig }) ?? null,
+  // LIVE-VERIFIED CORRECTION (budget-override-and-ui-save): the live tool
+  // takes `{id, patch: {modelConfig}}` and MERGES patch.modelConfig onto the
+  // existing config (tools.ts's deepMergeRecords) — mirrored here so fixture
+  // mode exercises the same "send only the changed fields" contract verbs.ts
+  // now relies on, instead of a wholesale replace that happened to match the
+  // old (wrong) full-object payload.
+  workspace_update_node_model_config: (a) => {
+    const id = str(a, 'id');
+    const patch = (a.patch ?? {}) as { modelConfig?: Partial<adapters.RawModelConfig> };
+    const incoming = patch.modelConfig ?? {};
+    const existing = mockStore.getNode(id);
+    const merged = { ...(existing?.modelConfig ?? {}), ...incoming } as adapters.RawModelConfig;
+    return mockStore.updateNode(id, { modelConfig: merged }) ?? null;
+  },
   workspace_update_node_input_schema: (a) => ({ nodeId: str(a, 'nodeId'), schema: a.schema ?? null, applied: true }),
   workspace_update_node_output_schema: (a) => ({ nodeId: str(a, 'nodeId'), schema: a.schema ?? null, applied: true }),
   workspace_update_node_metadata: (a) => {
