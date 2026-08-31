@@ -48,6 +48,16 @@
 // carries terminal evidence anyway is still read — see readTerminal — because refusing free evidence
 // would be silly.)
 //
+// WHICH REQUEST ID THE ARTIFACTS ARE WRITTEN UNDER. Not the planner's. The bridge's `request_id` names
+// the content_item that OWNS the artifact, and on a request_id-dialect client (dr-lurie) that object id
+// IS the run's own requestId — the id the content-item shell was created under one step earlier. The
+// planner runs before the shell exists and before runContext holds any publish id, so anything it
+// authors is a guess at the convention, and a guess that differs by one character names an object the
+// client cannot list, reconcile or delete. So the shell's id WINS whenever a shell exists, the planner's
+// is the fallback for a server-minted-id client that has no shell, and a disagreement is recorded as a
+// run-visible warning rather than silently resolved. The emitted envelope then carries the id the
+// artifacts actually live under, which is the id runContext lifts and the publisher patches.
+//
 // WHAT IS A SLOT FAILURE AND WHAT IS A NODE FAILURE. A slot whose job terminally failed, or whose
 // create was refused, is a BLOCKED SLOT carrying the bridge's own error verbatim (including
 // `renderer_unavailable:*` and `RENDERER_MISMATCH` — a renderer problem is the operator's to read, not
@@ -62,6 +72,7 @@ import { ProjectMcpAdapter, type CallToolResult } from "../projects/projectMcpAd
 import { describeMcpErrorResult } from "../projects/clientToolResult.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { stripCredentialShapedFields } from "../capture/captureEngine.js";
+import { readContentItemShell } from "./contentItemShell.js";
 
 export const ARTIFACT_MATERIALIZER_NODE_ID = "artifact_materializer";
 
@@ -539,6 +550,15 @@ export async function runArtifactMaterialization(
     );
   }
 
+  // The owning object's id beats the planner's guess — see the header. readContentItemShell reads this
+  // node's own dispatch input, where the executor recorded the shell it created immediately before.
+  const shell = readContentItemShell(run);
+  const requestId = shell?.requestId ?? spec.requestId;
+  if (shell && shell.requestId !== spec.requestId) {
+    warnings.push(`artifact_request_id_from_shell:${shell.requestId}`);
+  }
+  const effective: MaterializationSpec = { ...spec, requestId };
+
   const jobState = readJobState(run);
   jobState.dispatches += 1;
   const maxDispatches = readMaxPollDispatches(node);
@@ -546,10 +566,10 @@ export async function runArtifactMaterialization(
   // Zero slots: the planner said there is nothing to make. Emit the empty plan and complete — no bridge
   // call at all. (The skip predicate normally catches this before dispatch; this is the honest floor
   // for a run whose brief declared slots and whose planner resolved none of them.)
-  if (spec.slots.length === 0) {
+  if (effective.slots.length === 0) {
     return {
       kind: "completed",
-      output: buildArtifactPlanEnvelope({ spec, jobState, clientProjectId: spec.clientProjectId ?? run.projectId, clientObjectType: spec.clientObjectType ?? "content_item" }),
+      output: buildArtifactPlanEnvelope({ spec: effective, jobState, clientProjectId: effective.clientProjectId ?? run.projectId, clientObjectType: effective.clientObjectType ?? "content_item" }),
       jobStateKey: ARTIFACT_MATERIALIZER_JOB_STAGE_KEY,
       jobState,
       warnings
@@ -558,23 +578,23 @@ export async function runArtifactMaterialization(
 
   const bridge = bridgeCallFor(config, deps);
 
-  for (const slot of spec.slots) {
+  for (const slot of effective.slots) {
     const existing = jobState.slots[slot.slotId];
     if (existing && isTerminalPhase(existing.phase)) continue;
     try {
-      jobState.slots[slot.slotId] = await advanceSlot({ runId: run.runId, siteId, requestId: spec.requestId, slot, state: existing, bridge });
+      jobState.slots[slot.slotId] = await advanceSlot({ runId: run.runId, siteId, requestId, slot, state: existing, bridge });
     } catch (error) {
       if (error instanceof MaterializationRefusal) return refused(error.code, error.message);
       throw error;
     }
   }
 
-  const stillRunning = spec.slots.filter((slot) => !isTerminalPhase(jobState.slots[slot.slotId]?.phase ?? "running"));
+  const stillRunning = effective.slots.filter((slot) => !isTerminalPhase(jobState.slots[slot.slotId]?.phase ?? "running"));
 
   if (stillRunning.length === 0) {
     return {
       kind: "completed",
-      output: buildArtifactPlanEnvelope({ spec, jobState, clientProjectId: spec.clientProjectId ?? run.projectId, clientObjectType: spec.clientObjectType ?? "content_item" }),
+      output: buildArtifactPlanEnvelope({ spec: effective, jobState, clientProjectId: effective.clientProjectId ?? run.projectId, clientObjectType: effective.clientObjectType ?? "content_item" }),
       jobStateKey: ARTIFACT_MATERIALIZER_JOB_STAGE_KEY,
       jobState,
       warnings
