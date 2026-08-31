@@ -57,6 +57,9 @@ const runFixture = (slots: Record<string, unknown>[] = FOUR_SLOTS, jobState?: Ma
     runId: "run_materializer_1",
     projectId: "dr-lurie",
     executionMode: "openai",
+    // No content-item shell on this fixture: the planner's requestId stands, which is the
+    // server-minted-id client's case and keeps every other assertion here about the loop itself.
+    nodes: [],
     stageOutputs: {
       artifact_plan: spec(slots),
       ...(jobState ? { [ARTIFACT_MATERIALIZER_JOB_STAGE_KEY]: jobState } : {})
@@ -259,6 +262,46 @@ describe("artifact_materializer — the deterministic materialization loop (W8.3
     }
     expect(last).toMatchObject({ kind: "refused", code: "artifact_materialization_poll_budget_exhausted" });
     expect(createCalls(stuck.calls)).toHaveLength(4);
+  });
+
+  // WHOSE REQUEST ID. The planner runs before the content-item shell exists and before runContext holds
+  // any publish id, so whatever it authors is a guess at the client's convention. The bridge's
+  // request_id names the object that OWNS the artifact, and on a request_id-dialect client that is the
+  // shell's id. A one-character disagreement writes artifacts under an object the client can never list.
+  it("writes artifacts under the OWNING object's request id, not the planner's guess", async () => {
+    const deps = bridge({ pollsToFinish: 1 });
+    const shellId = "req_conductor_owning_20260831_07";
+    const run = {
+      runId: "run_shell_wins",
+      projectId: "dr-lurie",
+      executionMode: "openai",
+      stageOutputs: { artifact_plan: spec([FOUR_SLOTS[0]]) },
+      nodes: [{ nodeId: "artifact_materializer", input: { contentItemShell: { objectId: shellId, created: true, objectType: "content_item", requestId: shellId } } }]
+    } as unknown as WorkflowExecutionRecord;
+
+    // Two dispatches, the way the executor drives it: adopt+create, then poll.
+    const first = await runArtifactMaterialization({ run, node }, { projectRepository, callTool: deps.callTool });
+    expect(first.kind).toBe("pending");
+    const withJobs = { ...run, stageOutputs: { ...run.stageOutputs, [ARTIFACT_MATERIALIZER_JOB_STAGE_KEY]: first.kind === "pending" ? first.jobState : {} } } as unknown as WorkflowExecutionRecord;
+    const outcome = await runArtifactMaterialization({ run: withJobs, node }, { projectRepository, callTool: deps.callTool });
+    expect(outcome.kind).toBe("completed");
+    // Every bridge call — adopt, create, poll — is scoped to the shell's id, never the spec's.
+    expect(deps.calls.every((call) => call.args.request_id === shellId)).toBe(true);
+    expect(deps.calls.some((call) => call.args.request_id === REQUEST_ID)).toBe(false);
+    // And the envelope reports the id the artifacts actually live under, because runContext lifts it
+    // and the publisher patches that object.
+    const output = outcome.kind === "completed" ? outcome.output : {};
+    expect(output.requestId).toBe(shellId);
+    // The disagreement is recorded, not silently resolved.
+    expect(outcome.kind === "completed" ? outcome.warnings : []).toContain(`artifact_request_id_from_shell:${shellId}`);
+  });
+
+  it("falls back to the planner's id when there is no shell (a server-minted-id client)", async () => {
+    const deps = bridge({ pollsToFinish: 1 });
+    const { outcome } = await driveToTerminal({ deps, slots: [FOUR_SLOTS[0]] });
+    expect(outcome.kind).toBe("completed");
+    expect(deps.calls.every((call) => call.args.request_id === REQUEST_ID)).toBe(true);
+    expect((outcome.kind === "completed" ? outcome.warnings : []).some((warning) => warning.startsWith("artifact_request_id_from_shell"))).toBe(false);
   });
 
   // THE ZERO-MEDIA FLOOR — the regression W8 nearly shipped. A text-only run declares mediaSlots: []
