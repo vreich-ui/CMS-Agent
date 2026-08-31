@@ -151,7 +151,7 @@ describe("applyRunContextEnvelope — the engine echoes what the model used to r
       .sort();
     // The five nodes whose OUTPUT schema declares the envelope (publication_controller, the sixth
     // echoing node, reads contractSource in its prompt but does not re-emit it).
-    expect(echoing).toEqual(["article_body", "artifact_plan", "contract_intelligence", "publish_executor", "publish_payload"]);
+    expect(echoing).toEqual(["article_body", "artifact_materializer", "artifact_plan", "contract_intelligence", "publish_executor", "publish_payload"]);
   });
 });
 

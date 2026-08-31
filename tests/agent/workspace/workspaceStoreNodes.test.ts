@@ -19,7 +19,7 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
 const structured = (res: any) => res.result?.structuredContent;
 
 describe("workspaceStoreSeedNodes — the store's governance-visible union", () => {
-  it("unions publishing (24) + capture_conductor's own upstream (11) + clone_conductor's own upstream (13) with zero collisions", () => {
+  it("unions publishing (25) + capture_conductor's own upstream (11) + clone_conductor's own upstream (13) with zero collisions", () => {
     const seed = workspaceStoreSeedNodes();
     expect(seed).toHaveLength(listWorkspaceNodes().length + captureConductorNodes.length + cloneConductorNodes.length);
     const ids = seed.map((node) => node.id);
@@ -33,7 +33,7 @@ describe("workspaceStoreSeedNodes — the store's governance-visible union", () 
     expect(publishPayloadRows).toHaveLength(1);
     // Publishing's own tail form, never capture's ([capture_emit_live, capture_score]) or clone's
     // ([recipe_mint, theme_bind, layout_restamp]) rebinding.
-    expect(publishPayloadRows[0].dependsOn).toEqual(["article_body", "artifact_plan"]);
+    expect(publishPayloadRows[0].dependsOn).toEqual(["article_body", "artifact_materializer"]);
   });
 
   it("workspaceStoreCanonicalIds matches the seed set exactly", () => {
@@ -48,10 +48,10 @@ describe("workspaceStoreSeedNodes — the store's governance-visible union", () 
   });
 });
 
-describe("a fresh workspace document is seeded with all 48 nodes (store.ts's defaultWorkspaceNodes)", () => {
+describe("a fresh workspace document is seeded with all 49 nodes (store.ts's defaultWorkspaceNodes)", () => {
   it("createDefaultWorkspaceDocument includes capture/clone's own nodes from the start", () => {
     const document = createDefaultWorkspaceDocument();
-    expect(document.nodes).toHaveLength(48);
+    expect(document.nodes).toHaveLength(49);
     expect(document.nodes.some((node) => node.id === "block_classifier")).toBe(true);
     expect(document.nodes.some((node) => node.id === "clone_intake")).toBe(true);
   });
@@ -69,18 +69,18 @@ describe("WorkspaceStore.getNode resolves capture/clone nodes directly (governan
 
 describe("ensureWorkspaceNodeSeeds — additive top-up for a workspace document created before #195", () => {
   it("adds every missing capture/clone node without touching an existing (operator-edited) node", async () => {
-    // A pre-#195-shaped document: only publishing's 24 nodes (defaultWorkspaceNodes() before this
+    // A pre-#195-shaped document: only publishing's own nodes (defaultWorkspaceNodes() before this
     // change), with one operator-promoted prompt edit that must survive the top-up untouched.
     const preExistingDocument = createDefaultWorkspaceDocument();
     preExistingDocument.nodes = listWorkspaceNodes().map((node) => (node.id === "input_triage" ? { ...node, prompt: "OPERATOR-PROMOTED PROMPT TEXT" } : node));
     const store = new InMemoryWorkspaceStore(preExistingDocument);
 
     const before = await store.getNodes();
-    expect(before).toHaveLength(24);
+    expect(before).toHaveLength(25);
     expect(before.find((node) => node.id === "input_triage")?.prompt).toBe("OPERATOR-PROMOTED PROMPT TEXT");
 
     const topped = await store.ensureWorkspaceNodeSeeds();
-    expect(topped).toHaveLength(48);
+    expect(topped).toHaveLength(49);
     expect(topped.find((node) => node.id === "input_triage")?.prompt).toBe("OPERATOR-PROMOTED PROMPT TEXT");
     expect(topped.some((node) => node.id === "block_classifier")).toBe(true);
 
@@ -114,19 +114,19 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
   it("workspace.get_nodes lists all three workflows' nodes, not publishing's alone", async () => {
     const res = await call("workspace.get_nodes");
     const ids = structured(res).data.nodes.map((node: { id: string }) => node.id);
-    expect(ids).toHaveLength(48);
+    expect(ids).toHaveLength(49);
     expect(ids).toEqual(expect.arrayContaining(["input_triage", "block_classifier", "clone_intake"]));
   });
 
   // B1 (Pass 2, WP-00) — live capture found workspace.get_nodes could not filter by conductor (its
   // schema took no arguments at all). This adds the SAME optional workflowId filter workspace.get_graph
-  // already implements, resolved through the identical resolveConductorNodes path — same 24/16/18
+  // already implements, resolved through the identical resolveConductorNodes path — same 25/16/18
   // per-conductor topology, same fallback for an unregistered id, no client-side filtering required.
   it("workspace.get_nodes({workflowId}) scopes to one conductor's actual node set, same resolution as workspace.get_graph", async () => {
     const publishing = await call("workspace.get_nodes", { workflowId: "publishing_conductor" });
     const capture = await call("workspace.get_nodes", { workflowId: "capture_conductor" });
     const clone = await call("workspace.get_nodes", { workflowId: "clone_conductor" });
-    expect(structured(publishing).data.nodes).toHaveLength(24);
+    expect(structured(publishing).data.nodes).toHaveLength(25);
     expect(structured(capture).data.nodes).toHaveLength(16);
     expect(structured(clone).data.nodes).toHaveLength(18);
 
@@ -138,9 +138,9 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
     expect(publishPayload.dependsOn).toEqual(["recipe_mint", "theme_bind", "layout_restamp"]);
   });
 
-  it("workspace.get_nodes with no workflowId is unchanged: still the flat 48-node union", async () => {
+  it("workspace.get_nodes with no workflowId is unchanged: still the flat 49-node union", async () => {
     const res = await call("workspace.get_nodes", {});
-    expect(structured(res).data.nodes).toHaveLength(48);
+    expect(structured(res).data.nodes).toHaveLength(49);
   });
 
   it("workspace.get_nodes rejects an unknown argument, same additionalProperties:false discipline as before", async () => {
@@ -151,7 +151,7 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
   it("workspace.get_graph with no workflowId merges every registered workflow's nodes/edges", async () => {
     const res = await call("workspace.get_graph");
     const data = structured(res).data;
-    expect(data.nodes).toHaveLength(48);
+    expect(data.nodes).toHaveLength(49);
     expect(data.registeredWorkflowIds).toEqual(["publishing_conductor", "capture_conductor", "clone_conductor"]);
     // capture_report's own dependency on the shared tail is visible even in the flat merged view.
     expect(data.edges).toEqual(expect.arrayContaining([{ from: "publish_executor", to: "capture_report" }]));
@@ -161,7 +161,7 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
     const res = await call("workspace.get_graph", { workflowId: "capture_conductor" });
     const data = structured(res).data;
     expect(data.workflowId).toBe("capture_conductor");
-    // The flat store's publish_payload row is bound to [article_body, artifact_plan] (publishing's own
+    // The flat store's publish_payload row is bound to [article_body, artifact_materializer] (publishing's own
     // boundary); capture's ACTUAL run rebinds it to [capture_emit_live, capture_score] — invisible in
     // the flat merged view above, visible here.
     const publishPayload = data.nodes.find((node: { id: string }) => node.id === "publish_payload");

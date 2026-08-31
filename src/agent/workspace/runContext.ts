@@ -25,6 +25,7 @@
 // knows it (prefetched contract, or the deterministic contract_intelligence artifact that was built
 // from that prefetch); an unknown field is left exactly as the model emitted it, so a node whose
 // schema requires it still fails R-16 rather than passing on an engine-fabricated envelope.
+import { materializedPlanOf } from "./materializedPlan.js";
 import type { ReducedContract } from "./contractReduction.js";
 
 export type RunContext = {
@@ -123,7 +124,11 @@ export function buildRunContext(params: BuildRunContextParams): RunContext {
   // stamp the wrong identifier on a live client object, which is worse than not publishing. Absent
   // stays absent here — publish_executor's publish_request_id_absent refusal is the correct outcome
   // for a run nobody gave an id to, and nothing in this file mints one.
-  const plan = params.stageOutputs?.artifact_plan;
+  // W8.3 — the plan may now live under either node id: the deterministic `artifact_materializer` that
+  // emits it today, or `artifact_plan` for a run recorded before the split and for a late-stage
+  // entrypoint run that seeds that output directly. materializedPlan.ts owns that preference order so
+  // this lift, the readiness evidence and the content-item shell all answer the question identically.
+  const plan = materializedPlanOf(params.stageOutputs);
   if (isObject(plan) && nonEmptyString(plan.requestId)) context.requestId = plan.requestId.trim();
   else if (nonEmptyString(params.publishRequestId)) context.requestId = params.publishRequestId.trim();
 

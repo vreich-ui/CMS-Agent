@@ -17,6 +17,7 @@
 // own). The shell is recorded in artifact_plan's INPUT (`contentItemShell`), which is where the
 // publisher reads it back from the persisted run.
 
+import { firstMaterializedPlanValue } from "./materializedPlan.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { readCreateOutcome } from "../projects/objectDialect.js";
 import { describeMcpErrorResult, isMcpErrorResult } from "../projects/clientToolResult.js";
@@ -151,10 +152,16 @@ export async function ensureContentItemShell(params: ContentItemShellParams, dep
   return { ok: true, shell: { objectId, created: !existed, objectType, requestId } };
 }
 
-/** The shell artifact_plan's dispatch recorded on the run, if any (read by the publisher). */
-export const readContentItemShell = (run: Pick<WorkflowExecutionRecord, "nodes">): ContentItemShell | undefined => {
-  const state = run.nodes.find((node: NodeExecutionState) => node.nodeId === "artifact_plan");
-  const candidate = isObject(state?.input) ? (state!.input as Record<string, unknown>)[CONTENT_ITEM_SHELL_INPUT_KEY] : undefined;
-  if (!isObject(candidate) || !nonEmpty(candidate.objectId) || !nonEmpty(candidate.requestId)) return undefined;
-  return { objectId: candidate.objectId, created: candidate.created === true, objectType: nonEmpty(candidate.objectType) ? candidate.objectType : "content_item", requestId: candidate.requestId };
-};
+/** The shell the generating node's dispatch recorded on the run, if any (read by the publisher).
+ *
+ * W8.3 — that node is `artifact_materializer` now and was `artifact_plan` before the split, so both are
+ * searched in preference order. The search is over the SHELL, not over the node state: a materializer
+ * state that exists but carries no shell (its create failed, which is a warning and not an error) must
+ * fall through to the planner's rather than ending the search and losing a shell the run really has. */
+export const readContentItemShell = (run: Pick<WorkflowExecutionRecord, "nodes">): ContentItemShell | undefined =>
+  firstMaterializedPlanValue((nodeId) => {
+    const state = run.nodes.find((node: NodeExecutionState) => node.nodeId === nodeId);
+    const candidate = isObject(state?.input) ? (state!.input as Record<string, unknown>)[CONTENT_ITEM_SHELL_INPUT_KEY] : undefined;
+    if (!isObject(candidate) || !nonEmpty(candidate.objectId) || !nonEmpty(candidate.requestId)) return undefined;
+    return { objectId: candidate.objectId, created: candidate.created === true, objectType: nonEmpty(candidate.objectType) ? candidate.objectType : "content_item", requestId: candidate.requestId };
+  });

@@ -10,7 +10,9 @@ import { READ_TOOL_ALLOWLIST } from "../../../src/agent/projects/projectMcpAdapt
 // no approved tool ids dropped project.call_tool entirely, so the node correctly refused to fabricate
 // a contract rather than proceed on nothing. project.call_read_tool is the split that fixes this
 // without touching the write path at all.
-const CONTENT_BUILDING_NODES = ["contract_intelligence", "article_body", "artifact_plan", "publish_payload"];
+// W8 — artifact_plan left this set when it became a tool-less planning turn (allowedTools: []).
+// artifact_materializer is the node that now reaches the client, and it holds both grants.
+const CONTENT_BUILDING_NODES = ["contract_intelligence", "article_body", "artifact_materializer", "publish_payload"];
 const WRITE_ONLY_PUBLISH_NODES = ["publication_controller", "publish_executor"];
 // Disallowed-but-otherwise-unremarkable operation names, chosen so the ONLY reason each is refused
 // is the fixed allowlist itself — none of these also trip dr-lurie's executable policy (that gets its

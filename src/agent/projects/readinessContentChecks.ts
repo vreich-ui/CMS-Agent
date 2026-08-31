@@ -38,6 +38,8 @@ type ClientNode = { public?: Record<string, unknown>; [key: string]: unknown };
 // index signature is what lets mediaRefsOf read those fields without pinning one client's names.
 type ClientObject = { nodes?: ClientNode[] } & Record<string, unknown>;
 
+import { materializedPlanOf } from "../workspace/materializedPlan.js";
+
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
 export const clientObjectOf = (envelope: unknown): ClientObject =>
@@ -146,7 +148,11 @@ const collectArtifactEntryRefs = (entry: Record<string, unknown>, refs: string[]
 // array still HOLDS the evidence in the plan output, and a publisher that holds the run should not
 // report the body's media unverified because one copy of the same record went missing.
 export const artifactPlanVerifiedMediaRefsOf = (stageOutputs: Record<string, unknown> | undefined): string[] => {
-  const plan = stageOutputs?.artifact_plan;
+  // W8.3 — `artifact_materializer` emits this envelope now; `artifact_plan` still does for runs recorded
+  // before the split and for late-stage entrypoint runs that seed it. One shared preference order lives
+  // in materializedPlan.ts. That module is a deliberate LEAF (it imports nothing), which is what lets
+  // this otherwise import-free file share the answer instead of restating the id list.
+  const plan = materializedPlanOf(stageOutputs);
   if (!isObject(plan)) return [];
   const refs: string[] = [...envelopeVerifiedMediaRefsOf(plan)];
   const slots = Array.isArray(plan.media_slots) ? plan.media_slots : [];

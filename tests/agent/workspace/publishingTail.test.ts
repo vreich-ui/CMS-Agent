@@ -46,12 +46,13 @@ const syntheticUpstream = (): WorkspaceNode[] => {
 };
 
 // The binding a money_page author supplies: contract_intelligence and artifact_plan both read the
-// brief (T8: artifact_plan now depends on brief_architect directly, not on article_body), article_body
+// brief (T8: artifact_plan now depends on brief_architect directly, not on article_body) and artifact_plan
+// also reads the draft (W8: a PDF slot's renderData is filled from the written prose), article_body
 // reads the approved editorial content and the draft. narrative_movement/angle_strategy have no
 // money_page equivalent here, so their edges are re-bound to what exists.
 const syntheticBinding = {
   contract_intelligence: ["money_brief"],
-  artifact_plan: ["money_brief"],
+  artifact_plan: ["money_brief", "money_draft"],
   article_body: ["money_review", "money_draft", "money_brief"]
 } as const;
 
@@ -61,7 +62,7 @@ describe("§2.23 publishing tail declaration", () => {
     // media is generated and verified BEFORE the body that would reference it is built.
     // T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3): release_executor lands after
     // publish_executor and before learning_recorder.
-    expect([...publishingTailNodeIds]).toEqual(["contract_intelligence", "artifact_plan", "article_body", "publish_payload", "publication_controller", "publish_executor", "release_executor", "learning_recorder"]);
+    expect([...publishingTailNodeIds]).toEqual(["contract_intelligence", "artifact_plan", "artifact_materializer", "article_body", "publish_payload", "publication_controller", "publish_executor", "release_executor", "learning_recorder"]);
     for (const nodeId of publishingTailNodeIds) expect(isTailNode(nodeId)).toBe(true);
     expect(isTailNode("brief_architect")).toBe(false);
   });
@@ -69,7 +70,8 @@ describe("§2.23 publishing tail declaration", () => {
   it("captures the tail's upstream boundary exactly — the multi-edge entry contract", () => {
     expect(publishingTailBoundary).toEqual({
       contract_intelligence: ["brief_architect"],
-      artifact_plan: ["brief_architect"],
+      artifact_plan: ["brief_architect", "draft_writer"],
+      artifact_materializer: [],
       article_body: ["review_aggregator", "draft_writer", "narrative_movement", "angle_strategy"],
       publish_payload: [],
       publication_controller: [],
@@ -77,20 +79,25 @@ describe("§2.23 publishing tail declaration", () => {
       release_executor: [],
       learning_recorder: []
     });
-    expect(tailBoundary("artifact_plan")).toEqual(["brief_architect"]);
+    expect(tailBoundary("artifact_plan")).toEqual(["brief_architect", "draft_writer"]);
+    // W8: the materializer is purely tail-internal — it reads the plan and the contract, nothing upstream.
+    expect(tailBoundary("artifact_materializer")).toEqual([]);
     expect(tailBoundary("article_body")).toEqual(["review_aggregator", "draft_writer", "narrative_movement", "angle_strategy"]);
     expect(tailBoundary("publish_payload")).toEqual([]);
     expect(tailBoundary("release_executor")).toEqual([]);
     expect(tailBoundary("not_a_tail_node")).toEqual([]);
-    expect([...publishingTailUpstreamIds]).toEqual(["brief_architect", "review_aggregator", "draft_writer", "narrative_movement", "angle_strategy"]);
+    // W8 — draft_writer now enters the tail one node earlier (at artifact_plan, for a PDF slot's
+    // renderData) than at article_body, so first-appearance order moves it ahead of review_aggregator.
+    expect([...publishingTailUpstreamIds]).toEqual(["brief_architect", "draft_writer", "review_aggregator", "narrative_movement", "angle_strategy"]);
   });
 
   it("derives internal edges as the complement of the boundary — shared verbatim by every workflow", () => {
     expect(publishingTailInternalEdges).toEqual({
       contract_intelligence: [],
       artifact_plan: ["contract_intelligence"],
-      article_body: ["contract_intelligence", "artifact_plan"],
-      publish_payload: ["article_body", "artifact_plan"],
+      artifact_materializer: ["artifact_plan", "contract_intelligence"],
+      article_body: ["contract_intelligence", "artifact_materializer"],
+      publish_payload: ["article_body", "artifact_materializer"],
       publication_controller: ["publish_payload"],
       publish_executor: ["publication_controller"],
       release_executor: ["publish_executor"],
@@ -99,7 +106,7 @@ describe("§2.23 publishing tail declaration", () => {
   });
 
   it("partitions the tail into an authoring segment and a mandatory publish segment (ADR §6.1)", () => {
-    expect([...publishingAuthoringSegmentIds]).toEqual(["contract_intelligence", "artifact_plan", "article_body"]);
+    expect([...publishingAuthoringSegmentIds]).toEqual(["contract_intelligence", "artifact_plan", "artifact_materializer", "article_body"]);
     expect([...publishingPublishSegmentIds]).toEqual(["publish_payload", "publication_controller", "publish_executor", "release_executor", "learning_recorder"]);
     // Exact partition: every tail id in exactly one segment, nothing left over.
     const union = [...publishingAuthoringSegmentIds, ...publishingPublishSegmentIds].sort();
@@ -160,10 +167,11 @@ describe("§2.23 composeWorkflowNodes", () => {
     const byId = new Map(composed.map((node) => [node.id, node]));
     // Boundary edges bound to the second workflow's own upstream; internal edges untouched.
     expect(byId.get("contract_intelligence")?.dependsOn).toEqual(["money_brief"]);
-    expect(byId.get("artifact_plan")?.dependsOn).toEqual(["money_brief", "contract_intelligence"]);
-    expect(byId.get("article_body")?.dependsOn).toEqual(["money_review", "money_draft", "money_brief", "contract_intelligence", "artifact_plan"]);
-    expect(byId.get("article_body")?.requiredInputs).toEqual(["money_review", "money_draft", "money_brief", "contract_intelligence", "artifact_plan"]);
-    expect(byId.get("publish_payload")?.dependsOn).toEqual(["article_body", "artifact_plan"]);
+    expect(byId.get("artifact_plan")?.dependsOn).toEqual(["money_brief", "money_draft", "contract_intelligence"]);
+    expect(byId.get("artifact_materializer")?.dependsOn).toEqual(["artifact_plan", "contract_intelligence"]);
+    expect(byId.get("article_body")?.dependsOn).toEqual(["money_review", "money_draft", "money_brief", "contract_intelligence", "artifact_materializer"]);
+    expect(byId.get("article_body")?.requiredInputs).toEqual(["money_review", "money_draft", "money_brief", "contract_intelligence", "artifact_materializer"]);
+    expect(byId.get("publish_payload")?.dependsOn).toEqual(["article_body", "artifact_materializer"]);
     expect(byId.get("release_executor")?.dependsOn).toEqual(["publish_executor"]);
     expect(byId.get("learning_recorder")?.dependsOn).toEqual(["publication_controller", "publish_executor", "release_executor"]);
     // The shared tail DEFINITIONS travel: same prompt, schema, tools, riskLevel as the canonical tail,

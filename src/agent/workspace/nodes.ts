@@ -2201,12 +2201,347 @@ export const publishingConductorNodes = [
       "retryCount": 1
     }
   },
+  // W8 (2026-08-31) — THE SPLIT. artifact_plan used to be a gpt-5.5 tool loop that planned AND
+  // materialized: every adopt, create and status poll was a model turn over a 50-70K context, which
+  // cost $2-3 per media-bearing article and routinely ran out of tool-call budget mid-flight. It is now
+  // ONE tool-less turn that only PLANS (materialization_spec.v1), and the deterministic
+  // artifact_materializer below executes that plan for $0 and emits the unchanged artifact_plan.v1.
+  //
+  // T8 (Wave 3, 2026-08-13, run_1786557897658_elj34j) still holds and is why both sit AHEAD of
+  // article_body: media planned after the body was built could never be bound to it. draft_writer joins
+  // the dependencies here because a PDF slot's renderData is filled from the written prose, not from
+  // notes — which does mean generation now starts after the draft rather than beside it.
   {
     "id": "artifact_plan",
     "name": "Artifact Planning Agent",
     "kind": "adapter",
-    "description": "Plan and MATERIALIZE media/artifact requirements from brief_architect's mediaSlots, against the client's declared artifact protocol and id conventions, before article_body runs. No legacy fallbacks, no unverified media.",
-    "prompt": "Objective: Plan and MATERIALIZE every media/artifact need brief_architect declared, using only the artifact protocol the client's contract declares — and hand article_body verified references to build with, before article_body ever runs.\nSource of truth: the client's fetched contract declares the artifact protocol, the request-id convention, the media path rules, and the media budget. Read them from contract_intelligence, delivered directly in this node's input, rather than assuming. Carry clientProjectId, clientObjectType and contractSource forward.\nInputs expected: brief_architect (mediaSlots — the desired-media declaration, one entry {slotId, purpose, desiredKind, placement} per slot the envelope's media request asked for) and contract_intelligence (the artifact protocol, id convention, media path rules and budget), both delivered directly in this node's input. article_body has not run yet — do not expect it, do not wait for it, and do not read a body that does not exist yet.\nZero-media shortcut: when brief_architect's mediaSlots is an empty array, emit the plan immediately from your input with an empty slot list and zero tool calls. There is nothing to verify; spending turns proving the absence of media is the failure mode this node's budget exists to prevent. A zero-media plan may omit artifactProtocol entirely — there was no protocol to consult, and inventing a protocol string for an empty plan is exactly the fabrication this node forbids elsewhere.\nRequest id policy: derive the requestId from the CLIENT's id convention, record that convention in requestIdConvention, and confirm the id is acceptable to the client before any artifact is written. An artifact generator may accept a laxer id than the client's index does; writing under a non-conforming id creates an artifact the client can never list, reconcile, or delete. If the id cannot be confirmed, mark slots blocked rather than materializing.\nArtifact protocol policy: the client's declared protocol is the only valid transfer path. Media must be represented by references the protocol produced for the CURRENT request. Never use repo paths, remote URLs, data URIs, direct-save fallbacks, references copied from another request or slug, or hand-authored keys.\nMaterialization policy — adopt first, generate second, poll to a terminal state: create_agent_artifact_job is ASYNCHRONOUS. It returns a JOB, not an artifact. A response whose job is still running is NOT verification evidence and the artifact it will produce does not exist yet; treating that response as proof is how a slot ends up reported blocked while its image materializes seconds later, unbound and unusable. For each non-empty slot, in this order. (1) ADOPT. Call get_agent_artifact_by_slot for this slot's exact slotId under this request id and the client's site object id. If it returns a materialized artifact, that IS this slot's canonical artifact: record its key, digest, content type, size and timestamp in the slot's verification field, resolve its publicPath, mark the slot has_trusted_artifact, and CREATE NOTHING. This step is what makes a RE-RUN of this node safe and is not optional — a slot whose artifact already exists must never be given a second job, because a duplicate leaves an orphaned artifact on the client and leaves the slot no better bound than before. (2) GENERATE, only when adoption found nothing. Call create_agent_artifact_job with the slot's purpose, desiredKind and the client's brand styling, and record the job id it returns in the slot's verification field immediately, before any polling, so a later re-run can find the job rather than start another. (3) POLL. Call get_agent_artifact_job_status with THAT job id — never a fresh create — until the job reports a terminal state. Image generation routinely takes about a minute, so expect to poll many times rather than a handful; keep polling until the job is terminal or this node's tool-call budget is nearly spent, whichever comes first. A terminal SUCCESS response carries the artifact key and public path: that is the verification evidence — record it and mark the slot has_trusted_artifact. (4) If the budget runs out while the job is still RUNNING, that is neither a failure nor a blocked slot. Mark the slot needs_generation, record the job id and the last observed status in verification, and say in blockers that the job is in flight and a re-run of this node will adopt the finished artifact at step 1. Reserve status blocked for a job that terminally FAILED, a denied capability, an unconfirmable request id, or a refused create — never for a job that is merely still working. Never mark a slot has_trusted_artifact because a key merely matches a pattern: only an adoption response or a terminal-success status response is evidence.\nPublic path policy: when the contract distinguishes a raw artifact reference from a rendered public path, resolve and record both on the slot — the raw reference for the client's reference fields and publicPath for its rendered fields (this is the exact value article_body must bind into body.image.src). Do not hand-author a public path the contract did not define.\nMedia budget policy: honor the client's declared image budget and preferred format. If an artifact exceeds the budget, follow the client's over-budget rule — flag it when the policy warns, block it when the policy blocks, and prefer asking the artifact service to re-encode within budget over shipping an oversize asset.\nCapability policy: if the artifact service's required capabilities are not permitted by the registered project policy, do not attempt generation. Emit blockers naming the exact missing capabilities in requiredArtifactCapabilities and the slots that need them.\nApproval/resume policy: if generation or verification needs operator approval and it is unavailable or times out, never invent a pointer. Emit a blocker carrying requestId, slotId, the required capability, and the pending action so the run can resume safely.\nCompletion criteria: every desired slot is either bound to a verified current-request artifact with its correct raw and public forms, or explicitly blocked with the missing capability, approval, or verification reason. No unverified media passes downstream — article_body must be able to trust every artifactReferences entry and every slot's publicPath you emit without re-verifying them itself.\nBlocker criteria: missing mediaSlots declaration when one was expected; missing or unconfirmable request id; unreachable client or artifact service; missing storage grant path; denied capabilities; unverified materialization; approval timeout; over-budget media under a blocking policy; or any request to use a legacy fallback.\nTool policy: use only allowedTools. project.call_read_tool serves a FIXED server-side allowlist of client read verbs (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping) and needs no approval — use it for contract, registry and id-confirmation lookups. The artifact bridge's own verbs are NOT on that allowlist: create_agent_artifact_job, get_agent_artifact_job_status and get_agent_artifact_by_slot all go through project.call_tool, including the two that only read. Never route an artifact status or slot lookup through project.call_read_tool — it is refused before any transport with read_tool_operation_not_permitted, and that refusal is a routing mistake on your side, never evidence about the artifact. Do not publish, release, or mutate the client from this node beyond the single draft create the owning-object precondition permits.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "description": "Plan every media/artifact slot brief_architect declared, in ONE tool-less model turn, as an executable materialization_spec.v1. It generates nothing: artifact_materializer executes the spec deterministically.",
+    "prompt": "Objective: Emit ONE materialization_spec.v1 — the executable instruction set for every media/artifact slot brief_architect declared. You PLAN. You do not generate, adopt, poll, verify, or call anything: artifact_materializer, the deterministic node immediately after you, executes exactly what you emit.\nTurn budget: you have ONE turn and ZERO tools. allowedTools is empty by design. Everything you need is already in this node's input; there is nothing to fetch and nothing to confirm. Emit the spec and stop.\nInputs expected: brief_architect (mediaSlots — one entry {slotId, purpose, desiredKind, placement} per slot the envelope asked for), contract_intelligence (the artifact protocol, the request-id convention, the media path rules, the media budget, and the site's declared PDF templates with their renderDataSchema), and draft_writer (the written prose a PDF slot's renderData is filled FROM). clientProjectId, clientObjectType, contractSource and the run's requestId arrive in your input as runContext.\nZero-media shortcut: when brief_architect's mediaSlots is an empty array, emit the spec immediately with slots as an EMPTY ARRAY. A zero-media spec may omit artifactProtocol entirely — there was no protocol to consult, and inventing a protocol string for an empty spec is exactly the fabrication this node forbids elsewhere.\nRequest id policy: carry the requestId the run already holds (runContext.requestId) when it has one, and otherwise derive it from the CLIENT's declared id convention and record that convention in requestIdConvention. Never invent a convention. You cannot confirm an id with the client from here — that is not a blocker: the materializer's own adopt call against a non-conforming id fails loudly and cheaply.\nImage slot policy: emit prompt as the image SUBJECT ONLY — what is in the frame, nothing else. Never write style, medium, lighting, mood, palette, seed or lora into it. The site's brandImagery contract supplies all of those server-side and silently overrides anything you send, so style words in your prompt are at best ignored and at worst fight the brand. Put any per-slot output constraints the contract declares (format, size, usageContext, maxBytes) in requirements.\nPDF slot policy: choose templateId from the templates contract_intelligence carried into the run — the site's default for the slot's kind, or the one whose declared kind the slot asks for. Then fill renderData from the ALREADY-WRITTEN draft: every field the template's renderDataSchema declares, valid against it, with real content from draft_writer rather than placeholder text. If the site declares no usable template, mark that slot in blockers as no_pdf_template and OMIT it from slots. Never author, version, or publish a template — runs only ever use published ones.\nFabrication policy: a slot you cannot fully specify does not go in slots. It goes in blockers, named, with the reason. A half-specified slot would be handed to the materializer, refused there, and reported as a failure that was really a planning gap.\nMedia budget policy: honor the client's declared image budget and preferred format by expressing them in each slot's requirements. Do not plan an artifact the budget forbids.\nCompletion criteria: every slot you emit is executable with no further judgement — an image slot has a subject prompt, a PDF slot has a templateId and schema-valid renderData, and both carry the slotId brief_architect named so the materializer's adopt call can find any artifact a previous run already made.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "requestId",
+        "slots"
+      ],
+      "if": {
+        "required": [
+          "slots"
+        ],
+        "properties": {
+          "slots": {
+            "minItems": 1
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "artifactProtocol"
+        ]
+      },
+      "properties": {
+        "artifact": {
+          "const": "materialization_spec.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestIdConvention": {
+          "type": "string"
+        },
+        "requestIdConfirmedByClient": {
+          "type": "boolean"
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "slotId",
+              "purpose",
+              "desiredKind"
+            ],
+            "properties": {
+              "slotId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1
+              },
+              "desiredKind": {
+                "enum": [
+                  "image",
+                  "pdf"
+                ]
+              },
+              "placement": {
+                "type": "string"
+              },
+              "prompt": {
+                "type": "string"
+              },
+              "styleRefs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requirements": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "templateId": {
+                "type": "string"
+              },
+              "renderData": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "assets": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "filename": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "contentSource": {
+          "type": "object"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "stageOutputs": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "summary",
+        "clientProjectId",
+        "clientObjectType",
+        "requestId",
+        "slots"
+      ],
+      "if": {
+        "required": [
+          "slots"
+        ],
+        "properties": {
+          "slots": {
+            "minItems": 1
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "artifactProtocol"
+        ]
+      },
+      "properties": {
+        "artifact": {
+          "const": "materialization_spec.v1"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientProjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientObjectType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contractSource": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "artifactProtocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestIdConvention": {
+          "type": "string"
+        },
+        "requestIdConfirmedByClient": {
+          "type": "boolean"
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "slotId",
+              "purpose",
+              "desiredKind"
+            ],
+            "properties": {
+              "slotId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1
+              },
+              "desiredKind": {
+                "enum": [
+                  "image",
+                  "pdf"
+                ]
+              },
+              "placement": {
+                "type": "string"
+              },
+              "prompt": {
+                "type": "string"
+              },
+              "styleRefs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requirements": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "templateId": {
+                "type": "string"
+              },
+              "renderData": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "assets": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "filename": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "allowedTools": [],
+    "assignedSkills": [],
+    "requiredInputs": [
+      "brief_architect",
+      "contract_intelligence",
+      "draft_writer"
+    ],
+    "produces": [
+      "materialization_spec.v1"
+    ],
+    "riskLevel": "read",
+    "dependsOn": [
+      "brief_architect",
+      "contract_intelligence",
+      "draft_writer"
+    ],
+    "status": "active",
+    "position": {
+      "x": 1120,
+      "y": 500
+    },
+    "updatedAt": "2026-08-31T00:00:00.000Z",
+    "metadata": {
+      "approvalRequired": false,
+      "canonicalRules": [
+        "This node plans; it never generates, adopts, polls or verifies an artifact",
+        "One turn, zero tools: allowedTools is empty by design",
+        "A slot that cannot be fully specified is a blocker, never a half-specified slot",
+        "Runs only ever USE published PDF templates; a run never authors one",
+        "An image prompt is the subject only — brandImagery supplies style, palette, seed and lora server-side"
+      ]
+    },
+    "modelConfig": {
+      "maxTurns": 1,
+      "toolCallLimit": 0,
+      "timeout": 120000,
+      "budgetUsd": 0.5,
+      "maxOutputTokens": 4000
+    }
+  },
+  {
+    "id": "artifact_materializer",
+    "name": "Artifact Materializer",
+    "kind": "executor",
+    "description": "Deterministic execution of artifact_plan's materialization_spec.v1: adopt, create, poll and verify every media slot through the client's artifact bridge, with no model turn, and emit the unchanged artifact_plan.v1 envelope article_body binds.",
+    "prompt": "Objective: Materialize every slot artifact_plan's materialization_spec.v1 declared, and emit artifact_plan.v1 binding each one to a verified artifact.\nThis node is DETERMINISTIC. The engine (artifactMaterialization.ts) runs it with no model turn at all; this prompt is the mock-run fallback and the written statement of the contract that engine keeps.\nInputs expected: artifact_plan (materialization_spec.v1) and contract_intelligence, delivered directly in this node's input.\nOutput required: artifact_plan.v1 — media_slots with one entry per planned slot, artifactReferences carrying both forms of every verified artifact, and blockers naming every slot that failed and why.\nMaterialization policy — adopt first, generate second, poll to a terminal state: create_agent_artifact_job is ASYNCHRONOUS. It returns a JOB, not an artifact, and a response whose job is still running is not verification evidence. Per slot, in this order. (1) ADOPT. Call get_agent_artifact_by_slot for this slot's exact slotId under this request id and the client's site object id. If it returns a materialized artifact, that IS this slot's canonical artifact: record its key, digest, content type, size and public path in the slot's verification field, mark the slot has_trusted_artifact, and CREATE NOTHING. This is what makes a re-run safe, and it is not optional — a duplicate job leaves an orphaned artifact on the client. (2) GENERATE, only when adoption found nothing. Call create_agent_artifact_job with the slot's declared kind, prompt or template_id + data, and requirements, and record the job id it returns before anything polls it. (3) POLL. Call get_agent_artifact_job_status with THAT job id — never a fresh create — until the job reports a terminal state.\nPending policy: a job that is still RUNNING is neither a failure nor a blocked slot, and it is never reported as a finished plan. The node RE-QUEUES and polls again on the next dispatch, so an image that takes a minute is simply awaited. Reserve status blocked for a job that terminally FAILED, a job held for operator approval, a refused create, or a slot the plan could not specify — never for a job that is merely still working.\nEvidence policy: a slot is has_trusted_artifact only on an adoption response or a terminal-success job status carrying BOTH the raw artifact reference and the public path. A pattern-valid key is never proof of materialization.\nFailure policy: a job that terminally failed, or a create the bridge refused, is a BLOCKED SLOT carrying the bridge's own error verbatim — renderer errors included, unparaphrased. A missing request id, a missing site scope, an unusable spec or an unreachable client blocks the NODE, because none of those can be true of one slot only.\nTool policy: use only allowedTools. project.call_read_tool serves a FIXED server-side allowlist of client read verbs (object_contract, registry_get, object_inventory, object_get, object_list, object_validate, ping) and needs no approval — use it for contract and registry lookups. The artifact bridge's own verbs are NOT on that allowlist: create_agent_artifact_job, get_agent_artifact_job_status and get_agent_artifact_by_slot all go through project.call_tool, including the two that only read. Never route an artifact status or slot lookup through project.call_read_tool — it is refused before any transport with read_tool_operation_not_permitted, and that refusal is a routing mistake on your side, never evidence about the artifact. Do not publish, release, or mutate the client from this node beyond the single draft create the owning-object precondition permits.\nMemory policy: save only this node's structured output; never persist storage grants, tokens, raw authorization headers, or scoped upload credentials.\nOutput formatting policy: return one JSON object that directly matches this node's output schema. Do not wrap the object in actual, output, data, result, markdown, or prose.",
     "schema": {
       "type": "object",
       "additionalProperties": true,
@@ -2512,48 +2847,42 @@ export const publishingConductorNodes = [
       "project.call_tool",
       "project.call_read_tool"
     ],
-    "assignedSkills": [
-      "contract_intelligence"
-    ],
+    "assignedSkills": [],
     "requiredInputs": [
-      "brief_architect",
+      "artifact_plan",
       "contract_intelligence"
     ],
     "produces": [
       "artifact_plan.v1"
     ],
     "riskLevel": "write",
-    // T8 (Wave 3, 2026-08-13, run_1786557897658_elj34j): artifact_plan used to depend on article_body,
-    // which meant the media it plans could only be verified AFTER the body that would reference it was
-    // already written — a text-only body always shipped from that run, media or not, because there was
-    // never a verified reference to bind by the time article_body ran. Depending on brief_architect
-    // (mediaSlots, the desired-media declaration) and contract_intelligence (the artifact protocol, id
-    // convention, and media path rules) instead makes artifact_plan run BEFORE article_body, so a
-    // verified reference exists to hand article_body before it builds the body that would carry it.
     "dependsOn": [
-      "brief_architect",
+      "artifact_plan",
       "contract_intelligence"
     ],
     "status": "active",
     "position": {
       "x": 1120,
-      "y": 500
+      "y": 640
     },
-    "updatedAt": "2026-07-31T09:36:58.473Z",
+    "updatedAt": "2026-08-31T00:00:00.000Z",
     "metadata": {
       "approvalRequired": true,
+      "artifactMaterializerDeterministic": true,
+      "maxPollDispatches": 40,
       "canonicalRules": [
-        "The client's contract declares the artifact protocol, id convention and media path rules",
-        "A pattern-valid key is never proof of materialization",
-        "Request ids must satisfy the client's convention before any artifact is written",
-        "No legacy artifact fallback systems",
-        "create_agent_artifact_job (client site bridge, via project.call_tool) generates and verifies a brand-styled artifact in one call — that call's response is the verification evidence, not a separate lookup"
+        "Deterministic: no model turn, and no usage recorded (the R-20 $0 rule)",
+        "A slot whose artifact already exists is adopted, never regenerated",
+        "A job id is persisted before anything polls it, so no key ever gets a second job",
+        "Only an adoption response or a terminal-success job status is verification evidence",
+        "A renderer or bridge error reaches the operator verbatim, never paraphrased"
       ]
     },
     "modelConfig": {
-      "toolCallLimit": 8,
-      "timeout": 180000,
-      "budgetUsd": 0.5,
+      "maxTurns": 8,
+      "toolCallLimit": 6,
+      "timeout": 120000,
+      "budgetUsd": 0.25,
       "maxOutputTokens": 3000
     }
   },
@@ -2735,7 +3064,7 @@ export const publishingConductorNodes = [
       "contract_intelligence",
       "narrative_movement",
       "angle_strategy",
-      "artifact_plan"
+      "artifact_materializer"
     ],
     "produces": [
       "client_object.v1"
@@ -2752,7 +3081,7 @@ export const publishingConductorNodes = [
       "contract_intelligence",
       "narrative_movement",
       "angle_strategy",
-      "artifact_plan"
+      "artifact_materializer"
     ],
     "status": "active",
     "position": {
@@ -3005,7 +3334,7 @@ export const publishingConductorNodes = [
     ],
     "requiredInputs": [
       "article_body",
-      "artifact_plan"
+      "artifact_materializer"
     ],
     "produces": [
       "dry_run_publish_payload.v1"
@@ -3013,7 +3342,7 @@ export const publishingConductorNodes = [
     "riskLevel": "write",
     "dependsOn": [
       "article_body",
-      "artifact_plan"
+      "artifact_materializer"
     ],
     "status": "active",
     "position": {
