@@ -304,6 +304,66 @@ describe("artifact_materializer — the deterministic materialization loop (W8.3
     expect((outcome.kind === "completed" ? outcome.warnings : []).some((warning) => warning.startsWith("artifact_request_id_from_shell"))).toBe(false);
   });
 
+  // A RETRY MUST RECONSIDER A BLOCKED SLOT — the defect found on run_1788189874186_5973sq. retryNode
+  // clears stageOutputs[nodeId] but not the ":jobs" key, so a blocked slot used to read back as terminal
+  // and the retry completed instantly with the identical error, making an operator's fix look inert.
+  it("re-attempts a blocked slot on a retry, and buys nothing that already succeeded", async () => {
+    const deps = bridge({ pollsToFinish: 1 });
+    const priorJobs: MaterializerJobState = {
+      dispatches: 3,
+      slots: {
+        hero: { slotId: "hero", phase: "materialized", status: "complete", jobId: "job_hero", attempts: 2, createdAt: "x", updatedAt: "x", artifactReference: { blobKey: `img/${REQUEST_ID}/hero.webp` }, publicPath: `/img/${REQUEST_ID}/hero.webp`, verification: { source: "job" } },
+        inline_1: { slotId: "inline_1", phase: "running", status: "running", jobId: "job_inline_1", attempts: 2, createdAt: "x", updatedAt: "x" },
+        inline_2: { slotId: "inline_2", phase: "blocked", status: "create_failed", attempts: 0, createdAt: "x", updatedAt: "x", error: "bridge_error_result:status 400 requirements.format: Invalid enum value" }
+      }
+    };
+    // The retry signal: the node's envelope is gone, the job bookkeeping is not.
+    const run = {
+      runId: "run_materializer_1",
+      projectId: "dr-lurie",
+      executionMode: "openai",
+      nodes: [],
+      stageOutputs: { artifact_plan: spec(FOUR_SLOTS.slice(0, 3)), [ARTIFACT_MATERIALIZER_JOB_STAGE_KEY]: priorJobs }
+    } as unknown as WorkflowExecutionRecord;
+
+    const outcome = await runArtifactMaterialization({ run, node }, { projectRepository, callTool: deps.callTool });
+
+    // The blocked slot is re-attempted: adopt (finds nothing) then create.
+    expect(createCalls(deps.calls).map((call) => call.args.slot)).toEqual(["inline_2"]);
+    expect(deps.calls.filter((call) => call.tool === ADOPT_TOOL).map((call) => call.args.slot)).toEqual(["inline_2"]);
+    // The materialized slot is never re-created and never even re-adopted.
+    expect(deps.calls.some((call) => call.args.slot === "hero")).toBe(false);
+    // The in-flight slot keeps its job id and is polled, never duplicated.
+    expect(deps.calls.filter((call) => call.tool === STATUS_TOOL).map((call) => call.args.job_id)).toContain("job_inline_1");
+    expect(outcome.kind === "pending" || outcome.kind === "completed").toBe(true);
+    const warnings = outcome.kind === "refused" ? [] : outcome.warnings;
+    expect(warnings).toContain("artifact_slot_retried:inline_2");
+  });
+
+  it("does NOT reset a blocked slot mid-run, when the node's own envelope is still present", async () => {
+    const deps = bridge({ pollsToFinish: 1 });
+    const priorJobs: MaterializerJobState = {
+      dispatches: 1,
+      slots: { hero: { slotId: "hero", phase: "blocked", status: "create_failed", attempts: 0, createdAt: "x", updatedAt: "x", error: "refused" } }
+    };
+    const run = {
+      runId: "run_materializer_1",
+      projectId: "dr-lurie",
+      executionMode: "openai",
+      nodes: [],
+      stageOutputs: {
+        artifact_plan: spec([FOUR_SLOTS[0]]),
+        artifact_materializer: { artifact: "artifact_plan.v1" },
+        [ARTIFACT_MATERIALIZER_JOB_STAGE_KEY]: priorJobs
+      }
+    } as unknown as WorkflowExecutionRecord;
+
+    const outcome = await runArtifactMaterialization({ run, node }, { projectRepository, callTool: deps.callTool });
+    // Terminal stays terminal within a run: no second job for a slot this dispatch sequence already gave up on.
+    expect(deps.calls).toHaveLength(0);
+    expect(outcome.kind).toBe("completed");
+  });
+
   // THE ZERO-MEDIA FLOOR — the regression W8 nearly shipped. A text-only run declares mediaSlots: []
   // on brief_architect, artifact_plan skips, and a skipped node writes no stage output. Before this
   // pair of locks the materializer dispatched into that absence and refused, blocking every text-only
