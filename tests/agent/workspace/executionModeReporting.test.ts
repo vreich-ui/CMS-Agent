@@ -77,7 +77,9 @@ describe("workflow.get_run / workflow.list_runs report the mode prominently", ()
 
   it("carries the mode on every row of the run list", async () => {
     await data("workflow.start_dry_run", { executionMode: "mock", projectId: "dr-lurie", input: {} });
-    await data("workflow.start_dry_run", { executionMode: "openai", projectId: "dr-lurie", requestId: "req_test_fixture_20260817_01", input: {} });
+    // W10 — a LIVE run must name its subject (editorialSubject.ts). Mock rows may stay subject-less;
+    // this row is live, so it declares a topic exactly as a real live run does.
+    await data("workflow.start_dry_run", { executionMode: "openai", projectId: "dr-lurie", requestId: "req_test_fixture_20260817_01", input: { topic: "execution mode fixture" } });
     const runs = (await data("workflow.list_runs", {})).runs as { mode: { live: boolean } }[];
 
     expect(runs.length).toBeGreaterThanOrEqual(2);

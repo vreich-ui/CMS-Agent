@@ -185,7 +185,7 @@ describe("wired into the conductor: the ceiling exists before the brief is writt
     } as never);
     try {
       const store = new RepositoryManager().getExecutionRepository();
-      const started = await startDryRun({ executionMode: "openai", projectId: "project-a", input: { placement: "x" } }, store);
+      const started = await startDryRun({ executionMode: "openai", projectId: "project-a", input: { topic: "resolved vector fixture", placement: "x" } }, store);
       // Seed the vectors the engine resolves against, as an earlier deterministic node would have.
       const seeded = (await getRun(started.runId, store))!;
       seeded.stageOutputs.contract_intelligence = { resolvedAggression: { ceiling, target } };

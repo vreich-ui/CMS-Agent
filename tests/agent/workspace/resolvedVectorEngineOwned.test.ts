@@ -28,7 +28,7 @@ const runWith = async (emitted: Record<string, unknown>, stage: Record<string, u
   } as never);
   try {
     const store = new RepositoryManager().getExecutionRepository();
-    const started = await startDryRun({ executionMode: "openai", projectId: "project-a", input: { placement: "x" } }, store);
+    const started = await startDryRun({ executionMode: "openai", projectId: "project-a", input: { topic: "resolved vector fixture", placement: "x" } }, store);
     const seeded = (await getRun(started.runId, store))!;
     seeded.stageOutputs.contract_intelligence = stage;
     await store.saveRun(seeded);
