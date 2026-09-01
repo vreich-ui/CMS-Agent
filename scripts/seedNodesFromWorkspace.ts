@@ -46,7 +46,10 @@
  * spreads. A re-seed is allowed to add gates and change edges; it is not allowed to remove a gate.
  */
 import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { captureConductorNodes } from "../src/agent/workspace/captureConductorNodes.js";
+import { cloneConductorNodes } from "../src/agent/workspace/cloneConductorNodes.js";
 import { getWorkspaceNode, listWorkspaceNodes, validateWorkspaceGraph } from "../src/agent/workspace/nodes.js";
 import { publishingTailConformanceIssues } from "../src/agent/workspace/publishingTail.js";
 import { recipeAuthorityConformanceIssues } from "../src/agent/workspace/publishableTypeCharter.js";
@@ -81,7 +84,7 @@ const ALLOW_SHRINK_FLAG = "--allow-prompt-shrink";
 
 // Fields listWorkspaceNodes() spreads or copies. A node missing any of them would crash the runtime or
 // silently lose data, so an incomplete source is refused rather than emitted.
-const REQUIRED_FIELDS = ["id", "name", "kind", "description", "prompt", "schema", "inputSchema", "outputSchema", "allowedTools", "assignedSkills", "requiredInputs", "produces", "riskLevel", "dependsOn", "status", "position"] as const;
+export const REQUIRED_FIELDS = ["id", "name", "kind", "description", "prompt", "schema", "inputSchema", "outputSchema", "allowedTools", "assignedSkills", "requiredInputs", "produces", "riskLevel", "dependsOn", "status", "position"] as const;
 
 // Key order in the emitted literal. Fixed so a re-run produces a byte-identical file and `--check` reports
 // real drift instead of key shuffling.
@@ -93,6 +96,56 @@ const die = (message: string, detail: string[] = []): never => {
   for (const line of detail) process.stderr.write(`    ${line}\n`);
   process.stderr.write("\nnodes.ts was NOT written.\n");
   process.exit(1);
+};
+
+// T15.16 (#195) seeded capture_conductor's and clone_conductor's OWN upstream nodes into the SAME
+// workspace store document as publishing_conductor's (see workspaceStoreNodes.ts), so that ids like
+// block_classifier and fit_adjudicator became GOVERNABLE through the workspace.* surface instead of
+// reading back null. This script predates that and reads the store WHOLE, treating every row it gets
+// back as a publishing_conductor node: it runs every guard over them and renders them into
+// publishingConductorNodes.
+//
+// Since #195 that is wrong in both directions, and the live store now returns 49 rows where this
+// script assumes publishing_conductor's own 25:
+//
+//   1. `npm run nodes:check` refuses on 24 rows for a missing `schema` — a field REQUIRED_FIELDS
+//      still demands but which nodeTypes.ts marks @deprecated and optional, which capture/clone
+//      therefore correctly never declared, and which nothing in src/ or netlify/ reads except
+//      overlayStoreNode's `stored.schema ?? canonical.schema`. So the LIVE drift gate does not run at
+//      all. `nodes:check:offline` (--from-canonical) never reads the store, so CI stayed green and
+//      nothing said the gate was down — precisely the "workspace fix != fixed" shape this file exists
+//      to catch, running one level up.
+//   2. Were that refusal satisfied (by backfilling `schema` onto those 24, the obvious wrong fix), the
+//      very NEXT `nodes:update` would fold all 24 into publishing_conductor's canonical array — the
+//      tail-forking hazard workspaceStoreNodes.ts's own header exists to prevent, written into code.
+//
+// So the source is scoped here, ONCE, before any guard or the renderer sees it.
+//
+// By EXCLUSION, never by an allowlist of publishing's current ids. Adding a node in the store and
+// re-seeding it into nodes.ts is a supported act this script reports as `nodes added`; an inclusion
+// list would silently swallow exactly that. And the excluded set is read from the capture/clone node
+// modules themselves rather than a second hand-kept list here, so a capture/clone node added later is
+// excluded automatically instead of drifting back in the day someone forgets this file exists.
+const OTHER_WORKFLOW_NODE_IDS = new Set([...captureConductorNodes, ...cloneConductorNodes].map((node) => node.id));
+
+export const scopeToPublishingConductor = (source: WorkspaceNode[]): { scoped: WorkspaceNode[]; excluded: string[] } => {
+  // The RAW capture/clone arrays declare no shared-tail node — they only depend on tail ids
+  // (publish_executor, release_executor) that resolve against the tail's own canonical row.
+  // workspaceStoreNodes.ts relies on the same property to merge the three sets without a collision.
+  // If it ever stops holding, excluding these ids would silently DELETE a publishing node from
+  // nodes.ts, so it is checked rather than assumed.
+  const collisions = listWorkspaceNodes().filter((node) => OTHER_WORKFLOW_NODE_IDS.has(node.id)).map((node) => node.id);
+  if (collisions.length) {
+    die(`Cannot scope the source: ${collisions.length} publishing_conductor node(s) share an id with a capture/clone node.`, [
+      ...collisions,
+      "The raw capture/clone arrays are supposed to declare no shared-tail node (workspaceStoreNodes.ts).",
+      "Excluding them would delete these from nodes.ts. Fix the id collision before re-seeding."
+    ]);
+  }
+  return {
+    scoped: source.filter((node) => !OTHER_WORKFLOW_NODE_IDS.has(node.id)),
+    excluded: source.filter((node) => OTHER_WORKFLOW_NODE_IDS.has(node.id)).map((node) => node.id)
+  };
 };
 
 // S3: `--from-canonical` feeds the generator the COMPILED canonical set (nodes.ts as built), so the
@@ -400,7 +453,12 @@ const main = async () => {
   const source = await readSource(from, fromCanonical);
   say(`source            ${source.length} nodes from ${fromCanonical ? "the compiled canonical set (nodes.ts)" : from ?? "the live workspace store"}`);
 
-  const ordered = topologicallyOrdered(source);
+  // #195 scoping — see scopeToPublishingConductor. The live store holds all three workflows' nodes;
+  // this script seeds publishing_conductor's canonical array only.
+  const { scoped, excluded } = scopeToPublishingConductor(source);
+  if (excluded.length) say(`scoped            ${excluded.length} capture/clone node(s) excluded — this script seeds publishing_conductor only: ${excluded.join(", ")}`);
+
+  const ordered = topologicallyOrdered(scoped);
   refuseUnsafe(ordered, allowShrink);
   if (allowShrink) say(`prompt guard      DISABLED via ${ALLOW_SHRINK_FLAG} — prompt shrink and canonicalRule removal were explicitly permitted for this run`);
 
@@ -453,4 +511,8 @@ const main = async () => {
   else say("seededSkills.ts   up to date");
 };
 
-await main();
+// Only self-execute when run directly (`tsx scripts/seedNodesFromWorkspace.ts`), so the pure scoping
+// logic above stays importable from tests without reading the live store or calling process.exit —
+// the same guard scripts/reseedStoreFromCanonical.ts and scripts/twoPlaneDrift.ts use.
+const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isDirectRun) await main();
