@@ -206,6 +206,11 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
       "tracking_sink",
       "fleet_shared_keys",
       "deploy_side_mcp_env",
+      // C3 (BRIEF §3.5/§3.2) — the two visual-identity steps of birth. Both are writes against the
+      // NEW tenant's own MCP, which this deployment cannot reach at birth (its token is the
+      // deploy_side_mcp_env item immediately above), so both are planned in full rather than skipped.
+      "visual_identity_house_standard",
+      "pdf_default_template",
       "capture_rights_review",
       "dns"
     ]);

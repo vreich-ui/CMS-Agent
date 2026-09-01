@@ -7,7 +7,16 @@ import { effectiveToolPermission, type ProjectConnectionConfig, type ProjectObje
 // so this connection runs with FULL access: defaultToolPolicy "allowed" means every Dr. Lurie tool —
 // including publish/deploy and commerce — is callable via project.call_tool. The three-state Access
 // page (allowed / needs approval / blocked) is how an operator narrows this per tool.
-export const DR_LURIE_SAFE_READ_ONLY_TOOLS = ["ping", "registry_get", "object_inventory", "object_contract"] as const;
+// C1 (BRIEF §3.7): object_get/object_list are already globally read-allowed (READ_TOOL_ALLOWLIST,
+// projectMcpAdapter.ts) and this client's defaultToolPolicy is "allowed" already, so neither entry
+// changes what a call can reach — they are added for the same reason every other row here is: an
+// explicit allow-list entry is what the Access page and toToolPolicyMap show as this project's
+// DECLARED surface, not merely its default. list_pdf_templates/get_image_model_policy are the two new
+// reads sitePrefetch.ts performs (visual standard templates/PDF templates/image-policy contexts).
+export const DR_LURIE_SAFE_READ_ONLY_TOOLS = [
+  "ping", "registry_get", "object_inventory", "object_contract", "object_get", "object_list",
+  "list_pdf_templates", "get_image_model_policy"
+] as const;
 
 // Artifact + PDF capability, brokered BY Dr. Lurie (this is how CMS-Agent reaches "PDF-Tool": through
 // Dr. Lurie's server, not a direct connection): obtain a short-lived pdf-tool storage grant,
@@ -103,6 +112,11 @@ export const DR_LURIE_OBJECT_DIALECT: ProjectObjectDialect = {
   voiceObjectId: "voice_drlurie"
 };
 
+// 9 -> 10 (C1, BRIEF §3.7): DR_LURIE_SAFE_READ_ONLY_TOOLS gained object_get/object_list/
+// list_pdf_templates/get_image_model_policy — sitePrefetch.ts's site/visual_standard/PDF-template/
+// image-policy reads. Declarative only (defaultToolPolicy "allowed" already covered every one of
+// these); see the comment on that constant.
+//
 // Bumped 3 -> 4 when Dr. Lurie moved to full access (defaultToolPolicy "allowed"), 4 -> 5 when the
 // legacy save_json_blob_*/per-stage dialect was retired and the object-dialect parameters were added,
 // 5 -> 6 when defaultObjectType was added (F1, T-2 run_1785352838155_l544ye) so persisted stale
@@ -113,7 +127,7 @@ export const DR_LURIE_OBJECT_DIALECT: ProjectObjectDialect = {
 // 8 -> 9 when voiceObjectId was added (GUI rework Session B) closing the P-2 TODO: Dr. Lurie's
 // editorial voice is now read live from voice_drlurie instead of the hardcoded editorialVoice.ts
 // constants, which became fallback/seed data only.
-export const DR_LURIE_DEFINITION_VERSION = 9;
+export const DR_LURIE_DEFINITION_VERSION = 10;
 
 export const drLurieProjectConfig: ProjectConnectionConfig = {
   projectId: "dr-lurie",

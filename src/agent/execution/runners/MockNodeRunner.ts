@@ -3,6 +3,7 @@ import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner
 import type { NodeRunnerContext, ExecutionMode } from "../executionContext.js";
 import { mockValueFromSchema, type MockHints } from "../mockOutputFromSchema.js";
 import type { WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
+import { buildMockImageBlocks, extractImageRefs, resolveImageRefs, stripImageRefs } from "./imageRefs.js";
 
 // Dry-run outputs are DERIVED from each node's own output schema (R-17). They used to be hand-written
 // literals, which is how `article_body` came to emit a shape that failed all six required fields of its
@@ -33,9 +34,25 @@ export const mockOutputForNode = (node: WorkspaceNode, run?: WorkflowExecutionRe
   mockValueFromSchema(node.outputSchema, mockHintsForNode(node, run));
 
 export class MockNodeRunner implements NodeRunner {
+  // C4 — node runner image support: dry-run mode exercises the exact same imageRefs validation/
+  // resolution path as the real runners (fetchImpl injectable so tests never hit the network), so a
+  // node's imageRefs behavior can be checked without spending a real model call.
+  constructor(private readonly fetchImpl: typeof fetch = fetch) {}
   supports(mode: ExecutionMode) { return mode === "mock"; }
   validateConfiguration(_node: WorkspaceNode) { return { ok: true as const }; }
-  async run({ node }: NodeRunnerInput, context: NodeRunnerContext): Promise<NodeRunnerResult> {
-    return { ok: true, output: mockOutputForNode(node, context.run) };
+  async run({ node, input }: NodeRunnerInput, context: NodeRunnerContext): Promise<NodeRunnerResult> {
+    // Mock never calls a provider, so there is no wire request whose shape must stay byte-identical —
+    // `output` is untouched by imageRefs, exactly as before this feature existed, whether or not the
+    // input carries any. imageRefs are still validated/resolved (same drop-with-warning policy as the
+    // live runners) and surfaced on `trace` only, purely for dry-run inspection/tests.
+    const rawImageRefs = extractImageRefs(input);
+    const output = mockOutputForNode(node, context.run);
+    if (!rawImageRefs) return { ok: true, output };
+    const { resolved, warnings } = await resolveImageRefs(rawImageRefs, { fetchImpl: this.fetchImpl });
+    const imageBlocks = buildMockImageBlocks(resolved);
+    const content = imageBlocks.length > 0
+      ? [...imageBlocks, { type: "text", text: JSON.stringify(stripImageRefs(input)) }]
+      : JSON.stringify(stripImageRefs(input));
+    return { ok: true, output, trace: { provider: "mock", imageRefs: { included: resolved.length, dropped: warnings.length, warnings }, content } };
   }
 }

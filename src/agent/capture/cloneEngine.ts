@@ -297,7 +297,17 @@ const stageOutput = (run: { stageOutputs: Record<string, unknown> }, nodeId: str
 // (clone.mjs, pure). `artifact` and `summary` come from the engine itself now; this stage stamps only
 // the non-secret policy view on top, then re-settles budget.chars so the envelope still reports the
 // size of the thing that actually travels.
-export type CloneIntakeEnvelope = CloneIntake & { artifact: typeof CLONE_ARTIFACTS.intake; summary: string; policy: ClonePolicyView };
+export type CloneIntakeEnvelope = CloneIntake & {
+  artifact: typeof CLONE_ARTIFACTS.intake;
+  summary: string;
+  policy: ClonePolicyView;
+  // C3: the capture run's own imagery observations (theme.mjs's observeImagery, carried on the
+  // capture_theme stage's REPORT). Attached HERE, in this module, rather than inside buildCloneIntake
+  // — the vendored engine's briefing shape is untouched, and this is a ~150-byte addition to an
+  // envelope whose whole budget discipline is about the 637KB one that starved two AI nodes.
+  // Absent on a demand-driven run, and on a clone-driven run whose capture predates the observations.
+  imagery?: unknown;
+};
 
 const isCloneIntakeEnvelope = (value: unknown): value is CloneIntakeEnvelope => isRecord(value) && value.artifact === CLONE_ARTIFACTS.intake;
 
@@ -445,8 +455,11 @@ export async function cloneIntakeStep(
   }
   const gated = applyCloneDelta(intake, { pages: livePages });
 
+  const imageryObservations = isRecord(themeOut?.report) ? (themeOut!.report as Record<string, unknown>).imagery : undefined;
+
   return settleEnvelopeBudget({
     ...gated,
+    ...(imageryObservations !== undefined ? { imagery: imageryObservations } : {}),
     artifact: CLONE_ARTIFACTS.intake,
     summary: `${gated.summary} Briefed ${gated.pages.length} page(s), ${Object.keys(gated.registry.sectionTypes).length} registered section type(s), ${Object.keys(gated.registry.pageTypes).length} page type(s) at ${gated.budget.chars} of ${gated.budget.cap} chars.`,
     policy: clonePolicyView(config)
@@ -560,6 +573,203 @@ export async function cloneMintStep(input: { targetProjectId: string; intake: un
 }
 
 // ---------------------------------------------------------------------------------------------
+// C3 (BRIEF §3.1, R1, `derivedFrom.method: 'clone'`) — THE IMAGERY OBSERVATIONS BECOME A DRAFT.
+//
+// theme.mjs used to end its gap list with "Imagery style is intentionally not written to
+// brandImagery; review separately", because there was nowhere for an imagery observation to go: the
+// only place a look could live was `site.brandImagery`, and writing THAT from a crawl is exactly the
+// thing R6's privileged, Owner-gated apply verb exists to prevent. `visual_standard` (R1) is that
+// somewhere, and `derivedFrom.method` carries 'clone' for precisely this case.
+//
+// THREE LAWS THIS BUILDER KEEPS, in the order they matter.
+//
+//   1. NEVER APPLY. This produces an `object_create` for a `visual_standard` whose `status` is
+//      'draft'. It does not emit `set_site_brand_imagery`, it does not call
+//      `site_apply_brand_imagery`, and it does not touch the site object at all — a cloned look is a
+//      PROPOSAL a human reads, and the route from a standard to a live site stays the owner-gated
+//      verb. (`visual_standard` is also not a publishable type, BRIEF rule 4, so nothing here can
+//      publish it either.)
+//   2. NEVER INVENT. Every field is evidence or is absent. The palette is the theme's own
+//      evidence-backed swatches, hex-normalized. The ratios are the quantized ratios of the blocks
+//      that actually carried images. `medium` is written only when theme.mjs could quantize it (every
+//      asset an SVG => flat_vector). `sampleSubjects` is EMPTY: a snapshot cannot say what a site's
+//      images are OF, and the source's own alt text is extracted copy that capture's rights
+//      discipline governs — so it is a stated gap, not a fabrication.
+//   3. NEVER FROM NOTHING. `observed: false` (a source that showed no imagery) yields no draft at all.
+//
+// REVIEW — LAW 2 CANNOT BE KEPT BY OMITTING A REQUIRED FIELD, WHICH IS WHAT THIS DID.
+//
+// `visual_standard.v1` is a STRICT schema (platform `packages/core/schema/bodies/visual-standard-v1.ts`,
+// reusing `brandImagerySchema` from site-v1.ts verbatim, which BRIEF §3.1 freezes). It requires
+// `sampleSubjects` (an array — empty is legal for a draft, absent is not: platform's own FIX-E note
+// relaxed the 1..6 floor to `status !== 'draft'` FOR THIS CALLER, and left the key required), and
+// inside `brandImagery` it requires `medium`, `styleSentence`, `palette` (min 1), `negative`,
+// `aspectRatios` and `seedBase`. This builder omitted `sampleSubjects` and `styleSentence` on EVERY
+// run, and `medium`/`palette` on most, so the `object_create` it produced could never validate. The
+// failure was invisible because `createClonedImageryDraft` catches and reports: every clone run
+// filed `clone_imagery_draft_failed` and no cloned standard has ever existed.
+//
+// The distinction the old code missed is between a field that is OPTIONAL (omit it — that is law 2)
+// and a field the frozen schema REQUIRES (omitting it does not make the standard honest, it makes
+// the standard impossible). So:
+//   * `sampleSubjects` is emitted as `[]` — the exact "a draft may start empty" case platform carved
+//     out for this path — instead of being left off.
+//   * `styleSentence` is DERIVED FROM THE ONE OBSERVATION THAT EXISTS (the medium) and says in its
+//     own words what is still undecided. It names no subject, so R4's subject/style separation holds.
+//   * `medium` and `palette` cannot be derived from a snapshot that did not evidence them, and this
+//     builder still refuses to guess either. A draft missing one is not filed at all: `fileable` is
+//     false, `missing` names the fields, and cloneThemeBindStep reports
+//     `clone_imagery_draft_incomplete` on the envelope WITHOUT issuing a create that would 422. A
+//     reported non-event beats a remote call that cannot succeed.
+//
+// THE ASPECT-RATIO KEYS. `brandImagery.aspectRatios` is keyed on the TARGET site's image-model policy
+// contexts, which a clone run does not hold. The convention already established for exactly this gap
+// is `brand_imagery_writer`'s own ("if imagePolicyContexts is absent, emit the conservative pair
+// article_header and article_body and say so"), and it is followed here rather than invented again.
+export type CloneImageryObservations = {
+  observed: boolean;
+  imageCount: number;
+  pagesWithImages: number;
+  backgroundImageBlocks: number;
+  extensions: string[];
+  aspectRatios: string[];
+  medium: "flat_vector" | null;
+};
+
+export type CloneVisualStandardDraft = {
+  objectType: "visual_standard";
+  requestedId: string;
+  body: Record<string, unknown>;
+  /** What the snapshot could not answer, carried so the reviewer sees it without reading this file. */
+  gaps: string[];
+  /** False when the snapshot could not evidence a field `visual_standard.v1` REQUIRES. Nothing is created. */
+  fileable: boolean;
+  /** The required fields that are missing, by name. Present only when `fileable` is false. */
+  missing?: string[];
+};
+
+const isImageryObservations = (value: unknown): value is CloneImageryObservations =>
+  isRecord(value) && typeof value.observed === "boolean";
+
+// `rgb(46 111 149)` / `rgb(46, 111, 149)` / `#2E5C42` -> `#2E5C42`. A value this cannot read is
+// DROPPED, never approximated: brandImagery's palette is a closed hex pattern, and a swatch that is
+// not a color is worse than a shorter palette.
+const toHexColor = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (/^#[0-9A-Fa-f]{6}$/.test(trimmed)) return trimmed.toUpperCase();
+  const channels = /^rgba?\(([^)]+)\)$/.exec(trimmed);
+  if (!channels) return undefined;
+  const parts = channels[1].split(/[\s,/]+/).filter(Boolean).slice(0, 3).map((part) => Number.parseFloat(part));
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part) || part < 0 || part > 255)) return undefined;
+  return `#${parts.map((part) => Math.round(part).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+};
+
+// Deterministic, so a re-run of the same clone proposes the SAME seed rather than re-rolling every
+// image the site would regenerate. Derived from the site id alone — never random.
+const seedBaseFor = (siteId: string): number => {
+  let hash = 0;
+  for (const character of siteId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return hash;
+};
+
+// R2's own id grammar, and platform's (`^vis_[a-z0-9]+(?:_[a-z0-9]+)*$`, object-ids.ts): the SITE
+// SLUG, i.e. the site object id with its `site_` prefix removed — so a clone of `site_drlurie` files
+// `vis_drlurie_cloned` alongside that site's own `vis_drlurie`, not `vis_site_drlurie_cloned` in a
+// namespace nothing else uses. Same derivation visualStandardMaterialization.ts's
+// `siteSlugFromObjectId` makes, stated once per module because these are separate transports.
+const clonedStandardIdFor = (siteObjectId: string): string | undefined => {
+  const slug = siteObjectId.replace(/^site_/, "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return slug ? `vis_${slug}_cloned` : undefined;
+};
+
+// The style sentence, derived from the ONE style fact a snapshot can quantize (the medium) and
+// saying, in its own words, what it does not know. It names no subject, no scene and no object, so
+// R4's subject/style separation is kept — and a reviewer reading the standard sees the caveat on the
+// field itself rather than only in a gaps list they may never open.
+const STYLE_SENTENCE_FOR_MEDIUM: Record<string, string> = {
+  flat_vector:
+    "Flat vector artwork: flat fills and clean edges, no photographic texture or depth, legible at any size. Observed structurally from a page snapshot of the source — lighting, finish and treatment were not observable and are still to be decided."
+};
+
+export function buildCloneVisualStandardDraft(input: {
+  siteId: string;
+  themeId?: string;
+  /** The site's live palette as the briefing carries it (clone.mjs renames brandTokens -> palette). */
+  palette?: { colors?: Record<string, unknown> } | undefined;
+  imagery: unknown;
+}): CloneVisualStandardDraft | undefined {
+  const imagery = isImageryObservations(input.imagery) ? input.imagery : undefined;
+  if (!imagery?.observed) return undefined;
+  const requestedId = clonedStandardIdFor(input.siteId);
+  if (!requestedId) return undefined;
+
+  const swatches: string[] = [];
+  for (const value of Object.values(input.palette?.colors ?? {})) {
+    const hex = toHexColor(value);
+    if (hex && !swatches.includes(hex)) swatches.push(hex);
+    if (swatches.length === 8) break;
+  }
+
+  const ratios = imagery.aspectRatios.filter((ratio) => /^\d{1,2}:\d{1,2}$/.test(ratio));
+  const aspectRatios: Record<string, string> = {};
+  if (ratios.length) {
+    aspectRatios.article_header = ratios[0];
+    aspectRatios.article_body = ratios[1] ?? ratios[0];
+  }
+
+  const styleSentence = imagery.medium ? STYLE_SENTENCE_FOR_MEDIUM[imagery.medium] : undefined;
+
+  const gaps: string[] = [];
+  if (!imagery.medium) gaps.push("medium: a snapshot shows file types, not a medium — every asset would have to be an SVG to quantize one, and these were not. Left unwritten for a human or a visual_identity run in mode 'house'.");
+  if (!swatches.length) gaps.push("palette: the site's live palette carried no readable color values, so no swatch is proposed rather than one being approximated.");
+  if (!ratios.length) gaps.push("aspectRatios: no image-bearing block carried a measurable box, so no ratio is proposed.");
+  gaps.push("sampleSubjects: a snapshot cannot say what the images are OF, and the source's own alt text is extracted copy capture's rights discipline governs. The draft is filed with an empty list — the one case visual_standard.v1 permits — for a human or the writer to fill.");
+
+  // The three `brandImagery` fields visual_standard.v1 REQUIRES that a snapshot may simply not
+  // evidence. Named rather than guessed, and a draft short of any of them is not filed at all.
+  const missing = [
+    ...(imagery.medium ? [] : ["brandImagery.medium"]),
+    ...(styleSentence ? [] : ["brandImagery.styleSentence"]),
+    ...(swatches.length ? [] : ["brandImagery.palette"])
+  ];
+
+  return {
+    objectType: "visual_standard",
+    requestedId,
+    gaps,
+    fileable: missing.length === 0,
+    ...(missing.length ? { missing } : {}),
+    body: {
+      version: 1,
+      kind: "template",
+      label: "Cloned source imagery (observations)",
+      description: `Imagery OBSERVED on the cloned source: ${imagery.imageCount} distinct image asset(s) across ${imagery.pagesWithImages} page(s), ${imagery.backgroundImageBlocks} background-image block(s), file types ${imagery.extensions.join("/") || "unknown"}. Structural observations only — nothing here was inferred from what any picture depicts.`.slice(0, 400),
+      whenToUse: "Nothing yet. This is a review artifact: it records what the cloned source's imagery LOOKED like structurally so a human can decide whether the target should follow it. Finish it (styleSentence, sampleSubjects) or discard it.",
+      brandImagery: {
+        version: 1,
+        ...(imagery.medium ? { medium: imagery.medium } : {}),
+        ...(styleSentence ? { styleSentence } : {}),
+        ...(swatches.length ? { palette: swatches } : {}),
+        negative: [],
+        // `{}` when no block carried a measurable box: visual_standard.v1 requires the KEY, and an
+        // empty record is the honest value — unlike a ratio nobody measured.
+        aspectRatios,
+        seedBase: seedBaseFor(input.siteId)
+      },
+      references: [],
+      // Required by visual_standard.v1 and legal as `[]` only while status is 'draft' — which is the
+      // only status this builder ever produces. See the REVIEW note above.
+      sampleSubjects: [],
+      // R1/§3.1: 'clone' is the method this whole path exists for, and the theme it was observed
+      // beside is named so a reviewer can see both halves of the same capture.
+      derivedFrom: { method: "clone", ...(input.themeId ? { themeId: input.themeId } : {}) },
+      status: "draft"
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Stage: theme_bind — the palette's ONE sanctioned writer. Re-validates theme_reconciler's proposal
 // against the site's own declared slots (clone.mjs, pure), builds the apply plan (pure — a totality
 // refusal here means NO steps at all), and executes exactly the steps that plan names: checkout the
@@ -583,7 +793,52 @@ export type CloneThemeBindEnvelope = {
   substitutions: CloneSubstitution[];
   published: false;
   policy: ClonePolicyView;
+  // C3: the DRAFT visual_standard this run proposed from the capture's imagery observations, and what
+  // happened to it. `applied` is deliberately not a field on it: a cloned look is never applied.
+  imageryDraft?: { visualStandardId: string; created: boolean; status: "draft"; gaps: string[]; reason?: string };
 };
+
+// C3 — file the cloned imagery observations as a DRAFT `visual_standard`, and nothing else.
+//
+// Best-effort by construction: a theme bind that succeeded must not be reported as failed because a
+// REVIEW ARTIFACT could not be created, so every failure here becomes a `reason` on the envelope
+// rather than a refusal. And note what this function cannot do even if it wanted to — it issues one
+// `object_create`; `set_site_brand_imagery` and `site_apply_brand_imagery` appear nowhere in this
+// module, and the site object is never checked out for it.
+async function createClonedImageryDraft(
+  projectId: string,
+  input: { siteId: string; themeId?: string; palette?: { colors?: Record<string, unknown> }; imagery: unknown },
+  deps: CloneDeps
+): Promise<CloneThemeBindEnvelope["imageryDraft"]> {
+  const draft = buildCloneVisualStandardDraft(input);
+  if (!draft) return undefined;
+  // REVIEW: a body short of a field visual_standard.v1 requires is not filed. The create would be
+  // refused by the schema every time, and a remote call that cannot succeed is worse than a reported
+  // non-event: the observations still travel on the envelope, named, for a human to finish.
+  if (!draft.fileable) {
+    return {
+      visualStandardId: draft.requestedId,
+      created: false,
+      status: "draft",
+      gaps: draft.gaps,
+      reason: `clone_imagery_draft_incomplete: the snapshot did not evidence ${draft.missing!.join(", ")}, which visual_standard.v1 requires. Nothing was created rather than a body the schema would refuse; the observations are on this envelope for a human to finish.`
+    };
+  }
+  try {
+    const result = await callProjectTool(projectId, "object_create", { objectType: draft.objectType, requestedId: draft.requestedId, body: draft.body, site: input.siteId }, deps);
+    const record = isRecord(result.record) ? (result.record as Record<string, unknown>) : result;
+    const objectId = typeof record.object_id === "string" ? record.object_id : draft.requestedId;
+    return { visualStandardId: objectId, created: true, status: "draft", gaps: draft.gaps };
+  } catch (error) {
+    return {
+      visualStandardId: draft.requestedId,
+      created: false,
+      status: "draft",
+      gaps: draft.gaps,
+      reason: `clone_imagery_draft_failed: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
 
 // The already-emitted theme object's id, correlated from the capture run's OWN emission report the
 // same way clone.mjs's briefingPages() correlates pages. Since T13.2 this is INTAKE's helper: intake
@@ -652,9 +907,10 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
   const themeDelta = (intake as { delta?: { theme?: { changed?: boolean; reason?: string; livePaletteDigest?: string } } }).delta?.theme;
   if (themeDelta?.changed === false) {
     const live = (intake.site?.palette ?? {}) as CloneThemeApplied;
+    const gatedDraft = await createClonedImageryDraft(projectId, { siteId, themeId, palette: intake.site?.palette as { colors?: Record<string, unknown> } | undefined, imagery: intake.imagery }, deps);
     return {
       artifact: CLONE_ARTIFACTS.themeBind,
-      summary: `Theme bind skipped for site ${siteId}: clone_intake's delta gate found the captured theme's tokens already byte-identical to the site's live palette (${themeDelta.reason}; digest ${themeDelta.livePaletteDigest ?? "unknown"}). No site_apply_theme call was made and nothing was dropped.`,
+      summary: `Theme bind skipped for site ${siteId}: clone_intake's delta gate found the captured theme's tokens already byte-identical to the site's live palette (${themeDelta.reason}; digest ${themeDelta.livePaletteDigest ?? "unknown"}). No site_apply_theme call was made and nothing was dropped.${gatedDraft ? ` Cloned imagery observations ${gatedDraft.created ? `were filed as the DRAFT visual_standard ${gatedDraft.visualStandardId}` : `were NOT filed as ${gatedDraft.visualStandardId} (see imageryDraft.reason)`} — never applied.` : ""}`,
       siteId,
       themeId,
       applied: live,
@@ -663,6 +919,7 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
       after: live,
       substitutions: [],
       published: false,
+      ...(gatedDraft ? { imageryDraft: gatedDraft } : {}),
       policy: clonePolicyView(config)
     };
   }
@@ -747,9 +1004,14 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
     }
   }
 
+  // C3 — AFTER the palette write, never before it, and never conditional on it having changed
+  // anything: the imagery observations are filed as a DRAFT standard for review. This is one
+  // object_create of a non-publishable draft; nothing about the site is touched by it.
+  const imageryDraft = await createClonedImageryDraft(projectId, { siteId, themeId, palette: intake.site?.palette as { colors?: Record<string, unknown> } | undefined, imagery: intake.imagery }, deps);
+
   return {
     artifact: CLONE_ARTIFACTS.themeBind,
-    summary: `Theme bind for ${projectId}: ${Object.keys(validated.applied.colors).length} color(s) and ${Object.keys(validated.applied.fonts).length} font(s) applied to site ${siteId} via theme ${themeId}; ${validated.dropped.length} token(s) dropped.`,
+    summary: `Theme bind for ${projectId}: ${Object.keys(validated.applied.colors).length} color(s) and ${Object.keys(validated.applied.fonts).length} font(s) applied to site ${siteId} via theme ${themeId}; ${validated.dropped.length} token(s) dropped.${imageryDraft ? ` Cloned imagery observations ${imageryDraft.created ? `were filed as the DRAFT visual_standard ${imageryDraft.visualStandardId}` : `were NOT filed as ${imageryDraft.visualStandardId} (see imageryDraft.reason)`} — never applied.` : ""}`,
     siteId,
     themeId,
     applied: validated.applied,
@@ -758,6 +1020,7 @@ export async function cloneThemeBindStep(input: { targetProjectId: string; intak
     after: validated.applied,
     substitutions: validated.substitutions,
     published: false,
+    ...(imageryDraft ? { imageryDraft } : {}),
     policy: clonePolicyView(config)
   };
 }

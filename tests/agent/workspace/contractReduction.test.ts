@@ -142,4 +142,27 @@ describe("reduceContract (F1 deterministic contract reduction)", () => {
     expect(reduced.bodySchema).toBeNull();
     expect(reduced.constraints).toEqual([]);
   });
+
+  // C1 (BRIEF §3.7): the optional siteFields parameter merges sitePrefetch.ts's getSitePrefetch
+  // result in — each key independently optional, and never defaulted here (absent unless supplied).
+  describe("siteFields (C1)", () => {
+    it("merges visualStandard/pdfTemplates/imagePolicyContexts in when supplied", () => {
+      const siteFields = {
+        visualStandard: { houseId: "vis_drlurie", templates: [{ id: "vis_drlurie_ad", label: "Ad campaign" }], overridePolicy: "lock" as const },
+        pdfTemplates: [{ templateId: "tmpl_article", isDefault: true }],
+        imagePolicyContexts: ["article_body"]
+      };
+      const reduced = reduceContract(REAL_SHAPED_CONTRACT, source, "content_item", siteFields);
+      expect(reduced.visualStandard).toEqual(siteFields.visualStandard);
+      expect(reduced.pdfTemplates).toEqual(siteFields.pdfTemplates);
+      expect(reduced.imagePolicyContexts).toEqual(siteFields.imagePolicyContexts);
+    });
+
+    it("leaves all three fields absent when siteFields is omitted — unchanged 3-arg behavior", () => {
+      const reduced = reduceContract(REAL_SHAPED_CONTRACT, source, "content_item") as Record<string, unknown>;
+      expect(reduced).not.toHaveProperty("visualStandard");
+      expect(reduced).not.toHaveProperty("pdfTemplates");
+      expect(reduced).not.toHaveProperty("imagePolicyContexts");
+    });
+  });
 });

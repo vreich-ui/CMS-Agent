@@ -27,6 +27,53 @@
 // reuse the reduction instead of recomputing it.
 export type ContractSource = { tool: string; fetchedAtISO: string; fingerprint: string };
 
+// C1 (BRIEF §3.7): the three site-level facts a run needs to write on-brand imagery/PDFs without a
+// separate discovery call — the client's house visual standard + assignable templates, its published
+// PDF templates, and the usage contexts its image-model policy actually covers. These are NOT
+// produced by reduceContract() itself (they come from separate reads — object_get/object_list on the
+// site's server, list_pdf_templates, get_image_model_policy — not from the raw object_contract
+// payload reduceContract transforms); sitePrefetch.ts's getSitePrefetch fetches them, each
+// independently degrading with a named warningCode, and a caller merges the result into a
+// ReducedContract via reduceContract's optional siteFields parameter below.
+export type ReducedContractVisualStandard = {
+  // The site's singleton house standard's object id (`vis_<site>`, R2) — absent only when neither the
+  // site object nor the visual_standard list named one.
+  houseId?: string;
+  // Assignable named templates (kind:'template'), never including the house entry itself.
+  templates: Array<{ id: string; label: string; whenToUse?: string }>;
+  // The `brand_imagery_override_policy` guardrail (BRIEF §3.7's read path: a constraint entry on
+  // object_contract('site'), written by platform task P4). Always resolved — 'allow' is the default
+  // when the constraint is absent or unreadable, never left undefined, so a downstream node always
+  // has an answer rather than having to guess a default itself.
+  overridePolicy: "allow" | "lock";
+};
+
+// FIX-D (BRIEF §3.5) — the site's own brand facts, which §3.5 names as part of the writer's executor
+// prefetch ("site `brandTokens` + `logo`, editorial voice, house standard when mode:'template'") and
+// which C1's prefetch did not carry, leaving brand_imagery_writer's hardest rule — never invent a hex
+// that is near neither a reference nor a brandToken — enforceable against the references half only.
+//
+// THE NAME IS `brandPalette`, NOT `brandTokens`, AND THAT IS DELIBERATE. The node runners redact the
+// value of any input key matching /token/i before a model sees it (AnthropicNodeRunner.ts /
+// OpenAINodeRunner.ts), so a field literally named `brandTokens` reaches the writer as the string
+// "[REDACTED]" — the exact defect T13.3 recorded on the clone briefing (provenance.ts), fixed there
+// the same way: rename the carrier, never the security control. The platform field underneath is
+// unchanged and still called brandTokens, and its only sanctioned writer is still site_apply_theme.
+export type ReducedContractBrandPalette = { colors?: Record<string, string>; fonts?: Record<string, string> };
+
+/** The site's logo, bounded to what a look-writer needs: where the mark is, and what it is called. */
+export type ReducedContractSiteLogo = { url: string; alt?: string };
+
+export type ReducedContractPdfTemplate = {
+  templateId: string;
+  kind?: string;
+  label?: string;
+  renderDataSchema?: unknown;
+  // Cross-referenced against the site's pdf.defaultTemplateId / pdf.byKind[kind] — never assumed true
+  // for a lone result, since a site can legitimately publish more than one template of a kind.
+  isDefault: boolean;
+};
+
 export type ReducedContract = {
   clientObjectType: string;
   bodySchema: unknown;
@@ -46,6 +93,18 @@ export type ReducedContract = {
   // or partial ceiling is a typed blocker there, never a default here.
   aggressionCeiling?: unknown;
   unmapped?: Record<string, unknown>;
+  // C1 (BRIEF §3.7): threaded through unchanged by deterministicContractIntelligence.ts's fast path
+  // and carried by contract_intelligence.v1 under these same names. Populated by a caller that merges
+  // sitePrefetch.ts's getSitePrefetch result in via reduceContract's siteFields parameter — absent
+  // (not defaulted here) for a project sitePrefetch was never run for, exactly like every other
+  // optional field this reduction produces.
+  visualStandard?: ReducedContractVisualStandard;
+  pdfTemplates?: ReducedContractPdfTemplate[];
+  imagePolicyContexts?: string[];
+  // FIX-D: same carry-through discipline as the three above — populated only by a caller that ran the
+  // site prefetch, absent (never defaulted, never invented) otherwise.
+  brandPalette?: ReducedContractBrandPalette;
+  logo?: ReducedContractSiteLogo;
 };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -147,7 +206,15 @@ const MAPPED_KEYS = new Set([
   "aggression_ceiling", "aggressionCeiling"
 ]);
 
-export function reduceContract(raw: unknown, source: ContractSource, requestedObjectType: string): ReducedContract {
+// C1: the site-level facts, when a caller already ran sitePrefetch.ts's getSitePrefetch for this
+// project/run and wants them folded into the SAME ReducedContract the client's own object_contract
+// reduction produced, rather than carried as a second, separately-shaped value nodes would have to
+// know to look for. Each key is independently optional — a caller passes only what it has (e.g. only
+// `imagePolicyContexts` degraded this run) and the others stay absent, exactly as if siteFields were
+// never passed at all.
+export type ReducedContractSiteFields = Pick<ReducedContract, "visualStandard" | "pdfTemplates" | "imagePolicyContexts" | "brandPalette" | "logo">;
+
+export function reduceContract(raw: unknown, source: ContractSource, requestedObjectType: string, siteFields?: ReducedContractSiteFields): ReducedContract {
   const record = isObject(raw) ? raw : {};
   const constraints = extractConstraints(record);
   const clientObjectType = typeof pick(record, ["object_type", "objectType"]) === "string" ? (pick(record, ["object_type", "objectType"]) as string) : requestedObjectType;
@@ -167,6 +234,11 @@ export function reduceContract(raw: unknown, source: ContractSource, requestedOb
     validationSurface: extractValidationSurface(record),
     contractSource: source,
     ...(extractAggressionCeiling(record) !== undefined ? { aggressionCeiling: extractAggressionCeiling(record) } : {}),
-    ...(Object.keys(unmapped).length ? { unmapped } : {})
+    ...(Object.keys(unmapped).length ? { unmapped } : {}),
+    ...(siteFields?.visualStandard !== undefined ? { visualStandard: siteFields.visualStandard } : {}),
+    ...(siteFields?.pdfTemplates !== undefined ? { pdfTemplates: siteFields.pdfTemplates } : {}),
+    ...(siteFields?.imagePolicyContexts !== undefined ? { imagePolicyContexts: siteFields.imagePolicyContexts } : {}),
+    ...(siteFields?.brandPalette !== undefined ? { brandPalette: siteFields.brandPalette } : {}),
+    ...(siteFields?.logo !== undefined ? { logo: siteFields.logo } : {})
   };
 }
