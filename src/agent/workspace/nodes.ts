@@ -3103,10 +3103,10 @@ export const publishingConductorNodes = [
       ]
     },
     "modelConfig": {
-      "maxTurns": 6,
-      "toolCallLimit": 3,
+      "maxTurns": 9,
+      "toolCallLimit": 8,
       "timeout": 300000,
-      "budgetUsd": 0.75,
+      "budgetUsd": 1.125,
       "maxOutputTokens": 10000
     }
   },

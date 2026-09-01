@@ -34,8 +34,11 @@
  *   npm run nodes:update -- --allow-prompt-shrink   # confirm a deliberate prompt cut (see MAX_PROMPT_SHRINK)
  *
  * `--from` accepts a workspace.get_nodes / workspace.export_workspace payload: `{ok,data:{nodes}}`,
- * `{nodes}`, or a bare array. Without it the live WorkspaceRepository is read, which needs store
- * credentials.
+ * `{nodes}`, or a bare array — no credentials needed, which makes it the route for anyone holding an
+ * MCP session but not a GCP one. Without it the live WorkspaceRepository is read, which needs
+ * WORKSPACE_STORE=gcs plus GCS_BUCKET and GCP credentials (or WORKSPACE_STORE=blobs plus
+ * NETLIFY_BLOBS_SITE_ID/TOKEN). An unset WORKSPACE_STORE is refused by name rather than silently
+ * read as an empty workspace — see liveRepositoryManager below.
  *
  * SAFETY. The script refuses rather than writes when the incoming set would weaken the conductor:
  * a canonical node disappearing, a riskLevel stepping DOWN the ladder, a publish-risk node acquiring
@@ -97,6 +100,40 @@ const die = (message: string, detail: string[] = []): never => {
 // through the generator byte-for-byte — a hand-edit the generator would not reproduce fails here.
 // It does NOT prove parity with the LIVE store; `npm run nodes:check` (credentials) still does that.
 const FROM_CANONICAL_FLAG = "--from-canonical";
+// THE LIVE READ, MADE ACTUALLY POSSIBLE.
+//
+// Before this, `npm run nodes:check` / `nodes:update` could not read the production store from
+// anywhere — not a laptop, not Cloud Shell, not CI:
+//
+//   * with no env, WORKSPACE_STORE defaults to "memory". The read returned an EMPTY workspace, the
+//     generator saw every canonical node "disappear", and refused. A correct refusal about garbage
+//     input, which reads exactly like a broken script.
+//   * with WORKSPACE_STORE=gcs, blobClient.ts threw outright: the GCS store factory is registered by
+//     an ENTRYPOINT (bootstrapWorkspaceStore in runConductorJob.ts) and this script is not one.
+//
+// So the drift gate this script exists to be could never run against live, which is why canonical
+// and the store were free to diverge unobserved. Both holes are closed here: the same
+// bootstrapWorkspaceStore the Cloud Run entrypoint uses is called before the repositories are
+// touched (construction is lazy — see runtime/repositories.ts — so importing it registers nothing
+// and builds nothing), and an unconfigured store is refused BY NAME instead of being read as empty.
+const liveRepositoryManager = async () => {
+  const store = (process.env.WORKSPACE_STORE ?? "memory").trim();
+  if (store === "" || store === "memory") {
+    die(
+      'WORKSPACE_STORE is unset, so it defaults to "memory" — reading the live workspace would return an EMPTY node set and this generator would report every canonical node as deleted. ' +
+      "Either point it at the production store (WORKSPACE_STORE=gcs GCS_BUCKET=<bucket> [GCS_KEY_PREFIX=...], with GCP credentials), " +
+      "or pass --from <snapshot.json> holding a workspace.export_workspace / workspace.get_nodes payload, which needs no credentials at all."
+    );
+  }
+  // Registers the GCS store factory for WORKSPACE_STORE=gcs and validates the blobs credentials for
+  // WORKSPACE_STORE=blobs. Reused rather than re-implemented: "how to reach the production store" is
+  // defined once, in the entrypoint, and this script is now a second caller of that one definition.
+  const { bootstrapWorkspaceStore } = await import("../src/agent/entrypoints/runConductorJob.js");
+  bootstrapWorkspaceStore();
+  const { repositoryManager } = await import("../src/agent/runtime/repositories.js");
+  return repositoryManager;
+};
+
 const readSource = async (from?: string, fromCanonical = false): Promise<WorkspaceNode[]> => {
   if (fromCanonical) return JSON.parse(JSON.stringify(listWorkspaceNodes())) as WorkspaceNode[];
   if (from) {
@@ -105,8 +142,7 @@ const readSource = async (from?: string, fromCanonical = false): Promise<Workspa
     if (!Array.isArray(nodes)) die(`${from} does not contain a node array (looked at the root, .nodes and .data.nodes).`);
     return nodes as WorkspaceNode[];
   }
-  const { repositoryManager } = await import("../src/agent/runtime/repositories.js");
-  return repositoryManager.getWorkspaceRepository().getNodes();
+  return (await liveRepositoryManager()).getWorkspaceRepository().getNodes();
 };
 
 const readSkillSource = async (from?: string): Promise<SkillDefinition[] | undefined> => {
@@ -116,8 +152,7 @@ const readSkillSource = async (from?: string): Promise<SkillDefinition[] | undef
     if (!Array.isArray(skills)) die(`${from} does not contain a skill array (looked at the root, .skills and .data.skills).`);
     return skills as SkillDefinition[];
   }
-  const { repositoryManager } = await import("../src/agent/runtime/repositories.js");
-  return repositoryManager.getSkillRepository().list();
+  return (await liveRepositoryManager()).getSkillRepository().list();
 };
 
 // Nodes reference skills by id, so re-seeding nodes alone can leave the canonical graph pointing at skills
