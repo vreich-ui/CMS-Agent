@@ -92,8 +92,13 @@ export const RESEED_ALLOWLIST: ReseedAllowlistEntry[] = [
   { nodeId: "brief_architect", field: "prompt", note: "Wave 3 T8 — the required mediaSlots[]" },
   // Wave 3 T8 — materialize slots via create_agent_artifact_job.
   { nodeId: "artifact_plan", field: "prompt", note: "Wave 3 T8 — materialize slots via create_agent_artifact_job" },
-  // Wave 3 T8 — bind verified refs into body.image.
-  { nodeId: "article_body", field: "prompt", note: "Wave 3 T8 — bind verified refs into body.image" },
+  // Wave 3 T8 — bind verified refs into body.image. ALSO carries W10.1 (2026-09-01,
+  // run_1788208708424_a4xtn2): the Blocker criteria paragraph is now a CLOSED list, and names the four
+  // things that are never blockers of this node. The live store row was written directly on 2026-09-01
+  // to unblock that run; this entry is how canonical takes ownership of it back — `npm run store:update
+  // -- --node article_body` after the redeploy makes store and canonical agree again, and
+  // `npm run store:check -- --node article_body` proves it byte-for-byte.
+  { nodeId: "article_body", field: "prompt", note: "Wave 3 T8 — bind verified refs into body.image; W10.1 — blockers[] is a closed structural list" },
   // W8 (2026-08-31) — artifact_plan stops materializing and becomes ONE tool-less planning turn.
   //
   // Topology travelled with the redeploy (overlayStoreNode pins it), so artifact_materializer is live
