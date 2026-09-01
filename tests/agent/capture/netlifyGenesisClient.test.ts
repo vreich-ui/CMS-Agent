@@ -99,6 +99,60 @@ describe("NetlifyGenesisClient", () => {
     expect(payload).toMatchObject({ key: "TRACKING_PROJECT_ID" });
   });
 
+  // T21.8 — a Netlify constraint learned live: context "all" includes the `dev` context, and `dev`
+  // forbids secret values, so a secret written with context "all" is refused by the API. Secrets are
+  // therefore always written as the three contexts they may legally occupy.
+  it("live mode: a secret env var is written per-context — production/deploy-preview/branch-deploy, never `all`", async () => {
+    const calls: Call[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: Record<string, unknown>) => {
+      calls.push({ url, init });
+      if (url.includes("/env/TRACKING_SINK_TOKEN")) return (init?.method ?? "GET") === "GET" ? jsonResponse(404, {}) : jsonResponse(200, {});
+      if (url.includes("/env?site_id=site_123")) return jsonResponse(200, {});
+      throw new Error(`unexpected: ${url}`);
+    });
+    const client = new NetlifyGenesisClient("live", "tok_live_test", fetchImpl as never);
+    await client.setEnvVar("acct_1", "site_123", "TRACKING_SINK_TOKEN", "fleet-sink-token", { isSecret: true });
+
+    const post = calls.find((call) => call.init?.method === "POST")!;
+    const variable = JSON.parse(post.init!.body as string)[0];
+    expect(variable.is_secret).toBe(true);
+    expect(variable.values.map((value: { context: string }) => value.context)).toEqual(["production", "deploy-preview", "branch-deploy"]);
+    expect(variable.values.map((value: { context: string }) => value.context)).not.toContain("all");
+    // Scopes: `builds` is required — the tenant repo's postbuild tracking-dims-push reads the
+    // tracking env at BUILD time, and a functions-only scope makes it silently no-op.
+    expect(variable.scopes).toContain("builds");
+    expect(variable.scopes).toContain("functions");
+    // Names, scopes and contexts on the ledger; the value never.
+    expect(JSON.stringify(client.actions)).not.toContain("fleet-sink-token");
+    expect((client.actions[0].data as { contexts: string[] }).contexts).toEqual(["production", "deploy-preview", "branch-deploy"]);
+  });
+
+  it("refuses to write a secret with context `all` rather than letting Netlify answer with an opaque 4xx", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {}));
+    const client = new NetlifyGenesisClient("live", "tok_live_test", fetchImpl as never);
+    const error = await client
+      .setEnvVar("acct_1", "site_123", "TRACKING_SINK_TOKEN", "fleet-sink-token", { isSecret: true, context: "all" })
+      .catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(SiteGenesisRefusal);
+    expect((error as SiteGenesisRefusal).code).toBe("netlify_secret_context_invalid");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("live mode: a NON-secret env var still rides context `all` with the default build-inclusive scopes", async () => {
+    const calls: Call[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: Record<string, unknown>) => {
+      calls.push({ url, init });
+      if (url.includes("/env/TRACKING_PROJECT_ID")) return jsonResponse(200, {});
+      throw new Error(`unexpected: ${url}`);
+    });
+    const client = new NetlifyGenesisClient("live", "tok_live_test", fetchImpl as never);
+    await client.setEnvVar("acct_1", "site_123", "TRACKING_PROJECT_ID", "acme");
+    const variable = JSON.parse(calls.find((call) => call.init?.method === "PUT")!.init!.body as string);
+    expect(variable.values).toEqual([{ value: "acme", context: "all" }]);
+    expect(variable.scopes).toEqual(["builds", "functions", "runtime", "post_processing"]);
+    expect(variable.is_secret).toBeUndefined();
+  });
+
   it("schedules an env-refresh build and waits until that exact deploy is published", async () => {
     const calls: Call[] = [];
     const sleep = vi.fn(async () => undefined);

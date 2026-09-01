@@ -78,6 +78,12 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // grant is required any more — that checklist item is no longer a capture blocker.
     process.env.ZILBERMAN_MCP_ENDPOINT = NEW_SITE_ENDPOINT;
     delete process.env.SITE_GENESIS_NETLIFY_MODE; // default = dry_run
+    // T21.8: the fleet-shared tracking/deploy values genesis installs when this deployment holds
+    // them. Cleared here so the default case in this file is the ABSENT one (checklist fallback);
+    // the dedicated case below sets them explicitly rather than depending on the ambient env.
+    delete process.env.TRACKING_SINK_URL;
+    delete process.env.TRACKING_SINK_TOKEN;
+    delete process.env.NETLIFY_AUTH_TOKEN;
 
     vi.stubGlobal("fetch", vi.fn(async (url: string, init: { body?: string }) => {
       if (String(url).includes("api.netlify.com")) {
@@ -106,6 +112,9 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     delete process.env.PLATFORM_REPO_ROOT;
     delete process.env.ZILBERMAN_MCP_ENDPOINT;
     delete process.env.ZILBERMAN_MCP_TOKEN;
+    delete process.env.TRACKING_SINK_URL;
+    delete process.env.TRACKING_SINK_TOKEN;
+    delete process.env.NETLIFY_AUTH_TOKEN;
     await rm(platformRoot, { recursive: true, force: true });
     resetRepositoryManager();
   });
@@ -140,7 +149,11 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(byStep.has("register_project:executed")).toBe(true);
     expect((byStep.get("register_project:executed") as { data?: { clientSiteBinding?: unknown } }).data?.clientSiteBinding).toEqual({ netlifySiteName: "zilbermanfilmfoundation", netlifySiteId: "dryrun_site_zilbermanfilmfoundation" });
     const envSets = result.genesis.ledger.filter((action) => action.step === "netlify_set_env" && action.kind === "dry_run");
+    // No fleet tracking values are configured on THIS deployment (cleared in beforeEach), so genesis
+    // installs only what it can derive — never an empty inherited value (T21.8).
     expect(envSets.map((action) => (action as { data?: { key?: string } }).data?.key).sort()).toEqual(["CMS_AGENT_MCP_ENDPOINT", "CMS_AGENT_MCP_TOKEN", "NETLIFY_BUILD_HOOK_URL", "TRACKING_PROJECT_ID"]);
+    expect(byStep.get("tracking_fleet_env:requires_human")).toBeDefined();
+    expect((byStep.get("tracking_fleet_env:requires_human") as { data?: { missing?: string[] } }).data?.missing).toEqual(["TRACKING_SINK_URL", "TRACKING_SINK_TOKEN", "NETLIFY_AUTH_TOKEN"]);
     expect(byStep.has("cms_agent_client_manager_credential:dry_run")).toBe(true);
 
     // The scaffold subprocess really ran through the platform seam — with the seam's flags, and
@@ -204,6 +217,13 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(byId.get("set_admin_emails")!.detail).toContain("Until the first invite exists this is the ONLY way in");
     expect(byId.get("github_repo_binding")!.envVars).toEqual(["GITHUB_REPOSITORY", "GITHUB_BRANCH", "GITHUB_CONTENT_TOKEN", "GITHUB_COMMIT_AUTHOR_EMAIL", "GITHUB_COMMIT_AUTHOR_NAME"]);
     expect(byId.get("pdf_tool_storage_grant")!.envVars).toEqual(["PDF_TOOL_STORAGE_SITE_ID", "PDF_TOOL_STORAGE_TOKEN"]);
+    // T21.8 — the tracking partition is the BARE slug (the sink's partition id); `trk_<slug>` is the
+    // tracking_config OBJECT id and pointing the sink at it writes where nothing reads. With no fleet
+    // sink values on this deployment, the sink pair stays a human item and the detail says why.
+    expect(byId.get("tracking_sink")!.detail).toContain("Genesis set TRACKING_PROJECT_ID deterministically to zilberman —");
+    expect(byId.get("tracking_sink")!.detail).toContain("Do NOT set trk_zilberman");
+    expect(byId.get("tracking_sink")!.envVars).toEqual(["TRACKING_SINK_URL", "TRACKING_SINK_TOKEN"]);
+    expect(byId.get("fleet_shared_keys")!.envVars).toEqual(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NETLIFY_AUTH_TOKEN"]);
     // THE CHECKLIST SHRANK: the endpoint item is gone — genesis registered it — and what remains is
     // the token alone, which is irreducible because it is a secret VALUE in a custodian's keeping.
     expect(byId.get("deploy_side_mcp_env")!.envVars).toEqual(["ZILBERMAN_MCP_TOKEN"]);
@@ -251,6 +271,65 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
   // anywhere (unlike SOURCE_URL above, which happens to match platform's own hardcoded, hand-edited
   // Zilberman policy). This proves "URL in, any site" generalizes past the one client that used to
   // be the only one exercised for capture.
+  // T21.8 ACCEPTANCE — "setting up tracking for a new tenant has to be part of the genesis process
+  // not manually" (Wolf, 2026-09-01). With the fleet values present on THIS deployment, the same one
+  // site_duplicate call installs the whole tracking connection on the new tenant: partition id, sink
+  // URL, sink token — build-scoped, secrets per-context — and the checklist stops asking for them.
+  it("installs the fleet-shared tracking connection on the new tenant when this deployment holds the fleet values", async () => {
+    process.env.TRACKING_SINK_URL = "https://sink.example/track";
+    process.env.TRACKING_SINK_TOKEN = "fleet-sink-token";
+    process.env.NETLIFY_AUTH_TOKEN = "fleet-netlify-token";
+
+    const { rpcError, structured } = await mcpCall("site_duplicate", {
+      sourceUrl: SOURCE_URL,
+      newSite: { name: "zilberman", netlifySiteName: "zilbermanfilmfoundation" },
+      executionMode: "mock"
+    });
+    expect(rpcError).toBeUndefined();
+    const result = structured.data as {
+      humanChecklist: Array<{ id: string; title: string; detail: string; envVars?: string[] }>;
+      genesis: { ledger: Array<{ step: string; kind: string; data?: Record<string, unknown> }> };
+    };
+
+    const envSets = new Map(
+      result.genesis.ledger
+        .filter((action) => action.step === "netlify_set_env")
+        .map((action) => [String((action.data as { key?: string }).key), action.data as { isSecret: boolean; scopes: string[]; contexts: string[] }])
+    );
+    expect([...envSets.keys()].sort()).toEqual([
+      "CMS_AGENT_MCP_ENDPOINT",
+      "CMS_AGENT_MCP_TOKEN",
+      "NETLIFY_AUTH_TOKEN",
+      "NETLIFY_BUILD_HOOK_URL",
+      "TRACKING_PROJECT_ID",
+      "TRACKING_SINK_TOKEN",
+      "TRACKING_SINK_URL"
+    ]);
+    // BUILDS, not just functions: the tenant repo's postbuild scripts/tracking-dims-push.mjs reads
+    // TRACKING_SINK_URL/TOKEN/PROJECT_ID at BUILD time — functions-only is why drluriescience's dims
+    // counters sat at zero.
+    for (const key of ["TRACKING_PROJECT_ID", "TRACKING_SINK_URL", "TRACKING_SINK_TOKEN", "NETLIFY_AUTH_TOKEN"]) {
+      expect(envSets.get(key)!.scopes, `${key} must be build-scoped`).toContain("builds");
+    }
+    // Secrets per-context; a secret written with context "all" would include `dev`, which Netlify
+    // forbids for secrets.
+    for (const key of ["TRACKING_SINK_URL", "TRACKING_SINK_TOKEN", "NETLIFY_AUTH_TOKEN"]) {
+      expect(envSets.get(key)!.isSecret).toBe(true);
+      expect(envSets.get(key)!.contexts).toEqual(["production", "deploy-preview", "branch-deploy"]);
+    }
+
+    const byId = new Map(result.humanChecklist.map((entry) => [entry.id, entry]));
+    expect(byId.get("tracking_sink")!.envVars).toBeUndefined();
+    expect(byId.get("tracking_sink")!.title).toContain("genesis installed the fleet sink connection");
+    expect(byId.get("fleet_shared_keys")!.envVars).toEqual(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+
+    // Values never travel: not into the ledger, not into the checklist, not into the response.
+    const serialized = JSON.stringify(structured);
+    expect(serialized).not.toContain("fleet-sink-token");
+    expect(serialized).not.toContain("fleet-netlify-token");
+    expect(serialized).not.toContain("https://sink.example/track");
+  }, 90_000);
+
   it("derives a working capturePolicy from an arbitrary sourceUrl that names no project definition, with no hand-edited policy", async () => {
     const ARBITRARY_SOURCE_URL = "https://an-example-prospect-site.test/";
     const { rpcError, structured } = await mcpCall("site_duplicate", {

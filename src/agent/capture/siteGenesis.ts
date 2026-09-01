@@ -13,8 +13,20 @@
 //        site-create primitive when no checkout is mounted.
 //     3. Build hook (POST /api/v1/sites/{id}/build_hooks) + NETLIFY_BUILD_HOOK_URL — the runbook's
 //        by-hand step the T12.12 §6 analysis marked API-capable; closed here.
-//     4. Deterministic env defaults — TRACKING_PROJECT_ID=trk_<slug> (the documented convention,
-//        derived instead of human-decided; override any time in the Netlify console).
+//     4. Deterministic env defaults — TRACKING_PROJECT_ID=<slug>, the BARE slug. That is the tracking
+//        SINK's partition id: the sink answers `/api/tracking-sink/stats?project_id=<slug>`, and a
+//        site that leaves TRACKING_PROJECT_ID unset falls back to its own siteShortId (platform's
+//        track-ingest function) — the bare slug again. `trk_<slug>` is a DIFFERENT id: the per-tenant
+//        tracking_config OBJECT (platform's site identity calls it trackingProjectId, "tracking
+//        project OBJECT id"). Genesis used to install THAT one here, so every genesis-provisioned
+//        tenant wrote into a partition nothing ever reads. Derived instead of human-decided;
+//        override any time in the Netlify console.
+//     4b. Fleet tracking/deploy values — TRACKING_SINK_URL, TRACKING_SINK_TOKEN and NETLIFY_AUTH_TOKEN
+//        are installed from THIS deployment's own environment when it holds them (the same var NAME
+//        on both sides: "reuse the existing fleet values, never mint per-client copies"). Setting up
+//        tracking is part of birth, not a per-tenant paste job. A value this deployment does not
+//        hold is never invented and never written empty — the human checklist entry stays as the
+//        fallback and says which half is missing.
 //     5. CMS-Agent registration — project.create with the <SLUG>_MCP_TOKEN env NAME (a secret value
 //        NEVER transits MCP), the tenant's MCP ENDPOINT derived from the Netlify site this run just
 //        created and stored on the record, and a conservative seeded capture policy (rights all
@@ -28,7 +40,9 @@
 //        not a secret; the TOKEN still is, and stays an env var NAME reference on the checklist.
 //   HUMAN (the checklist): NETLIFY_API_TOKEN custody itself, GitHub repo binding + content token,
 //   enabling Netlify Identity, ADMIN_EMAILS, the first-Owner sign-in, artifact ingest hosts, the
-//   pdf-tool storage grant (a new Netlify machine account — no API mints accounts), tracking sink,
+//   pdf-tool storage grant (a new Netlify machine account — no API mints accounts), the tracking
+//   sink connection and NETLIFY_AUTH_TOKEN *only when this deployment does not hold the fleet value*
+//   (see 4b — when it does, genesis installs them and the checklist entry shrinks accordingly),
 //   fleet-shared AI keys, the
 //   deploy-side <SLUG>_MCP_TOKEN value (secret custody: Secret Manager + the Cloud Run
 //   --update-secrets list; the ENDPOINT half is no longer a human step), and DNS.
@@ -56,10 +70,14 @@ import { createProject } from "../projects/projectAdmin.js";
 import type { ProjectCapturePolicy, ProjectSummary } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { ManagedScopedBearerCredentialRepository } from "../mcp/auth/managedScopedBearerCredentials.js";
+import { TRACKING_SINK_TOKEN_ENV, TRACKING_SINK_URL_ENV } from "../improvement/trackingIngest.js";
 
 const execFileAsync = promisify(execFile);
 
 export const NETLIFY_API_TOKEN_ENV = "NETLIFY_API_TOKEN";
+// The tenant site's own fleet-shared Netlify token (T11.7 env table). Distinct from
+// NETLIFY_API_TOKEN above, which is genesis's OWN site-create credential.
+export const NETLIFY_AUTH_TOKEN_ENV = "NETLIFY_AUTH_TOKEN";
 export const PLATFORM_REPO_ROOT_ENV = "PLATFORM_REPO_ROOT";
 export const SITE_GENESIS_NETLIFY_MODE_ENV = "SITE_GENESIS_NETLIFY_MODE";
 export const CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV = "CMS_AGENT_PUBLIC_MCP_ENDPOINT";
@@ -219,6 +237,54 @@ export const resolveGenesisNetlifyMode = (env: NodeJS.ProcessEnv = process.env):
   (env[SITE_GENESIS_NETLIFY_MODE_ENV] ?? "").trim().toLowerCase() === "live" ? "live" : "dry_run";
 
 // ---------------------------------------------------------------------------------------------
+// FLEET-SHARED VALUES GENESIS INSTALLS (T21.8).
+//
+// "Setting up tracking for a new tenant has to be part of the genesis process not manually" (Wolf,
+// 2026-09-01). These three were a per-tenant copy-paste chore on the human checklist, for no reason
+// that survives inspection: they are fleet-shared values — the SAME value on every tenant, already
+// present in this deployment's own environment under the SAME name (the T11.7 env table's "reuse the
+// existing fleet values, never mint per-client copies"). So genesis reads them from `env` and pushes
+// them onto the new site itself. No new config mechanism: the source is the env var NAME genesis is
+// already configured with, exactly like NETLIFY_API_TOKEN and CMS_AGENT_PUBLIC_MCP_ENDPOINT.
+//
+// SCOPES ARE LOAD-BEARING, and their absence caused a live bug. On drluriescience these three were
+// scoped `functions` only, so the site repo's `postbuild` step (scripts/tracking-dims-push.mjs,
+// which reads TRACKING_SINK_URL/TRACKING_SINK_TOKEN/TRACKING_PROJECT_ID at BUILD time) silently
+// no-opped and the tracking `dims` counters sat at zero. Every tracking var genesis installs
+// therefore carries setEnvVar's DEFAULT scope set, which includes `builds` as well as `functions` —
+// do not narrow these to ["functions"] the way the credential vars below legitimately are.
+//
+// A value this deployment does not hold is NEVER invented and never written empty: it drops out of
+// the provisioning list and its human checklist entry stays, saying which half is missing.
+export const GENESIS_FLEET_ENV_VARS: ReadonlyArray<{ key: string; isSecret: boolean; why: string }> = [
+  // The sink URL is not a bearer on its own, but the platform scaffold already inherits it as a
+  // secret-flagged variable (create-site.mjs's `inheritedEnvKey` block). Genesis keeps that flag so
+  // an update of an already-provisioned site is never an attempt to demote a secret to a plain value.
+  { key: TRACKING_SINK_URL_ENV, isSecret: true, why: "tracking sink endpoint (build + function time)" },
+  { key: TRACKING_SINK_TOKEN_ENV, isSecret: true, why: "tracking sink bearer" },
+  { key: NETLIFY_AUTH_TOKEN_ENV, isSecret: true, why: "fleet-shared Netlify token the tenant's own tooling uses" }
+];
+
+export type GenesisFleetEnvResolution = {
+  /** Fleet vars this deployment holds — genesis installs these on the new site. */
+  provisioned: Array<{ key: string; value: string; isSecret: boolean }>;
+  /** Fleet vars this deployment does NOT hold — they stay human checklist items. */
+  missing: string[];
+};
+
+/** Split the fleet-shared env vars into what genesis can install and what stays a human step. */
+export const resolveGenesisFleetEnvVars = (env: NodeJS.ProcessEnv): GenesisFleetEnvResolution => {
+  const provisioned: GenesisFleetEnvResolution["provisioned"] = [];
+  const missing: string[] = [];
+  for (const { key, isSecret } of GENESIS_FLEET_ENV_VARS) {
+    const value = env[key]?.trim();
+    if (value) provisioned.push({ key, value, isSecret });
+    else missing.push(key);
+  }
+  return { provisioned, missing };
+};
+
+// ---------------------------------------------------------------------------------------------
 // Netlify API client with a first-class dry-run mode. In dry_run NOTHING touches the network: the
 // intended call is recorded on the ledger with a synthetic id. In live mode the calls mirror the
 // platform CLI's proven request shapes (create-site.mjs). The bearer token is only ever placed in
@@ -239,6 +305,17 @@ const NETLIFY_REQUEST_BACKOFF_MS = [250, 1_000];
 // result line; nothing else there is worth the risk of a token landing in a query param one day),
 // no response body, no headers.
 const netlifyCallSummary = (method: string, url: string, status: number): string => `${method} ${new URL(url).pathname} HTTP ${status}`;
+
+// The deploy contexts a SECRET env var may occupy. Netlify refuses a secret written with context
+// "all" because "all" includes `dev`, and the dev context forbids secret values — so a secret is
+// always written as these three explicit contexts instead. (Learned live: the `all` write is a 4xx
+// that says nothing useful about why.)
+export const NETLIFY_SECRET_CONTEXTS = ["production", "deploy-preview", "branch-deploy"] as const;
+
+// setEnvVar's default scope set. `builds` is in here and must stay in here for every tracking var:
+// the tenant repo's postbuild step reads the tracking env at BUILD time, and a functions-only scope
+// makes it silently no-op (the live drluriescience bug — T21.8).
+export const NETLIFY_DEFAULT_ENV_SCOPES = ["builds", "functions", "runtime", "post_processing"] as const;
 
 export class NetlifyGenesisClient {
   readonly actions: GenesisAction[] = [];
@@ -368,17 +445,32 @@ export class NetlifyGenesisClient {
   }
 
   // Env-var set mirrors create-site.mjs's proven check-then-POST/PUT shape. `value` is only ever a
-  // non-secret deterministic default or a capability URL flagged isSecret; the ledger records the
-  // NAME, never the value.
+  // non-secret deterministic default, a capability URL, or a fleet-shared value flagged isSecret;
+  // the ledger records the NAME (plus scopes and contexts), never the value.
+  //
+  // SECRETS ARE PER-CONTEXT, NEVER `all` — a Netlify constraint hit live: `all` includes the `dev`
+  // context, and `dev` forbids secret values, so writing a secret with context "all" is refused by
+  // the API. A caller that asks for a secret without naming contexts therefore gets the three
+  // contexts a secret may legally occupy (production, deploy-preview, branch-deploy) rather than a
+  // request that cannot succeed. Passing `context: "all"` explicitly for a secret is a bug, and is
+  // refused here rather than at Netlify with an opaque 4xx.
   async setEnvVar(
     accountId: string,
     siteId: string,
     key: string,
     value: string,
-    { isSecret = false, scopes = ["builds", "functions", "runtime", "post_processing"], context = "all" }: { isSecret?: boolean; scopes?: string[]; context?: string } = {}
+    { isSecret = false, scopes = [...NETLIFY_DEFAULT_ENV_SCOPES], context, contexts }: { isSecret?: boolean; scopes?: string[]; context?: string; contexts?: string[] } = {}
   ): Promise<void> {
+    const requested = contexts ?? (context ? [context] : undefined);
+    const valueContexts = requested ?? (isSecret ? [...NETLIFY_SECRET_CONTEXTS] : ["all"]);
+    if (isSecret && valueContexts.includes("all")) {
+      throw new SiteGenesisRefusal(
+        "netlify_secret_context_invalid",
+        `Env var ${key} is secret and cannot be written with context "all" (that includes the dev context, which forbids secrets). Write it per-context: ${NETLIFY_SECRET_CONTEXTS.join(", ")}.`
+      );
+    }
     if (this.mode === "dry_run") {
-      this.record("netlify_set_env", `DRY-RUN: would set env var ${key} on site ${siteId} (name recorded; value never logged).`, { siteId, key, isSecret });
+      this.record("netlify_set_env", `DRY-RUN: would set env var ${key} on site ${siteId} (name, scopes and contexts recorded; value never logged).`, { siteId, key, isSecret, scopes, contexts: valueContexts });
       return;
     }
     const keyUrl = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env/${encodeURIComponent(key)}?site_id=${encodeURIComponent(siteId)}`;
@@ -391,9 +483,9 @@ export class NetlifyGenesisClient {
         netlifyCallSummary("GET", keyUrl, existing.status)
       );
     }
-    const variable = { key, scopes, values: [{ value, context }], ...(isSecret ? { is_secret: true } : {}) };
+    const variable = { key, scopes, values: valueContexts.map((valueContext) => ({ value, context: valueContext })), ...(isSecret ? { is_secret: true } : {}) };
     await this.request(existing.ok ? "PUT" : "POST", existing.ok ? keyUrl : collectionUrl, existing.ok ? variable : [variable], { redactErrorBody: true });
-    this.record("netlify_set_env", `Set env var ${key} on site ${siteId} (name recorded; value never logged).`, { siteId, key, isSecret });
+    this.record("netlify_set_env", `Set env var ${key} on site ${siteId} (name, scopes and contexts recorded; value never logged).`, { siteId, key, isSecret, scopes, contexts: valueContexts });
   }
 }
 
@@ -442,8 +534,15 @@ export function buildGenesisHumanChecklist(input: {
   // The endpoint genesis derived and stored on the registry record. Present = the endpoint half of
   // the deploy-side connection is DONE and the checklist item shrinks to the token alone.
   registeredMcpEndpoint?: string;
+  // T21.8 — the fleet-shared env vars genesis INSTALLED for this tenant (because this deployment
+  // held the fleet value). Each one shrinks the checklist item that used to ask a human to paste it;
+  // anything absent from this list is still a human step and says so.
+  provisionedFleetEnvVars?: string[];
 }): GenesisHumanChecklistItem[] {
   const { slug, netlifySiteName, envPrefix } = input;
+  const provisionedFleet = input.provisionedFleetEnvVars ?? [];
+  const outstandingFleet = (keys: string[]): string[] => keys.filter((key) => !provisionedFleet.includes(key));
+  const outstandingSinkVars = outstandingFleet([TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV]);
   const items: GenesisHumanChecklistItem[] = [];
   if (!input.scaffoldExecuted) {
     items.push({
@@ -511,16 +610,25 @@ export function buildGenesisHumanChecklist(input: {
     },
     {
       id: "tracking_sink",
-      title: "Tracking sink — point at the shared owner-DB or provision a dedicated sink",
-      detail: `Runbook §3, verbatim: "Tracking sink may be one shared owner-DB (partitioned by TRACKING_PROJECT_ID) or per-site — your call." Genesis set TRACKING_PROJECT_ID deterministically to trk_${slug} (the documented trk_<shortId> convention); override in the Netlify console if this tenant needs a different partition.`,
-      envVars: ["TRACKING_SINK_URL", "TRACKING_SINK_TOKEN"],
+      title: outstandingSinkVars.length === 0
+        ? "Tracking sink — genesis installed the fleet sink connection; confirm the partition choice"
+        : "Tracking sink — point at the shared owner-DB or provision a dedicated sink",
+      // The partition id is the BARE slug. `trk_<slug>` is the tracking_config OBJECT id — a
+      // different id in a different system — and asserting it here is what taught operators to set
+      // a partition the sink never reads.
+      detail: `Runbook §3, verbatim: "Tracking sink may be one shared owner-DB (partitioned by TRACKING_PROJECT_ID) or per-site — your call." Genesis set TRACKING_PROJECT_ID deterministically to ${slug} — the BARE slug, which is the sink's partition id (the sink answers /api/tracking-sink/stats?project_id=${slug}, and a site with TRACKING_PROJECT_ID unset falls back to its own siteShortId, the same bare slug). Do NOT set trk_${slug}: that is the per-tenant tracking_config OBJECT id, and pointing the sink at it writes into a partition nothing reads. Override in the Netlify console only if this tenant genuinely needs a different partition. ${outstandingSinkVars.length === 0
+        ? `${TRACKING_SINK_URL_ENV} and ${TRACKING_SINK_TOKEN_ENV} were installed by genesis from this deployment's own fleet values (scoped for builds as well as functions, so the repo's postbuild tracking-dims-push step sees them at BUILD time) — nothing to paste unless this tenant needs a DEDICATED sink instead of the fleet one.`
+        : `${outstandingSinkVars.join(" and ")} ${outstandingSinkVars.length === 1 ? "is" : "are"} NOT configured on the CMS-Agent deployment that ran genesis, so genesis could not install ${outstandingSinkVars.length === 1 ? "it" : "them"} — an empty value is never written. Set ${outstandingSinkVars.length === 1 ? "it" : "them"} on the new Netlify site by hand with a scope set that includes BUILDS as well as functions (functions-only is why drluriescience's dims counters sat at zero), or configure the fleet value on this deployment so the next genesis installs ${outstandingSinkVars.length === 1 ? "it" : "them"} automatically.`}`,
+      ...(outstandingSinkVars.length > 0 ? { envVars: outstandingSinkVars } : {}),
       source: "site-provisioning-runbook.md §3 / T11.7 env table"
     },
     {
       id: "fleet_shared_keys",
       title: "Confirm the remaining fleet-shared AI/integration values are present — reuse, never mint per-client",
-      detail: "Runbook §3 + T11.7 env table: ANTHROPIC_API_KEY, OPENAI_API_KEY and NETLIFY_AUTH_TOKEN are fleet-shared — \"reuse the existing fleet values, never mint per-client copies.\" CMS_AGENT_MCP_ENDPOINT and the site's scoped CMS_AGENT_MCP_TOKEN are installed by genesis and are not human checklist items.",
-      envVars: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NETLIFY_AUTH_TOKEN"],
+      detail: `Runbook §3 + T11.7 env table: ANTHROPIC_API_KEY, OPENAI_API_KEY and ${NETLIFY_AUTH_TOKEN_ENV} are fleet-shared — "reuse the existing fleet values, never mint per-client copies." CMS_AGENT_MCP_ENDPOINT and the site's scoped CMS_AGENT_MCP_TOKEN are installed by genesis and are not human checklist items. ${provisionedFleet.includes(NETLIFY_AUTH_TOKEN_ENV)
+        ? `${NETLIFY_AUTH_TOKEN_ENV} is no longer one either: genesis installed it from this deployment's own fleet value. The AI keys remain human because this deployment does not carry the tenant-facing copies.`
+        : `${NETLIFY_AUTH_TOKEN_ENV} is NOT configured on the CMS-Agent deployment that ran genesis, so genesis could not install it — an empty value is never written — and it stays a human step here.`}`,
+      envVars: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", ...outstandingFleet([NETLIFY_AUTH_TOKEN_ENV])],
       source: "T11.7 env table / site-provisioning-runbook.md §3"
     },
     input.registeredMcpEndpoint
@@ -678,6 +786,10 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   const cmsAgentPublicMcpEndpoint = mode === "live" ? resolveCmsAgentPublicMcpEndpoint(env) : env[CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV]?.trim() || "https://cms-agent.example/mcp";
   const ledger: GenesisAction[] = [];
   const platformRoot = env[PLATFORM_REPO_ROOT_ENV]?.trim();
+  // Which fleet-shared tracking/deploy values THIS deployment can hand the new tenant (T21.8).
+  // Resolved once, up front: it decides both what gets installed and what the checklist still asks a
+  // human for — the two must never disagree.
+  const genesisFleetEnv = resolveGenesisFleetEnvVars(env);
 
   // 1. Scaffold (filesystem, via the platform seam) — when a checkout is mounted.
   let scaffoldExecuted = false;
@@ -757,7 +869,32 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     // NETLIFY_BUILD_HOOK_URL is a capability URL — set secret-flagged, recorded by NAME only. In
     // dry-run mode setEnvVar records the intent without a value ever existing.
     await netlify.setEnvVar(envAccount, siteId, "NETLIFY_BUILD_HOOK_URL", hook.url ?? "", { isSecret: true, scopes: ["functions"], context: "production" });
-    await netlify.setEnvVar(envAccount, siteId, "TRACKING_PROJECT_ID", `trk_${slug}`);
+    // The tracking partition id is the BARE slug — see the header note (4). `trk_<slug>` is the
+    // tracking_config OBJECT id, not a sink partition, and installing it here wrote every
+    // genesis-provisioned tenant's events into a partition nothing reads.
+    //
+    // Left on setEnvVar's DEFAULT scopes deliberately: `builds` is REQUIRED, because the site repo's
+    // postbuild `scripts/tracking-dims-push.mjs` reads TRACKING_PROJECT_ID at BUILD time. Narrowing
+    // this (or the sink pair below) to ["functions"] is exactly the live drluriescience bug that
+    // left the tracking `dims` counters at zero.
+    await netlify.setEnvVar(envAccount, siteId, "TRACKING_PROJECT_ID", slug);
+
+    // The fleet-shared tracking/deploy values, installed from THIS deployment's own environment so
+    // that tracking is provisioned BY GENESIS rather than pasted per tenant. Same default scopes,
+    // same `builds` requirement; secrets are written per-context (never "all" — see setEnvVar).
+    // Anything this deployment does not hold is not written at all and stays on the checklist.
+    for (const fleetVar of genesisFleetEnv.provisioned) {
+      await netlify.setEnvVar(envAccount, siteId, fleetVar.key, fleetVar.value, { isSecret: fleetVar.isSecret });
+    }
+    ledger.push({
+      step: "tracking_fleet_env",
+      kind: genesisFleetEnv.missing.length === 0 ? (mode === "dry_run" ? "dry_run" : "executed") : "requires_human",
+      detail: genesisFleetEnv.missing.length === 0
+        ? `Installed the fleet-shared tracking/deploy values on the new site from this deployment's own environment (names only): ${genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key).join(", ")}. Scoped for builds as well as functions — the repo's postbuild tracking-dims-push step reads them at BUILD time.`
+        : `${genesisFleetEnv.provisioned.length > 0 ? `Installed ${genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key).join(", ")} from this deployment's own environment. ` : ""}NOT configured on this deployment, so genesis could not install ${genesisFleetEnv.missing.join(", ")} — never an empty value: ${genesisFleetEnv.missing.length === 1 ? "it stays" : "they stay"} on the human checklist until the fleet value is present here (or set by hand on the new site).`,
+      at: now(),
+      data: { provisioned: genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key), missing: genesisFleetEnv.missing, scopes: [...NETLIFY_DEFAULT_ENV_SCOPES] }
+    });
   }
 
   // 3. Platform site -> CMS-Agent Client Manager credential. This is part of birth, not a human
@@ -832,7 +969,15 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     data: { projectId: slug, mcpEndpoint, mcpEndpointSource: input.mcpEndpoint ? "caller_supplied" : "derived_from_netlify_site", mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`, tokenEnvVar: `${envPrefix}_MCP_TOKEN`, clientSiteBinding: { netlifySiteName, netlifySiteId: siteId }, allowedCrawlOrigins: [sourceOrigin] }
   });
 
-  const humanChecklist = buildGenesisHumanChecklist({ slug, netlifySiteName, envPrefix, scaffoldExecuted, netlifyMode: mode, registeredMcpEndpoint: mcpEndpoint });
+  const humanChecklist = buildGenesisHumanChecklist({
+    slug,
+    netlifySiteName,
+    envPrefix,
+    scaffoldExecuted,
+    netlifyMode: mode,
+    registeredMcpEndpoint: mcpEndpoint,
+    provisionedFleetEnvVars: genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key)
+  });
   return {
     projectId: slug,
     netlifyMode: mode,
