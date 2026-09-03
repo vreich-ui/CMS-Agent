@@ -80,6 +80,8 @@ describe("the site facts reach artifact_plan on a publishing run (FINDING-C)", (
     // and reported, never refused — the planner can only say so if it can see it.
     expect(intelligence.visualStandard).toEqual({
       houseId: "vis_drlurie",
+      houseStatus: "present",
+      derivedHouseId: "vis_drlurie",
       templates: [{ id: "vis_drlurie_field_notes", label: "Field notes", whenToUse: "Reader case write-ups." }],
       overridePolicy: "lock"
     });

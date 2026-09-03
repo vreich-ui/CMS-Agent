@@ -17,7 +17,10 @@
 //      call. See extractBrandPalette below for why the palette is not named `brandTokens` here.
 //   3. object_list({object_type:'visual_standard'}) — the site's visual_standard objects; kind:'house'
 //      names the singleton (a fallback source for houseId when the site object did not carry one, R2:
-//      `vis_<site>` mirrors `voice_<site>`), kind:'template' entries become `templates`.
+//      `vis_<site>` mirrors `voice_<site>`), kind:'template' entries become `templates`. FIX
+//      (chat-recovery): this read is also what makes `houseStatus` "none" rather than "unknown" — it
+//      is the only one of the five that can prove a site has no house standard, as opposed to merely
+//      failing to find one. See the houseStatus block at the end of this function.
 //   4. list_pdf_templates — the site's published PDF templates.
 //   5. get_image_model_policy — `byUsageContext`'s keys become `imagePolicyContexts`.
 //
@@ -38,6 +41,7 @@ import type { ProjectRepository } from "../repository/interfaces/ProjectReposito
 import { conductorCache, type RunScopedCache } from "./conductor.js";
 import { extractContractPayload } from "./contractPrefetch.js";
 import type { ReducedContractBrandPalette, ReducedContractPdfTemplate, ReducedContractSiteLogo, ReducedContractVisualStandard } from "./contractReduction.js";
+import { visualStandardIdFor } from "./visualStandardIds.js";
 
 export type SitePrefetchWarningCode =
   | "site_project_unresolved"
@@ -49,6 +53,11 @@ export type SitePrefetchWarningCode =
   | "site_logo_absent"
   | "visual_standard_list_blocked"
   | "visual_standard_list_unreachable"
+  // FIX (chat-recovery): the site HAS no house standard — object_list(visual_standard) came
+  // back and named none, and the site object pointed at none. Named, like site_brand_tokens_absent
+  // beside it, because C1's whole posture is that absence is a reported state and not a failure:
+  // the tenant whose backfill has not run is the ordinary case, not a broken one.
+  | "visual_standard_house_absent"
   | "pdf_templates_blocked"
   | "pdf_templates_unreachable"
   | "image_policy_blocked"
@@ -390,6 +399,9 @@ export async function getSitePrefetch(params: SitePrefetchParams, deps: SitePref
     // 3. object_list({object_type:'visual_standard'}) — templates, and a fallback houseId when the
     // site object above did not carry one.
     let templates: Array<{ id: string; label: string; whenToUse?: string }> = [];
+    // FIX (chat-recovery): "the list said there is no house standard" and "the list never answered"
+    // are different facts, and only this flag can tell them apart downstream. See houseStatus below.
+    let visualStandardListRead = false;
     try {
       const arguments_ = { object_type: "visual_standard" };
       const blocking = blockingPolicyFindings(params.projectId, "object_list", arguments_);
@@ -400,6 +412,7 @@ export async function getSitePrefetch(params: SitePrefetchParams, deps: SitePref
         if (!call.ok) {
           warnings.push({ code: "visual_standard_list_unreachable", message: `object_list(visual_standard) failed for project ${params.projectId}: ${call.error ?? "unknown error"}.` });
         } else {
+          visualStandardListRead = true;
           const normalized = extractListItems(call.result).map(normalizeVisualStandardItem).filter((entry): entry is NonNullable<typeof entry> => !!entry);
           if (!houseId) houseId = normalized.find((entry) => entry.kind === "house")?.id;
           templates = normalized.filter((entry) => entry.kind !== "house").map(({ id, label, whenToUse }) => ({ id, label: label ?? "", ...(whenToUse ? { whenToUse } : {}) }));
@@ -409,7 +422,38 @@ export async function getSitePrefetch(params: SitePrefetchParams, deps: SitePref
       warnings.push({ code: "threw", message: `Unexpected error listing visual_standard objects for project ${params.projectId}: ${error instanceof Error ? error.message : String(error)}.` });
     }
 
-    const visualStandard: ReducedContractVisualStandard = { ...(houseId ? { houseId } : {}), templates, overridePolicy };
+    // FIX (chat-recovery) — THE HOUSE STANDARD'S STATE, STATED POSITIVELY.
+    //
+    // `houseId` being undefined used to carry two incompatible meanings at once: "this site has no
+    // house standard yet" and "the read that would have told me did not complete". A consuming prompt
+    // cannot act on an ambiguity, so it did the third thing — treated the gap as a lookup to perform,
+    // assembled `vis_` + the site OBJECT id, and probed `vis_site_<slug>`, an id the convention can
+    // never produce. The tri-state removes the ambiguity at its source.
+    //
+    // The list is the authority: it enumerates every visual_standard the site has, so when it comes
+    // back and names no house entry (and the site object pointed at none), "none" is a fact and not an
+    // inference. When it did NOT come back, nothing here is evidence, and "unknown" says so — the
+    // blocked/unreachable warning already pushed above names which read failed.
+    //
+    // `derivedHouseId` travels in every one of the three states, and deliberately: it is the id the
+    // materializer WOULD write, computed by the same one rule (visualStandardIds.ts), so a node that
+    // needs to name the standard it is offering to create has it in hand and never assembles one. It
+    // is never evidence of existence — `houseStatus` is the only field that says that.
+    const houseStatus: ReducedContractVisualStandard["houseStatus"] = houseId ? "present" : visualStandardListRead ? "none" : "unknown";
+    const derivedHouseId = visualStandardIdFor({ siteObjectId, mode: "house" });
+    if (houseStatus === "none") {
+      warnings.push({
+        code: "visual_standard_house_absent",
+        message: `Project ${params.projectId}'s site "${siteObjectId}" has no house visual_standard yet: object_list(visual_standard) returned no kind:'house' entry and the site object names none. This is the normal state of a site whose house standard has not been written — ${derivedHouseId ? `one would be filed as "${derivedHouseId}"` : "no id can be derived for one because the site object id reduces to no usable segment"}. Nothing should read this as a failure, and nothing should probe for the object.`
+      });
+    }
+    const visualStandard: ReducedContractVisualStandard = {
+      ...(houseId ? { houseId } : {}),
+      houseStatus,
+      ...(derivedHouseId ? { derivedHouseId } : {}),
+      templates,
+      overridePolicy
+    };
 
     // 4. list_pdf_templates.
     let pdfTemplates: ReducedContractPdfTemplate[] | undefined;

@@ -3,6 +3,7 @@ import { getReducedContract } from "../../../src/agent/workspace/contractPrefetc
 import { getSitePrefetch } from "../../../src/agent/workspace/sitePrefetch.js";
 import { RunScopedCache } from "../../../src/agent/workspace/conductor.js";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
+import { visualStandardIdFor } from "../../../src/agent/workspace/visualStandardIds.js";
 
 const ENDPOINT = "https://dr-lurie.example/mcp";
 
@@ -236,6 +237,8 @@ describe("getSitePrefetch (C1 site/visual-standard/PDF-template/image-policy pre
 
     expect(result.visualStandard).toEqual({
       houseId: "vis_drlurie",
+      houseStatus: "present",
+      derivedHouseId: "vis_drlurie",
       templates: [{ id: "vis_drlurie_ad", label: "Ad campaign", whenToUse: "Paid ad creative only." }],
       overridePolicy: "lock"
     });
@@ -315,11 +318,84 @@ describe("getSitePrefetch (C1 site/visual-standard/PDF-template/image-policy pre
 
     // houseId still resolves — it came from the site object, not the list — so only the templates
     // array and the warning reflect the degradation.
-    expect(result.visualStandard).toEqual({ houseId: "vis_drlurie", templates: [], overridePolicy: "lock" });
+    // houseStatus is "present" because the SITE OBJECT named the standard; the failed list is why
+    // templates is empty, and it never turns a known-present standard into an unknown one.
+    expect(result.visualStandard).toEqual({ houseId: "vis_drlurie", houseStatus: "present", derivedHouseId: "vis_drlurie", templates: [], overridePolicy: "lock" });
     expect(result.warnings).toContainEqual(expect.objectContaining({ code: "visual_standard_list_unreachable" }));
     // Not a failure: the other two independent reads still resolved normally.
     expect(result.pdfTemplates).toBeDefined();
     expect(result.imagePolicyContexts).toBeDefined();
+  });
+
+  // FIX (chat-recovery) — THE ACCEPTANCE CASE. A site whose house standard has never been written is
+  // the ordinary state of every tenant the backfill has not reached, and it must reach a node as a
+  // POSITIVE "none", not as an undefined houseId that reads like a lookup waiting to be performed.
+  // The live incident: a fresh chat listed a tenant's visual standards (correctly empty), then
+  // assembled `vis_` + the SITE OBJECT id and called object_get("vis_site_drlurie") — an id the
+  // convention can never mint — and the editor got a red "Object record not found".
+  const respondWithoutHouseStandard = (overrides: { listFails?: boolean } = {}) => {
+    remoteFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { method: string; params?: { name?: string; arguments?: Record<string, unknown> } };
+      const name = request.params?.name ?? "";
+      remoteCalls.push({ name: request.params?.name, arguments: request.params?.arguments });
+      if (overrides.listFails && name === "object_list") {
+        return { ok: false, status: 503, text: async () => "unavailable", json: async () => ({}) } as unknown as Response;
+      }
+      let structuredContent = request.method === "tools/call" ? HAPPY_PATH_RESPONSES[name] : undefined;
+      if (name === "object_get") {
+        // A real un-backfilled site object: brand tokens and logo, and NO visual standard reference.
+        structuredContent = { object: { pdf: { defaultTemplateId: "tmpl_article" }, brandTokens: { colors: { primary: "#2E5C42" } }, logo: { text: "Mark", imageAssetRef: "https://cdn.example/mark.svg" } } };
+      }
+      if (name === "object_list") structuredContent = { items: [] };
+      const result = structuredContent !== undefined ? { structuredContent } : {};
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
+    });
+  };
+
+  it("states 'none' positively for a site with no house standard yet, and derives the id one would take", async () => {
+    respondWithoutHouseStandard();
+    const projectRepository = new MemoryProjectRepository();
+    const result = await getSitePrefetch({ runId: "run-site-none", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
+
+    // "This site has no house standard" is SAID, not inferred from a hole. houseId stays absent
+    // because there is no object to name; houseStatus is what a consuming prompt reads.
+    expect(result.visualStandard?.houseStatus).toBe("none");
+    expect(result.visualStandard?.houseId).toBeUndefined();
+    // The id a house standard for this site WOULD take, derived by the one rule the materializer
+    // writes with — so no node ever assembles one, and none of them is `vis_site_drlurie`.
+    expect(result.visualStandard?.derivedHouseId).toBe("vis_drlurie");
+    expect(result.visualStandard?.derivedHouseId).toBe(visualStandardIdFor({ siteObjectId: "site_drlurie", mode: "house" }));
+    expect(result.visualStandard?.derivedHouseId).not.toBe("vis_site_drlurie");
+    // Absence is a NAMED degradation (the executor stamps site_prefetch_degraded:<code> on the run),
+    // never a failure: the other reads resolved and the prefetch returned normally.
+    expect(result.warnings).toContainEqual(expect.objectContaining({ code: "visual_standard_house_absent" }));
+    expect(result.pdfTemplates).toBeDefined();
+    expect(result.imagePolicyContexts).toBeDefined();
+  });
+
+  it("distinguishes 'unknown' from 'none' when the visual_standard list never answered", async () => {
+    respondWithoutHouseStandard({ listFails: true });
+    const projectRepository = new MemoryProjectRepository();
+    const result = await getSitePrefetch({ runId: "run-site-unknown", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
+
+    // The list is the only read that can PROVE a site has no house standard. It did not answer, and
+    // the site object named none, so nothing here is evidence either way — and saying "none" would
+    // invite an offer to write a standard that may already exist.
+    expect(result.visualStandard?.houseStatus).toBe("unknown");
+    expect(result.visualStandard?.houseId).toBeUndefined();
+    // The derived id travels in every state; it is never evidence that the object exists.
+    expect(result.visualStandard?.derivedHouseId).toBe("vis_drlurie");
+    expect(result.warnings).toContainEqual(expect.objectContaining({ code: "visual_standard_list_unreachable" }));
+    expect(result.warnings.map((warning) => warning.code)).not.toContain("visual_standard_house_absent");
+  });
+
+  it("states 'present' — with the real id, not the derived one — for a site that has a house standard", async () => {
+    const projectRepository = new MemoryProjectRepository();
+    const result = await getSitePrefetch({ runId: "run-site-present", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
+
+    expect(result.visualStandard?.houseStatus).toBe("present");
+    expect(result.visualStandard?.houseId).toBe("vis_drlurie");
+    expect(result.warnings.map((warning) => warning.code)).not.toContain("visual_standard_house_absent");
   });
 
   it("degrades to a warning, not a failure, when list_pdf_templates is unreachable", async () => {

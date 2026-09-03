@@ -69,7 +69,7 @@ describe("canonical client_manager workspace definition", () => {
   // aggression inputs and media request are carried, the request id is caller-supplied, and a
   // blocked/failed run is reported reusable-first.
   it("rev 3 carries the 'Starting and reporting production' rules and rev 2 is superseded", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(5);
+    expect(createCanonicalClientManagerAgent().rev).toBe(6);
     expect(CLIENT_MANAGER_PROMPT).toContain("## Starting and reporting production");
     expect(CLIENT_MANAGER_PROMPT).toContain("pass the editor's brief verbatim as `input.instructions` — never summarise or shorten it");
     expect(CLIENT_MANAGER_PROMPT).toContain("Set `trafficSource` and `awarenessStage` (ask if unknown)");
@@ -77,7 +77,7 @@ describe("canonical client_manager workspace definition", () => {
     expect(CLIENT_MANAGER_PROMPT).toContain("Supply `requestId` in the client's request-id form when the tool requires one.");
     expect(CLIENT_MANAGER_PROMPT).toContain("first name what was produced and is reusable (for example a completed draft), then what failed.");
     // Every earlier canonical text (rev 1 and rev 2) is superseded and upgradeable.
-    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(4);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(5);
     for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).toContain("## Candidates in learning mode");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).not.toContain("## Starting and reporting production");
@@ -90,7 +90,7 @@ describe("canonical client_manager workspace definition", () => {
   // raw verb path could create AND publish an article carrying none of the judge/score substrate.
   // These assertions are the regression wall for both. A deletion here is a live defect.
   it("rev 4 carries read-before-you-write and the single article production path", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(5);
+    expect(createCanonicalClientManagerAgent().rev).toBe(6);
 
     // Contract-first: the block platform's systemPrompt() used to send and CA6 left behind.
     expect(CLIENT_MANAGER_PROMPT).toContain("## Read before you write");
@@ -120,7 +120,7 @@ describe("canonical client_manager workspace definition", () => {
   // the only channel that reaches the image model's brand resolution at all. The prompt now routes
   // that request through the visual identity workflow's template mode instead of through prose.
   it("rev 5 routes a one-off look through a named standard, never through words in the brief", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(5);
+    expect(createCanonicalClientManagerAgent().rev).toBe(6);
 
     expect(CLIENT_MANAGER_PROMPT).toContain("## A one-off look for a set of articles");
     // The look is written down once and pointed at — never described into the brief or the prompt.
@@ -138,6 +138,33 @@ describe("canonical client_manager workspace definition", () => {
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[3]).toContain("## One production path for articles");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[3]).not.toContain("## A one-off look for a set of articles");
     expect(classifyConversationalAgentPrompt(SUPERSEDED_CLIENT_MANAGER_PROMPTS[3])).toBe("superseded");
+  });
+
+  // FIX (chat-recovery) — rev 6. A fresh chat on a site whose house imagery standard had never been
+  // written listed the site's visual standards (correctly empty), then assembled an id from the
+  // `vis_` prefix and the SITE OBJECT's id and looked it up. The convention puts the site's SHORT
+  // NAME in that segment, never another object's id, so the constructed id could not exist — and the
+  // editor saw a red not-found card describing a site that was simply new. Nothing in the prompt had
+  // named the convention, and nothing had said that an empty list is itself the answer.
+  it("rev 6 forbids assembling an object id and makes an empty list an answer, not a dead end", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(6);
+
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Object ids you were not given");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never assemble an object id/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never the id of another object/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/an empty list is an answer/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never follow an empty list with a lookup of a name you constructed/i);
+    // The house-standard case by name: report it, offer to write one, claim nothing in the meantime.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/the house look has never been written/i);
+    expect(CLIENT_MANAGER_PROMPT).toContain("visual identity workflow in house mode");
+    // The same rule reaches editorial voice and tracking configuration, which share the convention.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/editorial voice, its tracking configuration/i);
+
+    // Still project-neutral, and rev 5 is superseded rather than deleted.
+    expect(CLIENT_MANAGER_PROMPT).not.toMatch(/dr-lurie|fernwell|platform/i);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[4]).toContain("## A one-off look for a set of articles");
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[4]).not.toContain("## Object ids you were not given");
+    expect(classifyConversationalAgentPrompt(SUPERSEDED_CLIENT_MANAGER_PROMPTS[4])).toBe("superseded");
   });
 
   it("classifies stored prompts against the shipped canonical text", () => {

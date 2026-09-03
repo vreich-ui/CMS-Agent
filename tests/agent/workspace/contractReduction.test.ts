@@ -148,7 +148,7 @@ describe("reduceContract (F1 deterministic contract reduction)", () => {
   describe("siteFields (C1)", () => {
     it("merges visualStandard/pdfTemplates/imagePolicyContexts in when supplied", () => {
       const siteFields = {
-        visualStandard: { houseId: "vis_drlurie", templates: [{ id: "vis_drlurie_ad", label: "Ad campaign" }], overridePolicy: "lock" as const },
+        visualStandard: { houseId: "vis_drlurie", houseStatus: "present" as const, derivedHouseId: "vis_drlurie", templates: [{ id: "vis_drlurie_ad", label: "Ad campaign" }], overridePolicy: "lock" as const },
         pdfTemplates: [{ templateId: "tmpl_article", isDefault: true }],
         imagePolicyContexts: ["article_body"]
       };

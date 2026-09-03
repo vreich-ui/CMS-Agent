@@ -43,6 +43,7 @@ import { ProjectMcpAdapter, type CallToolResult } from "../projects/projectMcpAd
 import { describeMcpErrorResult } from "../projects/clientToolResult.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { repositoryManager } from "../runtime/repositories.js";
+import { visualStandardIdFor } from "./visualStandardIds.js";
 
 export const BRAND_IMAGERY_WRITER_NODE_ID = "brand_imagery_writer";
 export const VISUAL_STANDARD_MATERIALIZER_NODE_ID = "visual_standard_materializer";
@@ -80,20 +81,15 @@ export const readVisualStandardMaterializer = (node: Pick<WorkspaceNode, "metada
 // `site_drlurie` gets `vis_drlurie` next to its own `voice_drlurie`. Derived, never guessed from the
 // projectId: the two differ (project "dr-lurie", site "site_drlurie") and the object namespace is the
 // site's.
-
-export const siteSlugFromObjectId = (siteObjectId: string): string => siteObjectId.replace(/^site_/, "").trim();
-
-// Lowercase alphanumerics + underscore, matching the id vocabulary every other `<prefix>_<site>`
-// singleton in this codebase uses. A slug that sanitizes to nothing is a refusal, never a silent "".
-const sanitizeIdSegment = (value: string): string => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-
-export function visualStandardIdFor(params: { siteObjectId: string; mode: "house" | "template"; templateSlug?: string }): string | undefined {
-  const site = sanitizeIdSegment(siteSlugFromObjectId(params.siteObjectId));
-  if (!site) return undefined;
-  if (params.mode === "house") return `vis_${site}`;
-  const slug = sanitizeIdSegment(params.templateSlug ?? "");
-  return slug ? `vis_${site}_${slug}` : undefined;
-}
+//
+// FIX (chat-recovery): the rule itself MOVED to `visualStandardIds.ts` and is only re-exported here.
+// This module is the WRITE path — it imports the project repository, the MCP adapter and the tool
+// permission machinery — so the READ path (sitePrefetch.ts, which has to tell a node the id a house
+// standard occupies or would occupy) could not import it without dragging all of that along, and
+// therefore did not derive the id at all. An id nobody derives is an id something eventually guesses;
+// see visualStandardIds.ts's header for the guess this split exists to prevent. The re-exports keep
+// every existing importer of this module working unchanged.
+export { siteSlugFromObjectId, visualStandardIdFor } from "./visualStandardIds.js";
 
 // A reference id is STABLE PER IMAGE, never positional: BRIEF §3.1's own note is that "a reordered
 // mood board must not silently repoint an existing note/weight/region onto a different image". So it
