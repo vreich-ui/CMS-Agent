@@ -216,4 +216,22 @@ describe("toolError classification", () => {
       }
     });
   });
+
+  // Chat-recovery (2026-09-03 admin-chat incident): the point of the new code is that the caller
+  // can ACT on it. The envelope must name the outcome (start a new chat) rather than handing back
+  // another model_error the chat would just retry into the same permanent 400.
+  it("gives a conversation_needs_reset failure an envelope the chat can act on", () => {
+    const error = new ConverseError("conversation_needs_reset", "This conversation's saved history is in a state this model will not accept.", {
+      providerStatus: 400,
+      providerMessage: "`tool_use` ids were found without `tool_result` blocks immediately after: toolu_b",
+      operatorAction: "Start a new conversation; this transcript cannot be replayed to the model."
+    });
+
+    expect(toolError(error).error).toMatchObject({
+      code: "conversation_needs_reset",
+      providerStatus: 400,
+      operatorAction: expect.stringContaining("Start a new conversation")
+    });
+    expect(toolErrorSummary(toolError(error))).toContain("conversation_needs_reset");
+  });
 });

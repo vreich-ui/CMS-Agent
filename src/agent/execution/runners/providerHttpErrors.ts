@@ -35,3 +35,17 @@ export function operatorActionForProviderHttpError(code: ProviderHttpErrorCode, 
 export function operatorActionForBudgetExceeded(budgetUsd: number, spentUsd: number): string {
   return `Run budget ${budgetUsd} USD reached (spent ${spentUsd}). Raise the budget or stop.`;
 }
+
+// Request-shape rejection (2026-09-03 admin-chat incident). A provider 400/422 that complains about
+// the SHAPE of the request — an unanswered `tool_use`, an unmatched `tool_result`, an empty content
+// block — is the one provider failure a retry can actually fix, because we control the shape. It has
+// to be told apart from the other things a 400 can mean: Anthropic returns 400 for an exhausted
+// credit balance too, and re-sending a differently-shaped transcript would not help there.
+const SHAPE_SIGNAL = /tool_use|tool_result|tool_call|content block|non-?empty|must alternate|roles must|messages\.|messages\[|"messages"|invalid_request_error/i;
+const NOT_SHAPE_SIGNAL = /credit|billing|quota|payment|overloaded|rate.?limit|api.?key|authentication|permission|not_found|model.{0,12}(not found|does not exist)/i;
+
+export function isProviderRequestShapeRejection(status: number | undefined, signalText: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  if (NOT_SHAPE_SIGNAL.test(signalText)) return false;
+  return SHAPE_SIGNAL.test(signalText);
+}
