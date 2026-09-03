@@ -35,7 +35,13 @@ export const converseErrorCodes = [
   // chat shows the real cause instead of a generic model_error/"service unavailable". budget_exceeded
   // stays reserved for OUR OWN usd budget guard — it is never produced from a provider signal.
   "provider_quota",
-  "provider_rate_limit"
+  "provider_rate_limit",
+  // Chat-recovery (2026-09-03 incident): the transcript itself is the thing the provider refuses,
+  // and it will refuse it on every future turn too — so the failure is reported as what it is, a
+  // conversation that has to be restarted, instead of an opaque model_error the caller can only
+  // retry into the same wall. Raised only after the send-time sanitiser has already tried to repair
+  // the transcript and the provider rejected the repaired shape as well.
+  "conversation_needs_reset"
 ] as const;
 export type ConverseErrorCode = typeof converseErrorCodes[number];
 

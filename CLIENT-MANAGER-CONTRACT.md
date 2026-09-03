@@ -65,7 +65,7 @@ Exactly one of these strict shapes is accepted:
 { "role": "tool", "tool_call_id": "call_1", "content": "...", "is_error": false }
 ```
 
-For an assistant message, `text` and `tool_calls` are individually optional but at least one must be present. Tool names match `^[A-Za-z0-9_-]{1,64}$`. A tool result must answer a call in the immediately preceding assistant turn; parallel results may be consecutive. A desynchronized transcript is `invalid_turn_request`.
+For an assistant message, `text` and `tool_calls` are individually optional but at least one must be present. Tool names match `^[A-Za-z0-9_-]{1,64}$`. A tool result must answer a call in the immediately preceding assistant turn; parallel results may be consecutive. A desynchronized transcript is `invalid_turn_request`. Note that a tool call the caller never answered is **not** rejected here — the caller cannot always record a result for a tool run that failed or was interrupted — so the send-time sanitiser completes it instead (see Provider behavior).
 
 The transcript bound is both:
 
@@ -128,7 +128,9 @@ Caller context is explicitly labelled untrusted data. CMS-Agent performs no plac
 - OpenAI-family definitions issue one Chat Completions request with tools in function-calling format.
 - Anthropic definitions issue one Messages request with tools in `input_schema` format.
 - Neither family executes tool calls inside CMS-Agent in this mode.
-- Provider cancellation/elapsed timeout is `model_timeout`; other provider failures are `model_error`.
+- Provider cancellation/elapsed timeout is `model_timeout`; other provider failures are `model_error`, carrying the provider's own message (truncated to 500 characters) on `providerMessage` alongside `providerStatus`.
+- **The transcript is sanitised at send time** (2026-09-03 chat-recovery incident). CMS-Agent never sends a transcript whose shape the provider rejects: every `tool_use` is answered by a `tool_result` with the same id in the next message, every `tool_result` answers a call that is present, and no message carries empty or whitespace-only content. Repairs are visible, not silent — an unanswered tool call gains a synthetic error result stating that it never returned, and an unmatchable tool result is restated as text. A transcript that is already well formed is sent byte for byte unchanged.
+- If a provider nonetheless rejects the request **on shape** (a 400/422 about `tool_use`/`tool_result`/content blocks — not a rate limit, not an exhausted credit balance, not a timeout), the turn is retried **once** with the tool exchanges flattened into plain text. If that is refused too, the turn fails as `conversation_needs_reset`, whose message and `operatorAction` tell the editor to start a new chat. No conversation can reach a state where every future turn fails with an opaque `model_error` forever.
 - `budget_exceeded` is reserved for an explicit provider/request-constraint budget rejection. CA3 introduces **no stored per-conversation budget ceiling**. Conversation spend is metering-only through usage records.
 
 ## Replay and concurrency
@@ -150,7 +152,9 @@ The turn repository keeps the last **200** completed records per conversation an
 
 The frozen tool-error codes are:
 
-`unknown_project | project_disabled | agent_unresolved | transcript_too_large | model_timeout | model_error | budget_exceeded | invalid_turn_request`
+`unknown_project | project_disabled | agent_unresolved | transcript_too_large | model_timeout | model_error | budget_exceeded | invalid_turn_request | provider_quota | provider_rate_limit | conversation_needs_reset`
+
+`provider_quota` and `provider_rate_limit` split a provider's own 429 by cause (2026-08-29). `conversation_needs_reset` (2026-09-03) means this conversation's stored transcript cannot be replayed to the model even after repair: the caller should start a new conversation rather than retry this one.
 
 They appear in the existing MCP JSON-RPC error envelope at `error.data.error.code`; the JSON-RPC message begins with the same code. No error implies that a tool executed or that content changed.
 
