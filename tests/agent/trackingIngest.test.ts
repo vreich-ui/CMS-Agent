@@ -34,6 +34,7 @@ const throwingFetch = (error: Error): typeof fetch => (async () => { throw error
 const row = (nodeId: string, runId: string, overrides: Record<string, unknown> = {}) => ({
   node_id: nodeId,
   run_id: runId,
+  pageviews: 4100,
   exposures: 1200,
   sessions: 340,
   completion_rate: 0.42,
@@ -53,7 +54,7 @@ const deps = (fetchImpl: typeof fetch, env: NodeJS.ProcessEnv = CONFIGURED_ENV) 
 describe("trackingMetricsFromRow", () => {
   it("projects a row onto the fixed engagement.v1 metric vector", () => {
     expect(trackingMetricsFromRow(row("draft_writer", "run_1"))).toEqual({
-      exposures: 1200, sessions: 340, completion_rate: 0.42, cta_ctr: 0.08, purchase_rate: 0.011, revenue_cents: 45900, p75_dwell_ms: 38000
+      pageviews: 4100, exposures: 1200, sessions: 340, completion_rate: 0.42, cta_ctr: 0.08, purchase_rate: 0.011, revenue_cents: 45900, p75_dwell_ms: 38000
     });
     expect(Object.keys(trackingMetricsFromRow(row("n", "r")))).toEqual([...TRACKING_METRIC_KEYS]);
   });
@@ -109,7 +110,7 @@ describe("ingestTrackingRollups", () => {
     const first = feedback.find((record) => record.runId === "run_a");
     expect(first?.nodeId).toBe("draft_writer");
     expect(first?.outcome?.source).toBe(TRACKING_OUTCOME_SOURCE);
-    expect(first?.outcome?.metrics).toEqual({ exposures: 1200, sessions: 340, completion_rate: 0.42, cta_ctr: 0.08, purchase_rate: 0.011, revenue_cents: 45900, p75_dwell_ms: 38000 });
+    expect(first?.outcome?.metrics).toEqual({ pageviews: 4100, exposures: 1200, sessions: 340, completion_rate: 0.42, cta_ctr: 0.08, purchase_rate: 0.011, revenue_cents: 45900, p75_dwell_ms: 38000 });
     expect(first?.note).toBe("window 2026-08-29..2026-08-30");
   });
 
@@ -123,12 +124,59 @@ describe("ingestTrackingRollups", () => {
     const { url, init } = calls[0]!;
     expect(url.pathname.endsWith("/rollups")).toBe(true);
     expect(url.searchParams.get("by")).toBe("producer");
-    expect(url.searchParams.get("project")).toBe("trk_demo");
+    expect(url.searchParams.get("project_id")).toBe("trk_demo");
     expect(url.searchParams.get("from")).toBe("2026-08-29");
     expect(url.searchParams.get("to")).toBe("2026-08-30");
-    expect(url.searchParams.get("node")).toBe("draft_writer");
     expect(init?.method).toBe("GET");
     expect((init?.headers as Record<string, string>).Authorization).toBe(`Bearer ${CONFIGURED_ENV[TRACKING_SINK_TOKEN_ENV]}`);
+  });
+
+  // CONTRACT TEST — kugel-data netlify/functions/_shared/rollups.ts → parseRollupParams. These three
+  // rules are the whole reason the bridge returned 400 for a week: `project=` instead of `project_id=`,
+  // a `node` param the sink does not implement, and ISO date-times where it demands calendar days.
+  // Changing any expectation here means the sink changed too — check the other repo first.
+  it("sends exactly the query params the sink parses, and no others", async () => {
+    const calls: FetchCall[] = [];
+    await ingestTrackingRollups(
+      { projectId: "trk_demo", from: "2026-08-29", to: "2026-08-30", nodeId: "draft_writer" },
+      deps(jsonFetch({ rows: [] }, 200, calls))
+    );
+    const names = [...calls[0]!.url.searchParams.keys()].sort();
+    expect(names).toEqual(["by", "from", "project_id", "to"]);
+    // The sink rejects an unknown `project` and has no producer filter — neither may be sent.
+    expect(calls[0]!.url.searchParams.has("project")).toBe(false);
+    expect(calls[0]!.url.searchParams.has("node")).toBe(false);
+  });
+
+  it("truncates an ISO date-time window to the strict YYYY-MM-DD the sink requires", async () => {
+    const calls: FetchCall[] = [];
+    await ingestTrackingRollups(
+      { projectId: "trk_demo", from: "2026-08-29T00:00:00.000Z", to: "2026-08-30T23:59:59.999Z" },
+      deps(jsonFetch({ rows: [] }, 200, calls))
+    );
+    expect(calls[0]!.url.searchParams.get("from")).toBe("2026-08-29");
+    expect(calls[0]!.url.searchParams.get("to")).toBe("2026-08-30");
+  });
+
+  it("narrows to the requested node client-side, keeping rows that name none", async () => {
+    const result = await ingestTrackingRollups(
+      { projectId: "trk_demo", from: "2026-08-29", to: "2026-08-30", nodeId: "draft_writer" },
+      deps(
+        jsonFetch({
+          rows: [
+            { node_id: "draft_writer", run_id: "run_a", pageviews: 12 },
+            { node_id: "image_picker", run_id: "run_b", pageviews: 30 },
+            { run_id: "run_c", pageviews: 5 }
+          ]
+        })
+      )
+    );
+    expect(result.rows).toBe(2);
+    expect(result.ingested.map((entry) => entry.runId)).toEqual(["run_a", "run_c"]);
+  });
+
+  it("carries pageviews on the engagement.v1 metric vector", () => {
+    expect(trackingMetricsFromRow({ pageviews: 240, exposures: 0 })).toEqual({ pageviews: 240, exposures: 0 });
   });
 
   it("attributes a row with no node of its own to the requested nodeId", async () => {

@@ -27,6 +27,7 @@ export const TRACKING_OUTCOME_SOURCE = "tracking:engagement.v1";
 // The engagement.v1 metric set, in wire (snake_case) spelling. Anything else on a row is ignored —
 // the record is a fixed, comparable metric vector, not a dump of whatever the sink happens to emit.
 export const TRACKING_METRIC_KEYS = [
+  "pageviews",
   "exposures",
   "sessions",
   "completion_rate",
@@ -86,6 +87,26 @@ const producerField = (row: Record<string, unknown>, snake: string, camel: strin
   const nested = (typeof row.producer === "object" && row.producer ? row.producer : {}) as Record<string, unknown>;
   return asString(row[snake]) ?? asString(row[camel]) ?? asString(nested[snake]) ?? asString(nested[camel]);
 };
+
+// ── the sink's query contract ────────────────────────────────────────────────
+// Pinned here, and asserted by tests/agent/trackingIngest.test.ts, because the two repos drifted once
+// already: this bridge sent `project=` while the sink (kugel-data
+// netlify/functions/_shared/rollups.ts → parseRollupParams) requires `project_id=` and answers 400
+// `project_id is required` to anything else. The sink has NO producer filter — v_producer_window rows
+// come back whole — so `nodeId` is honoured client-side, not as a query param.
+export const ROLLUPS_QUERY_PARAM_NAMES = Object.freeze({
+  by: "by",
+  projectId: "project_id",
+  from: "from",
+  to: "to"
+} as const);
+
+/**
+ * The sink accepts strict YYYY-MM-DD calendar days (rollups.ts → parseDay) and 400s on anything else,
+ * an ISO date-time included. Callers pass whatever window they hold, so the day is taken off the front
+ * here rather than trusted.
+ */
+export const toSinkDay = (value: string): string => String(value ?? "").trim().slice(0, 10);
 
 /** Stable key for one rollup row: the producer identity the sink grouped by. */
 export const producerKeyOf = (nodeId: string | undefined, runId: string | undefined): string => `${nodeId ?? "unknown"}:${runId ?? "unknown"}`;
@@ -148,11 +169,10 @@ export async function ingestTrackingRollups(params: TrackingIngestParams, deps: 
   let rows: Array<Record<string, unknown>>;
   try {
     const url = new URL(`${env[TRACKING_SINK_URL_ENV]!.trim().replace(/\/+$/, "")}/rollups`);
-    url.searchParams.set("by", "producer");
-    url.searchParams.set("project", params.projectId);
-    url.searchParams.set("from", params.from);
-    url.searchParams.set("to", params.to);
-    if (params.nodeId) url.searchParams.set("node", params.nodeId);
+    url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.by, "producer");
+    url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.projectId, params.projectId);
+    url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.from, toSinkDay(params.from));
+    url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.to, toSinkDay(params.to));
     const response = await fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${env[TRACKING_SINK_TOKEN_ENV]!.trim()}`, Accept: "application/json" },
@@ -169,6 +189,16 @@ export async function ingestTrackingRollups(params: TrackingIngestParams, deps: 
     return result;
   } finally {
     clearTimeout(timer);
+  }
+
+  // The sink cannot narrow to one producer, so a caller that named a node gets the narrowing here.
+  // A row that names no node still passes: params.nodeId is its attribution fallback below.
+  if (params.nodeId) {
+    const wanted = params.nodeId;
+    rows = rows.filter((row) => {
+      const rowNodeId = producerField(row, "node_id", "nodeId");
+      return rowNodeId === undefined || rowNodeId === wanted;
+    });
   }
 
   result.rows = rows.length;
