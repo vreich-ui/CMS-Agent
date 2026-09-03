@@ -115,6 +115,8 @@ describe("buildDeterministicContractIntelligence (unit)", () => {
   const SITE_FIELDS: Pick<ReducedContract, "visualStandard" | "pdfTemplates" | "imagePolicyContexts"> = {
     visualStandard: {
       houseId: "vis_drlurie",
+      houseStatus: "present",
+      derivedHouseId: "vis_drlurie",
       templates: [{ id: "vis_drlurie_ad", label: "Ad campaign", whenToUse: "Paid ad creative only." }],
       overridePolicy: "lock"
     },

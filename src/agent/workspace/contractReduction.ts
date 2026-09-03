@@ -36,9 +36,37 @@ export type ContractSource = { tool: string; fetchedAtISO: string; fingerprint: 
 // independently degrading with a named warningCode, and a caller merges the result into a
 // ReducedContract via reduceContract's optional siteFields parameter below.
 export type ReducedContractVisualStandard = {
-  // The site's singleton house standard's object id (`vis_<site>`, R2) — absent only when neither the
-  // site object nor the visual_standard list named one.
+  // The site's singleton house standard's object id (`vis_<site>`, R2). Present if and only if
+  // `houseStatus` is "present" — read `houseStatus`, not this field's absence, to decide what to do.
   houseId?: string;
+  // FIX (chat-recovery) — THE ABSENCE IS NOW POSITIVELY STATED, and this is the field that states it.
+  //
+  // `houseId` alone could not distinguish two facts that call for opposite behaviour: "this site has
+  // no house visual standard yet" (the normal state of every tenant whose backfill has not run, and an
+  // invitation to offer to write one) and "the read that would have told me degraded" (say so; do not
+  // act as if the site is new). Undefined meant both, so a consuming prompt read it as neither — as
+  // "go and find it" — and a fresh chat on a tenant with no standard duly ran object_list, got
+  // nothing, assembled `vis_` + the SITE OBJECT id, and called object_get on `vis_site_drlurie`: an id
+  // the convention can never produce, surfaced to the editor as a red "Object record not found".
+  //
+  //   "present" — `houseId` holds the site's real house standard id.
+  //   "none"    — object_list(visual_standard) SUCCEEDED and named no house entry, and the site object
+  //               pointed at none either. The site genuinely has no house standard yet. Not an error.
+  //   "unknown" — the list did not complete (blocked, unreachable, threw) and the site object named
+  //               none, so nothing here is evidence either way. A separate named warning says which.
+  //
+  // Always set, never optional: a producer that cannot say which of the three this is has not finished
+  // its job, and an absent tri-state would reintroduce the exact ambiguity it was added to remove.
+  houseStatus: "present" | "none" | "unknown";
+  // The id `vis_<site>` that this site's house standard occupies, or WOULD occupy if one were written
+  // — derived in code by `visualStandardIds.ts`'s single rule from the project's declared
+  // `objectDialect.siteObjectId`, which is also the rule the materializer writes with. It is here so
+  // that a node which legitimately needs the id never has to assemble one from a prefix and an object
+  // id it happens to have seen. It is NOT evidence that the object exists: `houseStatus` is the only
+  // field that says that, and a "none"/"unknown" site carries this id precisely so a node can name the
+  // standard it is offering to create rather than probe for one. Absent only when the site object id
+  // reduces to no usable segment, or no site object is configured at all.
+  derivedHouseId?: string;
   // Assignable named templates (kind:'template'), never including the house entry itself.
   templates: Array<{ id: string; label: string; whenToUse?: string }>;
   // The `brand_imagery_override_policy` guardrail (BRIEF §3.7's read path: a constraint entry on

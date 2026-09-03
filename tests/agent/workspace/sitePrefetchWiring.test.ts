@@ -85,6 +85,10 @@ describe("site prefetch wired into node dispatch", () => {
     expect(input.prefetchedContract).toBeDefined();
     expect(input.prefetchedContract!.visualStandard).toEqual({
       houseId: "vis_drlurie",
+      // FIX (chat-recovery): the writer is told, positively, that the house standard EXISTS — and is
+      // handed the id the convention derives, so it never has to assemble one.
+      houseStatus: "present",
+      derivedHouseId: "vis_drlurie",
       templates: [{ id: "vis_drlurie_field_notes", label: "Field notes", whenToUse: "Reader case write-ups." }],
       // P4's guardrail read path (§3.7) travels with them — the writer must know when the owner has
       // locked overrides, and the default is never invented locally.
