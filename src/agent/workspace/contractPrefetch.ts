@@ -45,7 +45,9 @@ const CONTRACT_PREFETCH_TIMEOUT_MS = 15_000;
 // when structuredContent is absent. Most contract responses nest the payload under a "contract" key
 // (confirmed against a real platform response); fall back to the structured value itself for a
 // server that returns the contract unnested — never assumed, always the shape THIS call returned.
-function extractContractPayload(result: unknown): unknown {
+// Exported so sitePrefetch.ts's object_contract('site') call (BRIEF §3.7's overridePolicy read path)
+// can reuse the same tolerant envelope descent instead of re-deriving it.
+export function extractContractPayload(result: unknown): unknown {
   if (!isObject(result)) return result;
   const structured = result.structuredContent;
   if (isObject(structured)) return isObject(structured.contract) ? structured.contract : structured;

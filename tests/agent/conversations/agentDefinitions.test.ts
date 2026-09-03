@@ -69,7 +69,7 @@ describe("canonical client_manager workspace definition", () => {
   // aggression inputs and media request are carried, the request id is caller-supplied, and a
   // blocked/failed run is reported reusable-first.
   it("rev 3 carries the 'Starting and reporting production' rules and rev 2 is superseded", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(4);
+    expect(createCanonicalClientManagerAgent().rev).toBe(5);
     expect(CLIENT_MANAGER_PROMPT).toContain("## Starting and reporting production");
     expect(CLIENT_MANAGER_PROMPT).toContain("pass the editor's brief verbatim as `input.instructions` — never summarise or shorten it");
     expect(CLIENT_MANAGER_PROMPT).toContain("Set `trafficSource` and `awarenessStage` (ask if unknown)");
@@ -77,7 +77,7 @@ describe("canonical client_manager workspace definition", () => {
     expect(CLIENT_MANAGER_PROMPT).toContain("Supply `requestId` in the client's request-id form when the tool requires one.");
     expect(CLIENT_MANAGER_PROMPT).toContain("first name what was produced and is reusable (for example a completed draft), then what failed.");
     // Every earlier canonical text (rev 1 and rev 2) is superseded and upgradeable.
-    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(3);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(4);
     for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).toContain("## Candidates in learning mode");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).not.toContain("## Starting and reporting production");
@@ -90,7 +90,7 @@ describe("canonical client_manager workspace definition", () => {
   // raw verb path could create AND publish an article carrying none of the judge/score substrate.
   // These assertions are the regression wall for both. A deletion here is a live defect.
   it("rev 4 carries read-before-you-write and the single article production path", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(4);
+    expect(createCanonicalClientManagerAgent().rev).toBe(5);
 
     // Contract-first: the block platform's systemPrompt() used to send and CA6 left behind.
     expect(CLIENT_MANAGER_PROMPT).toContain("## Read before you write");
@@ -112,6 +112,32 @@ describe("canonical client_manager workspace definition", () => {
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[2]).toContain("## Starting and reporting production");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[2]).not.toContain("## Read before you write");
     expect(classifyConversationalAgentPrompt(SUPERSEDED_CLIENT_MANAGER_PROMPTS[2])).toBe("superseded");
+  });
+
+  // C3 (BRIEF §3.8) — rev 5. An editor asking for a campaign or a series to LOOK different used to
+  // get the look described in the brief, which the site's imagery contract silently overrides
+  // server-side; `style` (a named visual_standard template, pointed at by the run's imageStyle) is
+  // the only channel that reaches the image model's brand resolution at all. The prompt now routes
+  // that request through the visual identity workflow's template mode instead of through prose.
+  it("rev 5 routes a one-off look through a named standard, never through words in the brief", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(5);
+
+    expect(CLIENT_MANAGER_PROMPT).toContain("## A one-off look for a set of articles");
+    // The look is written down once and pointed at — never described into the brief or the prompt.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never write style words into an image prompt/i);
+    expect(CLIENT_MANAGER_PROMPT).toContain("visual identity workflow in template mode");
+    expect(CLIENT_MANAGER_PROMPT).toContain("`input.imageStyle.visualStandardId`");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/reuse an existing named look/i);
+    // R5: a locked site ignores the pointer and REPORTS it. Never an error to route around.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/locked imagery overrides/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/not an error to work around/i);
+    // Editor-facing language still holds: a standard is named in words, never by its id.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never by its id/i);
+    // Still project-neutral, and rev 4 is superseded rather than deleted.
+    expect(CLIENT_MANAGER_PROMPT).not.toMatch(/dr-lurie|fernwell|platform/i);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[3]).toContain("## One production path for articles");
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[3]).not.toContain("## A one-off look for a set of articles");
+    expect(classifyConversationalAgentPrompt(SUPERSEDED_CLIENT_MANAGER_PROMPTS[3])).toBe("superseded");
   });
 
   it("classifies stored prompts against the shipped canonical text", () => {

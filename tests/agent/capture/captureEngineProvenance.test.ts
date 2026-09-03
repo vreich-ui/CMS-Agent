@@ -38,15 +38,18 @@ describe("vendored capture engine provenance", () => {
     expect(await hashVendoredEngineFile(entry.file)).toBe(entry.vendoredSha256);
   });
 
-  it("is byte-identical to upstream everywhere except the recorded deviations (screenshot-normalize.mjs lazy sharp import; clone.mjs's T15.30 demand-driven intake, pending platform re-vendor)", () => {
-    // Two files may deviate today: screenshot-normalize.mjs since T12.16 (the module that actually
-    // needs sharp — score.mjs is byte-identical to upstream again), and clone.mjs since T15.30/#206
-    // (buildCloneIntake's demand-driven structureBrief branch, added CMS-Agent-side ahead of the
-    // platform-side companion vendoring this repo's worktree cannot perform — see provenance.ts's own
-    // comment on the entry). Any OTHER file deviating is undocumented drift and must fail this test.
+  it("is byte-identical to upstream everywhere except the recorded deviations (screenshot-normalize.mjs lazy sharp import; clone.mjs's T15.30 demand-driven intake; theme.mjs's C3 imagery observations — the last two pending platform re-vendor)", () => {
+    // Three files may deviate today: screenshot-normalize.mjs since T12.16 (the module that actually
+    // needs sharp — score.mjs is byte-identical to upstream again), clone.mjs since T15.30/#206
+    // (buildCloneIntake's demand-driven structureBrief branch), and theme.mjs since C3 (observeImagery
+    // plus the report key that carries it, so a captured site's imagery becomes a DRAFT
+    // visual_standard instead of a dropped line) — each added CMS-Agent-side ahead of a platform-side
+    // companion vendoring this repo's worktree cannot perform, see provenance.ts's own comment on each
+    // entry. Any OTHER file deviating is undocumented drift and must fail this test.
     expect(CAPTURE_ENGINE_FILES.filter((entry) => entry.deviation).map((entry) => entry.file).sort()).toEqual([
       "clone.mjs",
-      "screenshot-normalize.mjs"
+      "screenshot-normalize.mjs",
+      "theme.mjs"
     ]);
     for (const entry of CAPTURE_ENGINE_FILES) {
       if (entry.file === "screenshot-normalize.mjs") {
@@ -54,6 +57,12 @@ describe("vendored capture engine provenance", () => {
         expect(entry.vendoredSha256).not.toBe(entry.upstreamSha256);
       } else if (entry.file === "clone.mjs") {
         expect(entry.deviation).toMatch(/T15\.30/);
+        expect(entry.vendoredSha256).not.toBe(entry.upstreamSha256);
+      } else if (entry.file === "theme.mjs") {
+        // The deviation must say WHAT it added and that the additions are structural only — the
+        // property that keeps capture's rights discipline intact through this change.
+        expect(entry.deviation).toMatch(/observeImagery/);
+        expect(entry.deviation).toMatch(/STRUCTURAL/);
         expect(entry.vendoredSha256).not.toBe(entry.upstreamSha256);
       } else {
         expect(entry.deviation).toBeUndefined();

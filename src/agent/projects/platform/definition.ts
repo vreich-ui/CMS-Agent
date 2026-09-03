@@ -24,6 +24,11 @@ export const PLATFORM_TOOL_POLICIES: ProjectConnectionConfig["toolPolicies"] = {
   object_get: "allowed",
   object_list: "allowed",
   object_validate: "allowed",
+  // C1 (BRIEF §3.7): sitePrefetch.ts's PDF-template and image-model-policy reads — pure reads, same
+  // "allowed" tier as the object_* rows above. Declarative only: defaultToolPolicy "allowed" already
+  // covered both, this is what the Access page shows as this project's declared surface.
+  list_pdf_templates: "allowed",
+  get_image_model_policy: "allowed",
   deploy_status: "allowed",
   trigger_netlify_build: "allowed",
   // FLAGGED, NOT CHANGED (T12.13, 2026-08-17): this row is STALE POLICY, not a capability. Platform
@@ -59,6 +64,17 @@ export const PLATFORM_TOOL_POLICIES: ProjectConnectionConfig["toolPolicies"] = {
   object_retire: "needs_approval",
   object_review_decide: "needs_approval",
   site_apply_theme: "needs_approval",
+  // REVIEW (BRIEF §3.3/R6) — the brand-imagery wave's privileged apply verb, declared with the SAME
+  // posture as its own stated recipe one row above. It was left undeclared, and this project's
+  // defaultToolPolicy is "allowed", so effectiveToolPermission(config, "site_apply_brand_imagery")
+  // answered "allowed" — which is exactly the answer visual_standard_materializer's second gate
+  // (visualStandardMaterialization.ts) tests for before it runs the verb's dry run and then the
+  // apply. Both of that node's "two independent gates" would therefore have reduced to one — the
+  // run's own `apply: true` — and a visual_identity run could put a freshly written look on the live
+  // site with no approval anywhere. §3.3 says the opposite in as many words: "agents per project
+  // policy (needs_approval default on platform)". A row, not a code change: the gate itself was
+  // right, the policy it reads was silent.
+  site_apply_brand_imagery: "needs_approval",
   object_instantiate_template: "needs_approval",
   object_instantiate_section_template: "needs_approval",
   wipe_blob_stores: "needs_approval"
@@ -117,8 +133,14 @@ export const PLATFORM_CAPTURE_POLICY: ProjectCapturePolicy = {
   }
 };
 
-// Bumped 3 -> 4 to migrate the platform record to its explicit Zilberman capture policy.
-export const PLATFORM_DEFINITION_VERSION = 4;
+// Bumped 3 -> 4 to migrate the platform record to its explicit Zilberman capture policy, 4 -> 5 (C1,
+// BRIEF §3.7) to declare list_pdf_templates/get_image_model_policy in PLATFORM_TOOL_POLICIES —
+// sitePrefetch.ts's PDF-template and image-policy reads (declarative only; defaultToolPolicy
+// "allowed" already covered both). 5 -> 6 (REVIEW, BRIEF §3.3) to declare
+// site_apply_brand_imagery as needs_approval — NOT declarative: this one changes the effective
+// permission from "allowed" (the client-wide default) to "needs_approval", which is what makes
+// visual_standard_materializer's policy gate mean something on this project.
+export const PLATFORM_DEFINITION_VERSION = 6;
 
 export const platformProjectConfig: ProjectConnectionConfig = {
   projectId: "platform",

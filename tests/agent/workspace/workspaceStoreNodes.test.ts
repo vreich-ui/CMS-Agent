@@ -4,6 +4,7 @@ import { resetRepositoryManager } from "../../../src/agent/runtime/repositories.
 import { listWorkspaceNodes } from "../../../src/agent/workspace/nodes.js";
 import { captureConductorNodes, listCaptureConductorNodes } from "../../../src/agent/workspace/captureConductorNodes.js";
 import { cloneConductorNodes, listCloneConductorNodes } from "../../../src/agent/workspace/cloneConductorNodes.js";
+import { visualIdentityNodes } from "../../../src/agent/workspace/visualIdentityNodes.js";
 import { workspaceStoreCanonicalIds, workspaceStoreSeedNodes } from "../../../src/agent/workspace/workspaceStoreNodes.js";
 import { createDefaultWorkspaceDocument, InMemoryWorkspaceStore } from "../../../src/agent/mcp/workspace/store.js";
 import { MemoryWorkspaceRepository } from "../../../src/agent/repository/memory/MemoryWorkspaceRepository.js";
@@ -19,12 +20,15 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
 const structured = (res: any) => res.result?.structuredContent;
 
 describe("workspaceStoreSeedNodes — the store's governance-visible union", () => {
-  it("unions publishing (25) + capture_conductor's own upstream (11) + clone_conductor's own upstream (13) with zero collisions", () => {
+  // C5 added the fourth source: visual_identity's two nodes (brand_imagery_writer,
+  // visual_standard_materializer). They compose no publishing tail at all, so they can collide with
+  // nothing — the zero-collision assertion below is what proves it rather than asserts it by faith.
+  it("unions publishing (25) + capture_conductor's own upstream (11) + clone_conductor's own upstream (13) + visual_identity's pair (2) with zero collisions", () => {
     const seed = workspaceStoreSeedNodes();
-    expect(seed).toHaveLength(listWorkspaceNodes().length + captureConductorNodes.length + cloneConductorNodes.length);
+    expect(seed).toHaveLength(listWorkspaceNodes().length + captureConductorNodes.length + cloneConductorNodes.length + visualIdentityNodes.length);
     const ids = seed.map((node) => node.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toEqual(expect.arrayContaining(["block_classifier", "capture_crawl", "capture_report", "clone_intake", "recipe_designer", "clone_report"]));
+    expect(ids).toEqual(expect.arrayContaining(["block_classifier", "capture_crawl", "capture_report", "clone_intake", "recipe_designer", "clone_report", "brand_imagery_writer", "visual_standard_materializer"]));
   });
 
   it("never carries capture/clone's tail-composed copies — publish_payload etc. appear exactly once, in publishing's own canonical form", () => {
@@ -48,12 +52,13 @@ describe("workspaceStoreSeedNodes — the store's governance-visible union", () 
   });
 });
 
-describe("a fresh workspace document is seeded with all 49 nodes (store.ts's defaultWorkspaceNodes)", () => {
-  it("createDefaultWorkspaceDocument includes capture/clone's own nodes from the start", () => {
+describe("a fresh workspace document is seeded with all 51 nodes (store.ts's defaultWorkspaceNodes)", () => {
+  it("createDefaultWorkspaceDocument includes capture/clone/visual-identity's own nodes from the start", () => {
     const document = createDefaultWorkspaceDocument();
-    expect(document.nodes).toHaveLength(49);
+    expect(document.nodes).toHaveLength(51);
     expect(document.nodes.some((node) => node.id === "block_classifier")).toBe(true);
     expect(document.nodes.some((node) => node.id === "clone_intake")).toBe(true);
+    expect(document.nodes.some((node) => node.id === "brand_imagery_writer")).toBe(true);
   });
 });
 
@@ -80,7 +85,7 @@ describe("ensureWorkspaceNodeSeeds — additive top-up for a workspace document 
     expect(before.find((node) => node.id === "input_triage")?.prompt).toBe("OPERATOR-PROMOTED PROMPT TEXT");
 
     const topped = await store.ensureWorkspaceNodeSeeds();
-    expect(topped).toHaveLength(49);
+    expect(topped).toHaveLength(51);
     expect(topped.find((node) => node.id === "input_triage")?.prompt).toBe("OPERATOR-PROMOTED PROMPT TEXT");
     expect(topped.some((node) => node.id === "block_classifier")).toBe(true);
 
@@ -111,11 +116,11 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
     expect(structured(clone).data.config?.riskLevel).toBe("write");
   });
 
-  it("workspace.get_nodes lists all three workflows' nodes, not publishing's alone", async () => {
+  it("workspace.get_nodes lists all four workflows' nodes, not publishing's alone", async () => {
     const res = await call("workspace.get_nodes");
     const ids = structured(res).data.nodes.map((node: { id: string }) => node.id);
-    expect(ids).toHaveLength(49);
-    expect(ids).toEqual(expect.arrayContaining(["input_triage", "block_classifier", "clone_intake"]));
+    expect(ids).toHaveLength(51);
+    expect(ids).toEqual(expect.arrayContaining(["input_triage", "block_classifier", "clone_intake", "brand_imagery_writer"]));
   });
 
   // B1 (Pass 2, WP-00) — live capture found workspace.get_nodes could not filter by conductor (its
@@ -138,9 +143,9 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
     expect(publishPayload.dependsOn).toEqual(["recipe_mint", "theme_bind", "layout_restamp"]);
   });
 
-  it("workspace.get_nodes with no workflowId is unchanged: still the flat 49-node union", async () => {
+  it("workspace.get_nodes with no workflowId is unchanged: still the flat union, now 51 nodes", async () => {
     const res = await call("workspace.get_nodes", {});
-    expect(structured(res).data.nodes).toHaveLength(49);
+    expect(structured(res).data.nodes).toHaveLength(51);
   });
 
   it("workspace.get_nodes rejects an unknown argument, same additionalProperties:false discipline as before", async () => {
@@ -151,8 +156,8 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
   it("workspace.get_graph with no workflowId merges every registered workflow's nodes/edges", async () => {
     const res = await call("workspace.get_graph");
     const data = structured(res).data;
-    expect(data.nodes).toHaveLength(49);
-    expect(data.registeredWorkflowIds).toEqual(["publishing_conductor", "capture_conductor", "clone_conductor"]);
+    expect(data.nodes).toHaveLength(51);
+    expect(data.registeredWorkflowIds).toEqual(["publishing_conductor", "capture_conductor", "clone_conductor", "visual_identity"]);
     // capture_report's own dependency on the shared tail is visible even in the flat merged view.
     expect(data.edges).toEqual(expect.arrayContaining([{ from: "publish_executor", to: "capture_report" }]));
   });

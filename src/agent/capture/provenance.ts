@@ -205,8 +205,22 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "theme.mjs",
-    vendoredSha256: "c60632791f4399421772eeb16cb13e75482d944da2cd9226a759c2c8139a3a5d",
-    upstreamSha256: "c60632791f4399421772eeb16cb13e75482d944da2cd9226a759c2c8139a3a5d"
+    vendoredSha256: "77f426464b7f2418221581e48e215d06ede3bdeadfb51b1f2326ab736ecb4a3a",
+    upstreamSha256: "c60632791f4399421772eeb16cb13e75482d944da2cd9226a759c2c8139a3a5d",
+    deviation:
+      "C3 (BRIEF §3.1, derivedFrom.method 'clone') adds `observeImagery(snapshot)` and carries its " +
+      "result on the extraction's REPORT (never on `body`, which is the theme OBJECT written to the " +
+      "platform), plus the one gap line that used to read \"Imagery style is intentionally not " +
+      "written to brandImagery; review separately\" now states what was observed and where it goes. " +
+      "Additive: one new exported function and one new report key; every existing value this " +
+      "extractor emits — swatches, tokens, axes, the theme body — is byte-identical, which is what " +
+      "capturePolicyEnforcement.test.ts's token assertions pin. The observations are STRUCTURAL " +
+      "only (asset counts, background-image blocks, quantized aspect ratios, file extensions); no " +
+      "alt text, caption or page copy is read, so capture's rights discipline is untouched and " +
+      "nothing infers a subject or a mood from a picture the extractor has not looked at. Same " +
+      "vendored-engine rule as clone.mjs's own deviations (T15.30/T2): the platform-side companion " +
+      "vendoring is a different agent's task, so upstreamSha256 stays pinned to the pre-C3 platform " +
+      "commit until that lands and this file is re-vendored byte-identical again."
   },
   {
     file: "emit.mjs",

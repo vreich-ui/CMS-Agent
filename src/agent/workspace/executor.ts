@@ -20,6 +20,7 @@ import { clientAuthFailedError, preflightDriverAuth, resolveProjectCredentialNam
 import { mintPublishRequestId } from "./publishRequestId.js";
 import { getReducedContract } from "./contractPrefetch.js";
 import { getEditorialVoice } from "./voicePrefetch.js";
+import { getSitePrefetch } from "./sitePrefetch.js";
 import { CONTENT_ITEM_SHELL_FAILED_PREFIX, CONTENT_ITEM_SHELL_INPUT_KEY, ensureContentItemShell } from "./contentItemShell.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
 import { runDeterministicPublishPayload, validateClientObjectOnce, readTopLevelObjectId } from "./publishPayload.js";
@@ -40,11 +41,14 @@ import { resolvePublishableTypeCharter } from "./publishableTypeCharter.js";
 // that drives runs, since they all import this module. See captureConductorWorkflow.ts.
 import "./captureConductorWorkflow.js";
 import "./cloneConductorWorkflow.js";
+// C5 — same side-effect registration for visual_identity (BRIEF §3.5's two-node pair).
+import "./visualIdentityWorkflow.js";
 import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
+import { readVisualStandardMaterializer, runVisualStandardMaterialization } from "./visualStandardMaterialization.js";
 import { resolveGateId } from "./gateRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
-import { declaresContractPrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
+import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
@@ -1075,7 +1079,10 @@ const DETERMINISTIC_ROUTE_METADATA_KEYS = [
   // which declaresDeterministicRoute below already treats as declared.
   "captureStageDeterministic",
   // T13.1: the clone_conductor stages (cloneConductorRoutes.ts). Same string-valued declaration.
-  "cloneStageDeterministic"
+  "cloneStageDeterministic",
+  // C5: visual_identity's second node (visualStandardMaterialization.ts). Boolean-valued, like
+  // artifact_materializer's own route flag.
+  "visualStandardMaterializerDeterministic"
 ] as const;
 const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
   DETERMINISTIC_ROUTE_METADATA_KEYS.some((key) => {
@@ -1657,6 +1664,76 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       const message = error instanceof Error ? error.message : String(error);
       state.input = { ...(state.input as Record<string, unknown>), prefetchError: message };
       state.warnings = [...(state.warnings ?? []), "contract_prefetch_failed:threw"];
+    }
+  }
+
+  // C5 (BRIEF §3.5/§3.7) — THE SITE PREFETCH, and the reason it merges rather than sits beside.
+  //
+  // C1 wrote sitePrefetch.ts (the site's visual standards, its PDF templates, its image-model policy
+  // contexts) and ReducedContract's three fields to carry them, and explicitly left THIS — the gate
+  // that actually runs it — as a follow-up. Until it exists the fields have a shape and nothing ever
+  // fills them: brand_imagery_writer cannot see the site it is writing a look for, and artifact_plan's
+  // usage-context and PDF-template policies (C2) are inert on every run.
+  //
+  // It merges INTO `prefetchedContract` rather than travelling as a second value, because that is the
+  // name every downstream node and prompt already uses, and because reduceContract's own siteFields
+  // parameter (contractReduction.ts) declares exactly this union. A node that declares both prefetches
+  // gets one object carrying both halves; a node that declares only this one gets an object carrying
+  // only the site half — which is what `visualStandard?`/`pdfTemplates?`/`imagePolicyContexts?` being
+  // independently optional is for.
+  //
+  // It ALSO merges onto this dispatch's `deterministicPrefetch.reduced` (a COPY — that object may come
+  // from the reduced-contract cache and must never be mutated in place), so the deterministic
+  // contract_intelligence artifact built further down carries the site facts too. Otherwise
+  // contract_intelligence's own input would have them and its OUTPUT — the thing artifact_plan reads —
+  // would not.
+  //
+  // THIS CAN NEVER FAIL A NODE. getSitePrefetch has no failure return at all: each of its five reads
+  // degrades independently to a named warning and `overridePolicy` always resolves. Every warning is
+  // re-stamped run-visibly as `site_prefetch_degraded:<code>` — the same loud-degradation convention
+  // contract_prefetch_failed and voice_prefetch_fallback use — so "the site facts were not there" is a
+  // run-level fact rather than something inferable only by diffing one node's input.
+  //
+  // FINDING-C — AND THE ONE CASE WHERE THE SITE HALF IS WITHHELD. `contract_intelligence` now declares
+  // BOTH prefetches (nodeGatingSeed.ts), and its own prompt reads `prefetchedContract` as "the
+  // contract was already fetched; this is a validation and pass-through step, not a discovery one".
+  // A node in that position whose CONTRACT prefetch failed must therefore not be handed a
+  // `prefetchedContract` carrying only the site half — that object would read to the node as a
+  // successful contract fetch and turn a client-unreachable run into a confidently empty artifact.
+  // So for a node that declares the contract prefetch and did not get one, the site prefetch is not
+  // merged and is not even performed (five reads whose result would be discarded), and the fact is
+  // named on the run: `site_prefetch_withheld:contract_prefetch_failed`, beside the
+  // `contract_prefetch_failed:<code>` that caused it. A node that declares ONLY the site prefetch
+  // (brand_imagery_writer) is untouched by this — a site-only `prefetchedContract` is exactly what
+  // its prompt is written for.
+  const sitePrefetchWithheld = declaresSitePrefetch(nextNode) && declaresContractPrefetch(nextNode) && deterministicPrefetch?.ok !== true;
+  if (sitePrefetchWithheld) {
+    state.warnings = [...(state.warnings ?? []), "site_prefetch_withheld:contract_prefetch_failed"];
+  }
+  if (declaresSitePrefetch(nextNode) && !sitePrefetchWithheld) {
+    try {
+      const site = await getSitePrefetch({ runId: run.runId, projectId: run.projectId }, { projectRepository: repositoryManager.getProjectRepository() });
+      const siteFields = {
+        ...(site.visualStandard !== undefined ? { visualStandard: site.visualStandard } : {}),
+        ...(site.pdfTemplates !== undefined ? { pdfTemplates: site.pdfTemplates } : {}),
+        ...(site.imagePolicyContexts !== undefined ? { imagePolicyContexts: site.imagePolicyContexts } : {}),
+        // FIX-D (BRIEF §3.5): the site's own brandTokens and logo, travelling under the names
+        // contractReduction.ts declares. `brandPalette`, not `brandTokens` — the runners' credential
+        // redactor eats any key matching /token/i, so the literal name would deliver "[REDACTED]".
+        ...(site.brandPalette !== undefined ? { brandPalette: site.brandPalette } : {}),
+        ...(site.logo !== undefined ? { logo: site.logo } : {})
+      };
+      if (Object.keys(siteFields).length) {
+        if (deterministicPrefetch?.ok) deterministicPrefetch = { ...deterministicPrefetch, reduced: { ...deterministicPrefetch.reduced, ...siteFields } };
+        const carried = state.input as Record<string, unknown>;
+        const existing = carried.prefetchedContract;
+        state.input = { ...carried, prefetchedContract: { ...(existing && typeof existing === "object" && !Array.isArray(existing) ? (existing as Record<string, unknown>) : {}), ...siteFields } };
+      }
+      for (const warning of site.warnings) state.warnings = [...(state.warnings ?? []), `site_prefetch_degraded:${warning.code}`];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      state.warnings = [...(state.warnings ?? []), "site_prefetch_degraded:threw"];
+      state.input = { ...(state.input as Record<string, unknown>), sitePrefetchError: message };
     }
   }
 
@@ -2332,7 +2409,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // state.status/startedAt are already "running" by this point, which is what assessRunStall matches
   // on together with the dispatch stamp. Every terminal path out of both branches deletes it again
   // (the capture "pending" re-queue already did), so no branch can leave a lease-shaped ghost behind.
-  if (claim && (readCaptureStage(nextNode) !== undefined || readCloneStage(nextNode) !== undefined || readArtifactMaterializer(nextNode))) {
+  if (claim && (readCaptureStage(nextNode) !== undefined || readCloneStage(nextNode) !== undefined || readArtifactMaterializer(nextNode) || readVisualStandardMaterializer(nextNode))) {
     stampDispatch(state, startedAt, deterministicStageTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
     run = await store.saveRun(run);
     state = stateById(run).get(nextNode.id) as NodeExecutionState;
@@ -2441,6 +2518,60 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       const completedAt = now();
       state.status = "blocked";
       delete state.dispatch;  // T14.4: terminal — the claim this stage published goes with it.
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = { error: { code: refusal.code, message: refusal.message } };
+      run.status = "blocked";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = completedAt;
+      return { run };
+    }
+    // Mock run: fall through to the MockNodeRunner placeholder below so CI traversal keeps working.
+  }
+
+  // C5 (BRIEF §3.5) — visual_standard_materializer: DETERMINISTIC, no model turn, $0. Same two
+  // outcomes clone's route has, for the same reasons:
+  //   completed — the standard was created or patched. Whether it was APPLIED is a field on the
+  //               output, never an outcome here: a refused apply is a normal, reported result (the
+  //               draft survives it), not a failure of the node.
+  //   refused   — typed refusal. A LIVE run BLOCKS (a model must never fabricate a visualStandardId
+  //               or claim an apply that did not happen); a MOCK run falls through to MockNodeRunner
+  //               with a run-visible warning so CI graph traversal keeps working.
+  if (readVisualStandardMaterializer(nextNode)) {
+    let materialized: Awaited<ReturnType<typeof runVisualStandardMaterialization>>;
+    try {
+      materialized = await runVisualStandardMaterialization({ run, node: nextNode });
+    } catch (error) {
+      materialized = { kind: "refused", code: "visual_standard_threw", message: error instanceof Error ? error.message : String(error) };
+    }
+    let refusal: { code: string; message: string } | undefined;
+    if (materialized.kind === "completed") {
+      const stagedValidation = validateOutput(materialized.output, nextNode.outputSchema);
+      if (stagedValidation.ok) {
+        const completedAt = now();
+        state.status = "completed";
+        delete state.dispatch;
+        state.completedAt = completedAt;
+        state.durationMs = duration(startedAt, completedAt);
+        state.output = materialized.output;
+        if (materialized.warnings.length) state.warnings = [...(state.warnings ?? []), ...materialized.warnings];
+        run.stageOutputs[nextNode.id] = materialized.output;
+        run.artifacts.push(buildArtifact(nextNode, materialized.output));
+        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.updatedAt = completedAt;
+        run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+        // No model call happened, so no usage record is written (the R-20 rule).
+        return { run };
+      }
+      refusal = { code: "output_schema_invalid", message: `visual_standard_materializer produced an envelope its own node schema rejects: ${stagedValidation.errors[0] ?? "schema_invalid"}` };
+    } else {
+      refusal = { code: materialized.code, message: materialized.message };
+    }
+    state.warnings = [...(state.warnings ?? []), `visual_standard_materializer_unavailable:${refusal.code}`];
+    if (((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock") {
+      const completedAt = now();
+      state.status = "blocked";
+      delete state.dispatch;
       state.completedAt = completedAt;
       state.durationMs = duration(startedAt, completedAt);
       state.output = { error: { code: refusal.code, message: refusal.message } };

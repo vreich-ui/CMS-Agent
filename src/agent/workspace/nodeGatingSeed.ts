@@ -33,6 +33,12 @@ export type NodeGatingSeedEntry = {
   // the agent loop. Declared here so a store overlay that rewrites the node's metadata (say, to flip
   // approvalRequired) cannot silently switch the voice off; the seed is the floor.
   voicePrefetch?: true;
+  // C5 (BRIEF §3.5): the site-level prefetch (sitePrefetch.ts) — the site's visual standards, its PDF
+  // templates and its image-model policy contexts, fetched deterministically before the agent loop and
+  // merged into the node's `prefetchedContract`. Declared here for the same reason voicePrefetch is:
+  // a store overlay that rewrites a node's metadata wholesale must not be able to switch it off by
+  // omission. The seed is the floor.
+  sitePrefetch?: true;
   // Why this node carries this policy. Kept in the data, not in a comment, so it travels into the
   // audit record and into anything that renders the policy.
   rationale: string;
@@ -91,7 +97,48 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
   // target, which is already a declared dependency of brief_architect. No DAG edge is moved: see the
   // work order's re-seed section for what a full contract_intelligence reorder would additionally
   // require (publishingTail.ts declares the tail's edges as a hard invariant).
-  brief_architect: { contractPrefetch: true, voicePrefetch: true, rationale: "The aggression ceiling must exist before the brief that spends it is written; the client's editorial voice must be in hand for the same reason — the brief sets the tone guardrails every downstream writer reads." }
+  brief_architect: { contractPrefetch: true, voicePrefetch: true, rationale: "The aggression ceiling must exist before the brief that spends it is written; the client's editorial voice must be in hand for the same reason — the brief sets the tone guardrails every downstream writer reads." },
+  // FINDING-C (C3, resolving C5's finding C) — contract_intelligence DOES declare the site prefetch,
+  // and this is the line C5 left for whoever owns the publishing run's cost budget.
+  //
+  // WHY IT HAD TO BE THIS NODE. `artifact_plan`'s prompt reads the three site facts off
+  // contract_intelligence's INPUTS-as-carried, and `artifact_materializer`'s deterministic engine
+  // reads them off contract_intelligence's OUTPUT (artifactMaterialization.ts's readPdfTemplates /
+  // readImagePolicyContexts both index `run.stageOutputs.contract_intelligence`). BRIEF §3.7 says the
+  // same thing normatively: "Carried by contract_intelligence.v1 under the same names." Declaring the
+  // prefetch on the CONSUMING nodes instead would have put the facts in artifact_plan's own input and
+  // left the materializer's two readers — and therefore C2's deterministic PDF renderData mapping and
+  // its usage-context enforcement — still reading an artifact that never carries them. One carrier,
+  // the one every consumer already reads, beats two half-wired ones.
+  //
+  // COST, the first of C5's two stated objections. This adds getSitePrefetch's five client reads to
+  // every publishing run, and `contractPrefetchIntegration.test.ts` pinned "exactly TWO remote fetches
+  // per run". That test has been RE-BASELINED DELIBERATELY, not incidentally, and its assertion is now
+  // the principle the number stood for rather than the number: every prefetch read happens AT MOST
+  // ONCE per run, in deterministic conductor code, never inside a node's own agent loop. Two was a
+  // consequence of there being two prefetches; F1's invariant was never "two", it was "not
+  // five-plus-one from a naive per-node re-fetch", and the thing F1 actually cost money on was MODEL
+  // TOKENS re-sent per turn (~60K/turn), which a run-scoped conductor-side read does not do. Five
+  // extra JSON-RPC reads, once, outside any model loop, whose payloads are reduced to a few hundred
+  // bytes before they enter a prompt, is not that failure mode.
+  //
+  // CONSIDERED AND REJECTED: gating this prefetch on the same `no_media_slots` signal that decides
+  // whether artifact_plan runs at all, so a text-only run pays nothing. It would save five cheap reads
+  // on some runs and buys a second place where "does this run have media?" is decided — one that can
+  // disagree with the node that consumes the answer, and whose failure mode is silently returning to
+  // exactly the inert state this change exists to end. Reliability of the facts is worth more than the
+  // reads.
+  //
+  // PROMPT CONTRACT, the second objection, is closed in executor.ts rather than here: the site half is
+  // now WITHHELD from `prefetchedContract` for a node that declares the contract prefetch and whose
+  // contract prefetch failed, with its own named run-visible warning. This node's prompt sentence
+  // ("if prefetchedContract is present: this is a validation and pass-through step") therefore stays
+  // exactly true — `prefetchedContract` on this node still means the contract was fetched — and no
+  // prompt op is needed for it.
+  contract_intelligence: {
+    sitePrefetch: true,
+    rationale: "The site's visual standards, PDF templates and image-model policy contexts must ride the artifact every media node already reads (contract_intelligence.v1), or C1's reduced-contract fields and C2's usage-context/PDF-template policies are shape without substance on every publishing run."
+  }
 };
 
 type GatedNode = Pick<WorkspaceNode, "id"> & { metadata?: Record<string, unknown> | undefined };
@@ -106,6 +153,7 @@ export function gatedMetadata(node: GatedNode): Record<string, unknown> | undefi
   if (seed.skipWhen !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "skipWhen")) merged.skipWhen = seed.skipWhen;
   if (seed.contractPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "contractPrefetch")) merged.contractPrefetch = seed.contractPrefetch;
   if (seed.voicePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "voicePrefetch")) merged.voicePrefetch = seed.voicePrefetch;
+  if (seed.sitePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "sitePrefetch")) merged.sitePrefetch = seed.sitePrefetch;
   return merged;
 }
 
@@ -113,3 +161,4 @@ export function gatedMetadata(node: GatedNode): Record<string, unknown> | undefi
 // place rather than checking metadata here and a seed table there.
 export const declaresContractPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.contractPrefetch === true;
 export const declaresVoicePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.voicePrefetch === true;
+export const declaresSitePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.sitePrefetch === true;

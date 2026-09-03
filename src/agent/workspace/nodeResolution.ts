@@ -6,6 +6,13 @@ import { getWorkflowDefinition, listRegisteredWorkflowIds } from "./workflowRegi
 // makes). Node resolution must see EVERY registered workflow on every plane that resolves a node —
 // including the tool-policy path, which is reachable without the executor module ever loading.
 import "./captureConductorWorkflow.js";
+// C5: clone_conductor and visual_identity, for the identical reason the capture import above exists —
+// and clone's absence here was a latent gap, not a decision: it registers only via executor.ts, so a
+// plane that resolves a single node WITHOUT the executor (this module's whole purpose) could not see
+// clone's canonical definitions either. Registration order is import order, and this is where it is
+// fixed: publishing (workflowRegistry.ts's own), capture, clone, visual_identity.
+import "./cloneConductorWorkflow.js";
+import "./visualIdentityWorkflow.js";
 
 // T12.15 — single-node resolution for EXECUTION, as opposed to resolveConductorNodes (executor.ts),
 // which resolves a whole run's node array.

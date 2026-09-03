@@ -183,6 +183,8 @@ export type SiteGenesisResult = {
   project: ProjectSummary;
   ledger: GenesisAction[];
   humanChecklist: GenesisHumanChecklistItem[];
+  // C3: what birth did (or precisely planned) about the site's look and its default PDF template.
+  visualIdentity: GenesisVisualIdentityPlan;
 };
 
 const now = () => new Date().toISOString();
@@ -523,6 +525,79 @@ async function runCreateSiteCli(platformRoot: string, args: string[], { passToke
 }
 
 // ---------------------------------------------------------------------------------------------
+// C3 (BRIEF §3.5/§3.2, R2/R7) — VISUAL IDENTITY AT BIRTH: a new site is born with a WRITTEN house
+// standard and a published default PDF template, not merely with a derived one and no template.
+//
+// WHAT PLATFORM ALREADY DOES, AND IS NOT DUPLICATED HERE. `create-site.mjs` (platform task P6) mints
+// a tokens-DERIVED house standard as the FLOOR: `vis_<slug>`, `derivedFrom.method:'tokens'`, computed
+// from the scaffold's own brandTokens. That is a real standard and genesis never re-mints, re-derives
+// or overwrites it. What genesis adds is the two things a derivation cannot produce:
+//
+//   1. A WRITTEN standard. `visual_identity` in mode:'house' with `brief` = the tenant's niche and
+//      audience turns the floor into a look somebody actually decided — a style sentence, negatives,
+//      ratios keyed on the site's real policy contexts — with derivedFrom.method:'writer'. Nothing is
+//      applied by that: the materializer files a DRAFT (R6's apply verb is owner-gated and separate),
+//      so birth never silently changes what the site renders.
+//   2. A PUBLISHED default article template. R7's generic `article_brochure_v1`, published the way
+//      pdf-tool's own `scripts/publish-article-template.mjs` publishes it, and named in the site's
+//      `pdf.defaultTemplateId` block (§3.2). Until that exists, EVERY PDF slot on EVERY run of this
+//      tenant is a `no_pdf_template` blocker: artifact_plan chooses templateId only from the site's
+//      published templates and never authors one.
+//
+// WHY BOTH ARE NORMALLY CHECKLIST ITEMS RATHER THAN GENESIS ACTIONS, stated plainly rather than
+// discovered later. Both are writes against the NEW TENANT'S OWN MCP, and at the moment genesis runs,
+// this deployment cannot reach it: `<SLUG>_MCP_TOKEN` is a secret custody act that is itself a human
+// checklist item (see `deploy_side_mcp_env`), and the same is true of the tenant's pdf-tool grant
+// (`PDF_TOOL_STORAGE_SITE_ID/_TOKEN`). Inventing a credential to close them would be exactly the
+// fabrication R-C5 forbids. So genesis PLANS both precisely — the exact ids, the exact brief, the
+// exact verb — records the plan in the audit ledger, and puts the two steps on the checklist with
+// enough detail to run them without a decision. When a caller DOES supply a transport for either
+// (deps.publishArticlePdfTemplate / deps.runVisualIdentityHouse — the site.duplicate chain can, once
+// the tenant is reachable), genesis performs it instead and the checklist item shrinks to a
+// confirmation, exactly the way the fleet-env items shrink in T21.8.
+export const DEFAULT_ARTICLE_PDF_TEMPLATE_ID = "article_brochure_v1";
+export const PUBLISH_ARTICLE_TEMPLATE_SCRIPT = "scripts/publish-article-template.mjs";
+
+/** R2: the house standard is a singleton named after its site, mirroring `voice_<site>`. */
+export const houseVisualStandardId = (slug: string): string => `vis_${slug.replace(/-/g, "")}`;
+
+/** The writer's brief for mode:'house' — the tenant's niche and audience, and nothing invented. */
+export const genesisHouseBrief = (input: { niche?: string; audience?: string }): string | undefined => {
+  const niche = input.niche?.trim();
+  const audience = input.audience?.trim();
+  if (!niche && !audience) return undefined;
+  if (niche && audience) return `${niche}, written for ${audience}.`;
+  return `${niche ?? audience}.`;
+};
+
+export type GenesisVisualIdentityPlan = {
+  houseStandardId: string;
+  defaultTemplateId: string;
+  /** The brief `visual_identity` mode:'house' would run with; absent when the caller stated neither niche nor audience. */
+  brief?: string;
+  /** Did platform's create-site report the tokens-derived floor this run builds on? */
+  derivedFloorReported: boolean;
+  /** Did genesis actually publish the default article template on this run? */
+  templatePublished: boolean;
+  /** Did genesis actually run `visual_identity` in mode:'house' on this run? */
+  houseStandardWritten: boolean;
+};
+
+// Read tolerantly off create-site.mjs's own --json result: P6 may report the derived floor under a
+// few plausible names, and a scaffold that predates P6 reports none. Absence is recorded as absence —
+// it never becomes a claim that the floor exists.
+export const readDerivedHouseStandardFromScaffold = (scaffold: Record<string, unknown> | undefined): boolean => {
+  if (!scaffold) return false;
+  for (const key of ["visualStandardId", "houseVisualStandardId", "visual_standard_id"]) {
+    if (typeof scaffold[key] === "string" && (scaffold[key] as string).trim()) return true;
+  }
+  const nested = scaffold.visualStandard ?? scaffold.houseStandard;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) return true;
+  const tokens = scaffold.brandTokens;
+  return !!tokens && typeof tokens === "object" && !Array.isArray(tokens);
+};
+
+// ---------------------------------------------------------------------------------------------
 // The human checklist — verbatim from the provisioning runbook (site-provisioning-runbook.md §2/§3/§3a
 // + the T11.7 env table), concretized for this tenant. Order follows the runbook.
 export function buildGenesisHumanChecklist(input: {
@@ -538,11 +613,22 @@ export function buildGenesisHumanChecklist(input: {
   // held the fleet value). Each one shrinks the checklist item that used to ask a human to paste it;
   // anything absent from this list is still a human step and says so.
   provisionedFleetEnvVars?: string[];
+  // C3 — the visual-identity half of birth (see GenesisVisualIdentityPlan above). Always supplied by
+  // runSiteGenesis; optional here only so older callers of this pure builder keep compiling, in which
+  // case the two items describe the steps as entirely un-run, which is the truthful default.
+  visualIdentity?: GenesisVisualIdentityPlan;
 }): GenesisHumanChecklistItem[] {
   const { slug, netlifySiteName, envPrefix } = input;
   const provisionedFleet = input.provisionedFleetEnvVars ?? [];
   const outstandingFleet = (keys: string[]): string[] => keys.filter((key) => !provisionedFleet.includes(key));
   const outstandingSinkVars = outstandingFleet([TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV]);
+  const visualIdentity: GenesisVisualIdentityPlan = input.visualIdentity ?? {
+    houseStandardId: houseVisualStandardId(slug),
+    defaultTemplateId: DEFAULT_ARTICLE_PDF_TEMPLATE_ID,
+    derivedFloorReported: false,
+    templatePublished: false,
+    houseStandardWritten: false
+  };
   const items: GenesisHumanChecklistItem[] = [];
   if (!input.scaffoldExecuted) {
     items.push({
@@ -653,6 +739,37 @@ export function buildGenesisHumanChecklist(input: {
         verify: "project.get — connection.endpointConfigured/tokenConfigured turn true once the deploy sees the env vars."
       },
     {
+      // C3 (BRIEF §3.5, R2). The DERIVED floor is platform's (create-site/P6) and is never re-minted
+      // here; what this step buys is a look somebody DECIDED, which no derivation from brandTokens
+      // can produce — and it is a draft either way, so running it changes nothing the site renders
+      // until an Owner applies it through the privileged verb.
+      id: "visual_identity_house_standard",
+      title: visualIdentity.houseStandardWritten
+        ? `Review the WRITTEN house imagery standard genesis produced (${visualIdentity.houseStandardId}) and apply it when it is right`
+        : `Write the house imagery standard: run the visual identity workflow in mode 'house' for ${slug}`,
+      detail: `${visualIdentity.derivedFloorReported
+        ? `create-site.mjs already minted the tokens-DERIVED floor as ${visualIdentity.houseStandardId} (derivedFrom.method 'tokens'), so the site is never without a standard. `
+        : `create-site.mjs reported no derived house standard for this run — platform mints ${visualIdentity.houseStandardId} from the scaffold's brandTokens (P6); confirm it exists before writing over it. `}${visualIdentity.houseStandardWritten
+        ? `Genesis then ran the visual_identity workflow in mode 'house' and filed a DRAFT written standard on ${visualIdentity.houseStandardId} (derivedFrom.method 'writer'). Nothing was applied: putting a standard on the live site is the privileged, Owner-gated site_apply_brand_imagery verb, deliberately a separate act from writing one.`
+        : `Genesis could NOT run it: writing the standard is a call against the new tenant's own MCP, and this deployment holds no ${envPrefix}_MCP_TOKEN yet (see the deploy-side step above) — inventing one is not an option. Once that token is in place, run the visual_identity workflow with mode 'house'${visualIdentity.brief ? ` and brief "${visualIdentity.brief}"` : `, supplying a brief that states this tenant's niche and audience (genesis was given neither, and never invents one)`}, plus any reference images the operator has. The writer proposes; the materializer files a DRAFT; applying it to the live site stays a separate, Owner-gated act through site_apply_brand_imagery.`}`,
+      source: "BRIEF §3.5 (visual_identity mode:'house') / R2 / platform create-site P6",
+      verify: `object_get(visual_standard, ${visualIdentity.houseStandardId}) — derivedFrom.method reads 'writer' once the written standard is filed, 'tokens' while only the floor exists.`
+    },
+    {
+      // C3 (BRIEF §3.2/R7). Until a published article template exists and the site names it, EVERY
+      // PDF slot on every run of this tenant is a no_pdf_template blocker — artifact_plan chooses
+      // templateId only from the site's PUBLISHED templates and never authors one.
+      id: "pdf_default_template",
+      title: visualIdentity.templatePublished
+        ? `Confirm the site's default PDF template (${visualIdentity.defaultTemplateId}) — genesis published it`
+        : `Publish the default article PDF template (${visualIdentity.defaultTemplateId}) and name it in the site's pdf block`,
+      detail: `${visualIdentity.templatePublished
+        ? `Genesis published ${visualIdentity.defaultTemplateId} on this tenant and set site.pdf.defaultTemplateId to it. Confirm it renders: list_pdf_templates should show it published with a renderDataSchema and sampleData.`
+        : `Run the equivalent of pdf-tool's ${PUBLISH_ARTICLE_TEMPLATE_SCRIPT} against this tenant — create_pdf_template with the generic chromium article brochure (its renderDataSchema mirrors article structure, which is what lets artifact_materializer fill renderData deterministically from the draft at zero model cost), then publish_pdf_template. Genesis could not: the call needs this tenant's own pdf-tool grant (PDF_TOOL_STORAGE_SITE_ID/_TOKEN, itself a human step above) and its MCP token. `}Then set the site's pdf block with set_site_fields: {"pdf": {"defaultTemplateId": "${visualIdentity.defaultTemplateId}"}} — an ordinary agent-writable field (§3.2), not a privileged one. Until BOTH halves are true, every PDF slot on every run for this tenant is reported blocked as no_pdf_template.`,
+      source: "BRIEF §3.2 + R7 / pdf-tool " + PUBLISH_ARTICLE_TEMPLATE_SCRIPT,
+      verify: "list_pdf_templates shows the template published, and object_get(site).pdf.defaultTemplateId names it."
+    },
+    {
       id: "capture_rights_review",
       title: "Capture rights were seeded CONSERVATIVE — raise only if the operator holds rights",
       detail: "Genesis seeded capturePolicy.rights = {content: \"prohibited\", media: \"prohibited\"}: every extracted body is regenerated (copy_regenerator) and no source media is imported. If this account holds rights to the source content/media, raise them explicitly via project.update — a rights assertion is a human act, never a default.",
@@ -680,6 +797,11 @@ export type SiteGenesisInput = {
   // the Netlify site it just created, so nobody passes or sets anything. Validated credential-free
   // by projectAdmin before it can reach a record.
   mcpEndpoint?: string;
+  // C3 (BRIEF §3.5): the two facts `visual_identity` mode:'house' needs as its `brief`. Neither is
+  // invented — a run given neither states so on the checklist and asks for one rather than writing a
+  // house look for a publication nobody has described.
+  niche?: string;
+  audience?: string;
 };
 
 export type SiteGenesisDeps = {
@@ -688,6 +810,12 @@ export type SiteGenesisDeps = {
   netlifyFetch?: NetlifyFetch;
   credentialFetch?: NetlifyFetch;
   credentialRepository?: Pick<ManagedScopedBearerCredentialRepository, "mint" | "activateAndRetireOtherProjectCredentials" | "revokeCredential">;
+  // C3 — the two visual-identity writes, injected rather than assumed. Absent (the normal case at
+  // birth, because the tenant's own MCP token is still a human custody step) the steps are PLANNED
+  // and put on the checklist; supplied, they are performed and the checklist item shrinks. Either
+  // way the ledger records what happened — a capability this deployment lacks is itself audited.
+  publishArticlePdfTemplate?: (input: { projectId: string; templateId: string }) => Promise<{ published: boolean; detail: string }>;
+  runVisualIdentityHouse?: (input: { projectId: string; mode: "house"; brief: string; visualStandardId: string }) => Promise<{ visualStandardId: string; status: string; detail: string }>;
 };
 
 export const resolveCmsAgentPublicMcpEndpoint = (env: NodeJS.ProcessEnv = process.env): string => {
@@ -793,9 +921,13 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
 
   // 1. Scaffold (filesystem, via the platform seam) — when a checkout is mounted.
   let scaffoldExecuted = false;
+  // C3: whether platform's create-site reported the tokens-derived house standard it mints (P6). Read
+  // off the scaffold's own --json result — never assumed, and never re-derived here.
+  let derivedFloorReported = false;
   if (platformRoot) {
     const scaffold = await runCreateSiteCli(platformRoot, ["--name", slug, ...(input.netlifySiteName ? ["--netlify-site-name", netlifySiteName] : [])], { passToken: false, token });
     scaffoldExecuted = true;
+    derivedFloorReported = readDerivedHouseStandardFromScaffold(scaffold);
     ledger.push({
       step: "scaffold",
       kind: "executed",
@@ -969,6 +1101,84 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     data: { projectId: slug, mcpEndpoint, mcpEndpointSource: input.mcpEndpoint ? "caller_supplied" : "derived_from_netlify_site", mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`, tokenEnvVar: `${envPrefix}_MCP_TOKEN`, clientSiteBinding: { netlifySiteName, netlifySiteId: siteId }, allowedCrawlOrigins: [sourceOrigin] }
   });
 
+  // 5. C3 — the visual-identity half of birth. Both steps are PLANNED here in full (exact ids, exact
+  // brief, exact verb) and PERFORMED only when a caller supplied the transport for them; otherwise
+  // each is a `requires_human` ledger entry mirrored into the checklist, never a silent skip. See the
+  // long note above GenesisVisualIdentityPlan for why the normal case is the plan and not the call.
+  const visualIdentity: GenesisVisualIdentityPlan = {
+    houseStandardId: houseVisualStandardId(slug),
+    defaultTemplateId: DEFAULT_ARTICLE_PDF_TEMPLATE_ID,
+    ...(genesisHouseBrief(input) ? { brief: genesisHouseBrief(input)! } : {}),
+    derivedFloorReported,
+    templatePublished: false,
+    houseStandardWritten: false
+  };
+
+  if (deps.publishArticlePdfTemplate) {
+    try {
+      const published = await deps.publishArticlePdfTemplate({ projectId: slug, templateId: visualIdentity.defaultTemplateId });
+      visualIdentity.templatePublished = published.published;
+      ledger.push({
+        step: "publish_default_pdf_template",
+        kind: published.published ? "executed" : "requires_human",
+        detail: published.detail,
+        at: now(),
+        data: { projectId: slug, templateId: visualIdentity.defaultTemplateId, script: PUBLISH_ARTICLE_TEMPLATE_SCRIPT }
+      });
+    } catch (error) {
+      // A failed template publish is never a failed birth: the tenant exists, and the step stays on
+      // the checklist with the reason attached.
+      ledger.push({
+        step: "publish_default_pdf_template",
+        kind: "requires_human",
+        detail: `Publishing ${visualIdentity.defaultTemplateId} on ${slug} failed and is left to the human checklist: ${error instanceof SiteGenesisRefusal ? error.safeSummary : error instanceof Error ? error.message : String(error)}`,
+        at: now(),
+        data: { projectId: slug, templateId: visualIdentity.defaultTemplateId }
+      });
+    }
+  } else {
+    ledger.push({
+      step: "publish_default_pdf_template",
+      kind: "requires_human",
+      detail: `No pdf-template transport was supplied to this genesis run, and none can be assumed: publishing ${visualIdentity.defaultTemplateId} is a call against the new tenant's own surface, whose ${envPrefix}_MCP_TOKEN and pdf-tool storage grant are both still human custody steps. The step is planned in full on the checklist (pdf_default_template) rather than silently skipped — until it is done, every PDF slot on every run for this tenant is blocked no_pdf_template.`,
+      at: now(),
+      data: { projectId: slug, templateId: visualIdentity.defaultTemplateId, script: PUBLISH_ARTICLE_TEMPLATE_SCRIPT }
+    });
+  }
+
+  if (deps.runVisualIdentityHouse && visualIdentity.brief) {
+    try {
+      const result = await deps.runVisualIdentityHouse({ projectId: slug, mode: "house", brief: visualIdentity.brief, visualStandardId: visualIdentity.houseStandardId });
+      visualIdentity.houseStandardWritten = true;
+      visualIdentity.houseStandardId = result.visualStandardId || visualIdentity.houseStandardId;
+      ledger.push({
+        step: "write_house_visual_standard",
+        kind: "executed",
+        detail: `${result.detail} The standard is a DRAFT: writing a look and putting it on the live site are separate acts, and the second one is the Owner-gated site_apply_brand_imagery verb.`,
+        at: now(),
+        data: { projectId: slug, visualStandardId: visualIdentity.houseStandardId, mode: "house", status: result.status, derivedFloorReported }
+      });
+    } catch (error) {
+      ledger.push({
+        step: "write_house_visual_standard",
+        kind: "requires_human",
+        detail: `The visual_identity mode:'house' run for ${slug} failed and is left to the human checklist: ${error instanceof SiteGenesisRefusal ? error.safeSummary : error instanceof Error ? error.message : String(error)}. The tokens-derived floor platform mints is unaffected — a failed write never removes a standard.`,
+        at: now(),
+        data: { projectId: slug, visualStandardId: visualIdentity.houseStandardId, mode: "house" }
+      });
+    }
+  } else {
+    ledger.push({
+      step: "write_house_visual_standard",
+      kind: "requires_human",
+      detail: visualIdentity.brief
+        ? `No visual_identity transport was supplied to this genesis run: writing the house standard is a call against the new tenant's own MCP, whose ${envPrefix}_MCP_TOKEN is still a human custody step. The run is planned in full on the checklist (visual_identity_house_standard) with brief "${visualIdentity.brief}". The tokens-derived floor platform's create-site mints (${visualIdentity.houseStandardId}) is${derivedFloorReported ? "" : " expected to be"} in place either way, so the site is never without a standard — it is only without a DECIDED one.`
+        : `This genesis run was given neither a niche nor an audience, so there is no brief to write a house look from and genesis invents neither. The step is on the checklist (visual_identity_house_standard) asking for one. The tokens-derived floor platform's create-site mints (${visualIdentity.houseStandardId}) still applies, so the site is never without a standard.`,
+      at: now(),
+      data: { projectId: slug, visualStandardId: visualIdentity.houseStandardId, mode: "house", brief: visualIdentity.brief ?? null, derivedFloorReported }
+    });
+  }
+
   const humanChecklist = buildGenesisHumanChecklist({
     slug,
     netlifySiteName,
@@ -976,7 +1186,8 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     scaffoldExecuted,
     netlifyMode: mode,
     registeredMcpEndpoint: mcpEndpoint,
-    provisionedFleetEnvVars: genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key)
+    provisionedFleetEnvVars: genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key),
+    visualIdentity
   });
   return {
     projectId: slug,
@@ -988,6 +1199,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     seededCapturePolicy,
     project,
     ledger,
-    humanChecklist
+    humanChecklist,
+    visualIdentity
   };
 }

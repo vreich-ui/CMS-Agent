@@ -44,7 +44,11 @@ export type PublishGateDefinition = {
 const WORKFLOW_GATE_SEGMENT: Record<string, string> = {
   publishing_conductor: "publishing",
   capture_conductor: "capture",
-  clone_conductor: "clone"
+  clone_conductor: "clone",
+  // C5: already short and already stable, so the segment IS the workflow id — declared explicitly
+  // rather than left to the `?? workflowId` fallback below, because an operator reading this table
+  // should be able to see every gate prefix that exists without knowing which ones are defaults.
+  visual_identity: "visual_identity"
 };
 
 const gate = (workflowId: string, nodeId: string, description: string): PublishGateDefinition => ({
@@ -70,7 +74,14 @@ const GATE_REGISTRY: readonly PublishGateDefinition[] = [
   // (see cloneConductorNodes.ts's own note on why). It is a gate for exactly the same reason the tail
   // nodes are — it passes through the executor's publish-risk dispatch guard — so it is addressable
   // for exactly the same reason.
-  gate("clone_conductor", "pdf_template_publish", "publish_pdf_template for the pdf-tool templates a studio run minted. Not a CMS release: pdf-tool publication never triggers a production build.")
+  gate("clone_conductor", "pdf_template_publish", "publish_pdf_template for the pdf-tool templates a studio run minted. Not a CMS release: pdf-tool publication never triggers a production build."),
+  // C5 (BRIEF §3.5/R6) — visual_identity's write node. It is riskLevel "admin" because it can reach
+  // `site_apply_brand_imagery`, whose own platform governance is toolClass 'privileged' with
+  // autonomyFloor 'ask'; that floor is expressed HERE, as an addressable gate, rather than as prose in
+  // an approval reason. Like the pdf-template branch above it is a gate WITHOUT composing the shared
+  // tail: this workflow publishes nothing (visual_standard is deliberately not a publishable type),
+  // and the site write it can make travels through the privileged apply verb, not through a publisher.
+  gate("visual_identity", "visual_standard_materializer", "site_apply_brand_imagery for the visual standard a writer run proposed — the site's applied brandImagery. Creating the standard itself is not gated; putting it on the live site is.")
 ];
 
 const byWorkflowAndNode = new Map(GATE_REGISTRY.map((definition) => [`${definition.workflowId} ${definition.nodeId}`, definition]));

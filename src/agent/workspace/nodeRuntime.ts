@@ -16,6 +16,7 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 // keeps the store as the winner wherever it holds a record and falls back to the registered workflow's
 // canonical definition only when it does not — see nodeResolution.ts for the full rationale.
 import { resolveNodeForExecution } from "./nodeResolution.js";
+import { readVisualStandardMaterializer, VISUAL_STANDARD_MATERIALIZER_NODE_ID } from "./visualStandardMaterialization.js";
 import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
 import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
@@ -161,6 +162,19 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   if (data.expectedWorkspaceVersion !== undefined && data.expectedWorkspaceVersion !== await repos.workspaceRepository.getWorkspaceVersion()) throw new Error("stale_workspace_version");
   const node = await resolveNodeForExecution(data.nodeId, repos.workspaceRepository);
   if (!node) throw new Error(`Unknown node: ${data.nodeId}`);
+  // REVIEW — a deterministic WRITE node has no deterministic route on this path, so it must not run
+  // here at all. `visual_standard_materializer` is executed by engine code (visualStandardMaterialization.ts)
+  // that only the CONDUCTOR dispatches: executeNode goes straight to getNodeRunner, so a live
+  // node.execute of it would put a MODEL in the seat of the engine — and its output schema requires
+  // `visualStandardId`, `applied` and `created`, so what comes back is a receipt for a write that
+  // never happened, addressed to a run whose projectId is the literal "workspace" (there is no client
+  // here to write to). Refused by name rather than trusted to a prompt sentence. Mock mode still
+  // works: a dry-run placeholder is what it is for, and nothing reads it as a receipt.
+  if (readVisualStandardMaterializer(node) && (data.executionMode ?? DEFAULT_EXECUTION_MODE) !== "mock") {
+    throw new Error(
+      `deterministic_node_not_independently_executable: ${VISUAL_STANDARD_MATERIALIZER_NODE_ID} is executed by deterministic engine code that only the conductor dispatches, and node.execute has no client to write to (projectId "workspace"). A model turn here would return a visualStandardId, applied and created for a write that never happened. Run it through a visual_identity run (workflow.run_node / run_all) instead.`
+    );
+  }
   const inputValidation = validateAgainstNodeSchema(data.input ?? {}, node.inputSchema);
   if (!inputValidation.valid) throw new Error(`input_validation_failed: ${inputValidation.issues.join("; ")}`);
   // Threads the node loaded above through prepareNodeExecution (which threads it further, into

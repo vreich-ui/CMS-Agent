@@ -109,6 +109,36 @@ describe("buildDeterministicContractIntelligence (unit)", () => {
       expect(buildDeterministicContractIntelligence(sampleReduced({ aggressionCeiling: bad }), "platform")).not.toHaveProperty("ceiling");
     }
   });
+
+  // C1 (BRIEF §3.7): visualStandard/pdfTemplates/imagePolicyContexts are carried through unchanged —
+  // this mapper computes nothing further, exactly like constraints/publishPolicy/bodySchema above.
+  const SITE_FIELDS: Pick<ReducedContract, "visualStandard" | "pdfTemplates" | "imagePolicyContexts"> = {
+    visualStandard: {
+      houseId: "vis_drlurie",
+      templates: [{ id: "vis_drlurie_ad", label: "Ad campaign", whenToUse: "Paid ad creative only." }],
+      overridePolicy: "lock"
+    },
+    pdfTemplates: [{ templateId: "tmpl_article", kind: "article", label: "Article Brochure", renderDataSchema: { type: "object" }, isDefault: true }],
+    imagePolicyContexts: ["article_body", "hero_image"]
+  };
+
+  it("carries visualStandard, pdfTemplates and imagePolicyContexts through unchanged when the reduction has them", () => {
+    const output = buildDeterministicContractIntelligence(sampleReduced(SITE_FIELDS), "platform");
+    expect(output.visualStandard).toEqual(SITE_FIELDS.visualStandard);
+    expect(output.pdfTemplates).toEqual(SITE_FIELDS.pdfTemplates);
+    expect(output.imagePolicyContexts).toEqual(SITE_FIELDS.imagePolicyContexts);
+
+    const node = getWorkspaceNode("contract_intelligence")!;
+    const result = validateOutput(output, node.outputSchema);
+    expect(result.ok, JSON.stringify(result.ok ? [] : result.errors)).toBe(true);
+  });
+
+  it("omits visualStandard, pdfTemplates and imagePolicyContexts when sitePrefetch never ran for this project/run — no invented defaulting", () => {
+    const output = buildDeterministicContractIntelligence(sampleReduced(), "platform") as Record<string, unknown>;
+    expect(output).not.toHaveProperty("visualStandard");
+    expect(output).not.toHaveProperty("pdfTemplates");
+    expect(output).not.toHaveProperty("imagePolicyContexts");
+  });
 });
 
 describe("wired into a real run: replaces the model call entirely (Session D end to end)", () => {
@@ -169,9 +199,14 @@ describe("wired into a real run: replaces the model call entirely (Session D end
     expect(output.summary).toMatch(/deterministic pass-through, no model call/);
     expect(output.constraints).toEqual([{ id: "article_slug", severity: "blocks_write", enforcedLive: undefined, note: undefined }].map((c) => expect.objectContaining({ id: c.id, severity: c.severity })));
 
-    // The only network call made anywhere was the deterministic prefetch's own read — one call, not
-    // one-per-turn the way the pre-#93 self-fetch behaved.
-    expect(remoteFetch).toHaveBeenCalledTimes(1);
+    // Every network call made anywhere was a DETERMINISTIC PREFETCH READ, issued once by the
+    // conductor — not one-per-turn the way the pre-#93 self-fetch behaved, which is the property this
+    // assertion has always been about. FINDING-C (C3) moved the count 1 -> 6: contract_intelligence
+    // now declares the SITE prefetch as well (nodeGatingSeed.ts), whose five reads are what make C1's
+    // visualStandard/pdfTemplates/imagePolicyContexts and C2's planning rules exist on a real run.
+    // Six reads, once each, outside every model loop; the model-call count this test exists to pin is
+    // still zero, which is what the empty usage list below proves.
+    expect(remoteFetch).toHaveBeenCalledTimes(6);
 
     // No model call means no usage record for this node at all — not even a $0 one.
     const usage = await repositoryManager.getUsageRepository().list({ runId: started.runId, nodeId: "contract_intelligence" });

@@ -60,7 +60,12 @@ const mockString = (schema: Record<string, unknown>): string => {
   const pad = (text: string) => (text.length >= minLength ? text : text + "x".repeat(minLength - text.length));
 
   if (!pattern) return pad(MOCK_TEXT);
-  for (const candidate of [pad(MOCK_TEXT), "n_mock1", "mock", "mock-1", "mock_1", "1", "a"]) {
+  // REVIEW: the last two are appended, never reordered, so no pattern that an earlier candidate
+  // already satisfied changes answer. They cover the two shapes the brand-imagery schemas actually
+  // declare — a 6-digit hex swatch (`^#[0-9A-Fa-f]{6}$`) and a "W:H" aspect ratio
+  // (`^\d{1,2}:\d{1,2}$`) — without which brand_imagery_writer's outputSchema had no satisfiable
+  // dry-run value at all and the visual_identity workflow could not be traversed in mock mode.
+  for (const candidate of [pad(MOCK_TEXT), "n_mock1", "mock", "mock-1", "mock_1", "1", "a", "#2E5C42", "1:1"]) {
     try {
       if (new RegExp(pattern).test(candidate) && candidate.length >= minLength) return candidate;
     } catch {
@@ -168,6 +173,27 @@ export function mockValueFromSchema(schema: unknown, hints: MockHints = {}): unk
     for (const key of spare) {
       if (Object.keys(result).length >= minProperties) break;
       result[key] = mockValueFromSchema(properties[key], hints);
+    }
+    // REVIEW: an object closed by `additionalProperties: false` but opened by `patternProperties` is
+    // not "closed" in the sense this branch meant — it accepts any key matching a declared pattern,
+    // which is exactly how a keyed map (brandImagery.aspectRatios: context key -> "W:H" ratio) is
+    // spelled in the draft-2020-12 subset outputValidator.ts implements. `properties` is empty for
+    // such an object, so `spare` above is empty and the old code left it short forever: no dry-run
+    // value could satisfy `minProperties: 1`, and the node failed its own output schema in mock mode.
+    // Filled from the pattern itself — a key mockString derives from the KEY pattern, a value from
+    // that pattern's own subschema — so nothing is invented that the schema would not accept.
+    const patternProperties = isPlainObject(schema.patternProperties) ? schema.patternProperties : undefined;
+    if (patternProperties && Object.keys(result).length < minProperties) {
+      for (const [keyPattern, child] of Object.entries(patternProperties)) {
+        if (Object.keys(result).length >= minProperties) break;
+        const key = mockString({ pattern: keyPattern });
+        try {
+          if (!new RegExp(keyPattern).test(key) || key in result) continue;
+        } catch {
+          continue;
+        }
+        result[key] = mockValueFromSchema(child, hints);
+      }
     }
     // Still short, and the object is open: synthesize filler keys. If it is closed, leave it short so
     // validation reports the real problem rather than the generator inventing fields.

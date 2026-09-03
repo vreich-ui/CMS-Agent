@@ -23,7 +23,7 @@
 // (executor.ts) validates its result against the node's own outputSchema before using it, and falls
 // back to the normal model dispatch on any validation failure — a mapping bug degrades to "spend the
 // $0.134" rather than "the run fails" or "a malformed artifact ships".
-import type { ReducedContract } from "./contractReduction.js";
+import type { ReducedContract, ReducedContractBrandPalette, ReducedContractPdfTemplate, ReducedContractSiteLogo, ReducedContractVisualStandard } from "./contractReduction.js";
 
 export type ContractIntelligenceOutput = {
   artifact: "contract_intelligence.v1";
@@ -43,6 +43,18 @@ export type ContractIntelligenceOutput = {
   assumptions: string[];
   blockers: string[];
   notes: string[];
+  // C1 (BRIEF §3.7): carried through from the reduction under these same names, unchanged — this
+  // mapper does not compute, validate, or reshape them any further than reduceContract already did.
+  // Absent whenever sitePrefetch.ts's getSitePrefetch was never run for this project/run, exactly
+  // like every other optional field this mapper passes through only when present.
+  visualStandard?: ReducedContractVisualStandard;
+  pdfTemplates?: ReducedContractPdfTemplate[];
+  imagePolicyContexts?: string[];
+  // FIX-D (BRIEF §3.5): the site's own brand facts, carried the same way and under the same names the
+  // reduction used. `brandPalette` rather than `brandTokens` — see contractReduction.ts for why that
+  // name is load-bearing rather than cosmetic.
+  brandPalette?: ReducedContractBrandPalette;
+  logo?: ReducedContractSiteLogo;
 };
 
 /**
@@ -155,6 +167,13 @@ export function buildDeterministicContractIntelligence(reduced: ReducedContract,
     contract_findings,
     assumptions,
     blockers: [],
-    notes
+    notes,
+    // C1 (BRIEF §3.7): unchanged pass-through, no invented defaulting — a field the reduction did not
+    // carry (sitePrefetch never ran, or degraded to nothing usable) stays absent here too.
+    ...(reduced.visualStandard !== undefined ? { visualStandard: reduced.visualStandard } : {}),
+    ...(reduced.pdfTemplates !== undefined ? { pdfTemplates: reduced.pdfTemplates } : {}),
+    ...(reduced.imagePolicyContexts !== undefined ? { imagePolicyContexts: reduced.imagePolicyContexts } : {}),
+    ...(reduced.brandPalette !== undefined ? { brandPalette: reduced.brandPalette } : {}),
+    ...(reduced.logo !== undefined ? { logo: reduced.logo } : {})
   };
 }

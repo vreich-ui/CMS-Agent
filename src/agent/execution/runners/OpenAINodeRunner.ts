@@ -13,6 +13,7 @@ import type { NodeRunner, NodeRunnerInput, NodeRunnerResult, NodeToolCallRecord 
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { NodeBudgetExceededError, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
 import { classifyProviderHttpError, operatorActionForBudgetExceeded, operatorActionForProviderHttpError, truncateProviderMessage } from "./providerHttpErrors.js";
+import { buildOpenAIImageBlocks, resolveImageRefs } from "./imageRefs.js";
 
 const forbidden = /api[_-]?key|authorization|bearer|jwt|cookie|token|secret|blob.*credential/i;
 const redact = (v: unknown): unknown => typeof v === "string" ? v.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]") : Array.isArray(v) ? v.map(redact) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k,val]) => [k, forbidden.test(k) ? "[REDACTED]" : redact(val)])) : v;
@@ -286,6 +287,9 @@ function instructions(node: WorkspaceNode, deps: unknown, observations: unknown)
 }
 
 export class OpenAINodeRunner implements NodeRunner {
+  // C4 — node runner image support: imageRefs whose `url` needs fetching are resolved through this
+  // (injectable, so tests never hit the network — same pattern as AnthropicNodeRunner's fetchImpl).
+  constructor(private readonly fetchImpl: typeof fetch = fetch) {}
   supports(mode: ExecutionMode) { return mode === "openai"; }
   validateConfiguration(node: WorkspaceNode) {
     const c = cfg(node); const errors: string[] = [];
@@ -410,12 +414,29 @@ export class OpenAINodeRunner implements NodeRunner {
     // first and the run's stage outputs otherwise (the single-node path supplies its own).
     const inputRecord = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
     const deliveredDependencies = inputRecord?.dependencies && typeof inputRecord.dependencies === "object" ? (inputRecord.dependencies as Record<string, unknown>) : undefined;
-    const { dependencies: _delivered, ...inputSansDependencies } = inputRecord ?? {};
+    // C4 — node runner image support (BRIEF 3.9): imageRefs is pulled out here alongside `dependencies`
+    // (its sibling exclusion below) so it never reaches the JSON text — it is resolved into its own
+    // leading content blocks instead (see imageRefs.ts). `rawImageRefs` stays undefined for any input
+    // that never declared the field, which is what keeps the no-refs path byte-identical to today.
+    const rawImageRefs = Array.isArray(inputRecord?.imageRefs) ? (inputRecord.imageRefs as unknown[]) : undefined;
+    const { dependencies: _delivered, imageRefs: _imageRefs, ...inputSansDependencies } = inputRecord ?? {};
     // Each dependency is bounded INDEPENDENTLY, so one oversized confluence input cannot crowd out
     // a small sibling the node also needs (see boundDependencyOutput).
     const dependencyMaxChars = dependencyOutputMaxChars();
     const dependencyOutputs = Object.fromEntries(node.dependsOn.map((d) => [d, boundDependencyOutput(deliveredDependencies?.[d] ?? context.run.stageOutputs[d] ?? context.suppliedDependencies?.[d], dependencyMaxChars)]));
     const prompt = JSON.stringify(redact({ input: inputRecord ? inputSansDependencies : input, dependencyOutputs, ...(playbookText ? { playbook: playbookText } : {}), outputSchema: node.outputSchema }));
+    const { resolved: resolvedImageRefs, warnings: imageRefWarnings } = await resolveImageRefs(rawImageRefs, { fetchImpl: this.fetchImpl });
+    const imageBlocks = buildOpenAIImageBlocks(resolvedImageRefs);
+    // Passed as the second arg to run() below in place of the plain string `prompt` whenever there are
+    // image blocks to carry; a node with no imageRefs never builds this and `run()` still receives the
+    // bare `prompt` string exactly as before this feature existed.
+    // The SDK's own AgentInputItem schema (agents-core/dist/types/protocol.d.ts) requires "input_text"
+    // for a message's text content item, not the generic "text" the brief describes uniformly for all
+    // three runners — an actual "text" tag here is a real type (and, if it ever reached the SDK's own
+    // validation, runtime) mismatch, so this deliberately deviates to the SDK-correct tag. See imageRefs.ts.
+    const promptWithImages = imageBlocks.length > 0
+      ? [{ type: "message" as const, role: "user" as const, content: [...imageBlocks, { type: "input_text" as const, text: prompt }] }]
+      : undefined;
     // F5 (T-2, run_1785352838155_l544ye): draft_writer had NO explicit timeout, defaulted to 60s, and
     // failed with model_timeout on a large brief (300s configured live and it passed). 60s is too
     // tight a default for a single large-output generation call even with zero tool calls — the
@@ -520,7 +541,7 @@ export class OpenAINodeRunner implements NodeRunner {
           else context.signal.addEventListener("abort", forwardExternalAbort, { once: true });
         }
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-        const runOnce = run(agent, prompt, {
+        const runOnce = run(agent, promptWithImages ?? prompt, {
           maxTurns, signal: attemptAbort.signal as any,
           tracingDisabled: !tracingEnabled, traceIncludeSensitiveData: false,
           // Detection-only tap (see the truncation retry comment above the loop): the SDK calls this
@@ -582,7 +603,19 @@ export class OpenAINodeRunner implements NodeRunner {
         // Telemetry is non-authoritative: the validated output is the deliverable, so a usage-record
         // write failure must never discard a successful node (matches the workflow executor's pattern).
         await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: provider.label, ...usageFields, status: "actual", metadata: { executionMode: "openai", traceId: result.lastResponseId, attempt: attempt + 1, attemptsTotal: attempt + 1, turnCount, toolCallCount } }).catch(() => undefined);
-        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, model, trace: { responseId: result.lastResponseId, toolCount: effective.length }, toolCalls, outputValidated: true };
+        return {
+          ok: true,
+          output: validated.value,
+          usage: { ...usageFields, actual: true },
+          model,
+          trace: {
+            responseId: result.lastResponseId,
+            toolCount: effective.length,
+            ...(rawImageRefs ? { imageRefs: { included: resolvedImageRefs.length, dropped: imageRefWarnings.length, warnings: imageRefWarnings } } : {})
+          },
+          toolCalls,
+          outputValidated: true
+        };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         // Checked before the generic cancellation/abort branch below: the guard throws from inside the

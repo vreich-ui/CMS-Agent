@@ -1,6 +1,7 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import { captureConductorNodes } from "./captureConductorNodes.js";
 import { cloneConductorNodes } from "./cloneConductorNodes.js";
+import { visualIdentityNodes } from "./visualIdentityNodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 
 // T15.16 (#195) — the workspace STORE's own governance-visible node set, as distinct from a
@@ -56,10 +57,14 @@ const cloneNode = (node: WorkspaceNode): WorkspaceNode => ({
   metadata: node.metadata ? structuredClone(node.metadata) : undefined
 });
 
-// The three sources, in the order they appear in a fresh union: publishing's own canonical set first
+// The four sources, in the order they appear in a fresh union: publishing's own canonical set first
 // (unchanged ordering/behavior for every existing publishing-only caller), then capture_conductor's
-// own upstream nodes, then clone_conductor's own upstream nodes.
-const workspaceStoreSources = (): WorkspaceNode[] => [...listWorkspaceNodes(), ...captureConductorNodes, ...cloneConductorNodes];
+// own upstream nodes, then clone_conductor's own upstream nodes, then (C5) visual_identity's pair.
+//
+// visual_identity's two nodes are listed RAW for the same reason capture's and clone's are, and the
+// reason is even simpler here: this workflow composes no publishing tail at all, so its array declares
+// no shared-tail node and can collide with nothing.
+const workspaceStoreSources = (): WorkspaceNode[] => [...listWorkspaceNodes(), ...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes];
 
 // Duplicate ids across the three sources are not expected (verified by
 // workspaceStoreNodes.test.ts) — this defensive dedup keeps the FIRST occurrence (publishing's own

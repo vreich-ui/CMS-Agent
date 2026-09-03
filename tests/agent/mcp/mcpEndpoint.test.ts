@@ -109,9 +109,10 @@ describe("mcp endpoint", () => {
 
     expect(response.json.result.structuredContent.ok).toBe(true);
     // 24 publishing_conductor nodes (R-22 re-seed + §2.16 placement_resolver/monetization_strategy +
-    // T15.6 release_executor) + 11 capture_conductor + 9 clone_conductor own nodes, additively seeded
-    // into the store by T15.16 (#195) so they are governance-visible through workspace.get_nodes too.
-    expect(response.json.result.structuredContent.data.nodes).toHaveLength(49);
+    // T15.6 release_executor) + 11 capture_conductor + 13 clone_conductor + C5's 2 visual_identity own
+    // nodes, additively seeded into the store by T15.16 (#195) so they are governance-visible through
+    // workspace.get_nodes too.
+    expect(response.json.result.structuredContent.data.nodes).toHaveLength(51);
     expect(response.json.result.structuredContent.data.nodes.map((node: { id: string }) => node.id)).toEqual(expect.arrayContaining(["input_triage", "contract_intelligence", "article_body", "artifact_plan", "publish_payload", "publication_controller", "publish_executor"]));
     // The client's fetched contract is the authority, and the envelope carries the provenance that proves
     // it was fetched rather than assumed.

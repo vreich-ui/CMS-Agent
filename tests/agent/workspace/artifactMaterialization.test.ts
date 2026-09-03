@@ -4,6 +4,7 @@ import {
   ARTIFACT_MATERIALIZER_JOB_STAGE_KEY,
   CREATE_TOOL,
   STATUS_TOOL,
+  evaluateBridgePolicy,
   materializationIdempotencyKey,
   runArtifactMaterialization,
   type MaterializerDeps,
@@ -33,6 +34,14 @@ const REQUEST_ID = "req_conductor_barrier_20260831_01";
 const projectConfig = { projectId: "dr-lurie", status: "active", objectDialect: { siteObjectId: SITE_ID } } as unknown as ProjectConnectionConfig;
 const projectRepository = { get: async () => projectConfig } as unknown as ProjectRepository;
 
+// C2. A registered client with NO executable policy hook — the ordinary case, and the one the §3.10
+// asset path is specified against. `dr-lurie` keeps its own hooks (and its own test below), so the two
+// facts stay separable: "does the materializer forward/derive what it should" and "what does one
+// particular client's executable policy do to that".
+const HOOKLESS_PROJECT = "acme-media";
+const hooklessConfig = { projectId: HOOKLESS_PROJECT, status: "active", objectDialect: { siteObjectId: SITE_ID } } as unknown as ProjectConnectionConfig;
+const hooklessRepository = { get: async () => hooklessConfig } as unknown as ProjectRepository;
+
 const node = getWorkspaceNode("artifact_materializer")!;
 
 const spec = (slots: Record<string, unknown>[]) => ({
@@ -52,16 +61,68 @@ const FOUR_SLOTS = [
   { slotId: "worksheet", purpose: "downloadable worksheet", desiredKind: "pdf", templateId: "tpl_worksheet_v1", renderData: { title: "Barrier repair", rows: [] } }
 ];
 
-const runFixture = (slots: Record<string, unknown>[] = FOUR_SLOTS, jobState?: MaterializerJobState): WorkflowExecutionRecord =>
+// C1 threaded BRIEF §3.7's site facts onto contract_intelligence.v1. This is the half C2 reads: the
+// site's published PDF templates (with the renderDataSchema the mapper emits against) and the draft
+// the render data is derived FROM. The schema mirrors pdf-tool's real
+// `templates/article_brochure_v1.json` at the top level — required brand/title/deck/sections/
+// pullQuotes/sources, additionalProperties:false — without pasting its 2.6KB of $defs.
+const ARTICLE_RENDER_DATA_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["brand", "title", "deck", "sections", "pullQuotes", "sources"],
+  properties: {
+    brand: { type: "object" },
+    title: { type: "string" },
+    deck: { type: "string" },
+    kicker: { type: "string" },
+    author: { type: "string" },
+    coverImage: { type: "string" },
+    sections: { type: "array" },
+    pullQuotes: { type: "array" },
+    sources: { type: "array" }
+  }
+};
+
+const ARTICLE_CONTRACT = {
+  contract_intelligence: {
+    artifact: "contract_intelligence.v1",
+    clientObjectType: "content_item",
+    pdfTemplates: [
+      { templateId: "article_brochure_v1", kind: "article", label: "Article Brochure", isDefault: true, renderDataSchema: ARTICLE_RENDER_DATA_SCHEMA },
+      { templateId: "tpl_checklist_v1", kind: "checklist", label: "Checklist", isDefault: false }
+    ]
+  },
+  draft_writer: {
+    artifact: "draft.v1",
+    summary: "A draft about barrier repair.",
+    title: "Rebuilding the skin barrier without stripping it",
+    deck: "What actually repairs a compromised barrier, and what only feels like it does.",
+    sections: [
+      { heading: "What the barrier actually is", paragraphs: ["A short first paragraph about lipids.", "A second paragraph about ceramides."] },
+      { heading: "What to stop doing", body: "Stop over-exfoliating." },
+      // Dropped: a heading with no prose is a planning gap, never a page.
+      { heading: "Coming soon", paragraphs: [] }
+    ],
+    pullQuotes: [{ quote: "Barrier repair is subtraction before addition.", attribution: "Dr. Lurie" }],
+    sources: [{ label: "Journal of Dermatological Science, 2024", url: "https://example.invalid/jds-2024" }]
+  }
+};
+
+const runFixture = (
+  slots: Record<string, unknown>[] = FOUR_SLOTS,
+  jobState?: MaterializerJobState,
+  extras: { projectId?: string; stageOutputs?: Record<string, unknown> } = {}
+): WorkflowExecutionRecord =>
   ({
     runId: "run_materializer_1",
-    projectId: "dr-lurie",
+    projectId: extras.projectId ?? "dr-lurie",
     executionMode: "openai",
     // No content-item shell on this fixture: the planner's requestId stands, which is the
     // server-minted-id client's case and keeps every other assertion here about the loop itself.
     nodes: [],
     stageOutputs: {
       artifact_plan: spec(slots),
+      ...(extras.stageOutputs ?? {}),
       ...(jobState ? { [ARTIFACT_MATERIALIZER_JOB_STAGE_KEY]: jobState } : {})
     }
   }) as unknown as WorkflowExecutionRecord;
@@ -69,10 +130,19 @@ const runFixture = (slots: Record<string, unknown>[] = FOUR_SLOTS, jobState?: Ma
 type Call = { tool: string; args: Record<string, unknown> };
 
 /** A bridge whose jobs need `pollsToFinish` polls before they report complete. */
-const bridge = (options: { pollsToFinish?: number; failSlots?: Record<string, string>; adopted?: Record<string, boolean> } = {}) => {
+const bridge = (options: { pollsToFinish?: number; failSlots?: Record<string, string>; adopted?: Record<string, boolean>; imageKeyRoot?: string; canonicalBlobKeys?: boolean } = {}) => {
   const calls: Call[] = [];
   const polls: Record<string, number> = {};
   const pollsToFinish = options.pollsToFinish ?? 1;
+  // pdf-tool's canonical blob layout is `{artifactKind}/{safeRequestId}/{sha256}{ext}` — i.e. keys
+  // really do start with `image/`. The default `img` here is the historical fixture value; tests that
+  // care about what a blob key LOOKS like ask for the canonical root.
+  const imageKeyRoot = options.imageKeyRoot ?? "img";
+  // FIX-2: the canonical layout's filename is the SHA256 OF THE BYTES, which is why such a key cannot
+  // be hand-authored and why dr-lurie's policy can safely exempt it. The historical fixture spells the
+  // filename as the slot name — fine for the loop's own arithmetic, wrong for anything asserting what
+  // a real key looks like — so a test that cares asks for the real thing.
+  const canonicalName = (slot: string, ext: string) => (options.canonicalBlobKeys ? `${"b".repeat(64)}.${ext}` : `${slot}.${ext}`);
   const callTool = async (_config: ProjectConnectionConfig, tool: string, args: Record<string, unknown>) => {
     calls.push({ tool, args });
     const slot = String(args.slot ?? "");
@@ -92,8 +162,9 @@ const bridge = (options: { pollsToFinish?: number; failSlots?: Record<string, st
       if (polls[jobId] < pollsToFinish) return { ok: true, result: { structuredContent: { data: { job: { jobId, status: "running" } } } } };
       if (failure) return { ok: true, result: { structuredContent: { data: { job: { jobId, status: "failed", errorDetail: failure } } } } };
       const ext = slotOfJob === "worksheet" ? "pdf" : "webp";
-      const dir = slotOfJob === "worksheet" ? "pdf" : "img";
-      return { ok: true, result: { structuredContent: { data: { job: { jobId, status: "complete", artifactReference: { blobKey: `${dir}/${REQUEST_ID}/${slotOfJob}.${ext}`, sha256: "b".repeat(64), contentType: slotOfJob === "worksheet" ? "application/pdf" : "image/webp", size: 4096 }, public_path: `/${dir}/${REQUEST_ID}/${slotOfJob}.${ext}` } } } } };
+      const dir = slotOfJob === "worksheet" ? "pdf" : imageKeyRoot;
+      const name = canonicalName(slotOfJob, ext);
+      return { ok: true, result: { structuredContent: { data: { job: { jobId, status: "complete", artifactReference: { blobKey: `${dir}/${REQUEST_ID}/${name}`, sha256: "b".repeat(64), contentType: slotOfJob === "worksheet" ? "application/pdf" : "image/webp", size: 4096 }, public_path: `/${dir}/${REQUEST_ID}/${name}` } } } } };
     }
     throw new Error(`unexpected tool ${tool}`);
   };
@@ -103,20 +174,32 @@ const bridge = (options: { pollsToFinish?: number; failSlots?: Record<string, st
 };
 
 /** Drives the node the way the executor does: re-queue on pending, persist job state, dispatch again. */
-const driveToTerminal = async (params: { slots?: Record<string, unknown>[]; deps: { calls: Call[]; callTool: ReturnType<typeof bridge>["callTool"] }; maxDispatches?: number }) => {
+const driveToTerminal = async (params: {
+  slots?: Record<string, unknown>[];
+  deps: { calls: Call[]; callTool: ReturnType<typeof bridge>["callTool"] };
+  maxDispatches?: number;
+  projectId?: string;
+  projectRepository?: ProjectRepository;
+  stageOutputs?: Record<string, unknown>;
+}) => {
   let jobState: MaterializerJobState | undefined;
   let dispatches = 0;
+  // Warnings are per-DISPATCH (the executor records each one as it lands), so a caller that wants to
+  // assert on something the node said while it was still pending has to accumulate them the way the
+  // run log does.
+  const warnings: string[] = [];
   for (let i = 0; i < (params.maxDispatches ?? 12); i += 1) {
     dispatches += 1;
     const outcome = await runArtifactMaterialization(
-      { run: runFixture(params.slots ?? FOUR_SLOTS, jobState), node },
-      { projectRepository, callTool: params.deps.callTool }
+      { run: runFixture(params.slots ?? FOUR_SLOTS, jobState, { ...(params.projectId ? { projectId: params.projectId } : {}), ...(params.stageOutputs ? { stageOutputs: params.stageOutputs } : {}) }), node },
+      { projectRepository: params.projectRepository ?? projectRepository, callTool: params.deps.callTool }
     );
+    if (outcome.kind !== "refused") warnings.push(...outcome.warnings);
     if (outcome.kind === "pending") {
       jobState = outcome.jobState;
       continue;
     }
-    return { outcome, dispatches, jobState };
+    return { outcome, dispatches, jobState, warnings };
   }
   throw new Error("never reached a terminal outcome");
 };
@@ -261,7 +344,11 @@ describe("artifact_materializer — the deterministic materialization loop (W8.3
       jobState = last.jobState;
     }
     expect(last).toMatchObject({ kind: "refused", code: "artifact_materialization_poll_budget_exhausted" });
-    expect(createCalls(stuck.calls)).toHaveLength(4);
+    // THREE creates, not four: C2's §3.10 ordering means the worksheet PDF is never dispatched while
+    // an image slot is still running, because its cover cannot be named before the image exists. Its
+    // job was therefore never bought — which is the point: a budget exhausted on images does not also
+    // spend on a PDF that would have rendered cover-less.
+    expect(createCalls(stuck.calls).map((call) => call.args.slot)).toEqual(["hero", "inline_1", "inline_2"]);
   });
 
   // WHOSE REQUEST ID. The planner runs before the content-item shell exists and before runContext holds
@@ -421,5 +508,217 @@ describe("artifact_materializer — the deterministic materialization loop (W8.3
     const protocolLess = { ...output };
     delete protocolLess.artifactProtocol;
     expect(validateOutput(protocolLess, node.outputSchema).ok).toBe(true);
+  });
+  // ------------------------------------------------------------------------------------------
+  // C2 (BRIEF §3.8 and §3.10): run/slot style, the usage-context policy, the executable project
+  // policy, and deterministic PDF render data.
+
+  it("C2: forwards a slot's `style` verbatim on create, folding brief_architect's `instructions` into the bridge's `note`", async () => {
+    const deps = bridge({ pollsToFinish: 1 });
+    const styled = [
+      { ...FOUR_SLOTS[0], style: { visualStandardId: "vis_drlurie_editorial", override: { styleSentence: "soft daylight, matte finish" }, note: "keep it clinical" } },
+      { ...FOUR_SLOTS[1], style: { instructions: "match the mood board's palette, not its subject" } }
+    ];
+    await driveToTerminal({ deps, slots: styled });
+
+    const hero = createCalls(deps.calls).find((call) => call.args.slot === "hero")!;
+    expect(hero.args.style).toEqual({ visualStandardId: "vis_drlurie_editorial", override: { styleSentence: "soft daylight, matte finish" }, note: "keep it clinical" });
+    // R4's subject-only rule survives: nothing from `style` leaked into the prompt.
+    expect(hero.args.prompt).toBe("a jar of moisturizer on a marble countertop");
+
+    // pdf-tool's style object is `.strict()`, so `instructions` — brief_architect's spelling — has to
+    // become `note` here or the whole create is rejected for an unknown key.
+    const inline = createCalls(deps.calls).find((call) => call.args.slot === "inline_1")!;
+    expect(inline.args.style).toEqual({ note: "match the mood board's palette, not its subject" });
+
+    // A slot with no style sends no style key at all — not an empty object.
+    const bare = bridge({ pollsToFinish: 1 });
+    await driveToTerminal({ deps: bare, slots: [FOUR_SLOTS[0]] });
+    expect(Object.keys(createCalls(bare.calls)[0].args)).not.toContain("style");
+  });
+
+  it("C2: blocks a slot whose usageContext is not in the site's image-model policy, with the code usage_context_not_in_policy", async () => {
+    const deps = bridge({ pollsToFinish: 1 });
+    const contexts = { contract_intelligence: { artifact: "contract_intelligence.v1", clientObjectType: "content_item", imagePolicyContexts: ["article_hero", "article_body"] } };
+    const slots = [
+      { ...FOUR_SLOTS[0], requirements: { image: { usageContext: "article_hero", outputFormat: "webp" } } },
+      { ...FOUR_SLOTS[1], requirements: { image: { usageContext: "instagram_story", outputFormat: "webp" } } }
+    ];
+    const { outcome } = await driveToTerminal({ deps, slots, stageOutputs: contexts });
+
+    expect(outcome.kind).toBe("completed");
+    const mediaSlots = (outcome.kind === "completed" ? outcome.output.media_slots : []) as Record<string, unknown>[];
+    const offender = mediaSlots.find((slot) => slot.slotId === "inline_1")!;
+    expect(offender.status).toBe("blocked");
+    expect(String(offender.blocker)).toContain("usage_context_not_in_policy");
+    expect(String(offender.blocker)).toContain("instagram_story");
+    // Never dispatched: the refusal happens while composing the args, before any create.
+    expect(createCalls(deps.calls).map((call) => call.args.slot)).toEqual(["hero"]);
+    // The in-policy slot is untouched — one bad slot does not kill the article.
+    expect(mediaSlots.find((slot) => slot.slotId === "hero")?.status).toBe("has_trusted_artifact");
+
+    // With no policy list on the run there is nothing to check against, and nothing is blocked: an
+    // unknown policy is not a violation.
+    const unchecked = bridge({ pollsToFinish: 1 });
+    const loose = await driveToTerminal({ deps: unchecked, slots });
+    expect(createCalls(unchecked.calls).map((call) => call.args.slot)).toEqual(["hero", "inline_1"]);
+    expect(loose.outcome.kind).toBe("completed");
+  });
+
+  it("C2: runs every image slot to a terminal state BEFORE it dispatches a PDF slot", async () => {
+    const deps = bridge({ pollsToFinish: 3, imageKeyRoot: "image" });
+    const { outcome } = await driveToTerminal({ deps, projectId: HOOKLESS_PROJECT, projectRepository: hooklessRepository, stageOutputs: ARTICLE_CONTRACT });
+
+    expect(outcome.kind).toBe("completed");
+    expect(createCalls(deps.calls).map((call) => call.args.slot)).toEqual(["hero", "inline_1", "inline_2", "worksheet"]);
+
+    // Not merely "last in the array": at the moment the PDF was created, every image job had already
+    // reported terminal success — which is the only reason its cover could be named at all.
+    const pdfCreateIndex = deps.calls.findIndex((call) => call.tool === CREATE_TOOL && call.args.slot === "worksheet");
+    const before = deps.calls.slice(0, pdfCreateIndex);
+    for (const slotId of ["hero", "inline_1", "inline_2"]) {
+      expect(before.some((call) => call.tool === CREATE_TOOL && call.args.slot === slotId), slotId).toBe(true);
+      expect(before.some((call) => call.tool === STATUS_TOOL && call.args.job_id === `job_${slotId}`), slotId).toBe(true);
+    }
+    // The PDF is not adopted or polled before the images are done either.
+    expect(before.some((call) => call.args.slot === "worksheet" && call.tool !== ADOPT_TOOL)).toBe(false);
+  });
+
+  it("C2: a PDF slot on the site's default article template needs NO model-filled data — template_id, data and assets are all derived", async () => {
+    const deps = bridge({ pollsToFinish: 1, imageKeyRoot: "image" });
+    const slots = [
+      FOUR_SLOTS[0],
+      // No renderData, no assets: exactly what artifact_plan emits for an article template whose
+      // renderDataSchema the run can fill deterministically (R7).
+      { slotId: "brochure", purpose: "downloadable article PDF", desiredKind: "pdf", templateId: "article_brochure_v1" }
+    ];
+    const { outcome, warnings } = await driveToTerminal({ deps, slots, projectId: HOOKLESS_PROJECT, projectRepository: hooklessRepository, stageOutputs: ARTICLE_CONTRACT });
+    expect(outcome.kind).toBe("completed");
+
+    const create = createCalls(deps.calls).find((call) => call.args.slot === "brochure")!;
+    expect(create.args.template_id).toBe("article_brochure_v1");
+
+    const data = create.args.data as Record<string, unknown>;
+    expect(data.title).toBe("Rebuilding the skin barrier without stripping it");
+    expect(data.deck).toBe("What actually repairs a compromised barrier, and what only feels like it does.");
+    expect(data.sections).toEqual([
+      { heading: "What the barrier actually is", paragraphs: ["A short first paragraph about lipids.", "A second paragraph about ceramides."] },
+      { heading: "What to stop doing", paragraphs: ["Stop over-exfoliating."] }
+    ]);
+    expect(data.pullQuotes).toEqual([{ quote: "Barrier repair is subtraction before addition.", attribution: "Dr. Lurie" }]);
+    expect(data.sources).toEqual([{ label: "Journal of Dermatological Science, 2024", url: "https://example.invalid/jds-2024" }]);
+    // Nothing was invented: `brand` is required by the template but is not derivable from a draft, so
+    // it is absent rather than fabricated (pdf-tool does not validate a job's `data` against the
+    // template schema — the template renders on its own defaults).
+    expect(data.brand).toBeUndefined();
+    // Only keys the template's own renderDataSchema declares.
+    expect(Object.keys(data).every((key) => ["title", "deck", "kicker", "author", "coverImage", "sections", "pullQuotes", "sources", "brand"].includes(key))).toBe(true);
+
+    // §3.10: the cover is the header IMAGE slot, named by assetId and resolved by pdf-tool from the
+    // blobKey. The bytes never travel.
+    expect(data.coverImage).toBe("hero");
+    expect(create.args.assets).toEqual({ images: [{ assetId: "hero", blobKey: `image/${REQUEST_ID}/hero.webp` }] });
+
+    // The derivation and the one required field it could not fill are both reported on the run.
+    expect(warnings).toContain("artifact_render_data_unfilled:brochure:brand");
+    expect(warnings).toContain("artifact_pdf_cover_bound:brochure:hero");
+    expect(warnings.some((warning) => warning.startsWith("artifact_render_data_derived:brochure:"))).toBe(true);
+  });
+
+  it("C2: the planner's own renderData still wins per key over the derived one", async () => {
+    const deps = bridge({ pollsToFinish: 1, imageKeyRoot: "image" });
+    const slots = [
+      FOUR_SLOTS[0],
+      { slotId: "brochure", purpose: "downloadable article PDF", desiredKind: "pdf", templateId: "article_brochure_v1", renderData: { title: "A deliberately different cover title" } }
+    ];
+    const { outcome } = await driveToTerminal({ deps, slots, projectId: HOOKLESS_PROJECT, projectRepository: hooklessRepository, stageOutputs: ARTICLE_CONTRACT });
+    expect(outcome.kind).toBe("completed");
+    const data = createCalls(deps.calls).find((call) => call.args.slot === "brochure")!.args.data as Record<string, unknown>;
+    expect(data.title).toBe("A deliberately different cover title");
+    // …and the rest is still derived, so overriding one field does not cost the other five.
+    expect(Array.isArray(data.sections)).toBe(true);
+    expect(data.coverImage).toBe("hero");
+  });
+
+  it("C2: the three per-kind create refusals are blocked SLOTS carrying their code", async () => {
+    const cases: Array<{ slot: Record<string, unknown>; code: string }> = [
+      { slot: { slotId: "no_template", purpose: "a PDF nobody chose a template for", desiredKind: "pdf", renderData: { title: "x" } }, code: "no_pdf_template" },
+      // A template the run knows nothing about (or a non-article one) derives nothing, so a slot that
+      // brought no renderData of its own has none at all.
+      { slot: { slotId: "no_data", purpose: "a PDF with a template but no data", desiredKind: "pdf", templateId: "tpl_worksheet_v1" }, code: "no_render_data" },
+      { slot: { slotId: "no_prompt", purpose: "an image nobody wrote a subject for", desiredKind: "image" }, code: "no_image_prompt" }
+    ];
+    for (const { slot, code } of cases) {
+      const deps = bridge({ pollsToFinish: 1 });
+      const { outcome } = await driveToTerminal({ deps, slots: [slot], stageOutputs: ARTICLE_CONTRACT });
+      expect(outcome.kind, code).toBe("completed");
+      const mediaSlots = (outcome.kind === "completed" ? outcome.output.media_slots : []) as Record<string, unknown>[];
+      expect(mediaSlots[0].status, code).toBe("blocked");
+      expect(String(mediaSlots[0].blocker).startsWith(`${code}:`), String(mediaSlots[0].blocker)).toBe(true);
+      // Adopted (free, and the reason a re-run is free) but never created.
+      expect(createCalls(deps.calls), code).toHaveLength(0);
+    }
+  });
+
+  // THE POLICY GAP THIS CLOSES. Every other deterministic conductor call site runs the project's
+  // executable policy hook before its transport; this module reached ProjectMcpAdapter directly and
+  // ran none, so a project whose policy blocks a verb or an argument shape was silently obeyed
+  // everywhere EXCEPT the one module that creates things on the client.
+  it("C2: runs the project's executable call-tool policy before every bridge call", async () => {
+    // (i) the two SCOPES, at the seam itself. A finding whose path is the tool name condemns the verb
+    // for every slot at once (a node refusal); a finding on the arguments is per-slot.
+    expect(evaluateBridgePolicy("dr-lurie", "save_artifact", { site_id: SITE_ID })).toMatchObject({ scope: "tool", codes: ["blocked_legacy_artifact_tool"] });
+    // A HAND-COPIED reference is still an arguments-scope block — the rule the pattern exists for.
+    expect(evaluateBridgePolicy("dr-lurie", CREATE_TOOL, { site_id: SITE_ID, assets: { images: [{ assetId: "hero", blobKey: `image/${REQUEST_ID}/hero.webp` }] } })).toMatchObject({ scope: "arguments", codes: ["blocked_copied_artifact_ref"] });
+    // FIX-2: …and the SANCTIONED §3.10 cover binding is not, because a canonical
+    // `{kind}/{request}/{sha256}{ext}` key is machine-minted by construction (its filename is the
+    // digest of bytes nobody knows until they exist) and so cannot be the hand-copied reference the
+    // rule is about. Before this, an article PDF with a cover was a blocked slot on dr-lurie.
+    expect(evaluateBridgePolicy("dr-lurie", CREATE_TOOL, { site_id: SITE_ID, assets: { images: [{ assetId: "hero", blobKey: `image/${REQUEST_ID}/${"b".repeat(64)}.webp` }] } })).toBeUndefined();
+    // The three sanctioned verbs with ordinary arguments pass, so nothing here is blocked by accident.
+    expect(evaluateBridgePolicy("dr-lurie", CREATE_TOOL, { site_id: SITE_ID, prompt: "a jar of moisturizer on a marble countertop", filename: "hero.webp" })).toBeUndefined();
+    expect(evaluateBridgePolicy("dr-lurie", ADOPT_TOOL, { site_id: SITE_ID, request_id: REQUEST_ID, slot: "hero" })).toBeUndefined();
+    expect(evaluateBridgePolicy("dr-lurie", STATUS_TOOL, { site_id: SITE_ID, job_id: "job_hero" })).toBeUndefined();
+    // A project with no hook at all is never blocked.
+    expect(evaluateBridgePolicy(HOOKLESS_PROJECT, "save_artifact", {})).toBeUndefined();
+
+    // (ii) FIX-2, end to end and on the real client this bit: dr-lurie's own executable policy no
+    // longer blocks the sanctioned cover binding, so an article PDF with a cover RENDERS. The cover
+    // this run binds is the header image the same run just generated, named by assetId and resolved by
+    // pdf-tool from a canonical blobKey — the bytes never travel.
+    const canonical = bridge({ pollsToFinish: 1, imageKeyRoot: "image", canonicalBlobKeys: true });
+    const rendered = await driveToTerminal({
+      deps: canonical,
+      slots: [FOUR_SLOTS[0], { slotId: "brochure", purpose: "downloadable article PDF", desiredKind: "pdf", templateId: "article_brochure_v1" }],
+      stageOutputs: ARTICLE_CONTRACT
+    });
+    expect(rendered.outcome.kind).toBe("completed");
+    const renderedSlots = (rendered.outcome.kind === "completed" ? rendered.outcome.output.media_slots : []) as Record<string, unknown>[];
+    expect(renderedSlots.find((slot) => slot.slotId === "brochure")?.status).toBe("has_trusted_artifact");
+    const coverCreate = createCalls(canonical.calls).find((call) => call.args.slot === "brochure")!;
+    expect(coverCreate.args.assets).toEqual({ images: [{ assetId: "hero", blobKey: `image/${REQUEST_ID}/${"b".repeat(64)}.webp` }] });
+    expect((coverCreate.args.data as Record<string, unknown>).coverImage).toBe("hero");
+
+    // (iii) …and a finding on the ARGUMENTS is still per-slot, so a genuinely HAND-COPIED reference —
+    // one the planner typed onto the slot's own `assets`, which is precisely what the rule exists to
+    // refuse — blocks that slot and the article keeps the rest of its media.
+    const argBlocked = bridge({ pollsToFinish: 1, imageKeyRoot: "image", canonicalBlobKeys: true });
+    const { outcome } = await driveToTerminal({
+      deps: argBlocked,
+      slots: [
+        FOUR_SLOTS[0],
+        { slotId: "brochure", purpose: "downloadable article PDF", desiredKind: "pdf", templateId: "article_brochure_v1", assets: { images: [{ assetId: "typed_cover", blobKey: `image/${REQUEST_ID}/cover.webp` }] } }
+      ],
+      stageOutputs: ARTICLE_CONTRACT
+    });
+    expect(outcome.kind).toBe("completed");
+    const mediaSlots = (outcome.kind === "completed" ? outcome.output.media_slots : []) as Record<string, unknown>[];
+    expect(mediaSlots.find((slot) => slot.slotId === "hero")?.status).toBe("has_trusted_artifact");
+    const brochure = mediaSlots.find((slot) => slot.slotId === "brochure")!;
+    expect(brochure.status).toBe("blocked");
+    expect(String(brochure.blocker)).toContain("tool_policy_blocked");
+    expect(String(brochure.blocker)).toContain("blocked_copied_artifact_ref");
+    // And the blocked call never reached the client.
+    expect(argBlocked.calls.some((call) => call.tool === CREATE_TOOL && call.args.slot === "brochure")).toBe(false);
   });
 });

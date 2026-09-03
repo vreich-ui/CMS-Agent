@@ -24,6 +24,7 @@ import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { boundDependencyOutput, dependencyOutputMaxChars } from "./OpenAINodeRunner.js";
 import { classifyProviderHttpError, operatorActionForProviderHttpError, truncateProviderMessage } from "./providerHttpErrors.js";
+import { buildAnthropicImageBlocks, extractImageRefs, resolveImageRefs, stripImageRefs } from "./imageRefs.js";
 
 const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
@@ -98,8 +99,15 @@ export class AnthropicNodeRunner implements NodeRunner {
 
     const playbook = await repositoryManager.getImprovementRepository().getPlaybook(node.id).catch(() => undefined);
     const playbookText = playbook ? renderPlaybookForPrompt(playbook) : "";
+    // C4 — node runner image support (BRIEF 3.9). imageRefs never enter the JSON text: they are
+    // resolved (fetched/validated/bounded — see imageRefs.ts) into their own leading content blocks,
+    // and stripped out of `input` before it is serialized below. A node with no imageRefs resolves to
+    // an empty array here and takes the exact same path as before this feature existed — `messageContent`
+    // stays the plain string `userContent`, so the request body is byte-identical to today's.
+    const rawImageRefs = extractImageRefs(input);
+    const { resolved: resolvedImageRefs, warnings: imageRefWarnings } = await resolveImageRefs(rawImageRefs, { fetchImpl: this.fetchImpl });
     const userContent = JSON.stringify(redact({
-      input,
+      input: stripImageRefs(input),
       // T12.22 fleet parity: the OpenAI runner bounds these; an unbounded confluence payload hangs
       // the same way on either provider, so the same bound applies here rather than waiting for
       // the second incident to prove it.
@@ -107,11 +115,15 @@ export class AnthropicNodeRunner implements NodeRunner {
       ...(playbookText ? { playbook: playbookText } : {}),
       outputSchema: node.outputSchema
     }));
+    const imageBlocks = buildAnthropicImageBlocks(resolvedImageRefs);
+    const messageContent: string | Array<Record<string, unknown>> = imageBlocks.length > 0
+      ? [...imageBlocks, { type: "text", text: userContent }]
+      : userContent;
     const body = {
       model,
       max_tokens: numberFrom(c.maxOutputTokens) ?? 4096,
       system: instructions(node, playbookText, input),
-      messages: [{ role: "user", content: userContent }],
+      messages: [{ role: "user", content: messageContent }],
       tools: [{ name: "emit_output", description: "Emit this node's structured output. Call exactly once with the full result matching the schema.", input_schema: node.outputSchema as Record<string, unknown> }],
       tool_choice: { type: "tool", name: "emit_output" }
     };
@@ -227,7 +239,18 @@ export class AnthropicNodeRunner implements NodeRunner {
         // already validated `output` against `node.outputSchema` immediately above (to decide whether
         // to retry), so the executor's own generic output-schema gate can skip re-running the identical
         // check against the identical (output, schema) pair.
-        return { ok: true, output: validated.value, usage: { ...usageFields, actual: true }, model, trace: { responseId: data.id, provider: "anthropic" }, outputValidated: true };
+        return {
+          ok: true,
+          output: validated.value,
+          usage: { ...usageFields, actual: true },
+          model,
+          trace: {
+            responseId: data.id,
+            provider: "anthropic",
+            ...(rawImageRefs ? { imageRefs: { included: resolvedImageRefs.length, dropped: imageRefWarnings.length, warnings: imageRefWarnings } } : {})
+          },
+          outputValidated: true
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (context.signal?.aborted) return { ok: false, code: "cancelled", message: "Anthropic node execution was cancelled." };

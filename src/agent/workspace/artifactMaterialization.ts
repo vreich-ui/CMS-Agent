@@ -62,6 +62,35 @@
 // its id and is polled, a materialized one keeps its evidence and is skipped. See the retry block in
 // runArtifactMaterialization for why the absent envelope is the signal.
 //
+// C2 (BRIEF §3.8 / §3.10) ADDED FOUR THINGS TO THIS LOOP, ALL OF THEM DETERMINISTIC.
+//
+//   1. STYLE FORWARDING. A slot may carry `style` ({visualStandardId?, override?, note?} — R4's
+//      override channel). It is forwarded verbatim on create_agent_artifact_job and nowhere else:
+//      the subject-only rule for `prompt` is untouched, because style words in a prompt are ignored
+//      server-side at best and fight the brand at worst. `instructions` (brief_architect's spelling
+//      for the same field) is normalized to `note` HERE rather than at the bridge, because pdf-tool's
+//      style object is `.strict()` and would reject the unknown key outright.
+//   2. USAGE-CONTEXT POLICY. contract_intelligence carries `imagePolicyContexts` — the actual keys of
+//      the site's image-model policy (BRIEF §3.7). A slot whose requirements.image.usageContext is not
+//      one of them is a BLOCKED SLOT with the code `usage_context_not_in_policy`. The platform would
+//      silently coerce it to `article_body` and warn (§3.4); a coerced context is a differently-sized,
+//      differently-priced image than the one the brief asked for, so we would rather name it. When the
+//      run carries no policy list at all, nothing is checked — an unknown policy is not a violation.
+//   3. THE EXECUTABLE PROJECT POLICY. Every other deterministic conductor call site (contractPrefetch,
+//      sitePrefetch, voicePrefetch, publishPayload, contentItemShell) runs the project's
+//      `enforceCallToolPolicy` hook before its transport. This module did not — it predates that
+//      convention and reaches the client through ProjectMcpAdapter directly, bypassing the
+//      model-facing project.call_tool gate that would otherwise apply it. That gap is closed here.
+//      A finding on the TOOL NAME is a node refusal (it cannot be true of one slot only); a finding on
+//      the ARGUMENTS is a blocked slot (the arguments differ per slot, so the verdict does too).
+//   4. IMAGE SLOTS BEFORE PDF SLOTS, and a deterministic renderData mapper for `kind:'article'`
+//      templates. A PDF's cover image is `assets.images[] = {assetId, blobKey}` naming an image that
+//      must already EXIST in the tenant's store (§3.10 — the bytes never travel over MCP), so no PDF
+//      slot is dispatched until every image slot is terminal. Then renderDataMapper.ts fills
+//      title/deck/sections/pullQuotes/sources from draft_writer's prose and `coverImage` from the
+//      header image slot, so an article PDF costs zero model tokens (R7). The planner's own renderData
+//      still WINS per key where it wrote one — the mapper fills gaps, it does not overrule a plan.
+//
 // WHAT IS A SLOT FAILURE AND WHAT IS A NODE FAILURE. A slot whose job terminally failed, or whose
 // create was refused, is a BLOCKED SLOT carrying the bridge's own error verbatim (including
 // `renderer_unavailable:*` and `RENDERER_MISMATCH` — a renderer problem is the operator's to read, not
@@ -77,6 +106,8 @@ import { describeMcpErrorResult } from "../projects/clientToolResult.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { stripCredentialShapedFields } from "../capture/captureEngine.js";
 import { readContentItemShell } from "./contentItemShell.js";
+import { getProjectHooks } from "../projects/projectHooks.js";
+import { isArticleTemplate, mapArticleRenderData, type MaterializedImageSlot, type RenderDataTemplate } from "./renderDataMapper.js";
 
 export const ARTIFACT_MATERIALIZER_NODE_ID = "artifact_materializer";
 
@@ -119,6 +150,16 @@ const nowIso = (): string => new Date().toISOString();
 // ---------------------------------------------------------------------------------------------
 // The spec this node executes (artifact_plan's single turn produces it).
 
+/** R4's override channel, as it reaches a slot. `instructions` is brief_architect's spelling of the
+ * same free-text field (BRIEF §3.8); the bridge only accepts `note` (§3.4), and only these three keys
+ * — pdf-tool's style object is `.strict()`. */
+export type MaterializationSlotStyle = {
+  visualStandardId?: string;
+  override?: Record<string, unknown>;
+  note?: string;
+  instructions?: string;
+};
+
 export type MaterializationSlotSpec = {
   slotId: string;
   purpose: string;
@@ -126,11 +167,35 @@ export type MaterializationSlotSpec = {
   placement?: string;
   prompt?: string;
   styleRefs?: unknown;
+  style?: MaterializationSlotStyle;
   requirements?: Record<string, unknown>;
   templateId?: string;
   renderData?: Record<string, unknown>;
   assets?: Record<string, unknown>;
   filename?: string;
+};
+
+/** The style object the bridge actually accepts: `instructions` folded into `note`, nothing else. */
+export const bridgeStyleOf = (style: MaterializationSlotStyle | undefined): Record<string, unknown> | undefined => {
+  if (!style) return undefined;
+  const note = trimmed(style.note) ?? trimmed(style.instructions);
+  const forwarded: Record<string, unknown> = {
+    ...(trimmed(style.visualStandardId) ? { visualStandardId: trimmed(style.visualStandardId)! } : {}),
+    ...(isRecord(style.override) ? { override: style.override } : {}),
+    ...(note ? { note } : {})
+  };
+  return Object.keys(forwarded).length ? forwarded : undefined;
+};
+
+const readSlotStyle = (value: unknown): MaterializationSlotStyle | undefined => {
+  if (!isRecord(value)) return undefined;
+  const style: MaterializationSlotStyle = {
+    ...(trimmed(value.visualStandardId) ? { visualStandardId: trimmed(value.visualStandardId)! } : {}),
+    ...(isRecord(value.override) ? { override: value.override } : {}),
+    ...(trimmed(value.note) ? { note: trimmed(value.note)! } : {}),
+    ...(trimmed(value.instructions) ? { instructions: trimmed(value.instructions)! } : {})
+  };
+  return Object.keys(style).length ? style : undefined;
 };
 
 export type MaterializationSpec = {
@@ -212,6 +277,7 @@ export const readMaterializationSpec = (run: Pick<WorkflowExecutionRecord, "stag
       ...(trimmed(entry.placement) ? { placement: trimmed(entry.placement)! } : {}),
       ...(trimmed(entry.prompt) ? { prompt: trimmed(entry.prompt)! } : {}),
       ...(entry.styleRefs !== undefined ? { styleRefs: entry.styleRefs } : {}),
+      ...(readSlotStyle(entry.style) ? { style: readSlotStyle(entry.style)! } : {}),
       ...(isRecord(entry.requirements) ? { requirements: entry.requirements } : {}),
       ...(trimmed(entry.templateId) ? { templateId: trimmed(entry.templateId)! } : {}),
       ...(isRecord(entry.renderData) ? { renderData: entry.renderData } : {}),
@@ -244,6 +310,48 @@ const readRunRequestId = (run: Pick<WorkflowExecutionRecord, "requestId" | "publ
 const readClientObjectType = (run: Pick<WorkflowExecutionRecord, "stageOutputs">): string | undefined => {
   const intelligence = run.stageOutputs?.contract_intelligence;
   return isRecord(intelligence) ? trimmed(intelligence.clientObjectType) : undefined;
+};
+
+// C1 threaded BRIEF §3.7's three site facts through contract_intelligence.v1 under these exact names
+// (its schema is additionalProperties:true, so carrying them was a declaration, not a shape change).
+// Read defensively: a run whose sitePrefetch degraded carries none of them, and that is a no-op here,
+// never a refusal — the same posture every other optional carrier in this module has.
+export const readImagePolicyContexts = (run: Pick<WorkflowExecutionRecord, "stageOutputs">): string[] | undefined => {
+  const intelligence = run.stageOutputs?.contract_intelligence;
+  if (!isRecord(intelligence) || !Array.isArray(intelligence.imagePolicyContexts)) return undefined;
+  const contexts = intelligence.imagePolicyContexts.filter(nonEmpty).map((context) => context.trim());
+  return contexts.length ? contexts : undefined;
+};
+
+export const readPdfTemplates = (run: Pick<WorkflowExecutionRecord, "stageOutputs">): RenderDataTemplate[] => {
+  const intelligence = run.stageOutputs?.contract_intelligence;
+  if (!isRecord(intelligence) || !Array.isArray(intelligence.pdfTemplates)) return [];
+  const templates: RenderDataTemplate[] = [];
+  for (const entry of intelligence.pdfTemplates) {
+    if (!isRecord(entry)) continue;
+    const templateId = trimmed(entry.templateId);
+    if (!templateId) continue;
+    templates.push({
+      templateId,
+      ...(trimmed(entry.kind) ? { kind: trimmed(entry.kind)! } : {}),
+      ...(trimmed(entry.label) ? { label: trimmed(entry.label)! } : {}),
+      ...(entry.renderDataSchema !== undefined ? { renderDataSchema: entry.renderDataSchema } : {}),
+      ...(typeof entry.isDefault === "boolean" ? { isDefault: entry.isDefault } : {})
+    });
+  }
+  return templates;
+};
+
+const readDraft = (run: Pick<WorkflowExecutionRecord, "stageOutputs">): unknown => run.stageOutputs?.draft_writer;
+
+/** The id an `assets.images[]` entry is bound under. pdf-tool serves it to a chromium template at
+ * `https://render.assets.invalid/<assetId>`, so it must match its `^[a-zA-Z0-9._-]{1,128}$` shape.
+ * The bridge's own id wins when it returned one; the slot id is the deterministic fallback, and being
+ * derived from the slot means the SAME cover id survives a re-run that adopts instead of creating. */
+export const assetIdFor = (slotId: string, artifactReference?: Record<string, unknown>): string => {
+  const declared = trimmed(artifactReference?.assetId) ?? trimmed(artifactReference?.artifactId);
+  const candidate = declared ?? slotId;
+  return (candidate.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "asset").slice(0, 128);
 };
 
 export const readJobState = (run: Pick<WorkflowExecutionRecord, "stageOutputs">): MaterializerJobState => {
@@ -285,6 +393,33 @@ class MaterializationRefusal extends Error {
 
 type BridgeCall = (tool: string, args: Record<string, unknown>) => Promise<{ ok: true; payload: Record<string, unknown> } | { ok: false; code: string; detail: string }>;
 
+// C2. The project's EXECUTABLE policy hook, run before the transport — the same ordering and the same
+// "error severity blocks" rule contractPrefetch.ts / sitePrefetch.ts / voicePrefetch.ts /
+// publishPayload.ts / contentItemShell.ts all use. It matters here more than at any of them: this is
+// the only deterministic conductor module that CREATES things on the client, and it reaches
+// ProjectMcpAdapter directly, so neither the model-facing project.call_tool gate nor its policy check
+// was ever in the path.
+//
+// A finding whose `path` is the tool name condemns the VERB and is therefore true of every slot at
+// once — a node refusal, by this module's own rule that a fact which cannot be true of one slot only
+// is never reported as a slot failure. A finding on the arguments is the opposite: the arguments are
+// per-slot, so it blocks that slot and the article keeps its other media.
+export const POLICY_TOOL_PATH = "tool";
+
+export type ArtifactPolicyBlock = { scope: "tool" | "arguments"; codes: string[]; message: string };
+
+export const evaluateBridgePolicy = (projectId: string, tool: string, args: Record<string, unknown>): ArtifactPolicyBlock | undefined => {
+  const findings = getProjectHooks(projectId)?.enforceCallToolPolicy?.({ tool, arguments: args }) ?? [];
+  const blocking = findings.filter((finding) => finding.severity === "error");
+  if (!blocking.length) return undefined;
+  const scope = blocking.some((finding) => finding.path === POLICY_TOOL_PATH) ? "tool" : "arguments";
+  return {
+    scope,
+    codes: blocking.map((finding) => finding.code),
+    message: blocking.map((finding) => `${finding.code}${finding.path ? ` at ${finding.path}` : ""}: ${finding.message}`).join(" | ")
+  };
+};
+
 const unwrapPayload = (raw: unknown): Record<string, unknown> => {
   const structured = isRecord(raw) && isRecord(raw.structuredContent) ? (raw.structuredContent as Record<string, unknown>) : isRecord(raw) ? raw : {};
   const unwrapped = isRecord(structured.data) ? (structured.data as Record<string, unknown>) : structured;
@@ -294,6 +429,17 @@ const unwrapPayload = (raw: unknown): Record<string, unknown> => {
 const bridgeCallFor = (config: ProjectConnectionConfig, deps: MaterializerDeps): BridgeCall => {
   const call = deps.callTool ?? ((cfg: ProjectConnectionConfig, tool: string, args: Record<string, unknown>) => new ProjectMcpAdapter(cfg).callTool(tool, args));
   return async (tool, args) => {
+    // Policy first, transport second: a blocked call must never reach the client at all.
+    const blocked = evaluateBridgePolicy(config.projectId, tool, args);
+    if (blocked) {
+      if (blocked.scope === "tool") {
+        throw new MaterializationRefusal(
+          "artifact_tool_policy_blocked",
+          `The executable project policy for ${config.projectId} blocks the verb "${tool}" itself (${blocked.codes.join(", ")}), so no slot on this run can be materialized through it: ${blocked.message}`
+        );
+      }
+      return { ok: false, code: "tool_policy_blocked", detail: `${blocked.codes.join(",")} — ${blocked.message}` };
+    }
     let result: CallToolResult;
     try {
       result = await call(config, tool, args);
@@ -407,8 +553,38 @@ const filenameFor = (slot: MaterializationSlotSpec): string => {
  * really was created) re-attaches to the original job instead of minting a second one. */
 export const materializationIdempotencyKey = (runId: string, requestId: string, slotId: string): string => `artifact:${runId}:${requestId}:${slotId}`;
 
-const createArgsFor = (params: { runId: string; siteId: string; requestId: string; slot: MaterializationSlotSpec }): Record<string, unknown> | { refusal: string } => {
-  const { slot } = params;
+/** What the run already knows by the time a slot is dispatched: the site's PDF templates and image
+ * policy (contract_intelligence), the written prose (draft_writer), and the images THIS dispatch
+ * sequence has already materialized. Rebuilt per dispatch; never persisted. */
+export type SlotRenderContext = {
+  pdfTemplates: RenderDataTemplate[];
+  imagePolicyContexts?: string[];
+  draft: unknown;
+  images: MaterializedImageSlot[];
+};
+
+const EMPTY_RENDER_CONTEXT: SlotRenderContext = { pdfTemplates: [], draft: undefined, images: [] };
+
+const readUsageContext = (slot: MaterializationSlotSpec): string | undefined => {
+  const image = isRecord(slot.requirements?.image) ? (slot.requirements!.image as Record<string, unknown>) : undefined;
+  return trimmed(image?.usageContext) ?? trimmed(image?.usage_context);
+};
+
+/** Planner entries win on a shared assetId; mapper entries fill what the plan left unnamed. */
+const mergeAssets = (planned: Record<string, unknown> | undefined, derived: { images: Array<{ assetId: string; blobKey: string }> } | undefined): Record<string, unknown> | undefined => {
+  if (!derived) return planned;
+  const plannedImages = Array.isArray(planned?.images) ? (planned!.images as unknown[]) : [];
+  const named = new Set(plannedImages.filter(isRecord).map((entry) => trimmed(entry.assetId) ?? trimmed(entry.name) ?? trimmed(entry.id)).filter(nonEmpty));
+  const images = [...plannedImages, ...derived.images.filter((entry) => !named.has(entry.assetId))];
+  return { ...(planned ?? {}), images };
+};
+
+type CreateArgsResult = { args: Record<string, unknown>; warnings: string[] } | { refusal: string; message: string };
+
+const createArgsFor = (params: { runId: string; siteId: string; requestId: string; slot: MaterializationSlotSpec; context: SlotRenderContext }): CreateArgsResult => {
+  const { slot, context } = params;
+  const warnings: string[] = [];
+  const style = bridgeStyleOf(slot.style);
   const base: Record<string, unknown> = {
     site_id: params.siteId,
     request_id: params.requestId,
@@ -418,21 +594,61 @@ const createArgsFor = (params: { runId: string; siteId: string; requestId: strin
     // See the header: the bridge's inline wait makes a multi-slot dispatch unbounded. We poll.
     wait: false,
     idempotency_key: materializationIdempotencyKey(params.runId, params.requestId, slot.slotId),
-    ...(slot.requirements ? { requirements: slot.requirements } : {})
+    ...(slot.requirements ? { requirements: slot.requirements } : {}),
+    // C2/R4: the override channel, forwarded verbatim. The platform resolves it (override >
+    // visualStandardId > site.brandImagery > derived); this node neither resolves nor second-guesses
+    // it, and a site whose guardrail is locked has its `style` ignored THERE, reported in
+    // overriddenFields — never as an error here.
+    ...(style ? { style } : {})
   };
+
+  // C2 (BRIEF §3.4/§3.7): a usageContext outside the site's image-model policy is a planning error we
+  // can see. Checked for BOTH kinds — a PDF slot has no business carrying an image usage context
+  // either — and only when the run actually carries the policy's key list.
+  const usageContext = readUsageContext(slot);
+  if (usageContext && context.imagePolicyContexts && !context.imagePolicyContexts.includes(usageContext)) {
+    return {
+      refusal: "usage_context_not_in_policy",
+      message: `slot "${slot.slotId}" asks for requirements.image.usageContext "${usageContext}", which is not one of this site's image-model policy contexts (${context.imagePolicyContexts.join(", ")}). The bridge would silently coerce it to article_body and generate a differently sized, differently priced image than the brief asked for, so the slot is blocked and named instead.`
+    };
+  }
+
   if (slot.desiredKind === "pdf") {
     // W9: a PDF slot renders a PUBLISHED template. This node never authors one, never falls back to an
-    // image, and never invents renderData — artifact_plan's turn resolved both against the site's
-    // declared renderDataSchema, or it marked the slot blocked and we never got here.
-    if (!slot.templateId) return { refusal: "no_pdf_template" };
-    if (!slot.renderData) return { refusal: "no_render_data" };
-    return { ...base, template_id: slot.templateId, data: slot.renderData, ...(slot.assets ? { assets: slot.assets } : {}) };
+    // image, and never publishes one — artifact_plan chose the template from the site's declared list,
+    // or it marked the slot blocked and we never got here.
+    if (!slot.templateId) {
+      return { refusal: "no_pdf_template", message: `slot "${slot.slotId}" is a PDF slot with no templateId. Runs only ever render a template the site has already published; this node never authors one.` };
+    }
+    // C2/R7: for an ARTICLE template the render data is derived, not model-written — the schema
+    // mirrors article structure precisely so draft_writer's prose fills it for free. The planner's own
+    // renderData still wins per key: the mapper closes gaps, it does not overrule a deliberate plan.
+    const template = context.pdfTemplates.find((candidate) => candidate.templateId === slot.templateId);
+    const mapping = template && isArticleTemplate(template) ? mapArticleRenderData({ template, draft: context.draft, images: context.images }) : undefined;
+    const renderData = mapping ? { ...mapping.renderData, ...(slot.renderData ?? {}) } : slot.renderData;
+    if (mapping) {
+      if (mapping.filled.length) warnings.push(`artifact_render_data_derived:${slot.slotId}:${mapping.filled.join(",")}`);
+      // Named, never filled with invented copy — and never a block: pdf-tool does not validate a job's
+      // `data` against the template schema, so an unfilled optional-in-practice field (a `brand` block
+      // the platform supplies, say) renders on the template's own defaults rather than failing.
+      const stillMissing = mapping.unfilledRequired.filter((key) => (renderData ?? {})[key] === undefined);
+      if (stillMissing.length) warnings.push(`artifact_render_data_unfilled:${slot.slotId}:${stillMissing.join(",")}`);
+      if (mapping.coverSlotId) warnings.push(`artifact_pdf_cover_bound:${slot.slotId}:${mapping.coverSlotId}`);
+    }
+    if (!renderData || Object.keys(renderData).length === 0) {
+      return { refusal: "no_render_data", message: `slot "${slot.slotId}" carries no renderData, and none could be derived for template "${slot.templateId}" (it is not an article template this run can fill deterministically, or the draft carried nothing to fill it with). This node never invents render data.` };
+    }
+    const assets = mergeAssets(slot.assets, mapping?.assets);
+    return { args: { ...base, template_id: slot.templateId, data: renderData, ...(assets ? { assets } : {}) }, warnings };
   }
-  if (!slot.prompt) return { refusal: "no_image_prompt" };
+  if (!slot.prompt) {
+    return { refusal: "no_image_prompt", message: `slot "${slot.slotId}" is an image slot with no prompt. This node never authors a subject.` };
+  }
   // The prompt is the SUBJECT ONLY. Platform prepends the site's brandImagery styleSentence, merges its
   // negatives and derives its seed server-side; anything we sent for those would be silently overridden,
-  // so we do not send them at all.
-  return { ...base, operation: "generate", prompt: slot.prompt };
+  // so we do not send them at all. `style` above is the sanctioned channel for everything the prompt
+  // must not say.
+  return { args: { ...base, operation: "generate", prompt: slot.prompt }, warnings };
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -606,15 +822,64 @@ export async function runArtifactMaterialization(
 
   const bridge = bridgeCallFor(config, deps);
 
-  for (const slot of effective.slots) {
+  // C2 (BRIEF §3.10): IMAGE SLOTS FIRST, PDF SLOTS AFTER. A PDF's cover is `assets.images[] =
+  // {assetId, blobKey}` naming an image that must already exist in the tenant's pdf-tool store — the
+  // bytes never travel over MCP — so a PDF dispatched alongside its own cover would either render
+  // cover-less or need a second run to acquire one. Ordering it here costs at most one extra dispatch
+  // (the images were going to be polled anyway) and makes the cover deterministic rather than lucky.
+  // "Complete" means TERMINAL, not successful: a blocked image does not hold the PDF hostage, it just
+  // means the PDF renders without that cover.
+  const imageSlots = effective.slots.filter((slot) => slot.desiredKind !== "pdf");
+  const pdfSlots = effective.slots.filter((slot) => slot.desiredKind === "pdf");
+
+  const advance = async (slot: MaterializationSlotSpec, context: SlotRenderContext): Promise<MaterializationOutcome | undefined> => {
     const existing = jobState.slots[slot.slotId];
-    if (existing && isTerminalPhase(existing.phase)) continue;
+    if (existing && isTerminalPhase(existing.phase)) return undefined;
     try {
-      jobState.slots[slot.slotId] = await advanceSlot({ runId: run.runId, siteId, requestId, slot, state: existing, bridge });
+      jobState.slots[slot.slotId] = await advanceSlot({ runId: run.runId, siteId, requestId, slot, state: existing, bridge, context, note: (warning) => warnings.push(warning) });
     } catch (error) {
       if (error instanceof MaterializationRefusal) return refused(error.code, error.message);
       throw error;
     }
+    return undefined;
+  };
+
+  const imagePolicyContexts = readImagePolicyContexts(run);
+  const imageContext: SlotRenderContext = { ...EMPTY_RENDER_CONTEXT, ...(imagePolicyContexts ? { imagePolicyContexts } : {}) };
+
+  for (const slot of imageSlots) {
+    const outcome = await advance(slot, imageContext);
+    if (outcome) return outcome;
+  }
+
+  const imagesPending = imageSlots.filter((slot) => !isTerminalPhase(jobState.slots[slot.slotId]?.phase ?? "running"));
+  if (pdfSlots.length && imagesPending.length === 0) {
+    // Every image is terminal, so the cover this run can offer is now known and will not change.
+    const materializedImages: MaterializedImageSlot[] = [];
+    for (const slot of imageSlots) {
+      const state = jobState.slots[slot.slotId];
+      const blobKey = trimmed(state?.artifactReference?.blobKey);
+      if (!state || state.phase === "blocked" || !blobKey) continue;
+      materializedImages.push({
+        slotId: slot.slotId,
+        ...(slot.purpose ? { purpose: slot.purpose } : {}),
+        ...(slot.placement ? { placement: slot.placement } : {}),
+        assetId: assetIdFor(slot.slotId, state.artifactReference),
+        blobKey
+      });
+    }
+    const pdfContext: SlotRenderContext = {
+      pdfTemplates: readPdfTemplates(run),
+      ...(imagePolicyContexts ? { imagePolicyContexts } : {}),
+      draft: readDraft(run),
+      images: materializedImages
+    };
+    for (const slot of pdfSlots) {
+      const outcome = await advance(slot, pdfContext);
+      if (outcome) return outcome;
+    }
+  } else if (pdfSlots.length) {
+    warnings.push(`artifact_pdf_slots_await_images:${imagesPending.map((slot) => slot.slotId).join(",")}`);
   }
 
   const stillRunning = effective.slots.filter((slot) => !isTerminalPhase(jobState.slots[slot.slotId]?.phase ?? "running"));
@@ -649,8 +914,11 @@ async function advanceSlot(params: {
   slot: MaterializationSlotSpec;
   state: SlotJobState | undefined;
   bridge: BridgeCall;
+  context?: SlotRenderContext;
+  note?: (warning: string) => void;
 }): Promise<SlotJobState> {
   const { runId, siteId, requestId, slot, bridge } = params;
+  const context = params.context ?? EMPTY_RENDER_CONTEXT;
   const at = nowIso();
   const base: SlotJobState = params.state ?? { slotId: slot.slotId, phase: "running", status: "pending", attempts: 0, createdAt: at, updatedAt: at };
 
@@ -705,11 +973,12 @@ async function advanceSlot(params: {
   }
 
   // --- 2. CREATE. Only ever reached with adoption having positively found nothing.
-  const args = createArgsFor({ runId, siteId, requestId, slot });
-  if ("refusal" in args) {
-    return { ...base, phase: "blocked", status: "refused", updatedAt: at, error: `${args.refusal}: the plan's slot "${slot.slotId}" (${slot.desiredKind}) is missing what its kind requires; this node never authors a prompt, a template or renderData` };
+  const prepared = createArgsFor({ runId, siteId, requestId, slot, context });
+  if ("refusal" in prepared) {
+    return { ...base, phase: "blocked", status: "refused", updatedAt: at, error: `${prepared.refusal}: ${prepared.message}` };
   }
-  const created = await bridge(CREATE_TOOL, args);
+  for (const warning of prepared.warnings) params.note?.(warning);
+  const created = await bridge(CREATE_TOOL, prepared.args);
   if (!created.ok) {
     return { ...base, phase: "blocked", status: "create_failed", updatedAt: at, error: `${created.code}:${created.detail}`.slice(0, 500) };
   }

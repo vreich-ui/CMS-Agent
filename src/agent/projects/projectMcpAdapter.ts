@@ -129,7 +129,10 @@ export type CallToolResult = { ok: boolean; projectId: string; connection: Proje
 // never becomes a dependency of this generic adapter.
 export const READ_TOOL_ALLOWLIST = [
   "object_contract", "registry_get", "object_inventory", "object_get", "object_list", "object_validate", "ping",
-  "list_sources", "list_connections", "search_offers", "performance", "demand_signals", "explain_decision"
+  "list_sources", "list_connections", "search_offers", "performance", "demand_signals", "explain_decision",
+  // C1 (BRIEF §3.7): sitePrefetch.ts's read-only PDF-template and image-model-policy prefetch — pure
+  // reads, exactly like the object_* rows above, so callReadTool (never callTool) is the right gate.
+  "list_pdf_templates", "get_image_model_policy"
 ] as const;
 export type ReadToolOperation = typeof READ_TOOL_ALLOWLIST[number];
 const isReadToolOperation = (name: string): name is ReadToolOperation => (READ_TOOL_ALLOWLIST as readonly string[]).includes(name);
