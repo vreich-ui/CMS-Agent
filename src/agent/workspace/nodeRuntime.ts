@@ -6,6 +6,7 @@ import type { ExecutionMode } from "../execution/executionContext.js";
 import { validateOutput } from "../execution/outputValidator.js";
 import { recordModelUsage } from "../observability/modelUsage.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
+import { nextAttemptNumber } from "./nodeAttemptHistory.js";
 import { resolveSkillsForNode } from "../skills/skillResolver.js";
 import { resolveEffectiveToolsForNode } from "../tools/toolResolver.js";
 import { DEFAULT_EXECUTION_MODE } from "./executor.js";
@@ -235,6 +236,11 @@ export type NodeExecutionEntry = {
   runId: string;
   nodeId: string;
   status: ExecutionStatus;
+  // W0 T0.1 — 1-based attempt number. The surviving state is the highest attempt; entries flagged
+  // `superseded` are earlier attempts reconstructed from node.errorHistory, so a node retried once
+  // returns two records instead of the one that used to hide the failure entirely.
+  attempt?: number;
+  superseded?: true;
   startedAt?: string;
   completedAt?: string;
   durationMs?: number;
@@ -289,6 +295,25 @@ export async function listNodeExecutions(
       if (filters.nodeId && state.nodeId !== filters.nodeId) continue;
       if (filters.executionId && !(run.artifacts ?? []).some((artifact) => artifact.nodeId === state.nodeId && (artifact as unknown as { executionId?: string }).executionId === filters.executionId)) continue;
 
+      // W0 T0.1 — ONE ENTRY PER ATTEMPT. A node that failed and was retried has its superseded
+      // attempts on state.errorHistory (nodeAttemptHistory.ts); before that existed this listing
+      // showed only the surviving attempt, so a retried node read as if it had run once and
+      // succeeded. Historical entries carry no cost/token join: usage is recorded per node, not per
+      // attempt, and splitting one usage total across attempts would invent numbers.
+      for (const attempt of state.errorHistory ?? []) {
+        entries.push({
+          runId: run.runId,
+          nodeId: state.nodeId,
+          status: attempt.status,
+          attempt: attempt.attempt,
+          superseded: true,
+          ...(attempt.startedAt ? { startedAt: attempt.startedAt } : {}),
+          ...(attempt.completedAt ? { completedAt: attempt.completedAt } : {}),
+          ...(attempt.durationMs !== undefined ? { durationMs: attempt.durationMs } : {}),
+          ...(attempt.code ? { error: [attempt.code, attempt.message].filter(Boolean).join("; ") } : {})
+        });
+      }
+
       const usage = usageRecords.filter((record) => record.runId === run.runId && record.nodeId === state.nodeId);
       const costUsd = usage.length ? round6(usage.reduce((sum, record) => sum + record.costUsdEstimate, 0)) : undefined;
       const tokensIn = usage.length ? usage.reduce((sum, record) => sum + record.inputTokens, 0) : undefined;
@@ -298,6 +323,7 @@ export async function listNodeExecutions(
         runId: run.runId,
         nodeId: state.nodeId,
         status: state.status,
+        attempt: nextAttemptNumber(state),
         ...(state.startedAt ? { startedAt: state.startedAt } : {}),
         ...(state.completedAt ? { completedAt: state.completedAt } : {}),
         ...(state.durationMs !== undefined ? { durationMs: state.durationMs } : {}),

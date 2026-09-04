@@ -41,8 +41,14 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       expect(retried.nodes.find((n) => n.nodeId === "input_triage")!.status).toBe("completed");
       // The node itself no longer carries the resolved failure...
       expect(retried.nodes.find((n) => n.nodeId === "input_triage")!.errors).toBeUndefined();
-      // ...and neither should the run-level ledger the operator actually reads for triage.
-      expect(retried.errors).toEqual([]);
+      // ...and the run-level ledger the operator reads for triage no longer shows it as a LIVE
+      // failure. W0 T0.1 changed what "no longer live" means here: the entry is marked
+      // `:retried@<ts>` instead of being dropped, because dropping it erased the only remaining
+      // record of the failure (10 of the last 11 retries on dr-lurie were undiagnosable for exactly
+      // this reason). The T-2 distinction the defect was about — currently-broken vs already-
+      // recovered — is now IN the entry rather than in its absence.
+      expect(retried.errors).toHaveLength(1);
+      expect(retried.errors[0]).toMatch(/^input_triage:model_timeout:retried@/);
     } finally {
       spy.mockRestore();
     }
@@ -75,7 +81,8 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       await runNextNode(retried.runId, { executionRepository: store }); // placement_resolver succeeds (§2.16)
       const afterSecondNode = await runNextNode(retried.runId, { executionRepository: store }); // topic_opportunity fails
 
-      expect(afterSecondNode.errors).toEqual(["topic_opportunity:model_timeout"]);
+      expect(afterSecondNode.errors.filter((entry) => !entry.includes(":retried@"))).toEqual(["topic_opportunity:model_timeout"]);
+      expect(afterSecondNode.errors.filter((entry) => entry.includes(":retried@"))).toHaveLength(1);
     } finally {
       spy.mockRestore();
     }

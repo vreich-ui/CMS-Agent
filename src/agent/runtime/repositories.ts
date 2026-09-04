@@ -40,6 +40,7 @@ export const getArtifactRepository = () => getRepositoryManager().getArtifactRep
 export const getLearningRepository = () => getRepositoryManager().getLearningRepository();
 export const getUsageRepository = () => getRepositoryManager().getUsageRepository();
 export const getNodeTimingRepository = () => getRepositoryManager().getNodeTimingRepository();
+export const getDriverHealthRepository = () => getRepositoryManager().getDriverHealthRepository();
 export const getProjectRepository = () => getRepositoryManager().getProjectRepository();
 export const getChangeRepository = () => getRepositoryManager().getChangeRepository();
 export const getEvaluationRepository = () => getRepositoryManager().getEvaluationRepository();

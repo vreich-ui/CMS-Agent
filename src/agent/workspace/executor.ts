@@ -50,6 +50,7 @@ import { resolveGateId } from "./gateRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
 import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
+import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried } from "./nodeAttemptHistory.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
 
@@ -166,7 +167,13 @@ export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   nodes: run.nodes.map(({ input: _input, output: _output, ...state }) => ({
     ...state,
     ...(state.errors !== undefined ? { errors: boundList(state.errors, 5, 1_000) } : {}),
-    ...(state.warnings !== undefined ? { warnings: boundList(state.warnings, 5, 1_000) } : {})
+    ...(state.warnings !== undefined ? { warnings: boundList(state.warnings, 5, 1_000) } : {}),
+    // W0 T0.1 — attempt history is bounded on the record already; bounded again here for the same
+    // reason errors/warnings are: a list page must not grow with a node's retry count. The three
+    // most recent attempts are what triage reads; node.list_executions returns them all.
+    ...(state.errorHistory !== undefined
+      ? { errorHistory: state.errorHistory.slice(-3).map((attempt) => ({ ...attempt, ...(attempt.message ? { message: boundText(attempt.message, 1_000) } : {}) })) }
+      : {})
   })),
   nodeCount: run.nodes.length,
   artifactCount: run.artifacts.length,
@@ -820,15 +827,67 @@ export type RunStallInfo = {
   timeoutMs?: number;
   stalledSuspected: boolean;
   advice?: string;
+  // W0 T0.3 — WHEN A BACKGROUND DRIVER LAST LOOKED AT THIS RUN, and what it decided (run.driverHealth,
+  // written by the continuation tick). Without these two fields the stall block could describe the
+  // run's own claim but never the thing that actually stopped on 2026-09-04: the driver.
+  lastSeenByTickAt?: string;
+  lastRefusal?: { code: string; reason?: string; at: string };
 };
 
-export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date()): RunStallInfo | undefined {
+// W0 T1.2 — the margin a dispatch must clear inside the driver's own task timeout. A node dispatched
+// with less than its full timeout plus this left in the task is a node the platform will kill
+// mid-flight: on 2026-09-04 article_body was dispatched ~10s before the Cloud Run task timeout (300s),
+// the task died, the claim expired 90s later and the node was re-dispatched 12.7 minutes and ~$0.60
+// later. Deferring that dispatch to the next tick costs the tick interval and nothing else.
+export const DISPATCH_DEADLINE_MARGIN_MS = 15_000;
+
+// The timeout the NEXT dispatch of this run will claim — the serial node's own, or the widest in the
+// concurrent batch, resolved exactly as the dispatch path resolves it (nodeTimeoutMs, with the
+// deterministic-stage floor). Exported for the continuation tick's deadline check (T1.2), which must
+// know how long a dispatch could take BEFORE it starts one. Pure read: nothing is claimed or saved.
+const plannedNodeTimeoutMs = (node: WorkspaceNode): number => (declaresDeterministicRoute(node) ? deterministicStageTimeoutMs(node) : nodeTimeoutMs(node));
+
+export async function nextDispatchTimeoutMs(run: WorkflowExecutionRecord, workspaceRepository?: WorkspaceRepository): Promise<number | undefined> {
+  if (HALTED_EXECUTION_STATUSES.has(run.status)) return undefined;
+  const nodes = await resolveConductorNodes(workspaceRepository, run.workflowId);
+  const nextNode = findNextRunnableNode(run, nodes);
+  if (!nextNode) return undefined;
+  const batch = selectConcurrentBatch(run, nodes, nextNode, undefined);
+  const dispatched = batch.length > 1 ? batch : [nextNode];
+  return Math.max(...dispatched.map(plannedNodeTimeoutMs));
+}
+
+// W0 T0.4 — measured per-node p95 durations (nodeTimings.aggregateNodeTimingsByNode), supplied by the
+// caller that already reads them (workflow.get_run / list_runs). Optional: without them assessRunStall
+// behaves exactly as it did, so no existing caller changes meaning.
+export type RunStallTimingContext = { p95DurationMsByNode?: Record<string, number> };
+
+// The multiple of the remaining work's own p95 that counts as "this is not slow, it is not moving".
+// Deliberately generous: three times the p95 sum of everything still to run is a run that, on its
+// own measured history, should have finished twice over.
+export const OVERDUE_RUN_P95_MULTIPLE = 3;
+
+const remainingP95TotalMs = (run: WorkflowExecutionRecord, timing: RunStallTimingContext | undefined): number | undefined => {
+  const aggregates = timing?.p95DurationMsByNode;
+  if (!aggregates) return undefined;
+  const remaining = run.nodes.filter((node) => node.status === "queued" || node.status === "running");
+  if (!remaining.length) return undefined;
+  const known = remaining.map((node) => aggregates[node.nodeId]).filter((value): value is number => typeof value === "number" && value > 0);
+  return known.length ? known.reduce((sum, value) => sum + value, 0) : undefined;
+};
+
+export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date(), timing?: RunStallTimingContext): RunStallInfo | undefined {
   if (run.status !== "running") return undefined;
+  const driverHealth = {
+    ...(run.driverHealth?.lastSeenByTickAt ? { lastSeenByTickAt: run.driverHealth.lastSeenByTickAt } : {}),
+    ...(run.driverHealth?.lastRefusal ? { lastRefusal: run.driverHealth.lastRefusal } : {})
+  };
   const inFlight = run.nodes.find((node) => node.status === "running" && node.dispatch);
   if (inFlight) {
     const deadline = Date.parse(inFlight.dispatch!.dispatchedAt) + inFlight.dispatch!.timeoutMs + STALL_MARGIN_MS;
     const stalled = at.getTime() > deadline;
     return {
+      ...driverHealth,
       inFlightNodeId: inFlight.nodeId,
       dispatchedAt: inFlight.dispatch!.dispatchedAt,
       timeoutMs: inFlight.dispatch!.timeoutMs,
@@ -840,7 +899,23 @@ export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date
   }
   const idleMs = at.getTime() - Date.parse(run.updatedAt);
   const stalled = idleMs > STALL_MARGIN_MS;
+  // W0 T0.4 — THE OVERDUE FLAG. `updatedAt` only tells you when the record was last touched, so a run
+  // whose driver walked away 40 minutes ago reads as healthy for the first 90 seconds and then as
+  // "died between nodes" forever, with no sense of scale. This adds the one comparison that has a
+  // scale: the run has been open for more than OVERDUE_RUN_P95_MULTIPLE times the measured p95 of the
+  // work it still has left. Only reported when the caller supplied timing aggregates.
+  const remainingP95Ms = remainingP95TotalMs(run, timing);
+  const openMs = at.getTime() - Date.parse(run.startedAt);
+  const overdue = remainingP95Ms !== undefined && openMs > OVERDUE_RUN_P95_MULTIPLE * remainingP95Ms;
+  if (overdue) {
+    return {
+      ...driverHealth,
+      stalledSuspected: true,
+      advice: `overdue: no driver progress — the run has been open ${Math.round(openMs / 1000)}s with nothing in flight, against a measured p95 of ${Math.round(remainingP95Ms! / 1000)}s for the ${run.nodes.filter((node) => node.status === "queued" || node.status === "running").length} node(s) it still has to run. Advance it (workflow.run_until / run_next_node) or check whether any driver is scanning this tenant (project.get driverHealth).`
+    };
+  }
   return {
+    ...driverHealth,
     stalledSuspected: stalled,
     advice: stalled
       ? `Run status is "running" but no node is in flight and the record has not been touched for ${Math.round(idleMs / 1000)}s — the driver died between nodes. State is persisted and resumable: advance the run to continue.`
@@ -1295,7 +1370,7 @@ async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: Work
     // The same supersede semantics executeRunnableNode applies serially (T-2, run_1785352838155_l544ye):
     // this node's earlier entries are dropped, then whatever THIS attempt recorded is appended — in
     // batch (canonical) order, so a slow sibling's error never sorts ahead of a fast one's.
-    reconciled.errors = [...reconciled.errors.filter((entry) => !entry.startsWith(`${node.id}:`)), ...produced.errors.filter((entry) => entry.startsWith(`${node.id}:`))];
+    reconciled.errors = [...dropUnretriedNodeErrors(reconciled.errors, node.id), ...produced.errors.filter((entry) => entry.startsWith(`${node.id}:`))];
     if (!halted && HALTED_EXECUTION_STATUSES.has(produced.status)) halted = { nodeId: node.id, status: produced.status };
     if (outcome.value.commit) commits.push(outcome.value.commit);
   });
@@ -1907,7 +1982,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.output = mapped;
       run.stageOutputs[nextNode.id] = mapped;
       run.artifacts.push(buildArtifact(nextNode, mapped));
-      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
       run.updatedAt = completedAt;
       run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
       // No model call happened, so no usage record is written — that is the entire point, and R-20
@@ -1949,7 +2024,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         state.output = resolution;
         run.stageOutputs[nextNode.id] = resolution;
         run.artifacts.push(buildArtifact(nextNode, resolution));
-        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
         run.updatedAt = completedAt;
         run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
         // Deterministic, $0: no model call, no usage record (the R-20 rule).
@@ -2120,7 +2195,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.output = built.payload;
       run.stageOutputs[nextNode.id] = built.payload;
       run.artifacts.push(buildArtifact(nextNode, built.payload));
-      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
       run.updatedAt = completedAt;
       run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
       // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
@@ -2187,7 +2262,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.output = decided.decision;
       run.stageOutputs[nextNode.id] = decided.decision;
       run.artifacts.push(buildArtifact(nextNode, decided.decision));
-      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
       run.updatedAt = completedAt;
       run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
       // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
@@ -2260,7 +2335,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.warnings = [...(state.warnings ?? []), ...engine.warnings];
       run.stageOutputs[nextNode.id] = engine.output;
       run.artifacts.push(buildArtifact(nextNode, engine.output));
-      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
       run.updatedAt = completedAt;
       if (engine.nodeBlocked) {
         // A failed sequence leaves the NODE blocked (and the run with it): the artifact records what
@@ -2318,7 +2393,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.warnings = [...(state.warnings ?? []), "no_publication_performed"];
       run.stageOutputs[nextNode.id] = executed.output;
       run.artifacts.push(buildArtifact(nextNode, executed.output));
-      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
       run.updatedAt = completedAt;
       run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
       // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
@@ -2382,7 +2457,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         state.warnings = [...(state.warnings ?? []), ...released.warnings, ...(enforced.downgraded ? ["executed_claim_downgraded_to_blocked", ...enforced.reasons.map((reason) => reason.split(":")[0])] : [])];
         run.stageOutputs[nextNode.id] = output;
         run.artifacts.push(buildArtifact(nextNode, output));
-        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
         // Only a TERMINAL outcome may be ledgered terminal. `ledger: "none"` is the recoverable case
         // (release_to_production never confirmed it landed) and must leave the ledger untouched so the
         // next dispatch can call it again; `ledger: "pending"` keeps release_to_production unreachable
@@ -2428,7 +2503,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.output = observations;
       run.stageOutputs[nextNode.id] = observations;
       run.artifacts.push(buildArtifact(nextNode, observations));
-      run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+      run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
       run.updatedAt = completedAt;
       run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
       // No model call happened, so no usage record is written (the R-20 rule: a $0 event stays $0).
@@ -2499,7 +2574,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         state.output = staged.output;
         run.stageOutputs[nextNode.id] = staged.output;
         run.artifacts.push(buildArtifact(nextNode, staged.output));
-        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
         run.updatedAt = completedAt;
         run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
         // No model call happened, so no usage record is written (the R-20 rule).
@@ -2547,7 +2622,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         state.output = staged.output;
         run.stageOutputs[nextNode.id] = staged.output;
         run.artifacts.push(buildArtifact(nextNode, staged.output));
-        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
         run.updatedAt = completedAt;
         run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
         // No model call happened, so no usage record is written (the R-20 rule).
@@ -2601,7 +2676,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         if (materialized.warnings.length) state.warnings = [...(state.warnings ?? []), ...materialized.warnings];
         run.stageOutputs[nextNode.id] = materialized.output;
         run.artifacts.push(buildArtifact(nextNode, materialized.output));
-        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
         run.updatedAt = completedAt;
         run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
         // No model call happened, so no usage record is written (the R-20 rule).
@@ -2674,7 +2749,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         state.warnings = [...(state.warnings ?? []), ...materialized.warnings];
         run.stageOutputs[nextNode.id] = materialized.output;
         run.artifacts.push(buildArtifact(nextNode, materialized.output));
-        run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+        run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
         run.updatedAt = completedAt;
         run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
         // No model call happened, so no usage record is written (the R-20 rule).
@@ -3002,7 +3077,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // failure permanently in run.errors — this run ended with ["draft_writer:model_timeout", ...] even
   // though draft_writer had since completed. A completion supersedes every earlier entry for THIS
   // node, retried or not, so triage reflects current status rather than accumulating every attempt.
-  run.errors = run.errors.filter((entry) => !entry.startsWith(`${nextNode.id}:`));
+  run.errors = dropUnretriedNodeErrors(run.errors, nextNode.id);
   run.updatedAt = completedAt;
   run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
   return {
@@ -3114,6 +3189,14 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
       // (the node is about to have a real execution record) but the override survives it.
       if (node.status === "skipped") node.skipOverride = true;
       delete node.skip;
+      // W0 T0.1 — REMEMBER THE ATTEMPT BEFORE ERASING IT. Everything below this line is the reset
+      // that made 10 of the last 11 retries undiagnosable: it clears the node's errors, output and
+      // timing, and a later completion drops that node's `run.errors` entries. The attempt is
+      // appended to node.errorHistory here, and the run-level entries are marked `:retried@<ts>`
+      // rather than left to be dropped, so a successful retry no longer erases the failure it fixed.
+      const retriedAt = now();
+      appendNodeAttempt(node, retriedAt);
+      run.errors = markRunErrorsRetried(run.errors, node.nodeId, retriedAt);
       node.status = "queued";
       delete node.errors;
       delete node.output;

@@ -161,6 +161,16 @@ export async function runConductorJob(options: ConductorJobOptions): Promise<Con
     logNodeTransitions(run);
   }
 
+  // W0 T0.3 — the other background driver's stamp. Same contract as the tick's: written only when
+  // this process actually dispatched something, best-effort, never able to fail the run.
+  if (steps > 0) {
+    try {
+      await repositoryManager.getDriverHealthRepository().recordTenantDispatch({ projectId: run.projectId, lastBackgroundDispatchAt: new Date().toISOString(), driver: "cloud_run_job", runId: run.runId });
+    } catch {
+      // A driver-health store this job cannot write is a lost telemetry stamp, never a failed run.
+    }
+  }
+
   const usage = await summarizeModelUsage({ runId: run.runId }, repositoryManager.getUsageRepository());
   const ledger = summarizeRunCost(run, usage);
   const plan = planRun(run);

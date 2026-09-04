@@ -37,12 +37,21 @@ export type ContinuationTickJobOptions = {
 // line existed.
 export const summarizeTick = (result: ContinuationTickResult): string => JSON.stringify({
   event: "workflow.continuation_tick",
+  // W0 T0.2 — the ledger id, so the stdout line and the stored ticks/<tickId>.json record are
+  // provably the same execution.
+  ...(result.tickId ? { tickId: result.tickId } : {}),
   enabled: result.enabled,
   scanned: result.scanned,
   driven: result.driven.map((report) => ({ runId: report.runId, code: report.code, statusBefore: report.statusBefore, statusAfter: report.statusAfter, steps: report.steps, ...(report.chain ? { chain: report.chain } : {}) })),
   timedOut: result.timedOut,
+  ...(result.driverSilent ? { driverSilent: true } : {}),
+  ...(result.deferredDeadline ? { deferredDeadline: true } : {}),
   refusals: result.verdicts.filter((verdict) => !verdict.reenter).map((verdict) => ({ runId: verdict.runId, code: verdict.code }))
 });
+
+// W0 T0.2 — the exit-code rule, as a pure function so "when does this job fail" is answerable in a
+// unit test without running a tick.
+export const tickExitCode = (result: Pick<ContinuationTickResult, "driverSilent">): number => (result.driverSilent ? 1 : 0);
 
 export async function runContinuationTickJob(options: ContinuationTickJobOptions = {}): Promise<{ result: ContinuationTickResult; exitCode: number }> {
   const log = options.log ?? (() => undefined);
@@ -62,7 +71,13 @@ export async function runContinuationTickJob(options: ContinuationTickJobOptions
   // Exit 0 even when nothing was driven: "no run needed advancing" is the healthy steady state, and a
   // non-zero exit there would make Cloud Scheduler retry and alert on normal operation. Only a THROWN
   // failure (store unreachable, misconfiguration) is non-zero — see runContinuationTickMain.ts.
-  return { result, exitCode: 0 };
+  //
+  // W0 T0.2 — with ONE addition, and it is the point of the wave. "Nothing needed advancing" and "I
+  // have failed to advance an advanceable run three ticks running" were the same green job before
+  // this line: on 2026-09-04 the job exited 0 every two minutes through a 44-minute hole. The second
+  // case now fails the job, so Cloud Run job failures — the thing Scheduler and alerting actually
+  // watch — finally include the failure mode that matters.
+  return { result, exitCode: tickExitCode(result) };
 }
 
 export async function continuationTickCliMain(env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<number> {
