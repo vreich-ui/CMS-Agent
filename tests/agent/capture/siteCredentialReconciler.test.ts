@@ -121,7 +121,7 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
     expect(credentialFetch).toHaveBeenCalledOnce();
   });
 
-  it("includes disabled marked client sites and excludes unmarked internal projects", async () => {
+  it("includes disabled marked client sites, and reports (not omits) an unmarked internal project as unmanaged", async () => {
     const platform = defaultProjectConfigs().find((project) => project.projectId === "platform")!;
     const disabledClient = { ...platform, projectId: "fernwell", mcpEndpoint: "https://fernwell.netlify.app/mcp", clientSiteBinding: { netlifySiteName: "fernwell" }, status: "disabled" as const };
     const internal = { ...platform, projectId: "pdf-tool", mcpEndpoint: "https://internal.example/mcp", status: "active" as const };
@@ -129,10 +129,15 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
       { apply: false },
       { projectRepository: { ...projectRepository(), list: async () => [disabledClient, internal] } as ProjectRepository, env: {} }
     );
-    expect(results).toEqual([{ projectId: "fernwell", netlifySiteName: "fernwell", status: "planned" }]);
+    // pdf-tool is bearer_env with no binding, so it is now VISIBLE as "unmanaged" rather than
+    // silently dropped from the plan — the whole point of this change. It still takes no action.
+    expect(results).toEqual([
+      { projectId: "fernwell", netlifySiteName: "fernwell", status: "planned" },
+      { projectId: "pdf-tool", status: "unmanaged", errorDetail: expect.stringContaining("No client-site binding") }
+    ]);
   });
 
-  it("uses an explicit backfill map for existing clients without marking internal projects", async () => {
+  it("uses an explicit backfill map for existing clients, and still reports an unmapped internal project as unmanaged", async () => {
     const platform = defaultProjectConfigs().find((project) => project.projectId === "platform")!;
     const existingClient = { ...platform, projectId: "dr-lurie", status: "active" as const };
     const internal = { ...platform, projectId: "pdf-tool", status: "active" as const };
@@ -143,7 +148,10 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
         env: { CMS_AGENT_SITE_BINDINGS_JSON: JSON.stringify({ "dr-lurie": "drluriescience" }) }
       }
     );
-    expect(results).toEqual([{ projectId: "dr-lurie", netlifySiteName: "drluriescience", status: "planned" }]);
+    expect(results).toEqual([
+      { projectId: "dr-lurie", netlifySiteName: "drluriescience", status: "planned" },
+      { projectId: "pdf-tool", status: "unmanaged", errorDetail: expect.stringContaining("No client-site binding") }
+    ]);
   });
 
   it("persists the durable binding after a mapped credential is installed and verified", async () => {
@@ -490,5 +498,51 @@ describe("dry run without an injected credential repository", () => {
     expect(results).toHaveLength(1);
     expect(["planned", "current"]).toContain(results[0]!.status);
     expect(results[0]!.status).not.toBe("failed");
+  });
+});
+
+// "unmanaged": the fix for the incident this file's header comment describes. A bearer_env project
+// with no binding used to be filtered out BEFORE this loop ran at all and never appear in `results`
+// — silent omission that read as "nothing to do" right up until a stale credential 401'd in
+// production. It must now be reported, and it must still never be acted on, in EITHER mode.
+describe("unmanaged: a bearer_env project with no binding is reported, never acted on", () => {
+  it("apply mode still takes no Netlify action for the unmanaged project, while the eligible one still rotates normally", async () => {
+    const platform = defaultProjectConfigs().find((project) => project.projectId === "platform")!;
+    // Raw default "platform" carries no clientSiteBinding, so this project inherits none either —
+    // exactly the shape a real internal service project (pdf-tool, monetizer) has today.
+    const unmanaged = { ...platform, projectId: "pdf-tool", mcpEndpoint: "https://internal.example/mcp", status: "active" as const };
+    const netlifyCalls: string[] = [];
+    const netlifyFetch = vi.fn(async (url: string) => {
+      netlifyCalls.push(url);
+      if (url.includes("/sites?name=")) return response(200, [{ id: "site_platform", name: "kugel-platform", account_id: "acct_1", ssl_url: "https://kugel-platform.netlify.app" }]);
+      if (url.includes("/env/CMS_AGENT_MCP_")) return response(404);
+      if (url.includes("/env?site_id=site_platform")) return response(200);
+      if (url.includes("/sites/site_platform/builds?title=")) return response(200, { id: "build_1", deploy_id: "deploy_1" });
+      if (url.endsWith("/deploys/deploy_1")) return response(200, { id: "deploy_1", state: "ready" });
+      if (url.endsWith("/sites/site_platform")) return response(200, { published_deploy: { id: "deploy_1", state: "ready" } });
+      throw new Error(`unexpected ${url}`);
+    });
+    const mint = vi.fn(async () => ({ token: "raw-token-never-reported", digest: "c".repeat(64), policy: { projects: ["platform"], toolAllowlist: ["agent_resolve", "agent_converse"] } }));
+
+    const results = await reconcileSiteClientManagerCredentials(
+      { apply: true },
+      {
+        projectRepository: { ...projectRepository(), list: async () => [{ ...platform, mcpEndpoint: "https://kugel-platform.netlify.app/mcp", clientSiteBinding: { netlifySiteName: "kugel-platform", netlifySiteId: "site_platform" }, status: "active" as const }, unmanaged] } as ProjectRepository,
+        env: { NETLIFY_API_TOKEN: "netlify-hidden", CMS_AGENT_PUBLIC_MCP_ENDPOINT: "https://cms-agent.example/mcp" },
+        netlifyFetch: netlifyFetch as never,
+        credentialFetch: vi.fn(async () => response(200, { jsonrpc: "2.0", id: "genesis-credential-check", result: {} })) as never,
+        credentialRepository: { mint, activateAndRetireOtherProjectCredentials: vi.fn(async () => undefined), revokeCredential: vi.fn(), findActiveCredentialForProject: vi.fn(async () => undefined) }
+      }
+    );
+
+    expect(results).toEqual([
+      { projectId: "platform", netlifySiteName: "kugel-platform", status: "rotated" },
+      { projectId: "pdf-tool", status: "unmanaged", errorDetail: expect.stringContaining("No client-site binding") }
+    ]);
+    // Not one Netlify call names pdf-tool's endpoint or anything about it — every call the eligible
+    // "platform" rotation alone would make, and nothing more.
+    expect(netlifyCalls.every((url) => !url.includes("pdf-tool") && !url.includes("internal.example"))).toBe(true);
+    expect(mint).toHaveBeenCalledOnce();
+    expect(mint).toHaveBeenCalledWith(expect.objectContaining({ projectId: "platform" }));
   });
 });
