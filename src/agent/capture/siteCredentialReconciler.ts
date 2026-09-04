@@ -15,12 +15,22 @@ export const CMS_AGENT_SITE_BINDINGS_ENV = "CMS_AGENT_SITE_BINDINGS_JSON";
 
 export type SiteCredentialReconcileResult = {
   projectId: string;
-  netlifySiteName: string;
-  status: "planned" | "current" | "rotated" | "failed";
+  // Absent only for status "unmanaged": there is no bound (or backfill-mapped) Netlify site to
+  // name for a project the reconciler cannot act on at all.
+  netlifySiteName?: string;
+  // "unmanaged" (2026-09-04): a bearer_env project with NO usable binding. THE FIX this type exists
+  // for — such a project used to be filtered out before the loop below and never appear in
+  // `results` at all, which read as "nothing to do" and is exactly what let dr-lurie and platform
+  // sit on stale credentials while every visual_identity_propose call 401'd and the operator,
+  // reading an empty diff, called the fleet healthy. No mint, no env write, no rebuild happens for
+  // an "unmanaged" row in either dry-run or apply — it is reporting only.
+  status: "planned" | "current" | "rotated" | "failed" | "unmanaged";
   errorCode?: string;
   // The safe half of the underlying refusal — `METHOD /path HTTP nnn`, never a response body. A
   // bare errorCode cannot distinguish "the credential is revoked" (401) from "Netlify wobbled"
-  // (503), and the operator reading this line is exactly the person who needs to know which.
+  // (503), and the operator reading this line is exactly the person who needs to know which. Also
+  // carries the plain-language reason for an "unmanaged" row (see above) — there is no HTTP call to
+  // summarize there, so this is the only field with anything to say.
   errorDetail?: string;
 };
 
@@ -68,17 +78,27 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
   if (input.apply && !netlifyToken) throw new SiteGenesisRefusal("netlify_token_missing", `${NETLIFY_API_TOKEN_ENV} is required for apply; reconciliation never accepts or prints token values as arguments.`);
   const publicEndpoint = input.apply ? resolveCmsAgentPublicMcpEndpoint(env) : env[CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV]?.trim() || "https://cms-agent.example/mcp";
   const bindings = parseBindings(env);
-  // Eligibility is an explicit durable genesis marker or an explicit one-time backfill mapping,
-  // never inferred from project status, auth mode alone, or endpoint shape. Internal projects
-  // (monetizer/pdf-tool, etc.) have neither. Disabled client sites retain the marker and therefore
-  // remain eligible for credential maintenance.
-  const projects = (await deps.projectRepository.list()).filter(
-    (project) => project.authMode === "bearer_env" && (project.clientSiteBinding || bindings[project.projectId])
-  );
+  // Population is authMode alone now — every bearer_env project is WALKED, not pre-filtered, so
+  // one with no binding is reported (see "unmanaged" on the result type) instead of silently
+  // disappearing before the loop even starts. Binding eligibility (an explicit durable genesis
+  // marker, or an explicit one-time backfill mapping) still decides what gets ACTED on inside the
+  // loop; it just no longer decides what gets REPORTED. Internal projects (monetizer, pdf-tool,
+  // etc.) have neither a marker nor a mapping and will show up as "unmanaged" too — see the
+  // module-level comment for why that noise is the accepted trade. Disabled client sites retain the
+  // marker and therefore remain eligible for credential maintenance.
+  const projects = (await deps.projectRepository.list()).filter((project) => project.authMode === "bearer_env");
   const results: SiteCredentialReconcileResult[] = [];
 
   for (const project of projects) {
-    let siteName = project.clientSiteBinding?.netlifySiteName ?? bindings[project.projectId]!;
+    const siteName = project.clientSiteBinding?.netlifySiteName ?? bindings[project.projectId];
+    if (!siteName) {
+      results.push({
+        projectId: project.projectId,
+        status: "unmanaged",
+        errorDetail: `No client-site binding for "${project.projectId}": no credential can be minted or installed for it. If this is a client site, set one with project.update ({ clientSiteBinding: { netlifySiteName: "<netlify-site-name>" } }); if it is an internal service project (e.g. monetizer, pdf-tool) rather than a client site, no action is needed.`
+      });
+      continue;
+    }
     let mintedDigest: string | undefined;
     let credentialInstalled = false;
     let credentials: CredentialRepository | undefined;

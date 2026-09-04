@@ -250,14 +250,20 @@ export function createSiteCredentialTools(deps: SiteCredentialToolDeps): Workspa
   return [
     tool({
       name: "site_credentials_plan",
-      description: "Read-only dry run of the fleet Client Manager credential reconciler: for every registered client-site tenant, reports whether its scoped chat bearer is current or would be rotated on an apply. No Netlify or Cloud Run call — same in-process check reconcileSiteCredentialsMain.ts runs without --apply.",
+      description: "Read-only dry run of the fleet Client Manager credential reconciler: for every bearer_env project, reports whether its scoped chat bearer is current, would be rotated on an apply, or is unmanaged (no client-site binding, so the reconciler cannot act on it at all — see unmanagedCount). No Netlify or Cloud Run call — same in-process check reconcileSiteCredentialsMain.ts runs without --apply.",
       zodSchema: emptyInput,
       inputSchema: emptyJsonSchema,
       execute: async (input) => {
         emptyInput.parse(input);
         const results = await reconcileSiteClientManagerCredentials({ apply: false }, { projectRepository: deps.projectRepository });
         const staleCount = results.filter((result) => result.status === "planned").length;
-        return ok({ mode: "dry_run", results, staleCount });
+        // Named and counted SEPARATELY from staleCount on purpose: "unmanaged" is not a project
+        // waiting on an apply, it is one the reconciler cannot see a site for at all (see
+        // siteCredentialReconciler.ts). Folding it into staleCount would let an existing reader who
+        // only checks that one number silently misread "nothing to apply" when a tenant is actually
+        // invisible to the reconciler — which is the exact incident this change exists to prevent.
+        const unmanagedCount = results.filter((result) => result.status === "unmanaged").length;
+        return ok({ mode: "dry_run", results, staleCount, unmanagedCount });
       }
     }),
 

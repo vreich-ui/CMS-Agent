@@ -83,6 +83,14 @@ export const secretVersionRefSchema = z.string().min(1).max(512).superRefine((va
   }
 });
 
+// Shape-only: the CONTENT check (a valid non-secret Netlify site name/id) is requireValidClientSiteBinding
+// below — kept as the single validator so project.create's trusted in-process path and
+// project.update's MCP-facing path can never drift apart on what counts as a valid binding.
+const clientSiteBindingSchema = z.object({
+  netlifySiteName: z.string().min(1).max(256),
+  netlifySiteId: z.string().min(1).max(256).optional()
+}).strict();
+
 // canonicalArticleBody was removed (R-23): every definition declared the identical value, making it
 // configuration that could only ever misconfigure. The canonical body contract (client_object.v1) is
 // derived from the article_body node's own produces const (see projectRegistry.ts validate_handoff).
@@ -172,6 +180,16 @@ export const projectUpdateSchema = z.object({
   contentContract: z.object({ contentContract: z.string().min(1) }).strict().optional(),
   capturePolicy: capturePolicySchema.optional(),
   status: z.enum(projectStatuses).optional(),
+  // T15.6 (2026-09-04) — the one identity-shaped field project.update DOES accept, and deliberately
+  // not on projectCreateSchema (see ProjectCreateInput.clientSiteBinding). Safe here in a way
+  // publishingPolicy is not: this is non-secret metadata (a Netlify site name/id, nothing that
+  // grants authority on its own), the reconciler already writes it unprompted onto any project it
+  // successfully applies a credential to, and runSiteGenesis already stamps it at birth for every
+  // genesis-born tenant. Exposing a manual path to the SAME field a normal apply already sets adds
+  // no capability that did not already exist — it only lets an operator backfill it for a tenant
+  // that predates genesis (dr-lurie, platform) without an env var + redeploy. null clears it, same
+  // convention as mcpEndpoint/tokenSecretRef/tokenEnvVar above.
+  clientSiteBinding: clientSiteBindingSchema.nullable().optional(),
   // T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2.2): the ONE deliberate crack in
   // "publishingPolicy is server-controlled" (see updateProject below and the comment at tools.ts's
   // projectPatchJsonSchema). Every other field on ProjectPublishingPolicy — publishEnabled (the hard
@@ -238,6 +256,20 @@ const requireValidClientSiteBinding = (binding: ClientSiteBinding | undefined) =
   }
 };
 
+// T15.6 (2026-09-04) — surfaced, not enforced, at project.create: bearer_env ALSO covers internal
+// service projects CMS-Agent calls OUT to (monetizer, pdf-tool), which are not client sites and
+// never get a clientSiteBinding, and no field on a project distinguishes the two today. Refusing a
+// bearer_env project with no binding would break registering those. What bit us instead (2026-09-04)
+// was the opposite failure mode: two client sites (dr-lurie, platform) predated site genesis, had
+// no binding, and the fleet credential reconciler silently OMITTED them from every plan — they read
+// as "nothing to do" right up until their stale bearer 401'd on every visual_identity_propose call.
+// The honest fix given no reliable discriminator is a visible advisory an operator can act on (or
+// dismiss, if the project really is internal), never a guess in either direction.
+export function bearerEnvClientSiteBindingAdvisory(input: Pick<ProjectCreateInput, "authMode" | "clientSiteBinding">): string | undefined {
+  if (input.authMode !== "bearer_env" || input.clientSiteBinding) return undefined;
+  return "authMode \"bearer_env\" with no clientSiteBinding set: if this is a CLIENT SITE, the fleet credential reconciler (reconcileSiteClientManagerCredentials) cannot mint or install its scoped chat bearer for it until a binding exists — set one with project.update ({ clientSiteBinding: { netlifySiteName: \"<netlify-site-name>\" } }) once the tenant's Netlify site exists. If this is an INTERNAL service project (e.g. monetizer, pdf-tool) rather than a client site CMS-Agent is called BY, no action is needed.";
+}
+
 export async function createProject(repository: ProjectRepository, input: ProjectCreateInput): Promise<ProjectSummary> {
   requireTokenSourceForBearer(input.authMode, input.tokenEnvVar, input.tokenSecretRef);
   requireCredentialFreeEndpoint(input.mcpEndpoint);
@@ -302,8 +334,13 @@ export async function updateProject(repository: ProjectRepository, projectId: st
     if (patch.tokenEnvVar === null) delete next.tokenEnvVar;
     else next.tokenEnvVar = patch.tokenEnvVar;
   }
+  if (patch.clientSiteBinding !== undefined) {
+    if (patch.clientSiteBinding === null) delete next.clientSiteBinding;
+    else next.clientSiteBinding = { ...patch.clientSiteBinding };
+  }
   requireTokenSourceForBearer(next.authMode, next.tokenEnvVar, next.tokenSecretRef);
   requireCredentialFreeEndpoint(next.mcpEndpoint);
+  requireValidClientSiteBinding(next.clientSiteBinding);
   return toProjectSummary(await repository.save(next));
 }
 
