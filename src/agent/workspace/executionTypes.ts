@@ -75,6 +75,15 @@ export type NodeAttemptRecord = {
   recordedAt: string;
 };
 
+// W1 T1.1 — see NodeExecutionState.retry.
+export type NodeRetryState = {
+  attempt: number;
+  notBefore: string;
+  code: string;
+  message?: string;
+  scheduledAt: string;
+};
+
 export type NodeExecutionState = {
   nodeId: string;
   status: ExecutionStatus;
@@ -96,6 +105,12 @@ export type NodeExecutionState = {
   lastDispatch?: NodeDispatchProvenance;
   // Present only on a node whose status is "skipped" (W4).
   skip?: NodeSkipRecord;
+  // W1 T1.1 — the orchestrator's own scheduled retry of a transient runner failure. Present on a
+  // node that is "queued" BECAUSE its last attempt failed retryably: `notBefore` is the earliest the
+  // scheduler may dispatch it again (exponential backoff), and `attempt` counts orchestrator retries
+  // only (an operator retryNode is not one). Cleared when the node completes. See nodeRetryPolicy.ts
+  // for why this is a marker on a queued node rather than a new node status.
+  retry?: NodeRetryState;
   // Execution-time identity for the exact node definition/model that produced this state. This is
   // stamped after the runner returns, before the output is persisted, and is never recomputed from a
   // later workspace node edit.
@@ -260,6 +275,12 @@ export type WorkflowExecutionRecord = {
   // continuation tick on every scan (never a status change), read by assessRunStall's advice and by
   // workflow.list_runs' stall block.
   driverHealth?: RunDriverHealth;
+  // W1 T1.1 — set ONLY when an orchestrator retry was scheduled and that node was the run's ONLY
+  // runnable work: the earliest moment any driver could usefully re-enter this run. The continuation
+  // tick reads it to tell "waiting out a 60s backoff" from "parked driver" without resolving the node
+  // graph (decideRunContinuation is a pure function of the record, and stays one). Cleared by the
+  // next node completion.
+  retryBackoffUntil?: string;
   approvalsRequired: ApprovalRequired[];
   initialInput?: unknown;
   stageOutputs: Record<string, unknown>;

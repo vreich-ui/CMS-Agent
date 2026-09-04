@@ -14,6 +14,11 @@ import * as registry from "../../../src/agent/execution/runnerRegistry.js";
 // appended to, so a resolved failure stayed in the array forever, making triage misleading — an
 // operator reading `run.errors` could not tell a currently-broken node from one that already recovered.
 
+// W1 T1.1 (2026-09-04): the injected code is now a NON-retryable one (max_turns_exceeded).
+// model_timeout is auto-retried by the orchestrator since W1, so it no longer produces the
+// terminal failure THIS test is about — the subject here is unchanged, only the way the
+// failure is provoked.
+
 describe("run-level errors array (T-2 defect: stale entries after a successful retry)", () => {
   it("drops a node's stale error entry once a retry completes it successfully", async () => {
     let calls = 0;
@@ -23,7 +28,7 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       validateConfiguration: () => ({ ok: true as const }),
       run: async ({ node }: { node: WorkspaceNode }) => {
         calls += 1;
-        if (calls === 1) return { ok: false as const, code: "model_timeout", message: "OpenAI node execution timed out." };
+        if (calls === 1) return { ok: false as const, code: "max_turns_exceeded", message: "OpenAI node execution timed out." };
         return { ok: true as const, output: mockOutputForNode(node, emptyRun) };
       }
     } as never);
@@ -35,7 +40,7 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       const failed = await runNextNode(started.runId, { executionRepository: store });
       expect(failed.status).toBe("failed");
       expect(failed.nodes.find((n) => n.nodeId === "input_triage")!.status).toBe("failed");
-      expect(failed.errors).toEqual(["input_triage:model_timeout"]);
+      expect(failed.errors).toEqual(["input_triage:max_turns_exceeded"]);
 
       const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store }))!;
       expect(retried.nodes.find((n) => n.nodeId === "input_triage")!.status).toBe("completed");
@@ -48,7 +53,7 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       // this reason). The T-2 distinction the defect was about — currently-broken vs already-
       // recovered — is now IN the entry rather than in its absence.
       expect(retried.errors).toHaveLength(1);
-      expect(retried.errors[0]).toMatch(/^input_triage:model_timeout:retried@/);
+      expect(retried.errors[0]).toMatch(/^input_triage:max_turns_exceeded:retried@/);
     } finally {
       spy.mockRestore();
     }
@@ -64,10 +69,10 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       run: async ({ node }: { node: WorkspaceNode }) => {
         if (node.id === "input_triage") {
           triageCalls += 1;
-          if (triageCalls === 1) return { ok: false as const, code: "model_timeout", message: "timed out" };
+          if (triageCalls === 1) return { ok: false as const, code: "max_turns_exceeded", message: "timed out" };
           return { ok: true as const, output: mockOutputForNode(node, emptyRun) };
         }
-        if (node.id === "topic_opportunity") return { ok: false as const, code: "model_timeout", message: "timed out" };
+        if (node.id === "topic_opportunity") return { ok: false as const, code: "max_turns_exceeded", message: "timed out" };
         return { ok: true as const, output: mockOutputForNode(node, emptyRun) };
       }
     } as never);
@@ -81,7 +86,7 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       await runNextNode(retried.runId, { executionRepository: store }); // placement_resolver succeeds (§2.16)
       const afterSecondNode = await runNextNode(retried.runId, { executionRepository: store }); // topic_opportunity fails
 
-      expect(afterSecondNode.errors.filter((entry) => !entry.includes(":retried@"))).toEqual(["topic_opportunity:model_timeout"]);
+      expect(afterSecondNode.errors.filter((entry) => !entry.includes(":retried@"))).toEqual(["topic_opportunity:max_turns_exceeded"]);
       expect(afterSecondNode.errors.filter((entry) => entry.includes(":retried@"))).toHaveLength(1);
     } finally {
       spy.mockRestore();

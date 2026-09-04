@@ -13,6 +13,11 @@ import * as registry from "../../../src/agent/execution/runnerRegistry.js";
 // then succeeded left nothing behind — node.errors cleared by the retry, run.errors dropped by the
 // completion — so "why did these runs fail" was unanswerable for 10 of the 11.
 
+// W1 T1.1 (2026-09-04): the injected code is now a NON-retryable one (max_turns_exceeded).
+// model_timeout is auto-retried by the orchestrator since W1, so it no longer produces the
+// terminal failure THIS test is about — the subject here is unchanged, only the way the
+// failure is provoked.
+
 describe("W0 T0.1 — failure history survives a retry", () => {
   it("keeps the failed attempt on the node, marks the run entry retried, and lists one record per attempt", async () => {
     let calls = 0;
@@ -22,7 +27,7 @@ describe("W0 T0.1 — failure history survives a retry", () => {
       validateConfiguration: () => ({ ok: true as const }),
       run: async ({ node }: { node: WorkspaceNode }) => {
         calls += 1;
-        if (calls === 1) return { ok: false as const, code: "model_error", message: "Injected provider failure." };
+        if (calls === 1) return { ok: false as const, code: "max_turns_exceeded", message: "Injected provider failure." };
         return { ok: true as const, output: mockOutputForNode(node, emptyRun) };
       }
     } as never);
@@ -35,7 +40,7 @@ describe("W0 T0.1 — failure history survives a retry", () => {
 
       const failed = await runNextNode(started.runId, { executionRepository: store });
       expect(failed.status).toBe("failed");
-      expect(failed.errors).toEqual(["input_triage:model_error"]);
+      expect(failed.errors).toEqual(["input_triage:max_turns_exceeded"]);
 
       const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store }))!;
       const node = retried.nodes.find((state) => state.nodeId === "input_triage")!;
@@ -43,10 +48,10 @@ describe("W0 T0.1 — failure history survives a retry", () => {
 
       // 1. The superseded attempt is on the node, with the code the retry cleared.
       expect(node.errorHistory).toHaveLength(1);
-      expect(node.errorHistory![0]).toMatchObject({ attempt: 1, status: "failed", code: "model_error", message: "Injected provider failure." });
+      expect(node.errorHistory![0]).toMatchObject({ attempt: 1, status: "failed", code: "max_turns_exceeded", message: "Injected provider failure." });
 
       // 2. The run-level ledger still names the original failure (marked, not deleted).
-      expect(retried.errors.some((entry) => entry.startsWith("input_triage:model_error:retried@"))).toBe(true);
+      expect(retried.errors.some((entry) => entry.startsWith("input_triage:max_turns_exceeded:retried@"))).toBe(true);
 
       // 3. node.list_executions returns one record per attempt, not one per node.
       const executions = await listNodeExecutions({ runId: started.runId, nodeId: "input_triage" }, store, usage);
