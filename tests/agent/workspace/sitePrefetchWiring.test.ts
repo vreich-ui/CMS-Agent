@@ -100,6 +100,54 @@ describe("site prefetch wired into node dispatch", () => {
     expect((state.warnings ?? []).filter((warning) => warning.startsWith("site_prefetch_degraded:"))).toEqual([]);
   });
 
+  it("reads imagePolicyContexts from the shape a real tenant actually returns", async () => {
+    // FOUND LIVE 2026-09-04, on the first real brand_imagery_writer run. dr-lurie's
+    // get_image_model_policy answers { policy: { byUsageContext }, contexts, siteId } — the map one
+    // level down, plus a ready-made key list. The extractor only looked at the TOP level, so the read
+    // succeeded, yielded nothing, warned about nothing, and the writer filed the conservative
+    // article_header/article_body fallback its prompt names — silently dropping category_page.
+    // The fixture above uses the flat shape, which is exactly why this survived.
+    remoteFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { method: string; params?: { name?: string } };
+      const result = request.params?.name === "get_image_model_policy"
+        ? { structuredContent: { policy: { version: 1, byUsageContext: { article_header: {}, article_body: {}, category_page: {} } }, contexts: ["article_header", "article_body", "category_page"], siteId: "site_drlurie" } }
+        : {};
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
+    });
+
+    const { state } = await startWriterRun("live image policy shape");
+    const input = state.input as { prefetchedContract?: { imagePolicyContexts?: string[] } };
+    expect(input.prefetchedContract?.imagePolicyContexts).toEqual(["article_header", "article_body", "category_page"]);
+  });
+
+  it("falls back to the nested map when the tenant sends no pre-derived contexts list", async () => {
+    remoteFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { method: string; params?: { name?: string } };
+      const result = request.params?.name === "get_image_model_policy"
+        ? { structuredContent: { policy: { byUsageContext: { article_header: {}, category_page: {} } } } }
+        : {};
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
+    });
+
+    const { state } = await startWriterRun("nested map only");
+    const input = state.input as { prefetchedContract?: { imagePolicyContexts?: string[] } };
+    expect(input.prefetchedContract?.imagePolicyContexts).toEqual(["article_header", "category_page"]);
+  });
+
+  it("treats an empty policy as absent rather than as an empty context list", async () => {
+    remoteFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { method: string; params?: { name?: string } };
+      const result = request.params?.name === "get_image_model_policy"
+        ? { structuredContent: { policy: { byUsageContext: {} }, contexts: [] } }
+        : {};
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
+    });
+
+    const { state } = await startWriterRun("empty policy");
+    const input = state.input as { prefetchedContract?: { imagePolicyContexts?: string[] } };
+    expect(input.prefetchedContract?.imagePolicyContexts).toBeUndefined();
+  });
+
   it("degrades to named, run-visible warnings — never a failed node — when the client is unreachable", async () => {
     delete process.env.DR_LURIE_MCP_ENDPOINT;
     const { state } = await startWriterRun("site prefetch degraded");

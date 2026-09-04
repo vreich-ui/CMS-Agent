@@ -296,11 +296,35 @@ const extractOverridePolicyValue = (raw: unknown): unknown => {
   return entry ? pick(entry, ["value"]) : undefined;
 };
 
+// FOUND LIVE (2026-09-04, the first real brand_imagery_writer run). This read SUCCEEDS against a
+// tenant and then silently yields nothing, because it only ever looked for `byUsageContext` at the
+// TOP level. dr-lurie's `get_image_model_policy` answers
+//   { policy: { version, byUsageContext: {...} }, contexts: [...], siteId }
+// — the map is one level down, and the tenant additionally hands back the derived key list ready
+// made. So the writer was told "imagePolicyContexts was absent", filed the conservative
+// article_header/article_body pair its prompt falls back to, and dropped `category_page` on the
+// floor. No warning fired, because nothing failed: the call was fine, the shape was not the one
+// this function knew. That is the worst kind of degradation — invisible — so all three spellings
+// are read now, top level first for callers that already match.
 const extractImagePolicyContexts = (raw: unknown): string[] | undefined => {
   const payload = extractRecordBody(raw);
   if (!isObject(payload)) return undefined;
-  const byUsageContext = pick(payload, ["byUsageContext", "by_usage_context"]);
-  return isObject(byUsageContext) ? Object.keys(byUsageContext) : undefined;
+
+  const fromMap = (value: unknown): string[] | undefined => {
+    const map = isObject(value) ? pick(value, ["byUsageContext", "by_usage_context"]) : undefined;
+    if (!isObject(map)) return undefined;
+    const keys = Object.keys(map);
+    return keys.length ? keys : undefined;
+  };
+
+  // A pre-derived key list, when the tenant offers one.
+  const contexts = pick(payload, ["contexts", "usageContexts", "usage_contexts"]);
+  if (Array.isArray(contexts)) {
+    const named = contexts.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+    if (named.length) return named;
+  }
+
+  return fromMap(payload) ?? fromMap(pick(payload, ["policy", "imageModelPolicy", "image_model_policy"]));
 };
 
 export async function getSitePrefetch(params: SitePrefetchParams, deps: SitePrefetchDeps): Promise<SitePrefetchResult> {
