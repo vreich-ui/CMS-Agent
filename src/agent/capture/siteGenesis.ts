@@ -130,7 +130,11 @@ export const SITE_CLIENT_MANAGER_TOOLS = [
   "workflow_get_run_cost",
   "workflow_publish_readiness",
   "workflow_publish_run",
-  "workflow_set_operator_publish_decision"
+  "workflow_set_operator_publish_decision",
+  // A1/D1 (2026-09-04): the narrow site-scoped writer door. Platform's `brand_imagery_propose`
+  // calls it. It is here INSTEAD of `node_execute`, which must never reach a tenant bearer —
+  // see visualIdentityTools.ts's header and ruling R1.
+  "visual_identity_propose"
 ] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";

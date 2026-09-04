@@ -27,7 +27,11 @@ describe("site client_manager scoped-token allowlist", () => {
     "workflow_get_run_cost",
     "workflow_publish_readiness",
     "workflow_publish_run",
-    "workflow_set_operator_publish_decision"
+    "workflow_set_operator_publish_decision",
+    // A1/D1 (2026-09-04): platform's brand_imagery_propose (brand-imagery-proxy.ts). It used to
+    // call node_execute, which a site bearer can never hold — the call 401'd in production for a
+    // day. visual_identity_propose is the narrow replacement; node_execute stays out (ruling R1).
+    "visual_identity_propose"
   ];
 
   it("covers exactly Platform's bridge — no missing tool (401 at the door) and no extra (blast radius)", () => {
@@ -40,7 +44,7 @@ describe("site client_manager scoped-token allowlist", () => {
   });
 
   it("grants no workspace-authoring or destructive tool", () => {
-    for (const forbidden of ["workspace_update_node", "workspace_update_graph", "skill_delete", "project_delete", "workflow_run_node"]) {
+    for (const forbidden of ["workspace_update_node", "workspace_update_graph", "skill_delete", "project_delete", "workflow_run_node", "node_execute"]) {
       expect(SITE_CLIENT_MANAGER_TOOLS).not.toContain(forbidden);
     }
   });

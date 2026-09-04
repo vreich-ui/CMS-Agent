@@ -55,6 +55,35 @@ import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
+// D2 — a bounded, whitelisted view of the run's initialInput, forwarded to EVERY node's input
+// (including nodes that depend on others). initialInput itself is only threaded to nodes with no
+// dependsOn (see the state.input assembly below), so a node with dependencies has historically had
+// no way to see run-level fields like imageStyle — brief_architect is the concrete case this closes.
+//
+// This is a WHITELIST, not a passthrough: initialInput is the run's full input envelope and can carry
+// operator-only fields (credentials, internal routing, anything a caller attached for a different
+// node's benefit). Forwarding it unbounded to every node in the DAG would hand each of them the whole
+// envelope regardless of whether that node has any business seeing it. Naming the keys explicitly
+// keeps the blast radius of "what a dependent node can see from the run" equal to what it is
+// deliberately given, not equal to whatever a caller happened to put in initialInput.
+export const RUN_INPUT_FORWARDED_KEYS = ["imageStyle", "instructions"] as const;
+
+// Builds the bounded view for one run's initialInput: only the whitelisted keys that are actually
+// PRESENT survive — never an `undefined` placeholder for an absent key, and never an empty object
+// when nothing whitelisted is present (the caller decides whether to attach `runInput` at all).
+const buildRunInput = (initialInput: unknown): Record<string, unknown> | undefined => {
+  if (!initialInput || typeof initialInput !== "object" || Array.isArray(initialInput)) return undefined;
+  const source = initialInput as Record<string, unknown>;
+  const bounded: Record<string, unknown> = {};
+  for (const key of RUN_INPUT_FORWARDED_KEYS) {
+    // `hasOwnProperty` AND a defined value: `{ imageStyle: undefined }` has the key but forwarding it
+    // would produce an envelope that serialises as `{}` — the empty object this is meant to avoid,
+    // one step removed — and would shadow nothing useful downstream.
+    if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined) bounded[key] = source[key];
+  }
+  return Object.keys(bounded).length ? bounded : undefined;
+};
+
 // The execution mode a run gets when a caller names none.
 //
 // This used to be "mock" at every entry point, which meant the pipeline's DEFAULT behavior was to
@@ -1592,7 +1621,22 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     .map((entry) => ({ nodeId: entry.dependency, reason: entry.dependencyState?.skip?.reason ?? "skipped by the conductor before dispatch", predicate: entry.dependencyState?.skip?.predicate as SkippedDependencyEntry["predicate"] }));
   // W-4: clientProjectId travels in EVERY node's input — client identity is run state, delivered by
   // the conductor, not something an editorial prompt may assume or a downstream node must reconstruct.
-  state.input = { initialInput: nextNode.dependsOn.length ? undefined : run.initialInput, dependencies: Object.fromEntries(nextNode.dependsOn.map((dependency) => [dependency, run.stageOutputs[dependency]])), clientProjectId, ...(skippedDependencies.length ? { skippedDependencies } : {}) };
+  // D2 fix: a node WITH dependsOn gets no `initialInput` above (unchanged), but the run's whitelisted
+  // fields now reach it anyway, spread AT THE TOP LEVEL of its input.
+  //
+  // TOP LEVEL, not under a `runInput` wrapper, and the distinction is the whole fix: `imageStyle` and
+  // `instructions` are declared as TOP-LEVEL properties of brief_architect's own inputSchema, and its
+  // prompt tells the model to read `imageStyle` there (docs/plan/brand-imagery-node-ops.md, ops 1/3/11).
+  // Delivering them one level down would satisfy this function and still leave the node looking at a
+  // key that does not exist — D2's exact symptom, with a passing test over it.
+  //
+  // The node's own input wins: these are spread FIRST, so a value a caller put on the node itself is
+  // never clobbered by the run envelope. The conductor-owned keys added further down
+  // (prefetchedContract, resolvedAggression, aggressionResolution, runContext) re-spread `state.input`
+  // first and so also still win. A no-dependsOn node is untouched: it already gets the full
+  // initialInput, so the forwarded view is computed only for the dependent case.
+  const forwardedRunInput = nextNode.dependsOn.length ? buildRunInput(run.initialInput) : undefined;
+  state.input = { ...(forwardedRunInput ?? {}), initialInput: nextNode.dependsOn.length ? undefined : run.initialInput, dependencies: Object.fromEntries(nextNode.dependsOn.map((dependency) => [dependency, run.stageOutputs[dependency]])), clientProjectId, ...(skippedDependencies.length ? { skippedDependencies } : {}) };
   run.status = "running";
   run.currentNodeId = nextNode.id;
   run.updatedAt = startedAt;

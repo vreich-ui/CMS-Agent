@@ -34,6 +34,7 @@ import { listTools as listControlledTools, getTool as getControlledTool, resolve
 import { executeTool, getToolExecution, listToolExecutions } from "../../tools/toolExecutor.js";
 import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
 import { createSiteCredentialTools } from "./siteCredentialTools.js";
+import { createVisualIdentityTools } from "./visualIdentityTools.js";
 
 const emptyInput = z.object({}).strict();
 
@@ -892,6 +893,10 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // SITE_CLIENT_MANAGER_TOOLS (siteGenesis.ts) — they are operator-only and must never reach a
     // tenant's scoped chat bearer.
     ...createSiteCredentialTools({ projectRepository }),
+    // A1 (D1) — the one narrow, site-scoped door to the brand-imagery writer. Present in
+    // SITE_CLIENT_MANAGER_TOOLS (siteGenesis.ts) precisely so `node_execute` never has to be:
+    // it takes no nodeId, no executionMode, and writes nothing. See visualIdentityTools.ts.
+    ...createVisualIdentityTools({ workspaceRepository, executionRepository, projectRepository }),
     ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),

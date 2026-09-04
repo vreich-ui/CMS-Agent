@@ -87,3 +87,53 @@ After the first successful apply persists every existing binding, later job upda
 
 The legacy JSON may still be attached with merge-style `--update-secrets`; never put bearer values
 in `--update-env-vars` and never use `--set-*` on an existing service.
+
+## The narrow site-scoped tool family (`visual_identity_propose`)
+
+A site bearer's `toolAllowlist` is `SITE_CLIENT_MANAGER_TOOLS` (`src/agent/capture/siteGenesis.ts`),
+pinned by `docs/site-credential-scope-lock.json` (`npm run test:scope` / `npm run scope:update`).
+
+Platform's `brand_imagery_propose` originally reached the brand-imagery writer through
+`node_execute('brand_imagery_writer')`. That could never work and never did: `node_execute` is
+workspace-**programming** scope — it takes a caller-supplied `nodeId`, runs any node in the store for
+any project, and accepts `modelConfig` — so granting it to a tenant bearer would hand every tenant
+the whole workspace. The credential refused the call, correctly, and the writer path sat dead in
+production behind an opaque "CMS-Agent rejected the credential".
+
+**Ruling R1 (2026-09-04): `node_execute` is never widened to a site token.** Instead there is one
+narrow, site-scoped tool family, whose first member is `visual_identity_propose`
+(`src/agent/mcp/workspace/visualIdentityTools.ts`). Any later member must copy its shape:
+
+- **No caller-supplied node.** A `kind` selects from a fixed in-source map. The set of nodes a site
+  bearer can reach is a compile-time constant a reviewer can read in one line. `pdf_template` is
+  declared on the wire contract but absent from the map, so naming it is a named refusal
+  (`visual_identity_kind_not_available`) rather than a surprise when E2 half-lands.
+- **`project_id` is required and is the scoping key.** `mcpEndpoint.ts`'s `isScopedMessageAllowed`
+  reads `projectId`/`project_id` off the call's arguments and refuses any scoped call naming a
+  project outside the bearer's own `projects`. The tool also refuses unknown/disabled projects
+  itself (`unknown_project`, `project_disabled`) for non-scoped callers.
+- **No execution-mode lever.** `executionMode` is not on the wire, so the run is always live and a
+  proposal on an approval card can never be a mock placeholder.
+- **No writes to the client.** The writer node has `allowedTools: []` and creates, patches, applies
+  and publishes nothing. Materializing and applying a standard stay where they were — a
+  `visual_identity` run, then the owner-gated `site_apply_brand_imagery` verb. A call does still
+  persist workspace bookkeeping, which "zero writes" read literally would deny: `executeNode` records
+  an execution run (under projectId `workspace`, not the tenant's), a node timing, model usage, and the
+  workspace-global stage output for `brand_imagery_writer`, which each call overwrites. No tool a site
+  bearer holds can read any of that back.
+
+### Shipping a change to this family
+
+Adding the tool is three steps, and the third is the one that is always forgotten:
+
+1. The tool module, wired into `createWorkspaceTools`.
+2. The wire name in `SITE_CLIENT_MANAGER_TOOLS`, then `npm run scope:update` (and
+   `npm run drift:update` when the wire catalog changes). `tests/agent/capture/siteClientManagerScope.test.ts`
+   pins the constant against Platform's bridge calls — update `PLATFORM_BRIDGE_CALLS` in the same commit.
+3. **A reconciler run with `--apply`.** Widening the constant only changes what NEW sites are minted
+   with; every already-registered tenant keeps its old scope, and every call to the new tool 401s at
+   the door, until `site-credential-reconciler` re-mints it.
+
+If a deployment sets `MCP_EXPOSED_TOOL_PREFIXES`, it must include `visual_identity` — the exposure
+filter keys on the namespace before the first dot, and an unlisted namespace is neither advertised
+nor callable, which reads to the caller as an unknown tool.
