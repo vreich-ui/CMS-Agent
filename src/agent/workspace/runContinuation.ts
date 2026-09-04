@@ -21,13 +21,15 @@
 // tick touch, and which would it refuse" is answerable in a unit test with no repository, no network
 // and no schedule. The scheduled function is a thin shell over it.
 
-import { assessRunStall, runNextNode, type RunStallInfo } from "./executor.js";
+import { assessRunStall, nextDispatchTimeoutMs, runNextNode, DISPATCH_DEADLINE_MARGIN_MS, type RunStallInfo } from "./executor.js";
 import { isOperatorPublishWithheld } from "./publishDecision.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "./executionTypes.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
+import type { DriverHealthRepository } from "../repository/interfaces/DriverHealthRepository.js";
+import { applyRunDriverHealth, makeTickId, TICK_LEDGER_RETENTION_MS, type TickLedgerEntry, type TickLedgerRefusal } from "./driverHealth.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { logProjectEnvNamesOnce, preflightDriverEnv, recordDriverEnvWarning } from "./driverEnvPreflight.js";
 // T15.9 (#188) — THIS is the "continuation plane" the issue names as the driver that chains
@@ -50,7 +52,11 @@ export type ContinuationVerdictCode =
   | "reenter_stale_dispatch"   // a dispatch claim outlived its own timeout; advanceRun reclaims it
   | "skip_not_active"          // completed / failed / blocked / cancelled / paused — a stop, honoured
   | "skip_dispatch_in_flight"  // a live claim inside its window — re-entering would double-dispatch
-  | "skip_operator_withheld";  // the operator's durable publish veto (P0 §2.2)
+  | "skip_operator_withheld"   // the operator's durable publish veto (P0 §2.2)
+  // W0 T1.2 — REPORT-ONLY, never produced by decideRunContinuation. The tick had less task time left
+  // than the next dispatch's own timeout plus its margin, so it declined to start a node the platform
+  // would kill mid-flight and left the run for the next tick.
+  | "deferred_deadline";
 
 export type ContinuationVerdict = {
   runId: string;
@@ -123,6 +129,16 @@ export const CONTINUATION_TICK_BUDGET_MS = (() => {
 export const continuationTickEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
   !["off", "false", "0"].includes((env.RUN_CONTINUATION_TICK ?? "on").trim().toLowerCase());
 
+// W0 T1.2 — the driver task's own wall-clock ceiling. On Cloud Run this is `--task-timeout` (600s
+// after C2.2; 300s when the incident happened) and the platform kills the task at it with no warning
+// and no chance to persist. Read from the environment so the code and the deploy flag cannot drift
+// apart silently, defaulted to the pre-C2.2 300s — the conservative direction, since a too-small
+// value only defers a dispatch by one tick while a too-large one loses a node mid-flight.
+export const TASK_TIMEOUT_MS = (env: NodeJS.ProcessEnv = process.env): number => {
+  const configured = Number(env.TASK_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 300_000;
+};
+
 export type ContinuationTickDeps = {
   executionRepository: ExecutionRepository;
   workspaceRepository?: WorkspaceRepository;
@@ -138,6 +154,17 @@ export type ContinuationTickDeps = {
   // the chain's shared budgetUsd (see siteDuplicationChain.ts). Injected for tests; production reads
   // the live usage store.
   usageRepository?: UsageRepository;
+  // W0 T0.2/T0.3 — the tick ledger and per-tenant background-dispatch stamp. Injected for tests;
+  // production reads the live store. Every write through it is best-effort: a ledger this tick could
+  // not write must never stop the tick from driving runs.
+  driverHealthRepository?: DriverHealthRepository;
+  // W0 T1.2 — the driver process's own task timeout (Cloud Run --task-timeout, in ms). A dispatch is
+  // deferred to the next tick when the node's claim would outlive it. Injected for tests; production
+  // reads TASK_TIMEOUT_MS.
+  taskTimeoutMs?: number;
+  // Injected for tests: how long the run's next dispatch could take. Production resolves the real
+  // node graph through executor.nextDispatchTimeoutMs (serial node, or the widest in the batch).
+  dispatchTimeoutMs?: (run: WorkflowExecutionRecord) => Promise<number | undefined>;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   timeBudgetMs?: number;
@@ -160,6 +187,10 @@ export type ContinuationRunReport = {
   // carries a site.duplicate request marker: "chained" (with the new clone runId) or "refused"
   // (with the named code) from maybeChainCloneAfterCapture. Absent for every other run.
   chain?: { action: "chained"; cloneRunId: string } | { action: "refused"; code: string };
+  // W0 T1.2 — set when this run's advance was deferred because the remaining task time could not
+  // hold the next dispatch's own timeout. steps may be > 0: the deferral is decided per dispatch, so
+  // a tick can advance three nodes and defer the fourth.
+  deferredReason?: string;
 };
 
 export type ContinuationTickResult = {
@@ -168,6 +199,15 @@ export type ContinuationTickResult = {
   verdicts: ContinuationVerdict[];
   driven: ContinuationRunReport[];
   timedOut: boolean;
+  // W0 T0.2 — this execution's ledger id, so a stdout line and its stored record are the same event.
+  tickId?: string;
+  // W0 T0.2 — at least one run has now been selected for re-entry and advanced ZERO steps for
+  // SILENT_TICK_THRESHOLD consecutive ticks. The Cloud Run job exits 1 on this, which is the whole
+  // point: a driver that has stopped driving must be able to fail its own job.
+  driverSilent?: boolean;
+  // W0 T1.2 — this tick stopped early because the next dispatch could not fit in the task's own
+  // remaining time. Not a failure: the next tick starts that node with a full task ahead of it.
+  deferredDeadline?: boolean;
 };
 
 // Matches workflow.run_all's advance bound; the canonical graph has 18 nodes, so this is headroom for
@@ -183,16 +223,31 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
   const advance = deps.advance ?? ((runId: string) => runNextNode(runId, { executionRepository: deps.executionRepository, workspaceRepository: deps.workspaceRepository, driver: "continuation_tick" }));
   const projectRepository = deps.projectRepository ?? repositoryManager.getProjectRepository();
   const usageRepository = deps.usageRepository ?? repositoryManager.getUsageRepository();
+  // W0 T0.2/T0.3 — resolved lazily and defensively: a store this process cannot reach must cost the
+  // tick its LEDGER, never its ability to drive runs.
+  const driverHealthRepository = (() => {
+    if (deps.driverHealthRepository) return deps.driverHealthRepository;
+    try { return repositoryManager.getDriverHealthRepository(); } catch { return undefined; }
+  })();
   const env = deps.env ?? process.env;
   await logProjectEnvNamesOnce(projectRepository, env);
   const budgetMs = deps.timeBudgetMs ?? CONTINUATION_TICK_BUDGET_MS;
   const maxSteps = Math.max(1, Math.floor(deps.maxStepsPerRun ?? DEFAULT_MAX_STEPS_PER_RUN));
-  const deadline = clock().getTime() + budgetMs;
+  const tickStartedAt = clock();
+  const tickId = makeTickId(tickStartedAt);
+  const deadline = tickStartedAt.getTime() + budgetMs;
+  // W0 T1.2 — the HARD ceiling, distinct from the tick's own soft time budget above: exceeding the
+  // budget ends the loop cleanly, while exceeding this one has the platform kill the process with a
+  // node in flight (2026-09-04: article_body, 12.7 minutes and ~$0.60 lost to a 300s task timeout).
+  const taskTimeoutMs = deps.taskTimeoutMs ?? TASK_TIMEOUT_MS(env);
+  const taskDeadline = tickStartedAt.getTime() + taskTimeoutMs;
+  const dispatchTimeoutMs = deps.dispatchTimeoutMs ?? ((run: WorkflowExecutionRecord) => nextDispatchTimeoutMs(run, deps.workspaceRepository).catch(() => undefined));
   const runs = await deps.executionRepository.listRuns({});
   const { reenter, skipped } = selectContinuableRuns(runs, clock());
   const selected = reenter.slice(0, Math.max(1, Math.floor(deps.maxRuns ?? DEFAULT_MAX_RUNS)));
   const driven: ContinuationRunReport[] = [];
   let timedOut = false;
+  let deferredDeadline = false;
 
   for (const verdict of selected) {
     if (clock().getTime() > deadline) { timedOut = true; break; }
@@ -216,6 +271,25 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
       }
       while (current && decideRunContinuation(current, clock()).reenter && report.steps < maxSteps) {
         if (clock().getTime() > deadline) { timedOut = true; break; }
+        // W0 T1.2 — DEADLINE-AWARE DISPATCH. Ask how long the next dispatch could claim (the node's
+        // own timeout, or the widest in the concurrent batch) and refuse to start it if the task
+        // cannot hold it plus its margin. Deferring costs one tick interval; dispatching anyway costs
+        // the node's whole spend plus the claim's 90s expiry before anything can pick it up again.
+        //
+        // ONE EXCEPTION, and it is what keeps this from being a livelock: a node whose own timeout
+        // cannot fit in a WHOLE fresh task (a deterministic capture stage claims 300s, and the task
+        // was 300s before C2.2 raised it to 600s) gains nothing from being deferred — every future
+        // tick would refuse it for the same reason and the run would never move again. Such a node is
+        // dispatched exactly as it was before this wave; the fix for it is the task-timeout flag, not
+        // a deferral loop.
+        const nextTimeoutMs = await dispatchTimeoutMs(current);
+        const fitsAFreshTask = nextTimeoutMs !== undefined && nextTimeoutMs + DISPATCH_DEADLINE_MARGIN_MS <= taskTimeoutMs;
+        if (fitsAFreshTask && clock().getTime() + nextTimeoutMs! + DISPATCH_DEADLINE_MARGIN_MS > taskDeadline) {
+          report.code = "deferred_deadline";
+          report.deferredReason = `Next dispatch claims ${nextTimeoutMs}ms and this task has ${Math.max(0, taskDeadline - clock().getTime())}ms left; starting it would have the platform kill it mid-node. Deferred to the next tick, which starts it with a full task ahead of it.`;
+          deferredDeadline = true;
+          break;
+        }
         current = await advance(verdict.runId);
         report.steps += 1;
       }
@@ -237,9 +311,70 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
         }
       }
       report.statusAfter = current?.status;
+      // W0 T0.3 — one stamp per tenant per tick, written only when this tick actually dispatched
+      // something for it. "Is anything driving dr-lurie at all" then costs one read
+      // (project.get -> driverHealth) instead of a scan of every run.
+      if (report.steps > 0 && current) {
+        await driverHealthRepository?.recordTenantDispatch({ projectId: current.projectId, lastBackgroundDispatchAt: clock().toISOString(), driver: "continuation_tick", runId: current.runId }).catch(() => undefined);
+      }
     } catch (error) {
       report.error = error instanceof Error ? error.message : String(error);
     }
+    if (deferredDeadline) break;
   }
-  return { enabled: true, scanned: runs.length, verdicts: [...reenter, ...skipped], driven, timedOut };
+
+  // W0 T0.2 — THE LEDGER, and the silence signal. Two facts the tick could not previously leave
+  // behind: that it looked at a run at all, and that it has now failed to advance an advanceable run
+  // three ticks running. Both are written AFTER the driving loop so a slow store can never delay a
+  // dispatch, and every write is swallowed — a tick that drove ten nodes and could not write its own
+  // ledger is a tick that drove ten nodes.
+  const observedAt = clock().toISOString();
+  const stepsByRun = new Map(driven.map((report) => [report.runId, report.steps]));
+  const selectedRunIds = new Set(selected.map((verdict) => verdict.runId));
+  let driverSilent = false;
+  for (const verdict of [...reenter, ...skipped]) {
+    // Terminal runs are not driven by anyone and never will be: stamping driver health on all 51 of
+    // them every two minutes would be pure write amplification for no signal.
+    if (!CONTINUABLE_RUN_STATUSES.includes(verdict.status)) continue;
+    try {
+      const stored = await deps.executionRepository.getRun(verdict.runId);
+      if (!stored) continue;
+      const advancedSteps = stepsByRun.get(verdict.runId) ?? 0;
+      const applied = applyRunDriverHealth(stored, {
+        at: observedAt,
+        advancedSteps,
+        // Only a run this tick SELECTED and then advanced zero steps counts toward silence — a
+        // backlog beyond maxRuns, a live dispatch, or an operator veto is the tick working.
+        selected: selectedRunIds.has(verdict.runId) && verdict.reenter,
+        ...(advancedSteps === 0 ? { refusal: { code: driven.find((report) => report.runId === verdict.runId)?.code ?? verdict.code, reason: driven.find((report) => report.runId === verdict.runId)?.skippedReason ?? driven.find((report) => report.runId === verdict.runId)?.deferredReason ?? verdict.reason } } : {})
+      });
+      if (applied.silent) driverSilent = true;
+      if (applied.changed) await deps.executionRepository.saveRun(applied.run);
+    } catch {
+      // A CAS conflict here means another driver wrote the run while we were stamping health on it —
+      // which is the opposite of the condition this detects. Next tick re-observes it.
+    }
+  }
+
+  const ledger: TickLedgerEntry = {
+    tickId,
+    startedAt: tickStartedAt.toISOString(),
+    finishedAt: observedAt,
+    scanned: runs.length,
+    driven: driven.filter((report) => report.steps > 0).map((report) => ({ runId: report.runId, code: report.code, steps: report.steps, ...(report.statusAfter ? { statusAfter: report.statusAfter } : {}) })),
+    refusals: [
+      ...skipped.map((verdict): TickLedgerRefusal => ({ runId: verdict.runId, reason: verdict.code })),
+      ...driven.filter((report) => report.steps === 0).map((report): TickLedgerRefusal => ({ runId: report.runId, reason: report.skippedReason ?? report.deferredReason ?? report.error ?? report.code }))
+    ],
+    ...(driverSilent ? { driverSilent: true } : {})
+  };
+  await driverHealthRepository?.recordTick(ledger).catch(() => undefined);
+  await driverHealthRepository?.pruneTicks(new Date(tickStartedAt.getTime() - TICK_LEDGER_RETENTION_MS).toISOString()).catch(() => undefined);
+  if (driverSilent) {
+    // ERROR severity because this is the line an alert should fire on: the tick is running and the
+    // runs are not moving, which is exactly the state that was invisible for 44 minutes.
+    console.error(JSON.stringify({ event: "workflow.continuation_tick_driver_silent", severity: "ERROR", tickId, scanned: runs.length, silentRunIds: [...selectedRunIds].filter((runId) => (stepsByRun.get(runId) ?? 0) === 0) }));
+  }
+
+  return { enabled: true, scanned: runs.length, verdicts: [...reenter, ...skipped], driven, timedOut, tickId, ...(driverSilent ? { driverSilent: true } : {}), ...(deferredDeadline ? { deferredDeadline: true } : {}) };
 }

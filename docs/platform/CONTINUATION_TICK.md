@@ -89,6 +89,35 @@ poller; it bypasses no stop.
 window: the budget is checked BETWEEN advances and never cuts a dispatch short, so the timeout is
 headroom, not a guillotine. A node's own timeout (120 s default) fits comfortably inside it.
 
+**It did not fit for `article_body` (2026-09-04).** With a 240 s budget inside a 300 s task, a node
+dispatched at 239 s with a 300 s timeout outlives the task: the platform killed the task mid-node,
+the dispatch claim expired 90 s later, and the node was re-dispatched 12.7 minutes and ~$0.60 after
+the first attempt. Two things changed:
+
+- **`TASK_TIMEOUT_MS` (env, on the job).** W0 T1.2's deadline-aware dispatch reads it and refuses to
+  START a node whose own timeout plus a 15 s margin does not fit in the task's REMAINING time; the
+  tick returns `deferredDeadline` and the next tick starts that node with a full task ahead of it.
+  Set it to the same number of milliseconds as `--task-timeout`, or the check defends the wrong
+  ceiling. Default 300000 (the pre-C2.2 value) when unset.
+- **A node whose timeout cannot fit a WHOLE task is dispatched anyway**, deliberately: deferring it
+  would refuse it on every future tick too. The fix for such a node is a larger `--task-timeout`
+  (C2.2 raises it to 600 s), not a deferral loop.
+
+## What the tick leaves behind (W0 T0.2/T0.3)
+
+- `ticks/<tickId>.json` — one ledger document per execution: what was scanned, what actually advanced
+  (steps > 0), and every refusal with its reason. Retained 48 h, pruned by the tick that notices.
+- `run.driverHealth` on every continuable run — `lastSeenByTickAt`, the last refusal, and a
+  consecutive-silence counter. Surfaced in `workflow.list_runs` / `workflow.get_run` under `stall`.
+- `driverHealth/<projectId>.json` — the last background dispatch per tenant (tick or conductor job),
+  surfaced by `project.get` / `project.list`. "Is anything driving dr-lurie at all" is one read.
+
+**The job now exits 1** when a run it selected for re-entry has advanced zero steps for three
+consecutive ticks (`driver_silent_since:<ts>` lands on the run, and the tick logs
+`workflow.continuation_tick_driver_silent` at ERROR severity). "Nothing needed advancing" still
+exits 0 — that is the healthy steady state. Before this, both looked identical to Scheduler, which
+is why a 44-minute hole on 2026-09-04 produced 22 consecutive green executions.
+
 ## Kill switch
 
 `RUN_CONTINUATION_TICK=off|false|0` on the job. The job stays deployed and logs

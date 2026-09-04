@@ -55,6 +55,26 @@ export type NodeSkipRecord = {
   evaluatedAt: string;
 };
 
+// W0 T0.1 — one record per SUPERSEDED attempt at a node, appended by nodeAttemptHistory.
+// appendNodeAttempt at the exact moment retryNode (or any other requeue) is about to erase the
+// attempt's own state. Without it a retried node's failure reason was unrecoverable: 10 of the last
+// 11 retries on dr-lurie left nothing to diagnose. `attempt` is 1-based and counts attempts that
+// actually ran, so the CURRENT state is attempt errorHistory.length + 1.
+export type NodeAttemptRecord = {
+  attempt: number;
+  // The status the attempt held when it was superseded ("failed" for the case this exists for;
+  // "blocked"/"skipped" when an operator retried past a gate).
+  status: ExecutionStatus;
+  code?: string;
+  message?: string;
+  dispatchedAt?: string;
+  driver?: RunDriver;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  recordedAt: string;
+};
+
 export type NodeExecutionState = {
   nodeId: string;
   status: ExecutionStatus;
@@ -66,6 +86,10 @@ export type NodeExecutionState = {
   errors?: string[];
   warnings?: string[];
   produces?: string[];
+  // W0 T0.1 — superseded attempts at THIS node, oldest first, bounded
+  // (nodeAttemptHistory.MAX_NODE_ATTEMPT_HISTORY). Absent on a node that has only ever been executed
+  // once. Never read by any gate: it is evidence, not state.
+  errorHistory?: NodeAttemptRecord[];
   toolCalls?: NodeToolCallRecord[];
   dispatch?: NodeDispatchClaim;
   // The most recent dispatch's provenance (driver + project endpoint visibility); survives completion.
@@ -155,6 +179,18 @@ export type WorkflowEntrypoint = {
   output: unknown;
 };
 
+// W0 T0.2 — see WorkflowExecutionRecord.driverHealth. `silentTicks` counts CONSECUTIVE ticks that
+// selected this run for re-entry and advanced it zero steps; at driverHealth.SILENT_TICK_THRESHOLD
+// the tick writes `driver_silent_since:<ts>` on the run and exits non-zero so the Cloud Run job
+// failure is visible to Scheduler/alerting. Any tick that advances the run clears all of it.
+export type RunDriverHealth = {
+  lastSeenByTickAt?: string;
+  lastRefusal?: { code: string; reason?: string; at: string };
+  lastDrivenAt?: string;
+  silentTicks?: number;
+  silentSince?: string;
+};
+
 export type WorkflowExecutionRecord = {
   runId: string;
   workflowId: string;
@@ -214,8 +250,16 @@ export type WorkflowExecutionRecord = {
   errors: string[];
   // Run-level, non-fatal, deduplicated by value. Today: `driver_env_missing:<VAR>` written by a
   // background driver (continuation tick / conductor job) that declined to dispatch because the
-  // run's project MCP endpoint env var was not set in its process (driverEnvPreflight.ts).
+  // run's project MCP endpoint env var was not set in its process (driverEnvPreflight.ts), and
+  // `driver_silent_since:<ts>` written by the tick ledger (W0 T0.2, driverHealth.ts).
   warnings?: string[];
+  // W0 T0.2 — WHEN A DRIVER LAST LOOKED AT THIS RUN, and what it decided. The 2026-09-04 incident
+  // was a 44-minute hole in which the run sat "running" with nothing in flight: every existing
+  // signal (status, updatedAt, the dispatch claim) described the RUN, and none of them could say
+  // "no driver has looked at this for 40 minutes". This field is that signal, written by the
+  // continuation tick on every scan (never a status change), read by assessRunStall's advice and by
+  // workflow.list_runs' stall block.
+  driverHealth?: RunDriverHealth;
   approvalsRequired: ApprovalRequired[];
   initialInput?: unknown;
   stageOutputs: Record<string, unknown>;

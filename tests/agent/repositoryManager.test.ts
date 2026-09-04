@@ -64,6 +64,8 @@ describe("RepositoryManager", () => {
       usage: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       // T6 (Wave 3): the node timing ledger's own repository, mirroring usage's health shape exactly.
       nodeTiming: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      // W0 T0.2/T0.3: the tick ledger / tenant driver-health store, same memory health shape.
+      driverHealth: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       // dr-lurie and platform both carry a complete objectDialect, so the audit (G3) reports no
       // findings and this looks exactly like every other clean repository health entry.
       project: { backend: "memory", readable: true, writable: true, version: "memory.v1" },

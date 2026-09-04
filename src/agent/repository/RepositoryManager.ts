@@ -7,6 +7,7 @@ import type { LearningRepository } from "./interfaces/LearningRepository.js";
 import type { ProjectRepository } from "./interfaces/ProjectRepository.js";
 import type { UsageRepository } from "./interfaces/UsageRepository.js";
 import type { NodeTimingRepository } from "./interfaces/NodeTimingRepository.js";
+import type { DriverHealthRepository } from "./interfaces/DriverHealthRepository.js";
 import type { SkillRepository } from "./interfaces/SkillRepository.js";
 import type { WorkspaceRepository } from "./interfaces/WorkspaceRepository.js";
 import type { ChangeRepository } from "./interfaces/ChangeRepository.js";
@@ -21,6 +22,7 @@ import { BlobLearningRepository } from "./blobs/BlobLearningRepository.js";
 import { BlobProjectRepository } from "./blobs/BlobProjectRepository.js";
 import { BlobUsageRepository } from "./blobs/BlobUsageRepository.js";
 import { BlobNodeTimingRepository } from "./blobs/BlobNodeTimingRepository.js";
+import { BlobDriverHealthRepository } from "./blobs/BlobDriverHealthRepository.js";
 import { BlobWorkspaceRepository } from "./blobs/BlobWorkspaceRepository.js";
 import { BlobChangeRepository } from "./blobs/BlobChangeRepository.js";
 import { BlobConversationTurnRepository } from "./blobs/BlobConversationTurnRepository.js";
@@ -31,6 +33,7 @@ import { MemoryLearningRepository } from "./memory/MemoryLearningRepository.js";
 import { MemoryProjectRepository } from "./memory/MemoryProjectRepository.js";
 import { MemoryUsageRepository } from "./memory/MemoryUsageRepository.js";
 import { MemoryNodeTimingRepository } from "./memory/MemoryNodeTimingRepository.js";
+import { MemoryDriverHealthRepository } from "./memory/MemoryDriverHealthRepository.js";
 import { MemoryWorkspaceRepository } from "./memory/MemoryWorkspaceRepository.js";
 import { MemoryChangeRepository } from "./memory/MemoryChangeRepository.js";
 import { MemoryEvaluationRepository } from "./memory/MemoryEvaluationRepository.js";
@@ -85,6 +88,10 @@ export type RepositoryHealthSummary = {
   learning: RepositoryHealth;
   usage: RepositoryHealth;
   nodeTiming: RepositoryHealth;
+  // W0 T0.2/T0.3 — the tick ledger / tenant driver-health store. Reported here for the same reason
+  // every other store is: a driver-visibility store nobody can write is exactly the silent failure
+  // the wave exists to end.
+  driverHealth: RepositoryHealth;
   project: RepositoryHealth;
   skill: RepositoryHealth;
   change: RepositoryHealth;
@@ -104,6 +111,7 @@ export class RepositoryManager {
   private readonly learningRepository: LearningRepository;
   private readonly usageRepository: UsageRepository;
   private readonly nodeTimingRepository: NodeTimingRepository;
+  private readonly driverHealthRepository: DriverHealthRepository;
   private readonly projectRepository: ProjectRepository;
   private readonly skillRepository: SkillRepository;
   private readonly changeRepository: ChangeRepository;
@@ -123,6 +131,7 @@ export class RepositoryManager {
       this.learningRepository = new BlobLearningRepository(this.workspaceRepository);
       this.usageRepository = new BlobUsageRepository();
       this.nodeTimingRepository = new BlobNodeTimingRepository();
+      this.driverHealthRepository = new BlobDriverHealthRepository();
       this.projectRepository = new BlobProjectRepository();
       this.skillRepository = new BlobSkillRepository();
       this.changeRepository = new BlobChangeRepository();
@@ -139,6 +148,7 @@ export class RepositoryManager {
     this.learningRepository = new MemoryLearningRepository(this.workspaceRepository, this.context.backend);
     this.usageRepository = new MemoryUsageRepository(this.context.backend);
     this.nodeTimingRepository = new MemoryNodeTimingRepository(this.context.backend);
+    this.driverHealthRepository = new MemoryDriverHealthRepository(this.context.backend);
     this.projectRepository = new MemoryProjectRepository(this.context.backend);
     this.skillRepository = new MemorySkillRepository(this.context.backend);
     this.changeRepository = new MemoryChangeRepository(this.context.backend);
@@ -155,6 +165,8 @@ export class RepositoryManager {
   getLearningRepository(): LearningRepository { return this.learningRepository; }
   getUsageRepository(): UsageRepository { return this.usageRepository; }
   getNodeTimingRepository(): NodeTimingRepository { return this.nodeTimingRepository; }
+  // W0 T0.2/T0.3 — the tick ledger and per-tenant background-dispatch stamp.
+  getDriverHealthRepository(): DriverHealthRepository { return this.driverHealthRepository; }
   getProjectRepository(): ProjectRepository { return this.projectRepository; }
   getSkillRepository(): SkillRepository { return this.skillRepository; }
   getChangeRepository(): ChangeRepository { return this.changeRepository; }
@@ -169,13 +181,14 @@ export class RepositoryManager {
   // operator or startup check reading repository.get_health instead of leaving them reachable only by
   // calling project repo health directly.
   async getRepositoryHealth(): Promise<RepositoryHealthSummary> {
-    const [workspace, execution, artifact, learning, usage, nodeTiming, project, skill, change, evaluation, improvement, conversationTurns] = await Promise.all([
+    const [workspace, execution, artifact, learning, usage, nodeTiming, driverHealth, project, skill, change, evaluation, improvement, conversationTurns] = await Promise.all([
       this.workspaceRepository.health(),
       this.executionRepository.health(),
       this.artifactRepository.health(),
       this.learningRepository.health(),
       this.usageRepository.health(),
       this.nodeTimingRepository.health(),
+      this.driverHealthRepository.health(),
       this.projectRepository.health(),
       this.skillRepository.health(),
       this.changeRepository.health(),
@@ -183,7 +196,7 @@ export class RepositoryManager {
       this.improvementRepository.health(),
       this.conversationTurnRepository.health()
     ]);
-    const storageHealth = [workspace, execution, artifact, learning, usage, nodeTiming, project, skill, change, evaluation, improvement, conversationTurns].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
-    return { backend: this.context.backend, storageHealth, build: planeBuildIdentity(), workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, nodeTiming, project, skill, change, evaluation, improvement, conversationTurns };
+    const storageHealth = [workspace, execution, artifact, learning, usage, nodeTiming, driverHealth, project, skill, change, evaluation, improvement, conversationTurns].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
+    return { backend: this.context.backend, storageHealth, build: planeBuildIdentity(), workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, nodeTiming, driverHealth, project, skill, change, evaluation, improvement, conversationTurns };
   }
 }
