@@ -30,6 +30,7 @@ import type { ProjectRepository } from "../repository/interfaces/ProjectReposito
 import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
 import type { DriverHealthRepository } from "../repository/interfaces/DriverHealthRepository.js";
 import { applyRunDriverHealth, makeTickId, TICK_LEDGER_RETENTION_MS, type TickLedgerEntry, type TickLedgerRefusal } from "./driverHealth.js";
+
 import { repositoryManager } from "../runtime/repositories.js";
 import { logProjectEnvNamesOnce, preflightDriverEnv, recordDriverEnvWarning } from "./driverEnvPreflight.js";
 // T15.9 (#188) — THIS is the "continuation plane" the issue names as the driver that chains
@@ -53,6 +54,7 @@ export type ContinuationVerdictCode =
   | "skip_not_active"          // completed / failed / blocked / cancelled / paused — a stop, honoured
   | "skip_dispatch_in_flight"  // a live claim inside its window — re-entering would double-dispatch
   | "skip_operator_withheld"   // the operator's durable publish veto (P0 §2.2)
+  | "skip_retry_backoff"       // W1 T1.1 — every remaining node is waiting out an orchestrator retry
   // W0 T1.2 — REPORT-ONLY, never produced by decideRunContinuation. The tick had less task time left
   // than the next dispatch's own timeout plus its margin, so it declined to start a node the platform
   // would kill mid-flight and left the run for the next tick.
@@ -90,6 +92,13 @@ export const decideRunContinuation = (run: WorkflowExecutionRecord, at: Date = n
   // it can never pass would spend model money on the operator's behalf against their stated decision.
   if (isOperatorPublishWithheld(run)) {
     return { ...base, reenter: false, code: "skip_operator_withheld", reason: "The operator's durable publish decision for this run is \"withheld\". The tick does not drive a run the operator stopped; advance it by hand if the non-publish tail is still wanted." };
+  }
+  // W1 T1.1 — a run whose only remaining work is an orchestrator retry that has not come due is
+  // WAITING, not parked. Re-entering it would dispatch nothing and, without this, the tick's advance
+  // loop would spin against a no-op advance until its step bound. The backoff is short (60-120s), so
+  // the next tick picks it up.
+  if (run.retryBackoffUntil && Date.parse(run.retryBackoffUntil) > at.getTime()) {
+    return { ...base, reenter: false, code: "skip_retry_backoff", reason: `The run's only remaining work is an orchestrator retry that comes due at ${run.retryBackoffUntil}. A tick after that dispatches it — no human retry needed, and re-entering now would dispatch nothing.` };
   }
   const stall = assessRunStall(run, at);
   if (stall?.inFlightNodeId && !stall.stalledSuspected) {
@@ -290,8 +299,13 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
           deferredDeadline = true;
           break;
         }
+        const before = current;
         current = await advance(verdict.runId);
         report.steps += 1;
+        // W1 T1.1 — an advance that changed nothing (the executor found nothing to dispatch, e.g.
+        // every remaining node is inside its retry backoff) must end this run's loop. Without this,
+        // a no-op advance that leaves the run re-enterable spins to the step bound.
+        if (current && before && current.rev !== undefined && current.rev === before.rev && current.updatedAt === before.updatedAt) break;
       }
       // T15.9 (#188) — this run's advance loop just stopped. If it stopped because the run reached a
       // HALTED status (decideRunContinuation no longer reenters it) and it is a site.duplicate-

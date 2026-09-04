@@ -2532,7 +2532,7 @@ export const publishingConductorNodes = [
       "maxTurns": 1,
       "toolCallLimit": 0,
       "timeout": 120000,
-      "budgetUsd": 0.5,
+      "budgetUsd": 2,
       "maxOutputTokens": 4000
     }
   },

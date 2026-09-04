@@ -50,7 +50,8 @@ import { resolveGateId } from "./gateRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
 import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
-import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried } from "./nodeAttemptHistory.js";
+import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried, NODE_ERROR_RETRIED_MARKER } from "./nodeAttemptHistory.js";
+import { decideNodeRetry, isAwaitingRetryBackoff, nextRetryAt, scheduleNodeRetry } from "./nodeRetryPolicy.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
 
@@ -530,9 +531,12 @@ const isDependencySatisfied = (state: NodeExecutionState | undefined): boolean =
 
 // The one runnability predicate, shared by the single-node and the T7 batch selectors below so
 // "dependency-ready" cannot come to mean two different things in the same dispatch loop.
-const isNodeRunnable = (states: Map<string, NodeExecutionState>, node: WorkspaceNode): boolean => {
+const isNodeRunnable = (states: Map<string, NodeExecutionState>, node: WorkspaceNode, at: Date = new Date()): boolean => {
   const state = states.get(node.id);
   if (!state || state.status !== "queued") return false;
+  // W1 T1.1 — a node whose orchestrator retry is still backing off is queued but NOT yet runnable.
+  // This is the only place the backoff is enforced: one scheduler, one gate.
+  if (isAwaitingRetryBackoff(state, at)) return false;
   return node.dependsOn.every((dependency) => isDependencySatisfied(states.get(dependency)));
 };
 
@@ -1463,6 +1467,12 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
         // No termination observation is recorded here: this path is only reachable by re-entering a
         // run the gate already refused, and that refusal was already observed when it happened —
         // re-recording would bill a second learning_recorder dispatch for one event.
+        // W1 T1.1 — a run with nothing runnable RIGHT NOW but a node waiting out its retry backoff
+        // is not finished; stamping "completed" here would be the most expensive lie the record can
+        // tell (T5 fix 2's lesson, one wave later). Return it untouched: the next advance, after the
+        // backoff, dispatches the node.
+        const retryAt = nextRetryAt(run, new Date());
+        if (retryAt) return run;
         const refused = publishRefusalStubNodes(run);
         if (refused.length) {
           return await store.saveRun({
@@ -2853,6 +2863,29 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   state.completedAt = completedAt;
   state.durationMs = duration(startedAt, completedAt);
   if (!result.ok) {
+    // W1 T1.1 — THE 89% BUCKET. A transient runner failure (see nodeRetryPolicy.RETRYABLE_RUNNER_
+    // ERROR_CODES) schedules its own next attempt instead of parking the run on a human: the node
+    // goes back to "queued" with a backoff, the RUN STAYS RUNNING, and the next advance — the
+    // continuation tick, in practice — dispatches it again. Everything a human retry does is done
+    // here except the waiting. `budget_exceeded`, `approval_required` and `cancelled` are never
+    // auto-retried (a ceiling and a gate are decisions, not failures), and after
+    // MAX_ORCHESTRATOR_RETRIES the node fails exactly as it does today.
+    const retryDecision = decideNodeRetry(state, result.code, new Date(Date.parse(completedAt)));
+    if (retryDecision.retry) {
+      // The failure survives the retry that clears it (W0 T0.1): the attempt goes to errorHistory and
+      // the run-level entry is marked retried rather than never written. A self-healing driver that
+      // erased its own failures would be the previous wave's defect, rebuilt one layer up.
+      state.errors = [result.code, result.message];
+      scheduleNodeRetry(run, state, retryDecision, { code: result.code, message: result.message }, completedAt);
+      // Only when this node was the run's ONLY work does the whole run have to wait: with a sibling
+      // still runnable the tick should re-enter immediately and dispatch that instead.
+      if (!findNextRunnableNode(run, nodes)) run.retryBackoffUntil = retryDecision.notBefore;
+      run.errors = [...run.errors, `${nextNode.id}:${result.code}${NODE_ERROR_RETRIED_MARKER}${completedAt}`];
+      run.status = "running";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = completedAt;
+      return { run };
+    }
     state.status = result.code === "approval_required" ? "blocked" : result.code === "cancelled" ? "cancelled" : "failed";
     state.errors = [result.code, result.message];
     // Provider-error-details: providerStatus/providerMessage/operatorAction ride along on the
@@ -3066,6 +3099,9 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   }
 
   state.status = "completed";
+  // W1 T1.1 — the scheduled-retry marker described a node that had not yet succeeded. It has now.
+  delete state.retry;
+  delete run.retryBackoffUntil;
   state.output = output;
   const provenance = buildNodeExecutionProvenance(effectiveNode, result.model, completedAt);
   if (provenance) state.provenance = provenance;

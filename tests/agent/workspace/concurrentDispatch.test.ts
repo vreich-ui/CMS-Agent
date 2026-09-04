@@ -92,6 +92,11 @@ const runWithReady = async (readyIds: string[], input: unknown = "Draft this") =
   return { run, nodes };
 };
 
+// W1 T1.1 (2026-09-04): the injected code is now a NON-retryable one (max_turns_exceeded).
+// model_timeout is auto-retried by the orchestrator since W1, so it no longer produces the
+// terminal failure THIS test is about — the subject here is unchanged, only the way the
+// failure is provoked.
+
 describe("four independent nodes sharing one downstream dependency dispatch concurrently", () => {
   beforeEach(() => repositoryManager.getUsageRepository().clear());
 
@@ -176,7 +181,7 @@ describe("failure isolation and canonical ordering under a concurrent batch", ()
   const batchArtifacts = (run: WorkflowExecutionRecord) => run.artifacts.filter((artifact) => QUARTET.includes(artifact.nodeId)).map((artifact) => artifact.nodeId);
 
   it("keeps three siblings' results when the fourth fails, and halts the run at the failing node", async () => {
-    const { trace, restore } = installRunner({ hold: barrierHold(QUARTET), fail: (nodeId) => nodeId === "trust_factual" ? { code: "model_timeout", message: "timed out" } : undefined });
+    const { trace, restore } = installRunner({ hold: barrierHold(QUARTET), fail: (nodeId) => nodeId === "trust_factual" ? { code: "max_turns_exceeded", message: "timed out" } : undefined });
     try {
       const store = new RepositoryManager().getExecutionRepository();
       const runId = await toQuartet(store);
@@ -192,7 +197,7 @@ describe("failure isolation and canonical ordering under a concurrent batch", ()
       // failure named once in the run-level ledger and the aggregator still waiting.
       expect(batched.status).toBe("failed");
       expect(batched.currentNodeId).toBe("trust_factual");
-      expect(batched.errors).toEqual(["trust_factual:model_timeout"]);
+      expect(batched.errors).toEqual(["trust_factual:max_turns_exceeded"]);
       expect(statusOf(batched, "review_aggregator")).toBe("queued");
       // Halted means halted: the next advance does not walk past the failure.
       const after = await runNextNode(runId, { executionRepository: store });
@@ -210,7 +215,7 @@ describe("failure isolation and canonical ordering under a concurrent batch", ()
     const reversed = [...QUARTET].reverse();
     const { trace, restore } = installRunner({
       hold: barrierHold(QUARTET, reversed),
-      fail: (nodeId) => ["human_texture", "reader_simulation"].includes(nodeId) ? { code: "model_timeout", message: "timed out" } : undefined
+      fail: (nodeId) => ["human_texture", "reader_simulation"].includes(nodeId) ? { code: "max_turns_exceeded", message: "timed out" } : undefined
     });
     try {
       const store = new RepositoryManager().getExecutionRepository();
@@ -220,7 +225,7 @@ describe("failure isolation and canonical ordering under a concurrent batch", ()
       // The stagger really happened...
       expect(trace.finished.slice(-4)).toEqual(reversed);
       // ...and none of it is visible in the record. Errors in canonical order, not completion order.
-      expect(batched.errors).toEqual(["human_texture:model_timeout", "reader_simulation:model_timeout"]);
+      expect(batched.errors).toEqual(["human_texture:max_turns_exceeded", "reader_simulation:max_turns_exceeded"]);
       // Artifacts in canonical order — the two survivors, oldest-canonical first.
       expect(batchArtifacts(batched)).toEqual(["trust_factual", "emotional_resonance"]);
       // Node statuses stay in the canonical `nodes` order the run was built with.
