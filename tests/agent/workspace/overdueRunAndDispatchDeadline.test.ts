@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { assessRunStall, DISPATCH_DEADLINE_MARGIN_MS } from "../../../src/agent/workspace/executor.js";
+import { assessRunStall, DISPATCH_DEADLINE_MARGIN_MS, OVERDUE_RUN_P95_MULTIPLE } from "../../../src/agent/workspace/executor.js";
 import { runContinuationTick, TASK_TIMEOUT_MS } from "../../../src/agent/workspace/runContinuation.js";
 import { MemoryDriverHealthRepository } from "../../../src/agent/repository/memory/MemoryDriverHealthRepository.js";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
@@ -13,10 +13,13 @@ import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/execu
 //       task was killed mid-node, the claim expired 90s later, and the node was re-dispatched 12.7
 //       minutes and ~$0.60 later. A dispatch that cannot fit in the task must not start.
 
-const runAt = (startedAtMsAgo: number, remaining: string[]): WorkflowExecutionRecord => ({
+// The run's age is measured from the SAME instant the assessment is made. Building `startedAt` from
+// one clock read and passing a second, later one as `now` puts an unowned millisecond between them,
+// which is only invisible while no assertion sits on a boundary — see NOW below.
+const runAt = (startedAtMsAgo: number, remaining: string[], at: Date): WorkflowExecutionRecord => ({
   runId: "run_overdue", workflowId: "publishing_conductor", projectId: "dr-lurie", status: "running", executionMode: "openai",
-  startedAt: new Date(Date.now() - startedAtMsAgo).toISOString(),
-  updatedAt: new Date(Date.now() - 10_000).toISOString(),
+  startedAt: new Date(at.getTime() - startedAtMsAgo).toISOString(),
+  updatedAt: new Date(at.getTime() - 10_000).toISOString(),
   nodes: [
     { nodeId: "input_triage", status: "completed" },
     ...remaining.map((nodeId) => ({ nodeId, status: "queued" as const }))
@@ -26,26 +29,48 @@ const runAt = (startedAtMsAgo: number, remaining: string[]): WorkflowExecutionRe
 
 // article_body p95 60s + learning_recorder p95 40s = 100s of remaining work; 3x = 300s.
 const timing = { p95DurationMsByNode: { article_body: 60_000, learning_recorder: 40_000 } };
+const REMAINING = ["article_body", "learning_recorder"];
+// The threshold this flag is defined by, derived rather than restated: OVERDUE_RUN_P95_MULTIPLE x the
+// 100s of remaining p95 above. Written out as "5 minutes" it read like a comfortably young run; it was
+// in fact the boundary itself, to the millisecond.
+const OVERDUE_AT_MS = OVERDUE_RUN_P95_MULTIPLE * 100_000;
+
+// One pinned instant for the record and for the assessment. `assessRunStall` compares with a strict
+// `>`, so a run described as "5 minutes old" against a 300s threshold was flagged overdue on exactly
+// those executions where the two clock reads fell in different milliseconds — a coin toss this suite
+// won on the PR branch and lost on main, with no code change in between. A boundary worth having is a
+// boundary worth pinning, so both sides of it are asserted here instead of straddled.
+const NOW = new Date("2026-09-04T16:26:00.000Z");
 
 describe("W0 T0.4 — overdue-run flag", () => {
-  it("flags a 2-hour-old run against its own measured p95, and leaves a 5-minute-old one alone", () => {
-    const overdue = assessRunStall(runAt(2 * 60 * 60_000, ["article_body", "learning_recorder"]), new Date(), timing);
+  it("flags a 2-hour-old run against its own measured p95, and pins both sides of the threshold", () => {
+    const overdue = assessRunStall(runAt(2 * 60 * 60_000, REMAINING, NOW), NOW, timing);
     expect(overdue?.stalledSuspected).toBe(true);
     expect(overdue?.advice).toMatch(/^overdue: no driver progress/);
 
-    const young = assessRunStall(runAt(5 * 60_000, ["article_body", "learning_recorder"]), new Date(), timing);
+    // Exactly OVERDUE_RUN_P95_MULTIPLE x the remaining p95 is "should have finished by now", not
+    // "is not moving" — the flag stays quiet.
+    const atThreshold = assessRunStall(runAt(OVERDUE_AT_MS, REMAINING, NOW), NOW, timing);
+    expect(atThreshold?.advice ?? "").not.toMatch(/overdue/);
+
+    // One millisecond past it, and it fires.
+    const pastThreshold = assessRunStall(runAt(OVERDUE_AT_MS + 1, REMAINING, NOW), NOW, timing);
+    expect(pastThreshold?.advice).toMatch(/^overdue: no driver progress/);
+
+    // And the ordinary case the flag exists to stay out of the way of: a minute-old run.
+    const young = assessRunStall(runAt(60_000, REMAINING, NOW), NOW, timing);
     expect(young?.advice ?? "").not.toMatch(/overdue/);
   });
 
   it("says nothing new without measured timings — every existing caller keeps today's behaviour", () => {
-    const noTimings = assessRunStall(runAt(2 * 60 * 60_000, ["article_body"]), new Date());
+    const noTimings = assessRunStall(runAt(2 * 60 * 60_000, ["article_body"], NOW), NOW);
     expect(noTimings?.advice ?? "").not.toMatch(/overdue/);
   });
 
   it("carries the tick's own driver-health record into the stall block (T0.3)", () => {
-    const run = runAt(60_000, ["article_body"]);
+    const run = runAt(60_000, ["article_body"], NOW);
     run.driverHealth = { lastSeenByTickAt: "2026-09-04T14:06:00.000Z", lastRefusal: { code: "skip_dispatch_in_flight", at: "2026-09-04T14:06:00.000Z" } };
-    const stall = assessRunStall(run, new Date());
+    const stall = assessRunStall(run, NOW);
     expect(stall?.lastSeenByTickAt).toBe("2026-09-04T14:06:00.000Z");
     expect(stall?.lastRefusal?.code).toBe("skip_dispatch_in_flight");
   });
