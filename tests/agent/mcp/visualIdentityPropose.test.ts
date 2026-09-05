@@ -154,6 +154,39 @@ describe("visual_identity.propose", () => {
     expect(withBoard.calls).toHaveLength(1);
   });
 
+  it("surfaces a dropped imageRef as a warning and reports hasBoard honestly when every ref drops", async () => {
+    // The bug this closes: the writer receives imageRefs[].url and the runner fetches
+    // unauthenticated http(s) only (imageRefs.ts) — an admin-gated URL 401s and the image is
+    // DROPPED. Before this fix the only record of that drop was a runner `trace` this tool never
+    // saw, so a caller was told the array it sent was non-empty and had no way to learn the board
+    // that actually reached the model was empty. nodeRuntime.ts's executeNode now returns the
+    // runner's own `trace` alongside `execution`; this pins the tool reading it.
+    const droppedRun = proposeWith(({ nodeId }) => ({
+      ...completedRun(nodeId, PROPOSAL),
+      trace: {
+        provider: "anthropic",
+        imageRefs: {
+          included: 0,
+          dropped: 1,
+          warnings: [{ label: "board", reason: "dropped: fetch failed (HTTP 401)." }]
+        }
+      }
+    }));
+
+    const result = await droppedRun.definition.execute({
+      ...houseArgs,
+      imageRefs: [{ url: "https://admin-gated.example.test/board.png", mediaType: "image/png", label: "board" }]
+    }) as { data: { hasBoard?: boolean; warnings?: string[] } };
+
+    expect(result.data.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("board:dropped: fetch failed (HTTP 401).")])
+    );
+    // All refs dropped and no `references` supplied: the board that reached the model was empty,
+    // even though the array the caller sent was not — `hasBoard` says so instead of claiming the
+    // board held.
+    expect(result.data.hasBoard).toBe(false);
+  });
+
   it("reads the proposal from stageOutputs and from artifacts when nodes[].output is absent", async () => {
     const staged = proposeWith(({ nodeId }) => ({ executionId: "exec_2", execution: { status: "completed", nodes: [{ nodeId, status: "completed" }], stageOutputs: { [nodeId]: PROPOSAL }, artifacts: [], errors: [] } }));
     expect(((await staged.definition.execute(houseArgs)) as { data: { proposal: unknown } }).data.proposal).toEqual(PROPOSAL);

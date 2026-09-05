@@ -211,9 +211,12 @@ export function createVisualIdentityTools({ workspaceRepository, executionReposi
         if (project.status !== "active") throw new WorkspaceToolError("project_disabled", `Project "${data.project_id}" is disabled.`, { projectId: data.project_id });
 
         // The writer's own schema states it as an anyOf; refusing here names WHICH precondition
-        // failed instead of surfacing a schema-shaped validation blob for an empty brief.
-        const hasBoard = (data.references?.length ?? 0) > 0 || (data.imageRefs?.length ?? 0) > 0;
-        if (!hasBoard && !data.brief) {
+        // failed instead of surfacing a schema-shaped validation blob for an empty brief. This is a
+        // PRE-flight check on what the caller SUPPLIED, not on what actually resolves — the imageRefs
+        // fetch (401s and all) has not run yet. See `hasBoard` below, computed AFTER the node runs,
+        // for the honest count that goes back to the caller.
+        const boardSupplied = (data.references?.length ?? 0) > 0 || (data.imageRefs?.length ?? 0) > 0;
+        if (!boardSupplied && !data.brief) {
           throw new WorkspaceToolError(
             "visual_identity_missing_input",
             "visual_identity.propose requires at least one of references or brief — a board with neither is not a brief, it is a blank page.",
@@ -302,14 +305,37 @@ export function createVisualIdentityTools({ workspaceRepository, executionReposi
           );
         }
 
+        // A4 — make a silent imageRef drop LOUD, and make `hasBoard` HONEST. The writer receives
+        // imageRefs[].url and the runner fetches unauthenticated http(s) only (imageRefs.ts): an
+        // admin-gated URL 401s and the image is DROPPED — the only record used to be a runner
+        // `trace` this tool never saw (nodeRuntime.ts discarded it), so a caller was told it had a
+        // board, the writer found nothing, and fell back to the brief alone with nobody the wiser.
+        // nodeRuntime.ts's executeNode now returns the runner's own `trace` alongside `execution`;
+        // `trace.imageRefs` is present only when this dispatch actually had imageRefs to resolve.
+        const trace = isBag(executed) ? executed.trace : undefined;
+        const imageRefTrace = isBag(trace) && isBag(trace.imageRefs)
+          ? (trace.imageRefs as { included?: number; warnings?: Array<{ label?: string; reason: string }> })
+          : undefined;
+        // Honest board count: references are never fetched (so never silently dropped) and count as
+        // given; imageRefs count only by how many actually RESOLVED. Every ref dropped (every URL
+        // 401ing, say) makes this false even though `boardSupplied` above — computed before the
+        // fetch ever ran — was true.
+        const hasBoard = (data.references?.length ?? 0) > 0 || (imageRefTrace?.included ?? 0) > 0;
+        const imageRefWarnings = (imageRefTrace?.warnings ?? []).map(
+          (warning) => `image_ref_dropped:${warning.label ?? "unlabeled"}:${warning.reason}`
+        );
+        const warnings = [...prefetchWarnings, ...imageRefWarnings];
+
         return ok({
           proposal: extracted.proposal,
           executionId: (executed as { executionId?: string }).executionId,
           nodeId,
           kind: data.kind,
+          hasBoard,
           // Loud degradation, the same convention the conductor uses: "the site facts were not there"
-          // is a reportable fact, not something inferable by diffing the proposal's rationale.
-          ...(prefetchWarnings.length ? { warnings: prefetchWarnings } : {})
+          // and "this image never reached the model" are reportable facts, not something inferable
+          // by diffing the proposal's rationale.
+          ...(warnings.length ? { warnings } : {})
         });
       }
     })

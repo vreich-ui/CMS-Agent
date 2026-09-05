@@ -215,7 +215,12 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   // every independent single-node execution entirely. Best-effort, same posture as executor.ts's own
   // hook: a timing-repository failure must never fail an otherwise-successful node.execute call.
   await recordNodeTimingCompletion({ runId, workflowId: run.workflowId, nodeId: node.id, durationMs: state.durationMs ?? 0, outcome: state.status as NodeTimingOutcome }).catch(() => undefined);
-  return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId });
+  // A4 -- the runner's own trace (imageRefs resolution counts/warnings, provider response id, etc.)
+  // is surfaced here, one level up from `execution`, so a caller of node.execute/executeNode can
+  // see WHY a node behaved the way it did (e.g. every imageRef silently 401ing) without scraping
+  // the runner internals. Present only when the runner actually set one -- a failed run's early
+  // returns never populate `trace`, so this never invents one.
+  return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId, ...(result.ok && result.trace !== undefined ? { trace: result.trace } : {}) });
 }
 
 // B2 (Pass 2, WP-00 finding #2) — node.list_executions used to hand back the WHOLE run record
