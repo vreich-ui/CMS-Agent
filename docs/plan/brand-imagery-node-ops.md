@@ -1,3 +1,5 @@
+> **HISTORICAL — dated plan/log kept for the decision record (documentation audit 2026-09-05).** Where it disagrees with the code, the code wins; the current architecture is documented in [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and its sibling docs (index: [docs/README.md](../README.md)).
+
 # brand-imagery — workspace store ops (the W7 config-session script)
 
 **What this file is.** `src/agent/workspace/nodes.ts` is GENERATED from the live workspace store

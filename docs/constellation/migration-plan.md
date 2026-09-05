@@ -1,3 +1,5 @@
+> **HISTORICAL — UI specification for the root `ui/` app (designated the old UI by `workbench/docs/RETIREMENT.md`); documentation audit 2026-09-05.** Current architecture: [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
+
 # Constellation redesign — migration plan
 
 > **Anchor:** `PRODUCT_VISION.md` (repo root) supersedes this plan wherever

@@ -1,0 +1,59 @@
+# CMS-Agent — Glossary
+
+Terminology as used in code. Where a term has an older meaning still present in docs, the legacy meaning is flagged. UI-facing copy definitions are generated separately in [ui-glossary.md](ui-glossary.md).
+
+| Term | Definition | Code anchor |
+|---|---|---|
+| **Project** | A registered external MCP connection — a tenant site (Dr. Lurie, Platform, Fernwell, minted clones) or a service (PDF-Tool, Monetizer). Identified by `projectId`; carries endpoint/token references, tool policies, publishing policy, capture policy, object dialect. Also called *client* or *tenant*. | `projects/projectTypes.ts` `ProjectConnectionConfig` |
+| **Tenant / client site** | A project that is a publishable site running the platform MCP (`vreich-ui/platform`). | `projects/projectHooks.ts` |
+| **Project MCP** | The tenant's own MCP server (`https://<site>/mcp`), the canonical owner of published content. CMS-Agent is its client. | `projects/mcpClient.ts` |
+| **Workspace MCP** | CMS-Agent's own MCP server (`publishing-workspace-mcp`): the 151-tool control plane. | `mcp/workspace/server.ts` |
+| **Workspace** / **workspace document** | The single JSON document `workspace/current.json`: nodes, conversational agents, relationships, stage-output mirror, learning observations, events, contract cache. Versioned by `workspaceVersion` and `currentRevisionId`. | `mcp/workspace/store.ts` `WorkspaceDocument` |
+| **Node** | A workflow stage definition: prompt, input/output JSON schemas, allowed tools, assigned skills, model config, `riskLevel`, `dependsOn`, metadata (deterministic route flags). Canonical nodes are code literals; the store overlays how they run. | `workspace/nodeTypes.ts` `WorkspaceNode` |
+| **Canonical node** | A node defined in code (`nodes.ts`, capture/clone/visual literals). Only canonical ids are executed by conductors; their topology is pinned at dispatch. | `workspace/workspaceStoreNodes.ts` |
+| **Store mode / static mode** | `WORKSPACE_NODES_SOURCE`: `store` (default) overlays stored node fields on canonical; `static` runs compiled literals only. | `workspace/executor.ts:338` |
+| **Workflow** | A registered DAG of canonical nodes with a `workflowId`: `publishing_conductor`, `capture_conductor`, `clone_conductor`, `visual_identity`. | `workspace/workflowRegistry.ts` |
+| **Conductor** | The orchestration engine that advances a run one dependency-ready node at a time (`advanceRun`), and by extension a workflow ("Publishing Conductor"). *Legacy meaning*: the default 18-node DTC graph. | `workspace/executor.ts` |
+| **Publishing tail** | The shared node sequence `publish_payload → publication_controller → publish_executor → release_executor → learning_recorder` composed into every publishing workflow. | `workspace/publishingTail.ts` |
+| **Stage** | A node's position in a workflow; **stage output** = the node's output stored under `run.stageOutputs[nodeId]` (and mirrored into the workspace document). In capture/clone, "stage" also names the deterministic engine step (`captureStageDeterministic: "crawl"`). | `executionTypes.ts`, `captureConductorRoutes.ts` |
+| **Run** | One execution of a workflow for a project: `WorkflowExecutionRecord` with per-node states, artifacts, stage outputs, approvals, budget, policy snapshot, release ledger. Id `run_<ms>_<rand>`. | `workspace/executionTypes.ts` |
+| **Dry run** | *Legacy term*: every run record carries `dryRun: true` and runs are created by `workflow_start_dry_run`; today this does **not** mean side-effect free. `executionMode: "mock"` is the actually side-effect-free mode. | `executionTypes.ts:287` |
+| **Execution mode** | `openai` (real model calls; default) or `mock` (deterministic placeholder outputs, no network). | `execution/executionContext.ts` |
+| **Driver** | Whatever advances a run: `http_run_all` (MCP `workflow_run_*`), `http_retry_node`, `continuation_tick` (Cloud Run job), `cloud_run_job` (conductor job). Stamped on every dispatch. | `executionTypes.ts` `RunDriver` |
+| **Continuation tick** | The scheduled Cloud Run job that scans runs and advances those still runnable, within time budgets; writes the tick ledger. | `workspace/runContinuation.ts` |
+| **Dispatch claim** | `node.dispatch{dispatchedAt, timeoutMs, driver}` persisted before a model call; a claim older than timeout + 90 s is reclaimed by the next driver. | `executor.ts` `stampDispatch` |
+| **Deterministic route** | A node whose `metadata.*Deterministic` flag makes the executor run engine code instead of a model turn. | `executor.ts` `DETERMINISTIC_ROUTE_METADATA_KEYS` |
+| **Skip predicate** | Declarative rule evaluated before dispatch that marks a node `skipped` (no model spend) when it has nothing to contribute. | `workspace/skipPredicates.ts` |
+| **Artifact** | (1) `ExecutionArtifact` — a node output recorded on the run and as `artifacts/{id}.json`; (2) a media/document produced by PDF-Tool or a tenant, referenced by an **ArtifactReference** (opaque ref/slot/public path). Bytes never pass through CMS-Agent. | `executionTypes.ts`, `workspace/artifactMaterialization.ts` |
+| **ArtifactReference** | A verified pointer to an artifact in the run's verified set (from `artifact_plan`, the envelope's `artifactReferences`, or caller-confirmed refs); required for every media src before publish. | `projects/readinessContentChecks.ts` |
+| **article_body.v1** | The canonical article envelope a run produces (`{ clientObjectType, body, artifactReferences, … }`), validated against the `article_body` node's output schema and the tenant's `object_validate`. Markdown is never canonical. | `workspace/articleBodyValidation.ts` |
+| **content_source.v1** | The external project workflow envelope / handoff contract used by `project_validate_handoff` and the client-0 self-README. | `docs/engine-objects.md` |
+| **client object** | A tenant-side object (`page`, `content_item`, `navigation`, `section_template`, …) addressed by `object_type` + `object_id`, manipulated through `object_*` verbs. | `projects/objectDialect.ts` |
+| **Object dialect** | Per-project parameters for those verbs: `siteObjectId`, `taxonomyRegistryObjectId`, `objectIdSource`, `requestIdPattern`, `voiceObjectId`. | `projectTypes.ts` `ProjectObjectDialect` |
+| **Publish request id** | Operator/`artifact_plan`-authored `req_<flow>_<topic>_<yyyymmdd>_<nn>` stamped on the tenant object and the release ledger. Distinct from the run's `requestId` join key. | `executionTypes.ts:220-257` |
+| **Publish gates** | `operator_enabled`, `publish_authorized`, `explicit_live`, `operator_not_withheld`, `controller_decision_go` — the closed set in `publishRun`. | `workspace/publisher.ts:148` |
+| **Publish authority** | The resolved answer to "may this run publish": operator explicit approval or the run's snapshotted autonomous policy. | `workspace/publishDecision.ts` |
+| **Operator publish decision** | `run.operatorPublishDecision ∈ {approved, withheld}`, set only by `workflow_set_operator_publish_decision`; `withheld` is a durable veto. | `executionTypes.ts:333` |
+| **Autonomy mode** | Project `publishingPolicy.autonomyMode`: `autonomous` (runs publish without an operator) or `operator-gated`; snapshotted onto each run at creation. | `projectTypes.ts` |
+| **Release** | Going live on the tenant (`release_to_production` + `deploy_status`), performed only by `release_executor` with an idempotency ledger. Distinct from publishing an object. | `workspace/releaseExecution.ts` |
+| **Charter** | Per-workflow list of object types a run may publish/author (`publishableTypeCharter.ts`); "never widen the publish charter" is a repo rule. | `workspace/publishableTypeCharter.ts` |
+| **Gate id** | Stable address of an approval gate per (workflow, node), for future per-gate manual approval. | `workspace/gateRegistry.ts` |
+| **Skill** | A versioned instruction/tool-policy document assigned to nodes; 13 seeded. | `skills/skillTypes.ts` |
+| **Controlled tool** | One of the 49 tools a node may call (`stage.*`, `project.call_tool`, `web.fetch`, `capture.*`, …), distinct from MCP tools. | `tools/toolRegistry.ts` |
+| **Tool policy** | Per-project permission for a remote tool: `allowed` / `needs_approval` / `blocked`. | `projectTypes.ts` `effectiveToolPermission` |
+| **Observation** (learning observation) | Free-text lesson with provenance recorded into the workspace document; soft-deletable. Not injected into prompts. | `mcp/workspace/store.ts` `LearningObservation` |
+| **Playbook** | Per-node ACE bullet list (strategies/pitfalls/constraints with helpful/harmful counters) injected into the node prompt on every dispatch; the implemented learning channel. | `improvement/playbook.ts` |
+| **Memory** | Overloaded: (1) client memory — per-tenant finished templates (`memory/{projectId}.json`); (2) template library — cross-tenant recipes; (3) run-scoped cache; (4) *legacy* `MemoryEnvelope` of the `/api/agent` scaffold. | `memory/clientMemoryStore.ts`, `library/` |
+| **Rubric / eval / trial / proposal** | Evaluation substrate: per-node rubric, judge result, champion/challenger replay trial, optimizer prompt proposal. | `improvement/improvementTypes.ts` |
+| **Change / revision** | Append-only change event and full-node revision snapshot written by every structural workspace mutation; restore creates a new revision. | `workspace/changeTypes.ts` |
+| **Conversational agent** / **client_manager** | The single-turn chat agent definition used by tenant admin chats through `agent_converse`. | `conversations/agentDefinitions.ts` |
+| **Turn** | One `agent_converse` request identified by `(conversation_id, turn_id)`; claimed, executed once, mirrored (≤200 per conversation). | `conversations/conversationTurnTypes.ts` |
+| **Scoped bearer** | An MCP bearer limited to a tool allowlist and project set; static (`MCP_SCOPED_TOKENS_JSON`) or managed (digest registry, minted by genesis). | `mcp/auth/scopedBearerTokens.ts` |
+| **Genesis** | `site_duplicate` with `newSite`: birth of a tenant — Netlify site, env, build hook, project registration, scoped credential, first capture/clone run. | `capture/siteGenesis.ts` |
+| **Reconciler** | The job that re-mints tenant chat credentials to the current `SITE_CLIENT_MANAGER_TOOLS` scope. | `capture/siteCredentialReconciler.ts` |
+| **Capture / clone** | Site capture (crawl → map → theme → emit → score) and structure cloning (recipes, theme bind, restamp, PDF templates) workflows using vendored engines. | `capture/captureEngine.ts`, `cloneEngine.ts` |
+| **Two-plane drift** | CI check that the Netlify adapter and the Cloud Run router expose an identical tool surface matching `docs/mcp-tool-manifest.json`. | `scripts/twoPlaneDrift.ts` |
+| **Canonical state** | For each domain, the store named in the [authority matrix](DATA_ARCHITECTURE.md#2-authority-matrix); everything else is derived. |  |
+| **Constellation** | Product-vision name for the organisational graph view of nodes/relationships/runs (UI); backed by `constellation_*` read tools. | `observability/constellationMetrics.ts` |
+| **Workbench** | The Conductor Workbench SPA (`workbench/`); **broker** = its same-origin auth proxy (`workbench-broker/`). | |
+| **Legacy: Netlify plane, Blobs store, `/api/workspace-mcp`, Identity secure proxy, `/api/agent` base agent, `learning/{id}.json`, 18-node graph** | Terms from the Netlify era (≤ August 2026). See [ARCHITECTURE.md](ARCHITECTURE.md) §3 and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) §D. | |

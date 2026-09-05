@@ -1,3 +1,5 @@
+> **HISTORICAL — dated finding kept for the decision record (documentation audit 2026-09-05).** Resolved or superseded; current state is in [docs/KNOWN_ISSUES.md](../../KNOWN_ISSUES.md) and [docs/ARCHITECTURE.md](../../ARCHITECTURE.md).
+
 # Node-limits audit — every node, all five limits (2026-07-31)
 
 Recorded as documentation of what was done in the node-system overhaul (PR A), not a proposal.

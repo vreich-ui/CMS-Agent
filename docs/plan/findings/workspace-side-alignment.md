@@ -1,3 +1,5 @@
+> **HISTORICAL — dated finding kept for the decision record (documentation audit 2026-09-05).** Resolved or superseded; current state is in [docs/KNOWN_ISSUES.md](../../KNOWN_ISSUES.md) and [docs/ARCHITECTURE.md](../../ARCHITECTURE.md).
+
 # Aligning the agent workspace to the platform ruling
 
 **Context:** platform is about to move `mcp.ts` into core — per-client *endpoints*, not per-client *code*; committed per-site config, not env-var tenant selection; **tools are law, instructions are data**.

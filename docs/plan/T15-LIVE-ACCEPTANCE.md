@@ -1,3 +1,5 @@
+> **HISTORICAL — dated plan/log kept for the decision record (documentation audit 2026-09-05).** Where it disagrees with the code, the code wins; the current architecture is documented in [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and its sibling docs (index: [docs/README.md](../README.md)).
+
 # T15.26 (#201) — the LIVE acceptance run
 
 **This is the runbook a human with deploy access executes.** `tests/agent/capture/endToEndAcceptance.test.ts`

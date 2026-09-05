@@ -1,3 +1,5 @@
+> **HISTORICAL — dated plan/log kept for the decision record (documentation audit 2026-09-05).** Where it disagrees with the code, the code wins; the current architecture is documented in [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and its sibling docs (index: [docs/README.md](../README.md)).
+
 # Consolidated change plan — CMS-Agent workspace, repo, and fleet integration
 
 **Date:** 2026-07-26 · **Rule in force: no code or MCP changes until this plan is approved.**
