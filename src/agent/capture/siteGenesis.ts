@@ -134,7 +134,14 @@ export const SITE_CLIENT_MANAGER_TOOLS = [
   // A1/D1 (2026-09-04): the narrow site-scoped writer door. Platform's `brand_imagery_propose`
   // calls it. It is here INSTEAD of `node_execute`, which must never reach a tenant bearer —
   // see visualIdentityTools.ts's header and ruling R1.
-  "visual_identity_propose"
+  "visual_identity_propose",
+  // T5 (S-07, partial): two more run-addressed tools, both scoped to the project's own runs the same
+  // way workflow_get_run/workflow_get_run_cost already are. Deliberately NOT widened further this
+  // wave — workflow_retry_node, workflow_set_node_budget_override, workspace_update_node_model_config
+  // (workspace-wide mutation) and feedback_list/playbook_get/optimizer_status/
+  // learning_list_observations (not project-partitioned) each need a decision out of scope here.
+  "node_get_latest_output",
+  "workflow_cancel_run"
 ] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";
