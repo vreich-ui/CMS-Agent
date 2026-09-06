@@ -590,6 +590,43 @@ describe("W7 — one build per release attempt, even across a 504", () => {
     expect(calls.filter((tool) => tool === "release_to_production")).toHaveLength(2);
   });
 
+  // T4 (S-11): the platform's idempotency-store answers a replay with
+  // `replayed_from_idempotency_key: true` — a boolean, not the string this executor originally only
+  // recognized. Same 504-then-replay shape as the test above, but the marker is the boolean form.
+  it("(b) also recognises a BOOLEAN replayed_from_idempotency_key, not only the string form", async () => {
+    let releaseCalls = 0;
+    const { callTool } = stubCallTool({
+      release_to_production: () => {
+        releaseCalls += 1;
+        if (releaseCalls === 1) return new Error("MCP request failed with HTTP 504.");
+        return { released: true, deploy: { deployId: "6a952b5e" }, targetCommit: "6a952b5e", replayed_from_idempotency_key: true };
+      },
+      deploy_status: () => ({ deployStatus: "ready", productionConfirmed: true })
+    });
+    const run = runWithReceipt({ commitSha: "6a952b5e" });
+
+    const first = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+    if (!first.ok || first.kind !== "pending") throw new Error("expected a pending outcome");
+
+    let polls = 0;
+    const second = await runDeterministicReleaseExecutor({
+      run: withLedger(run, first.ledgerEntry),
+      deps: {
+        callTool: (async (tool: string, args: Record<string, unknown>) => {
+          if (tool === "deploy_status") {
+            polls += 1;
+            return { ok: true, projectId: "dr-lurie", tool, result: polls === 1 ? { deployStatus: "building" } : { deployStatus: "ready", productionConfirmed: true } };
+          }
+          return callTool(tool, args);
+        }) as unknown as CallToolFn
+      }
+    });
+    if (!second.ok || second.kind !== "completed") throw new Error("expected a completed outcome");
+    expect(second.output.status).toBe("executed");
+    expect(second.output.notes.join(" ")).toMatch(/replayed the original receipt/);
+    expect(second.output.notes.join(" ")).toMatch(/SAME idempotency_key/);
+  });
+
   it("(b) a re-dispatch after a 504 polls deploy_status by commit FIRST and never re-calls when production is already live", async () => {
     const { callTool, calls, argsOf } = stubCallTool({
       release_to_production: () => new Error("MCP request failed with HTTP 504."),

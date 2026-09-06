@@ -235,7 +235,10 @@ const callReleaseToProduction = async (callTool: CallToolFn, args: Record<string
   const record = payloadOf(raw.result);
   const status = nonEmptyString(record.status) ? (record.status as string) : undefined;
   if (record.released === true || (status !== undefined && HOOK_FIRED_UNCONFIRMED_STATUSES.has(status))) {
-    const replayed = nonEmptyString(record.replayed_from_idempotency_key) || record.idempotent_replay === true;
+    const replayed =
+      nonEmptyString(record.replayed_from_idempotency_key) ||
+      record.replayed_from_idempotency_key === true ||
+      record.idempotent_replay === true;
     return { verdict: "acknowledged", record, replayed };
   }
   const detail = nonEmptyString(record.error) ? (record.error as string) : nonEmptyString(record.message) ? (record.message as string) : status;
