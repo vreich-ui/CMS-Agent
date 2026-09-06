@@ -9,13 +9,13 @@ Documentation map: this README → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 
 | Plane | What | Where |
 |---|---|---|
 | Control plane | MCP server (151 tools), OAuth 2.1 authorization server, `/health`; also drives runs inside a 45 s request window | Google Cloud Run service `cms-agent-mcp` (`us-central1`, project `cms-agent-503015`), image from `Dockerfile.mcp`, entrypoint `src/agent/entrypoints/mcpServerMainRun.ts` |
-| Background drivers | `continuation-tick` (every 2 min, advances runnable runs), `conductor-run` (one run to completion), `site-credential-reconciler` (daily, tenant chat credentials) | Cloud Run jobs from the same image |
+| Background drivers | `continuation-tick` (every 2 min, advances runnable runs), `conductor-run` (one run to completion — created by hand in Aug 2026; its current existence is not verifiable from the repo, see docs/DEPLOYMENT.md §1), `site-credential-reconciler` (daily, tenant chat credentials) | Cloud Run jobs from the same image |
 | State | Every repository (workspace document, runs, projects, skills, changes, evaluation, improvement, conversations, sessions, OAuth) | GCS bucket `cms-agent-503015-cms-agent-state` (`WORKSPACE_STORE=gcs`) |
 | Secrets | API keys, tenant tokens, scoped bearers, Netlify token | Secret Manager → Cloud Run env; records hold names/references only |
 | Operator UIs | `ui/` (workspace) at `/`, `workbench/` (conductor workbench) at `/workbench` — static SPAs calling the Cloud Run `/mcp` with a pasted bearer | Netlify site `cms-agent` |
-| Legacy | `netlify/functions/*` (old Netlify control plane; `mcp` function 502s since 2026-08-14; only `session` is live), the `/api/agent` base-agent scaffold, Netlify Blobs store | kept for tests and the CI drift detector — do not build on them |
+| Legacy, still deployed and routed | `netlify/functions/*` — all 8 functions are deployed on the `cms-agent` site and routed by `netlify.toml`. Live probe 2026-09-06: `/api/mcp` **502**, `/api/agent` **502**, `/api/session` 401 (alive), `/.well-known/oauth-authorization-server` **200 (alive OAuth server whose tokens land in Netlify Blobs and cannot authenticate to Cloud Run)**. Netlify Blobs store | kept for tests and the CI drift detector — do not build on them, do not point clients at them |
 
-Key facts that older documents get wrong: node behaviour comes from the **store** by default (`WORKSPACE_NODES_SOURCE=store`), every run record says `dryRun: true` but runs publish live when their gates pass, and publish authority is resolved from the run's own operator decision or snapshotted autonomy policy — never from a caller flag. See [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) §D for the full list.
+Key facts that older documents get wrong: node behaviour comes from the **store** by default (`WORKSPACE_NODES_SOURCE=store`), every run record says `dryRun: true` (a type literal, `executionTypes.ts:287`) and **no gate reads it** — runs publish live when their gates pass, and publish authority is resolved from the run's own operator decision or snapshotted autonomy policy — never from a caller flag. See [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) §D for the full list.
 
 ## Major components
 

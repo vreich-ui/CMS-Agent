@@ -1,5 +1,7 @@
 # docs/ — index and status of every document
 
+Verification status: written from source at `40424c4` (2026-09-05); post-merge verification at `921367e` (2026-09-06) re-checked deployment, publish authority, dry-run semantics and the top findings — corrections are listed in [KNOWN_ISSUES.md](KNOWN_ISSUES.md) D-13…D-17. Offline reproductions: `WORKSPACE_STORE=memory npx tsx scripts/repro/knownIssues.ts`.
+
 Canonical, current documentation (maintained with the code; each fact has one home):
 
 | Document | Scope |

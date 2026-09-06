@@ -74,7 +74,7 @@ Error semantics: unknown tool → `-32602`; unknown method → `-32601`; tool fa
 | Netlify Identity (`ADMIN_EMAIL_IDS`) | ui login gate only | none over MCP | — | Netlify |
 | Broker session (IAP JWT / password cookie) | workbench via workbench-broker (if deployed) | broker policy: 40 read verbs, 44 mutating verbs, `READ_ONLY=1` default | — | broker |
 
-Authorization inside CMS-Agent is therefore **per bearer, not per tool**: a full bearer can call `workflow_publish_run`, `project_call_tool` (with Dr. Lurie's `defaultToolPolicy: "allowed"` this reaches publish/deploy/commerce tools), `site_duplicate` and `workspace_delete_node`. The only finer controls are project tool policies (`allowed` / `needs_approval` / `blocked`, `projectTypes.effectiveToolPermission`), the publish gates, and catalog scoping. See [SECURITY.md](SECURITY.md) §3 for the consequences.
+Authorization inside CMS-Agent is therefore **per bearer, not per tool**: a full bearer can call `workflow_publish_run`, `project_call_tool` (with Dr. Lurie's and Platform's `defaultToolPolicy: "allowed"` this reaches `object_publish` and `release_to_production` with no publish gate), `site_duplicate` and `workspace_delete_node`. A tenant's scoped chat bearer is pinned to its project only for calls that carry `projectId`/`project_id` (`mcpEndpoint.ts:121-122`, `project === undefined` passes); run-addressed tools in its allowlist (`workflow_get_run`, `workflow_run_all`, `workflow_set_operator_publish_decision`, `workflow_publish_run` without `projectId`) act on any run by `runId` — KNOWN_ISSUES K-M9, reproduced by `scripts/repro/knownIssues.ts`. The only finer controls are project tool policies (`allowed` / `needs_approval` / `blocked`, `projectTypes.effectiveToolPermission`), the publish gates, and catalog scoping. See [SECURITY.md](SECURITY.md) §3 for the consequences.
 
 ## 4. Catalog and namespaces
 
@@ -103,8 +103,8 @@ Each tool declares both a zod schema (parses the input) and a hand-written JSON 
 
 ## 6. Legacy and compatibility
 
-- `netlify/functions/mcp.mts` + `netlifyMcpAdapter.ts`: same core, Netlify Blobs state; reported 502 (`ERR_REQUIRE_ESM`) in production since 2026-08-14; the sibling `workspace-mcp` proxy was deleted 2026-08-27. Kept for the in-process drift detector and tests. Do not route new clients there.
-- `netlify/functions/oauth-*.mts`: OAuth flow on Netlify, same `oauthEndpoints.ts` core — LEGACY.
+- `netlify/functions/mcp.mts` + `netlifyMcpAdapter.ts`: same core, Netlify Blobs state; still deployed and routed (`/api/mcp`); **re-verified 502 on 2026-09-06** (the Aug-2026 `ERR_REQUIRE_ESM` diagnosis in `netlifyMcpAdapter.ts:3-21` predates the 2026-08-27 deletion of the sibling `workspace-mcp` proxy, so the current cause is not re-diagnosed). Kept for the in-process drift detector and tests. Do not route new clients there.
+- `netlify/functions/oauth-*.mts`: OAuth flow on Netlify, same `oauthEndpoints.ts` core — LEGACY but **live** (`/.well-known/oauth-authorization-server` returned 200 on 2026-09-06 with issuer `https://cms-agent.netlify.app`). Tokens it mints are stored in Netlify Blobs (`stateStore.ts:120-135`, `blobClient.ts:24-33`); the Cloud Run endpoint verifies against GCS, so they authenticate nothing that runs — a decoy surface, not a bypass. Approval on either plane needs `MCP_OAUTH_APPROVAL_SECRET` (fallback `MCP_API_TOKEN`, `auth/consent.ts:15-19`), so an OAuth token is full-bearer authority minted by someone holding the static secret.
 - The `instructions` string still says "Session-aware Netlify Streamable-HTTP MCP endpoint" on Cloud Run (cosmetic, C-6).
 - `MCP_STATE_STORE=blobs` on Cloud Run means "durable via the registered GCS transport", not Netlify Blobs.
 
