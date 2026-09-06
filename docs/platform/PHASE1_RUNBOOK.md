@@ -215,6 +215,16 @@ It is safe to deploy and schedule BEFORE `TRACKING_SINK_URL` / `TRACKING_SINK_TO
 deployment's own fleet values — T21.8): with any of them unset the job exits 0 having done
 nothing, with `status: "skipped_unconfigured"` and a named reason in its JSON summary.
 
+What READS those records is `optimizer.analyze` (T21.22): it aggregates a node's
+`tracking:engagement.v1` outcomes over the analysis window into an `engagement` block and
+compares it against the site median for the same window (`GET /rollups?by=object`, same
+client, same pinned query contract). Below 50 sessions the block reports
+`insufficient_data` and nothing is diagnosed from it; with the sink unconfigured or
+unreachable the block is absent and the optimizer behaves exactly as it did before. When a
+node passes its rubric and still sits below the site median, `optimizer.propose` raises the
+proposal under its own named cause, `engagement_below_site_median` — the failure a rubric
+evaluation structurally cannot see. Trials are unaffected: they remain rubric-judged.
+
 `TRACKING_PROJECT_ID` is the tenant's partition in the sink and its value is the tenant's
 BARE slug (`drlurie`, not `trk_drlurie`) — the sink answers
 `/api/tracking-sink/stats?project_id=<slug>`, and a site that leaves the variable unset
@@ -243,6 +253,154 @@ npm run job:tracking-ingest -- --dry-run
 ```
 
 Documentation only, same as the block above.
+
+## …and `job:strategy-learning` (T21.35)
+
+`src/agent/entrypoints/strategyLearningJob.ts` (+ `strategyLearningJobMain.ts`) is the
+same pattern once more, on the sink's THIRD grain. The two jobs above are per-artifact:
+they answer "how did this piece do?". This one answers "what KIND of piece works here?" —
+it reads `GET /rollups?by=strategy` (one row per strategy/intent/day), aggregates each
+strategy/intent over the window, compares it against the site-wide figure for the SAME
+window, and writes the material differences down as learning observations with source
+`tracking:strategy.v1`, e.g.
+
+```
+intent `objection_handling` (strategy `objection_first`): p75 dwell 2.1× site median,
+completion +18 pts (n=412, window 2026-08-29..2026-08-30)
+```
+
+An observation is not yet a lesson. A finding is promoted into the per-node ACE playbooks
+of the WRITER and PLANNING nodes (`brief_architect`, `angle_strategy`, `objection_mapping`,
+`narrative_movement`, `reader_insight`, `draft_writer`) only when it is STABLE: the same
+direction across at least 2 consecutive observed windows, each with `n >= 100` — the sink's
+own raw attributed-event count for the group, not sessions. Promoted items are written
+through the same `applyPlaybookDelta` `playbook.curate` uses, with
+`provenance.source: "tracking"`, and read as guidance rather than as a metric dump.
+
+Unlearning is deliberately cheaper than learning: ONE later window that contradicts a
+promoted item, at the same `n` bar, `markHarmful`s it — the playbook's own pre-existing
+counter, which lowers net helpfulness, sinks the item in the injected prompt and puts it
+first in line for budget eviction. Nothing is deleted behind an operator's back.
+
+Safe to deploy and schedule DAILY before anything else is true. With
+`TRACKING_SINK_URL` / `TRACKING_SINK_TOKEN` / `TRACKING_PROJECT_ID` unset it exits 0 with
+`status: "skipped_unconfigured"`. And until kugel-data **migration 008** has run on the
+tenant's sink, the `by=strategy` grain answers 503: the job exits 0 with
+`status: "skipped_grain_unavailable"`, records nothing, and touches no playbook — the same
+no-op an absent sink gets, reported by its own name so an operator can see WHY there is
+nothing rather than reading it as a quiet day.
+
+```bash
+# Local smoke — reports the connection state, the resolved window and the target nodes;
+# observes nothing, promotes nothing:
+npm run job:strategy-learning -- --dry-run
+
+# Same build/secret/create steps as above, with its own Cloud Run Job resource:
+#   gcloud run jobs create strategy-learning-run \
+#     --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
+#     --cpu 1 --memory 512Mi --max-retries 0 --task-timeout 300 \
+#     --set-env-vars "WORKSPACE_STORE=blobs,NETLIFY_BLOBS_SITE_ID=<site-api-id>,TRACKING_PROJECT_ID=<tenant-slug>" \
+#     --set-secrets "NETLIFY_BLOBS_TOKEN=netlify-blobs-token:latest,TRACKING_SINK_URL=tracking-sink-url:latest,TRACKING_SINK_TOKEN=tracking-sink-token:latest" \
+#     --command "npm" --args "run,job:strategy-learning,--"
+#
+# Scheduled DAILY, after the tracking ingest (order does not actually matter — the two read
+# the same sink at different grains and write to different substrates):
+#   gcloud scheduler jobs create http strategy-learning-daily \
+#     --schedule="45 3 * * *" \
+#     --uri="https://<region>-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/<project>/jobs/strategy-learning-run:run" \
+#     --http-method=POST \
+#     --oauth-service-account-email="<job-runtime-sa>"
+```
+
+Documentation only, same as the blocks above.
+
+## …and `job:strategy-review` (T21.37) — WEEKLY, and it proposes rather than writes
+
+`src/agent/entrypoints/strategyReviewJob.ts` (+ `strategyReviewJobMain.ts`) is the fourth
+job on this pattern and the first whose output is addressed to a HUMAN. The three above
+change machine state — feedback records, playbook items. This one changes nothing: it
+reads what has held up and puts a PROPOSAL in front of the editor who owns the governed
+`editorial_strategy` object.
+
+It is WEEKLY, and with no `--from`/`--to` it pulls the previous whole UTC week — because
+its whole question is "how did this week compare with the one before it?", which a daily
+window cannot answer. It reads two things:
+
+* the `tracking:strategy.v1` observations `job:strategy-learning` already writes (the
+  cross-article grain), and
+* the sink's `by=object` rollups for the window AND the window before it, grouped by
+  **funnel stage** and by **topic**, with the top- and bottom-performing object named
+  inside each group.
+
+…and proposes a **delta** to that object across three dimensions: topic weights, angle
+mix, and funnel-stage aggression.
+
+**The bar is T21.35's bar, unchanged.** A line only appears when its direction held across
+at least **2 consecutive windows** with **n >= 100** attributed events in **each** — the
+same bar a finding must clear before it may change a node's playbook. For the angle mix
+that is literally `stableStrategySignals()`. For topic weights and funnel-stage
+aggression, whose grain nobody has been recording over time, it is the same rule applied
+to the two adjacent windows the job fetches side by side. Below the bar the run writes
+nothing and says why, listing every near-miss with the number that failed it.
+
+`n` is the sink's own attributed-event count on the row (`n` / `count` / `event_count`).
+`sessions` is deliberately NOT accepted as a substitute: the bar is stated in the count the
+rates were computed from, and quietly swapping the denominator would make this loop's
+"n >= 100" a weaker claim than the one the proposal text prints.
+
+**It never patches.** The proposal is ONE `marginalia_create` thread on the strategy object
+— the tenant's comment side-channel, which needs no lock and writes no body. Autonomous
+patching is behind the operator policy flag **`STRATEGY_REVIEW_AUTOPATCH`**, which is OFF
+unless an operator sets it and which nothing in the codebase sets. Turning it on today
+enables nothing: no patch path exists in this build, `marginalia_create` is the only tenant
+tool this loop can reach in either flag state, and the run reports the flag's state in its
+own JSON summary so it never has to be grepped for. When the patch path is eventually
+written, that flag is the one gate it goes behind.
+
+Slack: this repo has no Slack path, so nothing is announced and the run says so
+(`notification.attempted: false`). When a Slack path lands it is passed to
+`reviewEditorialStrategy` as the `notify` dependency; a notifier that fails never turns a
+written proposal into a failed run.
+
+Addressing the strategy object is operator configuration, by env NAME — the tenant's
+`object_type` is a closed enum and the reviewed object's id differs per tenant, so nothing
+is hard-coded:
+
+| Variable | What it is |
+| --- | --- |
+| `EDITORIAL_STRATEGY_PROJECT_ID` | the registered CMS project whose MCP connection reaches the object (NOT `TRACKING_PROJECT_ID`) |
+| `EDITORIAL_STRATEGY_OBJECT_TYPE` | the governed object type, as that tenant's `marginalia_create` enum spells it |
+| `EDITORIAL_STRATEGY_OBJECT_ID` | the object id |
+
+With any of them unset the job exits 0 with `status: "skipped_unconfigured"` and names the
+unset variables. Same for an unconfigured sink, an unset `TRACKING_PROJECT_ID`, a `by=object`
+grain answering 503, an empty window, nothing over the bar, or a tenant that refuses the
+marginalia write — **this job has no failure status at all and always exits 0**, because a
+weekly schedule that alerts on a quiet week trains an operator to ignore it.
+
+```bash
+# Local smoke — reports the connection, the strategy object address, the resolved weekly
+# window and the autopatch flag; reads nothing, proposes nothing:
+npm run job:strategy-review -- --dry-run
+
+# Same build/secret/create steps as above, with its own Cloud Run Job resource:
+#   gcloud run jobs create strategy-review-run \
+#     --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
+#     --cpu 1 --memory 512Mi --max-retries 0 --task-timeout 300 \
+#     --set-env-vars "WORKSPACE_STORE=blobs,NETLIFY_BLOBS_SITE_ID=<site-api-id>,TRACKING_PROJECT_ID=<tenant-slug>,EDITORIAL_STRATEGY_PROJECT_ID=<cms-project-id>,EDITORIAL_STRATEGY_OBJECT_TYPE=<governed-type>,EDITORIAL_STRATEGY_OBJECT_ID=<object-id>" \
+#     --set-secrets "NETLIFY_BLOBS_TOKEN=netlify-blobs-token:latest,TRACKING_SINK_URL=tracking-sink-url:latest,TRACKING_SINK_TOKEN=tracking-sink-token:latest" \
+#     --command "npm" --args "run,job:strategy-review,--"
+#
+# Scheduled WEEKLY, after the daily passes have had the week to record observations:
+#   gcloud scheduler jobs create http strategy-review-weekly \
+#     --schedule="0 5 * * 1" \
+#     --uri="https://<region>-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/<project>/jobs/strategy-review-run:run" \
+#     --http-method=POST \
+#     --oauth-service-account-email="<job-runtime-sa>"
+```
+
+Documentation only, same as the blocks above. Nothing here turns
+`STRATEGY_REVIEW_AUTOPATCH` on, and nothing should until a patch path exists to gate.
 
 ## Known limits (accepted for Phase 1, resolved in Phase 2)
 

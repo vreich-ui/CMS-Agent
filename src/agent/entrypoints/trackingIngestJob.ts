@@ -11,6 +11,7 @@
 import {
   ingestTrackingRollups,
   trackingSinkConnectionState,
+  TRACKING_PROJECT_ID_ENV,
   type TrackingIngestResult,
   type TrackingSinkConnectionState
 } from "../improvement/trackingIngest.js";
@@ -46,7 +47,7 @@ export type TrackingIngestJobResult =
   | { status: "completed" | "failed"; window: TrackingIngestWindow; result: TrackingIngestResult; connection: TrackingSinkConnectionState };
 
 const DEFAULT_ACTOR: WorkspaceActor = { kind: "agent", label: "tracking_ingest_job" };
-const PROJECT_ID_ENV = "TRACKING_PROJECT_ID";
+const PROJECT_ID_ENV = TRACKING_PROJECT_ID_ENV;
 
 const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
 

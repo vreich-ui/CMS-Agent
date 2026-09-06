@@ -134,6 +134,13 @@ export type EvalDataset = { datasetId: string; nodeId: string; name: string; cas
 
 export const proposalStatuses = ["proposed", "trialed", "promoted", "rejected"] as const;
 export type ProposalStatus = typeof proposalStatuses[number];
+// The NAMED cause a proposal was raised for (T21.22). Before this there was exactly one implicit
+// cause — the worst rubric criterion — so an engagement failure could only ever be described as a
+// criterion problem, which is the one thing it is not. Kept as an id so a cause can be filtered and
+// counted, not grepped out of prose: `engagement_below_site_median` is the case rubric evaluation
+// structurally cannot see (the artifact meets its written standard and still loses the reader).
+export const proposalCauses = ["rubric_criterion", "engagement_below_site_median", "no_evidence"] as const;
+export type ProposalCause = typeof proposalCauses[number];
 export type ProposalChange =
   | { kind: "prompt"; prompt: string }
   | { kind: "modelConfig"; modelConfig: Record<string, unknown> };
@@ -142,6 +149,11 @@ export type ImprovementProposal = {
   nodeId: string;
   status: ProposalStatus;
   diagnosis: string; // natural-language reflection (GEPA-style)
+  // Why this proposal exists, as a named cause plus the evidence sentence behind it. Optional only
+  // because proposals stored before T21.22 carry neither; every new proposal sets both, in mock and
+  // openai mode alike, because the cause is decided from the evidence and never by the model.
+  cause?: ProposalCause;
+  rationale?: string;
   change: ProposalChange;
   evidence: { runIds?: string[]; evalIds?: string[]; feedbackIds?: string[] };
   baselinePromptHash: string; // refuse promotion if node.prompt drifted since the proposal
@@ -231,7 +243,11 @@ export type PlaybookItem = {
   helpfulCount: number;
   harmfulCount: number;
   status: "active" | "retired";
-  provenance: { source: "reflector" | "human" | "migration"; runIds?: string[]; evalIds?: string[] };
+  // Where the lesson came from. `tracking` (T21.35) is the outer loop: a lesson promoted from
+  // measured cross-article reader behaviour (tracking:strategy.v1 observations), not from a
+  // reflector reading rubric evidence and not from a human writing it down. Kept distinct because
+  // "a model inferred this" and "readers did this" are different warrants for the same sentence.
+  provenance: { source: "reflector" | "human" | "migration" | "tracking"; runIds?: string[]; evalIds?: string[] };
   createdAt: string;
   updatedAt: string;
 };
@@ -271,7 +287,7 @@ export const evalRubricInputSchema = z.object({
 }).strict();
 
 export const playbookDeltaSchema = z.object({
-  add: z.array(z.object({ text: z.string().min(1), kind: z.enum(["strategy", "pitfall", "constraint"]), provenance: z.object({ source: z.enum(["reflector", "human", "migration"]), runIds: z.array(z.string()).optional(), evalIds: z.array(z.string()).optional() }).strict().optional() }).strict()).optional(),
+  add: z.array(z.object({ text: z.string().min(1), kind: z.enum(["strategy", "pitfall", "constraint"]), provenance: z.object({ source: z.enum(["reflector", "human", "migration", "tracking"]), runIds: z.array(z.string()).optional(), evalIds: z.array(z.string()).optional() }).strict().optional() }).strict()).optional(),
   markHelpful: z.array(z.string().min(1)).optional(),
   markHarmful: z.array(z.string().min(1)).optional(),
   retire: z.array(z.string().min(1)).optional()
