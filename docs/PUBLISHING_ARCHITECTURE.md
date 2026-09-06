@@ -4,7 +4,7 @@ Status: current as of commit `40424c4` (2026-09-05). Traces a publish from workf
 
 ## 1. Responsibility boundary (MUST)
 
-| Concern | CMS-Agent (this repo) | Tenant project MCP (`vreich-ui/platform`, one `/mcp` per site) |
+| Concern | CMS-Agent (this repo) | Tenant project MCP (`vreich-ui/platform`, one `/mcp` per site) — **every cell in this column is an external contract**: asserted by CMS-Agent's client code, knowledge prompts and captured fixtures, not verified in this repository |
 |---|---|---|
 | Deciding *whether* to publish | Yes — five gates in `publisher.ts` + publish-risk dispatch gate in `executor.ts` | Its own `object_validate`, locks, review policy, membership |
 | Building the object | Yes — `article_body.v1` envelope → client object (`publishPayload.ts`, `objectDialect.ts`) | Validates and stores it |
@@ -16,6 +16,24 @@ Status: current as of commit `40424c4` (2026-09-05). Traces a publish from workf
 | Learning | Records observations/feedback about the publish | — |
 
 "Where content becomes canonical": at the tenant's `object_publish` (or, for objects that pre-exist, `object_patch`). CMS-Agent's run record is an audit trail, not a content store.
+
+## 2.0 Every path that reaches `object_publish` / `release_to_production` (verified 2026-09-06 at `921367e`)
+
+Read this before repeating any sentence of the form "an agent can never publish without an operator". The gates in `publisher.ts` govern **one** family of paths; the table lists all of them.
+
+| # | Path | Who/what starts it | Publish gates (`publishRun`) | Dispatch authority (`resolvePublishAuthority`) | What else stands in the way |
+|---|---|---|---|---|---|
+| P1 | Engine path: `publish_executor` store row has `metadata.publishExecutorDeterministic: "execute"` → `publishRun` → tenant `object_publish`; then `release_executor` (deterministic while its store row keeps `releaseExecutorDeterministic: true`) → `release_to_production` once per `runId:requestId` | any run driver (`workflow_run_*`, `continuation-tick`, `conductor-run`) | **yes**, all five | **yes** (+ affirmative controller decision for `publish_executor`, `executor.ts:2074-2080`) | tenant-side validation, locks, review policy (external) |
+| P2 | Gate-then-model: flag `true` — refusal receipt when gates fail; a model turn when they pass | same | yes, as a pre-check only | yes | prompt; tenant tool policy (external) |
+| P3 | Model path (**canonical default**, flag absent): `publish_executor` runs a model turn holding `project.call_tool` and calls tenant verbs itself; `release_executor` does the same if its flag is set `false` on the store row | same | **no** | yes | prompt (`canonicalRules`); tenant tool policy (external); `project.call_tool` 30 s cap |
+| P4 | Non-publish-risk nodes that hold `project.call_tool`: `article_body` (always a model turn), and `contract_intelligence` / `artifact_materializer` / `publish_payload` whenever their `…Deterministic` flag is not `true` on the store row (`contract_intelligence` also falls back to a model turn when its deterministic prefetch fails, `executor.ts:1975`) — riskLevel `write`, so the publish-risk dispatch gate does not apply (`executor.ts:586`) | same | **no** | **no** | prompt; tenant tool policy (external). `composeWorkflowNodes`' `PUBLISH_ONLY_VERBS` check (`publishingTail.ts:207`) inspects `allowedTools` for tenant verb names, which never appear there — it does not see `project.call_tool` |
+| P5 | Wire `workflow_publish_run` | full bearer **or any tenant's scoped chat bearer** | **yes**; note `live` defaults to true when omitted (`publisher.ts:157`) | yes (same resolver) | project publish-readiness policy |
+| P6 | Wire `project_call_tool {tool:"object_publish" \| "release_to_production"}` | full bearer only (not in the scoped allowlist) | **no** | **no** | `effectiveToolPermission` — `allowed` on `dr-lurie` and `platform`; executable policy hook blocks only retired legacy tools/fallback artifact sources (`tools.ts:878-885`) |
+| P7 | `workflow_set_operator_publish_decision {runId, decision:"approved"}` — not a publish, but it *is* the authority | full bearer or **any tenant's scoped chat bearer**, by `runId` with no project pin (K-M9, reproduced) | — | creates it | nothing in CMS-Agent checks who the caller is |
+| P8 | `project_update {publishingPolicy:{autonomyMode:"autonomous"}}` → every later run of that project snapshots `autonomous` at creation | full bearer | — | grants it for every future run | no version check on the project record (K-P4) |
+| P9 | Legacy Netlify `mcp` function (`/api/mcp`) | anyone with a bearer the Netlify plane accepts | same code | same code | dead: 502 on 2026-09-06 |
+
+**The invariant, stated with its conditions.** *No run-based path (P1–P5) publishes or releases unless `resolvePublishAuthority(run)` is authorized — an operator decision recorded on that run, or an autonomous policy snapshotted at its creation — and, on the engine path, all five gates pass.* This holds **assuming**: (a) full-bearer credentials (`MCP_API_TOKEN`, an OAuth token approved with `MCP_OAUTH_APPROVAL_SECRET`/`MCP_API_TOKEN`) are not delegated to an agent — P6 and P8 need nothing else; (b) "operator" is read as *holder of a full bearer or of a tenant's scoped chat bearer* — P7 records the decision for whoever presents one, and the tenant plane decides whether a human was involved (external contract); (c) the model turns in P3/P4 obey their prompts, or the tenant's own tool policy refuses the verb — CMS-Agent enforces nothing verb-level on the node path; (d) the store rows for the tail nodes still carry their canonical `…Deterministic` flags (`store:update` restores none of them). Under those conditions the statement "no *normal agent path* bypasses the publish gates" is true; "an agent can never publish without an operator" is not.
 
 ## 2. End-to-end trace (article path, `publishing_conductor`)
 
@@ -92,7 +110,7 @@ Files: `src/agent/workspace/{publishPayload,publicationController,publishDecisio
 | `true` ("gate") | Engine emits the refusal receipt when gates fail; when gates pass, falls through to the model path |
 | absent (the **canonical** literal in `nodes.ts` sets none) | Model turn with `project.call_tool` granted: the agent itself calls tenant tools; `publishRun`'s gates are **not** consulted on this path (the executor's publish-risk dispatch gate still is) |
 
-In this repository the flag is set only by `scripts/reseedStoreFromCanonical.ts --set-publish-executor-mode <gate|execute>` against the live store; any `workspace_update_node_metadata` / `workspace_update_node` / `workspace_import_workspace` caller can also set or drop it. It only applies when `WORKSPACE_NODES_SOURCE` is `store` (the default). The repository therefore cannot tell which mode production runs in — **UNKNOWN**; verify with `workspace_get_node {"id":"publish_executor"}` → `metadata`. The same applies to `publicationControllerDeterministic`. `release_executor`, `publish_payload`, `placement_resolver`, `contract_intelligence` and `artifact_materializer` are deterministic in canonical code.
+In this repository the flag is set only by `scripts/reseedStoreFromCanonical.ts --set-publish-executor-mode <gate|execute>` against the live store; any `workspace_update_node_metadata` / `workspace_update_node` / `workspace_import_workspace` caller can also set or drop it. It only applies when `WORKSPACE_NODES_SOURCE` is `store` (the default). The repository therefore cannot tell which mode production runs in — **UNKNOWN**; verify with `workspace_get_node {"id":"publish_executor"}` → `metadata`. The same applies to `publicationControllerDeterministic`. `release_executor`, `publish_payload`, `placement_resolver`, `contract_intelligence` and `artifact_materializer` are deterministic **by canonical default only**: each is a `metadata.<name>Deterministic: true` literal that the store row overrides per key (`executor.ts:358`), none is in `reseedStoreFromCanonical`'s `RESEED_ALLOWLIST`, and a row set to `false` turns that node into a model turn holding its tools (for `release_executor` that includes `project.call_tool`). `learning_recorder`'s flag is set by no canonical literal at all (K-A11).
 
 For `capture_conductor` and `clone_conductor` the tail nodes carry workflow-owned routes (`captureStageDeterministic` / `cloneStageDeterministic`) that outrank the DTC flags; their publish executor uses `objectPublishExecution.ts` (`object_checkout → object_publish → object_checkin` per created/reused object, quarantined objects never published, leases released in `finally`).
 
@@ -118,7 +136,19 @@ Registered projects today (code defaults, seeded into `projects/*.json`): `dr-lu
 
 `publishRun` returns a discriminated `PublishResult` (`live` / `dry_run` with gate reasons / `blocked_for_publish_execution` with a resumable descriptor / `error` with `objectId` when the sequence created one). The executor writes it as `publish_execution.v1` into `stageOutputs.publish_executor` and the node's artifact; a claimed `executed` without deploy evidence is downgraded to `blocked` with `publishCommitted: true` and a `go_live_unconfirmed` blocker (`publishExecution.ts:33-45`), which `release_executor` then resolves. Observations `publish_executed` / `publish_failed` land in the workspace document. `workflow_get_run` (compact) exposes `publishRequestId`, `operatorPublishDecision`, `approvalsRequired` and per-node status; `detail:"full"` exposes the receipts.
 
-## 8. Implemented vs planned
+## 8. External contracts this document relies on (not verified here)
+
+| Claim | Where CMS-Agent asserts it | Owner |
+|---|---|---|
+| `object_publish` commits without deploying; `release_to_production` fires the production build hook, is idempotent on `idempotency_key`, and `deploy_status` reports it | `projects/{drLurie,platform}/knowledge.ts`, `releaseExecution.ts` header, `tests/agent/capture/fixtures/platformToolSchemas.ts` | `vreich-ui/platform` |
+| Mutating object verbs are `needs_approval` on the tenant unless a held approval exists; `release_to_production` is a "paid gate" | `projectMcpAdapter.ts:107-118` comment, `drLurie/knowledge.ts:72-73` | `vreich-ui/platform` |
+| The admin chat puts a human behind `workflow_set_operator_publish_decision` / `workflow_publish_run` calls made with the tenant's scoped bearer | `CLIENT-MANAGER-CONTRACT.md`, `capture/siteGenesis.ts` | `vreich-ui/platform` |
+| PDF-Tool persists artifacts, returns metadata-only `ArtifactReference`s, and serves public paths | `projects/pdfTool/definition.ts`, `artifactMaterialization.ts` | `vreich-ui/pdf-tool` |
+| Tenant sites hold the minted `CMS_AGENT_MCP_TOKEN` as a Netlify env var and use it only from the admin chat | `capture/siteGenesis.ts:1056-1057`, `siteCredentialReconciler.ts` | `vreich-ui/platform` + Netlify |
+
+The cross-repository audit owns these; until then treat each as "what CMS-Agent expects", not "what happens".
+
+## 9. Implemented vs planned
 
 | Item | State |
 |---|---|

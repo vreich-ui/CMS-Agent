@@ -19,7 +19,9 @@ import { createWorkspaceTools } from "../src/agent/mcp/workspace/tools.js";
 import { canonicalToolName } from "../src/agent/mcp/workspace/toolKit.js";
 import { DEPRECATED_TOOL_ALIASES } from "../src/agent/mcp/workspace/server.js";
 
-const OUTPUT = path.resolve(fileURLToPath(new URL("../docs/reference/MCP_TOOLS.md", import.meta.url)));
+const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const OUTPUT = path.resolve(ROOT, "docs/reference/MCP_TOOLS.md");
+const catalogSize = (): number => createWorkspaceTools({}).length;
 
 type Effect = "read" | "mutate-workspace" | "mutate-run" | "mutate-registry" | "mutate-learning" | "execute-model" | "external-read" | "external-mutate" | "publish" | "admin";
 type Row = { effect: Effect; storage: string; external: string; autonomy: "safe" | "caution" | "operator"; note?: string };
@@ -274,13 +276,41 @@ async function render(): Promise<string> {
   return lines.join("\n");
 }
 
+// The hand-written docs quote the catalog size ("151 tools", "all 151"). Those numbers are prose,
+// not derived, so --check also scans them and refuses when any quoted count disagrees with the live
+// catalog — the reference stays derived, and the prose can only ever be stale by one failing check.
+const COUNT_QUOTING_DOCS = ["README.md", "CLAUDE.md", "AGENTS.md", "docs/AI_CONTEXT.md", "docs/ARCHITECTURE.md", "docs/MCP_ARCHITECTURE.md", "docs/SECURITY.md", "docs/GLOSSARY.md", "docs/KNOWN_ISSUES.md"];
+const COUNT_PATTERNS = [/\b(\d{2,3}) (?:MCP )?tools\b/g, /\ball (\d{2,3})\b(?=[^\n]{0,40}tool)/g];
+const checkQuotedToolCounts = async (expected: number): Promise<string[]> => {
+  const problems: string[] = [];
+  for (const relative of COUNT_QUOTING_DOCS) {
+    const text = await readFile(path.resolve(ROOT, relative), "utf8").catch(() => "");
+    const lines = text.split("\n");
+    lines.forEach((line, index) => {
+      for (const pattern of COUNT_PATTERNS) {
+        pattern.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = pattern.exec(line))) {
+          const quoted = Number(match[1]);
+          // Only catalog-sized numbers are treated as a catalog count; small numbers ("11 tools" in a
+          // scoped allowlist, "49 controlled tools") describe other things and are left alone.
+          if (quoted >= 100 && quoted !== expected) problems.push(`${relative}:${index + 1} says "${match[0]}" but the catalog has ${expected} tools`);
+        }
+      }
+    });
+  }
+  return problems;
+};
+
 const main = async () => {
   const check = process.argv.includes("--check");
   const content = await render();
   if (check) {
     const existing = await readFile(OUTPUT, "utf8").catch(() => "");
     if (existing !== content) { console.error(`docs/reference/MCP_TOOLS.md is stale; run: npx tsx scripts/generateMcpToolReference.ts`); process.exit(1); }
-    console.log("docs/reference/MCP_TOOLS.md is current.");
+    const problems = await checkQuotedToolCounts(catalogSize());
+    if (problems.length) { console.error(problems.join("\n")); process.exit(1); }
+    console.log(`docs/reference/MCP_TOOLS.md is current (${catalogSize()} tools); quoted counts in ${COUNT_QUOTING_DOCS.length} docs agree.`);
     return;
   }
   await mkdir(path.dirname(OUTPUT), { recursive: true });

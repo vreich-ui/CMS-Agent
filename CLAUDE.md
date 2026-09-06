@@ -34,7 +34,7 @@ Repo: GitHub `vreich-ui/CMS-Agent`; `main` is protected — land through a PR, n
 
 ## Do not assume
 
-Runs marked `dryRun: true` are not safe; `WORKSPACE_NODES_SOURCE` defaults to `store`; `netlify/functions/` and `src/agent/runtime/runAgent.ts` are legacy; only `dr-lurie` and `platform` can publish articles; `learning_list_observations` is broken on the GCS backend once a conversation ledger exists (KNOWN_ISSUES C-1).
+`dryRun: true` on a run means nothing — it is a literal on every run and no gate reads it; a `workflow_start_dry_run` run publishes live when its gates pass; `WORKSPACE_NODES_SOURCE` defaults to `store`; `netlify/functions/` and `src/agent/runtime/runAgent.ts` are legacy; only `dr-lurie` and `platform` can publish articles; the publish gates govern only the run-based path — `project_call_tool` (full bearer) and a model turn holding `project.call_tool` reach tenant verbs without them; a tenant's scoped chat bearer can approve/run ANY run by `runId` (KNOWN_ISSUES K-M9); `learning_list_observations` is broken on the GCS backend once a conversation ledger exists (KNOWN_ISSUES C-1).
 
 ## Discipline
 
