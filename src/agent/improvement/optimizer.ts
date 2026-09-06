@@ -4,6 +4,15 @@
 // evidence-cited, one-step reversible via changes.restore. PROPOSE-ONLY by default: promotion is a
 // separate explicit call carrying the caller's mutation meta; nothing auto-applies.
 //
+// T21.22 — "eval evidence" now means TWO kinds. Rubric evaluation judges the artifact against a
+// written standard; engagement evidence (engagement.ts, from the tracking outer loop) measures what
+// readers actually did with the published output, against the site's own median. The second exists
+// because the first structurally cannot see the case that matters most: content that scores well on
+// the rubric and still fails with readers. DIAGNOSIS reads both; TRIALS deliberately still do not —
+// a trial replays frozen cases and is judged by rubric alone, because a challenger prompt has no
+// published audience to measure and an online metric there would be a number with no experiment
+// behind it. Engagement decides WHAT to change, never WHETHER the change won.
+//
 // Scope note (updated — Phase 5 landed): a promoted prompt is live for independent execution and
 // replay, and now ALSO for full conductor runs when WORKSPACE_NODES_SOURCE=store (the executor
 // resolves nodes from the workspace store behind a canonical-node guard — see executor.ts /
@@ -17,11 +26,14 @@ import type { EvaluationRepository } from "../repository/interfaces/EvaluationRe
 import { comparePairwise, scoreOutput } from "./rubricJudge.js";
 import { buildDataset, caseContract, runTrialCase, type ReplayDeps } from "./replay.js";
 import { recommendModel, type ModelLadderRecommendation } from "./modelLadder.js";
-import { makeImprovementId, stableHash, type EvalRubric, type ImprovementProposal, type TrialCaseResult, type TrialRecord } from "./improvementTypes.js";
+import { makeImprovementId, stableHash, type EvalRubric, type ImprovementProposal, type ProposalCause, type TrialCaseResult, type TrialRecord } from "./improvementTypes.js";
+import { ENGAGEMENT_MIN_SESSIONS, buildEngagementBlock, diagnoseEngagement, renderEngagementEvidence, type EngagementBlock } from "./engagement.js";
 
 const now = () => new Date().toISOString();
 
-export type OptimizerDeps = ReplayDeps;
+// The tracking sink's transport and env are injectable so analyzeNode's engagement lookup is
+// testable without a live sink; both default to the process's own, exactly as the ingest bridge does.
+export type OptimizerDeps = ReplayDeps & { fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv };
 
 export type NodeAnalysis = {
   nodeId: string;
@@ -31,10 +43,16 @@ export type NodeAnalysis = {
   worstCriteria: Array<{ criterionId: string; meanScore: number; maxScore: number }>;
   failureCodes: Record<string, number>;
   feedback: { approvals: number; rejections: number; edits: number; outcomes: number };
+  // Measured reader behaviour on this node's PUBLISHED output, compared against the site median for
+  // the same window (T21.22). `feedback.outcomes` above still only COUNTS those records; this is
+  // what reads them. Absent — and the whole analysis then identical to what it was before T21.22 —
+  // when the tracking sink is unconfigured or unreachable, or the node has no engagement records in
+  // the window. See engagement.ts for the floor and the no-fabrication rules.
+  engagement?: EngagementBlock;
   evidence: { evalIds: string[]; runIds: string[]; feedbackIds: string[] };
 };
 
-export async function analyzeNode(params: { nodeId: string; from?: string; to?: string }, deps: OptimizerDeps): Promise<NodeAnalysis> {
+export async function analyzeNode(params: { nodeId: string; from?: string; to?: string; projectId?: string }, deps: OptimizerDeps): Promise<NodeAnalysis> {
   const results = await deps.evaluationRepository.listResults({ nodeId: params.nodeId, from: params.from, to: params.to, limit: 200 });
   const feedback = await deps.evaluationRepository.listFeedback({ nodeId: params.nodeId, limit: 200 });
   const runs = await deps.executionRepository.listRuns({});
@@ -61,6 +79,15 @@ export async function analyzeNode(params: { nodeId: string; from?: string; to?: 
     .map(([criterionId, bucket]) => ({ criterionId, meanScore: Number((bucket.total / bucket.count).toFixed(3)), maxScore: bucket.max }))
     .sort((a, b) => a.meanScore / a.maxScore - b.meanScore / b.maxScore)
     .slice(0, 3);
+  // Best-effort by construction: buildEngagementBlock never throws, and this guard is the belt to
+  // that braces — analyzeNode is on the post-run reflection path and a tracking sink must never be
+  // able to take a node analysis down.
+  let engagement: EngagementBlock | undefined;
+  try {
+    engagement = await buildEngagementBlock({ feedback, from: params.from, to: params.to, projectId: params.projectId }, { fetchImpl: deps.fetchImpl, env: deps.env });
+  } catch {
+    engagement = undefined;
+  }
   return {
     nodeId: params.nodeId,
     sampleSize: results.length,
@@ -74,6 +101,7 @@ export async function analyzeNode(params: { nodeId: string; from?: string; to?: 
       edits: feedback.filter((record) => record.kind === "edit").length,
       outcomes: feedback.filter((record) => record.kind === "outcome").length
     },
+    ...(engagement ? { engagement } : {}),
     evidence: {
       evalIds: results.slice(0, 20).map((result) => result.evalId),
       runIds: [...new Set(failedRunIds)].slice(0, 20),
@@ -103,14 +131,33 @@ export async function proposeImprovement(params: { nodeId: string; mode: "mock" 
   const node = await deps.workspaceRepository.getNode(params.nodeId);
   if (!node) throw new Error(`Unknown node: ${params.nodeId}`);
   const analysis = await analyzeNode({ nodeId: params.nodeId }, deps);
+  const worst = analysis.worstCriteria[0];
+  // The named cause is decided HERE, from the evidence, in both modes — a reflector model never picks
+  // it. An engagement shortfall on a node whose rubric is healthy is its OWN cause, not a worse
+  // reading of worstCriteria[0]: blending the two is exactly how this failure stayed invisible, since
+  // the resulting proposal always described a criterion problem the criteria did not have.
+  const engaged = diagnoseEngagement(analysis, analysis.engagement);
+  // Empty below the session floor, with an unconfigured/unreachable sink, or with nothing comparable
+  // — so an under-evidenced node's prompt is byte-identical to what it was before T21.22.
+  const engagementEvidence = renderEngagementEvidence(analysis.engagement);
+  const cause: ProposalCause = engaged ? engaged.cause : worst ? "rubric_criterion" : "no_evidence";
+  const rationale = engaged
+    ? engaged.rationale
+    : worst
+      ? `rubric_criterion: criterion "${worst.criterionId}" averages ${worst.meanScore}/${worst.maxScore} across ${analysis.sampleSize} evaluation${analysis.sampleSize === 1 ? "" : "s"}.`
+      : `no_evidence: no criterion-level evaluation evidence for this node, and no engagement evidence above the ${ENGAGEMENT_MIN_SESSIONS}-session floor.`;
   let diagnosis: string;
   let proposedPrompt: string;
   if (params.mode === "mock") {
-    const worst = analysis.worstCriteria[0];
-    diagnosis = worst
-      ? `Deterministic reflection: criterion "${worst.criterionId}" averages ${worst.meanScore}/${worst.maxScore} across ${analysis.sampleSize} evaluations — the prompt gives it no explicit completion bar.`
-      : `Deterministic reflection: no criterion-level evidence yet (sample ${analysis.sampleSize}); tightening output expectations as a baseline mutation.`;
-    proposedPrompt = `${node.prompt}\nQuality bar: explicitly satisfy ${worst ? `the "${worst.criterionId}" criterion` : "every rubric criterion"} — state the evidence for it in your output's notes.`;
+    if (engaged) {
+      diagnosis = `Deterministic reflection [${engaged.cause}]: ${engaged.rationale}`;
+      proposedPrompt = `${node.prompt}\nEngagement bar: published output from this node underperforms the site median on ${engaged.shortfalls.map((shortfall) => shortfall.metric).join(", ")} (${engaged.comparison}) while passing its rubric. Write to hold a reader, not only to satisfy the rubric: open on the reader's own problem, make the payoff explicit before they have to scroll for it, and give one unmistakable next action — and state in your output's notes which choice you made for that.`;
+    } else {
+      diagnosis = worst
+        ? `Deterministic reflection [${cause}]: criterion "${worst.criterionId}" averages ${worst.meanScore}/${worst.maxScore} across ${analysis.sampleSize} evaluations — the prompt gives it no explicit completion bar.`
+        : `Deterministic reflection [${cause}]: no criterion-level evidence yet (sample ${analysis.sampleSize}); tightening output expectations as a baseline mutation.`;
+      proposedPrompt = `${node.prompt}\nQuality bar: explicitly satisfy ${worst ? `the "${worst.criterionId}" criterion` : "every rubric criterion"} — state the evidence for it in your output's notes.`;
+    }
   } else {
     const timestamp = now();
     const run: WorkflowExecutionRecord = { runId: makeImprovementId("reflect"), workflowId: "improvement_reflector", projectId: "workspace", status: "running", startedAt: timestamp, updatedAt: timestamp, nodes: [], artifacts: [], errors: [], approvalsRequired: [], stageOutputs: {}, dryRun: true, executionMode: "openai" } as WorkflowExecutionRecord;
@@ -118,10 +165,14 @@ export async function proposeImprovement(params: { nodeId: string; mode: "mock" 
       "You are a prompt engineer improving one agent in a content pipeline (GEPA-style reflection).",
       "Given the agent's current prompt and evaluation evidence, diagnose the weakness in plain language and propose a full replacement prompt.",
       "Keep everything that already works; change surgically; keep the prompt's structural template (Objective/Inputs/Output/Completion/Blocker/Tool policy/Memory policy) intact.",
+      // Only present above the session floor, and only with a real site median to compare against —
+      // otherwise the reflector is told nothing about engagement and behaves exactly as before.
+      ...(engagementEvidence ? ["", engagementEvidence] : []),
+      ...(engaged ? ["", `The named cause of this proposal is ${engaged.cause}: the node meets its written standard and still underperforms the site on reader behaviour. Do NOT propose a stricter rubric bar for it — that is the standard it already passes.`] : []),
       "Return only JSON matching the schema."
     ].join("\n");
     const result = await getNodeRunner("openai").run(
-      { node: syntheticReflectorNode(reflectorPrompt), input: { input: { currentPrompt: node.prompt, analysis } } },
+      { node: syntheticReflectorNode(reflectorPrompt), input: { input: { currentPrompt: node.prompt, analysis, engagementEvidence: engagementEvidence || undefined } } },
       { run, executionRepository: deps.executionRepository }
     );
     if (!result.ok) throw new Error(`reflection_failed: ${result.code}: ${result.message}`);
@@ -134,6 +185,8 @@ export async function proposeImprovement(params: { nodeId: string; mode: "mock" 
     nodeId: params.nodeId,
     status: "proposed",
     diagnosis,
+    cause,
+    rationale,
     change: { kind: "prompt", prompt: proposedPrompt },
     evidence: analysis.evidence,
     baselinePromptHash: stableHash(node.prompt),

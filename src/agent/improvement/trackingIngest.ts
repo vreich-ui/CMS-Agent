@@ -3,7 +3,9 @@
 // only published-content signal reaching the learning substrate was Monetizer's revenue view. This
 // module pulls the sink's per-PRODUCER rollups (a producer is the node/run that made the content) and
 // records each row as a feedback.record OUTCOME — the same channel human approvals/edits use, so
-// optimizer.analyzeNode's `feedback.outcomes` already counts them with no change there.
+// optimizer.analyzeNode's `feedback.outcomes` counts them. T21.22 went further and made those records
+// READABLE: analyzeNode now aggregates them into an `engagement` block and compares it against the
+// site median, through the same client (fetchRollupRows) rather than a second one — see engagement.ts.
 //
 // Pull-based (a scheduled job or a human/agent MCP call is the trigger; it never fires from a run) and
 // read-only against the sink: it issues one GET and only WRITES feedback outcomes locally. The sink is
@@ -21,6 +23,9 @@ const MAX_ROWS = 500;
 
 export const TRACKING_SINK_URL_ENV = "TRACKING_SINK_URL";
 export const TRACKING_SINK_TOKEN_ENV = "TRACKING_SINK_TOKEN";
+/** The tenant's partition inside the sink (site genesis sets it to the bare site slug). Named here
+ * so every reader — the ingest job, the optimizer's median lookup — spells it the same way. */
+export const TRACKING_PROJECT_ID_ENV = "TRACKING_PROJECT_ID";
 /** Outcome `source` stamped on every record this bridge writes; the contract optimizer/dataset code reads. */
 export const TRACKING_OUTCOME_SOURCE = "tracking:engagement.v1";
 
@@ -111,13 +116,18 @@ export const toSinkDay = (value: string): string => String(value ?? "").trim().s
 /** Stable key for one rollup row: the producer identity the sink grouped by. */
 export const producerKeyOf = (nodeId: string | undefined, runId: string | undefined): string => `${nodeId ?? "unknown"}:${runId ?? "unknown"}`;
 
-/** Project one rollup row onto the fixed engagement.v1 metric vector. Missing or non-finite values are
- * dropped rather than zero-filled — a metric the sink did not report is not a measured zero. */
-export function trackingMetricsFromRow(row: unknown): Record<string, number> {
+/** Project one rollup row onto a FIXED metric vector, in the sink's snake_case spelling, accepting the
+ * row's own fields in either casing or a nested `metrics` envelope. Missing or non-finite values are
+ * dropped rather than zero-filled — a metric the sink did not report is not a measured zero.
+ *
+ * The key list is a parameter so a second GRAIN can project its own vector (T21.35's `by=strategy`
+ * rows carry `buy_click_rate`, which engagement.v1 does not) without a second, subtly different
+ * reader: casing, nesting and the never-zero-fill rule stay defined in exactly one place. */
+export function metricsFromRow(row: unknown, keys: readonly string[]): Record<string, number> {
   const source = (row && typeof row === "object" ? row : {}) as Record<string, unknown>;
   const nested = (typeof source.metrics === "object" && source.metrics ? source.metrics : {}) as Record<string, unknown>;
   const metrics: Record<string, number> = {};
-  for (const key of TRACKING_METRIC_KEYS) {
+  for (const key of keys) {
     const camel = key.replace(/_([a-z0-9])/g, (_match, char: string) => char.toUpperCase());
     const raw = source[key] ?? source[camel] ?? nested[key] ?? nested[camel];
     const value = typeof raw === "string" && raw.trim() ? Number(raw) : raw;
@@ -125,6 +135,9 @@ export function trackingMetricsFromRow(row: unknown): Record<string, number> {
   }
   return metrics;
 }
+
+/** Project one rollup row onto the fixed engagement.v1 metric vector. */
+export const trackingMetricsFromRow = (row: unknown): Record<string, number> => metricsFromRow(row, TRACKING_METRIC_KEYS);
 
 /** Rollup rows out of whatever envelope the sink used: a bare array, or {rows|rollups|data|results:[…]}. */
 export function rowsFromSinkBody(body: unknown): Array<Record<string, unknown>> {
@@ -145,31 +158,51 @@ const sanitizeError = (error: unknown): string => {
 };
 
 /**
- * GET `${TRACKING_SINK_URL}/rollups?by=producer` for the project/window and record each returned row as
- * one feedback OUTCOME (source `tracking:engagement.v1`, note `window <from>..<to>`).
+ * How the sink groups a rollups page. `producer` is the ingestion bridge's view (one row per node/run
+ * that MADE something); `object` is the site's own view (one row per published object), which is what
+ * a site-wide median is computed from; `strategy` (T21.35, kugel-data migration 008) is the
+ * CROSS-ARTICLE view — one row per strategy/intent/day — which is what a lesson that outlives a
+ * single piece can be learned from. All three are the same endpoint, the same auth, the same pinned
+ * contract — only `by` differs, which is why there is exactly ONE client for them.
  *
- * NEVER throws. An unconfigured connection, a transport failure, a non-200, a malformed body, or a row
- * that cannot be recorded all come back as an entry in `errors` with an empty (or partial) `ingested` —
- * exactly the best-effort posture ingestMonetizerAnalytics has, so a scheduled caller cannot be taken
- * down by the far side.
+ * `strategy` answers 503 on any deployment whose sink has not run migration 008 yet. That is a grain
+ * that does not exist here YET, not a failure: every caller treats it exactly like an unreachable
+ * sink (see `RollupFetchResult.status`, which is what lets a caller tell the two apart).
  */
-export async function ingestTrackingRollups(params: TrackingIngestParams, deps: TrackingIngestDeps): Promise<TrackingIngestResult> {
+export type RollupGrouping = "producer" | "object" | "strategy";
+
+export type RollupFetchParams = { by: RollupGrouping; projectId: string; from: string; to: string };
+export type RollupFetchDeps = { fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv; timeoutMs?: number };
+export type RollupFetchResult =
+  | { ok: true; rows: Array<Record<string, unknown>> }
+  // `status` is the sink's HTTP status when there WAS one (absent for an unconfigured connection or a
+  // transport failure). It carries no sink text — only the number — and exists so a caller can tell
+  // "this grain is not deployed here yet" (503) from "the sink is broken", without string-matching a
+  // message that is deliberately free of detail.
+  | { ok: false; error: string; status?: number };
+
+/**
+ * The single HTTP client for the sink's `/rollups` endpoint: connection check, the pinned query
+ * contract (ROLLUPS_QUERY_PARAM_NAMES + toSinkDay), the bearer, the timeout, and the envelope
+ * unwrapping. Every caller in this repo goes through here, so the contract cannot drift per caller.
+ *
+ * NEVER throws. An unconfigured connection, a transport failure, a non-200 and an unparseable body
+ * all come back as `{ ok: false, error }` with the error already collapsed to a name (a sink URL can
+ * embed credentials, so no raw transport message or sink error body is ever surfaced).
+ */
+export async function fetchRollupRows(params: RollupFetchParams, deps: RollupFetchDeps = {}): Promise<RollupFetchResult> {
   const env = deps.env ?? process.env;
-  const result: TrackingIngestResult = { ingested: [], rows: 0, errors: [] };
   const connection = trackingSinkConnectionState(env);
   if (!connection.urlConfigured || !connection.tokenConfigured) {
     const missing = [!connection.urlConfigured ? connection.urlEnvVar : undefined, !connection.tokenConfigured ? connection.tokenEnvVar : undefined].filter(Boolean);
-    result.errors.push({ error: `tracking_sink_not_configured: ${missing.join(", ")} unset on this deployment.` });
-    return result;
+    return { ok: false, error: `tracking_sink_not_configured: ${missing.join(", ")} unset on this deployment.` };
   }
-
   const fetchImpl = deps.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  let rows: Array<Record<string, unknown>>;
   try {
     const url = new URL(`${env[TRACKING_SINK_URL_ENV]!.trim().replace(/\/+$/, "")}/rollups`);
-    url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.by, "producer");
+    url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.by, params.by);
     url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.projectId, params.projectId);
     url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.from, toSinkDay(params.from));
     url.searchParams.set(ROLLUPS_QUERY_PARAM_NAMES.to, toSinkDay(params.to));
@@ -179,17 +212,32 @@ export async function ingestTrackingRollups(params: TrackingIngestParams, deps: 
       signal: controller.signal
     });
     // Status only — a sink error BODY is not echoed anywhere, for the same reason the URL is not.
-    if (!response.ok) {
-      result.errors.push({ error: `tracking_sink_http_${response.status}: the tracking sink rejected the rollups request.` });
-      return result;
-    }
-    rows = rowsFromSinkBody(await response.json());
+    if (!response.ok) return { ok: false, error: `tracking_sink_http_${response.status}: the tracking sink rejected the rollups request.`, status: response.status };
+    return { ok: true, rows: rowsFromSinkBody(await response.json()) };
   } catch (error) {
-    result.errors.push({ error: sanitizeError(error) });
-    return result;
+    return { ok: false, error: sanitizeError(error) };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * GET `${TRACKING_SINK_URL}/rollups?by=producer` for the project/window and record each returned row as
+ * one feedback OUTCOME (source `tracking:engagement.v1`, note `window <from>..<to>`).
+ *
+ * NEVER throws. An unconfigured connection, a transport failure, a non-200, a malformed body, or a row
+ * that cannot be recorded all come back as an entry in `errors` with an empty (or partial) `ingested` —
+ * exactly the best-effort posture ingestMonetizerAnalytics has, so a scheduled caller cannot be taken
+ * down by the far side.
+ */
+export async function ingestTrackingRollups(params: TrackingIngestParams, deps: TrackingIngestDeps): Promise<TrackingIngestResult> {
+  const result: TrackingIngestResult = { ingested: [], rows: 0, errors: [] };
+  const page = await fetchRollupRows({ by: "producer", projectId: params.projectId, from: params.from, to: params.to }, deps);
+  if (!page.ok) {
+    result.errors.push({ error: page.error });
+    return result;
+  }
+  let rows = page.rows;
 
   // The sink cannot narrow to one producer, so a caller that named a node gets the narrowing here.
   // A row that names no node still passes: params.nodeId is its attribution fallback below.

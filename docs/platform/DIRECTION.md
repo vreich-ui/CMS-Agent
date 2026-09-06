@@ -305,6 +305,21 @@ can then be cross-family with Claude natively (the recommended judge setup).
   read-only against Monetizer's safe allow-list, best-effort per signal, and reached
   through the standard `ProjectMcpAdapter` (endpoint/token via env NAMES). Covered by
   `tests/agent/monetizerIngest.test.ts`.
+- **Tracking-engagement evidence in diagnosis ✅ implemented.** The tracking bridge
+  (`src/agent/improvement/trackingIngest.ts`, T21.7) records the sink's per-producer
+  engagement rollups as OUTCOME feedback (`source: tracking:engagement.v1`); T21.22 made
+  the optimizer READ them. `analyzeNode` now returns an `engagement` block — the node's
+  aggregated `pageviews / sessions / completion_rate / cta_ctr / purchase_rate /
+  p75_dwell_ms` for the window, plus the SITE MEDIAN for the same window (`GET
+  /rollups?by=object`, through the same client and the same pinned query contract) — and
+  `proposeImprovement` puts that comparison in the reflective prompt. Floor: below 50
+  sessions the block reports `insufficient_data` and nothing is diagnosed from it. When a
+  node scores well on its rubric and still sits below the site median, the proposal carries
+  the named cause `engagement_below_site_median` — the failure rubric evaluation
+  structurally cannot observe. With the sink unconfigured or unreachable the block is
+  absent and the optimizer behaves exactly as it did before. TRIALS are unchanged and stay
+  rubric-judged: engagement decides WHAT to change, never whether a change won. Covered by
+  `tests/agent/improvement/engagementEvidence.test.ts`.
 - **`IMPROVEMENT_AUTO_PROMOTE` flag ✅ implemented.** `autoPromoteProposals()`
   (`src/agent/improvement/autoPromote.ts`) promotes proposals whose champion/challenger
   TRIAL already proves the change is better (decisive challenger win, no case failures,
