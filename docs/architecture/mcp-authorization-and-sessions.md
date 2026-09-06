@@ -1,3 +1,5 @@
+> **SUPERSEDED-IN-PART (documentation audit 2026-09-05).** The OAuth/session flow described here is current, but the wording is Netlify-era (`/api/mcp`, Netlify Blobs state): production serves `/mcp` on Cloud Run with state in GCS (`WORKSPACE_STORE=gcs` implies a durable state store). Current: [docs/MCP_ARCHITECTURE.md](../MCP_ARCHITECTURE.md), [docs/SECURITY.md](../SECURITY.md).
+
 # MCP Authorization and session control
 
 This document explains why a remote MCP client (for example, Claude's custom connector) could not

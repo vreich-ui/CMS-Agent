@@ -1,3 +1,5 @@
+> **HISTORICAL decision record (phases 1–8 shipped; documentation audit 2026-09-05).** The "dual control plane / UI switch / Netlify not retired" framing was reversed in August 2026 — Cloud Run is the only control plane — and `WORKSPACE_NODES_SOURCE` defaults to `store`, not `static`. Current architecture: [docs/ARCHITECTURE.md](../ARCHITECTURE.md), [docs/DEPLOYMENT.md](../DEPLOYMENT.md).
+
 # Platform direction — Netlify → Google Cloud Run (decision record + phased plan)
 
 Status: **decided** (July 2026). This is a docs-only decision record; no code changes

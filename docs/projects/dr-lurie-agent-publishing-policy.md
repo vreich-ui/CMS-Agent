@@ -1,3 +1,5 @@
+> **Tenant-side contract (documentation audit 2026-09-05):** §8.2 describes `approved:true` as publish authority; in CMS-Agent authority is `resolvePublishAuthority` (operator decision or snapshotted autonomy policy) — see [docs/PUBLISHING_ARCHITECTURE.md](../PUBLISHING_ARCHITECTURE.md) §2.1.
+
 # Dr. Lurie agent publishing policy
 
 ## TL;DR (for humans)

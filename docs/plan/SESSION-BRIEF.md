@@ -1,3 +1,5 @@
+> **HISTORICAL — dated plan/log kept for the decision record (documentation audit 2026-09-05).** Where it disagrees with the code, the code wins; the current architecture is documented in [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and its sibling docs (index: [docs/README.md](../README.md)).
+
 # CMS-Agent — cowork session brief
 *Paste this at the start of future sessions. State as of 2026-07-26.*
 

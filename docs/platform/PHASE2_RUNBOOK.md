@@ -1,3 +1,5 @@
+> **HISTORICAL — dated plan/log kept for the decision record (documentation audit 2026-09-05).** Where it disagrees with the code, the code wins; the current architecture is documented in [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and its sibling docs (index: [docs/README.md](../README.md)).
+
 # Phase 2 runbook — state on Google Cloud Storage
 
 Executes Phase 2 of `docs/platform/DIRECTION.md`: workspace/run/usage/change/skill/project

@@ -1,0 +1,204 @@
+# CMS-Agent — Known Issues, Defects and Risks
+
+Status: audit of commit `40424c4` (2026-09-05). Every entry carries severity (Critical / High / Medium / Low), confidence, evidence (file:line), a failure scenario, a recommended fix, and whether **documentation** alone or **implementation** must change. Sections: **C** confirmed defects, **K-D/A/M/P** suspected risks by domain, **I** infrastructure, **T** tests, **D** documentation contradictions. Ids are referenced from the other docs. The audit's change set is documentation plus two small doc-adjacent changes: the `.env.example` comment for `WORKSPACE_NODES_SOURCE` (C-4) and a new generator script `scripts/generateMcpToolReference.ts`. No functional code was changed.
+
+## C. Confirmed defects (reproduced or unambiguous in code)
+
+### C-1 `learning.list_observations` breaks once any conversation-turn ledger exists — **High**, confidence: confirmed (reproduced by script)
+- Evidence: `src/agent/repository/blobs/BlobLearningRepository.ts:21-27` lists prefix `learning/` and, if any blob exists, parses every blob as a `LearningObservation` and never consults the workspace document; `BlobLearningRepository.ts:11` writes ledgers under `learning/conversation-turn-gc/<project>/<conversation>.json` (`{supersessions, references}`, no `createdAt`).
+- Scenario: one ledger → the ledger document is returned as an "observation" and the real observations (in `workspace/current.json`) are hidden; two ledgers → `sort` throws `Cannot read properties of undefined (reading 'localeCompare')` and `learning_list_observations` / the controlled `learning.list_observations` tool fail for every caller. Today no code in `src/` calls `recordConversationTurnSupersession/Reference`, so the defect is latent; the first caller (or a hand-written blob) triggers it. The `learning/{observationId}.json` convention the code expects here was never the write path (observations live in the workspace document).
+- Fix (implementation): make `listObservations` delegate to `workspaceRepository.listObservations` (the actual store) and move the ledger under its own prefix (`conversation-turn-gc/`), or filter by a distinct prefix. Add a blob-backend test.
+
+### C-2 `WORKSPACE_STORE=json` is in-memory; `JsonWorkspaceStore` is dead code — **Medium**, confirmed
+- Evidence: `RepositoryManager.ts:122-157` branches only on `blobs`/`gcs`; `JsonWorkspaceStore` (`mcp/workspace/store.ts:654`) has no reference; `WORKSPACE_STORE_PATH` is read nowhere; README claimed file persistence and a `NODE_ENV=production` guard that does not exist.
+- Scenario: a developer relies on `json` for local persistence and loses every edit on restart.
+- Fix: documentation (done here) + either wire `JsonWorkspaceStore` behind `json` or delete it.
+
+### C-3 Continuation tick ignores the SIGTERM abort signal — **Medium**, confirmed
+- Evidence: `entrypoints/runContinuationTickJob.ts:31,89` accepts `signal` but `runContinuationTickJob` never passes it to `runContinuationTick` (`workspace/runContinuation.ts:229` has no signal parameter); the wrapper comment (`runContinuationTickMain.ts:5-9`) promises graceful stop.
+- Scenario: Cloud Run sends SIGTERM (task timeout / scale-down); the tick keeps dispatching until the hard kill; the in-flight node's claim expires and is re-dispatched later (cost duplication, K-D1). The deadline-margin logic (`DISPATCH_DEADLINE_MARGIN_MS`) mitigates only the planned case.
+- Fix (implementation): thread `signal` into `runContinuationTick` and check it in the per-run loop.
+
+### C-4 `WORKSPACE_NODES_SOURCE` default is documented as `static`, code default is `store` — **Medium**, confirmed
+- Evidence: `.env.example:34-40` (pre-fix) vs `executor.ts:338` (`=== "static" ? "static" : "store"`); `docs/platform/DIRECTION.md`, `docs/SESSION_HANDOFF.md` repeat "defaults to static".
+- Scenario: an operator believes production runs compiled nodes; it runs store rows (prompts, tool grants, deterministic flags).
+- Fix: documentation (done) and the `.env.example` comment/value corrected in this change set (the example no longer forces `static`).
+
+### C-5 Three tools sit outside the namespace scheme — **Low**, confirmed
+- Evidence: internal names `site_credentials_plan|apply|execution_status` contain no `.` (`mcp/workspace/siteCredentialTools.ts`); `isToolExposed` takes the segment before the first `.` (`server.ts:22-27`), so `MCP_EXPOSED_TOOL_PREFIXES=site` exposes `site_duplicate*` but not these, and the manifest counts 24 namespaces for what are 22 domains.
+- Fix (implementation): rename internals to `site.credentials_plan` etc. (aliases keep the wire names) and regenerate the manifest.
+
+### C-6 Server `instructions` describe a Netlify endpoint — **Low**, confirmed
+- Evidence: `mcp/workspace/server.ts:112` "Session-aware Netlify Streamable-HTTP MCP endpoint…" served by Cloud Run. Fix: implementation (string edit) + `npm run drift:update` is **not** needed (instructions are not in the manifest).
+
+### C-7 Publisher validates article bodies against the canonical schema, the executor against the store overlay — **Medium**, confirmed
+- Evidence: `publisher.ts:277,464` use `getWorkspaceNode("article_body")?.outputSchema` (canonical `nodes.ts`); dispatch validates with the resolved (store-overlaid) node schema (`executor.ts` `validateOutput(output, node.outputSchema)`).
+- Scenario: a `workspace_update_node_output_schema` edit on `article_body` accepted at execution time is refused at publish time as `no_valid_article_body` (or vice versa).
+- Fix (implementation): resolve the node through `resolveConductorNodes` in the publisher; document that canonical remains the publish authority until then.
+
+### C-8 A stuck `agent_converse` claim is permanent — **Medium**, confirmed
+- Evidence: `conversations/conversationalRunner.ts:53-62,93-103`; `BlobConversationTurnRepository.claim` returns `pending` for any pending claim; claims have no TTL and are never deleted.
+- Scenario: the instance handling a turn dies after `claim` and before `completeClaim/failClaim`; every retry with the same `(conversation_id, turn_id)` waits `timeout_ms + 5 s` polling GCS every 20 ms (up to ~6 000 reads) then fails `model_timeout`. Platform must mint a new `turn_id`.
+- Fix (implementation): claim `updatedAt` + lease expiry (e.g., > 2× `timeout_ms` ⇒ reclaimable); exponential poll backoff.
+
+### C-9 Cancelling a run does not stop an in-flight model call — **Medium**, confirmed (design, undocumented)
+- Evidence: `mcp/workspace/tools.ts:640,826` set status only; runner abort is bound to timeout only (`OpenAINodeRunner.ts:522-570`).
+- Scenario: `workflow_cancel_run` during a 5-minute `draft_writer` call: the call completes, usage is recorded, the CAS save fails, output is discarded.
+- Fix: documentation (done) or plumb a cancellation check/abort into the runner context.
+
+### C-10 Conductor job image is not kept in sync by the trigger — **Medium**, confirmed
+- Evidence: `cloudbuild.deploy.yaml:45` `_EXECUTOR_JOBS: continuation-tick` only; the header explains a job pinned by digest "runs old code forever". `conductor-run` (PHASE1 runbook) executes workflow nodes too.
+- Scenario: the exact 2026-08-14→20 incident, on the other job. Fix: add `conductor-run` (and any ingest job built from this image) to `_EXECUTOR_JOBS` (infra config change).
+
+### C-11 `TASK_TIMEOUT_MS` is set by nothing, so the tick's deadline guard uses a default that may not match the job — **Medium**, confirmed
+- Evidence: `runContinuation.ts:141-147` (comment says it exists so code and `--task-timeout` "cannot drift"); no deploy artifact or runbook sets it (`docs/platform/CONTINUATION_TICK.md:58-64`).
+- Scenario: job `--task-timeout` raised above 300 s: the guard is merely conservative; set below 300 s: the guard over-estimates the remaining task time, starts a dispatch that cannot finish, and the platform kills the node mid-flight (the 2026-09-04 shape). Fix: set the env var wherever `--task-timeout` is set (runbook + a job deploy script).
+
+### C-12 Two deploy artifacts for one service disagree — **Medium**, confirmed
+- Evidence: [DEPLOYMENT.md](DEPLOYMENT.md) §3 (`cloudbuild.deploy.yaml:90-102` vs `scripts/deploy-mcp.sh:79-82`): memory 1Gi vs 512Mi, min-instances 1 vs 0, runtime SA set vs omitted, different client-variable sets, `MCP_ALLOWED_ORIGINS` only in the script.
+- Scenario: a hand deploy after a trigger deploy halves memory and drops min-instances (cold starts on the OAuth/consent path); a first deploy from the script lacks three client connections.
+- Fix (infra): make the script call the same flag set (single source: a shared env file or delete the script's deploy step in favour of `gcloud builds submit --config cloudbuild.deploy.yaml`).
+
+### C-13 `site_credentials_apply` refuses unless two variables were set by hand — **Low**, confirmed
+- Evidence: `siteCredentialTools.ts:75-92` refuses without `SITE_CREDENTIAL_RECONCILER_GCP_PROJECT/REGION`; no repo deploy artifact sets them (a hand-set value would survive the merge-style deploys, so the live state is UNKNOWN). Fix: add them to the trigger's `--update-env-vars` (infra).
+
+### C-14 Tool catalog is rebuilt on every JSON-RPC message — **Low**, confirmed
+- Evidence: `server.ts:106` `createWorkspaceTools(context)` inside `handleMcpJsonRpc`; 151 closures + zod schemas per call; batches multiply it. Fix: memoize per process keyed by exposure/allowlist; harmless today.
+
+### C-15 `resources/read workspace://export` and `workspace_export_workspace` return the whole document — **Low**, confirmed
+- Evidence: `server.ts:132-135`, `store.ts:571`. Scenario: a connector "resource" read pulls every stage output and observation (MBs) into model context. Fix: paginate or exclude `stageOutputs` by default.
+
+## K-D. Distributed-systems risks
+
+### K-D1 Double dispatch after claim expiry — **High**, confidence: high (documented incidents in code)
+- Evidence: reclaim rule `executor.ts:1431-1448` (`dispatchedAt + timeoutMs + 90 s`); per-phase re-stamp `executor.ts:2925-2947`; runner usage recorded before the run save (`OpenAINodeRunner.ts:465`); `executor.ts:2925-2933` describes the `article_body` re-dispatch loop (390 s stale claim vs ~645 s of legitimate work) and the earlier `gap_adjudicator` loop; `runContinuation.ts:250` cites the 2026-09-04 task-timeout kill that re-dispatched a node 12.7 min and ~$0.60 later.
+- Scenario: a slow-but-alive node exceeds `timeout + 90 s` (tool loops, validation loops, provider stalls beyond the SDK timeout); a second driver reclaims and re-runs it; the first finishes, its CAS save fails, its cost stands. With three drivers polling (tick every 2 min, run_all callers, conductor job) the window is realistic.
+- Fix: heartbeat the claim from inside the runner (re-stamp every N seconds while the model call is alive) instead of timeout arithmetic; make reclaim require `now > lastHeartbeat + margin`.
+
+### K-D2 Run save, artifact blobs and index entry are not atomic — **Medium**, high
+- Evidence: `BlobExecutionRepository.saveRun:234-244` writes the run (CAS), then `persistArtifacts` (unconditional), then `upsertIndexEntry` (CAS ×4 then one unconditional write); `resetRun` deletes old artifact blobs after writing the new run.
+- Scenario: crash between writes → index missing the run (self-heals on next save), orphan `artifacts/*.json`, or artifacts newer than the run. Readers tolerate it; `BlobArtifactRepository.listArtifacts` scans the entire `artifacts/` prefix for one run.
+- Fix: drop the artifact side-blobs (the run record already holds them) or write them under `artifacts/by-run/{runId}/`; treat the run record as the only truth.
+
+### K-D3 Wall-clock assumptions across instances — **Low**, medium
+- Evidence: claims, stall assessment, retry backoff, TTL envelopes and `makeId` all use the local clock. Cloud Run clocks are NTP-synced; skew of seconds is within the 90 s margin. Documented, no fix required beyond K-D1.
+
+### K-D4 The stale-read reconciliation loop assumes eventual consistency that GCS no longer has — **Low**
+- Evidence: `store.ts:353-383` (`STALE_READ_RETRIES`) exists for Netlify Blobs; on GCS reads are strong so it never fires. Harmless; documentation notes it.
+
+## K-A. Agent-system risks
+
+### K-A1 Publish executor behaviour is configuration in the store, not code — **High**, high
+- Evidence: canonical `publish_executor` and `publication_controller` carry no deterministic flags (`nodes.ts` dump); `scripts/reseedStoreFromCanonical.ts` header: "Those two flags exist only in the LIVE STORE's metadata today"; `executor.ts:2303-2315` three-way behaviour; `overlayStoreNode` (`executor.ts:346-363`) merges canonical and store metadata per key, so the flag exists only as long as the store row carries it; default node source is `store`.
+- Scenario: a `workspace_update_node_metadata` / `workspace_update_node` / `workspace_import_workspace` write that omits the key (these replace the row's `metadata` field — `mcp/workspace/tools.ts:719`), or a fresh workspace document (new bucket / `GCS_KEY_PREFIX`, seeded from `workspaceStoreSeedNodes()`), silently switches production from engine publishing (gated) to a model turn holding `project.call_tool`, where `publishRun`'s five gates never run. (`scripts/reseedStoreFromCanonical.ts` deliberately excludes `publish_executor.metadata` from its allowlist and cannot drop the flag.) Nobody can tell which mode is live without querying the store.
+- Fix (implementation): move the flags into canonical literals (the gate/execute choice is code policy, not tenant configuration) and pin them in `overlayStoreNode`; until then document (done) and add a startup/health check that reports the live mode.
+
+### K-A2 Article publishing is hard-wired to two tenants — **High** for the stated product goal, high confidence
+- Evidence: `projects/projectHooks.ts:123-127` (`dr-lurie`, `platform`, `fernwell` — the last without `executePublish`); `publisher.ts:362-366` refuses `no_publish_executor`.
+- Scenario: a genesis-minted tenant (zilberman, genesis-lab) or fernwell runs `publishing_conductor` to the end and cannot publish an article; autonomous publishing "for every client" is not possible for them. The verb sequence is shared across tenants (`objectDialect.ts`); the dialect is parameterised per tenant (`objectIdSource` request_id vs server_minted, site/taxonomy object ids).
+- Fix (implementation): a generic platform-dialect hook selected by `objectDialect` presence rather than by project id; keep per-project hooks for policy/readiness only.
+
+### K-A3 Schema authority split (see C-7) — Medium.
+
+### K-A4 Context explosion on wide dependencies — **Medium**, medium
+- Evidence: `OpenAINodeRunner.ts:426` builds `dependencyOutputs` for every `dependsOn` with a per-dependency cap of 48 000 chars; `brief_architect` has 8 dependencies, `article_body` 6 → up to ~384 k / 288 k chars (≈ 100 k / 75 k tokens) plus playbook and schema, before tool results (32 k each).
+- Scenario: provider context overflow or truncation-retry doubling, cost spikes; the W12 truncation retry treats it as output truncation.
+- Fix: a total prompt budget (sum across dependencies) and schema-aware projection of dependency outputs.
+
+### K-A5 Model-produced JSON validated by a home-grown JSON-Schema subset — **Medium**, medium
+- Evidence: `execution/outputValidator.ts` (custom validator; `strict: false` on the SDK `json_schema`); node schemas are operator-editable (`validateJsonSchema` checks only `type` keywords).
+- Scenario: a schema using `$ref`/`$defs`, `format`, `contains` or `propertyNames` (keywords the validator does not implement; it does enforce `pattern`, `oneOf`/`anyOf`/`allOf`/`not`, `if/then/else`) silently lets a malformed body through to `publish_payload`; conversely a keyword the validator interprets differently from the provider may reject valid output. Fix: adopt Ajv (or the SDK's strict mode) and lock the supported keyword set; test parity with `canonicalNodesSchemaParity`.
+
+### K-A6 Learned state can contaminate runs without provenance checks — **Medium**, medium
+- Evidence: playbooks are injected into every dispatch unconditionally (`OpenAINodeRunner.ts:390-391`, `AnthropicNodeRunner.ts:100-101`); `playbook.apply_delta` and `playbook.migrate_observations` accept free text from any full bearer; `optimizer.promote` requires `baselinePromptHash` but `workspace_update_node_prompt` does not; helpful/harmful counters never retire an item on their own — only budget eviction (`playbook.ts:41-45`) or an explicit `retire` delta does.
+- Scenario: a low-quality curation pass or an agent writing its own "lesson" becomes executable prompt text for all later runs of that node; no regression gate runs automatically on playbook changes.
+- Fix: route playbook changes through the change history (they are not today — no revision, no `changes_restore`), require evidence ids, run `evaluation_run_regression` before enabling.
+
+### K-A7 Workflow registration by side-effect import — **Low**, high
+- Evidence: `captureConductorWorkflow.ts`, `cloneConductorWorkflow.ts`, `visualIdentityWorkflow.ts` register on import; a script importing only `workflowRegistry.ts` sees one workflow (observed in this audit). Fix: explicit `registerAllWorkflows()` called by the registry.
+
+### K-A8 Unbounded agent loops are bounded — verified, no issue
+- `maxTurns`, `toolCallLimit`, timeouts, `MAX_STEPS`/`maxSteps`, `CONCURRENT_DISPATCH_LIMIT`, tick budgets, retry caps and budget gates all exist and are tested. Recursive tool use is impossible: nodes cannot call `workflow.*`/`node.execute` (not in the controlled registry).
+
+## K-M. MCP risks
+
+### K-M1 Catalog size — **Medium**, high: ~124 KB / ~30–35 k tokens per `tools/list`; connectors with the full bearer load all 151 tools. Fix: default `MCP_EXPOSED_TOOL_PREFIXES` per credential; split admin namespaces behind a second endpoint or scope.
+### K-M2 Namespace irregularity — see C-5.
+### K-M3 Hand-maintained JSON Schema beside zod — **Medium**, medium: `tools.ts` declares both; locked only for node/project/run tools and controlled tools (`tests/agent/mcp/*ToolSchemas.test.ts`). Fix: derive JSON Schema from zod (`z.toJSONSchema` in zod 4) and snapshot the whole manifest's schemas (the manifest already hashes them).
+### K-M4 Self-asserted actor attribution — **Medium**, high: `mcpEndpoint.ts:56-68` accepts `x-workspace-actor {kind:"human", id}` from any bearer; change history then shows a human. Fix: only honour the header for the (retired) proxy path; derive actor from the credential.
+### K-M5 Tool-grant widening via MCP — **Medium**, high: `workspace_update_node_tools` can grant `project.call_tool` (or any controlled tool) to any node with only change history as a guard. Canonical publish nodes carry `project.call_tool` by design (`publisher.ts:139-147`), and `reseedStoreFromCanonical.ts:292` deliberately names `workspace.update_node_tools` as the reviewed path for such a grant — so the risk is not the grant itself but that a full bearer (including an agent) can make it without review. Fix: require `adminApproved`/operator actor for tool-grant changes on `publish`/`admin` nodes in `WorkspaceStateStore.mutate`, or emit a distinct change-history event type the attention feed surfaces.
+### K-M6 Batch calls run concurrently — **Low**: `Promise.all` over JSON-RPC arrays lets two mutations race inside one request; CAS makes it safe but conflict-prone.
+### K-M7 500 responses echo `error.message` — **Low**: `mcpEndpoint.ts:195` returns raw messages; secrets are not expected in them but tenant error bodies can be.
+### K-M8 Managed-bearer registry read on every non-static request — **Low**: `findAnyScopedBearerTokenPolicy` reads `auth/managed-scoped-bearers.v1.json` then possibly the OAuth token blob for every OAuth/scoped call (2 GCS reads before dispatch). Fix: short in-process cache keyed by document generation.
+
+## K-P. Persistence risks
+
+### K-P1 Ephemeral fallback by omission — **Medium**, high: `WORKSPACE_STORE` unset ⇒ `memory` everywhere (`RepositoryManager.ts:103`), including a Cloud Run job whose env was created without it; the job would "succeed" scanning an empty store (exactly the Netlify tick incident). `gcs` without the factory throws, but `memory` never does. Fix: refuse `memory` when `K_SERVICE` is set unless `ALLOW_MEMORY_STORE=1`.
+### K-P2 One hot document — **High**, high: `workspace/current.json` holds nodes, agents, relationships, **stage output mirrors**, **learning observations**, the reduced-contract cache and an append-only `events[]` list; every mutation (including each node completion's stage mirror and every observation) is a full-document read-validate-write under CAS, and `events[]` never shrinks. Scenario: concurrent runs across tenants contend on one object; version conflicts rise with load; the document grows unbounded (parse + write cost per mutation grows with history). Fix: split stage outputs and observations into per-run/per-record keys (they already exist on the run record); cap or externalize `events[]`.
+### K-P3 Artifact dual write and orphan bytes — **Medium** (see K-D2); artifact bytes on PDF-Tool/tenant storage are never reclaimed when runs reset.
+### K-P4 Unconditional writers → lost updates — **Medium**, high: `BlobProjectRepository.save`, `BlobImprovementRepository.savePlaybook/saveProposal`, `BlobSkillRepository.save` (rewrites every skill/version/event blob and deletes missing ones — a concurrent `skill.create` can be erased), `BlobDriverHealthRepository`, `BlobUsageRepository`, `persistArtifacts`, `clientMemoryStore.recordTemplates` (`memory/{projectId}.json`, read-modify-write with no precondition). Two admins editing a project record or two curation passes on a playbook lose one write silently. Fix: ETag CAS via `getBlobJsonWithEtag` (already used elsewhere), and per-skill writes.
+### K-P5 No retention anywhere except ticks and conversation trims — **Medium**, high: `runs/`, `run-index/`, `usage/`, `node_timings/`, `artifacts/`, `changes/`, `revisions/`, `evaluation/*`, `improvement/*`, `conversation-turn-claims/`, `mcp/session/*`, `mcp/oauth/*` grow forever; the tick and constellation metrics fetch the whole run fleet every cycle (`runContinuation.ts:254`, `listRuns({})` → `fetchAllRuns`). Fix: retention job (archive runs older than N days to a cold prefix, drop expired session/OAuth blobs and completed claims).
+### K-P6 Schema migration is implicit — **Medium**, medium: no `schemaVersion` bump has ever happened; compatibility relies on optional fields; no test loads an old record (T-6). Fix: add fixture documents from production shapes per era and a read test.
+### K-P7 Reduced-contract cache keyed by fingerprint lives in the hot document — **Low**: cap 20, but every put is a full-document write (K-P2).
+### K-P8 `BlobSkillRepository.load` reads every version and event blob on every load — **Low/Medium**: grows with history; skills are loaded on `skill.*` calls and node skill resolution.
+
+## K-O. Observability
+
+### K-O1 No application-level request log for MCP calls — **Medium**, high
+- Evidence: `mcp/http/mcpEndpoint.ts` mints `requestId` (`:70`) and never logs it; no `console.*` in the endpoint, router or tool dispatch; no tracing dependency in `package.json`.
+- Scenario: "who called `workflow_publish_run` at 14:02 and with what result" is answerable only if the call mutated something with change history; read-only and failed calls leave no trace beyond Cloud Run's `POST /mcp 200`.
+- Fix (implementation): one structured line per `tools/call` (tool, actor kind/id, project arg, latency, ok/code, requestId, `K_REVISION`), with redaction.
+
+### K-O2 Build identity is half-wired — **Low**: `SERVICE_GIT_SHA`/`SERVICE_DEPLOYED_AT` read null (`RepositoryManager.ts:76-77`; the comment at `:63-65` says so); only `K_REVISION` identifies the build. Fix: stamp in `cloudbuild.deploy.yaml` `--update-env-vars`.
+
+## I. Infrastructure
+
+| Id | Severity | Finding | Fix |
+|---|---|---|---|
+| I-1 | Medium | Deploy artifact drift (C-12) | unify |
+| I-2 | Medium | `TASK_TIMEOUT_MS` unset (C-11) | set with `--task-timeout` |
+| I-3 | Medium | `conductor-run` image not synced (C-10) | `_EXECUTOR_JOBS` |
+| I-4 | Medium | No scripted rollback; `route-to-latest` only moves traffic forward | document `gcloud run services update-traffic --to-revisions` or add a `rollback` action to `cloud-run-plane.yml` |
+| I-5 | Medium | `/health` is shallow (no store, no client check); deploy verification checks variable names not values; `SERVICE_GIT_SHA` never stamped | add a `/ready` that reads `repository_get_health`; stamp SHA in the trigger |
+| I-6 | Low | Dozens of code-read variables (≥55 by static grep, more counting dynamically composed names) absent from `.env.example`; `SNOOCLE_*`, `ANTHROPIC_VERSION`, `WORKSPACE_STORE_PATH` are dead | regenerate `.env.example` from [DEPLOYMENT.md](DEPLOYMENT.md) §5 |
+| I-7 | Medium | Legacy Netlify functions remain deployed and routed (`/api/agent`, `/api/mcp`, OAuth) — dead 502 surface and an extra auth surface (`AGENT_API_TOKEN`) | remove functions except `session`; keep the modules for tests |
+| I-8 | Low | `MCP_ALLOWED_ORIGINS` only on the script path; a trigger-only fresh deploy denies the SPAs | add to trigger |
+| I-9 | Low | Ingest/GC jobs have no deploy artifact; whether they run is unknown | scripts like the reconciler's |
+| I-10 | Info | Secrets: no value leakage found in code, logs or records; `.dockerignore` excludes `.env*`; CI uses no secrets | — |
+
+## T. Tests (from the test-suite audit; 290 files / ~2 760 tests, all passing, ~4 min)
+
+| Id | Severity | Gap | Files |
+|---|---|---|---|
+| T-1 | High | C-1 has no test; blob-backend behaviour of `BlobLearningRepository` untested | `src/agent/repository/blobs/BlobLearningRepository.ts` |
+| T-2 | High | Publishing verbs have no captured-schema conformance test (capture has `mcpBoundaryConformance.test.ts`; publish uses hand-written `CallToolFn` fakes) | `publisher.ts`, `publishExecution.ts`, `objectPublishExecution.ts`, `releaseExecution.ts`, hooks |
+| T-3 | High | Release-ledger idempotency tested as a pure function only, never through `runNextNode` + CAS + re-dispatch | `executor.ts:2417-2479`, `releaseExecution.test.ts` |
+| T-4 | High | Run-index CAS retry/exhaustion/prune untested; fakes never return `modified:false` except `gcsBackend.test.ts` | `BlobExecutionRepository.ts:139-172` |
+| T-5 | Medium | Zero behavioural tests for `BlobEvaluation/Improvement/DriverHealth/NodeTiming/Usage/Artifact/Skill` repositories | `src/agent/repository/blobs/*`, `skills/skillRegistry.ts` |
+| T-6 | Medium | No backward-compat test loading old workspace documents / run records lacking newer fields | `store.ts`, `executor.ts` |
+| T-7 | Medium | Netlify Blobs non-CAS degrade path only single-instance tested | `blobClient.ts:56-75` |
+| T-8 | Medium | Entrypoint `*Main.ts` wrappers and real `GcsStoreClient` construction untested | `entrypoints/*Main.ts` |
+| T-9 | Medium | `CLIENT-MANAGER-CONTRACT.md` is not machine-diffed against the zod schemas | `conversations/conversationContract.ts` |
+| T-10 | Medium | Workbench Playwright (109) and broker (84) suites are not in CI | `.github/workflows/ci.yml` |
+| T-11 | Low | `skills/publish.test.ts` locks a TODO stub; legacy `runAgent` tests count as coverage of nothing live | `src/agent/skills/publish.ts` |
+| T-12 | Low | `capture/engine/screenshot-normalize.mjs`, `side-by-side.mjs` unreferenced by tests; production use UNKNOWN | — |
+| T-13 | Info | Tests validating mocks rather than contracts: every `callTool` fake-based publish test, `clientMemoryWriteWiring` (asserts fake called), `monetizerIngestJob`/`trackingIngestJob` (fetch stubs) — acceptable as unit tests, not as integration evidence | — |
+
+## D. Documentation contradictions resolved by this change set (code wins)
+
+| Id | Old statement (location) | Reality |
+|---|---|---|
+| D-1 | README: Netlify Blobs is the durable store; `WORKSPACE_STORE` supports `memory|json|blobs`; keys `learning/{observationId}.json`; `NODE_ENV=production` guard | GCS via `gcs`; `json` = memory; observations in the workspace document; no guard |
+| D-2 | README/.env.example: `/api/agent` + `AGENT_API_TOKEN` required; Snoocle project default (`src/agent/projects/snoocle/definition.ts`) | legacy function; no snoocle definition exists |
+| D-3 | README: 18-node graph, "stops at publication_controller with approval_required", "publishing execution disabled", "no approval execution path" | 25-node graph, five-gate publish path, autonomous policy, release executor |
+| D-4 | README: "Identity secure proxy" connection mode, `/api/workspace-mcp` | deleted 2026-08-27; SPAs call Cloud Run directly |
+| D-5 | AGENTS.md: orchestration in `src/agent/runtime`, workflows in `src/agent/workflows`, "one reusable base agent" (OpenAI Agents SDK), publish flags | orchestration in `src/agent/workspace/executor.ts`; no workflows dir; base agent is a legacy scaffold |
+| D-6 | `.env.example`, DIRECTION.md, SESSION_HANDOFF: `WORKSPACE_NODES_SOURCE` defaults to static | defaults to store (C-4) |
+| D-7 | DIRECTION/PHASE4: UI "control plane toggle Netlify/Cloud Run", "Netlify not retired" | Cloud Run is the only plane (`ui/src/connection.ts`) |
+| D-8 | PHASE1/HANDOFF/dr-lurie policy §8.2/STRATEGY: `--approved` / `approved:true` / `DR_LURIE_PUBLISH_ENABLED=true` authorize publishing | authority = `resolvePublishAuthority`; `approved` deprecated; `publishEnabled` defaults true |
+| D-9 | CAPTURE-CLONE-SPEC: three workflows; `publish.mjs` vendored | four workflows; `publish.mjs` deleted (T15.7) |
+| D-10 | README: `MCP_STATE_STORE` values `blobs|memory` only; `dev` starts Netlify | `gcs` implies durable; `npm run dev` = `serve:mcp` |
+| D-11 | LibreChat kit: 21-node pipeline | 25 canonical / ~48 seeded |
+| D-12 | `netlifyFunctionIsolation.test.ts:19` comment: workbench's only data path is `/api/workspace-mcp` | workbench uses Cloud Run transport |
+
+Historical plans (`docs/plan/*`, `docs/platform/*`, `docs/constellation/*`, `docs/SESSION_HANDOFF.md`) are retained with a HISTORICAL banner; see [docs/README.md](README.md).

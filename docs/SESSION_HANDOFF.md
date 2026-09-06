@@ -1,3 +1,5 @@
+> **HISTORICAL — dated plan/log kept for the decision record (documentation audit 2026-09-05).** Where it disagrees with the code, the code wins; the current architecture is documented in [docs/ARCHITECTURE.md](ARCHITECTURE.md) and its sibling docs (index: [docs/README.md](README.md)).
+
 # CMS-Agent — Session Handoff
 
 _Handoff for a fresh session. Repo: `vreich-ui/CMS-Agent`. Supersedes the 2026-07 MCP-hardening handoff._

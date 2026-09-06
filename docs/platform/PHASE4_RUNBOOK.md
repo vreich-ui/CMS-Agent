@@ -1,3 +1,5 @@
+> **SUPERSEDED-IN-PART (documentation audit 2026-09-05).** The deploy / CORS / `--set-env-vars` / `verify:deploy` guidance still applies (now scripted in `scripts/deploy-mcp.sh` and `cloudbuild.deploy.yaml`); the "UI switch" and "coexistence with Netlify" sections are obsolete — Cloud Run is the only control plane. Current: [docs/DEPLOYMENT.md](../DEPLOYMENT.md).
+
 # Phase 4 runbook — dual control plane with a UI switch
 
 Executes Phase 4 of `docs/platform/DIRECTION.md`: a Google **Cloud Run MCP Service**

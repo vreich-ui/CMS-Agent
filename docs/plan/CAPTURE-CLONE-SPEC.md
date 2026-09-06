@@ -1,3 +1,5 @@
+> **CURRENT with two stale statements (documentation audit 2026-09-05):** four workflows are registered (publishing, capture, clone, visual_identity), not three; `publish.mjs` was deleted by T15.7 and its behaviour lives in `src/agent/workspace/objectPublishExecution.ts`.
+
 # Capture and Clone Conductors — Design Specification
 
 **Status:** Definitive record · **Last updated:** 2026-08-25  

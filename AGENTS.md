@@ -1,63 +1,90 @@
-# AGENTS.md
+# AGENTS.md — rules for AI coding agents working in this repository
 
-## Read this first
+Read [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md) (architecture briefing) before changing anything, and [PRODUCT_VISION.md](PRODUCT_VISION.md) before product/UI decisions. [CLAUDE.md](CLAUDE.md) is the short navigation and safety card. This file states the contract; the docs it links carry the evidence.
 
-Reread `PRODUCT_VISION.md` (repo root) before every working session. It is
-the anchor for all product and design decisions: attention over information
-density, the graph as one view of an organization (not the product), the
-four-layer attention hierarchy, progressive disclosure, evidence-based
-explainability, and attribution-first history. Where any other document or
-earlier plan disagrees with it, the vision wins. Detailed UI specs live in
-`docs/constellation/`.
+## What this system is (do not re-derive it from old docs)
 
-## Project goal
+- Google Cloud Run service `cms-agent-mcp` + Cloud Run jobs, one image, one GCS bucket (`WORKSPACE_STORE=gcs`). Netlify hosts only the two SPAs. `netlify/functions/*`, `src/agent/runtime/{runAgent,createAgent}.ts`, `src/agent/skills/{contentDraft,editorialReview,seo,publish}.ts`, `src/agent/memory/{memoryEnvelope,JsonMemoryAdapter,MemoryAdapter}.ts` and Netlify Blobs are **legacy** — never extend them, never cite them as current behaviour.
+- Orchestration lives in `src/agent/workspace/executor.ts`; MCP in `src/agent/mcp/`; node runners in `src/agent/execution/`; tenants in `src/agent/projects/`; persistence in `src/agent/repository/`. There is no `src/agent/workflows/`.
+- Node behaviour is store-overlaid by default (`WORKSPACE_NODES_SOURCE=store`); topology is code. Runs are `dryRun: true` by literal and still publish live under policy.
 
-Build a Google Cloud Run-hosted TypeScript agent runtime for content creation and publishing workflows using the OpenAI Agents SDK. GCS is the authoritative workspace store. Netlify hosts the GUI only; Netlify function code is legacy/GUI support and is out of scope unless a task explicitly concerns the GUI delivery or its authentication proxy.
+## Architecture invariants (MUST)
 
-The runtime must support:
-- One reusable base agent.
-- Multiple project profiles selected by projectId.
-- Project-specific instructions, workflows, skills, MCP servers, memory namespaces, and publishing targets.
-- MCP communication through Streamable HTTP first.
-- Local SDK tools for deterministic project operations.
-- Future observability, learning loops, and JSON memory exchange.
-- Ignore folders: Other and DrLurieBlog.
+1. Every process entrypoint calls `bootstrapWorkspaceStore()` before any repository access; entrypoint logic modules import without side effects (`*Main.ts` wrappers only start things) — the Docker build imports the module graph as a startup guard.
+2. Run state changes go through `executor.ts` (`runNextNode`, `retryNode`, `resetRun`, `updateRunStatus`, `setOperatorPublishDecision`, `setNodeBudgetOverride`) under `withRunLock` and the repository's CAS `saveRun`. Never write `runs/*.json` directly or bypass `rev`.
+3. Workspace document changes go through `WorkspaceStateStore.mutate()` (validation → version → revision → event → CAS save → change sink). Never write `workspace/current.json` directly.
+4. Publish authority = `resolvePublishAuthority(run)` only. Do not add caller flags that authorize publishing; do not add or remove a gate in `publisher.ts` (`PUBLISH_GATE_NAMES` is a closed set); `release_to_production` is called only by `release_executor` (`releaseExecution.ts`).
+5. Never widen the publish charter (`workspace/publishableTypeCharter.ts`). Canonical publish nodes carry `project.call_tool` by design; changing tool grants on a `publish`/`admin` node is a reviewed operator decision made through `workspace_update_node_tools`, never through a re-seed or an agent's own initiative. If a change would let a node publish something it could not publish before, stop and ask the operator.
+6. Secrets are referenced by env-var NAME or Secret Manager REF; values never enter records, tool results, logs or prompts. Use `redactSensitiveKeys` on anything that echoes stored data.
+7. `netlify/functions/*.mts` must not import sibling functions (`tests/agent/netlifyFunctionIsolation.test.ts`).
+8. Deploy flags are merge-style (`--update-env-vars` / `--update-secrets`); never `--set-env-vars` / `--set-secrets` (two production incidents).
+9. Tool names on the wire are canonical underscore names; internal names are dotted; both must keep resolving (`DEPRECATED_TOOL_ALIASES` for renames).
+10. The five determinism/lock artifacts are regenerated deliberately, never edited by hand: `docs/mcp-tool-manifest.json` (`npm run drift:update`), node literals (`npm run nodes:update`), `docs/ui-glossary.md` (`npm run glossary:update`), `docs/engine-objects.md` + generated envelopes (`npm run objects:update`), `docs/site-credential-scope-lock.json` (`npm run scope:update`, then reconciler `--apply`). `docs/reference/MCP_TOOLS.md` is generated by `scripts/generateMcpToolReference.ts`.
 
-## Architecture rules
+## Canonical data ownership (summary — full matrix in docs/DATA_ARCHITECTURE.md §2)
 
-- Keep Cloud Run HTTP/job entrypoints thin.
-- Do not add agent-runtime or persistence behavior to Netlify functions; Netlify is the GUI host only.
-- Put orchestration logic in `src/agent/runtime`.
-- Put project configuration in `src/agent/projects`.
-- Put reusable local capabilities in `src/agent/skills`.
-- Put workflow definitions in `src/agent/workflows`.
-- Put MCP setup in `src/agent/mcp`.
-- Put memory exchange types and adapters in `src/agent/memory`.
-- Put logging/tracing adapters in `src/agent/observability`.
+| Domain | Owner |
+|---|---|
+| How a node runs (prompt, schemas, tools, model, metadata flags) | `workspace/current.json` (seeded from code) |
+| Topology, risk levels, node/workflow membership | code literals |
+| Run state, outputs, receipts, approvals, ledgers | `runs/{runId}.json` |
+| Published content | the tenant MCP, never CMS-Agent |
+| Projects | `projects/{projectId}.json` |
+| Credentials | env / Secret Manager values; digests for chat bearers |
+| Learned prompt material | `improvement/playbooks/{nodeId}.json` |
+| Chat transcripts | Platform `ChatDoc` (CMS-Agent keeps a 200-turn mirror) |
 
-## Runtime rules
+## What not to change casually
 
-- Use TypeScript.
-- Keep transport-neutral runtime behavior outside hosting adapters.
-- Do not hardcode secrets.
-- Read secrets from `process.env`.
-- Publishing is policy-driven by `publishingPolicy.autonomyMode` (see ADR-2026-08-25-publish-autonomy). `dryRun` is a separate parameter: `dryRun: true` disables side effects (API calls, releases, etc.); policy controls whether publication proceeds.
-- Add Zod validation for request bodies and tool parameters.
-- Return structured JSON from API endpoints.
-- Keep publishing adapters replaceable.
+- `src/agent/workspace/executor.ts` dispatch order (reclaim → runnable → budget → batch → skip → publish-risk → deterministic → auth preflight → claim → runner → validate → save); each step encodes an incident.
+- `resolveConductorNodes` / `overlayStoreNode` pinned-field list.
+- `mcp/http/mcpEndpoint.ts` auth order (static → scoped → OAuth) and the scoped-request checks.
+- `BlobExecutionRepository` CAS + index logic; `BlobWorkspaceRepository` ETag handling.
+- `capture/siteGenesis.ts` `SITE_CLIENT_MANAGER_TOOLS` (locked).
+- `cloudbuild.deploy.yaml` verification steps and `_EXECUTOR_JOBS`.
+- `CLIENT-MANAGER-CONTRACT.md` wire shape (additive versions only).
 
-## Testing rules
+## Where contracts are defined
 
-- Add unit tests for:
-  - project registry
-  - request validation
-  - memory envelope validation
-  - skill registry filtering
-  - dry-run publishing behavior
+| Contract | Location |
+|---|---|
+| MCP wire surface | `src/agent/mcp/workspace/tools.ts` + `*Tools.ts`; lock `docs/mcp-tool-manifest.json`; reference `docs/reference/MCP_TOOLS.md` |
+| Node input/output schemas | canonical literals (`nodes.ts`, `captureConductorNodes.ts`, `cloneConductorNodes.ts`, `visualIdentityNodes.ts`) + store overlay |
+| Run record | `src/agent/workspace/executionTypes.ts` |
+| Workspace document | `src/agent/mcp/workspace/store.ts` (zod) |
+| Project record | `src/agent/projects/projectTypes.ts`; registration contract via `project_get_registration_contract` |
+| Tenant object verbs / dialect | `src/agent/projects/objectDialect.ts`, per-tenant `hooks.ts`; capture fixtures `tests/agent/capture/fixtures/platformToolSchemas.ts` |
+| Chat turn | `src/agent/conversations/conversationContract.ts` + `CLIENT-MANAGER-CONTRACT.md` |
+| Scoped bearer policy | `src/agent/mcp/auth/scopedBearerTokens.ts`, `managedScopedBearerCredentials.ts`; `docs/mcp-scoped-bearer-auth.md` |
+| Storage keys | `docs/DATA_ARCHITECTURE.md` §3 |
+| Environment variables | `docs/DEPLOYMENT.md` §5 |
 
-## Safety rules
+## Required tests
 
-- Publishing is controlled by `publishingPolicy.autonomyMode` and operator decisions, never by `dryRun` alone. `dryRun: false` is required to actually publish, but policy is the authority (ADR-2026-08-25-publish-autonomy §2.4).
-- Never expose raw API keys or authorization headers in logs.
-- Tool calls that mutate external systems must be explicit and auditable.
-- Every explicit operator `withheld` decision halts publication in every mode (ADR-2026-08-25-publish-autonomy §2.4, rule 1).
+- Every task ships its own acceptance test under `tests/` (vitest, no network, no secrets). Repositories: add the blob-backend case to `tests/agent/gcsBackend.test.ts` style doubles that honour CAS (`modified:false`), not Map fakes.
+- Touching a tool: schema test in `tests/agent/mcp/*ToolSchemas.test.ts` (node/project/run families) or `tests/agent/tools/toolJsonSchema.test.ts`; `npm run test:drift`.
+- Touching nodes: `tests/agent/workspace/canonicalNodesSnapshot.test.ts` and `canonicalNodesSchemaParity.test.ts` will fail until regenerated — regenerate, do not hand-edit.
+- Touching publishing: `tests/agent/workspace/{publishDecisionGate,publishAutonomyEveryWorkflow,publishableTypeCharter,releaseExecution,objectPublishExecution}.test.ts`.
+- Touching the executor: `tests/agent/workspace/{conductor,concurrentDispatch,deterministicStageDispatchClaim,runStallHeartbeat,orchestratorRetry,approvalGateStateMachine}.test.ts`, `tests/agent/workflowRunnerConcurrency.test.ts`.
+- Touching auth: `tests/agent/mcp/{mcpEndpoint,oauth,oauthEndpoints,scopedBearerTokens,managedScopedBearerCredentials,session}.test.ts`.
+- Run before handing over: `npm run typecheck`, `npm test`, `npm run test:drift`, `npm run test:scope`, and `npm run test:ui` when `ui/` changed. UI `.tsx` is not covered by root tests; an adversarial review of the diff is required before delivery.
+
+## Forbidden assumptions
+
+- That `dryRun`/`workflow_start_dry_run` implies no side effects.
+- That a caller's `approved: true` or `RUN_APPROVED` authorizes publishing (only the durable operator decision does).
+- That `WORKSPACE_NODES_SOURCE` defaults to `static`, or that editing `nodes.ts` changes a live run without `nodes:update` + redeploy + `store:update`.
+- That `learning/` is a per-observation key space, or that observations are injected into prompts.
+- That any tenant other than `dr-lurie`/`platform` has an article publish hook.
+- That `tool_list_executions`, `/health`, or `repository_get_health` prove client connectivity.
+- That `MCP_STATE_STORE=blobs` on Cloud Run means Netlify Blobs.
+- That the Netlify `mcp`/`agent` functions serve traffic.
+- That the two deploy artifacts are equivalent.
+
+## Legacy directories not to mistake for current architecture
+
+`netlify/functions/` (except `session.mts`), `src/agent/runtime/{runAgent,createAgent,types,validateRequest}.ts`, `src/agent/skills/{contentDraft,editorialReview,seo,publish}.ts` and `skills/registry.ts` (base-agent skill filter), `src/agent/memory/{MemoryAdapter,JsonMemoryAdapter,memoryEnvelope}.ts`, `src/agent/observability/{ObservabilityAdapter,consoleObservability}.ts`, `src/agent/mcp/{buildMcpServers,toolFilters}.ts`, `src/agent/projects/project-a.ts`, `JsonWorkspaceStore` in `store.ts`, `deploy/librechat/`, `docs/plan/`, `docs/platform/`, `docs/constellation/`, `docs/SESSION_HANDOFF.md` (dated plans/runbooks — see `docs/README.md` for which parts remain valid).
+
+## Working discipline (unchanged)
+
+Commit per milestone; every task ships its own acceptance test; never push to `main` (land via PR); content production belongs in the tenant admin chat, not in the MCP workspace surface; keep Cloud Run entrypoints thin; use zod for request/tool inputs; return structured JSON from endpoints; never log authorization headers or token values.

@@ -1,3 +1,5 @@
+> **RUNBOOK (documentation audit 2026-09-05):** still valid; note that approval is recorded with `workflow_set_operator_publish_decision` (the `approved` call flag is inert) and go-live evidence comes from `release_executor` (`stageOutputs.release_executor`). See [docs/PUBLISHING_ARCHITECTURE.md](../PUBLISHING_ARCHITECTURE.md).
+
 # PUBLISH-SMOKE — a real publish, through the main pipeline, with zero model calls
 
 **What this is.** A mechanical end-to-end proof that an approved run reaches a tenant's live site.

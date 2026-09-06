@@ -1,3 +1,5 @@
+> **HISTORICAL — dated finding kept for the decision record (documentation audit 2026-09-05).** Resolved or superseded; current state is in [docs/KNOWN_ISSUES.md](../../KNOWN_ISSUES.md) and [docs/ARCHITECTURE.md](../../ARCHITECTURE.md).
+
 # Canonical input envelope for platform-site (own-property) runs
 
 **Finding (determinism-regression run `run_1786549907145_hf4wgb`, 2026-08-12).** The regression-test

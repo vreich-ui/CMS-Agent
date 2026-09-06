@@ -1,3 +1,5 @@
+> **HISTORICAL — dated plan/log kept for the decision record (documentation audit 2026-09-05).** Where it disagrees with the code, the code wins; the current architecture is documented in [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and its sibling docs (index: [docs/README.md](../README.md)).
+
 # WORK ORDER — 2026-08-12 — Determinism program + conductor node-gating
 
 **Next physical action:** open `src/agent/workspace/deterministicContractIntelligence.ts`, copy its pattern into a new `publishPayload.ts`, and wire `metadata.publishPayloadDeterministic` in `executor.ts`. That is W0. Everything else waits.

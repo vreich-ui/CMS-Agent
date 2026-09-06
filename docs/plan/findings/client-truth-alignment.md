@@ -1,3 +1,5 @@
+> **HISTORICAL — dated finding kept for the decision record (documentation audit 2026-09-05).** Resolved or superseded; current state is in [docs/KNOWN_ISSUES.md](../../KNOWN_ISSUES.md) and [docs/ARCHITECTURE.md](../../ARCHITECTURE.md).
+
 # Client-contract alignment — what changed
 
 **Date:** 2026-07-26 · **Plane:** Cloud Run + GCS (canonical) · **Workspace version:** 56 → 67

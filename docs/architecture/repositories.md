@@ -1,3 +1,5 @@
+> **SUPERSEDED-IN-PART (documentation audit 2026-09-05).** The canonical-vs-operational and change-history sections remain true; the "Future JSON / Netlify Blobs" section describes dead (`JsonWorkspaceStore`) or retired (Blobs) code. Current persistence model: [docs/DATA_ARCHITECTURE.md](../DATA_ARCHITECTURE.md).
+
 # Repository abstraction
 
 CMS-Agent uses repositories to put one boundary between runtime orchestration and storage. The current implementation intentionally preserves the existing in-memory behavior while giving the runtime a single place to ask for workspace, execution, artifact, learning, and usage storage.

@@ -1,3 +1,5 @@
+> **HISTORICAL — dated finding kept for the decision record (documentation audit 2026-09-05).** Resolved or superseded; current state is in [docs/KNOWN_ISSUES.md](../../KNOWN_ISSUES.md) and [docs/ARCHITECTURE.md](../../ARCHITECTURE.md).
+
 # Wave 3 T8: the media ordering is circular against the Platform artifact bridge
 
 **Status: T8's sequencing is blocked by a client precondition. Everything else in T8 is proven live.**

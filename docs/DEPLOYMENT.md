@@ -1,0 +1,131 @@
+# CMS-Agent — Deployment
+
+Status: current as of commit `40424c4` (2026-09-05), derived from `cloudbuild.deploy.yaml`, `cloudbuild.mcp.yaml`, `cloudbuild.workbench.yaml`, `Dockerfile*`, `scripts/deploy-*.sh`, `netlify.toml`, `.github/workflows/*.yml` and the entrypoints. Evidence classes as in [ARCHITECTURE.md](ARCHITECTURE.md). Runbooks with hand-run `gcloud` snippets live in `docs/platform/` (see [docs/README.md](README.md) for which are still valid).
+
+## 1. Topology
+
+| Plane | GCP / Netlify resource | Image / build | Entrypoint | Trigger | Deployed by |
+|---|---|---|---|---|---|
+| MCP control plane | Cloud Run **service** `cms-agent-mcp`, project `cms-agent-503015`, region `us-central1`, runtime SA `cms-agent-run@cms-agent-503015.iam.gserviceaccount.com`, public URL `https://cms-agent-mcp-937996366809.us-central1.run.app` | `Dockerfile.mcp` → `us-central1-docker.pkg.dev/cms-agent-503015/cms-agent/mcp-service:<SHORT_SHA>` | `node --import tsx src/agent/entrypoints/mcpServerMainRun.ts` (port 8080) | HTTPS, `--allow-unauthenticated` (auth is in-app) | Cloud Build trigger `cms-agent-mcp-deploy` on push to `main` (`cloudbuild.deploy.yaml`), or by hand `scripts/deploy-mcp.sh` |
+| Background run driver | Cloud Run **job** `continuation-tick` | same image (synced by the trigger's `sync-executor-planes` step, `_EXECUTOR_JOBS`) | `node --import tsx src/agent/entrypoints/runContinuationTickMain.ts` | Cloud Scheduler `*/2 * * * *` (per `docs/platform/CONTINUATION_TICK.md`; CONTINUATION_TICK_CRON in code is the retired Netlify minute schedule) | Created by hand per runbook; image auto-synced; **env never touched by the trigger** |
+| Long-run driver | Cloud Run **job** `conductor-run` | `Dockerfile` (same code) | `node --import tsx src/agent/entrypoints/runConductorJobMain.ts` | `gcloud run jobs execute … --args` | Hand (`docs/platform/PHASE1_RUNBOOK.md`, Blobs-era text); image **not** in `_EXECUTOR_JOBS` |
+| Credential reconciler | Cloud Run **job** `site-credential-reconciler` + Cloud Scheduler `site-credential-reconciler-daily` (`0 6 * * *` UTC, POSTs Jobs v2 `:run` with `--apply` container override) | image passed as `IMAGE` | `node --import tsx src/agent/entrypoints/reconcileSiteCredentialsMain.ts [--apply]` | Scheduler / `site_credentials_apply` MCP tool | `scripts/deploy-site-credential-reconciler.sh`, `scripts/deploy-site-credential-reconciler-schedule.sh` |
+| Ingest / GC / migration jobs | (candidates) `monetizer-ingest-run`, `tracking-ingest-run`, conversation-turn GC, `migrate-store` | same image | respective `*Main.ts` | Scheduler (commented snippets in PHASE1 runbook) | **No deploy artifact in repo — deployment UNKNOWN** |
+| State | GCS bucket `cms-agent-503015-cms-agent-state` (`GCS_BUCKET`), optional `GCS_KEY_PREFIX` | — | — | — | Pre-existing; not created by any script here |
+| Secrets | Secret Manager: `mcp-api-token`, `openai-api-key`, `mcp-scoped-tokens-json`, `dr-lurie-mcp-token`, `pdf-tool-mcp-token`, `platform-mcp-token`, `fernwell-mcp-token`, `netlify-api-token`; per-tenant `tokenSecretRef` versions for minted tenants | — | — | — | Hand-created |
+| Operator UIs | Netlify site `cms-agent`: `/` = `ui/dist`, `/workbench/*` = `workbench/dist`; functions dir still bundled | `netlify.toml` build command (root + ui + workbench installs, two Vite builds) | — | Netlify CI on push | Netlify |
+| Workbench broker (Track A) | Cloud Run service (name per `docs/plan/TRACK-A-RUNBOOK.md`) | `Dockerfile.workbench` via `cloudbuild.workbench.yaml` (build only) | `node dist/index.js` | — | Runbook never executed — **UNCONFIRMED** |
+| LibreChat kit | GCE VM + docker-compose | `deploy/librechat/` | — | — | Experimental |
+
+## 2. Release path for the MCP service (`cloudbuild.deploy.yaml`)
+
+1. `docker build -f Dockerfile.mcp` → tag `mcp-service:<SHORT_SHA>` (immutable; a `:latest` substitution on the trigger defeats this and is warned about).
+2. `docker push`.
+3. `gcloud run deploy cms-agent-mcp --image … --service-account cms-agent-run@… --cpu 1 --memory 1Gi --min-instances 1 --max-instances 4 --allow-unauthenticated` with **merge** flags `--update-env-vars` / `--update-secrets` (never `--set-*`: that replaced the whole environment and deleted the client-connection variables twice).
+4. Verify: served image == built image, resolving concurrent-build races by git ancestry (older build redeploys; newer build yields); 11 client variables present (`CMS_AGENT_PUBLIC_MCP_ENDPOINT`, `MCP_SCOPED_TOKENS_JSON`, `NETLIFY_API_TOKEN`, `{DR_LURIE,PDF_TOOL,PLATFORM,FERNWELL}_MCP_{ENDPOINT,TOKEN}`); `*_PUBLISH_ENABLED` reported advisory-only; `GET /health` must be 200.
+5. `sync-executor-planes`: for every job in `_EXECUTOR_JOBS` (today: `continuation-tick`) `gcloud run jobs update --image` and read back the image through three known field paths (a stale plane fails the build; an unreadable path is reported as *unverified*, not stale).
+
+Build-time startup guard: both Dockerfiles import the entrypoint's whole module graph during `docker build` (`node --import tsx -e "await import('./src/agent/entrypoints/…')"`) so an image that cannot load fails the build instead of dying silently on Cloud Run with zero logs (2026-08-20 incident).
+
+Rollback: none scripted. Cloud Run keeps revisions; `.github/workflows/cloud-run-plane.yml` (`workflow_dispatch`) can `report` traffic/revisions/env names or `route-to-latest`. Rolling back = redeploying an older commit through the trigger or `gcloud run services update-traffic` by hand (I-4).
+
+## 3. The two service deploy artifacts differ (I-1)
+
+| Flag / var | `cloudbuild.deploy.yaml` | `scripts/deploy-mcp.sh` |
+|---|---|---|
+| memory / min-instances / SA | 1Gi / 1 / `cms-agent-run@…` | 512Mi / 0 / not passed |
+| `DR_LURIE_*`, `PDF_TOOL_*`, `PLATFORM_*` endpoint+token | set | not set |
+| `MCP_ALLOWED_ORIGINS` | not set | required input |
+| `FERNWELL_*`, `WORKSPACE_STORE=gcs`, `MCP_STATE_STORE=blobs`, `GCS_BUCKET`, `CMS_AGENT_PUBLIC_MCP_ENDPOINT`, `MCP_API_TOKEN`, `OPENAI_API_KEY`, `MCP_SCOPED_TOKENS_JSON`, `NETLIFY_API_TOKEN` | set | set |
+| Post-deploy verification | image ancestry + 11 vars + health | health + `NETLIFY_API_TOKEN` + optional `npm run verify:deploy` |
+
+Because both merge, a variable missing from one artifact survives from the other on an existing service; a **fresh** service created from one alone is incomplete. Variables that neither sets and that code reads on the service: `MCP_ALLOWED_ORIGINS` (trigger path), `SITE_CREDENTIAL_RECONCILER_GCP_PROJECT/REGION` (needed by `site_credentials_apply`), `MCP_OAUTH_APPROVAL_SECRET`, `MCP_EXPOSED_TOOL_PREFIXES`, `MCP_REQUIRE_SESSION`, the `IMPROVEMENT_*` flags, `WORKSPACE_NODES_SOURCE`, `TRACKING_SINK_URL/TOKEN`, `ANTHROPIC_API_KEY`, `*_PUBLISH_ENABLED`. Their live values are UNKNOWN from the repo; `gcloud run services describe cms-agent-mcp --format='value(spec.template.spec.containers[0].env[].name)'` (or the `report` action of `cloud-run-plane.yml`) lists names.
+
+## 4. CI (`.github/workflows/ci.yml`)
+
+Runs on every push/PR, Node 22, no secrets: `workspace` (root `npm ci` + `ui` install because the root typecheck imports ui types; `npm run build` = `tsc --noEmit`; `npm test` ≈ 290 files / ~2 760 tests, ~4 min), `ui` (`npm run test:ui`, `npm run ui:build`), `drift` (`test:drift` two-plane MCP surface vs `docs/mcp-tool-manifest.json`; `test:glossary` `docs/ui-glossary.md` vs `ui/src/explain.ts`; `test:objects` `docs/engine-objects.md` + generated envelopes vs `ui/src/objectModel.ts`; `test:scope` `docs/site-credential-scope-lock.json` vs `SITE_CLIENT_MANAGER_TOOLS`), `summary` (single required status). Not in CI: `workbench` Playwright (109 tests), `workbench-broker` tests (84), `npm run nodes:check` / `store:check` (need a live store), `scripts/generateMcpToolReference.ts --check` (new, see [reference/MCP_TOOLS.md](reference/MCP_TOOLS.md)).
+
+## 5. Environment variables (canonical table)
+
+Complete inventory with file:line evidence, defaults and which artifact sets each: the audit table is reproduced in condensed form here; when in doubt grep `process.env.` / `env.` in the cited file.
+
+### 5.1 Store and control plane
+
+| Variable | Read by | Meaning | Default | Set by |
+|---|---|---|---|---|
+| `WORKSPACE_STORE` | `repository/RepositoryManager.ts`, `blobs/blobClient.ts`, `mcp/state/stateStore.ts`, entrypoints | `gcs` (prod) / `blobs` (legacy Netlify) / `memory` / `json` (=memory) | `memory` | trigger, deploy script, reconciler script |
+| `GCS_BUCKET`, `GCS_KEY_PREFIX` | `repository/gcs/gcsStoreClient.ts` | bucket; optional key prefix | — / `""` | trigger, scripts (bucket only) |
+| `MCP_STATE_STORE` | `mcp/state/stateStore.ts` | `blobs` = durable via the registered store, `memory` = in-process; otherwise follows `WORKSPACE_STORE` | derived | trigger, script |
+| `WORKSPACE_NODES_SOURCE` | `workspace/executor.ts:338` | `static` pins compiled nodes; anything else = `store` overlay | **`store`** (`.env.example` wrongly says static) | none |
+| `MCP_API_TOKEN` | `mcp/http/mcpEndpoint.ts`, `mcp/auth/consent.ts`, `scopedBearerTokens.ts` | static full-access bearer; OAuth approval fallback | — | secret |
+| `MCP_OAUTH_APPROVAL_SECRET` | `mcp/auth/consent.ts` | consent-screen secret | falls back to `MCP_API_TOKEN` | none |
+| `MCP_REQUIRE_SESSION` | `mcpEndpoint.ts:137` | require `Mcp-Session-Id` | `false` | none |
+| `MCP_EXPOSED_TOOL_PREFIXES` | `mcp/workspace/server.ts:15` | namespace allow-list | all | none |
+| `MCP_ALLOWED_ORIGINS` | `entrypoints/mcpServerMain.ts:71` | CORS exact origins | deny all | deploy script only |
+| `MCP_SCOPED_TOKENS_JSON` | `mcp/auth/scopedBearerTokens.ts` | static scoped bearer map (validated at startup) | none | secret |
+| `MCP_MANAGED_SCOPED_BEARERS` | `managedScopedBearerCredentials.ts:83` | force managed registry on/off | on when store is gcs/blobs | none |
+| `PORT` | `mcpServerMain.ts:99` | listen port | 8080 | Dockerfile / Cloud Run |
+| `CMS_AGENT_PUBLIC_MCP_ENDPOINT` | `capture/siteGenesis.ts`, `siteCredentialReconciler.ts` | this service's public `/mcp` URL wired into tenants | dry-run placeholder | trigger, scripts |
+| `NETLIFY_API_TOKEN` | `siteGenesis.ts`, `siteCredentialReconciler.ts` | Netlify PAT for genesis / reconciler | — | secret |
+| `NETLIFY_AUTH_TOKEN`, `TRACKING_SINK_URL`, `TRACKING_SINK_TOKEN` | `siteGenesis.ts:265-290`, `improvement/trackingIngest.ts` | fleet values genesis copies onto new sites; tracking ingest | — | none |
+| `PLATFORM_REPO_ROOT`, `SITE_GENESIS_NETLIFY_MODE` | `siteGenesis.ts` | platform checkout for `create-site.mjs`; `live` enables real Netlify writes | — / `dry_run` | none |
+| `CMS_AGENT_SITE_BINDINGS_JSON` | `siteCredentialReconciler.ts` | one-time project→Netlify-site backfill map | `{}` | reconciler script |
+| `SITE_CREDENTIAL_RECONCILER_GCP_PROJECT`, `_REGION`, `_JOB` | `mcp/workspace/siteCredentialTools.ts` | lets `site_credentials_apply` fire the job | — / — / `site-credential-reconciler` | none |
+| `K_SERVICE`, `K_REVISION`, `SERVICE_GIT_SHA`, `SERVICE_DEPLOYED_AT` | `RepositoryManager.ts:74-77` | build identity in `repository_get_health` | Cloud Run sets `K_*`; the SHA/date stamps are set by nothing (report null) | runtime |
+
+### 5.2 Models and runners
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `OPENAI_API_KEY` (secret), `OPENAI_AGENT_MODEL`, `OPENAI_BASE_URL`, `OPENAI_MAX_OUTPUT_TOKENS_CEILING` | OpenAI runner/provider | — / `gpt-5.5` / api.openai.com / 128000 |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MAX_OUTPUT_TOKENS_CEILING` | native Anthropic runner (`provider: "anthropic"`) | — / `claude-opus-4-8` / api.anthropic.com / 64000 (`ANTHROPIC_VERSION` in `.env.example` is never read) |
+| `GEMINI_API_KEY`, `modelConfig.apiKeyEnv` | Google / openai-compatible providers | — |
+| `TOOL_RESULT_MAX_CHARS`, `DEPENDENCY_OUTPUT_MAX_CHARS`, `AGENT_TRACING_ENABLED` | prompt size caps; OpenAI Agents tracing metadata | 32000 / 48000 / off |
+| `TOOL_BLOB_PREFIXES`, `WEB_DOMAIN_ALLOWLIST`, `WEB_DOMAIN_DENYLIST`, `WEB_RESPONSE_SIZE_LIMIT_BYTES`, `WEB_PROVIDER` | controlled tools | `agent-tools/` / — / — / 250000 / `disabled` |
+| `IMPROVEMENT_MODEL_LADDER_ENFORCE|_THRESHOLD|_MIN_SAMPLES`, `IMPROVEMENT_POST_RUN_REFLECT|_MODE|_MAX_NODES|_MIN_SAMPLES`, `IMPROVEMENT_AUTO_PROMOTE|_MIN_SCORE|_MAX`, `IMPROVEMENT_REFLECTOR_MODEL`, `IMPROVEMENT_CURATOR_MODEL`, `IMPROVEMENT_JUDGE_MODEL`, `IMPROVEMENT_FINETUNE_MIN_EXAMPLES|_MIN_PREFERENCE_PAIRS` | learning-loop flags ([AGENT_ARCHITECTURE.md](AGENT_ARCHITECTURE.md) §8) | all off / defaults in `.env.example` |
+
+### 5.3 Drivers and jobs
+
+| Variable | Read by | Meaning | Default |
+|---|---|---|---|
+| `RUN_DRIVER_TIME_BUDGET_MS` | `mcp/workspace/tools.ts:65` | in-request advance window, clamped ≤ 45 000 | 45 000 |
+| `RUN_CONTINUATION_TICK` | `runContinuation.ts:139` | `off`/`false`/`0` disables the tick | `on` |
+| `CONTINUATION_TICK_BUDGET_MS`, `CONTINUATION_TICK_MAX_RUNS`, `TASK_TIMEOUT_MS` | tick | wall budget; runs per tick; the job's own `--task-timeout` so dispatches that would outlive the task are deferred — **set by nothing in the repo** (I-2) | 45 000 / 5 / 300 000 |
+| `PROJECT_ID`, `EXECUTION_MODE`, `RUN_INPUT_JSON`, `RUN_INPUT_FILE`, `RESUME_RUN_ID`, `RUN_APPROVED`, `MAX_STEPS`, `RUN_BUDGET_USD` | conductor job | per-execution defaults (flags override) | `dr-lurie` / `openai` / … |
+| `CONVERSATION_ID`, `MIGRATE_PREFIX`, `MONETIZER_INGEST_*`, `TRACKING_PROJECT_ID`, `TRACKING_INGEST_*` | GC / migrate / ingest jobs | see the entrypoint headers | — |
+| `SITE_DUPLICATE_KICK_BUDGET_MS` | `workspace/runKick.ts` | in-call kick after `site.duplicate` | 60 000 |
+
+### 5.4 Tenant connections (dynamic names)
+
+`<CLIENT>_MCP_ENDPOINT` / `<CLIENT>_MCP_TOKEN` per project record (`mcpEndpointEnvVar`, `tokenEnvVar`; genesis derives `<SLUG>` upper-cased), `<PREFIX>_PUBLISH_ENABLED` (derived by stripping `_MCP_ENDPOINT`; `false` is a kill switch). Compiled defaults: `DR_LURIE_*`, `PDF_TOOL_*`, `PLATFORM_*`, `FERNWELL_*`, `MONETIZER_*`. Endpoint may come from the record; token may come from `tokenSecretRef` (Secret Manager) — executor planes need no per-tenant env at all when records carry both.
+
+### 5.5 SPAs and broker
+
+`VITE_CLOUD_RUN_MCP_URL` (Netlify site-level env, value not in repo), `VITE_MCP_TRANSPORT=cloudrun`, `VITE_READ_ONLY=0`, `WORKBENCH_BASE=/workbench/` (netlify.toml), `VITE_MOCK`, `VITE_API_BASE`; broker: `SESSION_SECRET`, `OPERATOR_PASSWORD_HASH`, `CMS_AGENT_MCP_URL`, `CMS_AGENT_MCP_TOKEN_SECRET` | `CMS_AGENT_MCP_TOKEN`, `READ_ONLY`, `ALLOWED_ORIGIN`, `AUTH_MODE`, `IAP_AUDIENCE`, `CACHE_TTL_MS`, `STATIC_ROOT`, `MOCK_UPSTREAM` (`workbench-broker/.env.example`). Netlify functions: `AGENT_API_TOKEN` (legacy), `ADMIN_EMAIL_IDS` (session gate).
+
+Dead documentation: `WORKSPACE_STORE_PATH`, `SNOOCLE_MCP_*`, `ANTHROPIC_VERSION`, the README's `NODE_ENV=production + json` guard (no code reads `NODE_ENV`).
+
+## 6. Health checks and verification
+
+- `GET /health` (also `/healthz`, `/`): `{status:"ok", service, store}` — unauthenticated, side-effect free, does **not** touch GCS or verify client connections (that is why "two releases took all clients down while health stayed green"). The deploy verifies variable *names*, not values.
+- `repository_get_health` (MCP): per-repository readable/writable flags, backend label, `workspaceVersion`, build identity (`K_REVISION`), project dialect drift findings, healed-node counts.
+- `npm run verify:deploy` (`scripts/verifyDeployment.ts`, needs `MCP_URL` + `MCP_API_TOKEN`): asserts the served tool surface and that each active project's endpoint/token resolve; optional scoped-token pin check.
+- `project_test_connection` / `project_list_tools`: live tenant reachability.
+- `workflow_list_runs` stall block and `project_get.driverHealth`: is any background driver alive.
+
+## 7. Local development
+
+```bash
+npm ci && npm ci --prefix ui            # root typecheck needs ui types
+npm run typecheck && npm test           # ~4 min
+npm run serve:mcp                       # Cloud Run entrypoint locally (memory store) on :8080
+npm run ui:dev                          # Vite ui at :5173 → paste a bearer, point at http://localhost:8080/mcp
+npm run workbench:dev                   # workbench (VITE_MOCK defaults to fixtures)
+WORKSPACE_STORE=memory npx tsx scripts/generateMcpToolReference.ts   # regenerate the tool reference
+```
+
+`npm run dev:legacy-netlify` starts the Netlify functions plane (legacy). Real GCS locally: `WORKSPACE_STORE=gcs GCS_BUCKET=… ` with Application Default Credentials.
+
+## 8. Netlify specifics
+
+`netlify.toml` builds both SPAs into `ui/dist` (workbench copied under `ui/dist/workbench`), publishes `ui/dist`, bundles `netlify/functions` with esbuild, and routes `/api/agent`, `/api/mcp`, `/api/session`, the OAuth well-known/endpoint paths, `/workbench/*` and the SPA catch-all. Only `/api/session` is on a live path. The Netlify project retirement plan is `docs/plan/RETIREMENT.md` (sign-off empty).

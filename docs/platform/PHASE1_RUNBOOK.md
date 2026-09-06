@@ -1,3 +1,5 @@
+> **SUPERSEDED-IN-PART (documentation audit 2026-09-05).** The `WORKSPACE_NODES_SOURCE` / re-seed section and the conductor job config and exit-code tables remain accurate; the `gcloud` commands are Netlify-Blobs-era and `--approved`/`RUN_APPROVED` records an operator decision but is not publish authority by itself (see [docs/PUBLISHING_ARCHITECTURE.md](../PUBLISHING_ARCHITECTURE.md)). Current deployment: [docs/DEPLOYMENT.md](../DEPLOYMENT.md).
+
 # Phase 1 runbook — Publishing Conductor on Cloud Run
 
 Deploys the execution plane from `docs/platform/DIRECTION.md` Phase 1: the existing
