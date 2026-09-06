@@ -211,6 +211,17 @@ describe("live publish gates", () => {
     }
   });
 
+  // S-26 — publishRun used to prefer input.projectId over the run's own, so a caller that named a
+  // project could publish another project's run under a configuration that run never belonged to.
+  it("refuses a publish whose caller-supplied projectId is not the run's own project", async () => {
+    const ctx = await seedRun(textBody);
+    const adapter = fakeCallTool();
+    await expect(
+      publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY, projectId: "platform" }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn })
+    ).rejects.toThrow(/does not own run/);
+    expect(adapter.calls).toHaveLength(0);
+  });
+
   it("executes the sanctioned publish sequence in order only when readiness is GO and EVERY gate passes", async () => {
     const ctx = await seedRun(textBody);
     const adapter = fakeCallTool();

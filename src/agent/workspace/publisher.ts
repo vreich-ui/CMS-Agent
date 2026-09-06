@@ -247,6 +247,11 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
 
   const run = await executionRepository.getRun(input.runId);
   if (!run) throw new Error(`Unknown run: ${input.runId}`);
+  // S-26 — a caller may name a project, but it must be the run's OWN project. Silently preferring
+  // input.projectId let a caller publish another project's run under a configuration that run was
+  // never created under. The message deliberately does not name the run's real project, so a
+  // refusal cannot be used to discover who owns a run id.
+  if (input.projectId && input.projectId !== run.projectId) throw new Error(`projectId "${input.projectId}" does not own run ${input.runId}.`);
   const projectId = input.projectId ?? run.projectId;
   const config = await projectRepository.get(projectId);
   if (!config) throw new Error(`Unknown projectId: ${projectId}`);
