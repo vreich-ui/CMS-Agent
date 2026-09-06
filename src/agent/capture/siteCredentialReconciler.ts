@@ -150,7 +150,13 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
       const minted = await credentials.mint({ projectId: project.projectId, toolAllowlist: [...SITE_CLIENT_MANAGER_TOOLS], netlifySiteId: site.siteId, netlifySiteName: siteName });
       mintedDigest = minted.digest;
       await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_ENDPOINT", publicEndpoint, { scopes: ["functions"] });
-      await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"], context: "production" });
+      // Every secret this codebase writes goes to NETLIFY_SECRET_CONTEXTS (production,
+      // deploy-preview, branch-deploy) — setEnvVar's own default for a secret. This call used to
+      // narrow it to production alone, so a deploy preview of the admin sent an EMPTY bearer and
+      // CMS-Agent answered "rejected the credential": three dead panels on every preview of the
+      // analytics Insights tab, indistinguishable from a real auth failure. A preview is where a
+      // change is reviewed before it reaches production; it needs the same credential.
+      await netlify.setEnvVar(site.accountId, site.siteId, "CMS_AGENT_MCP_TOKEN", minted.token, { isSecret: true, scopes: ["functions"] });
       credentialInstalled = true;
       await verifyCmsAgentScopedCredential(publicEndpoint, minted.token, deps.credentialFetch);
       await netlify.rebuildAndWaitForPublishedDeploy(site.siteId);

@@ -117,7 +117,7 @@ describe("existing-fleet Client Manager credential reconciliation", () => {
     const envPosts = netlifyCalls.filter((call) => call.init?.method === "POST" && call.url.includes("/env?site_id="));
     const variables = envPosts.flatMap((call) => JSON.parse(call.init!.body as string));
     expect(variables.map((variable: { key: string }) => variable.key).sort()).toEqual(["CMS_AGENT_MCP_ENDPOINT", "CMS_AGENT_MCP_TOKEN"]);
-    expect(variables.find((variable: { key: string }) => variable.key === "CMS_AGENT_MCP_TOKEN")).toMatchObject({ is_secret: true, scopes: ["functions"], values: [{ context: "production" }] });
+    expect(variables.find((variable: { key: string }) => variable.key === "CMS_AGENT_MCP_TOKEN")).toMatchObject({ is_secret: true, scopes: ["functions"], values: [{ context: "production" }, { context: "deploy-preview" }, { context: "branch-deploy" }] });
     expect(credentialFetch).toHaveBeenCalledOnce();
   });
 
