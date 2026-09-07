@@ -4332,7 +4332,8 @@ export const publishingConductorNodes = [
         "artifact_reference_missing",
         "raw_image_artifact_public_url",
         "image_rendering_placement_missing"
-      ]
+      ],
+      "learningRecorderDeterministic": true
     },
     "modelConfig": {
       "maxTurns": 5,

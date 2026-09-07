@@ -144,3 +144,62 @@ describe("W0 T1.2 — deadline-aware dispatch", () => {
     expect(DISPATCH_DEADLINE_MARGIN_MS).toBe(15_000);
   });
 });
+
+// C-3 (quick-fix wave 2) — Cloud Run sends SIGTERM on task timeout or scale-down; the tick previously
+// accepted a `signal` but never forwarded it into runContinuationTick, so it kept dispatching until
+// the platform's hard kill, orphaning an in-flight node's claim to expire and be re-dispatched later
+// at duplicated cost. scripts/repro/knownIssues.ts C-3 exercises the "already aborted" case directly;
+// these tests additionally cover the mid-tick abort the repro script does not reach.
+describe("C-3 — the tick honours its own abort signal", () => {
+  beforeEach(() => { delete process.env.WORKSPACE_STORE; delete process.env.TASK_TIMEOUT_MS; resetRepositoryManager(); });
+
+  const queuedRunNamed = (runId: string): WorkflowExecutionRecord => ({
+    runId, workflowId: "publishing_conductor", projectId: "dr-lurie", status: "queued", executionMode: "mock",
+    startedAt: new Date(Date.now() - 60_000).toISOString(), updatedAt: new Date(Date.now() - 10_000).toISOString(),
+    nodes: [{ nodeId: "article_body", status: "queued" }], artifacts: [], errors: [], approvalsRequired: [], stageOutputs: {}, dryRun: true
+  });
+
+  it("does no work at all when the signal is already aborted — not even a listRuns", async () => {
+    let listRunsCalls = 0;
+    const controller = new AbortController();
+    controller.abort();
+    const store: ExecutionRepository = { ...fakeStore([queuedRunNamed("run_a")]), listRuns: async () => { listRunsCalls += 1; return [queuedRunNamed("run_a")]; } };
+    const result = await runContinuationTick({
+      executionRepository: store,
+      driverHealthRepository: new MemoryDriverHealthRepository(),
+      projectRepository: repositoryManager.getProjectRepository(),
+      env: { DR_LURIE_MCP_ENDPOINT: "https://dr-lurie.example/mcp" },
+      signal: controller.signal,
+      advance: async () => { throw new Error("must not dispatch on an already-aborted signal"); }
+    });
+    expect(result.aborted).toBe(true);
+    expect(result.scanned).toBe(0);
+    expect(result.driven).toEqual([]);
+    expect(listRunsCalls).toBe(0);
+  });
+
+  it("stops before dispatching the next run when the signal aborts mid-tick", async () => {
+    const controller = new AbortController();
+    const advanced: string[] = [];
+    const records = [queuedRunNamed("run_a"), queuedRunNamed("run_b")];
+    const result = await runContinuationTick({
+      executionRepository: fakeStore(records),
+      driverHealthRepository: new MemoryDriverHealthRepository(),
+      projectRepository: repositoryManager.getProjectRepository(),
+      env: { DR_LURIE_MCP_ENDPOINT: "https://dr-lurie.example/mcp" },
+      signal: controller.signal,
+      advance: async (runId) => {
+        advanced.push(runId);
+        const record = records.find((candidate) => candidate.runId === runId)!;
+        record.status = "completed";
+        // Simulate Cloud Run's SIGTERM landing right after run_a finishes advancing, before the loop
+        // moves on to run_b.
+        if (runId === "run_a") controller.abort();
+        return record;
+      }
+    });
+    expect(advanced).toEqual(["run_a"]);
+    expect(result.aborted).toBe(true);
+    expect(result.driven.find((report) => report.runId === "run_b")).toBeUndefined();
+  });
+});

@@ -41,6 +41,7 @@
 //     (never coerced into something that would validate), and a page whose recipe was rejected at
 //     mint is SKIPPED at restamp — never half-restamped.
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
+import { FORBIDDEN_PROJECT_VERBS } from "../tools/forbiddenProjectVerbs.js";
 import { effectiveToolPermission, type ProjectConnectionConfig, type ToolPermission } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
@@ -117,9 +118,10 @@ const templateLibraryOf = (deps: CloneDeps = {}): TemplateLibraryStore => deps.t
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
-// Mirrors emit.mjs's (unexported) FORBIDDEN_VERBS and clone.mjs's own hand-kept duplicate of it —
-// see clone.mjs's header comment. Kept in lockstep by hand whenever either changes.
-const FORBIDDEN_VERBS = new Set(["object_publish", "release_to_production", "trigger_netlify_build", "deploy"]);
+// K-A10: one definition, in src/agent/tools/forbiddenProjectVerbs.ts, now shared with the node-path
+// denylist in toolRegistry.ts. emit.mjs and clone.mjs still hold hand-kept duplicates (standalone
+// scripts, no src/ imports) — see clone.mjs's header comment; keep all three in lockstep.
+const FORBIDDEN_VERBS = FORBIDDEN_PROJECT_VERBS;
 
 // ---------------------------------------------------------------------------------------------
 // Authority resolution — every clone step passes through this before touching the target project.

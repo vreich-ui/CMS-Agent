@@ -179,6 +179,12 @@ export type ContinuationTickDeps = {
   timeBudgetMs?: number;
   maxRuns?: number;
   maxStepsPerRun?: number;
+  // C-3 (quick-fix wave 2) — Cloud Run's own SIGTERM (task timeout or scale-down), forwarded from
+  // runContinuationTickJob. An already-aborted signal skips the tick entirely (not even a
+  // listRuns), and a signal that aborts mid-tick stops the advance loop before starting the next
+  // run's (or that run's next node's) dispatch — so an in-flight node's claim is never abandoned
+  // mid-advance and no run gets left dispatched-but-orphaned for the reclaim path to duplicate later.
+  signal?: AbortSignal;
 };
 
 export type ContinuationRunReport = {
@@ -217,6 +223,10 @@ export type ContinuationTickResult = {
   // W0 T1.2 — this tick stopped early because the next dispatch could not fit in the task's own
   // remaining time. Not a failure: the next tick starts that node with a full task ahead of it.
   deferredDeadline?: boolean;
+  // C-3 (quick-fix wave 2) — this tick stopped (immediately, or mid-loop) because its signal was
+  // aborted. Not a failure: a graceful SIGTERM stop, distinct from timedOut/deferredDeadline which
+  // are the tick's own pacing decisions rather than the platform telling it to stop.
+  aborted?: boolean;
 };
 
 // Matches workflow.run_all's advance bound; the canonical graph has 18 nodes, so this is headroom for
@@ -229,6 +239,10 @@ const DEFAULT_MAX_RUNS = 5;
 export async function runContinuationTick(deps: ContinuationTickDeps): Promise<ContinuationTickResult> {
   const clock = deps.now ?? (() => new Date());
   if (!continuationTickEnabled()) return { enabled: false, scanned: 0, verdicts: [], driven: [], timedOut: false };
+  // C-3 — an already-aborted signal (Cloud Run's SIGTERM arriving before this invocation even
+  // started, e.g. queued behind a slow store call) does no work at all: not a listRuns, not one
+  // dispatch. This is the case scripts/repro/knownIssues.ts exercises directly.
+  if (deps.signal?.aborted) return { enabled: true, scanned: 0, verdicts: [], driven: [], timedOut: false, aborted: true };
   const advance = deps.advance ?? ((runId: string) => runNextNode(runId, { executionRepository: deps.executionRepository, workspaceRepository: deps.workspaceRepository, driver: "continuation_tick" }));
   const projectRepository = deps.projectRepository ?? repositoryManager.getProjectRepository();
   const usageRepository = deps.usageRepository ?? repositoryManager.getUsageRepository();
@@ -257,8 +271,10 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
   const driven: ContinuationRunReport[] = [];
   let timedOut = false;
   let deferredDeadline = false;
+  let aborted = false;
 
   for (const verdict of selected) {
+    if (deps.signal?.aborted) { aborted = true; break; }
     if (clock().getTime() > deadline) { timedOut = true; break; }
     const report: ContinuationRunReport = { runId: verdict.runId, code: verdict.code, statusBefore: verdict.status, steps: 0 };
     driven.push(report);
@@ -279,6 +295,7 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
         }
       }
       while (current && decideRunContinuation(current, clock()).reenter && report.steps < maxSteps) {
+        if (deps.signal?.aborted) { aborted = true; break; }
         if (clock().getTime() > deadline) { timedOut = true; break; }
         // W0 T1.2 — DEADLINE-AWARE DISPATCH. Ask how long the next dispatch could claim (the node's
         // own timeout, or the widest in the concurrent batch) and refuse to start it if the task
@@ -334,7 +351,7 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
     } catch (error) {
       report.error = error instanceof Error ? error.message : String(error);
     }
-    if (deferredDeadline) break;
+    if (deferredDeadline || aborted) break;
   }
 
   // W0 T0.2 — THE LEDGER, and the silence signal. Two facts the tick could not previously leave
@@ -390,5 +407,5 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
     console.error(JSON.stringify({ event: "workflow.continuation_tick_driver_silent", severity: "ERROR", tickId, scanned: runs.length, silentRunIds: [...selectedRunIds].filter((runId) => (stepsByRun.get(runId) ?? 0) === 0) }));
   }
 
-  return { enabled: true, scanned: runs.length, verdicts: [...reenter, ...skipped], driven, timedOut, tickId, ...(driverSilent ? { driverSilent: true } : {}), ...(deferredDeadline ? { deferredDeadline: true } : {}) };
+  return { enabled: true, scanned: runs.length, verdicts: [...reenter, ...skipped], driven, timedOut, tickId, ...(driverSilent ? { driverSilent: true } : {}), ...(deferredDeadline ? { deferredDeadline: true } : {}), ...(aborted ? { aborted: true } : {}) };
 }

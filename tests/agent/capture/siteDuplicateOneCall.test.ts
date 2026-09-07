@@ -247,13 +247,15 @@ describe("site.duplicate — one call against an existing project (fixture end-t
     expect(request.artifact).toBe("site_duplication.v1");
     expect(request.sourceUrl).toBe(SOURCE_URL);
 
-    // Spend law unchanged: usage exists only for the AI nodes that dispatched — PLUS release_executor
-    // and learning_recorder, which fall through to MockNodeRunner on this mock-mode run for reasons
-    // unrelated to AI judgment (see captureConductorMockRun.test.ts's identical note: release_executor's
-    // own deterministic route is scoped to live runs only, and learning_recorder's canonical definition
-    // carries no learningRecorderDeterministic flag at all) — actual spend is zero regardless.
+    // Spend law unchanged: usage exists only for the AI nodes that dispatched — PLUS release_executor,
+    // which falls through to MockNodeRunner on this mock-mode run for reasons unrelated to AI judgment
+    // (see captureConductorMockRun.test.ts's identical note: release_executor's own deterministic route
+    // is scoped to live runs only). learning_recorder's canonical definition carries
+    // learningRecorderDeterministic: true (K-A11, quick-fix wave 2) and that route is NOT scoped to live
+    // runs, so it never falls through to MockNodeRunner and produces no usage record at all here — actual
+    // spend is zero regardless.
     const usageRecords = await repositoryManager.getUsageRepository().list({ runId: result.runId });
-    const MOCK_FALLBACK_NODE_IDS = new Set([...(CAPTURE_AI_NODE_IDS as readonly string[]), "release_executor", "learning_recorder"]);
+    const MOCK_FALLBACK_NODE_IDS = new Set([...(CAPTURE_AI_NODE_IDS as readonly string[]), "release_executor"]);
     for (const record of usageRecords) {
       expect(MOCK_FALLBACK_NODE_IDS).toContain(record.nodeId ?? "");
       expect(record.status).toBe("estimated");
