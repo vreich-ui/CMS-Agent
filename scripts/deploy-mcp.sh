@@ -67,19 +67,22 @@ else
   say "==> Skipping build (SKIP_BUILD=1)"
 fi
 
-# --update-* MERGES. This is the whole point of the file: anything already on the service — notably the
-# six client-connection variables — survives the deploy untouched.
+# THE FLAGS ARE NOT HERE. scripts/deploy-service.sh holds the service's entire Cloud Run shape —
+# sizing, scaling, runtime identity, env-var list, secret list — and cloudbuild.deploy.yaml runs the
+# very same script, so this path and the trigger path cannot disagree (KNOWN_ISSUES C-12).
 #
-# gcloud splits these lists on commas, so a multi-origin allow-list needs a different delimiter via the
-# ^delim^ prefix. "|" is safe; ":" is NOT, because every origin contains "://" and gcloud would split
-# mid-URL and reject the fragment.
-say "==> Deploying with MERGE-style flags (--update-env-vars / --update-secrets)"
-gcloud run deploy "$SERVICE" \
-  --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
-  --cpu 1 --memory 512Mi --min-instances 0 --max-instances 4 --port 8080 \
-  --allow-unauthenticated \
-  --update-env-vars "^|^WORKSPACE_STORE=gcs|GCS_BUCKET=$GCS_BUCKET|MCP_STATE_STORE=blobs|MCP_ALLOWED_ORIGINS=$MCP_ALLOWED_ORIGINS|CMS_AGENT_PUBLIC_MCP_ENDPOINT=$CMS_AGENT_PUBLIC_MCP_ENDPOINT|FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp" \
-  --update-secrets "MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest,FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest,NETLIFY_API_TOKEN=$NETLIFY_API_TOKEN_SECRET:latest"
+# They used to. This file deployed 512Mi / min-instances=0 with no service account and five
+# variables; the trigger deployed 1Gi / min-instances=1 with the runtime SA and eight. Sizing and
+# scaling are explicit flags, not merge-preserving, so a hand deploy after a trigger deploy silently
+# halved the memory and dropped min-instances — cold starts on the OAuth/consent path — and nothing
+# reported it. The values that survived into the shared script are the trigger's, because those are
+# what production has actually been running.
+say "==> Deploying (shape and flags from scripts/deploy-service.sh)"
+PROJECT="$PROJECT" REGION="$REGION" SERVICE="$SERVICE" IMAGE="$IMAGE" \
+  GCS_BUCKET="$GCS_BUCKET" PUBLIC_MCP_ENDPOINT="$CMS_AGENT_PUBLIC_MCP_ENDPOINT" \
+  MCP_ALLOWED_ORIGINS="$MCP_ALLOWED_ORIGINS" \
+  MCP_SCOPED_TOKENS_SECRET="$SCOPED_TOKENS_SECRET" NETLIFY_API_TOKEN_SECRET="$NETLIFY_API_TOKEN_SECRET" \
+  bash "$(dirname "${BASH_SOURCE[0]}")/deploy-service.sh"
 
 URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')"
 REVISION="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.latestReadyRevisionName)')"

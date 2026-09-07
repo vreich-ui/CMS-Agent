@@ -60,9 +60,15 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 - Scenario: job `--task-timeout` raised above 300 s: the guard is merely conservative; set below 300 s: the guard over-estimates the remaining task time, starts a dispatch that cannot finish, and the platform kills the node mid-flight (the 2026-09-04 shape). Fix: set the env var wherever `--task-timeout` is set (runbook + a job deploy script).
 
 ### C-12 Two deploy artifacts for one service disagree — **Medium**, confirmed
+- **Fixed.** `scripts/deploy-service.sh` is now the only place the service's shape is written down — sizing, scaling, runtime identity, env-var list, secret list. `cloudbuild.deploy.yaml`'s `deploy()` runs it and `scripts/deploy-mcp.sh` runs it; neither carries a second copy. Same fix shape as `deploy/executor-jobs.txt` (C-10). The trigger's values survived, because those are what production had been running.
 - Evidence: [DEPLOYMENT.md](DEPLOYMENT.md) §3 (`cloudbuild.deploy.yaml:90-102` vs `scripts/deploy-mcp.sh:79-82`): memory 1Gi vs 512Mi, min-instances 1 vs 0, runtime SA set vs omitted, different client-variable sets, `MCP_ALLOWED_ORIGINS` only in the script.
-- Scenario: a hand deploy after a trigger deploy halves memory and drops min-instances (cold starts on the OAuth/consent path); a first deploy from the script lacks three client connections.
-- Fix (infra): make the script call the same flag set (single source: a shared env file or delete the script's deploy step in favour of `gcloud builds submit --config cloudbuild.deploy.yaml`).
+- Scenario: a hand deploy after a trigger deploy halves memory and drops min-instances (cold starts on the OAuth/consent path) — sizing flags are explicit, not merge-preserving; a first deploy from the script lacks three client connections.
+- **Three things the fix turned up**, each live on the service and named by NEITHER artifact, each surviving only because both paths use merge-style flags (a fresh service would have lacked them; one `--set-*` would have deleted them):
+  - `ZILBERMAN_MCP_ENDPOINT` + `ZILBERMAN_MCP_TOKEN` — a **fourth tenant configured entirely by hand**.
+  - `TRACKING_SINK_URL` on the service, which `feedback_ingest_tracking` reads.
+  - `TRACKING_SINK_TOKEN`, now a Secret Manager binding rather than the plaintext env var it was before revision `00236-pcz`.
+  All five are named in the shared script.
+- **And one live defect.** `MCP_ALLOWED_ORIGINS` was corrupted — `https://cms-agent.netlify.app`, `https://cmslhost:5173-agent.netlify.app`, `http://loca`: an earlier hand deploy spliced `http://localhost:5173` into the middle of the first origin and truncated the remainder. `http://localhost:5173` was therefore never an allowed origin and two nonsense ones were. Corrected in place 2026-09-07 (revision `00240-jjm`); exact-match origin checking means the garbage entries were unreachable rather than permissive. This is precisely the delimiter hazard `deploy-mcp.sh` warns about in its own comment, which is why the shared script builds the list with the `^|^` prefix and a `join()` rather than by hand.
 
 ### C-13 `site_credentials_apply` refuses unless two variables were set by hand — **Low**, confirmed
 - Evidence: `siteCredentialTools.ts:75-92` refuses without `SITE_CREDENTIAL_RECONCILER_GCP_PROJECT/REGION`; no repo deploy artifact sets them (a hand-set value would survive the merge-style deploys, so the live state is UNKNOWN). Fix: add them to the trigger's `--update-env-vars` (infra).

@@ -105,31 +105,42 @@ describe("CA4 scoped MCP bearer tokens", () => {
 });
 
 describe("CA4 deploy script regression guard", () => {
-  it("keeps automated and manual deploy wiring aligned with merge-style scoped and Fernwell bindings", async () => {
+  // The two paths are no longer kept aligned by asserting the same bindings appear in both files —
+  // they are aligned because there is only one file (C-12). scripts/deploy-service.sh holds the
+  // bindings; this guard checks them there, and checks that each caller delegates rather than
+  // carrying a second copy that could drift away again.
+  it("keeps every scoped and client binding in the ONE deploy script both paths run", async () => {
+    const shared = await readFile(new URL("../../../scripts/deploy-service.sh", import.meta.url), "utf8");
     const script = await readFile(new URL("../../../scripts/deploy-mcp.sh", import.meta.url), "utf8");
     const cloudBuild = await readFile(new URL("../../../cloudbuild.deploy.yaml", import.meta.url), "utf8");
-    const commandLines = script.split("\n").filter((line) => !line.trimStart().startsWith("#"));
-    const cloudBuildCommandLines = cloudBuild.split("\n").filter((line) => !line.trimStart().startsWith("#"));
-    expect(commandLines.some((line) => /--set-(?:env-vars|secrets)\b/.test(line))).toBe(false);
-    expect(cloudBuildCommandLines.some((line) => /--set-(?:env-vars|secrets)\b/.test(line))).toBe(false);
-    expect(script).toContain("--update-env-vars");
-    expect(script).toContain("--update-secrets");
+    const uncommented = (source: string) => source.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+
+    for (const source of [shared, script, cloudBuild]) {
+      expect(uncommented(source).some((line) => /--set-(?:env-vars|secrets)\b/.test(line))).toBe(false);
+      expect(source).not.toContain("/healthz");
+    }
+
+    expect(shared).toContain("--update-env-vars");
+    expect(shared).toContain("--update-secrets");
+    expect(shared).toContain("MCP_SCOPED_TOKENS_JSON=${MCP_SCOPED_TOKENS_SECRET:-mcp-scoped-tokens-json}:latest");
+    expect(shared).toContain("CMS_AGENT_PUBLIC_MCP_ENDPOINT=${PUBLIC_MCP_ENDPOINT}");
+    expect(shared).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
+    expect(shared).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
+    expect(shared).toContain("NETLIFY_API_TOKEN=${NETLIFY_API_TOKEN_SECRET:-netlify-api-token}:latest");
+
+    // Each caller hands the shared script its inputs and nothing else.
+    expect(script).toContain("deploy-service.sh");
+    expect(script).toContain('MCP_SCOPED_TOKENS_SECRET="$SCOPED_TOKENS_SECRET"');
+    expect(script).toContain('NETLIFY_API_TOKEN_SECRET="$NETLIFY_API_TOKEN_SECRET"');
+    expect(cloudBuild).toContain("bash /workspace/scripts/deploy-service.sh");
+    expect(cloudBuild).toContain('PUBLIC_MCP_ENDPOINT="${_PUBLIC_MCP_ENDPOINT}"');
+
     const manualHealthLine = script.split("\n").find((line) => line.includes('curl -fsS "$URL/health"'));
     expect(manualHealthLine).toContain('curl -fsS "$URL/health" >/dev/null');
     expect(manualHealthLine).not.toMatch(/&&|\|\|/);
-    expect(script).not.toContain('/healthz');
-    expect(script).toContain("MCP_SCOPED_TOKENS_JSON=$SCOPED_TOKENS_SECRET:latest");
-    expect(cloudBuild).toContain("MCP_SCOPED_TOKENS_JSON=mcp-scoped-tokens-json:latest");
-    expect(script).toContain("CMS_AGENT_PUBLIC_MCP_ENDPOINT=$CMS_AGENT_PUBLIC_MCP_ENDPOINT");
-    expect(cloudBuild).toContain("CMS_AGENT_PUBLIC_MCP_ENDPOINT=${_PUBLIC_MCP_ENDPOINT}");
-    expect(script).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
-    expect(cloudBuild).toContain("FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp");
-    expect(script).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
-    expect(cloudBuild).toContain("FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest");
-    expect(script).toContain("NETLIFY_API_TOKEN=$NETLIFY_API_TOKEN_SECRET:latest");
-    expect(cloudBuild).toContain("NETLIFY_API_TOKEN=netlify-api-token:latest");
+
+    // The trigger's post-deploy check still names every client variable it requires to be present.
     expect(cloudBuild).toContain("for VAR in CMS_AGENT_PUBLIC_MCP_ENDPOINT MCP_SCOPED_TOKENS_JSON NETLIFY_API_TOKEN DR_LURIE_MCP_ENDPOINT DR_LURIE_MCP_TOKEN PDF_TOOL_MCP_ENDPOINT PDF_TOOL_MCP_TOKEN PLATFORM_MCP_ENDPOINT PLATFORM_MCP_TOKEN FERNWELL_MCP_ENDPOINT FERNWELL_MCP_TOKEN; do");
-    expect(cloudBuild).not.toContain('/healthz');
   });
 
   it("configures a dedicated dry-run-first reconciler job without executing it", async () => {

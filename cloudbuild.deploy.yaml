@@ -15,6 +15,11 @@
 # Two things are deliberately different, both fixes: the image is tagged with the commit instead of
 # `latest`, and the deploy is verified afterwards.
 #
+# THE DEPLOY FLAGS THEMSELVES NO LONGER LIVE HERE (KNOWN_ISSUES C-12). They live in
+# scripts/deploy-service.sh, which scripts/deploy-mcp.sh also runs — one artifact describing one
+# service, so the trigger path and the shell path cannot disagree about its shape. This is the same
+# arrangement deploy/executor-jobs.txt gives the job list.
+#
 # WHEN REPOINTING, DELETE THE TRIGGER'S `_IMAGE` SUBSTITUTION.
 # Trigger substitutions OVERRIDE the defaults below. Leaving `_IMAGE=...:latest` on the trigger silently
 # defeats the commit tagging — the build would still succeed, which is what makes it worth saying twice.
@@ -86,20 +91,25 @@ steps:
       - -c
       - |
         set -euo pipefail
+        # THE FLAGS ARE NOT HERE. scripts/deploy-service.sh holds the service's entire Cloud Run
+        # shape and scripts/deploy-mcp.sh runs the very same script, so the trigger path and the
+        # shell path cannot disagree (KNOWN_ISSUES C-12). They used to: this file deployed 1Gi /
+        # min-instances=1 with the runtime SA and eight variables while the shell script deployed
+        # 512Mi / min-instances=0 with no service account and five. Adding a variable, a secret or
+        # a sizing change is now one edit in that script and nothing else.
+        #
+        # MCP_ALLOWED_ORIGINS is deliberately NOT passed: this path has never set it, and the
+        # script omits the key entirely when the variable is empty, so the trigger keeps leaving
+        # whatever the service already has rather than replacing it with nothing.
         deploy() {
-          gcloud run deploy "${_SERVICE}" \
-            --region=${_DEPLOY_REGION} \
-            --project=${PROJECT_ID} \
-            --image=${_IMAGE} \
-            --service-account=${_RUNTIME_SA} \
-            --cpu=1 \
-            --memory=1Gi \
-            --min-instances=1 \
-            --max-instances=4 \
-            --allow-unauthenticated \
-            --quiet \
-            --update-env-vars=WORKSPACE_STORE=gcs,MCP_STATE_STORE=blobs,GCS_BUCKET=${_GCS_BUCKET},CMS_AGENT_PUBLIC_MCP_ENDPOINT=${_PUBLIC_MCP_ENDPOINT},DR_LURIE_MCP_ENDPOINT=https://drluriescience.netlify.app/mcp,PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp,PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp,FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp \
-            --update-secrets=MCP_API_TOKEN=mcp-api-token:latest,OPENAI_API_KEY=openai-api-key:latest,MCP_SCOPED_TOKENS_JSON=mcp-scoped-tokens-json:latest,DR_LURIE_MCP_TOKEN=dr-lurie-mcp-token:latest,PDF_TOOL_MCP_TOKEN=pdf-tool-mcp-token:latest,PLATFORM_MCP_TOKEN=platform-mcp-token:latest,FERNWELL_MCP_TOKEN=fernwell-mcp-token:latest,NETLIFY_API_TOKEN=netlify-api-token:latest
+          PROJECT="${PROJECT_ID}" \
+          REGION="${_DEPLOY_REGION}" \
+          SERVICE="${_SERVICE}" \
+          IMAGE="${_IMAGE}" \
+          RUNTIME_SA="${_RUNTIME_SA}" \
+          GCS_BUCKET="${_GCS_BUCKET}" \
+          PUBLIC_MCP_ENDPOINT="${_PUBLIC_MCP_ENDPOINT}" \
+          bash /workspace/scripts/deploy-service.sh
         }
         describe() { gcloud run services describe "${_SERVICE}" --region "${_DEPLOY_REGION}" --project "${PROJECT_ID}" --format "$1"; }
 
