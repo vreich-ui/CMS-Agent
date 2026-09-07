@@ -66,7 +66,11 @@ export async function runContinuationTickJob(options: ContinuationTickJobOptions
     executionRepository: repositoryManager.getExecutionRepository(),
     workspaceRepository: repositoryManager.getWorkspaceRepository(),
     ...(options.timeBudgetMs === undefined ? {} : { timeBudgetMs: options.timeBudgetMs }),
-    ...(options.maxRuns === undefined ? {} : { maxRuns: options.maxRuns })
+    ...(options.maxRuns === undefined ? {} : { maxRuns: options.maxRuns }),
+    // C-3 (quick-fix wave 2) — forwarded so Cloud Run's own SIGTERM (task timeout or scale-down)
+    // stops the tick's advance loop instead of it dispatching until the platform hard-kills it,
+    // which leaves an in-flight node's claim to expire and be re-dispatched later at duplicated cost.
+    ...(options.signal ? { signal: options.signal } : {})
   });
   // Exit 0 even when nothing was driven: "no run needed advancing" is the healthy steady state, and a
   // non-zero exit there would make Cloud Scheduler retry and alert on normal operation. Only a THROWN
