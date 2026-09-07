@@ -305,6 +305,9 @@ describe("T15.15 — determinism: no wall-clock value, random id, or completion-
 });
 
 describe("wired into a real run: replaces the model call entirely", () => {
+  // K-A11 (quick-fix wave 2) moved this opt-in onto the CANONICAL node (nodes.ts), so this explicit
+  // store override is now redundant with the default — kept anyway to prove a store-level promotion
+  // still works identically to the canonical default it now duplicates.
   it("completes learning_recorder with zero model calls and zero usage records", async () => {
     repositoryManager.getUsageRepository().clear();
     const store = new RepositoryManager().getExecutionRepository();
@@ -355,6 +358,59 @@ describe("wired into a real run: replaces the model call entirely", () => {
     expect(output.artifact).toBe("learning_observations.v1");
     expect(output.runId).toBe(started.runId);
     expect(output.gateEvents.map((event) => event.event)).toContain("publish_execution");
+    expect(output.summary).toMatch(/No model call/);
+    expect(await repositoryManager.getUsageRepository().list({ runId: started.runId, nodeId: "learning_recorder" })).toEqual([]);
+  });
+
+  // K-A11 (quick-fix wave 2): the canonical node (nodes.ts) alone — no store override, no per-workspace
+  // promotion — must be enough to take the deterministic route. This is the regression the fix closes:
+  // previously no canonical literal ever set the flag, so every observation was a model's account of
+  // what happened unless an operator remembered to promote the flag into every live store by hand.
+  it("takes the deterministic route from the canonical node alone, with no store-level opt-in", async () => {
+    repositoryManager.getUsageRepository().clear();
+    const store = new RepositoryManager().getExecutionRepository();
+    const workspace = new RepositoryManager().getWorkspaceRepository();
+    // Deliberately no workspace.updateNode call here.
+
+    const started = await startDryRun({
+      executionMode: "openai",
+      projectId: "platform",
+      input: "K-A11 canonical-default e2e",
+      budgetUsd: 100,
+      entrypoint: {
+        nodeId: "publish_payload",
+        output: {
+          artifact: "dry_run_publish_payload.v1",
+          summary: "Candidate.",
+          clientProjectId: "platform",
+          clientObjectType: "content_item",
+          contractSource: { tool: "object_contract", fingerprint: "fp_sample" },
+          dryRun: true,
+          clientObject: { slug: "s", title: "t", nodes: [] },
+          blockers: []
+        }
+      }
+    }, store, workspace);
+
+    const run = (await getRun(started.runId, store))!;
+    for (const [nodeId, output] of [
+      ["publication_controller", { artifact: "publication_decision.v1", summary: "Ready.", decision: "go", blockers: [] }],
+      ["publish_executor", { artifact: "publish_execution.v1", summary: "Refused.", status: "blocked", blockers: ["operator_approval_absent: ..."] }],
+      ["release_executor", { artifact: "release_execution.v1", summary: "Nothing published.", status: "skipped", reason: "nothing_published", blockers: [], notes: [] }]
+    ] as const) {
+      const state = run.nodes.find((node) => node.nodeId === nodeId)!;
+      state.status = "completed";
+      state.output = output;
+      run.stageOutputs[nodeId] = output;
+    }
+    await store.saveRun(run);
+
+    const advanced = await runNextNode(started.runId, { executionRepository: store, workspaceRepository: workspace, approved: true });
+    const state = advanced!.nodes.find((node) => node.nodeId === "learning_recorder")!;
+
+    expect(state.status).toBe("completed");
+    const output = state.output as { artifact: string; summary: string };
+    expect(output.artifact).toBe("learning_observations.v1");
     expect(output.summary).toMatch(/No model call/);
     expect(await repositoryManager.getUsageRepository().list({ runId: started.runId, nodeId: "learning_recorder" })).toEqual([]);
   });

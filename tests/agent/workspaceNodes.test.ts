@@ -291,6 +291,17 @@ describe("Publishing Conductor workspace nodes", () => {
     expect(node?.modelConfig?.timeout).toBeTypeOf("number");
     expect(node!.modelConfig!.timeout as number).toBeGreaterThanOrEqual(180000);
   });
+
+  // K-A11 (quick-fix wave 2): the deterministic templated route (learningRecord.ts) makes no model
+  // call and no free-text generation — every fact it writes already exists on the run record or the
+  // usage ledger. Without this flag on the CANONICAL node, every observation is a model's paraphrased
+  // account of what happened instead, which optimizer_analyze, playbook curation and the attention
+  // feed then treat identically to a deterministic one. The flag must be on by default, not something
+  // an operator has to remember to promote into the live store per environment.
+  it("opts learning_recorder into the deterministic templated route by default (K-A11)", () => {
+    const node = listWorkspaceNodes().find((candidate) => candidate.id === "learning_recorder");
+    expect(node?.metadata?.learningRecorderDeterministic).toBe(true);
+  });
 });
 
 // R-21 (T-2 finding F-7): article_body declared contract_intelligence in both dependsOn and

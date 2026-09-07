@@ -325,21 +325,20 @@ describe("capture_conductor fixture run end-to-end (mock mode)", () => {
     // LIVE runs only, so on this "mock" execution-mode fixture it falls through to MockNodeRunner
     // exactly like an AI node would, and records a $0 mock-mode estimate the same way. Every record
     // is a mock-mode estimate, and ACTUAL spend is zero everywhere regardless.
-    // learning_recorder ALSO falls through to MockNodeRunner here — a pre-existing, unrelated fact:
-    // its CANONICAL definition (nodes.ts) carries no learningRecorderDeterministic metadata flag at
-    // all (that flag is store-promoted, not baked into the static node); this is the first capture
-    // fixture to drive a run far enough to actually reach it with real tail data, so it is the first
-    // to observe this. True of publishing_conductor and clone_conductor identically — nothing T15.7
-    // introduced.
+    // learning_recorder does NOT fall through to MockNodeRunner (K-A11, quick-fix wave 2): its
+    // CANONICAL definition (nodes.ts) now carries learningRecorderDeterministic: true, and that route
+    // is deliberately NOT scoped to live runs (executor.ts) — a mock run gets the identical templated,
+    // no-model-call record a live run would, so it produces zero usage records here, unlike
+    // release_executor above.
     const usageRecords = await repositoryManager.getUsageRepository().list({ runId: run.runId });
     expect(usageRecords.length).toBeGreaterThan(0);
-    const MOCK_FALLBACK_NODE_IDS = new Set([...(CAPTURE_AI_NODE_IDS as readonly string[]), "release_executor", "learning_recorder"]);
+    const MOCK_FALLBACK_NODE_IDS = new Set([...(CAPTURE_AI_NODE_IDS as readonly string[]), "release_executor"]);
     for (const record of usageRecords) {
       expect(MOCK_FALLBACK_NODE_IDS).toContain(record.nodeId ?? "");
       expect(record.status).toBe("estimated");
     }
     const dispatchedAiNodes = new Set(usageRecords.map((record) => record.nodeId));
-    expect([...dispatchedAiNodes].sort()).toEqual(["block_classifier", "gap_adjudicator", "learning_recorder", "release_executor"]);
+    expect([...dispatchedAiNodes].sort()).toEqual(["block_classifier", "gap_adjudicator", "release_executor"]);
     const summary = await summarizeModelUsage({ runId: run.runId });
     expect(summary.actualCostUsdEstimate).toBe(0);
 
