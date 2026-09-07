@@ -137,3 +137,51 @@ Adding the tool is three steps, and the third is the one that is always forgotte
 If a deployment sets `MCP_EXPOSED_TOOL_PREFIXES`, it must include `visual_identity` — the exposure
 filter keys on the namespace before the first dot, and an unlisted namespace is neither advertised
 nor callable, which reads to the caller as an unknown tool.
+
+## Tools that list ACROSS projects (`feedback_list`, `learning_list_observations`)
+
+The allowlist is 15 tools (`docs/site-credential-scope-lock.json`, `toolCount`). Thirteen of them are
+addressed by a run or a project, and therefore cannot cross a tenant boundary whatever arguments they
+are given. Two are not: `feedback_list` and `learning_list_observations` (S-07, 2026-09-07) return
+**every record in the workspace** when called with no filter. They power the platform admin's
+Analytics → Insights tab.
+
+Granting them is safe only because of three pieces that have to exist together:
+
+1. **The records carry a project.** `FeedbackRecord` (`improvement/improvementTypes.ts`) and
+   `LearningObservation` (`mcp/workspace/store.ts`) have an optional `projectId`. Optional, because
+   every record written before the field existed lacks one and must keep working.
+2. **The list tools filter on it** (`improvement/projectScope.ts`). A record matches a requested
+   project when it is stamped with that project, **or** it is unstamped and its `runId` resolves to a
+   run owned by that project. An unstamped record whose project cannot be established — no runId, an
+   unknown runId, a store that threw — is **excluded**. "We could not tell" is never "show it".
+3. **A scoped bearer must name a project.** `PROJECT_REQUIRED_SCOPED_TOOLS` in `mcpEndpoint.ts` refuses
+   either tool from a scoped caller that supplies no `projectId`/`project_id`, on the same 401 path as
+   everything else; the pre-existing membership check then refuses a foreign one. Without this piece
+   the first two are decoration — the leak is the *unfiltered* call, not the mis-filtered one.
+
+**Adding another list-across-projects tool means editing that set.** It is a hand-maintained list of
+wire names, not an argument-driven rule like `requestedRun`, because "unfiltered, this returns
+everyone's rows" is a fact about a tool's semantics that no argument reveals. A tool added to
+`SITE_CLIENT_MANAGER_TOOLS` without being added there ships as a cross-tenant read.
+
+### Why `playbook_get` and `optimizer_status` are NOT in the allowlist
+
+They are the Insights tab's other two cards, and they stay out permanently — not pending, not
+partially. Both are keyed by **node**, and nodes are workspace-wide: one shared graph that every
+tenant's runs execute. There is no project to partition by, so scoping them the way the two above are
+scoped is not a smaller change, it is not a possible one. Granting either would hand one tenant the
+workspace's shared learning state — every other tenant's curated playbook lessons and optimizer
+proposals. Those two cards are handled on the Platform side instead.
+`tests/agent/capture/siteClientManagerScope.test.ts` pins the exclusion so a later "just add the last
+two" cannot land quietly.
+
+### The two project ids for one tenant
+
+`feedback.ingest_tracking` and the `tracking-ingest` job take **two** ids that both look like "the
+project": `projectId` / `TRACKING_PROJECT_ID` is the tracking sink's own partition (`drlurie`), and
+`cmsAgentProjectId` / `CMS_AGENT_PROJECT_ID` is the CMS-Agent project (`dr-lurie`). Only the second is
+ever stamped on a record, because only the second is the domain a scoped bearer's `policy.projects`
+holds. Stamping the sink spelling would write records that match no filter and vanish from the tenant's
+own Insights tab with no error anywhere. `CMS_AGENT_PROJECT_ID` is optional: unset, rows ingest
+unstamped and the job still exits 0.

@@ -32,6 +32,7 @@ import { resolveSkillsForNode } from "../../skills/skillResolver.js";
 import { skillStatuses, type SkillDefinition } from "../../skills/skillTypes.js";
 import { listTools as listControlledTools, getTool as getControlledTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { executeTool, getToolExecution, listToolExecutions } from "../../tools/toolExecutor.js";
+import { filterRecordsByProject } from "../../improvement/projectScope.js";
 import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
 import { createSiteCredentialTools } from "./siteCredentialTools.js";
 import { createVisualIdentityTools } from "./visualIdentityTools.js";
@@ -218,7 +219,7 @@ const validateNodeInput = z.object({ node: z.any().optional(), id: z.string().mi
 const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(), stageOutputs: z.array(stageOutputImport).optional(), learningObservations: z.array(learningObservationImport).optional() }).strict();
 const saveOutput = z.object({ id: z.string().min(1).optional(), stage: z.string().min(1), value: z.unknown() }).strict();
 const listOutputs = z.object({ stage: z.string().min(1).optional() }).strict();
-const recordObservation = z.object({ observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional() }).strict();
+const recordObservation = z.object({ observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), projectId: z.string().min(1).optional() }).strict();
 // W0 complement (determinism program, 2026-08-12): this tool used to do exactly one thing — wrap an
 // articleBody you already had in a {target, dryRun, builtAt} envelope and refuse it if it did not
 // satisfy the article_body node's outputSchema. That is useful for a caller holding a body, and
@@ -387,14 +388,14 @@ const learningObservationJsonSchema = objectSchema({ id: { type: "string", minLe
 const importWorkspaceJsonSchema = objectSchema({ nodes: { type: "array", items: workspaceNodeJsonSchema }, stageOutputs: { type: "array", items: stageOutputJsonSchema }, learningObservations: { type: "array", items: learningObservationJsonSchema } });
 const saveOutputJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, stage: { type: "string", minLength: 1 }, value: {} }, ["stage", "value"]);
 const listOutputsJsonSchema = objectSchema({ stage: { type: "string", minLength: 1 } });
-const recordObservationJsonSchema = objectSchema({ observation: { type: "string", minLength: 1 }, metadata: { type: "object" }, runId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the run that produced it, so it can be joined back later." }, nodeId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the node that produced it." } }, ["observation"]);
+const recordObservationJsonSchema = objectSchema({ observation: { type: "string", minLength: 1 }, metadata: { type: "object" }, runId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the run that produced it, so it can be joined back later." }, nodeId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the node that produced it." }, projectId: { type: "string", minLength: 1, description: "Optional: the CMS-Agent project id this observation belongs to (e.g. \"dr-lurie\"), so a project-scoped learning.list_observations finds it. NOT the tracking sink's partition id." } }, ["observation"]);
 // 2.8 (handoff 2026-08-10): lifecycle/archival for learning observations. Nothing is ever hard-deleted
 // — archive is soft: the record stays, gains status:"archived" plus archivedAt/archivedReason, and
 // listObservations excludes it by default (includeArchived:true opts back in). This is what lets
 // curation/migration skip a sunset directive's observations (e.g. the "[ALIGN" coordination-board
 // records — see scripts/purgeAlignObservations.ts) without needing every reader updated separately.
-const listObservationsInput = z.object({ includeArchived: z.boolean().optional() }).strict();
-const listObservationsJsonSchema = objectSchema({ includeArchived: { type: "boolean", description: "Include archived (soft-deleted) observations. Default false." } });
+const listObservationsInput = z.object({ includeArchived: z.boolean().optional(), projectId: z.string().min(1).optional() }).strict();
+const listObservationsJsonSchema = objectSchema({ includeArchived: { type: "boolean", description: "Include archived (soft-deleted) observations. Default false." }, projectId: { type: "string", minLength: 1, description: "CMS-Agent project id (e.g. \"dr-lurie\") to narrow to. NOT the tracking sink's partition id." } });
 const archiveObservationInput = z.object({ id: z.string().min(1), reason: z.string().min(1).optional() }).strict();
 const archiveObservationJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, reason: { type: "string", minLength: 1, description: "Optional human-readable reason recorded on the archived observation." } }, ["id"]);
 // Bulk archive by a text prefix rather than an arbitrary predicate — a predicate function cannot cross
@@ -734,8 +735,11 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "stage.save_output", description: "Save stage output.", zodSchema: saveOutput, inputSchema: saveOutputJsonSchema, execute: async (input) => { const data = saveOutput.parse(input); const output = await workspaceRepository.saveStageOutput(data.stage, data.value, data.id); return ok({ output, workspaceVersion: await workspaceRepository.getWorkspaceVersion() }); } }),
     tool({ name: "stage.get_output", description: "Get stage output.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => ok({ output: await workspaceRepository.getStageOutput(nodeId.parse(input).id) ?? null }) }),
     tool({ name: "stage.list_outputs", description: "List stage outputs.", zodSchema: listOutputs, inputSchema: listOutputsJsonSchema, execute: async (input) => ok({ outputs: await workspaceRepository.listStageOutputs(listOutputs.parse(input).stage) }) }),
-    tool({ name: "learning.record_observation", description: "Record a learning observation, optionally stamped with the runId/nodeId it came from.", zodSchema: recordObservation, inputSchema: recordObservationJsonSchema, execute: async (input) => { const data = recordObservation.parse(input); const observation = await learningRepository.recordObservation(data.observation, data.metadata, { runId: data.runId, nodeId: data.nodeId }); return ok({ observation, workspaceVersion: await workspaceRepository.getWorkspaceVersion() }); } }),
-    tool({ name: "learning.list_observations", description: "List learning observations. Archived (soft-deleted) observations are excluded by default.", zodSchema: listObservationsInput, inputSchema: listObservationsJsonSchema, execute: async (input) => { const data = listObservationsInput.parse(input); return ok({ observations: await learningRepository.listObservations({ includeArchived: data.includeArchived }) }); } }),
+    tool({ name: "learning.record_observation", description: "Record a learning observation, optionally stamped with the runId/nodeId it came from and the CMS-Agent projectId it belongs to.", zodSchema: recordObservation, inputSchema: recordObservationJsonSchema, execute: async (input) => { const data = recordObservation.parse(input); const observation = await learningRepository.recordObservation(data.observation, data.metadata, { runId: data.runId, nodeId: data.nodeId, projectId: data.projectId }); return ok({ observation, workspaceVersion: await workspaceRepository.getWorkspaceVersion() }); } }),
+    // S-07: the project filter lives here, not in LearningRepository.listObservations, because matching
+    // an UNSTAMPED legacy observation needs a run lookup and the learning repository has no execution
+    // repository. improvement/projectScope.ts owns the match rule and the fail-closed decision.
+    tool({ name: "learning.list_observations", description: "List learning observations. Archived (soft-deleted) observations are excluded by default. Pass projectId (the CMS-Agent project id) to see only that project's observations: one matches when it is stamped with that project, or is unstamped and its runId belongs to a run of that project. Observations whose project cannot be established are omitted from a filtered list.", zodSchema: listObservationsInput, inputSchema: listObservationsJsonSchema, execute: async (input) => { const data = listObservationsInput.parse(input); return ok({ observations: await filterRecordsByProject(await learningRepository.listObservations({ includeArchived: data.includeArchived }), data.projectId, executionRepository) }); } }),
     tool({ name: "learning.archive_observation", description: "Archive (soft-delete) one learning observation by id. The record is never removed — it gains status:\"archived\" plus archivedAt/archivedReason and is excluded from listObservations unless includeArchived is set.", zodSchema: archiveObservationInput, inputSchema: archiveObservationJsonSchema, execute: async (input) => {
       const data = archiveObservationInput.parse(input);
       return ok({ observation: await learningRepository.archiveObservation(data.id, data.reason) });

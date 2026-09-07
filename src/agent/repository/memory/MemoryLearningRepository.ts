@@ -10,7 +10,7 @@ export class MemoryLearningRepository implements LearningRepository {
   private readonly turnReferences = new Map<string, ConversationTurnReference>();
   constructor(private readonly workspaceRepository: WorkspaceRepository, private readonly backend: RepositoryBackend = "memory") {}
 
-  recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }): Promise<LearningObservation> {
+  recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string; projectId?: string }): Promise<LearningObservation> {
     return this.workspaceRepository.recordObservation(observation, metadata, provenance);
   }
 

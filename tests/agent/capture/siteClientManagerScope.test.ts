@@ -35,7 +35,13 @@ describe("site client_manager scoped-token allowlist", () => {
     // T5 (S-07, partial, 2026-09-06): two more run-addressed bridge calls, both scoped to the
     // project's own runs the same way workflow_get_run/workflow_get_run_cost already are.
     "node_get_latest_output",
-    "workflow_cancel_run"
+    "workflow_cancel_run",
+    // S-07 (2026-09-07): the Analytics → Insights tab's two project-partitionable cards. Safe to
+    // grant only because feedback/observation records now carry a projectId, both list tools filter
+    // on it, and mcpEndpoint.ts refuses either tool from a scoped bearer that names no project at
+    // all (PROJECT_REQUIRED_SCOPED_TOOLS) — the unfiltered call returns the whole workspace.
+    "feedback_list",
+    "learning_list_observations"
   ];
 
   it("covers exactly Platform's bridge — no missing tool (401 at the door) and no extra (blast radius)", () => {
@@ -45,6 +51,15 @@ describe("site client_manager scoped-token allowlist", () => {
   it("excludes release_workspace_run, which rides Platform's own operational bridge", () => {
     expect(SITE_CLIENT_MANAGER_TOOLS).not.toContain("release_workspace_run");
     expect(SITE_CLIENT_MANAGER_TOOLS).not.toContain("release_to_production");
+  });
+
+  // S-07: the OTHER half of the Insights decision, pinned so a later "just add the last two cards"
+  // cannot land quietly. playbook_get and optimizer_status are keyed by NODE, and nodes are
+  // workspace-wide — there is no project to partition by, so granting either would hand one tenant
+  // every other tenant's curated playbook lessons and optimizer proposals.
+  it("excludes the node-keyed improvement tools — nodes are workspace-wide, so there is nothing to partition", () => {
+    expect(SITE_CLIENT_MANAGER_TOOLS).not.toContain("playbook_get");
+    expect(SITE_CLIENT_MANAGER_TOOLS).not.toContain("optimizer_status");
   });
 
   it("grants no workspace-authoring or destructive tool", () => {

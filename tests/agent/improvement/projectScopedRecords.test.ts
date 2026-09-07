@@ -1,0 +1,136 @@
+import { describe, expect, it } from "vitest";
+import { createWorkspaceTools } from "../../../src/agent/mcp/workspace/tools.js";
+import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { filterRecordsByProject } from "../../../src/agent/improvement/projectScope.js";
+import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
+
+// S-07 — the read side of tenant partitioning for feedback records and learning observations.
+//
+// The two record types were never project-partitioned (only runId/nodeId), which is why the tenant
+// Insights tab could not be given feedback_list / learning_list_observations at all. They now carry an
+// OPTIONAL projectId, and these two list tools filter on it — matching a stamped record directly and
+// rescuing an unstamped legacy one through its run. What must never happen is the third case: a record
+// whose project cannot be established being shown to a filtered caller.
+const tools = createWorkspaceTools({});
+const callTool = async (name: string, input: unknown) => {
+  const found = tools.find((candidate) => candidate.name === name);
+  if (!found) throw new Error(`tool not registered: ${name}`);
+  return (await found.execute(input)) as { ok: true; data: any };
+};
+
+const seedRun = async (runId: string, projectId: string) => {
+  await repositoryManager.getExecutionRepository().createRun({
+    runId,
+    workflowId: "conductor",
+    projectId,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    nodes: [],
+    rev: 0
+  } as unknown as WorkflowExecutionRecord);
+};
+
+const unique = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
+
+describe("feedback.list project scoping", () => {
+  it("returns stamped rows for the project, rescues unstamped rows via their run, and drops the rest", async () => {
+    const nodeId = unique("node_fb");
+    const ownRun = unique("run_own");
+    const foreignRun = unique("run_foreign");
+    await seedRun(ownRun, "dr-lurie");
+    await seedRun(foreignRun, "fernwell");
+
+    await callTool("feedback.record", { kind: "approve", nodeId, projectId: "dr-lurie", note: "stamped-own" });
+    await callTool("feedback.record", { kind: "approve", nodeId, projectId: "fernwell", note: "stamped-foreign" });
+    await callTool("feedback.record", { kind: "approve", nodeId, runId: ownRun, note: "unstamped-own-run" });
+    await callTool("feedback.record", { kind: "approve", nodeId, runId: foreignRun, note: "unstamped-foreign-run" });
+    await callTool("feedback.record", { kind: "approve", nodeId, runId: unique("run_missing"), note: "unstamped-unknown-run" });
+    await callTool("feedback.record", { kind: "approve", nodeId, note: "unstamped-no-run" });
+
+    const scoped = await callTool("feedback.list", { nodeId, projectId: "dr-lurie" });
+    expect(scoped.data.records.map((record: { note: string }) => record.note).sort())
+      .toEqual(["stamped-own", "unstamped-own-run"]);
+  });
+
+  // The pre-existing contract: no projectId means no filtering at all, for the full workspace bearer
+  // and for every caller that has never passed one.
+  it("is unfiltered when no projectId is supplied", async () => {
+    const nodeId = unique("node_fb_all");
+    await callTool("feedback.record", { kind: "approve", nodeId, projectId: "dr-lurie" });
+    await callTool("feedback.record", { kind: "approve", nodeId, projectId: "fernwell" });
+    await callTool("feedback.record", { kind: "approve", nodeId });
+
+    const all = await callTool("feedback.list", { nodeId });
+    expect(all.data.records).toHaveLength(3);
+  });
+
+  it("persists the stamp so a record can be found by it later", async () => {
+    const nodeId = unique("node_fb_stamp");
+    const recorded = await callTool("feedback.record", { kind: "approve", nodeId, projectId: "dr-lurie" });
+    expect(recorded.data.feedback.projectId).toBe("dr-lurie");
+  });
+});
+
+describe("learning.list_observations project scoping", () => {
+  it("matches on the stamp, falls back to the run, and omits what it cannot place", async () => {
+    const marker = unique("[S07");
+    const ownRun = unique("run_obs_own");
+    const foreignRun = unique("run_obs_foreign");
+    await seedRun(ownRun, "dr-lurie");
+    await seedRun(foreignRun, "fernwell");
+
+    await callTool("learning.record_observation", { observation: `${marker} stamped-own`, projectId: "dr-lurie" });
+    await callTool("learning.record_observation", { observation: `${marker} stamped-foreign`, projectId: "fernwell" });
+    await callTool("learning.record_observation", { observation: `${marker} unstamped-own-run`, runId: ownRun });
+    await callTool("learning.record_observation", { observation: `${marker} unstamped-foreign-run`, runId: foreignRun });
+    await callTool("learning.record_observation", { observation: `${marker} unstamped-no-run` });
+
+    const scoped = await callTool("learning.list_observations", { projectId: "dr-lurie" });
+    const mine = scoped.data.observations
+      .filter((observation: { observation: string }) => observation.observation.startsWith(marker))
+      .map((observation: { observation: string }) => observation.observation.slice(marker.length + 1))
+      .sort();
+    expect(mine).toEqual(["stamped-own", "unstamped-own-run"]);
+  });
+
+  it("stamps the observation and leaves an unfiltered list alone", async () => {
+    const marker = unique("[S07ALL");
+    const recorded = await callTool("learning.record_observation", { observation: `${marker} one`, projectId: "dr-lurie" });
+    expect(recorded.data.observation.projectId).toBe("dr-lurie");
+    await callTool("learning.record_observation", { observation: `${marker} two`, projectId: "fernwell" });
+
+    const all = await callTool("learning.list_observations", {});
+    const seen = all.data.observations.filter((observation: { observation: string }) => observation.observation.startsWith(marker));
+    expect(seen).toHaveLength(2);
+  });
+});
+
+describe("filterRecordsByProject", () => {
+  // The bound that keeps a page of feedback from becoming a page of blob reads: each DISTINCT runId is
+  // resolved once, however many records share it.
+  it("resolves each distinct runId at most once per call", async () => {
+    const calls: string[] = [];
+    const executionRepository = {
+      getRun: async (runId: string) => {
+        calls.push(runId);
+        return { runId, projectId: runId === "run-a" ? "dr-lurie" : "fernwell" } as unknown as WorkflowExecutionRecord;
+      }
+    };
+    const records = [
+      { runId: "run-a" }, { runId: "run-a" }, { runId: "run-a" },
+      { runId: "run-b" }, { runId: "run-b" },
+      { projectId: "dr-lurie" }
+    ];
+
+    const kept = await filterRecordsByProject(records, "dr-lurie", executionRepository);
+    expect(kept).toHaveLength(4);
+    expect(calls.sort()).toEqual(["run-a", "run-b"]);
+  });
+
+  // Fail closed: "we could not tell" must never render as "show it to them".
+  it("excludes an unstamped record when the run lookup throws", async () => {
+    const executionRepository = { getRun: async () => { throw new Error("store unavailable"); } };
+    const kept = await filterRecordsByProject([{ runId: "run-a" }, { projectId: "dr-lurie" }], "dr-lurie", executionRepository as never);
+    expect(kept).toEqual([{ projectId: "dr-lurie" }]);
+  });
+});

@@ -26,6 +26,11 @@ export const TRACKING_SINK_TOKEN_ENV = "TRACKING_SINK_TOKEN";
 /** The tenant's partition inside the sink (site genesis sets it to the bare site slug). Named here
  * so every reader — the ingest job, the optimizer's median lookup — spells it the same way. */
 export const TRACKING_PROJECT_ID_ENV = "TRACKING_PROJECT_ID";
+/** S-07: the CMS-AGENT project id for the SAME tenant (`dr-lurie` where TRACKING_PROJECT_ID is
+ * `drlurie`). A second variable rather than a derivation, because the two ids are independent
+ * namespaces and no string transform is guaranteed to map one to the other. Unset means ingested
+ * rows are stamped with no project, exactly as before this existed. */
+export const CMS_AGENT_PROJECT_ID_ENV = "CMS_AGENT_PROJECT_ID";
 /** Outcome `source` stamped on every record this bridge writes; the contract optimizer/dataset code reads. */
 export const TRACKING_OUTCOME_SOURCE = "tracking:engagement.v1";
 
@@ -60,11 +65,30 @@ export const trackingSinkConnectionState = (env: NodeJS.ProcessEnv = process.env
 });
 
 export type TrackingIngestParams = {
+  /**
+   * The TRACKING partition to read — the sink's own `TRACKING_PROJECT_ID` (`drlurie`). This id lives
+   * in the sink's namespace, NOT CMS-Agent's, and the two are spelled differently for the same
+   * tenant. It is a query parameter, never a stamp: see `cmsAgentProjectId`.
+   */
   projectId: string;
   from: string;
   to: string;
   /** Restrict the pull to one producer node, and the attribution fallback for rows that omit one. */
   nodeId?: string;
+  /**
+   * S-07 — the CMS-AGENT project id (`dr-lurie`) to stamp on every recorded FeedbackRecord, so a
+   * tenant's project-scoped `feedback.list` can find its own outcome rows.
+   *
+   * A SEPARATE field from `projectId` on purpose. The two ids name the same tenant in two different
+   * namespaces (`drlurie` in the sink, `dr-lurie` here), and a scoped bearer's `policy.projects`
+   * holds only the CMS-Agent spelling — so stamping `projectId` would write a value that matches no
+   * filter and silently hides every ingested row from the tenant that produced it. Reusing one field
+   * for both would make that mistake invisible; two named fields make it a typed one.
+   *
+   * Omitted means "stamp nothing", which is exactly the pre-S-07 behaviour: the rows still record,
+   * and a project-filtered read resolves them through their `runId` instead.
+   */
+  cmsAgentProjectId?: string;
   actor?: string | WorkspaceActor;
 };
 
@@ -263,6 +287,8 @@ export async function ingestTrackingRollups(params: TrackingIngestParams, deps: 
         outcome: { source: TRACKING_OUTCOME_SOURCE, metrics },
         actor: params.actor,
         note: `window ${params.from}..${params.to}`,
+        // Deliberately NOT params.projectId — that is the sink's partition id. See the field docs.
+        ...(params.cmsAgentProjectId ? { projectId: params.cmsAgentProjectId } : {}),
         createdAt: now()
       };
       const saved = await deps.evaluationRepository.recordFeedback(record);

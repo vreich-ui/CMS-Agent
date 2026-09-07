@@ -17,7 +17,7 @@ const emptyLedger = (): ConversationTurnLearningLedger => ({ supersessions: [], 
 export class BlobLearningRepository implements LearningRepository {
   constructor(private readonly workspaceRepository: WorkspaceRepository, private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
 
-  async recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }): Promise<LearningObservation> {
+  async recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string; projectId?: string }): Promise<LearningObservation> {
     return this.workspaceRepository.recordObservation(observation, metadata, provenance);
   }
 

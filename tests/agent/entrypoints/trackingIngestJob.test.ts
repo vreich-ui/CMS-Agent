@@ -22,6 +22,14 @@ const jsonFetch = (body: unknown, status = 200, urls: string[] = []): typeof fet
 
 const rows = (count: number) => ({ rows: Array.from({ length: count }, (_value, index) => ({ node_id: "draft_writer", run_id: `run_${index}`, exposures: 100 + index, cta_ctr: 0.05 })) });
 
+// The evaluation repository is a process-lifetime singleton these tests share, so assert against the
+// records THIS run wrote (by the feedbackIds it reports) rather than the whole outcome ledger.
+const ingestedRecords = async (ingested: { feedbackId: string }[]) => {
+  const wanted = new Set(ingested.map((entry) => entry.feedbackId));
+  return (await repositoryManager.getEvaluationRepository().listFeedback({ kind: "outcome" }))
+    .filter((record) => wanted.has(record.feedbackId));
+};
+
 describe("previousUtcDay", () => {
   it("resolves the previous whole UTC day — the window a daily schedule should pull", () => {
     expect(previousUtcDay(new Date("2026-08-31T04:12:00Z"))).toEqual({ from: "2026-08-30", to: "2026-08-31" });
@@ -88,6 +96,50 @@ describe("runTrackingIngestJob", () => {
     const result = await runTrackingIngestJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch({ rows: [] }) });
     expect(result.status).toBe("completed");
     if (result.status === "completed") expect(result.result).toMatchObject({ rows: 0, ingested: [], errors: [] });
+  });
+
+  // S-07 — the ingest job reads a TRACKING partition (`trk_demo`/`drlurie`) and stamps a CMS-AGENT
+  // project (`dr-lurie`). Two ids, two namespaces, one tenant: stamping the partition id would write
+  // records that no scoped bearer's policy.projects can ever match, hiding a tenant's own engagement
+  // rows from its own Insights tab with no error anywhere.
+  it("stamps the CMS-Agent project id from CMS_AGENT_PROJECT_ID, never the tracking partition", async () => {
+    const result = await runTrackingIngestJob({
+      env: { ...CONFIGURED_ENV, CMS_AGENT_PROJECT_ID: "dr-lurie" } as unknown as NodeJS.ProcessEnv,
+      fetchImpl: jsonFetch(rows(2))
+    });
+    expect(result.status).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.window.cmsAgentProjectId).toBe("dr-lurie");
+    const written = await ingestedRecords(result.result.ingested);
+    expect(written).toHaveLength(2);
+    for (const record of written) {
+      expect(record.projectId).toBe("dr-lurie");
+      expect(record.projectId).not.toBe("trk_demo");
+    }
+  });
+
+  // Absent is a supported state, not a misconfiguration: a schedule that deploys ahead of the
+  // variable must keep ingesting and keep exiting 0.
+  it("ingests unstamped and still completes when CMS_AGENT_PROJECT_ID is unset", async () => {
+    const result = await runTrackingIngestJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch(rows(1)) });
+    expect(result.status).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.window.cmsAgentProjectId).toBeUndefined();
+    const written = await ingestedRecords(result.result.ingested);
+    expect(written).toHaveLength(1);
+    expect(written[0]!.projectId).toBeUndefined();
+  });
+
+  it("takes --cms-agent-project over the env var", async () => {
+    const originalLog = console.log;
+    const lines: string[] = [];
+    console.log = (line: string) => lines.push(line);
+    try {
+      await cliMain(["--cms-agent-project", "fernwell", "--dry-run"], { ...CONFIGURED_ENV, CMS_AGENT_PROJECT_ID: "dr-lurie" } as unknown as NodeJS.ProcessEnv);
+      expect(JSON.parse(lines[0]!).window.cmsAgentProjectId).toBe("fernwell");
+    } finally {
+      console.log = originalLog;
+    }
   });
 });
 

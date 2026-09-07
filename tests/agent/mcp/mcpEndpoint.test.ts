@@ -241,3 +241,83 @@ describe("scoped bearer tokens and run-addressed tools", () => {
     expect(unknown.body).toBe(foreign.body);
   });
 });
+
+// S-07 — feedback_list and learning_list_observations return the WHOLE workspace when no project is
+// supplied, so unlike every other tool on a site bearer they cannot be bounded by the tool allowlist
+// alone. mcpEndpoint.ts's PROJECT_REQUIRED_SCOPED_TOOLS makes a project mandatory for a scoped caller;
+// the pre-existing membership check then refuses a foreign one.
+describe("scoped bearer tokens and cross-project list tools", () => {
+  const SCOPED = "scoped-test-drlurie";
+  const seedRun = async (runId: string, projectId: string) => {
+    await repositoryManager.getExecutionRepository().createRun({
+      runId,
+      workflowId: "conductor",
+      projectId,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      nodes: [],
+      rev: 0
+    } as unknown as WorkflowExecutionRecord);
+  };
+
+  const post = async (token: string, args: Record<string, unknown>, name = "feedback_list") => {
+    const response = await handler({
+      httpMethod: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })
+    });
+    return { ...response, json: response.body ? JSON.parse(response.body) : undefined };
+  };
+  const rowsOf = (response: { json?: any }): { projectId?: string; note?: string }[] =>
+    response.json.result.structuredContent.data.records;
+
+  beforeEach(async () => {
+    process.env.MCP_API_TOKEN = "test-token";
+    process.env.MCP_SCOPED_TOKENS_JSON = JSON.stringify({
+      [SCOPED]: { projects: ["dr-lurie"], toolAllowlist: ["feedback_list", "learning_list_observations"] }
+    });
+    // One stamped row per project, plus an UNSTAMPED row whose run belongs to dr-lurie — the legacy
+    // shape the filter has to rescue rather than drop.
+    await seedRun("run-s07-drlurie", "dr-lurie");
+    const evaluationRepository = repositoryManager.getEvaluationRepository();
+    for (const record of [
+      { feedbackId: "fb_s07_own", kind: "approve" as const, projectId: "dr-lurie", note: "own", createdAt: new Date().toISOString() },
+      { feedbackId: "fb_s07_foreign", kind: "approve" as const, projectId: "fernwell", note: "foreign", createdAt: new Date().toISOString() },
+      { feedbackId: "fb_s07_legacy", kind: "approve" as const, runId: "run-s07-drlurie", note: "legacy", createdAt: new Date().toISOString() }
+    ]) await evaluationRepository.recordFeedback(record);
+  });
+
+  afterEach(() => {
+    delete process.env.MCP_SCOPED_TOKENS_JSON;
+  });
+
+  it("refuses a scoped feedback_list that names no project at all — unfiltered, it returns every tenant", async () => {
+    expect((await post(SCOPED, {})).statusCode).toBe(401);
+  });
+
+  it("refuses a scoped learning_list_observations that names no project at all", async () => {
+    expect((await post(SCOPED, {}, "learning_list_observations")).statusCode).toBe(401);
+  });
+
+  it("refuses a scoped list naming a project outside the bearer's own scope", async () => {
+    expect((await post(SCOPED, { projectId: "fernwell" })).statusCode).toBe(401);
+  });
+
+  it("allows the bearer's own project and returns only that project's rows", async () => {
+    const response = await post(SCOPED, { projectId: "dr-lurie" });
+    expect(response.statusCode).toBe(200);
+    const notes = rowsOf(response).map((record) => record.note);
+    expect(notes).toContain("own");
+    expect(notes).toContain("legacy"); // unstamped, but its run belongs to dr-lurie
+    expect(notes).not.toContain("foreign");
+  });
+
+  // A FULL bearer is unchanged: no project required, nothing filtered. The new refusal is a property
+  // of the SCOPED path only.
+  it("leaves a full bearer's unfiltered feedback_list exactly as it was", async () => {
+    const response = await post("test-token", {});
+    expect(response.statusCode).toBe(200);
+    const notes = rowsOf(response).map((record) => record.note);
+    expect(notes).toEqual(expect.arrayContaining(["own", "foreign", "legacy"]));
+  });
+});

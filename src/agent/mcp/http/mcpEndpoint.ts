@@ -122,6 +122,22 @@ const requestedRun = (argumentsValue: unknown): string | undefined | null => {
   return (camel ?? snake) as string | undefined;
 };
 
+// S-07 — tools whose UNFILTERED answer is the whole workspace, for every tenant at once.
+//
+// The projectId pin below only fires when a call actually NAMES a project; a call that names none was
+// let through on the theory that the tool allowlist alone bounds it. That theory holds for every tool
+// on a site bearer up to now: each is addressed by a run or a project and therefore cannot cross a
+// tenant boundary. It does NOT hold for `feedback_list` and `learning_list_observations`, which
+// return every record in the workspace when no filter is supplied — so admitting a scoped bearer that
+// simply omits `projectId` would hand one tenant every other tenant's editorial telemetry.
+//
+// A list of wire names rather than an argument-driven rule (the shape `requestedRun` uses), because
+// the property being encoded — "unfiltered, this returns everyone's rows" — is a fact about the
+// tool's semantics that no argument reveals. A tool added later is NOT covered until someone adds it
+// here, so: any tool that lists records across projects must be added to this set in the same commit
+// that adds it to SITE_CLIENT_MANAGER_TOOLS.
+const PROJECT_REQUIRED_SCOPED_TOOLS: readonly string[] = ["feedback_list", "learning_list_observations"];
+
 // An unknown runId is refused exactly like a foreign one, and a store failure fails closed.
 // Distinguishing "no such run" from "not your run" would make this check an existence oracle over
 // other tenants' run ids.
@@ -136,8 +152,9 @@ const isRunInScope = async (runId: string, policy: ScopedBearerTokenPolicy): Pro
 
 // Scoped callers receive the normal initialize response, but tools/list is reduced to its exact
 // wire-name allowlist. Each tools/call is also checked here before dispatch; the server-side filter
-// is defence in depth for the SDK path. Calls without a direct project argument are still bounded
-// by the explicit tool allowlist, while calls that name projectId/project_id must be in scope.
+// is defence in depth for the SDK path. Calls that name projectId/project_id must be in scope; calls
+// without one are bounded by the explicit tool allowlist ALONE, which is why a tool that lists across
+// projects when unfiltered must be named in PROJECT_REQUIRED_SCOPED_TOOLS and refused without one.
 const isScopedMessageAllowed = async (message: unknown, policy: ScopedBearerTokenPolicy): Promise<boolean> => {
   if (!isPlainObject(message) || typeof message.method !== "string") return false;
   // Scoped site credentials are for the MCP tool channel only. Keep the session handshake and
@@ -149,6 +166,10 @@ const isScopedMessageAllowed = async (message: unknown, policy: ScopedBearerToke
   if (!isPlainObject(params) || typeof params.name !== "string" || !policy.toolAllowlist.includes(params.name)) return false;
   const project = requestedProject(params.arguments);
   if (project === null) return false;
+  // Refuse BEFORE the membership check, so an omitted project is a refusal rather than a pass. The
+  // membership check below then does the rest: naming a foreign project is refused exactly as it
+  // already was, and naming the bearer's own project is the only way through.
+  if (project === undefined && PROJECT_REQUIRED_SCOPED_TOOLS.includes(params.name)) return false;
   if (project !== undefined && !policy.projects.includes(project)) return false;
   const runId = requestedRun(params.arguments);
   if (runId === null) return false;
