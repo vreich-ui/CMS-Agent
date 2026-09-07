@@ -1,0 +1,33 @@
+# EVERY Cloud Run JOB built from the cms-agent mcp-service image. ONE name per line.
+#
+# THIS IS THE ONLY LIST. scripts/pin-job-images.sh reads it, and cloudbuild.deploy.yaml runs that
+# same script — so the trigger path and the shell path cannot disagree about which planes exist.
+# Adding a job is one line here and nothing else. The previous arrangement kept the list in a
+# cloudbuild substitution (`_EXECUTOR_JOBS: continuation-tick`) that only the trigger could see,
+# and it went stale the moment jobs were added anywhere else: on 2026-09-07 two of the three live
+# jobs had never been in it, and both were caught by hand rather than by anything automated.
+#
+# Only jobs built from THIS image belong here. A job running a different image must not be forced
+# onto mcp-service — it would be pinned to an artifact that does not contain its entrypoint.
+#
+# Blank lines and #-comments are ignored; names may also be space-separated on one line.
+
+# Executes queued workflow nodes every ~2 minutes against live content across four tenant sites.
+# It SHOULD track the service, and that is the point of listing it — a repin here lands immediately
+# and at full scale, with no schedule to wait for. That is the desired behaviour, not an accepted
+# risk: this job running code older than the service is the 2026-08-14→20 incident, six days of
+# roughly half of all capture nodes failing while the service beside it succeeded. It gets no
+# special handling anywhere in the pin path; it is called out here so the next reader knows the
+# blast radius is immediate and deliberate, rather than discovering it during an incident.
+continuation-tick
+
+# Rotates every tenant's scoped credential from the tool allowlist COMPILED INTO THE IMAGE
+# (SITE_CLIENT_MANAGER_TOOLS, locked by docs/site-credential-scope-lock.json). A stale image here
+# does not fail — it re-narrows all four tenants to that older, smaller allowlist and exits 0
+# looking like a success, undoing an allowlist change that had just deployed. 2026-09-07.
+site-credential-reconciler
+
+# Ingests the tracking sink's previous UTC day. A stale image here silently loses the projectId
+# stamp on every record it writes, so a tenant admin's Insights panel shows nothing while the data
+# sits in the store, attributable to no one. 2026-09-07.
+tracking-ingest

@@ -114,5 +114,20 @@ else
   say "     MCP_URL=$URL/mcp MCP_API_TOKEN=<bearer> npm run verify:deploy"
 fi
 
+# A service is not the whole system. Cloud Run JOBS keep whatever image they were last given and
+# never follow a tag on their own, so before this ran here the shell deploy path updated the service
+# and stopped — leaving every executor plane on older code, silently, until someone noticed by hand.
+#
+# Runs LAST, after the health and surface checks above, and deliberately so: if this revision is bad
+# we want it confined to the service, not propagated onto the planes that rotate tenant credentials
+# and write to the live store. `set -e` means a failure here fails the deploy, which is the point —
+# a half-updated fleet is the bug this replaces.
+#
+# The job list lives in deploy/executor-jobs.txt and NOWHERE else; cloudbuild.deploy.yaml runs this
+# same script, so the trigger path and this path cannot disagree about which planes exist.
+say ""
+say "==> Pinning executor planes to the digest this revision resolves to"
+PROJECT="$PROJECT" REGION="$REGION" SERVICE="$SERVICE" bash "$(dirname "${BASH_SOURCE[0]}")/pin-job-images.sh"
+
 say ""
 say "✓ Deployed $IMAGE_TAG as $REVISION"
