@@ -12,6 +12,8 @@
 // for. Downstream, a skipped node counts as SATISFIED-with-absent for dependency purposes (executor:
 // findNextRunnableNode / dependenciesReached), never as a failure and never as a blocker. A run never
 // takes this status; only a node does.
+import type { Blockage } from "../execution/blockage.js";
+
 export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled", "skipped"] as const;
 export type ExecutionStatus = typeof executionStatuses[number];
 // A paused run is intentionally halted alongside completed/failed/blocked/cancelled runs until a
@@ -105,6 +107,12 @@ export type NodeExecutionState = {
   lastDispatch?: NodeDispatchProvenance;
   // Present only on a node whose status is "skipped" (W4).
   skip?: NodeSkipRecord;
+  // blockage.v1 — the structured, actionable form of THIS node's failure: what stopped it and the
+  // remedies that would unstick it (see execution/blockage.ts). Written wherever a runner result is
+  // turned into a failed node state (executor.executeRunnableNode, nodeRuntime.executeNode) and
+  // carried unchanged to the browser. `errors` (two strings) stays exactly as it was for every
+  // existing reader; this is the machine-readable half those two strings were a lossy summary of.
+  blockage?: Blockage;
   // W1 T1.1 — the orchestrator's own scheduled retry of a transient runner failure. Present on a
   // node that is "queued" BECAUSE its last attempt failed retryably: `notBefore` is the earliest the
   // scheduler may dispatch it again (exponential backoff), and `attempt` counts orchestrator retries

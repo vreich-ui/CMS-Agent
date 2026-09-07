@@ -21,6 +21,8 @@ import { readVisualStandardMaterializer, VISUAL_STANDARD_MATERIALIZER_NODE_ID } 
 import type { ExecutionArtifact, ExecutionStatus, NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
 import type { UsageRepository } from "../repository/interfaces/UsageRepository.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
+import { toBlockage } from "../execution/blockage.js";
+import { WorkspaceToolError } from "./workspaceErrors.js";
 
 const now = () => new Date().toISOString();
 const makeRunId = () => `node_run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -177,11 +179,28 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
     );
   }
   const inputValidation = validateAgainstNodeSchema(data.input ?? {}, node.inputSchema);
-  if (!inputValidation.valid) throw new Error(`input_validation_failed: ${inputValidation.issues.join("; ")}`);
+  // W0 T0.5 — a BARE Error here reached the wire as `tool_error` with the whole reason folded into
+  // one prose message (toolKit.toolError's last fallback), so the two most common "you asked for
+  // something this node cannot start on" refusals were indistinguishable from a crash and carried
+  // nothing a card could act on. Typed, with the failing fields as data — the caller now gets
+  // `input_validation_failed` + `issues[]`, which blockage.ts maps to kind "validation".
+  if (!inputValidation.valid) {
+    throw new WorkspaceToolError(
+      "input_validation_failed",
+      `input_validation_failed: ${inputValidation.issues.join("; ")}`,
+      { nodeId: node.id, issues: inputValidation.issues }
+    );
+  }
   // Threads the node loaded above through prepareNodeExecution (which threads it further, into
   // getEffectivePrompt and resolveEffectiveToolsForNode) so this dispatch loads it once, not four times.
   const prep = await prepareNodeExecution(data, repos, node);
-  if (prep.readinessStatus !== "ready") throw new Error(`node_not_ready: ${prep.missingInputs.join(", ")}`);
+  if (prep.readinessStatus !== "ready") {
+    throw new WorkspaceToolError(
+      "node_not_ready",
+      `node_not_ready: ${prep.missingInputs.join(", ")}`,
+      { nodeId: node.id, missingInputs: prep.missingInputs }
+    );
+  }
   const runId = data.runId ?? makeRunId();
   const executionId = makeExecutionId();
   const startedAt = now();
@@ -200,10 +219,43 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   const endedAt = now();
   state.completedAt = endedAt; state.durationMs = duration(startedAt, endedAt);
   if (result.toolCalls?.length) state.toolCalls = result.toolCalls;
-  if (!result.ok) { state.status = "failed"; state.errors = [result.code, result.message]; run.status = "failed"; run.errors = state.errors; }
+  if (!result.ok) {
+    state.status = "failed";
+    state.errors = [result.code, result.message];
+    // F2 — THE FLATTENING THIS FIXES. This path used to stop at the two strings above, while the
+    // conductor path (executor.ts's executeRunnableNode) kept the structured error. Every caller of
+    // node.execute — visual_identity.propose above all — therefore had nothing but prose to hand a
+    // human, and the remedy the runner had already computed (details.suggestedBudgetUsd,
+    // operatorAction) died here. Both halves are now written exactly as the conductor writes them:
+    // `output.error` for readers that already know that shape, `blockage` for the ones that act.
+    state.output = { error: { code: result.code, message: result.message, details: result.details, providerStatus: result.providerStatus, providerMessage: result.providerMessage, operatorAction: result.operatorAction } };
+    // surface "sync": this run record is synthetic (workflowId "independent_node"), so a per-run
+    // budget override + retry_node cannot address it — the reachable raise is a one-shot
+    // modelConfig override on the NEXT call (executeNode's own `modelConfig`, threaded at line ~198),
+    // or the node's stored default. See blockage.ts's BlockageContext.surface.
+    state.blockage = toBlockage(
+      { code: result.code, message: result.message, details: result.details, operatorAction: result.operatorAction },
+      { node_id: node.id, run_id: runId, execution_id: executionId, surface: "sync", attempt: 1 }
+    );
+    run.status = "failed";
+    run.errors = state.errors;
+  }
   else {
     const outputValidation = validateAgainstNodeSchema(result.output, node.outputSchema);
-    if (!outputValidation.valid) { state.status = "failed"; state.errors = outputValidation.issues; run.status = "failed"; run.errors = outputValidation.issues; }
+    if (!outputValidation.valid) {
+      state.status = "failed";
+      state.errors = outputValidation.issues;
+      // The contract says every failure carries a blockage; a node whose own
+      // output violated its schema is a failure like any other, and a card that
+      // says "this could not be used, here is why" beats a red X with nothing.
+      // Nothing but a retry can help — the node produced what it produced.
+      state.blockage = toBlockage(
+        { code: "output_validation_failed", message: `The node's output did not match its schema: ${outputValidation.issues.join("; ")}`, details: { nodeId: node.id, issues: outputValidation.issues } },
+        { node_id: node.id, run_id: runId, execution_id: executionId, surface: "sync", attempt: 1 }
+      );
+      run.status = "failed";
+      run.errors = outputValidation.issues;
+    }
     else { state.status = "completed"; state.output = outputValidation.value; const provenance = buildNodeExecutionProvenance(effectiveNode, result.model, endedAt); if (provenance) state.provenance = provenance; run.status = "completed"; run.completedAt = endedAt; run.stageOutputs[node.id] = outputValidation.value; const artifact: ExecutionArtifact & { runId: string; executionId: string } = { id: `artifact_${executionId}`, nodeId: node.id, type: node.produces[0] ?? node.id, value: outputValidation.value, createdAt: endedAt, runId, executionId }; run.artifacts.push(artifact); await repos.workspaceRepository.saveStageOutput(node.id, outputValidation.value, `${runId}:${executionId}:${node.id}`); }
   }
   run.updatedAt = endedAt; run.currentNodeId = undefined;

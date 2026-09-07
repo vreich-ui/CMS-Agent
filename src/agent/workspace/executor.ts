@@ -50,7 +50,8 @@ import { resolveGateId } from "./gateRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
 import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
-import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried, NODE_ERROR_RETRIED_MARKER } from "./nodeAttemptHistory.js";
+import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried, nextAttemptNumber, NODE_ERROR_RETRIED_MARKER } from "./nodeAttemptHistory.js";
+import { toBlockage } from "../execution/blockage.js";
 import { decideNodeRetry, isAwaitingRetryBackoff, nextRetryAt, scheduleNodeRetry } from "./nodeRetryPolicy.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
@@ -721,6 +722,7 @@ const requeueGateBlockedNode = (run: WorkflowExecutionRecord, node: NodeExecutio
   node.status = "queued";
   delete node.output;
   delete node.errors;
+  delete node.blockage;
   delete node.warnings;
   delete node.startedAt;
   delete node.completedAt;
@@ -1442,6 +1444,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       delete inFlight.durationMs;
       delete inFlight.output;
       delete inFlight.errors;
+      delete inFlight.blockage;
       delete inFlight.dispatch;
       inFlight.warnings = [...(inFlight.warnings ?? []), "stale_dispatch_reclaimed"];
       run.updatedAt = now();
@@ -2893,6 +2896,15 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     // planRun's failure reason) sees WHY a provider call failed, not just that it did. Absent on any
     // runner result that never set them (undefined keys serialize away, matching the pre-existing shape).
     state.output = { error: { code: result.code, message: result.message, details: result.details, providerStatus: result.providerStatus, providerMessage: result.providerMessage, operatorAction: result.operatorAction } };
+    // blockage.v1 — the same failure, in the shape a surface can put a button on. Minted here (and
+    // in nodeRuntime.ts for the independent-node path) rather than reconstructed downstream, because
+    // this is the last place that still holds the runner's structured `details`. surface "run": this
+    // IS a real conductor run, so the reachable raises are the per-run override (+ retry_node) and
+    // the node's stored default — never a one-shot attempt override, which only the sync path has.
+    state.blockage = toBlockage(
+      { code: result.code, message: result.message, details: result.details, operatorAction: result.operatorAction },
+      { node_id: nextNode.id, run_id: run.runId, surface: "run", attempt: nextAttemptNumber(state) }
+    );
     run.status = state.status;
     run.errors = [...run.errors, `${nextNode.id}:${result.code}`];
     run.updatedAt = completedAt;
@@ -3263,6 +3275,12 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
       node.status = "queued";
       delete node.errors;
       delete node.output;
+      // A blockage describes a node that is STOPPED. This one is going back to
+      // queued, so its wall goes with its errors — otherwise workflow.get_run
+      // keeps handing a card ("Raise to $1.50 and retry") for a node that has
+      // since been retried and completed, under a blockage_id the resolution
+      // ledger has never seen and therefore cannot refuse a second time.
+      delete node.blockage;
       delete node.startedAt;
       delete node.completedAt;
       delete node.durationMs;

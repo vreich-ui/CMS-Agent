@@ -79,6 +79,10 @@ export const scheduleNodeRetry = (
   state.status = "queued";
   delete state.output;
   delete state.errors;
+  // Same reason as every other requeue: a queued node is not stopped, so it has
+  // no wall. Left behind, the orchestrator's own auto-retry would leave a
+  // "Raise the budget" card sitting on a node that is about to run again.
+  delete state.blockage;
   delete state.completedAt;
   delete state.durationMs;
   delete state.startedAt;

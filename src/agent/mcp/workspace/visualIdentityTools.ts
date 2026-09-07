@@ -8,6 +8,7 @@ import { declaresSitePrefetch, declaresVoicePrefetch } from "../../workspace/nod
 import { getSitePrefetch } from "../../workspace/sitePrefetch.js";
 import { getEditorialVoice } from "../../workspace/voicePrefetch.js";
 import { objectSchema, ok, tool, WorkspaceToolError, type WorkspaceTool } from "./toolKit.js";
+import type { Blockage } from "../../execution/blockage.js";
 
 // A1 (D1) — `visual_identity.propose`: the ONE narrow, site-scoped door to the brand-imagery writer.
 //
@@ -75,6 +76,9 @@ export const VISUAL_IDENTITY_PROPOSE_NODES: Readonly<Partial<Record<VisualIdenti
   brand_imagery: BRAND_IMAGERY_WRITER_NODE_ID
 };
 
+/** The wire ceiling, above every plausible node config — the clamp below is the real bound. */
+const MAX_OVERRIDE_BUDGET_USD = 10;
+
 const regionSchema = z.object({
   x: z.number().min(0).max(1),
   y: z.number().min(0).max(1),
@@ -110,7 +114,21 @@ export const visualIdentityProposeInput = z.object({
   brief: z.string().min(1).max(8_000).optional(),
   existingBrandImagery: z.record(z.string(), z.unknown()).optional(),
   templateSlug: z.string().min(1).max(63).optional(),
-  imageRefs: z.array(imageRefSchema).max(8).optional()
+  imageRefs: z.array(imageRefSchema).max(8).optional(),
+  // D3 / F4 — THE ONE-SHOT RAISE. This tool runs its node through nodeRuntime.executeNode, whose run
+  // record is synthetic ("independent_node"): workflow.set_node_budget_override + workflow.retry_node
+  // literally cannot address it, so before this field a `budget_exceeded` here had NO remedy at all
+  // short of editing the node's stored default for every future caller. executeNode has always
+  // accepted a per-call `modelConfig` (it spreads it over the node's own); this is that lever, on the
+  // wire, narrowed to the three fields an operator's remedy actually raises. It is a CEILING for THIS
+  // CALL only — nothing is written to the node, and the next call without it sees the stored default.
+  // Deliberately NOT a model/provider selector: a caller who could name the model could route a
+  // tenant's proposal to an unpriced or unapproved one, which is a different (and unwanted) power.
+  modelConfigOverride: z.object({
+    budgetUsd: z.number().min(0).max(MAX_OVERRIDE_BUDGET_USD).optional(),
+    maxTurns: z.number().int().min(1).max(8).optional(),
+    maxOutputTokens: z.number().int().min(256).max(32_000).optional()
+  }).strict().optional()
 }).strict();
 
 const visualIdentityProposeJsonSchema = objectSchema({
@@ -122,7 +140,8 @@ const visualIdentityProposeJsonSchema = objectSchema({
   brief: { type: "string", minLength: 1, maxLength: 8000, description: "What the operator asked for, in words. Sufficient on its own when there is no board." },
   existingBrandImagery: { type: "object", description: "The contract in force today, when revising rather than starting." },
   templateSlug: { type: "string", minLength: 1, maxLength: 63, description: "Required for mode 'template': the <slug> in vis_<site>_<slug>." },
-  imageRefs: { type: "array", maxItems: 8, items: { type: "object" }, description: "BRIEF §3.9's model-visible view of the board, resolved by the caller." }
+  imageRefs: { type: "array", maxItems: 8, items: { type: "object" }, description: "BRIEF §3.9's model-visible view of the board, resolved by the caller." },
+  modelConfigOverride: { type: "object", additionalProperties: false, properties: { budgetUsd: { type: "number", minimum: 0, maximum: MAX_OVERRIDE_BUDGET_USD }, maxTurns: { type: "integer", minimum: 1, maximum: 8 }, maxOutputTokens: { type: "integer", minimum: 256, maximum: 32000 } }, description: "One-shot ceilings for THIS call only, nothing stored, and CLAMPED against the node's own stored config (a few multiples of it — see OVERRIDE_HEADROOM). Supply it to re-run a call that came back with a blockage whose remedy is raise_node_budget{scope:\"attempt\"} / raise_limit — pass the remedy's own args.budgetUsd (or maxTurns/maxOutputTokens) here; the engine's own suggestion always fits. A request above the clamp is lowered to it and reported in `warnings`, never refused. Raising the node's DEFAULT past the clamp is a separate, owner-gated call (workspace.update_node_model_config)." }
 }, ["project_id", "mode"]);
 
 export type VisualIdentityToolDeps = {
@@ -142,6 +161,57 @@ const isBag = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
+ * THE CLAMP, and why it is not optional.
+ *
+ * `visual_identity_propose` is on SITE_CLIENT_MANAGER_TOOLS: a TENANT's own
+ * bearer can call it. `modelConfigOverride` is spread over the node's stored
+ * config in executeNode, which REPLACES the ceiling rather than tightening it,
+ * and the synthetic run record carries no run-level budget behind it. An
+ * unclamped override would therefore hand every tenant a per-call spend lever
+ * on a node deliberately configured for one $0.25 turn — which is precisely the
+ * power this file's own header gives as the reason `node_execute` must never be
+ * granted to a site token. A tool that re-opened that door one field at a time
+ * would be this wave undoing the ruling it was built on.
+ *
+ * The bound is expressed as HEADROOM OVER THE NODE'S OWN CONFIG, not as a flat
+ * number, so it scales with whatever the node is legitimately configured to
+ * spend and needs no maintenance when that changes. The engine's own remedy
+ * (`suggestedBudgetUsd`, ~1.5x what the attempt actually needed;
+ * `maxTurns * 2`) always fits inside it — the clamp only ever bites a caller
+ * asking for something the engine never suggested.
+ *
+ * Clamped, not refused: a remedy that came back "invalid" would leave an
+ * operator staring at a button that does nothing. The lowered value is reported
+ * in `warnings` so it is visible rather than silent.
+ */
+const OVERRIDE_HEADROOM = { budgetUsd: 8, maxTurns: 4, maxOutputTokens: 4 } as const;
+const OVERRIDE_FLOOR = { budgetUsd: 2, maxTurns: 4, maxOutputTokens: 4_000 } as const;
+
+type ModelConfigOverride = { budgetUsd?: number; maxTurns?: number; maxOutputTokens?: number };
+
+export const clampModelConfigOverride = (
+  requested: ModelConfigOverride | undefined,
+  nodeModelConfig: Record<string, unknown> | undefined
+): { override?: ModelConfigOverride; warnings: string[] } => {
+  if (!requested) return { warnings: [] };
+  const warnings: string[] = [];
+  const override: ModelConfigOverride = {};
+  for (const field of ["budgetUsd", "maxTurns", "maxOutputTokens"] as const) {
+    const value = requested[field];
+    if (value === undefined) continue;
+    const stored = typeof nodeModelConfig?.[field] === "number" ? (nodeModelConfig[field] as number) : undefined;
+    const ceiling = Math.max(OVERRIDE_FLOOR[field], (stored ?? 0) * OVERRIDE_HEADROOM[field]);
+    if (value > ceiling) {
+      warnings.push(`model_config_override_clamped:${field}:${value}_to_${ceiling}`);
+      override[field] = ceiling;
+    } else {
+      override[field] = value;
+    }
+  }
+  return { override, warnings };
+};
+
+/**
  * The node's own output off an `executeNode` result. nodeRuntime.ts writes a completed node's output
  * to three equivalent places on the record (`nodes[].output`, `stageOutputs[nodeId]`,
  * `artifacts[].value`); reading all three keeps this working if one of them is ever restructured,
@@ -151,14 +221,26 @@ const isBag = (value: unknown): value is Record<string, unknown> =>
 export const extractNodeProposal = (
   executed: unknown,
   nodeId: string
-): { ok: true; proposal: unknown } | { ok: false; reason: string } => {
+): { ok: true; proposal: unknown } | { ok: false; reason: string; blockage?: Blockage } => {
   if (!isBag(executed)) return { ok: false, reason: "node execution returned no object." };
   const execution = isBag(executed.execution) ? executed.execution : undefined;
   if (!execution) return { ok: false, reason: "node execution returned no execution record." };
 
   const nodes = Array.isArray(execution.nodes) ? execution.nodes.filter(isBag) : [];
   const state = nodes.find((node) => node.nodeId === nodeId) ?? nodes[0];
-  if (state?.output !== undefined) return { ok: true, proposal: state.output };
+
+  // BEFORE the output reads below, not after, and this ORDER IS LOAD-BEARING TWICE.
+  //   1. nodeRuntime.ts now writes `state.output = { error: … }` on the failure path (F2), so a
+  //      failed node's state.output is DEFINED — the `state.output !== undefined` read below would
+  //      hand an error envelope back as if it were a proposal. It must never reach that line.
+  //   2. This is where the remedy survives. The blockage the engine minted travels out on
+  //      `{ok:false, blockage}` and is thrown as structured data by the caller, instead of being
+  //      string-joined into "node run failed: budget_exceeded; Node …" — the exact flattening (F3)
+  //      that left the Imagery tab with a sentence and no button.
+  const blockage = isBag(state?.blockage) ? (state!.blockage as unknown as Blockage) : undefined;
+  if (blockage) return { ok: false, reason: blockage.message, blockage };
+
+  if (state?.output !== undefined && !(isBag(state.output) && isBag(state.output.error))) return { ok: true, proposal: state.output };
 
   const stageOutputs = isBag(execution.stageOutputs) ? execution.stageOutputs : undefined;
   if (stageOutputs?.[nodeId] !== undefined) return { ok: true, proposal: stageOutputs[nodeId] };
@@ -294,14 +376,32 @@ export function createVisualIdentityTools({ workspaceRepository, executionReposi
 
         // No executionMode on the wire: this path always runs the real node (nodeRuntime.ts's
         // DEFAULT_EXECUTION_MODE), so a proposal on an approval card is never a mock placeholder.
-        const executed = await runNode({ nodeId, input: nodeInput }, { workspaceRepository, executionRepository });
+        // Clamped against the node's OWN stored config (see clampModelConfigOverride):
+        // this tool is reachable by a tenant bearer, and a raw caller-supplied
+        // ceiling here would be a per-call spend lever on a node configured for
+        // one cheap turn.
+        const clamped = clampModelConfigOverride(data.modelConfigOverride, node?.modelConfig);
+        prefetchWarnings.push(...clamped.warnings);
+
+        const executed = await runNode(
+          { nodeId, input: nodeInput, ...(clamped.override ? { modelConfig: { ...clamped.override } } : {}) },
+          { workspaceRepository, executionRepository }
+        );
 
         const extracted = extractNodeProposal(executed, nodeId);
         if (!extracted.ok) {
+          // `blockage` rides in `details`, which toolKit.toolError spreads onto the wire envelope's
+          // `error` object — so the caller reads `error.blockage`, a first-class field, not a string
+          // it has to parse. The prose message is unchanged for every existing reader.
           throw new WorkspaceToolError(
             "visual_identity_no_proposal",
             `${nodeId} returned no proposal: ${extracted.reason}`,
-            { nodeId, kind: data.kind, reason: extracted.reason }
+            {
+              nodeId,
+              kind: data.kind,
+              reason: extracted.reason,
+              ...(extracted.blockage ? { blockage: { ...extracted.blockage, scope: { ...extracted.blockage.scope, tool: VISUAL_IDENTITY_PROPOSE_TOOL } } } : {})
+            }
           );
         }
 

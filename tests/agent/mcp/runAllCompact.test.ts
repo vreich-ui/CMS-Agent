@@ -79,6 +79,9 @@ describe("workflow.run_all — budget below caller timeouts, compact response", 
     // short scalar facts an operator reads by name (ids, mode, timestamps, artifact COUNT). What it
     // still must never carry is the bulk: node inputs/outputs, stageOutputs, artifact values.
     expect(view).toEqual({
+      // blockage.v1 — always present, never omitted, so a caller can trust `blockages.length === 0`
+      // as "nothing is waiting on a human" rather than having to distinguish empty from absent.
+      blockages: [],
       runId: "r", workflowId: "w", projectId: "p", status: "running", executionMode: undefined, budget: { budgetUsd: 2 },
       startedAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z", artifactCount: 0,
       errors: [], approvalsRequired: [],

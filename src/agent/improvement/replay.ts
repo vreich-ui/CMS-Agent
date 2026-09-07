@@ -137,7 +137,10 @@ export async function exportSft(params: { nodeId: string; minScore?: number; lim
   for (const result of results) {
     const run = await deps.executionRepository.getRun(result.runId!);
     const state = run?.nodes.find((candidate) => candidate.nodeId === params.nodeId);
-    const output = run?.stageOutputs[params.nodeId] ?? state?.output;
+    // COMPLETED nodes only — a failed node's `output` is its error envelope
+    // (see improvementTools.ts's note). An SFT line whose `assistant` message is
+    // `{"error":{"code":"budget_exceeded"…}}` teaches the model to emit one.
+    const output = run?.stageOutputs[params.nodeId] ?? (state?.status === "completed" ? state.output : undefined);
     if (!run || output === undefined) continue;
     lines.push(JSON.stringify({
       messages: [

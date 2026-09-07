@@ -10,6 +10,7 @@ import { createConstellationTools } from "./constellationTools.js";
 import { createImprovementTools } from "./improvementTools.js";
 import { createAgentTools } from "./agentTools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
+import { collectRunBlockages, type Blockage } from "../../execution/blockage.js";
 import { DEFAULT_EXECUTION_MODE, MAX_LIST_RUNS_LIMIT, assessRunStall, type RunStallTimingContext, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, resetRun, retryNode, resolveConductorNodes, runModeSummary, runNextNode, setNodeBudgetOverride, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
 import { listRegisteredWorkflowIds } from "../../workspace/workflowRegistry.js";
 import { resolvePublishAuthority } from "../../workspace/publishDecision.js";
@@ -102,7 +103,13 @@ export type CompactRunView = {
   operatorPublishDecision?: WorkflowExecutionRecord["operatorPublishDecision"];
   operatorDecisionSource?: WorkflowExecutionRecord["operatorDecisionSource"];
   artifactCount?: number;
-  nodes: Array<{ nodeId: string; status: string; warnings?: string[]; errors?: string[]; durationMs?: number; dispatch?: unknown; lastDispatch?: unknown }>;
+  // blockage.v1 — EVERY pending, human-resolvable wall on this run, minted by the engine with the
+  // remedies that would clear each one (execution/blockage.ts). Collected here rather than left for
+  // each caller to re-derive from nodes[].blockage + budgetBlock + approvalsRequired, because three
+  // callers re-deriving it is exactly how the three surfaces drifted apart in the first place.
+  // Empty array on a healthy run — never omitted, so a caller can trust `blockages.length === 0`.
+  blockages: Blockage[];
+  nodes: Array<{ nodeId: string; status: string; warnings?: string[]; errors?: string[]; durationMs?: number; dispatch?: unknown; lastDispatch?: unknown; blockage?: Blockage }>;
 };
 export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
   runId: run.runId,
@@ -121,9 +128,17 @@ export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
   ...(run.budgetUsd !== undefined || run.budgetBlock !== undefined ? { budget: { ...(run.budgetUsd !== undefined ? { budgetUsd: run.budgetUsd } : {}), ...(run.budgetBlock !== undefined ? { budgetBlock: run.budgetBlock } : {}) } } : {}),
   errors: run.errors,
   approvalsRequired: run.approvalsRequired,
+  blockages: collectRunBlockages(run),
   nodes: run.nodes.map((node) => ({
     nodeId: node.nodeId,
     status: node.status,
+    // Guarded by status for the same reason collectRunBlockages is: a node put
+    // back to queued (or since completed) is not stopped, and a card rendered
+    // from a stale wall spends money on a node that no longer needs it. The
+    // requeue paths clear it too — this is the second lock on the same door.
+    ...(node.blockage !== undefined && (node.status === "failed" || node.status === "blocked" || node.status === "cancelled")
+      ? { blockage: node.blockage }
+      : {}),
     ...(node.warnings !== undefined ? { warnings: node.warnings } : {}),
     ...(node.errors !== undefined ? { errors: node.errors } : {}),
     ...(node.durationMs !== undefined ? { durationMs: node.durationMs } : {}),
@@ -818,7 +833,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // node's input and output plus stageOutputs and artifacts. `detail:"compact"` (the default) reuses
     // the compactRun view run_all has always returned; `detail:"full"` is the old behaviour, unchanged,
     // for when the node payloads are what you actually came for.
-    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state. detail:\"compact\" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch}]}; detail:\"full\" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status \"running\" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.", zodSchema: getRunInput, inputSchema: getRunJsonSchema, execute: async (input) => { const data = getRunInput.parse(input); const run = await getRun(data.runId, executionRepository); const timing = run ? await runStallTiming(run.workflowId) : undefined; return ok({ run: run ? (data.detail === "full" ? run : compactRun(run)) : null, detail: data.detail, mode: run ? runModeSummary(run) : null, stall: run ? assessRunStall(run, new Date(), timing) ?? null : null }); } }),
+    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state. detail:\"compact\" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,blockages,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch,blockage}]}. `blockages` is EVERY pending human-resolvable wall on the run (blockage.v1: what stopped plus the remedies that clear it — a budget raise, a gate approval, a limit) — always present, empty on a healthy run; detail:\"full\" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status \"running\" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.", zodSchema: getRunInput, inputSchema: getRunJsonSchema, execute: async (input) => { const data = getRunInput.parse(input); const run = await getRun(data.runId, executionRepository); const timing = run ? await runStallTiming(run.workflowId) : undefined; return ok({ run: run ? (data.detail === "full" ? run : compactRun(run)) : null, detail: data.detail, mode: run ? runModeSummary(run) : null, stall: run ? assessRunStall(run, new Date(), timing) ?? null : null }); } }),
     tool({ name: "workflow.list_runs", description: "List compact dry-run workflow summaries, newest first, paged (default 20 rows, max 100; `page.nextCursor` fetches the next page) with optional status and startedAt time-range filters. Node inputs/outputs, stage outputs, and artifact values are intentionally omitted; call workflow.get_run for one selected run. Each row carries the caller-supplied `requestId` it was started with (when it has one), so a page of runs can be joined back to the requests that asked for them, plus a `mode` block naming what produced it and a `stall` block on status \"running\" rows naming whether the driver is alive.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => { const { runs, page } = await listRunsPage(listRunsInput.parse(input), executionRepository); const timingByWorkflow = new Map<string, RunStallTimingContext>(); for (const workflowId of new Set(runs.map((run) => run.workflowId))) timingByWorkflow.set(workflowId, await runStallTiming(workflowId)); const at = new Date(); return ok({ runs: runs.map((run) => { const stall = assessRunStall(run, at, timingByWorkflow.get(run.workflowId)); return { ...summarizeRunForList(run), mode: runModeSummary(run), ...(stall ? { stall } : {}) }; }), page }); } }),
     tool({ name: "workflow.run_next_node", description: "Run exactly one dependency-ready Publishing Conductor node, stopping before publish-risk nodes unless approved is true.", zodSchema: runNextNodeInput, inputSchema: runNextNodeJsonSchema, execute: async (input) => { const data = runNextNodeInput.parse(input); return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); } }),
     tool({ name: "workflow.run_node", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Run dependency-ready nodes; when nodeId is given, advance the run until that node completes. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); if (!data.nodeId) return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS; let timedOut = false; let run = await getRun(data.runId, executionRepository); for (let i = 0; run && i < 100 && !HALTED_RUN_STATUSES.includes(run.status); i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }); const state = run.nodes.find((node) => node.nodeId === data.nodeId); if (state && state.status !== "queued" && state.status !== "running") break; } return ok({ run, ...(timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) }); } }),
