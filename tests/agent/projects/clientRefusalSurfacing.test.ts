@@ -14,7 +14,7 @@ import { platformProjectHooks } from "../../../src/agent/projects/platform/hooks
 import { DR_LURIE_OBJECT_DIALECT } from "../../../src/agent/projects/drLurie/definition.js";
 import { PLATFORM_OBJECT_DIALECT } from "../../../src/agent/projects/platform/definition.js";
 import type { ProjectObjectDialect } from "../../../src/agent/projects/projectTypes.js";
-import type { PublishExecutionContext, PublishObjectOrigin } from "../../../src/agent/projects/projectHooks.js";
+import type { PublishExecutionContext, PublishObjectOrigin, PublishProducerContext } from "../../../src/agent/projects/projectHooks.js";
 
 // -------------------------------------------------------------------------------------------------
 // The failure this file exists to prevent. Publish run run_1787656120374_18bobg (dr-lurie) reported
@@ -438,5 +438,38 @@ describe.each([
     await hooks.executePublish!(other.ctx);
     expect(other.calls[0]!.args.idempotency_key).toBe("req_publish_test_20260825_02");
     expect(other.calls[0]!.args.idempotency_key).not.toBe(firstKey);
+  });
+});
+
+// -------------------------------------------------------------------------------------------------
+// T2 (S-05): dr-lurie is the only tracked tenant, and its publish hook built object_publish's
+// arguments with no producer at all — conductor content landed in the kugel-data sink with nothing
+// to attribute it to the run that produced it. platform already sent producer (T20.6b); this proves
+// dr-lurie now mirrors it, and that a caller who supplies no producer still gets the byte-for-byte
+// old call (asserted above, "calls the same six tools with the same arguments") rather than an
+// `undefined` key on the wire.
+describe.each([
+  { name: "dr-lurie", hooks: drLurieProjectHooks },
+  { name: "platform", hooks: platformProjectHooks }
+])("$name executePublish forwards producer onto object_publish", ({ hooks }) => {
+  const producer: PublishProducerContext = {
+    run_id: "run_1787862284296_x53xz0",
+    node_id: "n_publish_executor",
+    prompt_version: "prompt_sha256:abc123",
+    model: "claude-opus-5"
+  };
+
+  it("puts all four producer fields on the object_publish call, verbatim", async () => {
+    const { ctx, calls } = makeCtx();
+    await hooks.executePublish!({ ...ctx, producer });
+    const publishArgs = calls.find((entry) => entry.tool === "object_publish")!.args;
+    expect(publishArgs.producer).toEqual(producer);
+  });
+
+  it("omits the key entirely (not `producer: undefined`) when no producer is supplied", async () => {
+    const { ctx, calls } = makeCtx();
+    await hooks.executePublish!(ctx);
+    const publishArgs = calls.find((entry) => entry.tool === "object_publish")!.args;
+    expect(Object.keys(publishArgs)).not.toContain("producer");
   });
 });

@@ -13,6 +13,7 @@ import { OAuthService } from "../auth/oauthService.js";
 import { buildWwwAuthenticate, parseBearerToken, resourceMetadataUrl } from "../auth/wwwAuthenticate.js";
 import { resolveBaseUrl } from "../auth/metadata.js";
 import { findAnyScopedBearerTokenPolicy, type ScopedBearerTokenPolicy } from "../auth/scopedBearerTokens.js";
+import { getExecutionRepository } from "../../runtime/repositories.js";
 
 const SESSION_HEADER = "mcp-session-id";
 const PROTOCOL_HEADER = "mcp-protocol-version";
@@ -105,11 +106,39 @@ const requestedProject = (argumentsValue: unknown): string | undefined | null =>
   return (camel ?? snake) as string | undefined;
 };
 
+// S-26 / K-M9 — run-addressed tools (workflow_get_run, workflow_publish_run, workflow_run_all,
+// node_get_latest_output, workflow_cancel_run, workflow_get_run_cost, workflow_publish_readiness,
+// workflow_set_operator_publish_decision) name a run and nothing else, so the projectId pin above
+// never saw them: a tenant's scoped bearer could read, approve or publish ANY tenant's run by its
+// runId. The check is argument-driven rather than a list of tool names, so a run-addressed tool
+// added later is covered the day it is added rather than the day someone remembers the list.
+const requestedRun = (argumentsValue: unknown): string | undefined | null => {
+  if (!isPlainObject(argumentsValue)) return undefined;
+  const camel = argumentsValue.runId;
+  const snake = argumentsValue.run_id;
+  if (camel !== undefined && (typeof camel !== "string" || !camel)) return null;
+  if (snake !== undefined && (typeof snake !== "string" || !snake)) return null;
+  if (camel !== undefined && snake !== undefined && camel !== snake) return null;
+  return (camel ?? snake) as string | undefined;
+};
+
+// An unknown runId is refused exactly like a foreign one, and a store failure fails closed.
+// Distinguishing "no such run" from "not your run" would make this check an existence oracle over
+// other tenants' run ids.
+const isRunInScope = async (runId: string, policy: ScopedBearerTokenPolicy): Promise<boolean> => {
+  try {
+    const run = await getExecutionRepository().getRun(runId);
+    return !!run && policy.projects.includes(run.projectId);
+  } catch {
+    return false;
+  }
+};
+
 // Scoped callers receive the normal initialize response, but tools/list is reduced to its exact
 // wire-name allowlist. Each tools/call is also checked here before dispatch; the server-side filter
 // is defence in depth for the SDK path. Calls without a direct project argument are still bounded
 // by the explicit tool allowlist, while calls that name projectId/project_id must be in scope.
-const isScopedMessageAllowed = (message: unknown, policy: ScopedBearerTokenPolicy): boolean => {
+const isScopedMessageAllowed = async (message: unknown, policy: ScopedBearerTokenPolicy): Promise<boolean> => {
   if (!isPlainObject(message) || typeof message.method !== "string") return false;
   // Scoped site credentials are for the MCP tool channel only. Keep the session handshake and
   // discovery available, but deny prompts/resources (which can expose workspace-wide metadata)
@@ -119,11 +148,19 @@ const isScopedMessageAllowed = (message: unknown, policy: ScopedBearerTokenPolic
   const params = message.params;
   if (!isPlainObject(params) || typeof params.name !== "string" || !policy.toolAllowlist.includes(params.name)) return false;
   const project = requestedProject(params.arguments);
-  return project !== null && (project === undefined || policy.projects.includes(project));
+  if (project === null) return false;
+  if (project !== undefined && !policy.projects.includes(project)) return false;
+  const runId = requestedRun(params.arguments);
+  if (runId === null) return false;
+  if (runId !== undefined && !(await isRunInScope(runId, policy))) return false;
+  return true;
 };
 
-const isScopedRequestAllowed = (body: unknown, policy: ScopedBearerTokenPolicy): boolean =>
-  Array.isArray(body) ? body.every((message) => isScopedMessageAllowed(message, policy)) : isScopedMessageAllowed(body, policy);
+const isScopedRequestAllowed = async (body: unknown, policy: ScopedBearerTokenPolicy): Promise<boolean> => {
+  if (!Array.isArray(body)) return isScopedMessageAllowed(body, policy);
+  const verdicts = await Promise.all(body.map((message) => isScopedMessageAllowed(message, policy)));
+  return verdicts.every(Boolean);
+};
 
 const unauthorized = (headers: HeaderMap, presentedToken: boolean) => {
   const baseUrl = resolveBaseUrl(headers);
@@ -164,7 +201,7 @@ export async function handleMcpHttp(request: McpHttpRequest): Promise<McpHttpRes
     const context = buildToolContext(request.headers, auth.actor, auth.scopedPolicy);
     const rawBody = request.body ? JSON.parse(request.body) : {};
 
-    if (auth.scopedPolicy && !isScopedRequestAllowed(rawBody, auth.scopedPolicy)) return unauthorized(request.headers, true);
+    if (auth.scopedPolicy && !(await isScopedRequestAllowed(rawBody, auth.scopedPolicy))) return unauthorized(request.headers, true);
 
     if (!Array.isArray(rawBody) && isInitialize(rawBody)) {
       const params = (rawBody.params ?? {}) as { protocolVersion?: string; clientInfo?: McpClientInfo };

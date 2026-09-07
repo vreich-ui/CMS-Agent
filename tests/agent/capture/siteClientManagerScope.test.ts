@@ -31,7 +31,11 @@ describe("site client_manager scoped-token allowlist", () => {
     // A1/D1 (2026-09-04): platform's brand_imagery_propose (brand-imagery-proxy.ts). It used to
     // call node_execute, which a site bearer can never hold — the call 401'd in production for a
     // day. visual_identity_propose is the narrow replacement; node_execute stays out (ruling R1).
-    "visual_identity_propose"
+    "visual_identity_propose",
+    // T5 (S-07, partial, 2026-09-06): two more run-addressed bridge calls, both scoped to the
+    // project's own runs the same way workflow_get_run/workflow_get_run_cost already are.
+    "node_get_latest_output",
+    "workflow_cancel_run"
   ];
 
   it("covers exactly Platform's bridge — no missing tool (401 at the door) and no extra (blast radius)", () => {

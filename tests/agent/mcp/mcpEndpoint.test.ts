@@ -1,6 +1,7 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, afterEach, beforeEach } from "vitest";
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { handler } from "../../../netlify/functions/mcp.mjs";
+import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
 const event = (body: unknown, token = "test-token") => ({
   httpMethod: "POST",
@@ -178,5 +179,65 @@ describe("mcp endpoint", () => {
     expect(importResponse.json.error.code).toBe(-32603);
     expect(importResponse.json.error.data.error.code).toBe("validation_error");
     expect(getResponse.json.result.structuredContent.data.node).toBeNull();
+  });
+});
+
+
+// S-26 / K-M9 — a tenant's scoped bearer is pinned to its projects by the projectId/project_id
+// argument, but run-addressed tools carry a runId and nothing else. Before this check a
+// platform-scoped credential could read, approve and publish a dr-lurie run by naming its runId.
+describe("scoped bearer tokens and run-addressed tools", () => {
+  const SCOPED = "scoped-test-platform";
+  const seedRun = async (runId: string, projectId: string) => {
+    await repositoryManager.getExecutionRepository().createRun({
+      runId,
+      workflowId: "conductor",
+      projectId,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      nodes: [],
+      rev: 0
+    } as unknown as WorkflowExecutionRecord);
+  };
+
+  const scopedCall = async (runId: string, name = "workflow_get_run") =>
+    handler({
+      httpMethod: "POST",
+      headers: { authorization: `Bearer ${SCOPED}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { runId } } })
+    });
+
+  beforeEach(() => {
+    process.env.MCP_API_TOKEN = "test-token";
+    process.env.MCP_SCOPED_TOKENS_JSON = JSON.stringify({
+      [SCOPED]: { projects: ["platform"], toolAllowlist: ["workflow_get_run"] }
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.MCP_SCOPED_TOKENS_JSON;
+  });
+
+  it("refuses a run-addressed call for a run owned by a project outside the token's scope", async () => {
+    await seedRun("run-foreign-1", "dr-lurie");
+    const response = await scopedCall("run-foreign-1");
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("allows a run-addressed call for a run the token's own project owns", async () => {
+    await seedRun("run-own-1", "platform");
+    const response = await scopedCall("run-own-1");
+    expect(response.statusCode).toBe(200);
+  });
+
+  // No existence oracle: an unknown run id is refused exactly like a foreign one, so the two cases
+  // are indistinguishable to a caller probing for other tenants' run ids.
+  it("refuses an unknown run id with the same response as a foreign run", async () => {
+    await seedRun("run-foreign-2", "dr-lurie");
+    const unknown = await scopedCall("run-does-not-exist");
+    const foreign = await scopedCall("run-foreign-2");
+    expect(unknown.statusCode).toBe(401);
+    expect(unknown.statusCode).toBe(foreign.statusCode);
+    expect(unknown.body).toBe(foreign.body);
   });
 });
