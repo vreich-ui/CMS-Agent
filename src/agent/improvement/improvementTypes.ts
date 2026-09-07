@@ -109,6 +109,14 @@ export type FeedbackRecord = {
   outcome?: { source: string; metrics: Record<string, number> }; // published-analytics hook (Monetizer etc.)
   actor?: unknown; // WorkspaceActor shape, stamped by the tool layer's meta()
   note?: string;
+  // S-07 — the CMS-AGENT project id (`dr-lurie`), never the tracking partition id (`drlurie`): a
+  // scoped bearer's `policy.projects` holds CMS-Agent ids, so stamping anything else would produce a
+  // record that silently matches no filter and disappears from the tenant's own Insights tab.
+  //
+  // OPTIONAL because every record written before this field existed lacks it, and those records must
+  // keep working. `feedback.list`'s project filter therefore treats an unstamped record as
+  // "resolvable via runId" rather than "not mine" — see the filter in improvementTools.ts.
+  projectId?: string;
   createdAt: string;
 };
 

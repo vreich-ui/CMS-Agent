@@ -11,6 +11,7 @@
 import {
   ingestTrackingRollups,
   trackingSinkConnectionState,
+  CMS_AGENT_PROJECT_ID_ENV,
   TRACKING_PROJECT_ID_ENV,
   type TrackingIngestResult,
   type TrackingSinkConnectionState
@@ -23,6 +24,17 @@ import { bootstrapWorkspaceStore } from "./runConductorJob.js";
 export type TrackingIngestJobOptions = {
   /** Tracking partition to read (the sink's TRACKING_PROJECT_ID). Falls back to that env var. */
   projectId?: string;
+  /**
+   * S-07 — the CMS-AGENT project id (`dr-lurie`) stamped on every feedback record this run writes,
+   * so a tenant's project-scoped `feedback.list` finds its own engagement rows. Falls back to
+   * CMS_AGENT_PROJECT_ID. Deliberately NOT derived from `projectId`: that is the sink's own partition
+   * spelling (`drlurie`) and stamping it would produce records no scoped bearer can ever match.
+   *
+   * Absent is a supported state, not a misconfiguration: the job still ingests and still exits 0,
+   * the rows simply carry no stamp. Making this required would turn a schedule that works today into
+   * a daily failure the moment it deploys ahead of the variable.
+   */
+  cmsAgentProjectId?: string;
   /** Window bounds; default to the previous whole UTC day, the natural window for a daily schedule. */
   from?: string;
   to?: string;
@@ -39,7 +51,10 @@ export type TrackingIngestJobOptions = {
   now?: () => Date;
 };
 
-export type TrackingIngestWindow = { projectId: string; from: string; to: string; nodeId?: string };
+// `cmsAgentProjectId` is reported here so `--dry-run` answers the question an operator actually has
+// before a first real run: "will these rows be stamped, and with which spelling?". Present only when
+// resolved, so a job configured exactly as it was before S-07 reports exactly the window it used to.
+export type TrackingIngestWindow = { projectId: string; from: string; to: string; nodeId?: string; cmsAgentProjectId?: string };
 
 export type TrackingIngestJobResult =
   | { status: "skipped_unconfigured"; reason: string; connection: TrackingSinkConnectionState }
@@ -83,19 +98,25 @@ export async function runTrackingIngestJob(options: TrackingIngestJobOptions = {
     };
   }
 
+  // Unset is NOT an error here, unlike the tracking partition above: without it the job ingests
+  // exactly as it did before S-07 and the rows simply carry no project stamp. Failing instead would
+  // break a working daily schedule the moment this code deploys ahead of the variable.
+  const cmsAgentProjectId = options.cmsAgentProjectId?.trim() || env[CMS_AGENT_PROJECT_ID_ENV]?.trim();
+
   const defaults = previousUtcDay(options.now?.() ?? new Date());
   const window: TrackingIngestWindow = {
     projectId,
     from: options.from?.trim() || defaults.from,
     to: options.to?.trim() || defaults.to,
-    ...(options.nodeId ? { nodeId: options.nodeId } : {})
+    ...(options.nodeId ? { nodeId: options.nodeId } : {}),
+    ...(cmsAgentProjectId ? { cmsAgentProjectId } : {})
   };
   if (options.dryRun) return { status: "dry_run", window, connection };
 
   bootstrapWorkspaceStore();
   const evaluationRepository = options.evaluationRepository ?? repositoryManager.getEvaluationRepository();
   const result = await ingestTrackingRollups(
-    { projectId: window.projectId, from: window.from, to: window.to, nodeId: window.nodeId, actor: options.actor ?? DEFAULT_ACTOR },
+    { projectId: window.projectId, from: window.from, to: window.to, nodeId: window.nodeId, cmsAgentProjectId: window.cmsAgentProjectId, actor: options.actor ?? DEFAULT_ACTOR },
     { evaluationRepository, env, fetchImpl: options.fetchImpl }
   );
   // ingestTrackingRollups is deliberately best-effort and never throws — a "hard failure" at the job
@@ -119,11 +140,15 @@ const requireDate = (value: string | undefined, flag: string): string | undefine
   return value.trim();
 };
 
-// Env: TRACKING_PROJECT_ID, TRACKING_INGEST_FROM, TRACKING_INGEST_TO, TRACKING_INGEST_NODE_ID,
-// TRACKING_INGEST_DRY_RUN. Flags override env, same convention as monetizerIngestJob.ts.
+// Env: TRACKING_PROJECT_ID, CMS_AGENT_PROJECT_ID, TRACKING_INGEST_FROM, TRACKING_INGEST_TO,
+// TRACKING_INGEST_NODE_ID, TRACKING_INGEST_DRY_RUN. Flags override env, same convention as
+// monetizerIngestJob.ts. `--project` and `--cms-agent-project` are two flags for two different id
+// namespaces (sink partition vs CMS-Agent project) and are never interchangeable — see
+// TrackingIngestParams.
 export async function cliMain(argv: string[], env: NodeJS.ProcessEnv): Promise<number> {
   const result = await runTrackingIngestJob({
     projectId: flagValue(argv, "project") ?? env.TRACKING_PROJECT_ID,
+    cmsAgentProjectId: flagValue(argv, "cms-agent-project") ?? env[CMS_AGENT_PROJECT_ID_ENV],
     from: requireDate(flagValue(argv, "from") ?? env.TRACKING_INGEST_FROM, "from"),
     to: requireDate(flagValue(argv, "to") ?? env.TRACKING_INGEST_TO, "to"),
     nodeId: flagValue(argv, "node") ?? env.TRACKING_INGEST_NODE_ID,

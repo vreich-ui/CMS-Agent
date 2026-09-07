@@ -39,6 +39,19 @@ gcloud secrets describe "$TRACKING_SINK_TOKEN_SECRET" --project "$PROJECT" >/dev
   || die "Secret $TRACKING_SINK_TOKEN_SECRET is missing; create it without printing its value before configuring the job."
 [[ "$TRACKING_PROJECT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]] || die "TRACKING_PROJECT_ID must be a lowercase slug, got: $TRACKING_PROJECT_ID"
 
+# S-07. TWO DIFFERENT IDS FOR ONE TENANT, and they are not interchangeable: TRACKING_PROJECT_ID is the
+# SINK's partition (`drlurie`), CMS_AGENT_PROJECT_ID is the CMS-AGENT project (`dr-lurie`). The second
+# is what every ingested feedback record is stamped with, and it is what a tenant's scoped bearer
+# carries in policy.projects — so setting it to the sink spelling silently hides every ingested row
+# from the tenant that produced it, with no error anywhere. OPTIONAL: unset means rows are ingested
+# unstamped, exactly as the job behaved before this existed, and the job still exits 0.
+CMS_AGENT_PROJECT_ID="${CMS_AGENT_PROJECT_ID:-}"
+if [[ -n "$CMS_AGENT_PROJECT_ID" ]]; then
+  [[ "$CMS_AGENT_PROJECT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]] || die "CMS_AGENT_PROJECT_ID must be a lowercase slug, got: $CMS_AGENT_PROJECT_ID"
+else
+  say "CMS_AGENT_PROJECT_ID is unset — ingested feedback rows will carry no project stamp, and this tenant's Insights cards will fall back to resolving them by runId."
+fi
+
 COMMON=(
   "$JOB"
   --project "$PROJECT"
@@ -53,6 +66,9 @@ COMMON=(
   --args=--import,tsx,src/agent/entrypoints/trackingIngestJobMain.ts
 )
 ENV_VARS="^|^WORKSPACE_STORE=gcs|GCS_BUCKET=$GCS_BUCKET|TRACKING_SINK_URL=$TRACKING_SINK_URL|TRACKING_PROJECT_ID=$TRACKING_PROJECT_ID"
+# Appended only when set: an empty CMS_AGENT_PROJECT_ID= would be a value the job then trims to
+# nothing anyway, and on the merge-style update path it would overwrite a good live value with blank.
+if [[ -n "$CMS_AGENT_PROJECT_ID" ]]; then ENV_VARS="$ENV_VARS|CMS_AGENT_PROJECT_ID=$CMS_AGENT_PROJECT_ID"; fi
 SECRET_BINDING="TRACKING_SINK_TOKEN=$TRACKING_SINK_TOKEN_SECRET:latest"
 
 if gcloud run jobs describe "$JOB" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then

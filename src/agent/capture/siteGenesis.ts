@@ -137,11 +137,27 @@ export const SITE_CLIENT_MANAGER_TOOLS = [
   "visual_identity_propose",
   // T5 (S-07, partial): two more run-addressed tools, both scoped to the project's own runs the same
   // way workflow_get_run/workflow_get_run_cost already are. Deliberately NOT widened further this
-  // wave — workflow_retry_node, workflow_set_node_budget_override, workspace_update_node_model_config
-  // (workspace-wide mutation) and feedback_list/playbook_get/optimizer_status/
-  // learning_list_observations (not project-partitioned) each need a decision out of scope here.
+  // wave — workflow_retry_node, workflow_set_node_budget_override and
+  // workspace_update_node_model_config (workspace-wide mutation) each need a decision out of scope
+  // there.
   "node_get_latest_output",
-  "workflow_cancel_run"
+  "workflow_cancel_run",
+  // S-07 (completing T5): Platform's Analytics → Insights tab. Both were previously refused at the
+  // door because neither record type carried a project, so there was nothing to partition on and
+  // granting them would have returned every tenant's rows. Both record types now carry an optional
+  // projectId (improvementTypes.ts, store.ts), both list tools filter on it, and — crucially —
+  // mcpEndpoint.ts's PROJECT_REQUIRED_SCOPED_TOOLS refuses either of these from a scoped bearer that
+  // supplies no project at all. Without that third piece these two entries would be a leak, not a
+  // fix: the unfiltered call returns the whole workspace.
+  //
+  // playbook_get and optimizer_status STAY OUT, deliberately, and the Insights tab's two remaining
+  // cards are being handled on the Platform side instead. Both are keyed by NODE, and nodes are
+  // workspace-wide — one shared graph every tenant's runs execute. There is no project to partition
+  // by, so "scope it like the other two" is not a smaller version of this change, it is impossible;
+  // granting them would hand one tenant the workspace's shared learning state (every other tenant's
+  // curated playbook lessons and optimizer proposals).
+  "feedback_list",
+  "learning_list_observations"
 ] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";

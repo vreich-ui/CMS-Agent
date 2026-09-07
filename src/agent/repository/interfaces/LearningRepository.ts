@@ -3,7 +3,7 @@ import type { ConversationTurnReference, ConversationTurnSupersession } from "..
 import type { RepositoryHealth } from "../RepositoryHealth.js";
 
 export interface LearningRepository {
-  recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }): Promise<LearningObservation>;
+  recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string; projectId?: string }): Promise<LearningObservation>;
   listObservations(options?: { includeArchived?: boolean }): Promise<LearningObservation[]>;
   archiveObservation(id: string, reason?: string): Promise<LearningObservation>;
   archiveObservationsByPredicate(predicate: (observation: LearningObservation) => boolean, reason?: string): Promise<{ archived: number; ids: string[] }>;

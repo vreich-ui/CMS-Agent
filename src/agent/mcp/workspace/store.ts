@@ -29,7 +29,12 @@ export type StageOutput = { id: string; stage: string; value?: unknown; createdA
 // so a bad archive can always be reasoned about from the record itself (archivedAt/archivedReason).
 export const learningObservationStatuses = ["active", "archived"] as const;
 export type LearningObservationStatus = typeof learningObservationStatuses[number];
-export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; runId?: string; nodeId?: string; createdAt: string; status?: LearningObservationStatus; archivedAt?: string; archivedReason?: string };
+// S-07: `projectId` is the CMS-AGENT project id (`dr-lurie`), never the tracking partition id
+// (`drlurie`) — a scoped bearer's `policy.projects` holds CMS-Agent ids, so any other spelling
+// stamps a record that silently matches no filter. OPTIONAL because every observation written before
+// the field existed lacks it and must keep working; `learning.list_observations` resolves those
+// through their `runId` instead (tools.ts).
+export type LearningObservation = { id: string; observation: string; metadata?: Record<string, unknown>; runId?: string; nodeId?: string; projectId?: string; createdAt: string; status?: LearningObservationStatus; archivedAt?: string; archivedReason?: string };
 // §2.20: cross-run cache of already-reduced client contracts, keyed by (projectId, objectType,
 // fingerprint) so a run whose client contract has not changed since a prior run's fetch can reuse the
 // reduction instead of recomputing it (contractPrefetch.ts). `key` is the joined lookup key, stored
@@ -95,7 +100,7 @@ export interface WorkspaceStore {
   saveStageOutput(stage: string, value: unknown, id?: string): Promise<StageOutput>;
   getStageOutput(id: string): Promise<StageOutput | undefined>;
   listStageOutputs(stage?: string): Promise<StageOutput[]>;
-  recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }): Promise<LearningObservation>;
+  recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string; projectId?: string }): Promise<LearningObservation>;
   // 2.8: includeArchived defaults to false — archived (soft-deleted) observations are excluded from
   // every existing caller (curation, migration) automatically unless a caller explicitly opts in, so
   // this one option closes the read side for every consumer at once rather than needing each of them
@@ -585,7 +590,7 @@ export class WorkspaceStateStore implements WorkspaceStore {
   }
   async getStageOutput(id: string) { return (await this.load()).stageOutputs.find((output) => output.id === id); }
   async listStageOutputs(stage?: string) { return (await this.load()).stageOutputs.filter((output) => !stage || output.stage === stage); }
-  async recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string }) {
+  async recordObservation(observation: string, metadata?: Record<string, unknown>, provenance?: { runId?: string; nodeId?: string; projectId?: string }) {
     // 2.7 (handoff 2026-08-10): playbook.migrate_observations (improvementTools.ts) reads
     // observation.metadata?.nodeId, but this method only ever wrote nodeId at the TOP level
     // (provenance, below) — so every one of 34 stored observations failed that lookup and curation
@@ -596,7 +601,11 @@ export class WorkspaceStateStore implements WorkspaceStore {
     const metadataWithProvenance = provenance?.runId || provenance?.nodeId
       ? { ...(metadata ?? {}), ...(provenance?.nodeId ? { nodeId: provenance.nodeId } : {}), ...(provenance?.runId ? { runId: provenance.runId } : {}) }
       : metadata;
-    const record: LearningObservation = { id: makeId("learning"), observation, metadata: metadataWithProvenance, ...(provenance?.runId ? { runId: provenance.runId } : {}), ...(provenance?.nodeId ? { nodeId: provenance.nodeId } : {}), createdAt: now() };
+    // S-07: projectId is NOT mirrored into metadata the way runId/nodeId are. That mirror exists only
+    // to rescue playbook.migrate_observations, which reads metadata.nodeId on legacy records; nothing
+    // reads a project out of metadata, and duplicating it would create a second, forgeable-looking
+    // spelling of the field the project filter trusts.
+    const record: LearningObservation = { id: makeId("learning"), observation, metadata: metadataWithProvenance, ...(provenance?.runId ? { runId: provenance.runId } : {}), ...(provenance?.nodeId ? { nodeId: provenance.nodeId } : {}), ...(provenance?.projectId ? { projectId: provenance.projectId } : {}), createdAt: now() };
     await this.mutate((document) => { document.learningObservations = [...document.learningObservations, record]; }, undefined, "learning.observation_recorded");
     return record;
   }
