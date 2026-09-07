@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   NO_SLACK_PATH_REASON,
+  OBJECT_ROLLUP_IDENTITY_COLUMNS,
+  OBJECT_ROLLUP_MEASURE_COLUMNS,
   STRATEGY_OBJECT_ID_ENV,
   STRATEGY_OBJECT_PROJECT_ID_ENV,
   STRATEGY_OBJECT_TYPE_ENV,
@@ -42,14 +44,30 @@ const CONFIGURED_ENV = {
 } as unknown as NodeJS.ProcessEnv;
 
 // ── object-grain fixtures ────────────────────────────────────────────────────
-// Two funnel stages, two topics, four published objects. `decision`/`retinoid_safety` converts far
-// above the site middle and holds readers; `awareness`/`sunscreen_basics` sits far below it.
-const objectRows = () => [
+//
+// TWO SETS, AND THE DIFFERENCE BETWEEN THEM IS THE POINT (S-04b).
+//
+// `sinkObjectRows()` is what the sink ACTUALLY sends: kugel-data's `shapeObjectRow` emits
+// object_id, variant_id, day and nine measures, and nothing else. No topic, no funnel stage, no
+// `n`. Every assertion about what a real weekly run does is made against these.
+//
+// `labelledObjectRows()` is a HYPOTHETICAL sink that also carries the labels. It is what this
+// file's fixtures used to be, unlabelled as such, which is why the two dead dimensions looked
+// alive: the readers were proven against a row shape no deployment produces. It is kept only to
+// prove the grouping arithmetic still works if the labels ever arrive, and every test using it says
+// so in its name.
+const sinkObjectRows = () => [
+  { object_id: "page_retinoid_purge", variant_id: "control", day: "2026-08-30", pageviews: 300, exposures: 260, sessions: 240, cta_ctr: 0.12, purchase_rate: 0.03, buy_click_rate: 0.05, completion_rate: 0.6, revenue_cents: 12000, p75_dwell_ms: 40000 },
+  { object_id: "page_spf_myths", variant_id: "control", day: "2026-08-30", pageviews: 240, exposures: 200, sessions: 190, cta_ctr: 0.04, purchase_rate: 0.005, buy_click_rate: 0.01, completion_rate: 0.4, revenue_cents: 900, p75_dwell_ms: 20000 }
+];
+
+const labelledObjectRows = () => [
   { slug: "retinoid-purge", funnel_stage: "decision", topic: "retinoid_safety", n: 260, cta_ctr: 0.12, purchase_rate: 0.03, completion_rate: 0.6, p75_dwell_ms: 40000 },
   { slug: "retinoid-strength", funnel_stage: "decision", topic: "retinoid_safety", n: 150, cta_ctr: 0.1, purchase_rate: 0.02, completion_rate: 0.55, p75_dwell_ms: 36000 },
   { slug: "spf-myths", funnel_stage: "awareness", topic: "sunscreen_basics", n: 200, cta_ctr: 0.04, purchase_rate: 0.005, completion_rate: 0.4, p75_dwell_ms: 20000 },
   { slug: "uv-index", funnel_stage: "awareness", topic: "sunscreen_basics", n: 180, cta_ctr: 0.03, purchase_rate: 0.004, completion_rate: 0.38, p75_dwell_ms: 19000 }
 ];
+const objectRows = labelledObjectRows;
 
 type FetchPlan = { current?: unknown; prior?: unknown; status?: number };
 
@@ -126,11 +144,39 @@ describe("object-grain readers", () => {
     expect(rowEventCount({ event_count: 12 })).toBe(12);
   });
 
+  // ── S-04b: the row shape the sink really sends ─────────────────────────────
+
+  it("counts a REAL sink row, which states no n: exposures first, pageviews behind it", () => {
+    // Before S-04b every one of these was 0, so the n>=100 bar could never be cleared by a real row
+    // even if a label had existed to group it under.
+    expect(rowEventCount(sinkObjectRows()[0]!)).toBe(260);
+    expect(rowEventCount({ pageviews: 300, sessions: 240 })).toBe(300);
+    expect(rowEventCount({ exposures: 0, pageviews: 300 })).toBe(300);
+    expect(rowEventCount({ n: 5, exposures: 260 })).toBe(5);
+  });
+
+  it("finds NO topic and NO funnel stage on a real sink row — the labels are simply not sent", () => {
+    for (const row of sinkObjectRows()) {
+      expect(topicOf(row)).toBeUndefined();
+      expect(funnelStageOf(row)).toBeUndefined();
+    }
+  });
+
+  it("pins the by=object columns to kugel-data's shapeObjectRow, so a drift here is caught here", () => {
+    const served = new Set([...OBJECT_ROLLUP_IDENTITY_COLUMNS, ...OBJECT_ROLLUP_MEASURE_COLUMNS]);
+    for (const row of sinkObjectRows()) {
+      expect(Object.keys(row).every((key) => served.has(key as never))).toBe(true);
+    }
+    for (const absent of ["topic", "primary_topic", "funnel_stage", "stage", "n", "event_count"]) {
+      expect(served.has(absent as never)).toBe(false);
+    }
+  });
+
   it("refuses sessions as a substitute for the attributed-event count the bar is stated in", () => {
     expect(rowEventCount({ sessions: 5000 })).toBe(0);
   });
 
-  it("groups rows with n-weighted rates and never zero-fills a metric nobody reported", () => {
+  it("groups rows with n-weighted rates and never zero-fills a metric nobody reported (labelled sink)", () => {
     const groups = groupObjectRows(objectRows(), funnelStageOf);
     const decision = groups.get("decision")!;
     expect(decision.n).toBe(410);
@@ -150,6 +196,53 @@ describe("object-grain readers", () => {
   it("derives the preceding window of equal length, and none from an unusable one", () => {
     expect(precedingWindow(CURRENT)).toEqual(PRIOR);
     expect(precedingWindow({ from: "2026-08-31", to: "2026-08-31" })).toBeUndefined();
+  });
+});
+
+// ── S-04b: a whole run against the rows the sink really sends ────────────────
+
+describe("reviewEditorialStrategy against the sink's real by=object rows", () => {
+  const realSink = { current: { rows: sinkObjectRows() }, prior: { rows: sinkObjectRows() } };
+
+  it("reports the two unlabelled dimensions as UNREADABLE, not as 'nothing held up'", async () => {
+    const result = await review({ plan: realSink, observations: [] });
+    expect(result.status).toBe("no_proposal");
+    expect(result.delta.topicWeights).toEqual([]);
+    expect(result.delta.funnelAggression).toEqual([]);
+
+    // The fact the loop used to swallow entirely: rows arrived, no group could be formed.
+    expect(result.rows.current).toBe(2);
+    const byDimension = Object.fromEntries(result.grain.map((entry) => [entry.dimension, entry]));
+    for (const dimension of ["topic_weight", "funnel_aggression"] as const) {
+      expect(byDimension[dimension]).toMatchObject({ rowsExamined: 2, rowsLabelled: 0, available: false });
+      expect(byDimension[dimension]!.detail).toContain("carried a");
+    }
+    // and it is said out loud in belowBar, once per dimension, not silently omitted
+    expect(result.belowBar.filter((note) => note.dimension === "topic_weight")).toHaveLength(1);
+    expect(result.belowBar.filter((note) => note.dimension === "funnel_aggression")).toHaveLength(1);
+    expect(result.detail).toContain("could not be looked at at all");
+  });
+
+  it("still proposes from the angle mix, and the proposal never claims a grain it did not read", async () => {
+    const calls: ToolCall[] = [];
+    const result = await review({ plan: realSink, calls });
+    expect(result.status).toBe("proposed");
+    expect(result.delta.angleMix).toHaveLength(1);
+
+    const body = String(calls[0]!.args.body);
+    expect(body).not.toContain("rollups grouped by topic and funnel stage");
+    expect(body).toContain("Not read this run: topic and funnel stage");
+    expect(body).toContain("missing input");
+    expect(body).not.toContain("TOPIC WEIGHTS");
+    expect(body).not.toContain("FUNNEL-STAGE AGGRESSION");
+  });
+
+  it("names the grain it DID read when the labels are present (a hypothetical labelled sink)", async () => {
+    const calls: ToolCall[] = [];
+    await review({ calls });
+    const body = String(calls[0]!.args.body);
+    expect(body).toContain("rollups grouped by topic and funnel stage");
+    expect(body).not.toContain("Not read this run");
   });
 });
 
