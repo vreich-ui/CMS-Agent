@@ -8,7 +8,10 @@ import { getBlobJson, getBlobJsonWithEtag, getCmsAgentBlobStore, storeBackendLab
 const clone = <T>(value: T): T => structuredClone(value);
 const MAX_WRITE_RETRIES = 5;
 type ConversationTurnLearningLedger = { supersessions: ConversationTurnSupersession[]; references: ConversationTurnReference[] };
-const ledgerKeyFor = (projectId: string, conversationId: string) => `learning/conversation-turn-gc/${encodeURIComponent(projectId)}/${encodeURIComponent(conversationId)}.json`;
+// C-1: the ledger used to live under `learning/`, the same prefix listObservations scanned. It has
+// its own top-level prefix now so no ledger can ever be mistaken for an observation again — and the
+// listing below no longer scans blobs at all, so the two are independent fixes of one defect.
+const ledgerKeyFor = (projectId: string, conversationId: string) => `conversation-turn-gc/${encodeURIComponent(projectId)}/${encodeURIComponent(conversationId)}.json`;
 const emptyLedger = (): ConversationTurnLearningLedger => ({ supersessions: [], references: [] });
 
 export class BlobLearningRepository implements LearningRepository {
@@ -18,12 +21,16 @@ export class BlobLearningRepository implements LearningRepository {
     return this.workspaceRepository.recordObservation(observation, metadata, provenance);
   }
 
+  // C-1. This used to list the `learning/` blob prefix and parse every blob it found as an
+  // observation. Nothing has ever WRITTEN an observation there — recordObservation delegates to the
+  // workspace document, and so do archive and archiveByPredicate — so the `learning/{id}.json`
+  // convention this read expected never existed. What did live under that prefix was the
+  // conversation-turn ledger, which has no `createdAt`: one ledger returned the ledger AS an
+  // observation and hid the real ones, and two made the sort throw for every caller of
+  // learning_list_observations. Reading from the same store the writes go to is the fix; the ledger
+  // moving to its own prefix (above) is belt and braces.
   async listObservations(options?: { includeArchived?: boolean }): Promise<LearningObservation[]> {
-    const result = await this.store.list({ prefix: "learning/" });
-    if (result.blobs.length === 0) return this.workspaceRepository.listObservations(options);
-    const records = await Promise.all(result.blobs.map((blob) => getBlobJson<LearningObservation>(this.store, blob.key)));
-    const observations = records.filter((record): record is LearningObservation => record !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((record) => clone(record));
-    return options?.includeArchived ? observations : observations.filter((observation) => observation.status !== "archived");
+    return this.workspaceRepository.listObservations(options);
   }
 
   async archiveObservation(id: string, reason?: string): Promise<LearningObservation> {
