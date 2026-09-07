@@ -251,6 +251,30 @@ export const readRequestShapeRejection = (result: unknown): string | undefined =
   return found.statusCode === 400 ? (found.message ?? "Invalid request fields.") : undefined;
 };
 
+// THE INTEGRITY GATE'S OWN WORDS, in one place. `client_validation_failed` is the sentence that stops
+// an invalid body from being published: publication_controller collects it from this node's
+// `blockers[]`, classifies publish_payload as INTEGRITY (blockerClassification.ts) and decides
+// "blocked", and publish_executor then refuses with publication_decision_not_affirmative. Under
+// dr-lurie's autonomous publishing policy (2026-09-07) no approval gate fires ahead of that chain, so
+// this string is load-bearing on its own.
+//
+// It lives in a named function rather than inline in the builder because W2.4 needs the IDENTICAL
+// sentence on the model fallback path too (see promoteRecordedInvalidVerdictToBlocker below); two
+// hand-copied wordings would be two blockers to a de-duplicating reader and one more place for the
+// gate's language to drift.
+//
+// Returns undefined for every verdict that is NOT a rejection — a pass, and a `deferred` refusal to
+// validate an object that does not exist yet (the NORMAL dry-run outcome article_body's own prompt
+// names). An unreachable validator is a different blocker with a different meaning; see below.
+export const clientValidationFailedBlocker = (validation: PublishPayloadValidation): string | undefined => {
+  if (!validation.attempted || validation.valid || validation.deferred) return undefined;
+  const issues = validation.issues.slice(0, 3).map((issue) => (typeof issue === "string" ? issue : JSON.stringify(issue))).join("; ");
+  return `client_validation_failed: the client's own validator rejected the candidate patch (${issues || "no issues reported"}).`;
+};
+
+export const clientValidationUnavailableBlocker = (validation: PublishPayloadValidation): string =>
+  `client_validation_unavailable: the client's own read-only validator could not be reached for this candidate (${validation.error ?? "no reason reported"}); validity is not asserted.`;
+
 export function buildDeterministicPublishPayload(sources: PublishPayloadSources, validation: PublishPayloadValidation): PublishPayloadBuildResult {
   const read = readArticleBody(sources.articleBody);
   if (!read.ok) return read;
@@ -263,8 +287,11 @@ export function buildDeterministicPublishPayload(sources: PublishPayloadSources,
   // Blockers this node itself owns, per its own blocker criteria ("client unreachable ... raise a
   // blocker; do not assert validity"). A deferral is explicitly NOT one of them.
   const ownBlockers: string[] = [];
-  if (!validation.attempted) ownBlockers.push(`client_validation_unavailable: the client's own read-only validator could not be reached for this candidate (${validation.error ?? "no reason reported"}); validity is not asserted.`);
-  else if (!validation.valid && !validation.deferred) ownBlockers.push(`client_validation_failed: the client's own validator rejected the candidate patch (${validation.issues.slice(0, 3).map((issue) => (typeof issue === "string" ? issue : JSON.stringify(issue))).join("; ") || "no issues reported"}).`);
+  if (!validation.attempted) ownBlockers.push(clientValidationUnavailableBlocker(validation));
+  else {
+    const rejected = clientValidationFailedBlocker(validation);
+    if (rejected) ownBlockers.push(rejected);
+  }
 
   const blockers = [...carried, ...ownBlockers.filter((blocker) => !carried.some((existing) => blockerKey(existing) === blockerKey(blocker)))];
 
@@ -286,12 +313,24 @@ export function buildDeterministicPublishPayload(sources: PublishPayloadSources,
     ...(resolved.length ? [`Upstream blocker(s) resolved by this node's own client-validator pass: ${resolved.join(" | ")}`] : [])
   ];
 
-  const engineLoop = (validation as { source?: unknown; engineLoop?: unknown }).source === "engine_validation_loop" ? (validation as { engineLoop?: { revalidations?: number; revisionTurns?: number; mechanicalFixes?: string[] } }).engineLoop : undefined;
+  const engineLoop = (validation as { source?: unknown; engineLoop?: unknown }).source === "engine_validation_loop" ? (validation as { engineLoop?: { revalidations?: number; revisionTurns?: number; mechanicalFixes?: string[]; revisionChangedBody?: boolean } }).engineLoop : undefined;
+
+  // W2.6 — a revision turn that RAN and changed nothing is the single most diagnostic fact about a
+  // failed repair (run_1788769566432_5qnafb: one turn, ~$0.75, and a body whose two flagged defects
+  // came back byte-for-byte, under a summary claiming one of them was fixed). W1.3 started recording
+  // it on engineLoop; without this line it was recorded and then invisible in the payload's own prose,
+  // which is the record an operator actually reads. Stated only when a turn was actually spent — on
+  // zero turns "changed nothing" would be true and meaningless.
+  const revisionEffect = engineLoop && (engineLoop.revisionTurns ?? 0) > 0 && typeof engineLoop.revisionChangedBody === "boolean"
+    ? engineLoop.revisionChangedBody
+      ? " The model's revision turn did change the body."
+      : " The model's revision turn changed NOTHING — the body it returned is byte-identical to the one the client had just rejected, so the turn was spent without producing a repair."
+    : "";
 
   const validationAssumptions: string[] = [
     "The client's own validator (object_validate, read-only via project.call_read_tool) is the only verdict recorded here; no workspace-local verdict was substituted, and an unreadable verdict is treated as invalid rather than as a pass.",
     ...(engineLoop
-      ? [`This verdict was earned by the engine's own validate→fix→revalidate loop at article_body, against this exact body (fingerprint-matched), and is reused here rather than re-earned: ${engineLoop.revalidations ?? 0} revalidation(s), ${engineLoop.revisionTurns ?? 0} model revision turn(s), mechanical fixes [${(engineLoop.mechanicalFixes ?? []).join(", ") || "none"}].`]
+      ? [`This verdict was earned by the engine's own validate→fix→revalidate loop at article_body, against this exact body (fingerprint-matched), and is reused here rather than re-earned: ${engineLoop.revalidations ?? 0} revalidation(s), ${engineLoop.revisionTurns ?? 0} model revision turn(s), mechanical fixes [${(engineLoop.mechanicalFixes ?? []).join(", ") || "none"}].${revisionEffect}`]
       : []),
     ...(validation.deferred === "requires_existing_object"
       ? ["The client refused to validate a candidate for an object that does not exist yet. Per the object lifecycle this is a NORMAL deferral, not a blocker: the authoritative validation runs in the publish executor after object_create and before any patch."]
@@ -348,6 +387,58 @@ export const readRecordedValidation = (articleBody: unknown, body: Record<string
   if (typeof record.tool !== "string" || typeof record.valid !== "boolean") return undefined;
   if (record.bodyFingerprint !== stableHash(body)) return undefined;
   return record as unknown as PublishPayloadValidation;
+};
+
+// W2.4 (2026-09-07) — CLOSING G2: the model fallback is the one publish_payload path where the
+// integrity gate depended on prompt text.
+//
+// The deterministic route above is what raises `client_validation_failed`, and it is what ran on
+// run_1788769566432_5qnafb. But it is a FAST path, not the only one: `executor.ts` validates its
+// output against the node's own outputSchema and, on any failure, warns
+// `publish_payload_deterministic_unavailable:<reason>` and dispatches the model instead. A
+// model-built payload is under no obligation to carry a blocker about a verdict it was never shown —
+// so on that path the only thing standing between an invalid body and publish_executor was a prompt.
+// That was tolerable while an approval gate always fired first. dr-lurie went
+// publishingPolicy.autonomyMode "autonomous" on 2026-09-07 and it no longer does.
+//
+// TWO OPTIONS WERE ON THE TABLE, AND WHY THIS ONE. The alternative was to REFUSE the model fallback
+// outright whenever a recorded invalid verdict exists. Both close the hole; this one is smaller in
+// every dimension that matters:
+//   - It is purely ADDITIVE. It appends one string to a `blockers[]` array that already exists, and
+//     changes nothing about which path runs. Refusing the fallback would convert every unrelated
+//     deterministic failure (contract_source_absent, a schema drift, a throw) into a hard node failure
+//     whenever the body also happens to be invalid — a much larger behavioural change, on a path whose
+//     whole purpose is to degrade gracefully.
+//   - It keeps the RECORD. A refusal at publish_payload means publication_controller never runs, so
+//     the run ends without the decision that names why nothing published. Here the blocker travels the
+//     normal route: publication_controller collects it, classifies publish_payload as INTEGRITY, and
+//     records `blocked` with the reason in the operator's own audit trail.
+//   - Identical wording is GUARANTEED, not maintained: the sentence comes from
+//     clientValidationFailedBlocker, the same function the deterministic builder calls, so the two
+//     paths cannot drift and a de-duplicating reader (blockerKey / collectSourcedBlockers) sees one
+//     blocker rather than two near-misses.
+// The refusal option would also have been a NEW refusal on the payload gate, which the W2 brief rules
+// out for the deterministic route; applying it only to the model route would leave the two halves of
+// one node disagreeing about what an invalid verdict means.
+//
+// Reuse discipline is exactly readRecordedValidation's, deliberately: the verdict must be the engine
+// loop's own, must have landed, and must be about THIS body. A fingerprint mismatch injects nothing,
+// because a verdict is about an object and asserting one about a different object is the failure mode
+// the whole record exists to prevent.
+//
+// Copy-on-write and de-duplicated, like promoteValidationWarningsToBlockers: the returned value is
+// the SAME reference when nothing was added, which is how the caller detects an injection.
+export const promoteRecordedInvalidVerdictToBlocker = (output: unknown, articleBody: unknown): unknown => {
+  if (!isObject(output)) return output;
+  const read = readArticleBody(articleBody);
+  if (!read.ok) return output;
+  const recorded = readRecordedValidation(articleBody, read.body);
+  if (!recorded) return output;
+  const blocker = clientValidationFailedBlocker(recorded);
+  if (!blocker) return output;
+  const existing = stringArray(output.blockers);
+  if (existing.some((entry) => blockerKey(entry) === blockerKey(blocker))) return output;
+  return { ...output, blockers: [...(Array.isArray(output.blockers) ? output.blockers : []), blocker] };
 };
 
 // The one entry point executor.ts calls: read upstream, reuse article_body's engine-earned verdict or

@@ -23,8 +23,8 @@ import { getEditorialVoice } from "./voicePrefetch.js";
 import { getSitePrefetch } from "./sitePrefetch.js";
 import { CONTENT_ITEM_SHELL_FAILED_PREFIX, CONTENT_ITEM_SHELL_INPUT_KEY, ensureContentItemShell } from "./contentItemShell.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
-import { runDeterministicPublishPayload, validateClientObjectOnce, readTopLevelObjectId } from "./publishPayload.js";
-import { ENGINE_VALIDATION_POLICY, MAX_ENGINE_REVALIDATION_CYCLES, ownsValidationLoop, promoteValidationUnavailableToBlocker, runArticleBodyValidationLoop, readBodyForValidation } from "./articleBodyValidation.js";
+import { runDeterministicPublishPayload, validateClientObjectOnce, readTopLevelObjectId, promoteRecordedInvalidVerdictToBlocker } from "./publishPayload.js";
+import { buildValidationFeedback, ENGINE_VALIDATION_POLICY, MAX_ENGINE_REVALIDATION_CYCLES, ownsValidationLoop, promoteValidationWarningsToBlockers, runArticleBodyValidationLoop, readBodyForValidation } from "./articleBodyValidation.js";
 import { applyRunContextEnvelope, buildRunContext } from "./runContext.js";
 import { runDeterministicPublicationController } from "./publicationController.js";
 import { readPublishExecutorDeterministicMode, runDeterministicPublishExecutor, runEnginePublishExecution } from "./publishExecution.js";
@@ -2955,10 +2955,20 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         // shape before the body was judged.
         validate: (body) => validateClientObjectOnce({ projectId: run.projectId, body, objectId: readTopLevelObjectId(body), objectType: typeof (output as Record<string, unknown>).clientObjectType === "string" ? ((output as Record<string, unknown>).clientObjectType as string) : undefined }, { projectRepository: repositoryManager.getProjectRepository() }),
         // ONE bounded revision turn, engine-driven: the model is handed the client's own errors and
-        // its own previous envelope and asked for a corrected one. A fresh dispatch, so the node's
-        // toolCallLimit is not what runs out; the runner records its own usage, so the turn is paid
-        // for visibly rather than hidden inside another node's bill.
-        revise: async ({ issues, output: previous, attempt }) => {
+        // the exact paths they name, and asked for a corrected envelope. A fresh dispatch, so the
+        // node's toolCallLimit is not what runs out; the runner records its own usage, so the turn is
+        // paid for visibly rather than hidden inside another node's bill.
+        //
+        // W1.2 (run_1788769566432_5qnafb) — what this dispatch carries changed, and buildValidationFeedback
+        // owns the shape (articleBodyValidation.ts). Two things left: the client's single
+        // three-problems-in-one-string issue object, now flattened to one string per problem with the
+        // untransformed original kept beside it as rawIssues; and `previousOutput`, the model's whole
+        // ~29-30K-character prior envelope, which was the bulk of this prompt and is the ONE part of
+        // `input` nothing bounds (the runner strips only `dependencies`/`imageRefs`, and
+        // boundDependencyOutput applies to dependencyOutputs). In its place goes revisionTarget —
+        // node ids, paths, and the values currently at them. The revision no longer re-reads the
+        // object that was rejected; it is told what to fix and where.
+        revise: async ({ issues, body: rejectedBody, attempt }) => {
           // A revision is a FULL second model dispatch — the phase claim must widen back out to a
           // model timeout for its duration, or the continuation tick reclaims mid-dispatch exactly
           // as it did before this fix.
@@ -2967,13 +2977,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
             node: effectiveNode,
             input: {
               ...(state.input as Record<string, unknown>),
-              validationFeedback: {
-                source: "client_object_validate",
-                attempt,
-                issues,
-                previousOutput: previous,
-                instruction: "The client's own validator REJECTED the body you emitted, for the issues listed here. Emit the SAME output envelope again with only the changes those issues require: fix the rejected fields, change nothing else, invent no new content, and do not call the validator yourself — the engine validates for you and will report the result."
-              }
+              validationFeedback: buildValidationFeedback({ issues, body: rejectedBody, attempt })
             }
           }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
           if (revision.toolCalls?.length) state.toolCalls = [...(state.toolCalls ?? []), ...revision.toolCalls];
@@ -2992,11 +2996,13 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
           const code = clientAuthFailedError(credential);
           return { run: failNodeOnClientAuth(run, state, nextNode.id, startedAt, code, `Project "${run.projectId}" refused this driver's credential with HTTP ${loop.authFailure.httpStatus ?? "401/403"} when ${nextNode.id} asked it to validate the body, so the body was never judged and nothing downstream could publish it. The run is stopped rather than completing with an unjudged artifact. Sync ${credential} for this plane and retry the run. Underlying error: ${loop.authFailure.error}`) };
         }
-        // S3 item 9: "the client's validator could not be reached / refused the request" is not a
-        // warning a publish gate may read past — it is a BLOCKER on article_body's own output, which
-        // readiness (article_body_blockers) then refuses. Warning stays for the run log; the blocker is
-        // what stops an unjudged body from being published as if it had been judged.
-        output = promoteValidationUnavailableToBlocker(output, loop.warnings);
+        // S3 item 9 + W2.5: "the client's validator could not be reached" AND "the client rejected
+        // this body" are both facts a publish gate may not read past — they are BLOCKERS on
+        // article_body's own output, which readiness (article_body_blockers) then refuses. The
+        // warnings stay for the run log; the blockers are what stop an unjudged (or judged-and-
+        // refused) body from being published as if it had passed. See
+        // promoteValidationWarningsToBlockers for why the rejection half was added.
+        output = promoteValidationWarningsToBlockers(output, loop.warnings);
       }
     } catch (error) {
       state.warnings = [...(state.warnings ?? []), `article_body_validation_loop_failed:${error instanceof Error ? error.message : String(error)}`];
@@ -3047,6 +3053,27 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         }
         state.warnings = [...(state.warnings ?? []), "resolved_vector_engine_owned"];
       }
+    }
+  }
+
+  // W2.4 (2026-09-07) — CLOSING G2. Everything above this line reaches here only on the MODEL path:
+  // publish_payload's deterministic route returns from this function the moment it succeeds, so a
+  // publish_payload output arriving here is one a model wrote after
+  // `publish_payload_deterministic_unavailable` — the one path where the client_validation_failed
+  // gate depended on prompt text rather than on code. It doesn't now: if article_body recorded an
+  // engine-earned INVALID verdict against this exact body, the same blocker the deterministic builder
+  // would have raised is appended here, in the same words (promoteRecordedInvalidVerdictToBlocker
+  // explains the reuse discipline and why injecting beats refusing the fallback).
+  //
+  // Keyed on the node's own declared product rather than a node id or a seed-only metadata flag, for
+  // the reason ownsValidationLoop already documents: the live workspace is store-sourced, so an id
+  // list or a nodes.ts flag would leave a re-keyed or cloned publish_payload silently exempt.
+  // Live runs only — a mock body is a placeholder and carries no real verdict to promote.
+  if (mode !== "mock" && (nextNode.produces ?? []).includes("dry_run_publish_payload.v1")) {
+    const promoted = promoteRecordedInvalidVerdictToBlocker(output, run.stageOutputs.article_body);
+    if (promoted !== output) {
+      output = promoted;
+      state.warnings = [...(state.warnings ?? []), "publish_payload_client_validation_blocker_injected"];
     }
   }
 

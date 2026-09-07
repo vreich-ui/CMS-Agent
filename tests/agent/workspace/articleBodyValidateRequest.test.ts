@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetValidateRequestShapeLog, validateClientObjectOnce } from "../../../src/agent/workspace/publishPayload.js";
-import { promoteValidationUnavailableToBlocker } from "../../../src/agent/workspace/articleBodyValidation.js";
+import { promoteValidationWarningsToBlockers } from "../../../src/agent/workspace/articleBodyValidation.js";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
 
 // S3 item 9 — the article_body validate request. Two engine-side defects made the client 400 the
@@ -71,17 +71,35 @@ describe("validateClientObjectOnce request shape", () => {
   });
 });
 
-describe("promoteValidationUnavailableToBlocker", () => {
+describe("promoteValidationWarningsToBlockers", () => {
   it("turns article_body_validation_unavailable warnings into blockers on the output, deduplicated, copy-on-write", () => {
     const output = { artifact: "client_object.v1", body: {}, blockers: ["something else"] };
-    const promoted = promoteValidationUnavailableToBlocker(output, ["article_body_validation_unavailable:connect ECONNREFUSED", "other_warning"]) as { blockers: string[] };
+    const promoted = promoteValidationWarningsToBlockers(output, ["article_body_validation_unavailable:connect ECONNREFUSED", "other_warning"]) as { blockers: string[] };
     expect(promoted.blockers).toEqual(["something else", "article_body_validation_unavailable:connect ECONNREFUSED"]);
     expect(output.blockers).toEqual(["something else"]);
     // Idempotent: promoting the same warning twice adds nothing.
-    expect(promoteValidationUnavailableToBlocker(promoted, ["article_body_validation_unavailable:connect ECONNREFUSED"])).toBe(promoted);
+    expect(promoteValidationWarningsToBlockers(promoted, ["article_body_validation_unavailable:connect ECONNREFUSED"])).toBe(promoted);
   });
-  it("leaves the output untouched when no such warning exists", () => {
+
+  // W2.5 (2026-09-07) — G3. This assertion is INVERTED from what it was: an invalid verdict used to
+  // be a warning only, so article_body completed with blockers:[] on a body the client had rejected
+  // and readiness's article_body_blockers check passed over it. Both rejection warnings are blockers
+  // now; see promoteValidationWarningsToBlockers' header for why.
+  it.each(["article_body_validation_invalid", "article_body_validation_loop_exhausted"])(
+    "promotes %s — the client said no, and that is not a warning a publish gate may read past",
+    (warning) => {
+      const output = { artifact: "client_object.v1", body: {} };
+      const promoted = promoteValidationWarningsToBlockers(output, [warning]) as { blockers: string[] };
+      expect(promoted).not.toBe(output);
+      expect(promoted.blockers).toEqual([warning]);
+      expect(output).not.toHaveProperty("blockers");
+    }
+  );
+
+  it("leaves the output untouched for a warning that is not a verdict about the object", () => {
     const output = { artifact: "client_object.v1", body: {} };
-    expect(promoteValidationUnavailableToBlocker(output, ["article_body_validation_invalid"])).toBe(output);
+    // A repair ATTEMPT that went wrong is not a statement about the body's validity — whatever the
+    // real verdict is, it rides on one of the three promoted warnings instead.
+    expect(promoteValidationWarningsToBlockers(output, ["article_body_revision_failed:provider_error", "other_warning"])).toBe(output);
   });
 });

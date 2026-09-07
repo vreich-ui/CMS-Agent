@@ -226,6 +226,46 @@ export function evaluateContentReadiness(input: ContentReadinessInput): Readines
   if (ownBlockers.length) fail("article_body_blockers", "article_body declared no blockers", ownBlockers.join("; "));
   else pass("article_body_blockers", "article_body declared no blockers");
 
+  // client_validation_verdict — W2.3 (2026-09-07), closing G1.
+  //
+  // Nothing on the readiness path read the CLIENT's verdict. `article_body_valid` above (and the
+  // per-project `article_body_valid` check that calls this function) validates the envelope against
+  // the WORKSPACE's own outputSchema — whose `body` is `{type:"object", minProperties:1,
+  // additionalProperties:true}`, i.e. it asks whether a body exists, never whether the client would
+  // accept it. So readiness could say "go" over a body the client's own validator had explicitly
+  // rejected, and only the upstream-blocker rule (via publish_payload's client_validation_failed)
+  // stopped the publish. That was one rule, on one node, with a model fallback beside it. dr-lurie
+  // went publishingPolicy.autonomyMode "autonomous" on 2026-09-07, so the approval gate that used to
+  // fire first no longer does; this is the belt to publish_payload's braces, inside the
+  // `publish_readiness` INTEGRITY class where a failure hard-blocks by construction.
+  //
+  // Scoped to the ENGINE's own record (source: engine_validation_loop), for the same reason
+  // publishPayload.readRecordedValidation is: a `clientValidation` object a model typed into its own
+  // envelope is a claim, not a verdict, and this check will not gate on one. Everything that is not
+  // an engine-earned rejection is reported honestly rather than passed silently:
+  //   - no engine record            -> accepted_empty (not evaluated — nothing to read)
+  //   - deferred                    -> pass (the client correctly refusing to validate an object that
+  //                                    does not exist yet; article_body's own prompt names it NORMAL)
+  //   - attempted:false             -> accepted_empty (the call never landed — that is
+  //                                    article_body_validation_unavailable's blocker to raise, and
+  //                                    article_body_blockers above already refuses it)
+  //   - valid:true                  -> pass
+  //   - valid:false, not deferred   -> FAIL. The client said no.
+  const verdict = isObject(input.articleBody) && isObject(input.articleBody.clientValidation) ? input.articleBody.clientValidation : undefined;
+  const verdictLabel = "Client validator accepted the body";
+  if (!verdict || verdict.source !== "engine_validation_loop" || typeof verdict.valid !== "boolean") {
+    acceptedEmpty("client_validation_verdict", verdictLabel, "no engine-earned client verdict is recorded on this envelope (clientValidation absent, or not written by the engine validation loop); not evaluated");
+  } else if (typeof verdict.deferred === "string" && verdict.deferred.trim()) {
+    pass("client_validation_verdict", verdictLabel, `client deferred (${verdict.deferred}) — a NORMAL dry-run outcome for an object that does not exist yet; the authoritative validation runs in the publish executor after object_create`);
+  } else if (verdict.attempted !== true) {
+    acceptedEmpty("client_validation_verdict", verdictLabel, "the client's validator was never reached, so it stated no verdict about this body; article_body_validation_unavailable is the blocker for that, raised on article_body itself");
+  } else if (verdict.valid) {
+    pass("client_validation_verdict", verdictLabel, "the client's own validator accepted this body");
+  } else {
+    const issues = (Array.isArray(verdict.issues) ? verdict.issues : []).slice(0, 3).map((issue) => (typeof issue === "string" ? issue : JSON.stringify(issue))).join("; ");
+    fail("client_validation_verdict", verdictLabel, `the client's own validator REJECTED this body (${issues || "no issues reported"})`);
+  }
+
   // upstream_blockers + media_requested_vs_delivered — need the run's stage outputs.
   const stages = input.stageOutputs;
   if (!stages) {

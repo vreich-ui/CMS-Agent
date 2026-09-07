@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReducedContract } from "../../../src/agent/workspace/contractPrefetch.js";
+import { CONTRACT_REDUCER_VERSION } from "../../../src/agent/workspace/contractReduction.js";
 import { RunScopedCache } from "../../../src/agent/workspace/conductor.js";
+import { stableHash } from "../../../src/agent/improvement/improvementTypes.js";
 import { MemoryProjectRepository } from "../../../src/agent/repository/memory/MemoryProjectRepository.js";
 import { MemoryWorkspaceRepository } from "../../../src/agent/repository/memory/MemoryWorkspaceRepository.js";
 
@@ -85,6 +87,36 @@ describe("cross-run reduced-contract cache (§2.20)", () => {
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     expect(remoteFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // W3b.1 (run_1788769566432_5qnafb): the live run reused a reduction cached from a contract fetched
+  // 2026-08-31 — days before annotationEnums (or any future reducer change) existed — even though its
+  // RAW content had not changed. A cache entry stored under the pre-fix key (the bare content hash,
+  // with no reducer-version salt) must be a MISS now, forcing a fresh reduceContract call, rather than
+  // being served back unchanged forever.
+  it("does not reuse a cache entry keyed on the pre-W3b.1 fingerprint (no reducer-version salt), even when the raw content is identical", async () => {
+    const projectRepository = new MemoryProjectRepository();
+    const workspaceRepository = new MemoryWorkspaceRepository();
+
+    // The exact raw payload this run's stub hands back for object_type "content_item" — reconstructed
+    // to compute the SAME pre-fix fingerprint a run before this change would have stored (a bare
+    // stableHash(raw), with no ":r<N>" suffix), so this test proves the salt is what changed, not the
+    // content.
+    const legacyFingerprint = stableHash({ object_type: "content_item", ...contractPayload });
+    const staleReduced = { clientObjectType: "content_item", bodySchema: null, idConventions: [], mediaConvention: { policy: null, notes: [] }, taxonomy: { notes: [], blockingConstraints: [] }, constraints: [], publishPolicy: null, workflowSequence: [], validationSurface: [], contractSource: { tool: "object_contract", fetchedAtISO: "2026-08-31T00:00:00.000Z", fingerprint: legacyFingerprint } };
+    await workspaceRepository.putReducedContractCacheEntry({ projectId: "dr-lurie", objectType: "content_item", fingerprint: legacyFingerprint, reduced: staleReduced as any });
+
+    const putSpy = vi.spyOn(workspaceRepository, "putReducedContractCacheEntry");
+    const result = await getReducedContract({ runId: "run-cache-4a", projectId: "dr-lurie", requestedObjectType: "content_item" }, { projectRepository, workspaceRepository, cache: new RunScopedCache() });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // A hit on the stale entry would skip reduceContract entirely and hand back staleReduced verbatim
+    // (see the miss/hit branch in contractPrefetch.ts) — neither happened.
+    expect(result.reduced).not.toEqual(staleReduced);
+    expect(putSpy).toHaveBeenCalledTimes(1);
+    // And the newly recorded fingerprint carries this file's reducer-version salt.
+    expect(result.reduced.contractSource.fingerprint).toBe(`${legacyFingerprint}:r${CONTRACT_REDUCER_VERSION}`);
   });
 });
 
