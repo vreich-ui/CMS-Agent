@@ -93,6 +93,47 @@ describe("release_executor — nothing published ⇒ skipped, not success", () =
   });
 });
 
+// S-17 (quick-fix wave 2) — without `commit`, the site's own tool defaults to releasing the shared
+// content-branch HEAD, which ships every OTHER tenant's dark (skip-netlify) export sitting on that
+// branch too, not just this run's, and a run that publishes but fails to release leaves its own
+// export dark until someone else's release happens to carry it along. Pinning `commit` to the sha
+// THIS run actually published closes both holes.
+describe("release_executor — S-17: names the commit it releases", () => {
+  it("passes commit: receipts.commitSha on the release_to_production call", async () => {
+    const { callTool, argsOf } = stubCallTool({
+      release_to_production: () => ({ released: true, deploy: { deployId: "deploy_s17" }, targetCommit: "sha_s17", deployStatus: "ready", productionConfirmed: true })
+    });
+    const run = committedRun({
+      stageOutputs: {
+        publish_executor: {
+          artifact: "publish_execution.v1",
+          status: "published_pending_release",
+          publishCommitted: true,
+          receipts: { requestId: "req_release_20260825_01", commitSha: "sha_s17" }
+        }
+      }
+    });
+
+    const outcome = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+
+    expect(outcome.ok).toBe(true);
+    expect((outcome as { kind: string }).kind).toBe("completed");
+    expect(argsOf("release_to_production")).toEqual([expect.objectContaining({ commit: "sha_s17" })]);
+  });
+
+  it("omits commit (degrading to the site's own branch-HEAD default) when the publish receipt names no commit sha", async () => {
+    const { callTool, argsOf } = stubCallTool({
+      release_to_production: () => ({ released: true, deploy: { deployId: "deploy_no_commit" }, deployStatus: "ready", productionConfirmed: true })
+    });
+    // committedRun()'s default receipts carry no commitSha at all.
+    const outcome = await runDeterministicReleaseExecutor({ run: committedRun(), deps: { callTool } });
+
+    expect(outcome.ok).toBe(true);
+    const [args] = argsOf("release_to_production");
+    expect(args).not.toHaveProperty("commit");
+  });
+});
+
 describe("release_executor — idempotent: call twice, one release", () => {
   it("a second dispatch after a terminal executed result returns the SAME output and calls nothing", async () => {
     const { callTool, calls } = stubCallTool({

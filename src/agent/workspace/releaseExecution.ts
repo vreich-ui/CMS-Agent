@@ -287,7 +287,19 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
   // on a dispatch that already has one: a receipt field that appears late (commitSha resolved on a
   // later read) must not silently change the key a build hook was already fired under.
   const idempotencyKey = pending && nonEmptyString(pending.idempotencyKey) ? pending.idempotencyKey : releaseIdempotencyKey(run.runId, receiptCommitSha ?? receiptObjectId ?? (requestId ?? "none"));
-  const releaseArgs: Record<string, unknown> = { idempotency_key: idempotencyKey, timeout_seconds: RELEASE_CALL_TIMEOUT_SECONDS };
+  // S-17 (quick-fix wave 2) — WITHOUT `commit`, the site's own tool defaults to releasing the current
+  // content-branch HEAD: on a branch shared by every tenant that ships every OTHER tenant's dark
+  // (skip-netlify) export sitting on it too, not just this run's. `commit` pins the release to the
+  // exact sha THIS run published — receipts.commitSha off publish_executor's own publish_execution.v1
+  // (findCommitSha in publishExecution.ts), the same identity this module already uses to name
+  // deployedSha and mint the idempotency key above. Omitted only when that identity genuinely could not
+  // be found on the publish receipt (findCommitSha found nothing commit-shaped in the client's publish
+  // result) — that degrades to the old branch-HEAD behavior rather than passing an invented value.
+  const releaseArgs: Record<string, unknown> = {
+    idempotency_key: idempotencyKey,
+    timeout_seconds: RELEASE_CALL_TIMEOUT_SECONDS,
+    ...(receiptCommitSha ? { commit: receiptCommitSha } : {})
+  };
   const pendingEntry = (fields: { releaseId?: string; deployedSha?: string; attempts: number; releaseUnconfirmed?: true }): ReleaseLedgerEntry => ({
     status: "pending",
     requestId: requestId ?? "",
