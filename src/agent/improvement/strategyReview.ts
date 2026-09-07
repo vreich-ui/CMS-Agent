@@ -36,6 +36,24 @@
 // one of them ends as a named `no_proposal` result. A weekly schedule must be un-noisy on every day
 // that has nothing to say.
 //
+// TWO OF THE THREE DIMENSIONS HAVE NO INPUT ON ANY DEPLOYMENT TODAY (S-04b). The sink's `by=object`
+// grain serves object_id, variant_id, day and nine measures — see OBJECT_ROLLUP_MEASURE_COLUMNS,
+// which mirrors kugel-data's `shapeObjectRow`. It carries no topic and no funnel stage, so
+// `topicOf` and `funnelStageOf` return undefined for every real row and the TOPIC WEIGHTS and
+// FUNNEL-STAGE AGGRESSION sections have never once been able to produce a line. Only ANGLE MIX,
+// which reads observations rather than rollups, has ever run. This was invisible because the
+// module's own tests fed it fixture rows carrying `funnel_stage`, `topic` and `n` — keys no sink
+// has ever sent — so the readers were proven against a row shape that does not exist.
+//
+// This commit does NOT invent the missing labels. It makes their absence a STATED fact: every run
+// reports a `grain` entry per dimension saying how many rows carried the label, a dimension with
+// none writes a named `belowBar` note instead of an empty section, and the proposal text names only
+// the dimensions it actually grouped by. Closing the gap for real is a contract change — either the
+// sink starts carrying the labels, or this loop resolves them per object through the tenant MCP —
+// and that decision is not made here. `funnel stage` in particular has no per-object meaning
+// anywhere in the platform today: there it names the event funnel of ONE object
+// (pageview → read_progress → completion → cta_click → buy_click), not a taxonomy over objects.
+//
 // OUT OF SCOPE, DELIBERATELY. `append_scores` (doc 12 §15) is not built here. Variant judging stays
 // with the optimizer's trial path. Neither is referenced by this module.
 import {
@@ -168,15 +186,57 @@ export const topicOf = (row: Record<string, unknown>): string | undefined => row
 export const objectLabelOf = (row: Record<string, unknown>): string | undefined => rowLabel(row, ["slug", "object_id", "id", "title", "path", "url"]);
 
 /**
- * The row's raw attributed-event count. `sessions` is deliberately NOT accepted as a substitute:
- * T21.35's bar is the count the RATES were computed from, and quietly swapping in a different
- * denominator here would make this loop's "n >= 100" a different, weaker claim than the one the
- * proposal text cites. A row that states no count contributes 0 to the bar.
+ * THE COLUMNS THE SINK ACTUALLY SERVES ON `by=object`, as a stated fact.
+ *
+ * kugel-data `netlify/functions/_shared/rollups.ts` shapes every object row through
+ * `shapeObjectRow`, which emits exactly `object_id`, `variant_id`, `day` and the nine
+ * `MEASURE_COLUMNS` below — and nothing else. It is a frozen projection of a migration-004 view, not
+ * a passthrough, so a column absent here is absent from the wire.
+ *
+ * This list exists because this module used to read `n`, `funnel_stage` and `topic` off these rows,
+ * none of which the sink has ever sent (S-04b). Its tests then proved the readers worked against
+ * fixtures carrying those keys, so two of the review's three dimensions were dead on every real run
+ * and said nothing about it. Anything added here must be checked against that file, in that repo.
+ */
+export const OBJECT_ROLLUP_IDENTITY_COLUMNS = ["object_id", "variant_id", "day"] as const;
+export const OBJECT_ROLLUP_MEASURE_COLUMNS = [
+  "pageviews",
+  "exposures",
+  "sessions",
+  "completion_rate",
+  "cta_ctr",
+  "buy_click_rate",
+  "purchase_rate",
+  "revenue_cents",
+  "p75_dwell_ms"
+] as const;
+
+/**
+ * The row's attributed-event count.
+ *
+ * `exposures` is the sink's own count of attributed events, and `pageviews` is the denominator it
+ * documents as standing in behind cta_ctr / buy_click_rate / purchase_rate while an arm has no
+ * exposures ("both a measure and the fallback denominator", rollups.ts MEASURE_COLUMNS). Reading
+ * them in that order keeps this loop's "n >= 100" the count the RATES were computed from, which is
+ * exactly the claim the proposal text makes.
+ *
+ * `n` / `count` / `event_count` stay ahead of both for a sink that states the count outright — no
+ * deployment does today, and they cost nothing to keep.
+ *
+ * `sessions` is still deliberately NOT accepted. It is a different denominator, and quietly swapping
+ * it in would make the bar a weaker claim than the one cited. A row that states no count at all
+ * contributes 0 to the bar.
  */
 export const rowEventCount = (row: Record<string, unknown>): number => {
-  const raw = row.n ?? row.count ?? row.event_count ?? (row as { eventCount?: unknown }).eventCount;
-  const value = typeof raw === "string" && raw.trim() ? Number(raw) : raw;
-  return isFinite_(value) && value > 0 ? value : 0;
+  // Each candidate is taken only if it is a POSITIVE number, then the next is tried. `??` would be
+  // wrong here: kugel-data's toNumber() turns a NULL column into 0, so a row on a page with no
+  // experiment running arrives as `exposures: 0` with a real `pageviews` beside it — exactly the
+  // case pageviews is documented to cover. Falling through on 0 is what makes that row countable.
+  for (const raw of [row.n, row.count, row.event_count, (row as { eventCount?: unknown }).eventCount, row.exposures, row.pageviews]) {
+    const value = typeof raw === "string" && raw.trim() ? Number(raw) : raw;
+    if (isFinite_(value) && value > 0) return value;
+  }
+  return 0;
 };
 
 /**
@@ -279,6 +339,27 @@ export const deltaLineCount = (delta: StrategyDelta): number => delta.topicWeigh
 /** What was SEEN but did not clear the bar. Printed in the proposal so "not proposed" is a stated
  * fact with a number beside it, not a silence a reader has to interpret. */
 export type BelowBarNote = { dimension: StrategyDeltaDimension; subject: string; reason: string };
+
+/**
+ * Whether the evidence for one object-grain dimension was READABLE at all, separate from whether
+ * anything in it cleared the bar.
+ *
+ * These are different facts and the loop used to report neither: `groupObjectRows` returning an
+ * empty map produced an empty section and an empty `belowBar`, which reads identically to "we
+ * looked and nothing held up". On every real deployment it meant "the rows do not carry this label,
+ * so nothing was ever looked at" — see OBJECT_ROLLUP_MEASURE_COLUMNS.
+ */
+export type DimensionGrain = {
+  dimension: StrategyDeltaDimension;
+  /** Rows the sink returned in the current window. */
+  rowsExamined: number;
+  /** Of those, how many carried a label for this dimension. */
+  rowsLabelled: number;
+  /** True when at least one row could be put in a group. */
+  available: boolean;
+  /** Human sentence, always present. */
+  detail: string;
+};
 
 const directionOf = (finding: StrategyFinding): StrategyDeltaDirection => (finding.direction === "above" ? "increase" : "decrease");
 
@@ -397,17 +478,36 @@ export function dimensionLines(
   spec: DimensionSpec,
   current: ObjectWindowSlice,
   prior: ObjectWindowSlice | undefined
-): { lines: StrategyDeltaLine[]; belowBar: BelowBarNote[] } {
+): { lines: StrategyDeltaLine[]; belowBar: BelowBarNote[]; grain: DimensionGrain } {
   const lines: StrategyDeltaLine[] = [];
   const belowBar: BelowBarNote[] = [];
   const currentGroups = groupObjectRows(current.rows, spec.labelOf);
-  if (!currentGroups.size) return { lines, belowBar };
+
+  const rowsLabelled = current.rows.filter((row) => spec.labelOf(row) !== undefined).length;
+  const grain: DimensionGrain = {
+    dimension: spec.dimension,
+    rowsExamined: current.rows.length,
+    rowsLabelled,
+    available: currentGroups.size > 0,
+    detail: currentGroups.size
+      ? `${rowsLabelled} of ${current.rows.length} by=object row(s) in ${strategyWindowKey(current.window)} carried a ${spec.noun}, forming ${currentGroups.size} group(s).`
+      : current.rows.length
+        ? `None of the ${current.rows.length} by=object row(s) in ${strategyWindowKey(current.window)} carried a ${spec.noun}, so no ${spec.dimension} line could be considered. The sink serves ${[...OBJECT_ROLLUP_IDENTITY_COLUMNS, ...OBJECT_ROLLUP_MEASURE_COLUMNS].join(", ")} on this grain and nothing else; this dimension needs a ${spec.noun} the sink does not carry. This is a gap in the evidence, not a finding.`
+        : `The sink returned no by=object rows for ${strategyWindowKey(current.window)}, so no ${spec.dimension} line could be considered.`
+  };
+
+  if (!currentGroups.size) {
+    // Say it, rather than returning an empty section that reads like "nothing held up". A row count
+    // with no groups is the difference between a quiet week and a dimension that cannot run here.
+    if (current.rows.length) belowBar.push({ dimension: spec.dimension, subject: `every ${spec.noun}`, reason: grain.detail });
+    return { lines, belowBar, grain };
+  }
 
   if (!prior) {
     for (const label of currentGroups.keys()) {
       belowBar.push({ dimension: spec.dimension, subject: label, reason: `only one window was readable (${strategyWindowKey(current.window)}); the bar is ${STRATEGY_PROMOTION_MIN_WINDOWS} consecutive windows.` });
     }
-    return { lines, belowBar };
+    return { lines, belowBar, grain };
   }
 
   const priorGroups = groupObjectRows(prior.rows, spec.labelOf);
@@ -460,7 +560,8 @@ export function dimensionLines(
 
   return {
     lines: lines.sort((a, b) => Math.abs(Math.log(b.driver.ratio)) - Math.abs(Math.log(a.driver.ratio))),
-    belowBar
+    belowBar,
+    grain
   };
 }
 
@@ -506,14 +607,24 @@ export function renderStrategyProposal(params: {
   belowBar: BelowBarNote[];
   autopatch: AutopatchState;
   objectRef: StrategyObjectRef;
+  /** Which object-grain dimensions were actually readable this run. */
+  grain?: DimensionGrain[];
 }): string {
-  const { delta, window, priorWindow, belowBar, autopatch, objectRef } = params;
+  const { delta, window, priorWindow, belowBar, autopatch, objectRef, grain = [] } = params;
+  const NOUN: Record<StrategyDeltaDimension, string> = { topic_weight: "topic", angle_mix: "angle", funnel_aggression: "funnel stage" };
+  // Name only what was READ. Claiming "grouped by topic and funnel stage" when the sink carried
+  // neither label is the same class of error as the empty section it used to print.
+  const grouped = grain.filter((entry) => entry.available).map((entry) => NOUN[entry.dimension]);
+  const ungrouped = grain.filter((entry) => !entry.available).map((entry) => NOUN[entry.dimension]);
   const parts: string[] = [
     "Editorial strategy review — proposal (nothing has been changed)",
     "",
     `Object: ${objectRef.objectType}/${objectRef.objectId} on project ${objectRef.projectId}.`,
     `Window ${strategyWindowKey(window)}${priorWindow ? `, compared against ${strategyWindowKey(priorWindow)}` : " (no prior window was readable)"}.`,
-    `Evidence: ${STRATEGY_OBSERVATION_SOURCE} observations (angle mix) and the tracking sink's by=object rollups grouped by topic and funnel stage.`,
+    `Evidence: ${STRATEGY_OBSERVATION_SOURCE} observations (angle mix)${grouped.length ? ` and the tracking sink's by=object rollups grouped by ${grouped.join(" and ")}` : ""}.`,
+    ...(ungrouped.length
+      ? [`Not read this run: ${ungrouped.join(" and ")}. The sink's by=object rows carry no such label, so that dimension was not considered at all — read it as a missing input, not as "nothing found".`]
+      : []),
     autopatch.reason
   ];
   for (const section of SECTIONS) {
@@ -570,6 +681,9 @@ export type StrategyReviewResult = {
   observations: number;
   delta: StrategyDelta;
   belowBar: BelowBarNote[];
+  /** Per object-grain dimension: was the label there to group on at all. Empty until the rollups
+   * were read (an unconfigured sink or a missing strategy object returns before that). */
+  grain: DimensionGrain[];
   proposalText?: string;
   marginalia?: MarginaliaState;
   notification: NotificationState;
@@ -635,6 +749,7 @@ const emptyResult = (window: StrategyWindow, env: NodeJS.ProcessEnv): StrategyRe
   observations: 0,
   delta: emptyDelta(),
   belowBar: [],
+  grain: [],
   notification: { attempted: false, delivered: false, reason: NO_SLACK_PATH_REASON },
   autopatch: autopatchState(env),
   errors: []
@@ -725,6 +840,7 @@ export async function reviewEditorialStrategy(params: StrategyReviewParams, deps
   const funnel = dimensionLines(FUNNEL_SPEC, currentSlice, priorSlice);
   result.delta = { topicWeights: topic.lines, angleMix: angleLines, funnelAggression: funnel.lines };
   result.belowBar.push(...topic.belowBar, ...funnel.belowBar);
+  result.grain = [topic.grain, funnel.grain];
 
   if (!deltaLineCount(result.delta)) {
     if (!sightings.length && !currentSlice.rows.length) {
@@ -740,12 +856,18 @@ export async function reviewEditorialStrategy(params: StrategyReviewParams, deps
       return result;
     }
     result.reason = "below_stability_bar";
-    result.detail = `Nothing held up: ${result.belowBar.length} candidate(s) were seen and none cleared the bar (the same direction across >=${STRATEGY_PROMOTION_MIN_WINDOWS} consecutive windows at n>=${STRATEGY_PROMOTION_MIN_N} each). No proposal was written. See belowBar for each candidate and the number that failed it.`;
+    const unreadable = result.grain.filter((entry) => !entry.available && entry.rowsExamined > 0);
+    result.detail = [
+      `Nothing held up: ${result.belowBar.length} note(s) were recorded and no line cleared the bar (the same direction across >=${STRATEGY_PROMOTION_MIN_WINDOWS} consecutive windows at n>=${STRATEGY_PROMOTION_MIN_N} each). No proposal was written. See belowBar for each one and the number that failed it.`,
+      ...(unreadable.length
+        ? [`${unreadable.length} of the ${result.grain.length} object-grain dimension(s) could not be looked at at all this run — see grain: ${unreadable.map((entry) => entry.dimension).join(", ")}.`]
+        : [])
+    ].join(" ");
     return result;
   }
 
   // ── the proposal ──
-  const proposalText = renderStrategyProposal({ delta: result.delta, window, priorWindow: priorSlice?.window, belowBar: result.belowBar, autopatch: result.autopatch, objectRef });
+  const proposalText = renderStrategyProposal({ delta: result.delta, window, priorWindow: priorSlice?.window, belowBar: result.belowBar, autopatch: result.autopatch, objectRef, grain: result.grain });
   result.proposalText = proposalText;
 
   const call = deps.callProjectTool ?? defaultCallProjectTool(deps.projectRepository);
