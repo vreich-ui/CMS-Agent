@@ -20,7 +20,7 @@ import { analyzeNode, optimizerStatus, promoteProposal, proposeImprovement, runT
 import { autoPromoteProposals } from "../../improvement/autoPromote.js";
 import { curatePlaybook } from "../../improvement/curator.js";
 import { ingestMonetizerAnalytics, MONETIZER_SIGNALS } from "../../improvement/monetizerIngest.js";
-import { filterRecordsByProject } from "../../improvement/projectScope.js";
+import { newestMatchingProject } from "../../improvement/projectScope.js";
 import { ingestTrackingRollups, TRACKING_METRIC_KEYS, TRACKING_OUTCOME_SOURCE, TRACKING_SINK_TOKEN_ENV, TRACKING_SINK_URL_ENV } from "../../improvement/trackingIngest.js";
 import { ENGAGEMENT_MIN_SESSIONS } from "../../improvement/engagement.js";
 import { evaluateFineTuneReadiness } from "../../improvement/fineTune.js";
@@ -157,14 +157,23 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
     // execution repository to do it with. See improvement/projectScope.ts for the match rule and why
     // an unresolvable record is dropped rather than shown.
     //
-    // ORDERING CAVEAT: `limit` is applied by the repository BEFORE this filter, so a project-filtered
-    // call returns AT MOST `limit` rows and possibly fewer — it is "the newest N records, of which
-    // these are yours", not "your newest N". Correct for the Insights cards (a recency window), and
-    // deliberately not fixed by over-fetching: that would make a tenant's page cost scale with the
-    // whole workspace's write volume.
+    // ORDERING, FIXED. `limit` used to be applied by the repository BEFORE the filter, so a
+    // project-filtered call returned "the newest N records, of which these are yours" — routinely a
+    // handful on a busy multi-tenant workspace, and sometimes none while that tenant had hundreds in
+    // the store, which the Insights cards could not tell apart from having no feedback at all.
+    //
+    // The reason given for leaving it was that over-fetching would make a tenant's page cost scale
+    // with the whole workspace's write volume. It does not: listFeedback already loads EVERY envelope
+    // under evaluation/feedback/ and applies `limit` in memory afterwards, so passing the limit down
+    // saved no reads. `limit` is therefore withheld from the repository when a project filter is
+    // supplied, and applied to the MATCHING records instead — see newestMatchingProject, which walks
+    // newest-first and stops as soon as the page is full so the legacy run-lookup cost stays bounded.
     tool({ name: "feedback.list", description: "List feedback records, newest first. Pass projectId (the CMS-Agent project id) to see only that project's records: a record matches when it is stamped with that project, or is unstamped and its runId belongs to a run of that project. Records whose project cannot be established are omitted from a filtered list.", zodSchema: listFeedbackInput, inputSchema: objectSchema({ nodeId: { type: "string" }, runId: { type: "string" }, kind: { type: "string", enum: [...feedbackKinds] }, projectId: { type: "string", description: "CMS-Agent project id (e.g. \"dr-lurie\") to narrow to. NOT the tracking sink's partition id." }, limit: { type: "integer", minimum: 1, maximum: 200 } }), execute: async (input) => {
-      const { projectId, ...filters } = listFeedbackInput.parse(input);
-      return ok({ records: await filterRecordsByProject(await evaluationRepository.listFeedback(filters), projectId, deps.executionRepository) });
+      const { projectId, limit, ...filters } = listFeedbackInput.parse(input);
+      // Unfiltered callers keep the exact query they always sent, limit included. A project-scoped
+      // caller withholds it here so the newest N is computed over THEIR records.
+      const records = await evaluationRepository.listFeedback(projectId ? filters : { ...filters, ...(limit === undefined ? {} : { limit }) });
+      return ok({ records: await newestMatchingProject(records, projectId, limit, deps.executionRepository) });
     } }),
     tool({ name: "feedback.ingest_monetizer", description: "Outer-loop ingestion (DIRECTION Phase 7): pull the Monetizer project's read-only performance / demand_signals telemetry and record each as a feedback OUTCOME (source monetizer:<signal>), so published-content analytics feed optimizer.analyze. Optionally attribute to a nodeId/runId and pass Monetizer query args. Requires the Monetizer connection (MONETIZER_MCP_ENDPOINT / MONETIZER_MCP_TOKEN). Best-effort per signal; nothing external is written.", zodSchema: ingestMonetizerInput, inputSchema: objectSchema({ nodeId: { type: "string" }, runId: { type: "string" }, signals: { type: "array", items: { type: "string", enum: [...MONETIZER_SIGNALS] }, description: "Which signals to pull (default both)." }, args: { type: "object", description: "Query args forwarded to the Monetizer tool." }, note: { type: "string" }, ...metaJson }), execute: async (input) => {
       const data = ingestMonetizerInput.parse(input);

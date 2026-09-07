@@ -61,3 +61,52 @@ export async function filterRecordsByProject<T extends ProjectScopedRecord>(
   }));
   return records.filter((_record, index) => verdicts[index]);
 }
+
+/**
+ * The newest `limit` records BELONGING TO `projectId` — as opposed to "the newest `limit` records,
+ * of which these are yours".
+ *
+ * WHY THIS EXISTS. `feedback.list` passed `limit` down to the repository and filtered afterwards, so
+ * a tenant asking for 50 got the workspace's newest 50 rows narrowed to their own — which on a busy
+ * multi-tenant workspace is routinely a handful, and can be none at all while that tenant has
+ * hundreds of records sitting in the store. The Insights cards then showed an empty panel that was
+ * indistinguishable from having no feedback.
+ *
+ * The reason recorded for not fixing it was that over-fetching would make a tenant's page cost scale
+ * with the whole workspace's write volume. That reason does not survive contact with the store:
+ * `BlobEvaluationRepository.listFeedback` already loads EVERY envelope under `evaluation/feedback/`
+ * and applies `limit` in memory afterwards. There is no cursor and no store-side limit, so passing
+ * one down saved no reads at all — it only truncated the array. The blob cost is identical either
+ * way.
+ *
+ * What over-fetching genuinely does cost is RUN LOOKUPS, for legacy records that carry no `projectId`
+ * stamp and must be matched through their `runId`. So this walks newest-first in batches and stops
+ * as soon as the page is full: a workspace whose records are stamped (everything written since S-07)
+ * costs zero lookups, and an unstamped tail costs only as many distinct runs as it takes to fill
+ * `limit` rows.
+ */
+const MATCH_BATCH = 50;
+
+export async function newestMatchingProject<T extends ProjectScopedRecord>(
+  records: T[],
+  projectId: string | undefined,
+  limit: number | undefined,
+  executionRepository: RunProjectLookup
+): Promise<T[]> {
+  if (!projectId) return typeof limit === "number" ? records.slice(0, limit) : records;
+  const resolveRunProject = runProjectResolver(executionRepository);
+  const matched: T[] = [];
+  for (let start = 0; start < records.length; start += MATCH_BATCH) {
+    if (typeof limit === "number" && matched.length >= limit) break;
+    const batch = records.slice(start, start + MATCH_BATCH);
+    // Within a batch the verdicts are resolved in parallel, as the unbounded filter always did; it
+    // is only ACROSS batches that the walk is sequential, which is what makes the early exit real.
+    const verdicts = await Promise.all(batch.map(async (record) => {
+      if (record.projectId !== undefined) return record.projectId === projectId;
+      if (!record.runId) return false;
+      return (await resolveRunProject(record.runId)) === projectId;
+    }));
+    batch.forEach((record, index) => { if (verdicts[index]) matched.push(record); });
+  }
+  return typeof limit === "number" ? matched.slice(0, limit) : matched;
+}
