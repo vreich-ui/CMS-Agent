@@ -27,6 +27,19 @@
 // reuse the reduction instead of recomputing it.
 export type ContractSource = { tool: string; fetchedAtISO: string; fingerprint: string };
 
+// W3b.1 (run_1788769566432_5qnafb): the cross-run reduced-contract cache (contractPrefetch.ts §2.20)
+// keys on `fingerprint` above alone — a hash of the RAW contract payload, computed BEFORE this file
+// ever runs. That hash says nothing about which version of THIS reducer produced the cached
+// ReducedContract, so a change to reduceContract's OUTPUT SHAPE (annotationEnums, added below) is
+// invisible to a client whose contract content has not itself changed: the persisted cache keeps
+// serving the pre-change reduction forever, byte-for-byte. That is exactly what the live run this
+// fixes hit — its contractSource.fetchedAtISO (2026-08-31) predates this change by a week, and its
+// raw contract had not moved since. contractPrefetch.ts folds this integer into the fingerprint it
+// hashes on, so bumping it here invalidates every persisted cache entry on the next fetch regardless
+// of raw content. Bump on any future change to this file's output shape that a stale cache must not
+// paper over.
+export const CONTRACT_REDUCER_VERSION = 1;
+
 // C1 (BRIEF §3.7): the three site-level facts a run needs to write on-brand imagery/PDFs without a
 // separate discovery call — the client's house visual standard + assignable templates, its published
 // PDF templates, and the usage contexts its image-model policy actually covers. These are NOT
@@ -102,7 +115,32 @@ export type ReducedContractPdfTemplate = {
   isDefault: boolean;
 };
 
+// W3b.1 (run_1788769566432_5qnafb): the six per-node annotation enums an authoring model actually has
+// to hit when it writes a node — kind/strategy/intent/presentation/placement/emphasis — as read
+// straight off whatever body_schema.properties.nodes.items declares for each, never re-derived or
+// invented. Absent entirely, or missing a key, when body_schema carries no nodes.items schema or that
+// key does not resolve to a string enum there.
+export type ReducedContractAnnotationEnums = {
+  kind?: string[];
+  strategy?: string[];
+  intent?: string[];
+  presentation?: string[];
+  placement?: string[];
+  emphasis?: string[];
+};
+
 export type ReducedContract = {
+  // Placed FIRST, deliberately, both in this type and in the object reduceContract returns (object
+  // key order is JSON serialization order): `bodySchema` below carries the client's FULL JSON Schema
+  // whole rather than pruned (the live dr-lurie contract's is ~18KB+), inside a dependency output
+  // bounded by size and shrunk by halving the largest arrays it finds when it overflows that bound —
+  // an `enum` array nested several levels into body_schema is exactly the kind of array that can catch
+  // (run_1788769566432_5qnafb: the model wrote "reassurance" into private.strategy, a value that
+  // belongs to neither the 12-value strategy enum nor the intent enum it was conflated with). A small,
+  // separately-named, top-level copy of just these six enums is unlikely to ever be the largest array
+  // in the payload, and sits at the front of the serialized JSON a model reads — the first fact about
+  // node shape available, not one it has to read past body_schema's own bulk to find.
+  annotationEnums?: ReducedContractAnnotationEnums;
   clientObjectType: string;
   bodySchema: unknown;
   idConventions: Array<{ id: string; severity?: string; note?: string }>;
@@ -151,6 +189,45 @@ const pick = (source: Record<string, unknown>, keys: string[]): unknown => {
 // alone was ~18KB); the schema itself is structural, not prose, so it is kept whole rather than
 // truncated — article_body needs its actual required/properties/additionalProperties to conform to.
 const extractBodySchema = (raw: Record<string, unknown>): unknown => pick(raw, ["body_schema", "bodySchema", "schema"]);
+
+const ANNOTATION_ENUM_KEYS = ["kind", "strategy", "intent", "presentation", "placement", "emphasis"] as const;
+
+// Walks a JSON-Schema-shaped node looking for the six annotation keys, wherever the client nests them
+// (directly on the node, or under a private/public sub-object — both seen on the live dr-lurie
+// contract) — the schema's own shape is the only authority on where these live, so this walks rather
+// than assumes one path. `seen` guards a schema graph with $ref-style back-references from looping.
+const collectAnnotationEnums = (schema: unknown, into: Record<string, string[]>, seen: Set<unknown>): void => {
+  if (!isObject(schema) || seen.has(schema)) return;
+  seen.add(schema);
+  for (const key of ANNOTATION_ENUM_KEYS) {
+    if (into[key]) continue; // first occurrence wins, same discipline as pick() above.
+    const candidate = schema[key];
+    const values = isObject(candidate) && isArray(candidate.enum) ? candidate.enum.filter((value): value is string => typeof value === "string") : undefined;
+    if (values?.length) into[key] = values;
+  }
+  // properties/items/anyOf/oneOf/allOf — every JSON Schema composition form seen in a real client
+  // contract so far — are just nested objects or arrays of them, so walked generically rather than
+  // enumerated by name: an unfamiliar composition keyword is still walked, never silently skipped.
+  for (const value of Object.values(schema)) {
+    if (isObject(value)) collectAnnotationEnums(value, into, seen);
+    else if (isArray(value)) for (const entry of value) collectAnnotationEnums(entry, into, seen);
+  }
+};
+
+// Scoped to body_schema.properties.nodes.items specifically (not the whole body_schema) — the six keys
+// are PER-NODE annotations, and a same-named field elsewhere in the schema (article-level metadata,
+// say) is not one of them.
+const extractAnnotationEnums = (bodySchema: unknown): ReducedContractAnnotationEnums | undefined => {
+  const nodesSchema = isObject(bodySchema) && isObject(bodySchema.properties) ? bodySchema.properties.nodes : undefined;
+  const itemsSchema = isObject(nodesSchema) ? nodesSchema.items : undefined;
+  // `items` is usually a single schema object; JSON Schema also allows a tuple-form array of schemas,
+  // so both are walked rather than assuming the common case is the only one.
+  const roots = isArray(itemsSchema) ? itemsSchema : [itemsSchema];
+  const collected: Record<string, string[]> = {};
+  const seen = new Set<unknown>();
+  for (const root of roots) collectAnnotationEnums(root, collected, seen);
+  return Object.keys(collected).length ? (collected as ReducedContractAnnotationEnums) : undefined;
+};
 
 const extractConstraints = (raw: Record<string, unknown>): ReducedContract["constraints"] => {
   const list = pick(raw, ["constraints", "structural_constraints", "structuralConstraints"]);
@@ -246,13 +323,17 @@ export function reduceContract(raw: unknown, source: ContractSource, requestedOb
   const record = isObject(raw) ? raw : {};
   const constraints = extractConstraints(record);
   const clientObjectType = typeof pick(record, ["object_type", "objectType"]) === "string" ? (pick(record, ["object_type", "objectType"]) as string) : requestedObjectType;
+  const bodySchema = extractBodySchema(record) ?? null;
+  const annotationEnums = extractAnnotationEnums(bodySchema);
   // Anything the extractors above did not recognize is preserved (bounded) rather than silently
   // dropped — this is what keeps the reducer honest for a client whose shape it does not fully know,
   // matching contract_intelligence's own "say so as an assumption" policy for a silent contract.
   const unmapped = Object.fromEntries(Object.entries(record).filter(([key, value]) => !MAPPED_KEYS.has(key) && value !== undefined).slice(0, 20));
   return {
+    // W3b.1: FIRST key, deliberately — see the field's own doc comment on ReducedContract above.
+    ...(annotationEnums ? { annotationEnums } : {}),
     clientObjectType,
-    bodySchema: extractBodySchema(record) ?? null,
+    bodySchema,
     idConventions: extractIdConventions(constraints),
     mediaConvention: extractMediaConvention(record),
     taxonomy: extractTaxonomy(record, constraints),

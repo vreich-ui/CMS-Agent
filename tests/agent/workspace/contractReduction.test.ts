@@ -165,4 +165,84 @@ describe("reduceContract (F1 deterministic contract reduction)", () => {
       expect(reduced).not.toHaveProperty("imagePolicyContexts");
     });
   });
+
+  // W3b.1 (run_1788769566432_5qnafb): the six per-node annotation enums — kind/strategy/intent/
+  // presentation/placement/emphasis — hoisted out of body_schema.properties.nodes.items to the top of
+  // the reduced contract, so they survive a size-driven dependency truncation that can otherwise reach
+  // an `enum` array buried inside the ~18KB+ body_schema kept whole above, and so a model reads them
+  // before it reads past body_schema's own bulk. Shaped on the live dr-lurie content_item contract:
+  // `kind` directly on the node, `strategy`/`intent` under `private`, `presentation`/`placement`/
+  // `emphasis` under `public` — the exact nesting the live run's `n_p14`/`n_box` issues named.
+  describe("annotationEnums (W3b.1)", () => {
+    const STRATEGY_VALUES = ["hook", "agitation", "context", "explanation", "proof", "example", "comparison", "myth", "step", "recommendation", "resolution", "summary"];
+    const DR_LURIE_SHAPED_CONTRACT = {
+      object_type: "content_item",
+      body_schema: {
+        type: "object",
+        required: ["slug", "title", "nodes"],
+        properties: {
+          slug: { type: "string" },
+          title: { type: "string" },
+          nodes: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["id", "kind"],
+              properties: {
+                id: { type: "string" },
+                kind: { type: "string", enum: ["paragraph", "heading", "action", "quote", "list", "image"] },
+                private: {
+                  type: "object",
+                  properties: {
+                    intent: { type: "string", enum: ["hook", "reassure", "inform", "persuade"] },
+                    strategy: { type: "string", enum: STRATEGY_VALUES }
+                  }
+                },
+                public: {
+                  type: "object",
+                  properties: {
+                    text: { type: "string" },
+                    items: { type: "array", items: { type: "string" } },
+                    presentation: { type: "string", enum: ["default", "callout", "highlight"] },
+                    placement: { type: "string", enum: ["inline", "sidebar", "hero"] },
+                    emphasis: { type: "string", enum: ["none", "subtle", "strong"] }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    it("yields all 12 strategy values under annotationEnums.strategy, reading the private/nested shape the live contract uses", () => {
+      const reduced = reduceContract(DR_LURIE_SHAPED_CONTRACT, source, "content_item");
+      expect(reduced.annotationEnums?.strategy).toEqual(STRATEGY_VALUES);
+      expect(reduced.annotationEnums?.strategy).toHaveLength(12);
+    });
+
+    it("hoists all six annotation keys, not strategy alone, from wherever each nests", () => {
+      const reduced = reduceContract(DR_LURIE_SHAPED_CONTRACT, source, "content_item");
+      expect(reduced.annotationEnums).toEqual({
+        kind: ["paragraph", "heading", "action", "quote", "list", "image"],
+        strategy: STRATEGY_VALUES,
+        intent: ["hook", "reassure", "inform", "persuade"],
+        presentation: ["default", "callout", "highlight"],
+        placement: ["inline", "sidebar", "hero"],
+        emphasis: ["none", "subtle", "strong"]
+      });
+    });
+
+    it("is serialized FIRST — the top of the reduced contract, ahead of body_schema's own bulk", () => {
+      const reduced = reduceContract(DR_LURIE_SHAPED_CONTRACT, source, "content_item") as Record<string, unknown>;
+      expect(Object.keys(reduced)[0]).toBe("annotationEnums");
+      // Not just first in the JS object — first in the JSON text a dependency-bounded prompt reads.
+      expect(JSON.stringify(reduced).indexOf('"annotationEnums"')).toBeLessThan(JSON.stringify(reduced).indexOf('"bodySchema"'));
+    });
+
+    it("is absent (never an empty object) when body_schema carries no nodes.items schema to hoist from", () => {
+      const reduced = reduceContract(REAL_SHAPED_CONTRACT, source, "content_item") as Record<string, unknown>;
+      expect(reduced).not.toHaveProperty("annotationEnums");
+    });
+  });
 });

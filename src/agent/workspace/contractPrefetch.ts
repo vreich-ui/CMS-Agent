@@ -18,7 +18,7 @@ import { stableHash } from "../improvement/improvementTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import { conductorCache, type RunScopedCache } from "./conductor.js";
-import { reduceContract, type ReducedContract } from "./contractReduction.js";
+import { CONTRACT_REDUCER_VERSION, reduceContract, type ReducedContract } from "./contractReduction.js";
 
 // T2: `authFailed` separates "the client rejected THIS driver's credential" from every other reason a
 // prefetch can fail. The distinction is load-bearing: every other failure is a degradation the node
@@ -111,7 +111,10 @@ export async function getReducedContract(params: ContractPrefetchParams, deps: C
     const raw = extractContractPayload(call.result);
     // §2.21: a stable content hash of the RAW payload, computed before any reduction — this is what
     // makes a contract that changed between fetch and publish detectable, and is the cache key below.
-    const fingerprint = stableHash(raw);
+    // W3b.1: salted with contractReduction.ts's own CONTRACT_REDUCER_VERSION, so a reducer change
+    // (e.g. annotationEnums) invalidates every persisted cache entry on the next fetch even when the
+    // client's raw contract content has not itself changed — see that constant's doc comment.
+    const fingerprint = `${stableHash(raw)}:r${CONTRACT_REDUCER_VERSION}`;
     if (deps.workspaceRepository) {
       const cached = await deps.workspaceRepository.getReducedContractCacheEntry(params.projectId, objectType, fingerprint).catch(() => undefined);
       if (cached) return { ok: true, reduced: cached.reduced };

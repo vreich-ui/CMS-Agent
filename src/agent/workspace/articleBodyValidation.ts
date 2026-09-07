@@ -43,7 +43,7 @@ export const ENGINE_VALIDATION_SOURCE = "engine_validation_loop";
 // text ships with the code that actually performs the loop — the instruction and the behaviour cannot
 // drift apart.
 export const ENGINE_VALIDATION_POLICY =
-  "Client-object validation is run BY THE ENGINE after you return: do not call the client's validator yourself and do not fill clientValidation — spending your tool calls on validation is what exhausted this node's budget mid-validation on a previous live run. Emit your best object and let the engine earn the verdict; if the client rejects it you may be dispatched once more with those exact issues in your input as validationFeedback, and should then re-emit the same envelope with only the changes those issues require.";
+  "Client-object validation is run BY THE ENGINE after you return: do not call the client's validator yourself and do not fill clientValidation — spending your tool calls on validation is what exhausted this node's budget mid-validation on a previous live run. Emit your best object and let the engine earn the verdict; if the client rejects it you may be dispatched once more, with each of its problems as a separate string in your input's validationFeedback.issues and the exact paths and node ids they name in validationFeedback.revisionTarget. Your previous envelope is deliberately not resent — build it again from the same inputs and change only what those issues name.";
 
 // Which nodes the loop owns. Keyed on the node's own declared product (client_object.v1) rather than
 // on a seed metadata flag alone, for a blunt operational reason: the live workspace is store-sourced,
@@ -72,11 +72,65 @@ export type ArticleBodyValidationRecord = PublishPayloadValidation & {
     // honest name for "we tried everything we are allowed to try", as distinct from "the client said
     // no and there was nothing mechanical to do about it".
     boundedExhaustion: boolean;
+    // W1.3 (run_1788769566432_5qnafb) — did the model's revision turn change the body AT ALL?
+    //
+    // That run recorded exactly one body: the post-revision one. So when the revision came back with
+    // both flagged defects still present, and a summary confidently claiming it had fixed one of
+    // them, there was no way to tell whether it had edited something else, edited nothing, or edited
+    // and lost it — the single most useful fact about a repair turn was the one fact not kept.
+    // Fingerprinted with the same stableHash that produces bodyFingerprint, on either side of the
+    // revision only, so a mechanical fix before or after it cannot be mistaken for the model's work.
+    //
+    // Read it WITH revisionTurns: {revisionTurns:0, revisionChangedBody:false} is "no revision ran";
+    // {revisionTurns:1, revisionChangedBody:false} is a revision that ran and did nothing, which is
+    // the alarm.
+    revisionChangedBody: boolean;
   };
 };
 
 export type ArticleBodyRevisionRequest = { output: Record<string, unknown>; body: Record<string, unknown>; issues: unknown[]; attempt: number };
 export type ArticleBodyRevisionResult = { ok: true; output: unknown } | { ok: false; code: string; message: string };
+
+// W1.2 (run_1788769566432_5qnafb) — the shape of the correction handed to the ONE revision turn.
+//
+// What it replaced, and why. The live client validator answers with a SINGLE issue object whose
+// `message` field concatenates every problem it found with "; " —
+//   {id:"schema_zod", label:"Per-type schema", status:"missing",
+//    message:"nodes.24.private.strategy: Invalid option: …; nodes.28.public.items.0: Invalid input: …; nodes.28.public.items.1: …"}
+// — and that object was forwarded to the revision dispatch untouched, beside `previousOutput`: the
+// model's whole ~29-30K-character prior envelope, the one part of the revision's `input` that nothing
+// bounds (boundDependencyOutput applies to dependencyOutputs only). So the model was asked to repair
+// three unrelated violations, in two different nodes, from one dense string labelled `status:
+// "missing"` (which describes none of them), while the bulk of its prompt was a copy of the very
+// output that had just been rejected and an instruction to reproduce it. It re-emitted a body with
+// neither defect fixed and a summary claiming it had fixed one of them.
+//
+// The replacement carries the same information in the shape the turn actually has to act on: one
+// plain string per real problem, the exact paths those problems name with the values currently at
+// them, and the client's untransformed answer kept alongside so the flattening can never be a lossy
+// rewrite of what the client said.
+export type ArticleBodyRevisionTarget = {
+  // The body's own ids for the nodes the issues name (`nodes.24…` → `n_p14`), in issue order. A model
+  // that edits by id cannot mis-count an array index.
+  nodeIds: string[];
+  // Every path the client named, in issue order, verbatim as the client wrote it.
+  paths: string[];
+  // path → the value sitting at it right now. Only resolvable, compact values: this field exists to
+  // let the turn see what it is replacing, not to smuggle the envelope back in under another name.
+  currentValues: Record<string, unknown>;
+};
+
+export type ArticleBodyValidationFeedback = {
+  source: "client_object_validate";
+  attempt: number;
+  // One string per real problem — what the model reads and acts on.
+  issues: string[];
+  // The client's answer exactly as it arrived, whatever shape that was. Nothing about the flattening
+  // above is allowed to lose evidence: if the split ever mangles a message, this is what proves it.
+  rawIssues: unknown[];
+  revisionTarget: ArticleBodyRevisionTarget;
+  instruction: string;
+};
 
 export type ArticleBodyLoopDeps = {
   validate: (body: Record<string, unknown>) => Promise<PublishPayloadValidation>;
@@ -136,6 +190,104 @@ const unrecognizedRootKeys = (text: string): string[] => {
   return [...keys];
 };
 
+// W3a.1 (run_1788769566432_5qnafb): the client's own client_object contract declares a closed
+// `private.strategy` enum per node (12 values on dr-lurie's content_item) and a SEPARATE `intent`
+// enum next to it. The model conflated the two and wrote "reassurance" (a value that belongs to
+// neither) into `strategy`. The path and the allowed list are both read OUT OF THE ISSUE TEXT ITSELF
+// — never hardcoded — because the 12 values are the contract's, not this file's, to own; matched
+// against both dot (`nodes.24.private.strategy`) and bracket (`nodes[24].private.strategy`) path
+// styles since the two mechanical fixers already in this file were written against bracket-style
+// fixtures while the live client emits dot-style paths (zod's own path join).
+const STRATEGY_ENUM_ISSUE = /nodes[.[](\d+)\]?\.private\.strategy:\s*Invalid option:\s*expected one of\s*(.+)/i;
+
+// A tiny, named map from a plausible-but-wrong word to the contract value it was probably reaching
+// for. Deliberately NOT an attempt to cover every synonym a model might invent — an unmapped miss is
+// not a failure of this fixer, it is the fixer correctly declining to guess, per the drop path below.
+const STRATEGY_SYNONYMS: Record<string, string> = {
+  reassurance: "resolution",
+  reassure: "resolution",
+  conclusion: "summary",
+  cta: "recommendation",
+  call_to_action: "recommendation"
+};
+
+// W3a.2 (run_1788769566432_5qnafb): the client's `public.items` is contractually `array of string`;
+// node `n_box` (kind `action`) emitted `[label, text]` pairs — each element of `items` an array, not
+// a string — so the client rejects every element individually (`items.0`, `items.1`, one issue each).
+const ITEMS_ARRAY_ISSUE = /nodes[.[](\d+)\]?\.public\.items[.[](\d+)\]?:\s*Invalid input:\s*expected string,\s*received array/i;
+
+const issueStrings = (issues: unknown[]): string[] => issues.map((issue) => (typeof issue === "string" ? issue : JSON.stringify(issue)));
+
+// Only the OPTIONAL, never-rendered `private.strategy` annotation is touched, and only via a mapped
+// synonym or an outright removal — never a guess dressed up as a value the contract did not offer.
+function applyStrategyEnumFixes(body: Record<string, unknown>, issues: unknown[]): { body: Record<string, unknown>; fixes: string[] } {
+  const nodes = body.nodes;
+  if (!Array.isArray(nodes)) return { body, fixes: [] };
+
+  const fixes: string[] = [];
+  let nextNodes: unknown[] | undefined;
+  for (const issueString of issueStrings(issues)) {
+    const match = STRATEGY_ENUM_ISSUE.exec(issueString);
+    if (!match) continue;
+    const index = Number(match[1]);
+    const node = (nextNodes ?? nodes)[index];
+    if (!isObject(node)) continue;
+    const currentPrivate = node.private;
+    if (!isObject(currentPrivate) || typeof currentPrivate.strategy !== "string") continue;
+    const currentValue = currentPrivate.strategy;
+
+    // The allowed list as the client just stated it, this issue, this call — never assumed stale.
+    const allowed = [...match[2].matchAll(/"([^"]*)"/g)].map((allowedMatch) => allowedMatch[1]);
+    if (allowed.includes(currentValue)) continue; // already valid by the client's own words; not ours to touch.
+    const mapped = STRATEGY_SYNONYMS[currentValue.trim().toLowerCase()];
+    const resolved = mapped && (allowed.length === 0 || allowed.includes(mapped)) ? mapped : undefined;
+
+    const nextPrivate = { ...currentPrivate };
+    if (resolved) {
+      nextPrivate.strategy = resolved;
+      fixes.push(`strategy_enum:nodes[${index}]:${currentValue}→${resolved}`);
+    } else {
+      delete nextPrivate.strategy;
+      fixes.push(`strategy_enum_dropped:nodes[${index}]`);
+    }
+    nextNodes = nextNodes ?? [...nodes];
+    nextNodes[index] = { ...node, private: nextPrivate };
+  }
+  return nextNodes ? { body: { ...body, nodes: nextNodes }, fixes } : { body, fixes: [] };
+}
+
+// Only when EVERY element of the offending array is a string does this join it into the single
+// string the contract wants — a `[label, non_string]` pair (or anything else mixed-typed) is left
+// exactly as the model wrote it, for the one remaining revision turn to judge, not for this program to
+// guess at.
+function applyItemsJoinFixes(body: Record<string, unknown>, issues: unknown[]): { body: Record<string, unknown>; fixes: string[] } {
+  const nodes = body.nodes;
+  if (!Array.isArray(nodes)) return { body, fixes: [] };
+
+  const fixes: string[] = [];
+  let nextNodes: unknown[] | undefined;
+  for (const issueString of issueStrings(issues)) {
+    const match = ITEMS_ARRAY_ISSUE.exec(issueString);
+    if (!match) continue;
+    const nodeIndex = Number(match[1]);
+    const itemIndex = Number(match[2]);
+    const node = (nextNodes ?? nodes)[nodeIndex];
+    if (!isObject(node)) continue;
+    const currentPublic = node.public;
+    if (!isObject(currentPublic) || !Array.isArray(currentPublic.items)) continue;
+    const items = currentPublic.items;
+    const element = items[itemIndex];
+    if (!Array.isArray(element) || element.length === 0 || !element.every((part): part is string => typeof part === "string")) continue;
+
+    const nextItems = [...items];
+    nextItems[itemIndex] = element.join(" — ");
+    nextNodes = nextNodes ?? [...nodes];
+    nextNodes[nodeIndex] = { ...node, public: { ...currentPublic, items: nextItems } };
+    fixes.push(`items_join:nodes[${nodeIndex}].items[${itemIndex}]`);
+  }
+  return nextNodes ? { body: { ...body, nodes: nextNodes }, fixes } : { body, fixes: [] };
+}
+
 // Copy-on-write: the body travels BY REFERENCE all the way to publish_payload (W0), so a fix that
 // mutated it in place would silently rewrite an artifact already recorded upstream. A fixed body is a
 // new object; an unfixed body is the same object, identity intact.
@@ -148,15 +300,35 @@ export function applyMechanicalFixes(body: Record<string, unknown>, issues: unkn
     const rest = applyMechanicalFixes(stripped, issues.filter((issue) => !UNRECOGNIZED_ROOT_KEY.test(typeof issue === "string" ? issue : JSON.stringify(issue))));
     return { body: rest.body, fixes: [...rootKeysToStrip.map((key) => `unrecognized_root_key:${key}`), ...rest.fixes] };
   }
-  if (!ID_COMPLAINT.test(text) || !FORM_COMPLAINT.test(text)) return { body, fixes: [] };
 
+  // W3a: each of these two classes is gated on its OWN issue pattern, not on the shared id/form gate
+  // below (a strategy-enum or items-shape complaint mentions neither "id" nor a casing/pattern word),
+  // so both run unconditionally and are no-ops — original `body` reference and all — whenever their
+  // own pattern is absent. `current` threads any change forward into the id-casing pass so a body
+  // carrying more than one failure class gets all of them applied in one call.
+  let current = body;
   const fixes: string[] = [];
+
+  const strategyFixed = applyStrategyEnumFixes(current, issues);
+  if (strategyFixed.fixes.length) {
+    current = strategyFixed.body;
+    fixes.push(...strategyFixed.fixes);
+  }
+
+  const itemsFixed = applyItemsJoinFixes(current, issues);
+  if (itemsFixed.fixes.length) {
+    current = itemsFixed.body;
+    fixes.push(...itemsFixed.fixes);
+  }
+
+  if (!ID_COMPLAINT.test(text) || !FORM_COMPLAINT.test(text)) return { body: current, fixes };
+
   let next: Record<string, unknown> | undefined;
-  for (const [key, value] of Object.entries(body)) {
+  for (const [key, value] of Object.entries(current)) {
     if (!ID_FIELD.test(key) || typeof value !== "string") continue;
     const fixed = mechanicalValue(value);
     if (fixed === value || fixed.length === 0) continue;
-    next = next ?? { ...body };
+    next = next ?? { ...current };
     next[key] = fixed;
     fixes.push(`id_casing:${key}`);
   }
@@ -164,7 +336,7 @@ export function applyMechanicalFixes(body: Record<string, unknown>, issues: unkn
   // The client's body grammar nests its content under `nodes[]` (the same array publishPayload's
   // candidate patch walks), and each node carries its own id — the id a deep search would wrongly
   // hand a validator, and the id a client most often rejects for form.
-  const nodes = (next ?? body).nodes;
+  const nodes = (next ?? current).nodes;
   if (Array.isArray(nodes)) {
     let nextNodes: unknown[] | undefined;
     nodes.forEach((node, index) => {
@@ -183,12 +355,112 @@ export function applyMechanicalFixes(body: Record<string, unknown>, issues: unkn
       nextNodes[index] = fixedNode;
     });
     if (nextNodes) {
-      next = next ?? { ...body };
+      next = next ?? { ...current };
       next.nodes = nextNodes;
     }
   }
-  return { body: next ?? body, fixes };
+  return { body: next ?? current, fixes };
 }
+
+// The joiner the client's own validator uses inside a single `message`. Splitting on it is the whole
+// of the flattening: no re-wording, no re-labelling, no re-ordering — each piece reaches the model as
+// the client wrote it, which is what makes `issues[n]` quotable back at the client.
+const CLIENT_ISSUE_JOINER = "; ";
+
+// A leading `<path>:` as zod (and therefore the client) emits it — `nodes.24.private.strategy: …`.
+// Anchored, and requiring the colon-space, so ordinary prose ("field `excerpt` is required…") and a
+// path-less root complaint ("(root): Unrecognized key…") simply do not match rather than producing a
+// path that points at nothing. Both the dot and bracket styles are accepted, for the same reason the
+// mechanical fixers accept both: fixtures in this repo were written bracket-style, the live client
+// emits dot-style.
+const ISSUE_PATH = /^([A-Za-z_$][\w$]*(?:\.[\w$]+|\[\d+\])*)\s*:\s/;
+
+// A `currentValues` entry is a hint, not a payload. A client is free to name a path that resolves to
+// something large (`nodes`, or a whole node), and re-attaching that would rebuild — under a new key —
+// exactly the bulk this change removes. Over-cap values are OMITTED, never truncated into a
+// half-value the model might copy: the path still travels, so the turn still knows what to fix.
+const REVISION_TARGET_VALUE_MAX_CHARS = 500;
+
+// One plain string per real problem. Accepts whatever the client actually sent: a string issue, an
+// object issue with a `message` (the live shape), or anything else, which is preserved as its own
+// JSON rather than dropped. Duplicates collapse — the same sentence twice is one problem, not two.
+export const flattenValidationIssues = (issues: readonly unknown[]): string[] => {
+  const flattened: string[] = [];
+  for (const issue of issues) {
+    const text =
+      typeof issue === "string" ? issue
+        : isObject(issue) && typeof issue.message === "string" ? issue.message
+          : JSON.stringify(issue) ?? String(issue);
+    for (const part of text.split(CLIENT_ISSUE_JOINER)) {
+      const trimmed = part.trim();
+      if (trimmed && !flattened.includes(trimmed)) flattened.push(trimmed);
+    }
+  }
+  return flattened;
+};
+
+const pathSegments = (path: string): string[] => path.replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean);
+
+const readAtPath = (body: Record<string, unknown>, path: string): unknown => {
+  let cursor: unknown = body;
+  for (const segment of pathSegments(path)) {
+    if (Array.isArray(cursor)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index) || index < 0 || index >= cursor.length) return undefined;
+      cursor = cursor[index];
+    } else if (isObject(cursor)) cursor = cursor[segment];
+    else return undefined;
+  }
+  return cursor;
+};
+
+// `nodes.24.…` → the id the body itself gives node 24. Reading the id off the body rather than out of
+// the issue text is deliberate: the client names positions, the model edits by name, and this is the
+// only place that translation can be made without either of them guessing.
+const nodeIdAtPath = (body: Record<string, unknown>, path: string): string | undefined => {
+  const [first, second] = pathSegments(path);
+  if (first !== "nodes" || second === undefined) return undefined;
+  const nodes = body.nodes;
+  const index = Number(second);
+  if (!Array.isArray(nodes) || !Number.isInteger(index)) return undefined;
+  const node = nodes[index];
+  return isObject(node) && typeof node.id === "string" ? node.id : undefined;
+};
+
+export const buildRevisionTarget = (body: Record<string, unknown>, issues: readonly string[]): ArticleBodyRevisionTarget => {
+  const nodeIds: string[] = [];
+  const paths: string[] = [];
+  const currentValues: Record<string, unknown> = {};
+  for (const issue of issues) {
+    const path = ISSUE_PATH.exec(issue)?.[1];
+    if (!path || paths.includes(path)) continue;
+    paths.push(path);
+    const nodeId = nodeIdAtPath(body, path);
+    if (nodeId && !nodeIds.includes(nodeId)) nodeIds.push(nodeId);
+    const value = readAtPath(body, path);
+    if (value === undefined) continue; // a path with nothing at it (a missing required field) is still worth naming.
+    if ((JSON.stringify(value) ?? "").length <= REVISION_TARGET_VALUE_MAX_CHARS) currentValues[path] = value;
+  }
+  return { nodeIds, paths, currentValues };
+};
+
+// The instruction says what is actually in the input. The previous envelope is NOT attached any more,
+// so an instruction to "emit the SAME output envelope again" would be asking the model to copy
+// something it cannot see — the surest way to get an invented copy back.
+export const REVISION_INSTRUCTION =
+  "The client's own validator REJECTED the body you emitted. Each entry in `issues` is ONE separate problem in the client's own words — fix every one of them, not the first. `revisionTarget` names the node ids and exact paths those problems refer to, with the value currently sitting at each. Emit your full output envelope again, built from the same inputs you were given: change exactly the fields these issues name, keep everything else as you built it, invent no new content, and do not call the validator yourself — the engine validates for you and will report the result. Your previous envelope is deliberately not attached: it is the object the client just rejected, and re-sending it in full is what this turn replaced.";
+
+export const buildValidationFeedback = (request: { issues: readonly unknown[]; body: Record<string, unknown>; attempt: number }): ArticleBodyValidationFeedback => {
+  const issues = flattenValidationIssues(request.issues);
+  return {
+    source: "client_object_validate",
+    attempt: request.attempt,
+    issues,
+    rawIssues: [...request.issues],
+    revisionTarget: buildRevisionTarget(request.body, issues),
+    instruction: REVISION_INSTRUCTION
+  };
+};
 
 const outcomeOf = (validation: PublishPayloadValidation): ArticleBodyLoopOutcome =>
   !validation.attempted ? "unavailable" : validation.valid ? "valid" : validation.deferred ? "deferred" : "invalid";
@@ -208,6 +480,7 @@ export async function runArticleBodyValidationLoop(output: Record<string, unknow
   const mechanicalFixes: string[] = [];
   let revalidations = 0;
   let revisionTurns = 0;
+  let revisionChangedBody = false;
   let validation = await deps.validate(body);
 
   while (!isTerminal(validation) && revalidations < MAX_ENGINE_REVALIDATION_CYCLES) {
@@ -221,6 +494,9 @@ export async function runArticleBodyValidationLoop(output: Record<string, unknow
       continue;
     }
     if (!deps.revise || revisionTurns >= MAX_ENGINE_REVISION_TURNS) break;
+    // Taken BEFORE the dispatch, against the exact body the turn is being asked to repair, so the
+    // comparison below measures the model's edit and nothing else.
+    const fingerprintBeforeRevision = stableHash(body);
     const revision = await deps.revise({ output: currentOutput, body, issues: validation.issues, attempt: revisionTurns + 1 });
     revisionTurns += 1;
     if (!revision.ok) {
@@ -236,6 +512,7 @@ export async function runArticleBodyValidationLoop(output: Record<string, unknow
     }
     currentOutput = revision.output;
     body = revisedBody;
+    if (stableHash(body) !== fingerprintBeforeRevision) revisionChangedBody = true;
     revalidations += 1;
     validation = await deps.validate(body);
   }
@@ -256,7 +533,7 @@ export async function runArticleBodyValidationLoop(output: Record<string, unknow
     ...validation,
     source: ENGINE_VALIDATION_SOURCE,
     bodyFingerprint: stableHash(body),
-    engineLoop: { revalidations, revisionTurns, mechanicalFixes, outcome, boundedExhaustion }
+    engineLoop: { revalidations, revisionTurns, mechanicalFixes, outcome, boundedExhaustion, revisionChangedBody }
   };
   return { output: { ...currentOutput, body, clientValidation: record }, validation: record, warnings, ...(authFailure ? { authFailure } : {}) };
 }
@@ -266,10 +543,38 @@ export async function runArticleBodyValidationLoop(output: Record<string, unknow
 // (article_body_blockers) then refuses. The warning stays for the run log; the blocker is what stops
 // an unjudged body from being published as if it had been judged. Copy-on-write, deduplicated.
 export const VALIDATION_UNAVAILABLE_PREFIX = "article_body_validation_unavailable";
-export function promoteValidationUnavailableToBlocker(output: unknown, warnings: readonly string[]): unknown {
-  const unavailable = warnings.filter((warning) => warning.startsWith(VALIDATION_UNAVAILABLE_PREFIX));
-  if (!unavailable.length || !isObject(output)) return output;
+
+// W2.5 (2026-09-07, run_1788769566432_5qnafb) — CLOSING G3, and the reason this function is no longer
+// named for one of the two cases it handles.
+//
+// "The client REJECTED the body" was, until now, only a warning. `article_body` completed with
+// `blockers: []` on a verdict of `valid:false`, so readiness's `article_body_blockers` check passed
+// on a body the client had explicitly refused, and the earliest node in the run that KNEW the object
+// was invalid was the one node that said nothing about it. That was survivable only because
+// publish_payload raises its own `client_validation_failed` blocker a step later — one gate, on one
+// path, with a model fallback beside it (G2). Under dr-lurie's autonomous publishing policy that is
+// not enough separation between an invalid body and a live site.
+//
+// So both classes of loop warning are promoted now, on the same principle S3 item 9 already
+// established for the unavailable case: a fact a publish gate must not read past belongs in
+// `blockers[]`, not only in the run log. `article_body_validation_loop_exhausted` (the loop spent
+// everything it was allowed to spend and the object is still invalid) and
+// `article_body_validation_invalid` (invalid with nothing left to try) both mean the client said no.
+// Promoting them makes the earliest honest signal an actual signal, and readiness's EXISTING
+// `article_body_blockers` check then refuses it for free — no new gate, no new policy.
+//
+// Deliberately NOT promoted: `article_body_revision_failed:*` / `article_body_revision_unusable:*`.
+// Those describe a repair ATTEMPT that went wrong, not a verdict about the object; whatever the
+// object's real verdict is, it is already carried by one of the three warnings above.
+export const VALIDATION_BLOCKING_WARNING_PREFIXES: readonly string[] = [
+  VALIDATION_UNAVAILABLE_PREFIX,
+  "article_body_validation_loop_exhausted",
+  "article_body_validation_invalid"
+];
+export function promoteValidationWarningsToBlockers(output: unknown, warnings: readonly string[]): unknown {
+  const blocking = warnings.filter((warning) => VALIDATION_BLOCKING_WARNING_PREFIXES.some((prefix) => warning.startsWith(prefix)));
+  if (!blocking.length || !isObject(output)) return output;
   const existing = Array.isArray(output.blockers) ? output.blockers : [];
-  const added = unavailable.filter((warning) => !existing.includes(warning));
+  const added = blocking.filter((warning) => !existing.includes(warning));
   return added.length ? { ...output, blockers: [...existing, ...added] } : output;
 }
