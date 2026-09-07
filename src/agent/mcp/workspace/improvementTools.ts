@@ -110,8 +110,16 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       let subject: { model?: string; executionMode?: string } | undefined;
       if (output === undefined || output === null) {
         if (!run) throw new Error("Provide output inline or a runId whose stage output should be judged.");
-        output = run.stageOutputs[data.nodeId] ?? run.nodes.find((node) => node.nodeId === data.nodeId)?.output;
-        if (output === undefined) throw new Error(`Run ${data.runId} has no recorded output for node ${data.nodeId}.`);
+        // COMPLETED nodes only. A failed node's `output` is its error envelope
+        // (`{error:{code,message,…}}`) — on the conductor path since the
+        // provider-error-details wave, and on the node.execute path since
+        // blockage.v1 — so "output is defined" stopped meaning "the node
+        // produced something" a while ago. Judged as if it were the node's work,
+        // a rubric scores a budget_exceeded envelope and stores a real
+        // EvalResult for it.
+        const judged = run.nodes.find((node) => node.nodeId === data.nodeId);
+        output = judged?.status === "completed" ? (run.stageOutputs[data.nodeId] ?? judged.output) : run.stageOutputs[data.nodeId];
+        if (output === undefined) throw new Error(`Run ${data.runId} has no recorded output for node ${data.nodeId} (the node did not complete).`);
         subject = { executionMode: String(run.executionMode ?? "mock") };
       }
       // Scoring a RECORDED run gets the same reference material the regression gate supplies — the
