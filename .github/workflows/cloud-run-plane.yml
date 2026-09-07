@@ -11,7 +11,7 @@
 # since. That leaves Cloud Run traffic split across revisions as the explanation, and nothing in
 # this repo could observe or correct it without a laptop that happened to have gcloud.
 #
-# `report` is READ-ONLY and safe to run at any time. `route-to-latest` is the only mutating action
+# `report` and `check-job-images` are READ-ONLY and safe to run at any time. `route-to-latest` is the only mutating action
 # and it does not build, deploy or change configuration — it moves 100% of traffic to the newest
 # READY revision, which is what `gcloud run deploy` does by default and what a partially-applied
 # rollout skipped. A real release still goes through scripts/deploy-mcp.sh, never a hand-written
@@ -19,7 +19,11 @@
 #
 # SECRETS (Settings → Secrets and variables → Actions):
 #   GCP_SERVICE_ACCOUNT_KEY  service account with run.viewer for `report`, plus run.admin and
-#                            iam.serviceAccountUser for `route-to-latest`.
+#                            iam.serviceAccountUser for `route-to-latest`. `check-job-images` also
+#                            needs artifactregistry.reader, but ONLY while a plane is still pinned
+#                            by tag: resolving a tag to a digest is a registry lookup, and once the
+#                            deploy path has repinned everything by digest the check is a string
+#                            compare and touches Artifact Registry not at all.
 # VARIABLES:
 #   GCP_PROJECT_ID (default cms-agent-503015), GCP_REGION (default us-central1),
 #   CLOUD_RUN_SERVICE (default cms-agent-mcp).
@@ -33,13 +37,20 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "report = read-only inspection. route-to-latest = send 100% of traffic to the newest ready revision."
+        description: "report = read-only inspection (also checks plane images). check-job-images = executor-plane drift only. route-to-latest = send 100% of traffic to the newest ready revision."
         required: true
         default: report
         type: choice
         options:
           - report
+          - check-job-images
           - route-to-latest
+  # Executor-plane drift is silent by construction — a stale plane exits 0 and looks like a success —
+  # so it is only ever found by looking. Left to workflow_dispatch it would be found by remembering to
+  # look, which on 2026-09-07 meant two incidents and three repins by hand. Daily, unattended, is the
+  # difference between noticing drift between deploys and noticing it after an incident.
+  schedule:
+    - cron: "17 7 * * *"
 
 concurrency:
   group: cloud-run-plane
@@ -51,9 +62,14 @@ permissions:
 
 jobs:
   plane:
-    name: ${{ inputs.action }}
+    name: ${{ inputs.action || 'check-job-images' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A scheduled run has no inputs, so every step keys off this rather than `inputs.action`.
+    # Unattended runs do the drift check and nothing else — `route-to-latest` mutates traffic and
+    # must never fire without a person choosing it, which is why it is not this default.
+    env:
+      ACTION: ${{ inputs.action || 'check-job-images' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -74,6 +90,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
 
       - name: Report revisions and traffic
+        if: env.ACTION != 'check-job-images'
         env:
           PROJECT: ${{ vars.GCP_PROJECT_ID || 'cms-agent-503015' }}
           REGION: ${{ vars.GCP_REGION || 'us-central1' }}
@@ -107,6 +124,32 @@ jobs:
               --format='value(spec.template.spec.containers[0].env[].name)' | tr ';' '\n' | sort
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The check that would have caught both 2026-09-07 incidents before a human did. Read-only:
+      # it describes the service, the revision and each job, and never updates anything. Exits
+      # non-zero when any executor plane is running a different artifact than the service, which
+      # fails this workflow on purpose — a stale plane is not a warning, it is a tenant-visible bug
+      # that presents as success. Repinning is the deploy path's job (scripts/pin-job-images.sh with
+      # no --check), never this workflow's.
+      - name: Check executor-plane image drift
+        if: env.ACTION != 'route-to-latest'
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID || 'cms-agent-503015' }}
+          REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+          SERVICE: ${{ vars.CLOUD_RUN_SERVICE || 'cms-agent-mcp' }}
+        run: |
+          # Capture the status BEFORE any pipe: inside `{ … } | tee`, $? and PIPESTATUS describe the
+          # tee pipeline, not the check, so a drifted fleet would render into the summary and still
+          # pass. Run it first, keep the status, then render.
+          STATUS=0
+          bash scripts/pin-job-images.sh --check > /tmp/planes.txt 2>&1 || STATUS=$?
+          {
+            echo "### Executor planes vs the served artifact"
+            echo '```'
+            cat /tmp/planes.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"
 
       - name: Route all traffic to the latest ready revision
         if: inputs.action == 'route-to-latest'

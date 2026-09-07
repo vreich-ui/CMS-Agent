@@ -25,6 +25,7 @@
     "test:scope": "tsx scripts/siteCredentialScopeLock.ts",
     "scope:update": "tsx scripts/siteCredentialScopeLock.ts --write",
     "verify:deploy": "tsx scripts/verifyDeployment.ts",
+    "check:job-images": "PROJECT=${PROJECT:-cms-agent-503015} REGION=${REGION:-us-central1} bash scripts/pin-job-images.sh --check",
     "learning:purge-align": "tsx scripts/purgeAlignObservations.ts",
     "deploy:mcp": "bash scripts/deploy-mcp.sh",
     "build": "npm run typecheck",
