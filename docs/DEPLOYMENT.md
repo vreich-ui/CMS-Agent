@@ -21,7 +21,7 @@ Status: current as of commit `40424c4` (2026-09-05), derived from `cloudbuild.de
 
 1. `docker build -f Dockerfile.mcp` → tag `mcp-service:<SHORT_SHA>` (immutable; a `:latest` substitution on the trigger defeats this and is warned about).
 2. `docker push`.
-3. `gcloud run deploy cms-agent-mcp --image … --service-account cms-agent-run@… --cpu 1 --memory 1Gi --min-instances 1 --max-instances 4 --allow-unauthenticated` with **merge** flags `--update-env-vars` / `--update-secrets` (never `--set-*`: that replaced the whole environment and deleted the client-connection variables twice).
+3. `deploy()` → [`scripts/deploy-service.sh`](../scripts/deploy-service.sh), the single source for the service's shape: `--service-account cms-agent-run@… --cpu 1 --memory 1Gi --min-instances 1 --max-instances 4 --port 8080 --allow-unauthenticated` with **merge** flags `--update-env-vars` / `--update-secrets` (never `--set-*`: that replaced the whole environment and deleted the client-connection variables twice). `scripts/deploy-mcp.sh` runs the same script — see §3.
 4. Verify: served image == built image, resolving concurrent-build races by git ancestry (older build redeploys; newer build yields); 11 client variables present (`CMS_AGENT_PUBLIC_MCP_ENDPOINT`, `MCP_SCOPED_TOKENS_JSON`, `NETLIFY_API_TOKEN`, `{DR_LURIE,PDF_TOOL,PLATFORM,FERNWELL}_MCP_{ENDPOINT,TOKEN}`); `*_PUBLISH_ENABLED` reported advisory-only; `GET /health` must be 200.
 5. `sync-executor-planes`: runs `scripts/pin-job-images.sh`, which pins every job in [`deploy/executor-jobs.txt`](../deploy/executor-jobs.txt) — today `continuation-tick`, `site-credential-reconciler`, `tracking-ingest` — to the **digest** the just-deployed revision resolves to, then reads the image back through three known field paths (a stale plane fails the build; an unreadable path is reported as *unverified*, not stale; a job that does not exist is skipped, not failed). `scripts/deploy-mcp.sh` runs the same script, so the two release paths cannot disagree about which planes exist. Adding a plane is one line in that file and nothing else — the list used to be a `_EXECUTOR_JOBS` substitution visible only to the trigger, which is how two of the three jobs came to be synced by nothing at all (C-10).
 
@@ -33,17 +33,31 @@ Build-time startup guard: both Dockerfiles import the entrypoint's whole module 
 
 Rollback: none scripted. Cloud Run keeps revisions; `.github/workflows/cloud-run-plane.yml` (`workflow_dispatch`) can `report` traffic/revisions/env names or `route-to-latest`. Rolling back = redeploying an older commit through the trigger or `gcloud run services update-traffic` by hand (I-4).
 
-## 3. The two service deploy artifacts differ (I-1)
+## 3. One service, one shape: `scripts/deploy-service.sh` (C-12, fixed)
 
-| Flag / var | `cloudbuild.deploy.yaml` | `scripts/deploy-mcp.sh` |
+Both release paths run [`scripts/deploy-service.sh`](../scripts/deploy-service.sh), which is the only place the service's sizing, scaling, runtime identity, env-var list and secret list are written down. `cloudbuild.deploy.yaml`'s `deploy()` calls it; `scripts/deploy-mcp.sh` calls it. Adding a variable, a secret or a sizing change is one edit there and nothing else. Same arrangement `deploy/executor-jobs.txt` gives the job list.
+
+**What it was.** The two artifacts deployed one service and disagreed:
+
+| Flag / var | `cloudbuild.deploy.yaml` (the trigger, i.e. production) | `scripts/deploy-mcp.sh` (by hand) |
 |---|---|---|
 | memory / min-instances / SA | 1Gi / 1 / `cms-agent-run@…` | 512Mi / 0 / not passed |
 | `DR_LURIE_*`, `PDF_TOOL_*`, `PLATFORM_*` endpoint+token | set | not set |
 | `MCP_ALLOWED_ORIGINS` | not set | required input |
-| `FERNWELL_*`, `WORKSPACE_STORE=gcs`, `MCP_STATE_STORE=blobs`, `GCS_BUCKET`, `CMS_AGENT_PUBLIC_MCP_ENDPOINT`, `MCP_API_TOKEN`, `OPENAI_API_KEY`, `MCP_SCOPED_TOKENS_JSON`, `NETLIFY_API_TOKEN` | set | set |
-| Post-deploy verification | image ancestry + 11 vars + health | health + `NETLIFY_API_TOKEN` + optional `npm run verify:deploy` |
 
-Because both merge, a variable missing from one artifact survives from the other on an existing service; a **fresh** service created from one alone is incomplete. Variables that neither sets and that code reads on the service: `MCP_ALLOWED_ORIGINS` (trigger path), `SITE_CREDENTIAL_RECONCILER_GCP_PROJECT/REGION` (needed by `site_credentials_apply`), `MCP_OAUTH_APPROVAL_SECRET`, `MCP_EXPOSED_TOOL_PREFIXES`, `MCP_REQUIRE_SESSION`, the `IMPROVEMENT_*` flags, `WORKSPACE_NODES_SOURCE`, `TRACKING_SINK_URL/TOKEN`, `ANTHROPIC_API_KEY`, `*_PUBLISH_ENABLED`. Their live values are UNKNOWN from the repo; `gcloud run services describe cms-agent-mcp --format='value(spec.template.spec.containers[0].env[].name)'` (or the `report` action of `cloud-run-plane.yml`) lists names.
+Sizing and scaling are **not** merge-preserving the way `--update-env-vars` is — they are explicit flags — so a hand deploy after a trigger deploy silently halved the memory and dropped min-instances to 0 (cold starts on the OAuth/consent path). The shared script keeps the trigger's values, because those are what production has been running.
+
+**What the fix also turned up.** Diffing the live service against both artifacts on 2026-09-07 found three things neither file named, all of which had survived only because both paths merge:
+
+- `ZILBERMAN_MCP_ENDPOINT` + `ZILBERMAN_MCP_TOKEN` — a **fourth tenant configured entirely by hand**. A fresh service would not have had it; one `--set-*` would have deleted it.
+- `TRACKING_SINK_URL` on the service (the `tracking-ingest` job sets its own copy; the service needs this one for `feedback_ingest_tracking`).
+- `TRACKING_SINK_TOKEN`, now a Secret Manager binding (it was a plaintext env var, readable in every revision before `00236-pcz`).
+
+All five are named in the shared script.
+
+`MCP_ALLOWED_ORIGINS` stays an optional input: the script omits the key entirely when the variable is empty, so the trigger path keeps leaving whatever the service already has rather than replacing it with nothing. **Its live value was found corrupted** on 2026-09-07 — `https://cms-agent.netlify.app`, `https://cmslhost:5173-agent.netlify.app`, `http://loca` — a spliced list from an earlier hand deploy, in which `http://localhost:5173` was never actually allowed and two nonsense origins were. Corrected in place by hand; the exact-match check means the garbage entries were unreachable rather than permissive.
+
+Variables that the script still does **not** set, and that code reads on the service: `SITE_CREDENTIAL_RECONCILER_GCP_PROJECT/REGION` (needed by `site_credentials_apply`, C-13), `MCP_OAUTH_APPROVAL_SECRET`, `MCP_EXPOSED_TOOL_PREFIXES`, `MCP_REQUIRE_SESSION`, the `IMPROVEMENT_*` flags, `WORKSPACE_NODES_SOURCE`, `ANTHROPIC_API_KEY`, `*_PUBLISH_ENABLED`. The last of those is deliberate — `DR_LURIE_PUBLISH_ENABLED` and `PLATFORM_PUBLISH_ENABLED` are left unnamed precisely so a deploy can never disturb them. For the rest, `gcloud run services describe cms-agent-mcp --format='value(spec.template.spec.containers[0].env[].name)'` (or the `report` action of `cloud-run-plane.yml`) lists what is live.
 
 ## 4. CI (`.github/workflows/ci.yml`)
 
