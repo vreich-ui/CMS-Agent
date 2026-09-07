@@ -81,6 +81,19 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 - **Open (implementation, needs a decision):** the labels themselves. Either the sink starts carrying a topic and a funnel stage on the `by=object` grain, or the review resolves them per `object_id` through the tenant MCP. Note that *funnel stage has no per-object meaning anywhere in the platform today*: there (`packages/core/lib/admin/analytics-object-drilldown-logic.ts`) it names the event funnel of one object — pageview → read_progress → completion → cta_click → buy_click — not a taxonomy over objects. Topic is resolvable: the platform mints `taxonomy_term` ids via the `add_term` op (`packages/core/server/lib/object-verbs.ts`). So the two halves are not the same decision.
 - See also T-14 below: the tests proved these readers against a row shape no deployment produces, which is why the suite stayed green while two thirds of the loop was dead.
 
+### C-17 `feedback.list` applied `limit` before the project filter — **Medium**, confirmed
+- **Fixed.** `limit` is withheld from the repository when a `projectId` is supplied and applied to the MATCHING records instead (`improvement/projectScope.ts` `newestMatchingProject`).
+- Evidence (pre-fix): `mcp/workspace/improvementTools.ts` passed the parsed filters — `limit` included — into `evaluationRepository.listFeedback(filters)` and only then called `filterRecordsByProject`.
+- Scenario: a tenant's Insights card asking for N got **the workspace's newest N narrowed to their own** — routinely a handful on a busy multi-tenant workspace, and sometimes zero while that tenant had hundreds of records in the store. An empty card meaning "you have no feedback" and one meaning "your feedback is older than the workspace's newest N" are different answers, and the panel could not tell them apart.
+- The reason recorded for leaving it — that over-fetching would make a tenant's page cost scale with the whole workspace's write volume — **did not hold**. `BlobEvaluationRepository.listFeedback` already loads every envelope under `evaluation/feedback/` and applies `limit` in memory afterwards; there is no cursor and no store-side limit, so passing one down saved no reads at all. The blob cost is identical either way.
+- What over-fetching *does* cost is run lookups for unstamped legacy records, so `newestMatchingProject` walks newest-first in batches of 50 and stops as soon as the page is full: a workspace whose records are stamped (everything since S-07) costs zero lookups, and an unstamped tail costs only as many distinct runs as it takes to fill `limit`.
+- `learning.list_observations` is unaffected — `listObservations` takes no `limit`.
+- Noticed while landing S-07 (#273); not a defect that pre-dates it, since nothing was project-filtered before.
+
+### T-15 `newestFirst` is not newest-first at sub-millisecond resolution — **Low**, confirmed
+- Evidence: records written in a tight loop share a `createdAt` millisecond; the sort is stable, so tied records come back in insertion order, i.e. **oldest first**. Surfaced while writing C-17's tests — an assertion that a 3-record page returned `["newest", "middle"]` got `["old", "middle"]`.
+- Scenario: cosmetic in the UI (a handful of same-millisecond records display in the wrong order), but a `limit`-capped page can drop the genuinely newest record of a tied group. Not fixed here; the fix is a tiebreak on the monotonically-increasing record id.
+
 ## K-D. Distributed-systems risks
 
 ### K-D1 Double dispatch after claim expiry — **High**, confidence: high (documented incidents in code)
