@@ -38,7 +38,7 @@ die() { say ""; say "✗ $*"; exit 1; }
 : "${REGION:?set REGION (e.g. us-central1)}"
 : "${GCS_BUCKET:?set GCS_BUCKET}"
 : "${MCP_ALLOWED_ORIGINS:?set MCP_ALLOWED_ORIGINS (exact origins, comma-separated; unset denies every browser origin)}"
-: "${CMS_AGENT_PUBLIC_MCP_ENDPOINT:?set CMS_AGENT_PUBLIC_MCP_ENDPOINT to this service's credential-free https /mcp URL}"
+: "${CMS_AGENT_PUBLIC_MCP_ENDPOINT:?set CMS_AGENT_PUBLIC_MCP_ENDPOINT to the credential-free https /mcp URL for this service}"
 
 SERVICE="${SERVICE:-cms-agent-mcp}"
 REPO="${REPO:-cms-agent}"
