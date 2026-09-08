@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { driftOf, loadFixtures } from "../../scripts/contractCheck.js";
 import { TRACKING_METRIC_KEYS } from "../../src/agent/improvement/trackingIngest.js";
+import { STRATEGY_METRIC_KEYS } from "../../src/agent/improvement/strategyLearning.js";
 import { OBJECT_ROLLUP_MEASURE_COLUMNS } from "../../src/agent/improvement/strategyReview.js";
 
 // The fixtures are only worth having if the CONSUMERS are held to them. `npm run contract:check`
@@ -40,13 +41,34 @@ describe("kugel-data by=producer", () => {
 });
 
 describe("kugel-data by=strategy", () => {
-  it("is still unimplemented at the producer, which is why strategyLearning has never seen a row", () => {
+  it("serves every metric strategyLearning aggregates", () => {
+    for (const key of STRATEGY_METRIC_KEYS) expect(strategyFixture.measures).toContain(key);
+  });
+
+  it("pins `n`, which is the weight and the one column whose absence is silent", () => {
+    // rowCount treats a row with no `n` as weight 1 rather than dropping it, so a
+    // producer that stopped sending it would not fail anything — it would let a
+    // four-session day outvote a four-thousand-session one, quietly.
+    expect(strategyFixture.columns).toContain("n");
+    expect(strategyFixture.consumerReads).toContain("n");
+    expect(strategyFixture.sample.n).toBe(strategyFixture.sample.sessions);
+  });
+
+  it("still pins the two label columns that have no fallback in the reader", () => {
+    expect(strategyFixture.consumerReads).toContain("strategy");
+    expect(strategyFixture.consumerReads).toContain("intent");
+  });
+
+  it("records that the producer now implements the grain", () => {
     // strategyLearning.ts reads row.strategy / row.intent with no fallback. There is no view behind
     // them: the sink answers 503 "grain not implemented" deliberately (S-04). When that changes,
     // contract:check fails on this fixture FIRST, which is the moment to agree the column names
     // rather than to discover them from an empty result.
-    expect(strategyFixture.producerState).toBe("unimplemented");
-    expect(strategyFixture.consumerReads).toEqual(["strategy", "intent"]);
+    // It answered 503 by design from the day this consumer was written until
+    // kugel-data migration 012 built v_strategy_window. `contract:check` fails
+    // against `main` until that migration merges — which is the intended order,
+    // not a broken pin.
+    expect(strategyFixture.producerState).toBe("implemented");
   });
 });
 

@@ -7,7 +7,11 @@ import { repositoryManager, resetRepositoryManager } from "../../../src/agent/ru
 // T21.35: the daily strategy-learning pass, the sibling of job:tracking-ingest on the same sink. These
 // tests drive the job function and its CLI directly against an injected fetch — never a live sink —
 // and pin the three no-op paths that must never become failures: an unconfigured sink, no partition,
-// and a `by=strategy` grain that has not been migrated on this deployment yet. Only env NAMES appear.
+// and a `by=strategy` grain the sink does not serve yet. Only env NAMES appear.
+//
+// Since kugel-data migration 012 the grain exists, which makes a FOURTH state
+// worth telling apart: rows served with every label NULL (KI-08). That is exit 0
+// and not a failure, but it is not a quiet week either.
 
 const CONFIGURED_ENV = {
   [TRACKING_SINK_URL_ENV]: "https://sink.example/track",
@@ -89,13 +93,55 @@ describe("runStrategyLearningJob", () => {
     expect(writer?.items.some((item) => item.provenance.source === "tracking")).toBe(true);
   });
 
+  it("reports completed_no_groups when rows arrive with every label NULL — KI-08's exact shape", async () => {
+    // The grain works, the sink serves a full window, and not one row carries a
+    // label because the platform's export strip ate them. Every row is dropped by
+    // strategyGroupsFromRows. Exit 0, because nothing failed — but a NAMED state,
+    // because "0 observations" here means "go look at the dims push", and a
+    // genuinely quiet week means "there was nothing to learn". Those two were
+    // indistinguishable before this.
+    const unlabelled = {
+      rows: [
+        { strategy: null, intent: null, day: "2026-08-30", n: 412, completion_rate: 0.58, p75_dwell_ms: 42000 },
+        { strategy: null, intent: null, day: "2026-08-30", n: 300, completion_rate: 0.4, p75_dwell_ms: 20000 }
+      ]
+    };
+    const result = await runStrategyLearningJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch(unlabelled) });
+    expect(result.status).toBe("completed_no_groups");
+    expect(exitCodeFor(result)).toBe(0);
+    if (result.status === "completed_no_groups") {
+      expect(result.result.rows).toBe(2);
+      expect(result.result.rowsLabelled).toBe(0);
+      expect(result.result.groups).toBe(0);
+      expect(result.result.errors).toEqual([]);
+    }
+  });
+
+  it("a genuinely empty window stays plain `completed` — no rows is not the same fault", async () => {
+    const result = await runStrategyLearningJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch({ rows: [] }) });
+    expect(result.status).toBe("completed");
+    if (result.status === "completed") {
+      expect(result.result.rows).toBe(0);
+      expect(result.result.rowsLabelled).toBe(0);
+    }
+  });
+
   it("reports skipped_grain_unavailable — exit 0, no error — when the sink's by=strategy grain answers 503", async () => {
     // The playbook store is process-wide, so "unchanged" is asserted against the version this run
     // started from rather than against emptiness.
     const before = await repositoryManager.getImprovementRepository().getPlaybook("draft_writer");
     const result = await runStrategyLearningJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch({ error: "unknown grain" }, 503) });
     expect(result.status).toBe("skipped_grain_unavailable");
-    if (result.status === "skipped_grain_unavailable") expect(result.reason).toContain("migration 008");
+    if (result.status === "skipped_grain_unavailable") {
+      // It used to say "migration 008", which was a real kugel-data migration
+      // about something else that had long since run — so an operator who
+      // checked got "yes" and was led away from the answer. The reason line is
+      // the only thing they read, so it names the migration that actually built
+      // the grain AND the request that settles which side is behind.
+      expect(result.reason).toContain("migration 012");
+      expect(result.reason).not.toContain("migration 008");
+      expect(result.reason).toContain("rollups?by=strategy");
+    }
     expect(exitCodeFor(result)).toBe(0);
     expect(await repositoryManager.getLearningRepository().listObservations()).toEqual([]);
     expect(await repositoryManager.getImprovementRepository().getPlaybook("draft_writer")).toEqual(before);

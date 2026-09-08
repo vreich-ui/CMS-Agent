@@ -3,7 +3,7 @@
 // directly-testable function plus a thin CLI parser, no orchestration logic of its own, the previous
 // whole UTC day as the default window (the sink's rollups are day-grained), and an unconfigured sink
 // as a clean named no-op rather than a crash — so this can be wired into a schedule before the
-// secrets exist, and before kugel-data migration 008 has brought the `by=strategy` grain up.
+// secrets exist, and before kugel-data migration 012 has brought the `by=strategy` grain up.
 //
 // It runs ALONGSIDE job:tracking-ingest, not instead of it: that job files per-producer engagement as
 // feedback outcomes, this one learns what KIND of piece works and writes it into the writer and
@@ -45,7 +45,20 @@ export type StrategyLearningJobResult =
   | { status: "skipped_unconfigured"; reason: string; connection: TrackingSinkConnectionState }
   | { status: "dry_run"; window: StrategyLearningWindow; targetNodes: string[]; connection: TrackingSinkConnectionState }
   | { status: "skipped_grain_unavailable"; reason: string; window: StrategyLearningWindow; connection: TrackingSinkConnectionState }
-  | { status: "completed" | "failed"; window: StrategyLearningWindow; result: StrategyLearningResult; connection: TrackingSinkConnectionState };
+  | {
+      /**
+       * `completed_no_groups` is exit 0 and NOT a failure — but it is not silence
+       * either. It means the sink served rows and not one of them carried a
+       * label, which is the KI-08 shape: the grain works, the labels are NULL,
+       * and nothing downstream can tell that apart from a quiet week unless this
+       * says so. Check the platform-side dims push and the backfill before
+       * concluding there is nothing to learn.
+       */
+      status: "completed" | "completed_no_groups" | "failed";
+      window: StrategyLearningWindow;
+      result: StrategyLearningResult;
+      connection: TrackingSinkConnectionState;
+    };
 
 const PROJECT_ID_ENV = TRACKING_PROJECT_ID_ENV;
 
@@ -95,7 +108,12 @@ export async function runStrategyLearningJob(options: StrategyLearningJobOptions
   if (result.skipped === "grain_unavailable") {
     return {
       status: "skipped_grain_unavailable",
-      reason: "The tracking sink's by=strategy grain answered 503 — it is not deployed on this tenant's sink yet (kugel-data migration 008). No-op, not a failure; nothing was observed and no playbook was touched.",
+      // An operator reads this line and nothing else. It says what to check, not
+      // just what happened — the previous wording named "kugel-data migration
+      // 008", which is a real migration about something else that had long since
+      // run, so checking it returned "yes" and led away from the answer.
+      reason:
+        "The tracking sink's by=strategy grain answered 503 — this tenant's sink does not serve it yet (kugel-data migration 012). No-op, not a failure; nothing was observed and no playbook was touched. Check with: GET ${TRACKING_SINK_URL}/rollups?by=strategy&project_id=<id> — 503 means the sink is behind, 200 means this job should be looked at instead.",
       window,
       connection
     };
@@ -104,7 +122,12 @@ export async function runStrategyLearningJob(options: StrategyLearningJobOptions
   // ingestStrategyRollups is deliberately best-effort and never throws. A "hard failure" at the job
   // level is a configured, migrated sink that produced no observation at all while reporting an
   // error. An empty window (rows but nothing material, or no rows) is a legitimate quiet day.
-  const status = result.observations.length === 0 && result.errors.length > 0 ? "failed" : "completed";
+  const status =
+    result.observations.length === 0 && result.errors.length > 0
+      ? "failed"
+      : result.rows > 0 && result.groups === 0
+        ? "completed_no_groups"
+        : "completed";
   return { status, window, result, connection };
 }
 

@@ -1,17 +1,70 @@
 {
   "producer": "vreich-ui/kugel-data",
   "path": "netlify/functions/_shared/rollups.ts",
-  "sha": "1c39eb18a1bd9f4c84fde52bd13fb5b50329ad08",
-  "capturedAt": "2026-09-08T11:53:51Z",
-  "shape": "GET /api/tracking-sink/rollups?by=strategy — NOT IMPLEMENTED by the producer",
-  "why": "strategyLearning.ts:142-144 reads row.strategy and row.intent with no fallback of any kind. There is no such view: the sink answers 503 \"grain not implemented\" on purpose (S-04), so this reader has never seen a row and its fixtures were never checked against a producer. This pin exists to FAIL when the grain becomes implemented, so the column names are agreed then rather than assumed.",
-  "producerState": "unimplemented",
+  "sha": "7e7157b5f64a09f989f6c415d3b55787c0551ca3",
+  "capturedAt": "2026-09-08T15:19:14Z",
+  "shape": "GET /api/tracking-sink/rollups?by=strategy — one row per (strategy, intent, day)",
+  "producerState": "implemented",
+  "why": "strategyLearning.ts:142-144 reads row.strategy and row.intent with NO fallback of any kind, and weights every mean by row.n. The grain answered 503 from the day the consumer was written until kugel-data migration 012 built v_strategy_window; this fixture is what stops the column names drifting apart again now that both sides exist.",
   "consumerReads": [
     "strategy",
-    "intent"
+    "intent",
+    "n",
+    "day",
+    "pageviews",
+    "exposures",
+    "sessions",
+    "completion_rate",
+    "cta_ctr",
+    "buy_click_rate",
+    "purchase_rate",
+    "revenue_cents",
+    "p75_dwell_ms"
   ],
+  "columns": [
+    "strategy",
+    "intent",
+    "day",
+    "n",
+    "pageviews",
+    "exposures",
+    "sessions",
+    "completion_rate",
+    "cta_ctr",
+    "buy_click_rate",
+    "purchase_rate",
+    "revenue_cents",
+    "p75_dwell_ms"
+  ],
+  "measures": [
+    "pageviews",
+    "exposures",
+    "sessions",
+    "completion_rate",
+    "cta_ctr",
+    "buy_click_rate",
+    "purchase_rate",
+    "revenue_cents",
+    "p75_dwell_ms"
+  ],
+  "note": "`n` is the weight. strategyLearning's rowCount treats a row with no n as weight 1 rather than dropping it, so losing this column would not fail -- it would let a four-session day outvote a four-thousand-session one. Only sessions, completion_rate and p75_dwell_ms are measured on this grain today; the rest are structurally 0 (kugel-data migration 012 header, ATTRIBUTION.md section 5). revenue_cents is not additive across strategy rows.",
+  "sample": {
+    "strategy": "hook_curiosity",
+    "intent": "stop_scroll",
+    "day": "2026-09-01",
+    "n": 2,
+    "pageviews": 0,
+    "exposures": 0,
+    "sessions": 2,
+    "completion_rate": 0,
+    "cta_ctr": 0,
+    "buy_click_rate": 0,
+    "purchase_rate": 0,
+    "revenue_cents": 0,
+    "p75_dwell_ms": 0
+  },
   "excerpt": [
-    "export const UNIMPLEMENTED_ROLLUP_GRAINS: ReadonlySet<string> = new Set([\"strategy\"]);\n",
-    "  if (UNIMPLEMENTED_ROLLUP_GRAINS.has(trimmedBy)) {\n    return { ok: false, status: 503, error: \"grain not implemented\", grain: trimmedBy };\n  }"
+    "export const ROLLUP_VIEWS: Readonly<Record<RollupBy, string>> = Object.freeze({\n  object: \"v_object_window\",\n  producer: \"v_producer_window\",\n  strategy: \"v_strategy_window\",\n});",
+    "/**\n * The strategy grain (migration 012). `n` is a first-class column here and\n * nowhere else: the consumer weights every cross-strategy mean by it, and a row\n * that states no `n` is weighted 1 rather than dropped — so dropping `n` from\n * this shape would not fail, it would silently let a four-session day outvote a\n * four-thousand-session one. The view sets it to `sessions` and never NULL.\n *\n * `strategy` and `intent` stay NULL rather than becoming \"\": a node may carry\n * one label and not the other, and the consumer distinguishes an absent label\n * from an empty one.\n */\nexport function shapeStrategyRow(row: Record<string, unknown>): StrategyRollupRow {\n  return {\n    strategy: row.strategy === null || row.strategy === undefined ? null : String(row.strategy),\n    intent: row.intent === null || row.intent === undefined ? null : String(row.intent),\n    day: toDay(row.day),\n    n: toNumber(row.n),\n    ...shapeMeasures(row),\n  };\n}"
   ]
 }
