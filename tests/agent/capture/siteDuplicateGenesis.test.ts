@@ -153,7 +153,11 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // installs only what it can derive — never an empty inherited value (T21.8).
     expect(envSets.map((action) => (action as { data?: { key?: string } }).data?.key).sort()).toEqual(["CMS_AGENT_MCP_ENDPOINT", "CMS_AGENT_MCP_TOKEN", "NETLIFY_BUILD_HOOK_URL", "TRACKING_PROJECT_ID"]);
     expect(byStep.get("tracking_fleet_env:requires_human")).toBeDefined();
-    expect((byStep.get("tracking_fleet_env:requires_human") as { data?: { missing?: string[] } }).data?.missing).toEqual(["TRACKING_SINK_URL", "TRACKING_SINK_TOKEN", "NETLIFY_AUTH_TOKEN"]);
+    // C-11: the sink pair is INHERITED from the account, so it is never "missing" on this
+    // deployment's account — only the copied key can be. It is also never written as a site-level
+    // copy, which is why it is absent from envSets above.
+    expect((byStep.get("tracking_fleet_env:requires_human") as { data?: { missing?: string[] } }).data?.missing).toEqual(["NETLIFY_AUTH_TOKEN"]);
+    expect((byStep.get("tracking_fleet_env:requires_human") as { data?: { inherited?: string[] } }).data?.inherited).toEqual(["TRACKING_SINK_URL", "TRACKING_SINK_TOKEN"]);
     expect(byStep.has("cms_agent_client_manager_credential:dry_run")).toBe(true);
 
     // The scaffold subprocess really ran through the platform seam — with the seam's flags, and
@@ -227,7 +231,9 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // sink values on this deployment, the sink pair stays a human item and the detail says why.
     expect(byId.get("tracking_sink")!.detail).toContain("Genesis set TRACKING_PROJECT_ID deterministically to zilberman —");
     expect(byId.get("tracking_sink")!.detail).toContain("Do NOT set trk_zilberman");
-    expect(byId.get("tracking_sink")!.envVars).toEqual(["TRACKING_SINK_URL", "TRACKING_SINK_TOKEN"]);
+    // C-11: the account supplies the sink pair, so it is off the human checklist even though this
+    // deployment holds no copy of it.
+    expect(byId.get("tracking_sink")!.envVars).toBeUndefined();
     expect(byId.get("fleet_shared_keys")!.envVars).toEqual(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NETLIFY_AUTH_TOKEN"]);
     // THE CHECKLIST SHRANK: the endpoint item is gone — genesis registered it — and what remains is
     // the token alone, which is irreducible because it is a secret VALUE in a custodian's keeping.
@@ -306,19 +312,20 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
       "CMS_AGENT_MCP_TOKEN",
       "NETLIFY_AUTH_TOKEN",
       "NETLIFY_BUILD_HOOK_URL",
-      "TRACKING_PROJECT_ID",
-      "TRACKING_SINK_TOKEN",
-      "TRACKING_SINK_URL"
+      "TRACKING_PROJECT_ID"
     ]);
+    // C-11: TRACKING_SINK_URL/TOKEN are deliberately NOT here. They are account-level; a site-level
+    // copy would override the account value and drift, which is how drluriescience came to hold a
+    // token the sink had stopped accepting.
     // BUILDS, not just functions: the tenant repo's postbuild scripts/tracking-dims-push.mjs reads
     // TRACKING_SINK_URL/TOKEN/PROJECT_ID at BUILD time — functions-only is why drluriescience's dims
     // counters sat at zero.
-    for (const key of ["TRACKING_PROJECT_ID", "TRACKING_SINK_URL", "TRACKING_SINK_TOKEN", "NETLIFY_AUTH_TOKEN"]) {
+    for (const key of ["TRACKING_PROJECT_ID", "NETLIFY_AUTH_TOKEN"]) {
       expect(envSets.get(key)!.scopes, `${key} must be build-scoped`).toContain("builds");
     }
     // Secrets per-context; a secret written with context "all" would include `dev`, which Netlify
     // forbids for secrets.
-    for (const key of ["TRACKING_SINK_URL", "TRACKING_SINK_TOKEN", "NETLIFY_AUTH_TOKEN"]) {
+    for (const key of ["NETLIFY_AUTH_TOKEN"]) {
       expect(envSets.get(key)!.isSecret).toBe(true);
       expect(envSets.get(key)!.contexts).toEqual(["production", "deploy-preview", "branch-deploy"]);
     }
