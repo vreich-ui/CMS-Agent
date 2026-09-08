@@ -18,8 +18,16 @@
 //
 // THE BAR FOR TEACHING SOMETHING. An observation is cheap; a playbook item changes what every future
 // piece is written to. So promotion needs BOTH:
-//   * n >= STRATEGY_PROMOTION_MIN_N — the sink's own raw attributed-event count for the group, NOT
-//     sessions. A rate computed off 12 events is a rumour.
+//   * n >= STRATEGY_PROMOTION_MIN_N — the sink's own `n` for the group. A rate computed off 12 of
+//     anything is a rumour.
+//
+//     WHAT `n` COUNTS CHANGED UNDER THIS BAR, AND THE BAR HAS NOT BEEN RE-PICKED. This text used to
+//     say "raw attributed-event count, NOT sessions". kugel-data's `by=strategy` grain (migration
+//     012) emits `n = sessions`, deliberately: sessions is the only class-A denominator on that
+//     deployment. So the same threshold now gates on roughly an order of magnitude fewer units, and
+//     100 was calibrated for events. Nothing errors — the loop simply promotes less, or stops. Left
+//     as an OPEN DECISION rather than silently re-picked here, because moving a promotion bar is a
+//     judgement about how much evidence a lesson needs, not a refactor. See KNOWN_ISSUES T-14b.
 //   * the same direction in >= STRATEGY_PROMOTION_MIN_WINDOWS consecutive windows — one good week is
 //     a week, not a lesson.
 // Countering is deliberately CHEAPER than promoting: a single later window that contradicts a
@@ -68,8 +76,10 @@ export type StrategyMetricKey = typeof STRATEGY_METRIC_KEYS[number];
 export const STRATEGY_COMPARABLE_KEYS = ["completion_rate", "cta_ctr", "buy_click_rate", "purchase_rate", "p75_dwell_ms"] as const;
 export type StrategyComparableKey = typeof STRATEGY_COMPARABLE_KEYS[number];
 
-/** Raw attributed-event count a group needs before it can promote or counter anything. The sink's own
- * `n`, NOT `sessions`: n is what the rates were actually computed from. */
+/** The sink's own `n` a group needs before it can promote or counter anything: whatever the grain
+ * says the rates were computed from. On kugel-data's `by=strategy` grain (migration 012) that is
+ * SESSIONS. This number was picked when `n` meant attributed events; it has not been re-picked.
+ * See the header, and KNOWN_ISSUES T-14b. */
 export const STRATEGY_PROMOTION_MIN_N = 100;
 /** Consecutive windows a finding must hold the same direction across before it becomes a lesson. */
 export const STRATEGY_PROMOTION_MIN_WINDOWS = 2;

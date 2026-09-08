@@ -52,6 +52,12 @@ describe("kugel-data by=strategy", () => {
     expect(strategyFixture.columns).toContain("n");
     expect(strategyFixture.consumerReads).toContain("n");
     expect(strategyFixture.sample.n).toBe(strategyFixture.sample.sessions);
+    // The sample is what the producer actually returns for this row, taken from
+    // kugel-data's own live-database test — not a row of zeroes that would pin
+    // nothing and quietly teach a reader that this grain measures nothing.
+    expect(strategyFixture.sample.completion_rate).toBe(0.5);
+    expect(strategyFixture.sample.p75_dwell_ms).toBe(2500);
+    expect(strategyFixture.sample.revenue_cents).toBe(2500);
   });
 
   it("still pins the two label columns that have no fallback in the reader", () => {

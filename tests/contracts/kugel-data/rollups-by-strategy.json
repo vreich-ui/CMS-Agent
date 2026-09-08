@@ -56,12 +56,13 @@
     "pageviews": 0,
     "exposures": 0,
     "sessions": 2,
-    "completion_rate": 0,
+    "completion_rate": 0.5,
     "cta_ctr": 0,
     "buy_click_rate": 0,
     "purchase_rate": 0,
-    "revenue_cents": 0,
-    "p75_dwell_ms": 0
+    "revenue_cents": 2500,
+    "p75_dwell_ms": 2500,
+    "_note": "Not invented: these are the values kugel-data's own live-database test observes for this exact row (tests/rollups.test.mjs, the v_strategy_window block)."
   },
   "excerpt": [
     "export const ROLLUP_VIEWS: Readonly<Record<RollupBy, string>> = Object.freeze({\n  object: \"v_object_window\",\n  producer: \"v_producer_window\",\n  strategy: \"v_strategy_window\",\n});",

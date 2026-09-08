@@ -113,7 +113,7 @@ export async function runStrategyLearningJob(options: StrategyLearningJobOptions
       // 008", which is a real migration about something else that had long since
       // run, so checking it returned "yes" and led away from the answer.
       reason:
-        "The tracking sink's by=strategy grain answered 503 — this tenant's sink does not serve it yet (kugel-data migration 012). No-op, not a failure; nothing was observed and no playbook was touched. Check with: GET ${TRACKING_SINK_URL}/rollups?by=strategy&project_id=<id> — 503 means the sink is behind, 200 means this job should be looked at instead.",
+        "The tracking sink's by=strategy grain answered 503 — this tenant's sink does not serve it yet (kugel-data migration 012). No-op, not a failure; nothing was observed and no playbook was touched. Check with: GET <TRACKING_SINK_URL>/rollups?by=strategy&project_id=<id> — 503 means the sink is behind, 200 means this job should be looked at instead.",
       window,
       connection
     };
