@@ -285,32 +285,69 @@ export const resolveGenesisNetlifyMode = (env: NodeJS.ProcessEnv = process.env):
 //
 // A value this deployment does not hold is NEVER invented and never written empty: it drops out of
 // the provisioning list and its human checklist entry stays, saying which half is missing.
-export const GENESIS_FLEET_ENV_VARS: ReadonlyArray<{ key: string; isSecret: boolean; why: string }> = [
+/**
+ * INHERITED, NOT COPIED (C-11).
+ *
+ * `TRACKING_SINK_URL` and `TRACKING_SINK_TOKEN` are ACCOUNT-level Netlify variables on the `vreich`
+ * team, scoped to builds and functions across all contexts. Every site in the account already reads
+ * them; there is exactly one value, and it is the one the sink itself validates against.
+ *
+ * Genesis used to write a per-site COPY of each anyway. That copy is not a safety net — it is a
+ * second source of truth that silently wins over the first, because a site-level variable overrides
+ * the account-level one. On 2026-09-07 that cost a tenant: `drluriescience` carried a site-level
+ * `TRACKING_SINK_TOKEN` holding a 20-character value the sink had long since stopped accepting,
+ * left behind when the account token was rotated to a different value and the copy was not. The site
+ * kept working only because Netlify snapshots env vars into functions at DEPLOY time and it had not
+ * been redeployed since — so the next rebuild for any reason, publishing an article included, would
+ * have baked in the dead token and stopped that tenant's tracking with nothing reporting it.
+ *
+ * So genesis no longer writes them. It CHECKS THEM BY NAME against the account and records the
+ * result, which is the whole of what a new site needs: the account value is already in scope, and an
+ * absent account value is a human step, not something to paper over with a copy that will drift.
+ *
+ * `NETLIFY_AUTH_TOKEN` is NOT in this class and is still copied per site: it is not an account-level
+ * variable on this team, and nothing has established that it should be. Do not move a key here
+ * without confirming the account-level variable actually exists — inheriting a value that is not
+ * there installs nothing at all.
+ */
+export const GENESIS_FLEET_ENV_VARS: ReadonlyArray<{ key: string; isSecret: boolean; inherited: boolean; why: string }> = [
   // The sink URL is not a bearer on its own, but the platform scaffold already inherits it as a
-  // secret-flagged variable (create-site.mjs's `inheritedEnvKey` block). Genesis keeps that flag so
-  // an update of an already-provisioned site is never an attempt to demote a secret to a plain value.
-  { key: TRACKING_SINK_URL_ENV, isSecret: true, why: "tracking sink endpoint (build + function time)" },
-  { key: TRACKING_SINK_TOKEN_ENV, isSecret: true, why: "tracking sink bearer" },
-  { key: NETLIFY_AUTH_TOKEN_ENV, isSecret: true, why: "fleet-shared Netlify token the tenant's own tooling uses" }
+  // secret-flagged variable (create-site.mjs's `inheritedEnvKey` block). The flag is retained here so
+  // that the account-level variable's own posture is described accurately, even though genesis no
+  // longer writes a site-level copy of it.
+  { key: TRACKING_SINK_URL_ENV, isSecret: true, inherited: true, why: "tracking sink endpoint (build + function time), account-level" },
+  { key: TRACKING_SINK_TOKEN_ENV, isSecret: true, inherited: true, why: "tracking sink bearer, account-level — one value, rotated in one place" },
+  { key: NETLIFY_AUTH_TOKEN_ENV, isSecret: true, inherited: false, why: "fleet-shared Netlify token the tenant's own tooling uses" }
 ];
 
 export type GenesisFleetEnvResolution = {
-  /** Fleet vars this deployment holds — genesis installs these on the new site. */
+  /** Fleet vars genesis COPIES onto the new site, because this deployment holds them. */
   provisioned: Array<{ key: string; value: string; isSecret: boolean }>;
-  /** Fleet vars this deployment does NOT hold — they stay human checklist items. */
+  /** Account-level fleet vars the new site INHERITS — verified by name, never written. */
+  inherited: string[];
+  /** Copied fleet vars this deployment does NOT hold — they stay human checklist items. */
   missing: string[];
 };
 
-/** Split the fleet-shared env vars into what genesis can install and what stays a human step. */
+/**
+ * Split the fleet-shared env vars three ways: what genesis copies, what the site inherits from the
+ * account, and what stays a human step.
+ *
+ * An inherited key is never read from this deployment's environment for its VALUE — whether this
+ * process happens to hold a copy says nothing about what the account holds, and acting on it is how
+ * the two drifted apart in the first place.
+ */
 export const resolveGenesisFleetEnvVars = (env: NodeJS.ProcessEnv): GenesisFleetEnvResolution => {
   const provisioned: GenesisFleetEnvResolution["provisioned"] = [];
+  const inherited: string[] = [];
   const missing: string[] = [];
-  for (const { key, isSecret } of GENESIS_FLEET_ENV_VARS) {
+  for (const { key, isSecret, inherited: isInherited } of GENESIS_FLEET_ENV_VARS) {
+    if (isInherited) { inherited.push(key); continue; }
     const value = env[key]?.trim();
     if (value) provisioned.push({ key, value, isSecret });
     else missing.push(key);
   }
-  return { provisioned, missing };
+  return { provisioned, inherited, missing };
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -483,6 +520,40 @@ export class NetlifyGenesisClient {
   // contexts a secret may legally occupy (production, deploy-preview, branch-deploy) rather than a
   // request that cannot succeed. Passing `context: "all"` explicitly for a secret is a bug, and is
   // refused here rather than at Netlify with an opaque 4xx.
+  /**
+   * Does the ACCOUNT-level env var exist, by name (C-11)?
+   *
+   * Names only. The response body is never read, so the value cannot leak into a ledger, a log or a
+   * project record — existence is the entire question. Deliberately queries the account collection
+   * WITHOUT `?site_id=`, because with a site id Netlify answers with the value that site would see,
+   * which is exactly the site-level copy this check exists to stop relying on.
+   *
+   * A 404 is a clean "no" rather than a failure: the caller turns it into a human checklist entry.
+   * Any other non-2xx is a genuine API problem and refuses, because "we could not tell" must never
+   * be recorded as "the tenant is configured".
+   */
+  async accountEnvVarExists(accountId: string, key: string): Promise<boolean> {
+    if (this.mode === "dry_run") {
+      this.record("netlify_check_env", `DRY-RUN: would check whether account-level env var ${key} exists (name only; no value is read).`, { key });
+      return true;
+    }
+    const url = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env/${encodeURIComponent(key)}`;
+    const response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${this.token}` } });
+    if (response.status === 404) {
+      this.record("netlify_check_env", `Account-level env var ${key} is NOT set on this team.`, { key, present: false });
+      return false;
+    }
+    if (!response.ok) {
+      throw new SiteGenesisRefusal(
+        "netlify_api_failed",
+        `Netlify account env-var lookup failed for ${key}: HTTP ${response.status}`,
+        netlifyCallSummary("GET", url, response.status)
+      );
+    }
+    this.record("netlify_check_env", `Account-level env var ${key} is present; the new site inherits it (name only; no value is read).`, { key, present: true });
+    return true;
+  }
+
   async setEnvVar(
     accountId: string,
     siteId: string,
@@ -945,6 +1016,12 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   // Resolved once, up front: it decides both what gets installed and what the checklist still asks a
   // human for — the two must never disagree.
   const genesisFleetEnv = resolveGenesisFleetEnvVars(env);
+  // Account-level keys CONFIRMED present, filled in by the provisioning block below. Declared here
+  // because the human checklist is assembled after it and must count an inherited key as configured:
+  // the new site has it either way, and telling an operator to set a variable that is already in
+  // scope is how a checklist stops being read. Empty until the check actually runs, so a genesis that
+  // never reached the check errs toward "still a human step" rather than toward silence.
+  const inheritedFleetPresent: string[] = [];
 
   // 1. Scaffold (filesystem, via the platform seam) — when a checkout is mounted.
   let scaffoldExecuted = false;
@@ -1038,21 +1115,48 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     // left the tracking `dims` counters at zero.
     await netlify.setEnvVar(envAccount, siteId, "TRACKING_PROJECT_ID", slug);
 
-    // The fleet-shared tracking/deploy values, installed from THIS deployment's own environment so
-    // that tracking is provisioned BY GENESIS rather than pasted per tenant. Same default scopes,
-    // same `builds` requirement; secrets are written per-context (never "all" — see setEnvVar).
-    // Anything this deployment does not hold is not written at all and stays on the checklist.
+    // The fleet-shared deploy values genesis still COPIES, from THIS deployment's own environment.
+    // Same default scopes, same `builds` requirement; secrets are written per-context (never "all" —
+    // see setEnvVar). Anything this deployment does not hold is not written at all and stays on the
+    // checklist. The tracking pair is NOT here any more — see the inherited block below and C-11.
     for (const fleetVar of genesisFleetEnv.provisioned) {
       await netlify.setEnvVar(envAccount, siteId, fleetVar.key, fleetVar.value, { isSecret: fleetVar.isSecret });
     }
+
+    // The tracking pair is ACCOUNT-level and the new site already reads it. Genesis checks it BY
+    // NAME and writes nothing: a site-level copy overrides the account value, so writing one creates
+    // a second source of truth that wins silently and then drifts — which is precisely what stranded
+    // drluriescience on a dead token (see GENESIS_FLEET_ENV_VARS).
+    const inheritedAbsent: string[] = [];
+    for (const key of genesisFleetEnv.inherited) {
+      if (await netlify.accountEnvVarExists(envAccount, key)) inheritedFleetPresent.push(key);
+      else inheritedAbsent.push(key);
+    }
+    const fleetMissing = [...genesisFleetEnv.missing, ...inheritedAbsent];
     ledger.push({
       step: "tracking_fleet_env",
-      kind: genesisFleetEnv.missing.length === 0 ? (mode === "dry_run" ? "dry_run" : "executed") : "requires_human",
-      detail: genesisFleetEnv.missing.length === 0
-        ? `Installed the fleet-shared tracking/deploy values on the new site from this deployment's own environment (names only): ${genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key).join(", ")}. Scoped for builds as well as functions — the repo's postbuild tracking-dims-push step reads them at BUILD time.`
-        : `${genesisFleetEnv.provisioned.length > 0 ? `Installed ${genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key).join(", ")} from this deployment's own environment. ` : ""}NOT configured on this deployment, so genesis could not install ${genesisFleetEnv.missing.join(", ")} — never an empty value: ${genesisFleetEnv.missing.length === 1 ? "it stays" : "they stay"} on the human checklist until the fleet value is present here (or set by hand on the new site).`,
+      kind: fleetMissing.length === 0 ? (mode === "dry_run" ? "dry_run" : "executed") : "requires_human",
+      detail: [
+        genesisFleetEnv.provisioned.length > 0
+          ? `Installed the fleet-shared deploy values on the new site from this deployment's own environment (names only): ${genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key).join(", ")}. Scoped for builds as well as functions — the repo's postbuild tracking-dims-push step reads them at BUILD time.`
+          : "",
+        inheritedFleetPresent.length > 0
+          ? `Inherited from the account, NOT copied (C-11): ${inheritedFleetPresent.join(", ")}. One value, rotated in one place; a per-site copy would override it and drift, which is how a tenant was left holding a token the sink had stopped accepting.`
+          : "",
+        inheritedAbsent.length > 0
+          ? `NOT set at the account level, so the new site inherits nothing for ${inheritedAbsent.join(", ")} — genesis deliberately does not substitute a per-site copy. Set the ACCOUNT-level variable; every site in the team then has it.`
+          : "",
+        genesisFleetEnv.missing.length > 0
+          ? `NOT configured on this deployment, so genesis could not install ${genesisFleetEnv.missing.join(", ")} — never an empty value: ${genesisFleetEnv.missing.length === 1 ? "it stays" : "they stay"} on the human checklist until the fleet value is present here (or set by hand on the new site).`
+          : ""
+      ].filter(Boolean).join(" "),
       at: now(),
-      data: { provisioned: genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key), missing: genesisFleetEnv.missing, scopes: [...NETLIFY_DEFAULT_ENV_SCOPES] }
+      data: {
+        provisioned: genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key),
+        inherited: inheritedFleetPresent,
+        missing: fleetMissing,
+        scopes: [...NETLIFY_DEFAULT_ENV_SCOPES]
+      }
     });
   }
 
@@ -1213,7 +1317,8 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     scaffoldExecuted,
     netlifyMode: mode,
     registeredMcpEndpoint: mcpEndpoint,
-    provisionedFleetEnvVars: genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key),
+    // A key the new site HAS, whether genesis copied it or the account already supplied it (C-11).
+    provisionedFleetEnvVars: [...genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key), ...inheritedFleetPresent],
     visualIdentity
   });
   return {

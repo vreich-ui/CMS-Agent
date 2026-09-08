@@ -97,10 +97,10 @@ describe("T21.8 — tracking provisioning is part of genesis", () => {
     expect(item(result.humanChecklist, "tracking_sink").detail).toContain("Do NOT set trk_acme");
   });
 
-  it("provisions every tracking var with a scope set containing `builds` — the postbuild dims push reads them at BUILD time", async () => {
+  it("provisions every tracking var it WRITES with a scope set containing `builds` — the postbuild dims push reads them at BUILD time", async () => {
     const result = await genesis(fleetEnv());
     const sets = envSets(result.ledger);
-    for (const key of ["TRACKING_PROJECT_ID", TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV, NETLIFY_AUTH_TOKEN_ENV]) {
+    for (const key of ["TRACKING_PROJECT_ID", NETLIFY_AUTH_TOKEN_ENV]) {
       expect(sets.get(key), `${key} was not provisioned`).toBeDefined();
       expect(sets.get(key)!.scopes, `${key} must be readable at build time`).toContain("builds");
       expect(sets.get(key)!.scopes).toContain("functions");
@@ -108,10 +108,25 @@ describe("T21.8 — tracking provisioning is part of genesis", () => {
     }
   });
 
+  // C-11. The sink pair is an ACCOUNT-level variable every site in the team already reads. A
+  // site-level copy OVERRIDES it, so writing one creates a second source of truth that wins silently
+  // and then drifts — which is exactly how drluriescience ended up holding a 20-character token the
+  // sink had stopped accepting, one rebuild away from losing that tenant's tracking entirely.
+  it("NEVER writes a site-level copy of the sink pair — it inherits and checks by name", async () => {
+    const result = await genesis(fleetEnv());
+    const sets = envSets(result.ledger);
+    for (const key of [TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV]) {
+      expect(sets.has(key), `${key} must be inherited from the account, never copied onto the site`).toBe(false);
+    }
+    const checks = result.ledger.filter((action) => action.step === "netlify_check_env");
+    expect(checks.map((action) => (action.data as { key: string }).key).sort())
+      .toEqual([TRACKING_SINK_TOKEN_ENV, TRACKING_SINK_URL_ENV].sort());
+  });
+
   it("writes secrets per-context and NEVER with context `all` (the dev context forbids secrets)", async () => {
     const result = await genesis(fleetEnv());
     const sets = envSets(result.ledger);
-    for (const key of [TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV, NETLIFY_AUTH_TOKEN_ENV]) {
+    for (const key of [NETLIFY_AUTH_TOKEN_ENV]) {
       expect(sets.get(key)!.isSecret).toBe(true);
       expect(sets.get(key)!.contexts).toEqual([...NETLIFY_SECRET_CONTEXTS]);
       expect(sets.get(key)!.contexts).not.toContain("all");
@@ -147,57 +162,74 @@ describe("T21.8 — tracking provisioning is part of genesis", () => {
     expect(fleetKeys.detail).toContain(`${NETLIFY_AUTH_TOKEN_ENV} is no longer one either`);
     const fleetLedger = result.ledger.find((action) => action.step === "tracking_fleet_env")!;
     expect(fleetLedger.kind).toBe("dry_run");
-    expect(fleetLedger.data).toMatchObject({ provisioned: [TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV, NETLIFY_AUTH_TOKEN_ENV], missing: [] });
+    expect(fleetLedger.data).toMatchObject({
+      provisioned: [NETLIFY_AUTH_TOKEN_ENV],
+      inherited: [TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV],
+      missing: []
+    });
+    expect(fleetLedger.detail).toContain("Inherited from the account, NOT copied");
   });
 
-  it("falls back to the human checklist entry — never an empty value — when this deployment holds no fleet value", async () => {
+  it("falls back to the human checklist entry — never an empty value — when this deployment holds no COPIED fleet value", async () => {
     const result = await genesis(baseEnv());
     const sets = envSets(result.ledger);
-    // Not written at all: an absent fleet value is never invented and never written empty.
+    // Not written at all: an absent fleet value is never invented and never written empty. The sink
+    // pair is absent for a different reason — it is inherited, never copied — so neither appears.
     for (const key of [TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV, NETLIFY_AUTH_TOKEN_ENV]) {
       expect(sets.has(key), `${key} must not be provisioned from an absent fleet value`).toBe(false);
     }
     // …and the deterministic partition id is still installed, because it is derived, not inherited.
     expect(sets.has("TRACKING_PROJECT_ID")).toBe(true);
 
-    const trackingSink = item(result.humanChecklist, "tracking_sink");
-    expect(trackingSink.envVars).toEqual([TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV]);
-    expect(trackingSink.detail).toContain("NOT configured on the CMS-Agent deployment that ran genesis");
-    expect(trackingSink.detail).toContain("includes BUILDS as well as functions");
     const fleetKeys = item(result.humanChecklist, "fleet_shared_keys");
     expect(fleetKeys.envVars).toEqual(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", NETLIFY_AUTH_TOKEN_ENV]);
     expect(fleetKeys.detail).toContain(`${NETLIFY_AUTH_TOKEN_ENV} is NOT configured`);
-    // The gap is audited, not silently skipped.
+    // The gap is audited, not silently skipped — and it is ONLY the copied key, because the account
+    // supplies the sink pair regardless of what this deployment happens to hold.
     const fleetLedger = result.ledger.find((action) => action.step === "tracking_fleet_env")!;
     expect(fleetLedger.kind).toBe("requires_human");
-    expect(fleetLedger.data).toMatchObject({ provisioned: [], missing: [TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV, NETLIFY_AUTH_TOKEN_ENV] });
+    expect(fleetLedger.data).toMatchObject({ provisioned: [], inherited: [TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV], missing: [NETLIFY_AUTH_TOKEN_ENV] });
   });
 
-  it("provisions the half it holds and leaves the other half on the checklist", async () => {
-    const env = { ...baseEnv(), [TRACKING_SINK_URL_ENV]: "https://sink.example/track" } as unknown as NodeJS.ProcessEnv;
-    const result = await genesis(env);
+  // The whole point of C-11: what this deployment holds is irrelevant to the sink pair. Holding a
+  // stale copy must not cause one to be written, and holding nothing must not cause one to be missed.
+  it("ignores this deployment's own copy of the sink pair entirely", async () => {
+    const stale = { ...baseEnv(), [TRACKING_SINK_URL_ENV]: "https://stale.example/track", [TRACKING_SINK_TOKEN_ENV]: "stale-token" } as unknown as NodeJS.ProcessEnv;
+    const result = await genesis(stale);
     const sets = envSets(result.ledger);
-    expect(sets.has(TRACKING_SINK_URL_ENV)).toBe(true);
+    expect(sets.has(TRACKING_SINK_URL_ENV)).toBe(false);
     expect(sets.has(TRACKING_SINK_TOKEN_ENV)).toBe(false);
-    const trackingSink = item(result.humanChecklist, "tracking_sink");
-    expect(trackingSink.envVars).toEqual([TRACKING_SINK_TOKEN_ENV]);
-    expect(trackingSink.detail).toContain(`${TRACKING_SINK_TOKEN_ENV} is NOT configured`);
+    expect(JSON.stringify(result)).not.toContain("stale-token");
+    expect(JSON.stringify(result)).not.toContain("https://stale.example/track");
   });
 });
 
 describe("resolveGenesisFleetEnvVars — what genesis may hand a new tenant", () => {
-  it("treats a blank or whitespace-only fleet value as absent rather than provisioning an empty one", () => {
+  it("treats a blank or whitespace-only COPIED fleet value as absent rather than provisioning an empty one", () => {
     const resolution = resolveGenesisFleetEnvVars({
-      [TRACKING_SINK_URL_ENV]: "   ",
-      [TRACKING_SINK_TOKEN_ENV]: "",
-      [NETLIFY_AUTH_TOKEN_ENV]: " fleet-netlify-token "
+      [NETLIFY_AUTH_TOKEN_ENV]: "   "
     } as unknown as NodeJS.ProcessEnv);
-    expect(resolution.missing).toEqual([TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV]);
-    expect(resolution.provisioned).toEqual([{ key: NETLIFY_AUTH_TOKEN_ENV, value: "fleet-netlify-token", isSecret: true }]);
+    expect(resolution.missing).toEqual([NETLIFY_AUTH_TOKEN_ENV]);
+    expect(resolution.provisioned).toEqual([]);
   });
 
-  it("marks every fleet value it can install as a secret — none of the three is a plain public value", () => {
+  it("puts the sink pair in `inherited` and never reads its value from this environment", () => {
+    const resolution = resolveGenesisFleetEnvVars({
+      [TRACKING_SINK_URL_ENV]: "https://stale.example/track",
+      [TRACKING_SINK_TOKEN_ENV]: "stale-token",
+      [NETLIFY_AUTH_TOKEN_ENV]: " fleet-netlify-token "
+    } as unknown as NodeJS.ProcessEnv);
+    expect(resolution.inherited).toEqual([TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV]);
+    expect(resolution.provisioned).toEqual([{ key: NETLIFY_AUTH_TOKEN_ENV, value: "fleet-netlify-token", isSecret: true }]);
+    // An inherited key is never a "missing" one either: the account supplies it, not this process.
+    expect(resolution.missing).toEqual([]);
+    expect(JSON.stringify(resolution)).not.toContain("stale-token");
+  });
+
+  it("marks every fleet value as a secret, and marks exactly the sink pair as inherited", () => {
     expect(GENESIS_FLEET_ENV_VARS.every((fleetVar) => fleetVar.isSecret)).toBe(true);
     expect(GENESIS_FLEET_ENV_VARS.map((fleetVar) => fleetVar.key)).toEqual([TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV, NETLIFY_AUTH_TOKEN_ENV]);
+    expect(GENESIS_FLEET_ENV_VARS.filter((fleetVar) => fleetVar.inherited).map((fleetVar) => fleetVar.key))
+      .toEqual([TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV]);
   });
 });
