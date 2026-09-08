@@ -1,4 +1,5 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
+import { sortNewestFirst } from "../newestFirst.js";
 import type { ImprovementRepository } from "../interfaces/ImprovementRepository.js";
 import type { EvalDataset, ImprovementProposal, NodePlaybook, ProposalStatus, TrialRecord } from "../../improvement/improvementTypes.js";
 import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
@@ -10,7 +11,7 @@ const trialKey = (trialId: string) => `improvement/trials/${trialId}.json`;
 const datasetKey = (datasetId: string) => `improvement/datasets/${datasetId}.json`;
 const playbookKey = (nodeId: string) => `improvement/playbooks/${nodeId}.json`;
 
-const newestFirst = <T extends { createdAt: string }>(records: T[]) => records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+const newestFirst = <T extends { createdAt: string }>(records: T[]) => sortNewestFirst(records);
 
 // Blob/GCS-backed optimizer state. Proposals/trials/datasets are status-bearing documents (plain
 // JSON, overwritten on status transitions); playbooks are one document per node.

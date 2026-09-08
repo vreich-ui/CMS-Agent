@@ -1,4 +1,5 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
+import { sortNewestFirst } from "../newestFirst.js";
 import type { WorkspaceMutationMeta } from "../../mcp/workspace/store.js";
 import type { EvalResultFilters, EvaluationRepository, FeedbackFilters, RegressionReportFilters } from "../interfaces/EvaluationRepository.js";
 import { makeImprovementId, validateRubric, type EvalResult, type EvalRubric, type EvalRubricVersionSnapshot, type FeedbackRecord, type PairwiseResult, type RegressionReport, type RubricStatus } from "../../improvement/improvementTypes.js";
@@ -6,7 +7,7 @@ import { makeImprovementId, validateRubric, type EvalResult, type EvalRubric, ty
 const now = () => new Date().toISOString();
 const clone = <T>(value: T): T => structuredClone(value);
 const newestFirst = <T extends { createdAt: string }>(records: T[], limit?: number) =>
-  [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit ?? 100).map(clone);
+  sortNewestFirst(records, limit ?? 100).map(clone);
 
 type EvaluationState = { evalVersion: number; rubrics: Map<string, EvalRubric>; versions: EvalRubricVersionSnapshot[]; results: EvalResult[]; pairwise: PairwiseResult[]; feedback: FeedbackRecord[]; regressionReports: RegressionReport[] };
 const createState = (): EvaluationState => ({ evalVersion: 0, rubrics: new Map(), versions: [], results: [], pairwise: [], feedback: [], regressionReports: [] });

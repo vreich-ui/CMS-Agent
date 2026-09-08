@@ -4,7 +4,24 @@
 // the skill/change type conventions. These fill the gap register's §4b "Evaluation" hole.
 import { z } from "zod";
 
-export const makeImprovementId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+// Ids are read as an ordering signal, not only as a name: the repositories tie-break equal
+// `createdAt` stamps on the id (src/agent/repository/newestFirst.ts). `Date.now()` + a random tail
+// could not carry that, because inside one millisecond only the random part varied — five records
+// written in one tick had no defined order, and a `limit: 3` read returned three arbitrary ones of
+// the five. The sequence below resets whenever the clock advances, so within a millisecond ids
+// increase in creation order while the random tail keeps them unique across processes.
+let lastIdMs = 0;
+let idSequence = 0;
+export const makeImprovementId = (prefix: string) => {
+  const ms = Date.now();
+  if (ms === lastIdMs) idSequence += 1;
+  else {
+    lastIdMs = ms;
+    idSequence = 0;
+  }
+  const ordinal = idSequence.toString(36).padStart(4, "0");
+  return `${prefix}_${ms}_${ordinal}_${Math.random().toString(36).slice(2, 8)}`;
+};
 
 // Small stable content hash (FNV-1a over JSON) for provenance and staleness guards — enough to
 // detect drift, deliberately not cryptographic.

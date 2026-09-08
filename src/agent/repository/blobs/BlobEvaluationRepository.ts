@@ -1,4 +1,5 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
+import { sortNewestFirst } from "../newestFirst.js";
 import type { RecordEnvelope } from "../RecordEnvelope.js";
 import type { WorkspaceMutationMeta } from "../../mcp/workspace/store.js";
 import type { EvalResultFilters, EvaluationRepository, FeedbackFilters, RegressionReportFilters } from "../interfaces/EvaluationRepository.js";
@@ -17,7 +18,7 @@ const envelope = <T>(id: string, recordType: string, createdAt: string, data: T)
   ({ id, record_type: recordType, schema_version: `${recordType}.v1`, created_at: createdAt, updated_at: createdAt, data });
 
 const newestFirst = <T extends { createdAt: string }>(records: T[], limit?: number) =>
-  records.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit ?? 100);
+  sortNewestFirst(records, limit ?? 100);
 
 // Blob/GCS-backed evaluation substrate. Rubrics follow the skills current/versions layout;
 // results, pairwise comparisons, and feedback are append-only RecordEnvelope blobs (one immutable
