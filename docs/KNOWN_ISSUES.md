@@ -197,7 +197,7 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 - Scenario: a playbook is curated from an observation that says the publish succeeded because the model believed it did. Fix (implementation): set the flag in canonical code or make the deterministic record the default; until then, documentation labels the source (AGENT_ARCHITECTURE §6).
 
 ### K-A12 `provider: "anthropic"` is fully wired in code and bound to no key on Cloud Run — **Medium**, confirmed (2026-09-08)
-- Evidence: `runnerRegistry.ts:15-18` routes any node whose `modelConfig.provider` is `anthropic` to `AnthropicNodeRunner`, which fails validation with "ANTHROPIC_API_KEY is required for anthropic execution" (`AnthropicNodeRunner.ts:80`) when the variable is unset. The 2026-09-08 recon found `ANTHROPIC_API_KEY` bound by NEITHER the `continuation-tick` job NOR the `cms-agent-mcp` service (`docs/platform/continuation-tick.live-shape.md`). Meanwhile genesis provisions that same key name into the Netlify `fleet_shared_keys` set for tenant sites (`tests/agent/capture/siteGenesisTrackingProvisioning.test.ts:161`), so the fleet already assumes it exists somewhere.
+- Evidence: `runnerRegistry.ts:15-18` routes any node whose `modelConfig.provider` is `anthropic` to `AnthropicNodeRunner`, which fails validation with "ANTHROPIC_API_KEY is required for anthropic execution" (`AnthropicNodeRunner.ts:80`) when the variable is unset. The 2026-09-08 recon found `ANTHROPIC_API_KEY` bound by NEITHER the `continuation-tick` job NOR the `cms-agent-mcp` service (`docs/platform/continuation-tick.live-shape.md`) — while a secret named `anthropic-api-key` DOES exist in Secret Manager, bound to nothing, so this is a wiring gap and not a procurement one: it is one `--update-secrets` from being live. Meanwhile genesis provisions that same key name into the Netlify `fleet_shared_keys` set for tenant sites (`tests/agent/capture/siteGenesisTrackingProvisioning.test.ts:161`), so the fleet already assumes it exists somewhere.
 - Nothing is broken today: no node or rubric outside tests declares `provider: "anthropic"`.
 - Scenario: the first node flipped to that provider fails on the tick plane within two minutes, across four tenant sites, as a per-node *validation* error rather than a deploy error — so it reads as a bad node, not as a missing binding, and the deploy that "caused" it will look clean. Fix: bind the secret on both planes before any node is switched, or make the runner refuse at registration time with a message that names the plane.
 
@@ -247,6 +247,13 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 
 ### K-O2 Build identity is half-wired — **Low**: `SERVICE_GIT_SHA`/`SERVICE_DEPLOYED_AT` read null (`RepositoryManager.ts:76-77`; the comment at `:63-65` says so); only `K_REVISION` identifies the build. Fix: stamp in `cloudbuild.deploy.yaml` `--update-env-vars`.
 
+### K-O3 The repository describes five deployable planes; the project runs three — **High**, confirmed (2026-09-08)
+- Evidence: `gcloud run jobs list` (project `cms-agent-503015`, region `us-central1`) returns `continuation-tick`, `site-credential-reconciler`, `tracking-ingest` and nothing else. `gcloud scheduler jobs list` returns `continuation-tick-schedule` and `tracking-ingest-daily` and nothing else.
+- So: `strategy-learning` and `strategy-review` have never executed, and `site-credential-reconciler` has no schedule. Their deploy and schedule scripts landed in #280 (S-14) and were never run. [DEPLOYMENT.md](DEPLOYMENT.md) presented all three W21 jobs with UTC schedules, which is a specification being read as a fact.
+- Scenario: `tracking-ingest` has been writing feedback outcomes since 2026-09-06 with nothing consuming them — no `tracking:strategy.v1` observations, no playbook promotions, and no weekly thread for the editor who owns `editorial_strategy`. Everything downstream reports "no evidence yet", which is indistinguishable from "the evidence does not support a change".
+- This is C-10's shape one level out: a plane counted as existing because the artifact describing it exists. C-10 closed the gap between the LIST and the SCRIPTS; nothing yet closes the gap between the scripts and the PROJECT. `npm run check:job-images` only inspects jobs that exist, so a job that was never created is invisible to it.
+- Fix: run the two deploy scripts and their schedule scripts (operator action, live planes), then extend `check:job-images` — or a sibling check — to fail when a job with a deploy artifact is absent from the project, which is the direction that would have caught this.
+
 ## I. Infrastructure
 
 | Id | Severity | Finding | Fix |
@@ -260,7 +267,8 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 | I-7 | Medium | Legacy Netlify functions remain deployed and routed — **re-verified 2026-09-06** on the production deploy of `921367e` (8 functions, 13 redirects): `/api/mcp` 502, `/api/agent` 502, `/api/session` 401 (alive), `/.well-known/oauth-authorization-server` 200 (a live OAuth authorization server minting tokens into Netlify Blobs that the Cloud Run verifier never reads). Dead 502 surface plus a decoy auth surface (`AGENT_API_TOKEN`, Netlify OAuth) | remove functions except `session`; keep the modules for tests |
 | I-8 | Low | `MCP_ALLOWED_ORIGINS` only on the script path; a trigger-only fresh deploy denies the SPAs | add to trigger |
 | I-9 | Low | Ingest/GC jobs have no deploy artifact; whether they run is unknown | scripts like the reconciler's |
-| I-10 | Medium | `ANTHROPIC_API_KEY` bound on neither the tick job nor the service, while the provider path is complete (K-A12) | bind on both planes before any node declares `provider: "anthropic"` |
+| I-10 | Medium | `ANTHROPIC_API_KEY` bound on neither the tick job nor the service, while the provider path is complete and the secret already exists (K-A12) | bind on both planes before any node declares `provider: "anthropic"` |
+| I-11 | High | `strategy-learning` and `strategy-review` were never created in the project, and `site-credential-reconciler` has no schedule (K-O3) | run their deploy + schedule scripts; add a check that fails when a scripted job is absent from the project |
 | I-10 | Info | Secrets: no value leakage found in code, logs or records; `.dockerignore` excludes `.env*`; CI uses no secrets | — |
 
 ## T. Tests (from the test-suite audit; 290 files / ~2 760 tests, all passing, ~4 min)
