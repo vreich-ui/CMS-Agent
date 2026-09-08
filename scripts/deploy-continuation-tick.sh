@@ -93,16 +93,21 @@ FERNWELL_MCP_TOKEN=$FERNWELL_MCP_TOKEN_SECRET:latest
 ZILBERMAN_MCP_TOKEN=$ZILBERMAN_MCP_TOKEN_SECRET:latest"
 
 # bash 3.2 on macOS: no mapfile, no associative arrays, no ${var,,}.
-join_pipe() {
-  local out="" line
+join_on() {
+  local delimiter="$1" out="" line
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
-    if [[ -z "$out" ]]; then out="$line"; else out="$out|$line"; fi
+    if [[ -z "$out" ]]; then out="$line"; else out="$out$delimiter$line"; fi
   done
   printf '%s' "$out"
 }
-ENV_VARS="^|^$(printf '%s\n' "$ENV_PAIRS" | join_pipe)"
-SECRET_BINDING="$(printf '%s\n' "$SECRET_PAIRS" | join_pipe)"
+# The env list uses gcloud's ^delim^ escape because a value may one day contain a comma (a URL list,
+# an origins list). A SECRET binding is `NAME=secret:version` and can contain neither a comma nor a
+# pipe, so it uses gcloud's default comma separator, the same as scripts/deploy-service.sh.
+# Prefixing it with ^|^ would make gcloud read the whole list as ONE secret whose name contains
+# pipes: the update is rejected, and it is rejected at the moment an operator chose to apply.
+ENV_VARS="^|^$(printf '%s\n' "$ENV_PAIRS" | join_on '|')"
+SECRET_BINDING="$(printf '%s\n' "$SECRET_PAIRS" | join_on ',')"
 
 ARGS="--import,tsx,$ENTRYPOINT"
 # Cloud Run reports cpu "1" as "1000m"; declare it the way the API answers so the diff is real.

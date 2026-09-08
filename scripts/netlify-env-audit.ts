@@ -65,8 +65,13 @@ export const findShadows = (accountVars: EnvVarSummary[], sites: SiteEnv[]): Sha
     for (const site of sites) {
       const seen = site.vars.find((candidate) => candidate.key === accountVar.key);
       if (!seen) continue;
-      // Inherited: the site sees exactly the account's value records. Shadowed: it sees its own.
-      if (seen.valueIds.every((id) => accountValueIds.has(id))) continue;
+      // Inherited: the site sees exactly the account's value records, AND we could read those ids.
+      // `[].every(...)` is true, so a variable whose values came back empty, absent, or without ids
+      // would otherwise be classified as inherited and never reported — a false "✓ No shadows" on a
+      // fleet full of them, which is the one answer this audit must never give wrongly.
+      const readable = seen.valueIds.filter((id) => id.length > 0);
+      const provablyInherited = readable.length === seen.valueIds.length && readable.length > 0 && readable.every((id) => accountValueIds.has(id));
+      if (provablyInherited) continue;
       shadows.push({ site: site.site, key: accountVar.key, contexts: seen.contexts, isSecret: seen.isSecret, accountIsSecret: accountVar.isSecret });
     }
   }

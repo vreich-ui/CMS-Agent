@@ -61,6 +61,19 @@ describe("findShadows", () => {
   });
 });
 
+describe("findShadows, unreadable value records", () => {
+  it("treats a site variable with no readable value ids as a shadow, not as inherited", () => {
+    // `[].every(...)` is true, so the obvious form of this check classifies an empty or id-less
+    // variable as inherited and never reports it. Of the two possible errors here, a spurious row
+    // costs a minute and a missed row costs a site 401-ing forever from a configuration that looks
+    // correct — so unknown is reported.
+    const noValues = summariseEnvVar({ key: "TRACKING_SINK_TOKEN", is_secret: true, scopes: ["builds"], values: [] });
+    const idLess = summariseEnvVar({ key: "TRACKING_SINK_TOKEN", is_secret: true, scopes: ["builds"], values: [{ context: "production", value: SECRET_LOOKING }] });
+    expect(findShadows(ACCOUNT.map(summariseEnvVar), [{ site: "opaque", vars: [noValues] }])).toHaveLength(1);
+    expect(findShadows(ACCOUNT.map(summariseEnvVar), [{ site: "opaque", vars: [idLess] }])).toHaveLength(1);
+  });
+});
+
 describe("renderReport", () => {
   const report = renderReport("vreich", ACCOUNT.map(summariseEnvVar), SITES);
 

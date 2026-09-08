@@ -70,7 +70,10 @@ export class BlobEvaluationRepository implements EvaluationRepository {
   async listRubricVersions(rubricId: string) {
     const { blobs } = await this.store.list({ prefix: `evaluation/rubric-versions/${rubricId}/` });
     const versions = (await Promise.all(blobs.map((blob) => getBlobJson<EvalRubricVersionSnapshot>(this.store, blob.key)))).filter((version): version is EvalRubricVersionSnapshot => Boolean(version));
-    return versions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    // Ascending by creation, unlike every other list here — and with a tiebreak, because two
+    // versions snapshotted in the same millisecond would otherwise come back in blob-listing order
+    // from this backend and insertion order from the memory one, for the same rubric.
+    return versions.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.versionId.localeCompare(b.versionId));
   }
   async restoreRubricVersion(rubricId: string, versionId: string, meta?: WorkspaceMutationMeta) {
     const version = (await this.listRubricVersions(rubricId)).find((candidate) => candidate.versionId === versionId);

@@ -21,12 +21,16 @@
 // not on the optional `evalId` it may point at, and a TrialRecord on `trialId` and not on the
 // `proposalId` it belongs to. A record matching none of them falls back to no tiebreak, which is
 // exactly the old behaviour rather than a wrong one.
+//
+// `versionId` is deliberately NOT here. Rubric-version snapshots are the one list that sorts
+// ASCENDING and never comes through this helper, so listing their key would make this look more
+// complete than it is; their tiebreak lives beside their own sort, in
+// BlobEvaluationRepository.listRubricVersions.
 const IDENTITY_KEYS = [
   "feedbackId",
   "comparisonId",
   "evalId",
   "reportId",
-  "versionId",
   "trialId",
   "proposalId",
   "datasetId",

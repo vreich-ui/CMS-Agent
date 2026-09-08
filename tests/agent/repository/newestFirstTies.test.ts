@@ -18,11 +18,16 @@ const feedback = (): FeedbackRecord =>
   ({ feedbackId: makeImprovementId("fb"), kind: feedbackKinds[0]!, nodeId: "writer", createdAt: new Date().toISOString() }) as FeedbackRecord;
 
 /**
- * The blob repositories read whatever order the store lists keys in. This stub lists them REVERSED,
- * which is the case the old code could not survive: a stable sort over equal createdAt values just
- * preserved the store's order, so the answer depended on the store rather than on the records.
+ * The blob repositories read whatever order the store lists keys in, and a stable sort over equal
+ * createdAt values just preserves it — so the answer depended on the store rather than on the
+ * records.
+ *
+ * This stub lists keys in an order that is NEITHER insertion order NOR its reverse. Reverse is the
+ * obvious choice and it is useless here: reverse-insertion already IS newest-first, so a comparator
+ * that returned 0 for every pair would land on the right answer by accident and the test would
+ * prove nothing. Interleaving does not.
  */
-const reversingStore = (): BlobStoreClient => {
+const scramblingStore = (): BlobStoreClient => {
   const blobs = new Map<string, unknown>();
   return {
     async setJSON(key: string, value: unknown) { blobs.set(key, value); },
@@ -32,7 +37,9 @@ const reversingStore = (): BlobStoreClient => {
       return options?.type === "json" ? value : JSON.stringify(value);
     },
     async list({ prefix }: { prefix: string }) {
-      return { blobs: [...blobs.keys()].filter((key) => key.startsWith(prefix)).reverse().map((key) => ({ key, etag: key })), directories: [] };
+      const keys = [...blobs.keys()].filter((key) => key.startsWith(prefix));
+      const scrambled = [...keys.filter((_, index) => index % 2 === 0), ...keys.filter((_, index) => index % 2 === 1)];
+      return { blobs: scrambled.map((key) => ({ key, etag: key })), directories: [] };
     },
     async delete(key: string) { blobs.delete(key); },
   } as unknown as BlobStoreClient;
@@ -61,6 +68,13 @@ describe("makeImprovementId", () => {
 
       vi.setSystemTime(new Date("2026-09-08T09:00:00.001Z"));
       expect(makeImprovementId("fb").split("_")[2]).toBe("0000");
+
+      // A wall clock that steps BACKWARDS must not re-issue a prefix already handed out. It stops
+      // advancing instead: the ms stays where it was and the sequence keeps climbing.
+      vi.setSystemTime(new Date(FROZEN));
+      const afterStepBack = makeImprovementId("fb");
+      expect(afterStepBack.split("_")[1]).toBe(String(new Date("2026-09-08T09:00:00.001Z").getTime()));
+      expect(afterStepBack.split("_")[2]).toBe("0001");
     } finally {
       vi.useRealTimers();
     }
@@ -102,11 +116,11 @@ describe("listFeedback with limit, five records in one millisecond", () => {
     }
   });
 
-  it("returns the three newest by insertion — blob repository, even when the store lists keys backwards", async () => {
+  it("returns the three newest by insertion — blob repository, whatever order the store lists keys in", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date(FROZEN));
-      const repository = new BlobEvaluationRepository(reversingStore());
+      const repository = new BlobEvaluationRepository(scramblingStore());
       const written = await writeFive((record) => repository.recordFeedback(record));
       const newest = await repository.listFeedback({ limit: 3 });
       expect(newest.map((record) => record.feedbackId)).toEqual([written[4]!, written[3]!, written[2]!].map((record) => record.feedbackId));

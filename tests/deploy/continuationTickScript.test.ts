@@ -65,10 +65,15 @@ describe("scripts/deploy-continuation-tick.sh", () => {
 
   it("defaults to checking, and reaches the update only under APPLY=1", () => {
     expect(code).toContain('APPLY="${APPLY:-}"');
-    const guard = code.indexOf('if [[ "$APPLY" != "1" ]]');
+    // There are TWO guards — one in the job-does-not-exist branch, one before the update. Asserting
+    // only that "a guard appears before the update" is satisfied by the first one, so the second
+    // could be deleted (letting a bare run update the live plane) with this test still green.
+    const guards = [...code.matchAll(/if \[\[ "\$APPLY" != "1" \]\]/g)].map((match) => match.index!);
+    const create = code.indexOf("gcloud run jobs create");
     const update = code.indexOf("gcloud run jobs update");
-    expect(guard).toBeGreaterThan(-1);
-    expect(update).toBeGreaterThan(guard);
+    expect(guards.length).toBe(2);
+    expect(create).toBeGreaterThan(guards[0]!);
+    expect(update).toBeGreaterThan(guards[1]!);
     // The default path ends in a report, not a write.
     expect(code).toContain("Nothing was written.");
   });
@@ -95,6 +100,15 @@ describe("scripts/deploy-continuation-tick.sh", () => {
     const secretBlock = /SECRET_PAIRS="([\s\S]*?)"\n/.exec(code)?.[1] ?? "";
     expect(secretBlock.split("\n").filter(Boolean).every((line) => line.endsWith(":latest"))).toBe(true);
   });
+
+  it("joins the secret bindings on gcloud's DEFAULT separator, not the env list's ^|^ escape", () => {
+    // --set-secrets/--update-secrets are ArgDicts with a comma separator. Feeding them a
+    // pipe-joined list makes gcloud read it as ONE secret whose name contains pipes, and the update
+    // is rejected -- at the exact moment an operator chose to apply, on the live plane.
+    expect(code).toContain(`SECRET_BINDING="$(printf '%s\\n' "$SECRET_PAIRS" | join_on ',')"`);
+    expect(code).not.toMatch(/SECRET_BINDING="\^\|\^/);
+    expect(code).toContain(`ENV_VARS="^|^$(printf '%s\\n' "$ENV_PAIRS" | join_on '|')"`);
+  });
 });
 
 describe("scripts/deploy-continuation-tick-schedule.sh", () => {
@@ -110,6 +124,17 @@ describe("scripts/deploy-continuation-tick-schedule.sh", () => {
     // an IAM problem for as long as anyone is willing to believe it.
     expect(scheduleCode).toContain('gcloud run jobs describe "$JOB"');
     expect(scheduleCode).toContain("run scripts/deploy-continuation-tick.sh first");
+  });
+
+  it("also defaults to reading — the cadence is the larger of the two decisions", () => {
+    // Its sibling is safe to run bare, so the habit transfers. Without a guard here, someone
+    // checking "what is the cadence?" rewrites the schedule of the every-two-minute plane, or
+    // creates it ENABLED and it begins firing immediately.
+    expect(scheduleCode).toContain('APPLY="${APPLY:-}"');
+    const guard = scheduleCode.indexOf('if [[ "$APPLY" != "1" ]]');
+    expect(guard).toBeGreaterThan(-1);
+    expect(scheduleCode.indexOf("gcloud scheduler jobs create")).toBeGreaterThan(guard);
+    expect(scheduleCode.indexOf("gcloud scheduler jobs update")).toBeGreaterThan(guard);
   });
 
   it("does not widen IAM, and says so", () => {

@@ -58,10 +58,14 @@ describe("the check itself", () => {
       "tests/contracts/kugel-data/rollups-by-producer.json",
       "tests/contracts/kugel-data/rollups-by-strategy.json",
     ]);
-    const source = objectFixture.excerpt.join("\n\n");
+    // A producer file that still contains the excerpt verbatim, with surrounding code around it —
+    // not the excerpt alone, which would make the "no drift" case true by construction.
+    const source = `// unrelated header\n\n${objectFixture.excerpt.join("\n\nfunction unrelated() {}\n\n")}\n\nexport const somethingElse = 1;\n`;
     expect(driftOf(objectFixture, source)).toEqual([]);
     // A deliberately edited producer — the column renamed — is caught and named.
     expect(driftOf(objectFixture, source.replace("object_id: String(row.object_id", "objectId: String(row.objectId"))[0])
       .toMatch(/first line no longer present|reordered or split/);
+    // A producer file missing the shape entirely is drift on every excerpt, not silence.
+    expect(driftOf(objectFixture, "// the file was rewritten\n")).toHaveLength(objectFixture.excerpt.length);
   });
 });

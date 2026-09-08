@@ -43,7 +43,7 @@ poller; it bypasses no stop.
 
 ## Deploy
 
-Two scripts, and neither of them starts a run.
+Two scripts. Neither fires the job itself, and both default to reading — the deploy script has no execute path at all, and the schedule script, whose whole product is a thing that fires the job, still writes nothing without `APPLY=1`.
 
     PROJECT=cms-agent-503015
     REGION=us-central1
@@ -60,7 +60,8 @@ Two scripts, and neither of them starts a run.
 
     # Cadence. A separate script, because how often this plane touches four live sites is a bigger
     # decision than what env it carries, and the two should not ride on one keystroke.
-    SCHEDULER_SA="$RUNTIME_SA" bash scripts/deploy-continuation-tick-schedule.sh
+    SCHEDULER_SA="$RUNTIME_SA" bash scripts/deploy-continuation-tick-schedule.sh            # read
+    SCHEDULER_SA="$RUNTIME_SA" APPLY=1 bash scripts/deploy-continuation-tick-schedule.sh    # write
 
 The shape those scripts declare was captured from the live project on 2026-09-08, before either
 existed: [continuation-tick.live-shape.md](continuation-tick.live-shape.md). Change a default in a

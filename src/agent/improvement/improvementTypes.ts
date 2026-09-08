@@ -13,7 +13,12 @@ import { z } from "zod";
 let lastIdMs = 0;
 let idSequence = 0;
 export const makeImprovementId = (prefix: string) => {
-  const ms = Date.now();
+  // Date.now() is wall-clock, not monotonic. An NTP step or a VM migration that moves it BACKWARDS
+  // would reset the sequence at a millisecond that already issued ids, re-emitting the same
+  // ${ms}_${seq} prefix and leaving only the random tail to order them — the coin flip this exists
+  // to remove, arriving silently. Ids never move backwards; at worst they stop advancing.
+  const wall = Date.now();
+  const ms = wall > lastIdMs ? wall : lastIdMs;
   if (ms === lastIdMs) idSequence += 1;
   else {
     lastIdMs = ms;

@@ -31,6 +31,7 @@ JOB="${JOB:-continuation-tick}"
 SCHEDULER_JOB="${SCHEDULER_JOB:-${JOB}-schedule}"
 CRON="${CRON:-*/2 * * * *}"
 ATTEMPT_DEADLINE="${ATTEMPT_DEADLINE:-180s}"
+APPLY="${APPLY:-}"
 
 command -v gcloud >/dev/null || die "gcloud is not on PATH."
 [[ "$CRON" =~ ^[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+$ ]] \
@@ -53,6 +54,30 @@ COMMON=(
   --time-zone "Etc/UTC"
   --attempt-deadline "$ATTEMPT_DEADLINE"
 )
+
+# Same default as scripts/deploy-continuation-tick.sh, and for the same reason. Its sibling is safe
+# to run bare, so the habit transfers: someone checking "what is the cadence?" must not rewrite the
+# schedule of the plane that touches four live tenant sites every two minutes, and must not create
+# it ENABLED -- a created scheduler job starts firing on its next tick, with no confirmation step
+# anywhere between the keystroke and four sites.
+if [[ "$APPLY" != "1" ]]; then
+  say "Would configure $SCHEDULER_JOB in $PROJECT/$REGION:"
+  say "  schedule          $CRON (Etc/UTC)"
+  say "  uri               $RUN_URI"
+  say "  oauth account     $SCHEDULER_SA"
+  say "  attempt deadline  $ATTEMPT_DEADLINE"
+  say ""
+  if gcloud scheduler jobs describe "$SCHEDULER_JOB" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
+    say "$SCHEDULER_JOB exists. Live shape:"
+    gcloud scheduler jobs describe "$SCHEDULER_JOB" --project "$PROJECT" --location "$REGION" \
+      --format="value[separator='  '](schedule, timeZone, state, attemptDeadline, httpTarget.uri)"
+  else
+    say "$SCHEDULER_JOB does not exist. APPLY=1 would CREATE it ENABLED, and it begins firing $JOB immediately."
+  fi
+  say ""
+  say "Nothing was written. Re-run with APPLY=1 to apply."
+  exit 1
+fi
 
 if gcloud scheduler jobs describe "$SCHEDULER_JOB" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
   say "Updating $SCHEDULER_JOB."

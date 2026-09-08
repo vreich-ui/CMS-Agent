@@ -71,6 +71,11 @@ const fetchProducerFile = async (fetcher: Fetcher, token: string, producer: stri
 
 const main = async (): Promise<void> => {
   const fixtures = loadFixtures();
+  if (!fixtures.length) {
+    console.log("UNVERIFIED — no fixtures were found under tests/contracts/, so nothing was compared.");
+    console.log("An empty pin set is not a pass: that is the C-10 shape, a check green because it did no work. Exit 2.");
+    process.exit(2);
+  }
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
     console.log(`UNVERIFIED — ${fixtures.length} fixture(s) were NOT compared against their producers.`);

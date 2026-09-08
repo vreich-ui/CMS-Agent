@@ -267,8 +267,8 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 | I-7 | Medium | Legacy Netlify functions remain deployed and routed — **re-verified 2026-09-06** on the production deploy of `921367e` (8 functions, 13 redirects): `/api/mcp` 502, `/api/agent` 502, `/api/session` 401 (alive), `/.well-known/oauth-authorization-server` 200 (a live OAuth authorization server minting tokens into Netlify Blobs that the Cloud Run verifier never reads). Dead 502 surface plus a decoy auth surface (`AGENT_API_TOKEN`, Netlify OAuth) | remove functions except `session`; keep the modules for tests |
 | I-8 | Low | `MCP_ALLOWED_ORIGINS` only on the script path; a trigger-only fresh deploy denies the SPAs | add to trigger |
 | I-9 | Low | Ingest/GC jobs have no deploy artifact; whether they run is unknown | scripts like the reconciler's |
-| I-10 | Medium | `ANTHROPIC_API_KEY` bound on neither the tick job nor the service, while the provider path is complete and the secret already exists (K-A12) | bind on both planes before any node declares `provider: "anthropic"` |
-| I-11 | High | `strategy-learning` and `strategy-review` were never created in the project, and `site-credential-reconciler` has no schedule (K-O3) | run their deploy + schedule scripts; add a check that fails when a scripted job is absent from the project |
+| I-12 | Medium | `ANTHROPIC_API_KEY` bound on neither the tick job nor the service, while the provider path is complete and the secret already exists (K-A12) | bind on both planes before any node declares `provider: "anthropic"` |
+| I-13 | High | `strategy-learning` and `strategy-review` were never created in the project, and `site-credential-reconciler` has no schedule (K-O3) | run their deploy + schedule scripts; add a check that fails when a scripted job is absent from the project |
 | I-10 | Info | Secrets: no value leakage found in code, logs or records; `.dockerignore` excludes `.env*`; CI uses no secrets | — |
 
 ## T. Tests (from the test-suite audit; 290 files / ~2 760 tests, all passing, ~4 min)
