@@ -50,6 +50,17 @@
  *   npm run store:update -- --set-publish-executor-mode gate     # merge-only: "gate" (deterministic refusal only)
  *   npm run store:update -- --set-publish-executor-mode execute  # merge-only: "execute" (engine performs the publish)
  *
+ * READ KNOWN_ISSUES C-19 BEFORE PASSING --allow-prompt-shrink TODAY. Measured against the live store
+ * on 2026-09-08, EVERY pair this script currently wants to write is CANONICAL BEING STALE, not the
+ * store drifting. brief_architect and artifact_plan carry a `style` block on their media slots —
+ * `visualStandardId`, `override`, `instructions` — that hooks a planned slot to a brand visual
+ * standard. `visualStandardId` is a live platform concept (ImageryBoard, brand-imagery-examples,
+ * visual-standard-examples-jobs, object-verbs) and appears NOWHERE in this repo's src/. Applying
+ * canonical would strip it from the two nodes that plan every generated image, and store:check would
+ * then go green — the capability loss would look like tidiness. The correct direction for THAT
+ * divergence is seedNodesFromWorkspace.ts (store -> canonical), which currently refuses too. The
+ * script below is not wrong; the drift it is pointed at is the wrong way round.
+ *
  * SAFETY. Refuses (exit non-zero, applies nothing, names the reason) when: the node does not exist
  * in the store; the node does not exist in canonical; the (node, field) pair is not in the hardcoded
  * allowlist below; a topology field is requested (see above); a prompt would shrink past the same
