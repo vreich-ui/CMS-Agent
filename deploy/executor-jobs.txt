@@ -31,3 +31,17 @@ site-credential-reconciler
 # stamp on every record it writes, so a tenant admin's Insights panel shows nothing while the data
 # sits in the store, attributable to no one. 2026-09-07.
 tracking-ingest
+
+# Reads the previous UTC day at the strategy grain and writes `tracking:strategy.v1` observations,
+# promoting what has held up into the writer/planning nodes' ACE playbooks. A stale image here is
+# worse than a stale reader: it WRITES learned state, so an older promotion rule would keep editing
+# the playbooks that shape every future draft, and the drift would look like the system learning
+# rather than like a deploy fault. Runs daily at 04:00 UTC, after tracking-ingest.
+strategy-learning
+
+# Weekly. The only job whose output is addressed to a HUMAN — one marginalia thread on the governed
+# editorial_strategy object, carrying a proposed delta and its evidence. It never patches. A stale
+# image here puts an out-of-date claim, with an out-of-date bar behind it, in front of the editor
+# who owns the strategy; the thread reads as current because nothing in it says which build wrote
+# it. Runs Mondays at 05:00 UTC.
+strategy-review
