@@ -37,13 +37,14 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "report = read-only inspection (also checks plane images). check-job-images = executor-plane drift only. route-to-latest = send 100% of traffic to the newest ready revision."
+        description: "report = read-only inspection (also checks plane images). check-job-images = executor-plane drift and existence only. netlify-env-audit = account-vs-site env shadows on the Netlify team. route-to-latest = send 100% of traffic to the newest ready revision."
         required: true
         default: report
         type: choice
         options:
           - report
           - check-job-images
+          - netlify-env-audit
           - route-to-latest
   # Executor-plane drift is silent by construction — a stale plane exits 0 and looks like a success —
   # so it is only ever found by looking. Left to workflow_dispatch it would be found by remembering to
@@ -63,6 +64,7 @@ permissions:
 jobs:
   plane:
     name: ${{ inputs.action || 'check-job-images' }}
+    if: ${{ inputs.action != 'netlify-env-audit' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # A scheduled run has no inputs, so every step keys off this rather than `inputs.action`.
@@ -131,7 +133,7 @@ jobs:
       # fails this workflow on purpose — a stale plane is not a warning, it is a tenant-visible bug
       # that presents as success. Repinning is the deploy path's job (scripts/pin-job-images.sh with
       # no --check), never this workflow's.
-      - name: Check executor-plane image drift
+      - name: Check executor-plane image drift and existence
         if: env.ACTION != 'route-to-latest'
         env:
           PROJECT: ${{ vars.GCP_PROJECT_ID || 'cms-agent-503015' }}
@@ -168,3 +170,61 @@ jobs:
               --format='table(status.traffic[].revisionName, status.traffic[].percent, status.traffic[].latestRevision)'
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # A SEPARATE JOB, not a step of the one above. They answer different questions about different
+  # planes, and the drift check exits non-zero the moment it finds something — so as a step this
+  # would simply never run on the days it matters. Separate jobs also mean a red run names which
+  # gap it is without anyone opening the log.
+  #
+  # WHY IT IS HERE AT ALL. A site-level Netlify variable OVERRIDES the account-level one of the same
+  # name (C-18). Genesis no longer writes site-level copies of the tracking pair — it inherits them
+  # by name — so the shadows that exist are a finite historical set rather than a growing one. But a
+  # shadow is invisible from the account view and from this repository, and rotating the account
+  # value leaves every shadowing site on the old token: events that 401 from a site whose
+  # configuration looks correct, with nothing reporting it, because the senders are fire-and-forget.
+  # `npm run env:audit` is read-only and names-only; it never prints a value.
+  netlify-env:
+    name: netlify env shadows
+    if: ${{ github.event_name == 'schedule' || inputs.action == 'netlify-env-audit' || inputs.action == 'report' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — required configuration is present
+        env:
+          TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+        run: |
+          # Presence only — never the value. Failing here rather than skipping is deliberate: a
+          # check that goes green because it could not run is the shape that let two planes sit
+          # unbuilt through every green build (C-10, K-O3).
+          if [ -z "${TOKEN}" ]; then
+            echo "::error::secret NETLIFY_AUTH_TOKEN is not set — the env audit could not run, so nothing was checked"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Audit account-vs-site environment variables
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_TEAM_SLUG: ${{ vars.NETLIFY_TEAM_SLUG || 'vreich' }}
+        run: |
+          # Same pattern as the drift check: capture the status BEFORE the pipe, or `tee` reports
+          # its own success and a shadowed fleet renders into the summary and passes.
+          STATUS=0
+          npm run --silent env:audit > /tmp/env-audit.txt 2>&1 || STATUS=$?
+          {
+            echo "### Netlify environment — account variables and site-level shadows"
+            echo '```'
+            cat /tmp/env-audit.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"

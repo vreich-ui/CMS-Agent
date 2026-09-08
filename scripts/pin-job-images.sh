@@ -145,10 +145,23 @@ CHANGED=""
 
 for JOB in $JOBS; do
   if ! gcloud run jobs describe "$JOB" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
-    # A job in the list that does not exist yet is a partial fleet, not a broken one — the service
-    # is already deployed and healthy, and a job that does not exist cannot run stale code. Say it
-    # loudly enough to be noticed and move on.
-    say "SKIP     $JOB — no such job in $REGION. Create it, or remove it from ${EXECUTOR_JOBS_FILE##*/}."
+    # PIN mode moves on: a job that does not exist cannot run stale code, and the service is
+    # deployed and healthy regardless.
+    #
+    # CHECK mode FAILS (2026-09-08). It used to say the same thing here — "a partial fleet, not a
+    # broken one" — and that reasoning is right about images and wrong about the question this mode
+    # asks, which is "is the fleet what the repository says it is?". A plane that does not exist is
+    # the loudest possible no, and treating it as a note is how `strategy-learning` and
+    # `strategy-review` sat unbuilt from the day their deploy scripts merged (#280) until someone
+    # listed the project by hand two days later: this check ran daily, green, the whole time,
+    # because it only ever inspected jobs that already existed. C-10 closed the gap between the LIST
+    # and the SCRIPTS; this closes the gap between the scripts and the PROJECT. See K-O3.
+    if [ -f "$ROOT/scripts/deploy-$JOB.sh" ]; then
+      say "ABSENT   $JOB — listed in ${EXECUTOR_JOBS_FILE##*/} with a deploy script, but no such job in $REGION."
+      say "           create it: PROJECT=$PROJECT REGION=$REGION IMAGE=<digest> GCS_BUCKET=… RUNTIME_SA=… bash scripts/deploy-$JOB.sh"
+    else
+      say "ABSENT   $JOB — listed in ${EXECUTOR_JOBS_FILE##*/}, no such job in $REGION, and no scripts/deploy-$JOB.sh to create it with."
+    fi
     MISSING="$MISSING $JOB"
     continue
   fi
@@ -211,7 +224,7 @@ for JOB in $JOBS; do
 done
 
 say ""
-if [ -n "$MISSING" ]; then say "note: not present in $REGION (skipped, not failed):$MISSING"; fi
+if [ -n "$MISSING" ] && [ "$MODE" = pin ]; then say "note: not present in $REGION (skipped, not failed):$MISSING"; fi
 if [ -n "$WEAK" ]; then say "note: pinned by tag rather than digest:$WEAK"; fi
 if [ "$MODE" = pin ] && [ -n "$CHANGED" ]; then say "repinned:$CHANGED"; fi
 
@@ -228,7 +241,15 @@ if [ -n "$UNVERIFIED" ]; then
   say "  Fix the read-back; do not assume either way. Check the shape with:" >&2
   say "    gcloud run jobs describe <job> --project $PROJECT --region $REGION --format=json" >&2
 fi
-if [ -n "$STALE$UNVERIFIED" ]; then
+if [ "$MODE" = check ] && [ -n "$MISSING" ]; then
+  say ""
+  say "✗ planes the repository describes that do not exist in $PROJECT / $REGION:$MISSING" >&2
+  say "  Nothing they were built to do is happening, and nothing else reports that — a job that was" >&2
+  say "  never created produces no logs, no failures and no executions to look at. Create them with" >&2
+  say "  their deploy scripts, or remove them from ${EXECUTOR_JOBS_FILE##*/} if they are not wanted." >&2
+fi
+
+if [ -n "$STALE$UNVERIFIED" ] || { [ "$MODE" = check ] && [ -n "$MISSING" ]; }; then
   exit 1
 fi
 

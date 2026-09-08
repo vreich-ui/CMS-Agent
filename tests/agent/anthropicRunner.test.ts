@@ -61,6 +61,19 @@ const messagesResponse = (over: Record<string, unknown> = {}) => ({ id: "msg_1",
 describe("AnthropicNodeRunner.validateConfiguration", () => {
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; });
+  it("says the missing key is a plane gap, not a defect in the node it is reporting on", () => {
+    // K-A12. The error surfaces as per-node validation, so whoever reads it is looking at a node
+    // and will start editing one. Nothing about the node is wrong: `anthropic-api-key` is in Secret
+    // Manager and bound to no Cloud Run plane, and the deploy that "caused" the failure is clean.
+    delete process.env.ANTHROPIC_API_KEY;
+    const result = new AnthropicNodeRunner().validateConfiguration({ id: "writer", outputSchema: { type: "object" }, modelConfig: { provider: "anthropic" } } as never);
+    const message = (result as { errors: string[] }).errors.join(" ");
+    expect(message).toContain("DEPLOY gap");
+    expect(message).toContain("K-A12");
+    expect(message).toContain("--update-secrets");
+    expect(message).toContain('node "writer"');
+  });
+
   it("requires ANTHROPIC_API_KEY and an outputSchema", () => {
     delete process.env.ANTHROPIC_API_KEY;
     const missingKey = new AnthropicNodeRunner().validateConfiguration(node());
