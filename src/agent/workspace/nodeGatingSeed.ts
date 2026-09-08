@@ -39,6 +39,12 @@ export type NodeGatingSeedEntry = {
   // a store overlay that rewrites a node's metadata wholesale must not be able to switch it off by
   // omission. The seed is the floor.
   sitePrefetch?: true;
+  // 2026-09-08: the run-cost prefetch (costPrefetch.ts) — the p50 of this workflow's measured prior
+  // run costs, fetched deterministically before the agent loop and delivered in the node's input as
+  // `runCostEstimate`. Declared here for the same reason the other three are: a store overlay that
+  // rewrites a node's metadata wholesale must not be able to switch it off by omission, and the number
+  // it delivers is the ONE thing standing between the EV floor and another invented $800.
+  costPrefetch?: true;
   // Why this node carries this policy. Kept in the data, not in a comment, so it travels into the
   // audit record and into anything that renders the policy.
   rationale: string;
@@ -60,6 +66,11 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
   // own_property_ev_and_aggression_exemption) already decides the answer for these classes, so paying
   // a model to compute an EV floor that could not block anything is paying for a discarded number.
   monetization_strategy: {
+    // 2026-09-08: the run-cost prefetch. This node authored `estimatedRunCost: 800` against a $3.86 run
+    // (run_1788769566432_5qnafb) and set a floor no article could ever clear. It now receives the
+    // measured figure in its input (costPrefetch.ts) instead of estimating one. An EV-exempt run skips
+    // before any prefetch runs, so this costs nothing on the runs it does not help.
+    costPrefetch: true,
     skipWhen: [{
       when: "content_class_in",
       classes: EV_EXEMPT_CONTENT_CLASSES,
@@ -97,7 +108,36 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
   // target, which is already a declared dependency of brief_architect. No DAG edge is moved: see the
   // work order's re-seed section for what a full contract_intelligence reorder would additionally
   // require (publishingTail.ts declares the tail's edges as a hard invariant).
-  brief_architect: { contractPrefetch: true, voicePrefetch: true, rationale: "The aggression ceiling must exist before the brief that spends it is written; the client's editorial voice must be in hand for the same reason — the brief sets the tone guardrails every downstream writer reads." },
+  // 2026-09-08 — THE EV FLOOR'S GATE, AND WHY IT SITS ON EXACTLY ONE NODE.
+  //
+  // brief_architect is the first node after monetization_strategy and the head of the expensive chain:
+  // everything from here on (the brief, contract_intelligence, the draft, the review quartet,
+  // article_body, the publish tail) is what an EV block is trying not to buy. It is also the run's
+  // SPINE, which is why this predicate is a run halt rather than a skip: a skipped brief leaves every
+  // downstream node "satisfied with absent" and the publish tail alive, writing and publishing an
+  // article against no brief. executor.ts recognizes EV_FLOOR_BLOCKED_PREDICATE by name and stops the
+  // run here instead — one transition, no live tail, status "blocked" with the reason recorded.
+  //
+  // Declaring it on the fifteen downstream nodes instead would cascade correctly today, produce a run
+  // reporting `completed` with nothing published, and break silently the first time a node was added
+  // without the entry. One node, one halt.
+  //
+  // It fires only on an EARNED block (skipPredicates.ts): verdict "block" AND estimateBasis
+  // "monetizer_data". While the Monetizer connection is down — expected for now, operator 2026-09-08 —
+  // the basis cannot reach "monetizer_data" and this predicate cannot fire on any run.
+  brief_architect: {
+    contractPrefetch: true,
+    voicePrefetch: true,
+    skipWhen: [{
+      when: "ev_floor_blocked",
+      reason: "Run halted before brief_architect: monetization_strategy's EV floor blocks this piece on LIVE Monetizer data, so the expensive post-brief chain is not bought. A block computed on assumed numbers would not have stopped anything."
+    }],
+    rationale: "The aggression ceiling must exist before the brief that spends it is written; the client's editorial voice must be in hand for the same reason — the brief sets the tone guardrails every downstream writer reads. And an EARNED EV block stops the run here, at the head of the expensive chain, rather than being computed at node 4 and then ignored by every node after it."
+  },
+  // 2026-09-08 — the run-cost figure this node was previously inventing. The prefetch delivers the p50
+  // of this workflow's measured prior run totals (node timing ledger, this run excluded) so the model
+  // copies a number rather than authoring one. Sits alongside the node's existing content-class skip:
+  // an exempt run still skips entirely and pays for no prefetch.
   // FINDING-C (C3, resolving C5's finding C) — contract_intelligence DOES declare the site prefetch,
   // and this is the line C5 left for whoever owns the publishing run's cost budget.
   //
@@ -154,6 +194,7 @@ export function gatedMetadata(node: GatedNode): Record<string, unknown> | undefi
   if (seed.contractPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "contractPrefetch")) merged.contractPrefetch = seed.contractPrefetch;
   if (seed.voicePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "voicePrefetch")) merged.voicePrefetch = seed.voicePrefetch;
   if (seed.sitePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "sitePrefetch")) merged.sitePrefetch = seed.sitePrefetch;
+  if (seed.costPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "costPrefetch")) merged.costPrefetch = seed.costPrefetch;
   return merged;
 }
 
@@ -162,3 +203,4 @@ export function gatedMetadata(node: GatedNode): Record<string, unknown> | undefi
 export const declaresContractPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.contractPrefetch === true;
 export const declaresVoicePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.voicePrefetch === true;
 export const declaresSitePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.sitePrefetch === true;
+export const declaresCostPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.costPrefetch === true;

@@ -36,6 +36,7 @@
 // (a client object that contains no media reference at all). A run whose input declares nothing gets
 // the full pipeline, exactly as it does today.
 import { readDeclaredContentClass } from "./publicationController.js";
+import { EARNED_BLOCK_ESTIMATE_BASIS, type EstimateBasis } from "./evFloor.js";
 import { gatedMetadata } from "./nodeGatingSeed.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -98,10 +99,27 @@ export type SkipPredicate =
   // about this predicate is designer-specific — it asks whether the branch has any work at all, which
   // is the same question for all three nodes — so the fix is to declare it on all three rather than to
   // add two near-duplicate predicates.
-  | { when: "clone_no_pdf_template_entries"; reason?: string };
+  | { when: "clone_no_pdf_template_entries"; reason?: string }
+  // 2026-09-08 — the EV floor's own gate, and the ONE predicate here whose firing STOPS A RUN rather
+  // than skipping a node (executor.ts turns this exact predicate into a run-level halt; see the note
+  // on evaluateEvFloorBlocked below for why skipping brief_architect alone would be worse than doing
+  // nothing at all).
+  //
+  // Fires ONLY on an EARNED block: verdict "block" AND estimateBasis "monetizer_data" — i.e. the cost
+  // side came from measured history and the revenue side from a live Monetizer query THIS RUN. Every
+  // other basis ("stated_assumption", "mixed", absent, unreadable) resolves toward RUNNING, which is
+  // rule 3 and is load-bearing here rather than merely consistent: with the Monetizer connection down
+  // (operator, 2026-09-08) expectedCommission is 0 on every money run, so a naive `verdict === "block"`
+  // predicate would stop EVERY money-class run the moment it deployed. The asymmetry is the argument:
+  // a wrong stop costs a silently unwritten article, a wrong run costs a few dollars.
+  | { when: "ev_floor_blocked"; reason?: string };
 
 export type SkipPredicateKind = SkipPredicate["when"];
-export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks", "clone_no_actionable_mismatches", "clone_demand_driven_entry", "clone_no_pdf_template_entries"];
+export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks", "clone_no_actionable_mismatches", "clone_demand_driven_entry", "clone_no_pdf_template_entries", "ev_floor_blocked"];
+
+// The predicate whose firing is a RUN HALT, not a node skip. Exported so executor.ts names the same
+// constant this file defines rather than a string literal that could drift from it.
+export const EV_FLOOR_BLOCKED_PREDICATE = "ev_floor_blocked" as const;
 
 // ---------------------------------------------------------------------------------------------
 // REVIEW QUARTET TIERING — operator policy, decided by Wolf 2026-08-12. Three tiers:
@@ -463,6 +481,58 @@ function evaluateCloneNoPdfTemplateEntries(predicate: Extract<SkipPredicate, { w
 }
 
 // ---------------------------------------------------------------------------------------------
+// Predicate 10 — ev_floor_blocked (2026-09-08).
+//
+// WHAT IT READS. The `evFloor` block on monetization_strategy.v1 (or an `ev_floor.v1` artifact
+// carried directly): the artifact computeEvFloor produces, whose `verdict` and `estimateBasis` are
+// DERIVED by that pure function, never authored by a model. Reading a model-authored verdict would
+// hand a node the power to stop a run by writing a word.
+//
+// WHY IT MUST NOT BE A PLAIN SKIP. brief_architect is the run's spine: contract_intelligence,
+// article_body and the whole publish tail treat a skipped dependency as satisfied-with-absent, so
+// skipping the brief alone would leave a LIVE TAIL writing and publishing an article against no brief
+// — strictly worse than no predicate at all. Declaring the predicate on all fifteen downstream nodes
+// instead would cascade correctly today and produce a run that reports `completed` with nothing
+// published (and would break the first time someone added a node and forgot the entry). So the
+// executor turns THIS predicate into a run-level halt at brief_architect's own pre-dispatch: one state
+// transition, no live tail, and a run whose status says plainly that it stopped on purpose.
+const EV_FLOOR_ARTIFACT = "ev_floor.v1";
+
+const readEvFloorBlock = (carrier: unknown): Record<string, unknown> | undefined => {
+  if (!isObject(carrier)) return undefined;
+  if (carrier.artifact === EV_FLOOR_ARTIFACT) return carrier;
+  const nested = carrier.evFloor;
+  if (isObject(nested)) return nested;
+  return undefined;
+};
+
+const isEarnedBasis = (value: unknown): value is EstimateBasis => typeof value === "string" && normalizeToken(value) === EARNED_BLOCK_ESTIMATE_BASIS;
+
+function evaluateEvFloorBlocked(predicate: Extract<SkipPredicate, { when: "ev_floor_blocked" }>, context: SkipEvaluationContext): SkipVerdict {
+  const basis: string[] = [];
+  for (const carrier of carriersFor(context, ["monetization_strategy"])) {
+    if (isPlaceholder(carrier)) { basis.push("carrier: mock placeholder (dryRun) — not evidence"); continue; }
+    const evFloor = readEvFloorBlock(carrier);
+    if (!evFloor) continue;
+    const verdict = typeof evFloor.verdict === "string" ? normalizeToken(evFloor.verdict) : undefined;
+    const estimateBasis = evFloor.estimateBasis;
+    basis.push(`evFloor.verdict: ${verdict ?? "not declared"}`);
+    basis.push(`evFloor.estimateBasis: ${typeof estimateBasis === "string" ? estimateBasis : "not declared"}`);
+    if (verdict !== "block") {
+      return { skip: false, predicate, reason: `${context.nodeId} runs: the EV floor's verdict is "${verdict ?? "not declared"}", not a block.`, basis, warnings: [] };
+    }
+    if (!isEarnedBasis(estimateBasis)) {
+      // THE LINE THAT KEEPS PRODUCTION UP. A block computed on assumptions is advisory: it is recorded
+      // on the artifact and readable by anyone, and it stops nothing.
+      return { skip: false, predicate, reason: `${context.nodeId} runs: the EV floor says block, but on estimateBasis "${typeof estimateBasis === "string" ? estimateBasis : "not declared"}" rather than "${EARNED_BLOCK_ESTIMATE_BASIS}" — a block computed on assumed numbers is advisory and never stops a run.`, basis, warnings: [] };
+    }
+    return { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} stopped: the EV floor blocks this piece on live Monetizer data (expectedValueUsd ${String(evFloor.expectedValueUsd)} against floorUsd ${String(evFloor.floorUsd)}), so the run is halted before the expensive post-brief chain rather than producing an article the numbers say is not worth its cost.`, basis, warnings: [] };
+  }
+  basis.push("no ev_floor artifact on any carrier");
+  return { skip: false, predicate, reason: `${context.nodeId} runs: no EV floor artifact is readable on this run, and an unanswered question is answered by running.`, basis, warnings: [] };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Metadata parsing. `skipWhen` accepts a single predicate or an array of them; an array means OR
 // (the first predicate that fires skips the node), which is the only composition rule worth having
 // while predicates are this few — AND would let two half-true conditions add up to a skip nobody
@@ -497,6 +567,7 @@ const evaluatePredicate = (predicate: SkipPredicate, context: SkipEvaluationCont
     case "clone_no_actionable_mismatches": return evaluateCloneNoActionableMismatches(predicate, context);
     case "clone_demand_driven_entry": return evaluateCloneDemandDrivenEntry(predicate, context);
     case "clone_no_pdf_template_entries": return evaluateCloneNoPdfTemplateEntries(predicate, context);
+    case "ev_floor_blocked": return evaluateEvFloorBlocked(predicate, context);
     default: {
       // Unreachable through readSkipPredicates; kept because an unrecognized rule must be inert
       // rather than throwing inside a dispatch path.

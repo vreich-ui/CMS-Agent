@@ -47,8 +47,9 @@ import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
 import { readVisualStandardMaterializer, runVisualStandardMaterialization } from "./visualStandardMaterialization.js";
 import { resolveGateId } from "./gateRegistry.js";
-import { evaluateNodeSkip, renderSkippedDependencyPolicy, type SkippedDependencyEntry } from "./skipPredicates.js";
-import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch } from "./nodeGatingSeed.js";
+import { evaluateNodeSkip, renderSkippedDependencyPolicy, EV_FLOOR_BLOCKED_PREDICATE, type SkippedDependencyEntry } from "./skipPredicates.js";
+import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch, declaresCostPrefetch } from "./nodeGatingSeed.js";
+import { getRunCostEstimate, RUN_COST_ESTIMATE_INPUT_KEY } from "./costPrefetch.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
 import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried, nextAttemptNumber, NODE_ERROR_RETRIED_MARKER } from "./nodeAttemptHistory.js";
 import { toBlockage } from "../execution/blockage.js";
@@ -1653,6 +1654,35 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   if (!state.skipOverride) {
     const verdict = evaluateNodeSkip(nextNode, { initialInput: run.initialInput, stageOutputs: run.stageOutputs });
     if (verdict?.warnings.length) state.warnings = [...(state.warnings ?? []), ...verdict.warnings];
+    // 2026-09-08 — THE ONE PREDICATE THAT STOPS A RUN INSTEAD OF SKIPPING A NODE.
+    //
+    // `ev_floor_blocked` is declared on brief_architect alone (nodeGatingSeed.ts). Marking that node
+    // `skipped` would be the wrong transition and a dangerous one: every downstream node treats a
+    // skipped dependency as SATISFIED-with-absent, so contract_intelligence, article_body and the whole
+    // publish tail would proceed to write and publish an article against a brief that was never
+    // written. The EV floor's finding is not "this node has nothing to contribute" — the brief has
+    // plenty to contribute — it is "the rest of this run is not worth buying", which is a run-level
+    // decision and is recorded as one.
+    //
+    // The predicate has already established that the block was EARNED (verdict "block" on
+    // estimateBasis "monetizer_data"); an advisory block never reaches this branch. Status "blocked",
+    // the same terminal the publish gates use for a deliberate stop, with the predicate's own reason
+    // and basis on the node — legible without opening the run, and never mistakable for `completed`.
+    if (verdict?.skip && verdict.predicate?.when === EV_FLOOR_BLOCKED_PREDICATE) {
+      const completedAt = now();
+      state.status = "blocked";
+      state.startedAt = startedAt;
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.skip = { reason: verdict.reason, predicate: verdict.predicate as Record<string, unknown> | undefined, basis: verdict.basis, evaluatedAt: completedAt };
+      state.output = { artifact: `${nextNode.id}.decision`, dryRun: true, decision: "blocked", reason: verdict.reason, basis: verdict.basis };
+      state.warnings = [...(state.warnings ?? []), `run_halted:${EV_FLOOR_BLOCKED_PREDICATE}`, "no_publication_performed"];
+      delete state.dispatch;
+      run.status = "blocked";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = completedAt;
+      return { run };
+    }
     if (verdict?.skip) {
       const completedAt = now();
       state.status = "skipped";
@@ -1892,6 +1922,29 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       const message = error instanceof Error ? error.message : String(error);
       state.warnings = [...(state.warnings ?? []), "voice_prefetch_fallback:threw"];
       state.input = { ...(state.input as Record<string, unknown>), editorialVoiceError: message };
+    }
+  }
+
+  // 2026-09-08 — THE RUN-COST PREFETCH. Same F1 pattern as the three above, for the node that was
+  // caught inventing its own input: monetization_strategy emitted `estimatedRunCost: 800` on
+  // run_1788769566432_5qnafb against a measured $3.86, then demanded $1,000 of expected value before
+  // any article could clear the floor. The measured figure — the p50 of this workflow's prior run
+  // totals from the node timing ledger, this run's own partial spend excluded — is now in the node's
+  // input as `runCostEstimate` before its agent loop starts.
+  //
+  // This can never fail a node. getRunCostEstimate has no failure return: an unreadable ledger or a
+  // history too thin to use both resolve to the no_history estimate ($0, which floors nothing) plus a
+  // named run-visible warning, the same loud-degradation convention the other three prefetches use. An
+  // EV floor is an optimization on spend; it must never be the reason a run cannot proceed.
+  if (declaresCostPrefetch(nextNode)) {
+    try {
+      const costResult = await getRunCostEstimate({ runId: run.runId, workflowId: run.workflowId });
+      state.input = { ...(state.input as Record<string, unknown>), [RUN_COST_ESTIMATE_INPUT_KEY]: costResult.estimate };
+      if (costResult.warningCode) state.warnings = [...(state.warnings ?? []), `cost_prefetch_degraded:${costResult.warningCode}`];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      state.warnings = [...(state.warnings ?? []), "cost_prefetch_degraded:threw"];
+      state.input = { ...(state.input as Record<string, unknown>), costPrefetchError: message };
     }
   }
 
