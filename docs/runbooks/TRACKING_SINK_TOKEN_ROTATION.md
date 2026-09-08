@@ -28,12 +28,20 @@ new version merely because it exists.
 
     npm run env:audit          # NETLIFY_AUTH_TOKEN required
 
+`cloud-run-plane.yml` also runs this daily as its own job (secret `NETLIFY_AUTH_TOKEN`), so the
+shadow count is watched rather than remembered — but read it yourself before a rotation.
+
 Read the shadow table. **A site-level copy of `TRACKING_SINK_TOKEN` overrides the account value**, so
 a rotation that only changes the account variable leaves that site on the old token — sending events
 that 401 from a site whose configuration looks correct. As of 2026-09-08 the audit reports
 `drluriescience` shadowing `TRACKING_SINK_TOKEN` (and `TRACKING_SINK_URL`), and `kugel-fernwell`,
 `kugel-platform` and `zilbermanfilmfoundation` shadowing `TRACKING_SINK_URL`. Clearing those is step 4
 and it is not optional.
+
+Clearing them is also permanent. Genesis used to write a per-site copy of both tracking variables
+(C-18); it now checks the account variable BY NAME and writes nothing, so a new tenant inherits and
+adds no shadow. The five that exist are what the old behaviour left behind — a finite set, not a
+tide.
 
 ## 1. Open the grace window (kugel-data)
 

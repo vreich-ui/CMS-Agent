@@ -77,7 +77,19 @@ export class AnthropicNodeRunner implements NodeRunner {
   validateConfiguration(node: WorkspaceNode) {
     const errors: string[] = [];
     if (!node.outputSchema) errors.push("outputSchema is required.");
-    if (!process.env[apiKeyEnv(node)]) errors.push(`${apiKeyEnv(node)} is required for anthropic execution.`);
+    // K-A12. This fires as a per-NODE validation error, which is what makes it misleading: the
+    // node is fine and the plane is not. `anthropic-api-key` exists in Secret Manager and is bound
+    // to neither the cms-agent-mcp service nor any executor job, so the first node switched to this
+    // provider fails within two minutes across four tenant sites, reads as a bad node rather than a
+    // missing binding, and has an entirely clean deploy behind it. The message says so, because
+    // whoever reads it will be looking at the node.
+    if (!process.env[apiKeyEnv(node)]) {
+      errors.push(
+        apiKeyEnv(node) === "ANTHROPIC_API_KEY"
+          ? `ANTHROPIC_API_KEY is required for anthropic execution and no Cloud Run plane binds it. This is a DEPLOY gap, not a defect in node "${node.id}": the secret exists in Secret Manager and is attached to neither the service nor the executor jobs. Bind it on both planes (one --update-secrets each) before switching any node to provider=anthropic. See KNOWN_ISSUES K-A12.`
+          : `${apiKeyEnv(node)} is required for anthropic execution, and nothing sets it on this plane. Node "${node.id}" names it through modelConfig.apiKeyEnv, so bind it where the plane is deployed rather than changing the node.`
+      );
+    }
     // This runner has no tool loop (see the header): a tool-using node would run WITHOUT its granted
     // tools — for article_body/artifact_plan/publish_payload that silently strips the client
     // validation their prompts mandate. A provider switch on such a node must fail by name at

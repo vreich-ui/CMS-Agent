@@ -27,7 +27,7 @@ Status: current as of commit `40424c4` (2026-09-05), derived from `cloudbuild.de
 
    Pinned by **digest**, not by the `:<SHORT_SHA>` tag, because a tag is a mutable pointer: two references spelled alike are similarly *named*, not provably the same *artifact*. The service escapes this without trying — Cloud Run resolves its tag to a digest when it creates the revision, and the revision is what serves — but a job records the literal reference it was given and no digest at all, so plane and service were genuinely not comparable as written.
 
-6. Between deploys: `npm run check:job-images` (or the `check-job-images` action of `cloud-run-plane.yml`, which also runs daily on a schedule) reports any plane whose image digest differs from the service's and exits non-zero. Read-only; it never repins.
+6. Between deploys: `npm run check:job-images` (or the `check-job-images` action of `cloud-run-plane.yml`, which also runs daily on a schedule) reports any plane whose image digest differs from the service's **and any listed plane that does not exist in the project at all**, exiting non-zero on either. The second direction was added on 2026-09-08 (K-O3): an absent plane used to be a note, so two jobs sat unbuilt while this check went green every morning. Read-only; it never repins and never creates. The same workflow runs `npm run env:audit` as a separate job, which needs the `NETLIFY_AUTH_TOKEN` Actions secret and fails rather than skipping when it is absent.
 
 ### The W21 learning loop (S-14)
 
