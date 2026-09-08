@@ -184,12 +184,12 @@ const sanitizeError = (error: unknown): string => {
 /**
  * How the sink groups a rollups page. `producer` is the ingestion bridge's view (one row per node/run
  * that MADE something); `object` is the site's own view (one row per published object), which is what
- * a site-wide median is computed from; `strategy` (T21.35, kugel-data migration 008) is the
+ * a site-wide median is computed from; `strategy` (T21.35, kugel-data migration 012) is the
  * CROSS-ARTICLE view — one row per strategy/intent/day — which is what a lesson that outlives a
  * single piece can be learned from. All three are the same endpoint, the same auth, the same pinned
  * contract — only `by` differs, which is why there is exactly ONE client for them.
  *
- * `strategy` answers 503 on any deployment whose sink has not run migration 008 yet. That is a grain
+ * `strategy` answers 503 on any deployment whose sink has not run migration 012 yet. That is a grain
  * that does not exist here YET, not a failure: every caller treats it exactly like an unreachable
  * sink (see `RollupFetchResult.status`, which is what lets a caller tell the two apart).
  */

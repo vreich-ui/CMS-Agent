@@ -185,13 +185,27 @@ describe("strategySiteBaseline + strategyFindings", () => {
 });
 
 describe("the observation text", () => {
-  it("reads as the cross-article finding, carrying its window and its n", () => {
+  it("reads as the cross-article finding, carrying its window, its n and what it rests on", () => {
     const rows = [strategyRow(), ordinaryRow(), thirdRow()];
     const group = strategyGroupsFromRows(rows).find((candidate) => candidate.intent === "objection_handling")!;
     const findings = strategyFindings(group, strategySiteBaseline(rows)).filter((finding) => ["p75_dwell_ms", "completion_rate"].includes(finding.metric));
     expect(renderStrategyObservation(group, findings, group.n, WINDOW_1)).toBe(
-      "intent `objection_handling` (strategy `objection_first`): p75 dwell 2.1× site median, completion +18 pts (n=412, window 2026-08-29..2026-08-30)"
+      "intent `objection_handling` (strategy `objection_first`): p75 dwell 2.1× site median, completion +18 pts (n=412, window 2026-08-29..2026-08-30, from: completion_rate, p75_dwell_ms)"
     );
+  });
+
+  it("names only the metrics the findings rest on, never a metric that merely arrived as 0", () => {
+    // On the strategy grain most of the nine metrics are structurally 0 — no
+    // node-level denominator exists for the per-exposure rates. A `from:` built
+    // from the row's metric map would list those as measurements (KI-29: the
+    // wire cannot say "unavailable", so a missing measure is a 0).
+    const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+    const group = strategyGroupsFromRows(rows).find((candidate) => candidate.intent === "objection_handling")!;
+    const findings = strategyFindings(group, strategySiteBaseline(rows)).filter((finding) => finding.metric === "completion_rate");
+    const text = renderStrategyObservation(group, findings, group.n, WINDOW_1);
+    expect(text).toContain("from: completion_rate");
+    expect(text).not.toContain("purchase_rate");
+    expect(text).not.toContain("pageviews");
   });
 
   it("names only the half of the subject the row actually carried", () => {
@@ -226,9 +240,17 @@ describe("ingestStrategyRollups", () => {
     expect(result.rows).toBe(3);
     expect(result.groups).toBe(3);
     expect(result.observations).toHaveLength(1);
+    // The `from:` clause names the metrics the claim rests on — the FINDINGS'
+    // metrics, not every metric the row carried a number for. On the strategy
+    // grain most of the nine are structurally 0 (no node-level denominator), and
+    // listing those as if they had been measured is exactly the confusion KI-29
+    // describes: the wire cannot say "unavailable", so a missing measure is a 0.
     expect(result.observations[0]!.observation).toBe(
-      "intent `objection_handling` (strategy `objection_first`): p75 dwell 2.1× site median, buy-click rate +2 pts, purchase rate +0.6 pts, CTA CTR +4 pts, completion +18 pts (n=412, window 2026-08-29..2026-08-30)"
+      "intent `objection_handling` (strategy `objection_first`): p75 dwell 2.1× site median, buy-click rate +2 pts, purchase rate +0.6 pts, CTA CTR +4 pts, completion +18 pts (n=412, window 2026-08-29..2026-08-30, from: buy_click_rate, completion_rate, cta_ctr, p75_dwell_ms, purchase_rate)"
     );
+    // KI-08's signature: rows served, labels NULL, every row dropped. Without
+    // this number it is indistinguishable from a quiet week.
+    expect(result.rowsLabelled).toBe(3);
 
     const stored = await learningRepository.listObservations();
     const observation = stored.find((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE)!;

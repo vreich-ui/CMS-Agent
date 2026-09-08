@@ -18,8 +18,16 @@
 //
 // THE BAR FOR TEACHING SOMETHING. An observation is cheap; a playbook item changes what every future
 // piece is written to. So promotion needs BOTH:
-//   * n >= STRATEGY_PROMOTION_MIN_N — the sink's own raw attributed-event count for the group, NOT
-//     sessions. A rate computed off 12 events is a rumour.
+//   * n >= STRATEGY_PROMOTION_MIN_N — the sink's own `n` for the group. A rate computed off 12 of
+//     anything is a rumour.
+//
+//     WHAT `n` COUNTS CHANGED UNDER THIS BAR, AND THE BAR HAS NOT BEEN RE-PICKED. This text used to
+//     say "raw attributed-event count, NOT sessions". kugel-data's `by=strategy` grain (migration
+//     012) emits `n = sessions`, deliberately: sessions is the only class-A denominator on that
+//     deployment. So the same threshold now gates on roughly an order of magnitude fewer units, and
+//     100 was calibrated for events. Nothing errors — the loop simply promotes less, or stops. Left
+//     as an OPEN DECISION rather than silently re-picked here, because moving a promotion bar is a
+//     judgement about how much evidence a lesson needs, not a refactor. See KNOWN_ISSUES T-14b.
 //   * the same direction in >= STRATEGY_PROMOTION_MIN_WINDOWS consecutive windows — one good week is
 //     a week, not a lesson.
 // Countering is deliberately CHEAPER than promoting: a single later window that contradicts a
@@ -68,8 +76,10 @@ export type StrategyMetricKey = typeof STRATEGY_METRIC_KEYS[number];
 export const STRATEGY_COMPARABLE_KEYS = ["completion_rate", "cta_ctr", "buy_click_rate", "purchase_rate", "p75_dwell_ms"] as const;
 export type StrategyComparableKey = typeof STRATEGY_COMPARABLE_KEYS[number];
 
-/** Raw attributed-event count a group needs before it can promote or counter anything. The sink's own
- * `n`, NOT `sessions`: n is what the rates were actually computed from. */
+/** The sink's own `n` a group needs before it can promote or counter anything: whatever the grain
+ * says the rates were computed from. On kugel-data's `by=strategy` grain (migration 012) that is
+ * SESSIONS. This number was picked when `n` meant attributed events; it has not been re-picked.
+ * See the header, and KNOWN_ISSUES T-14b. */
 export const STRATEGY_PROMOTION_MIN_N = 100;
 /** Consecutive windows a finding must hold the same direction across before it becomes a lesson. */
 export const STRATEGY_PROMOTION_MIN_WINDOWS = 2;
@@ -270,8 +280,33 @@ export const strategyWindowKey = (window: StrategyWindow): string => `${window.f
  * was measured over and the count it rests on, both of which a later reader needs to decide whether
  * to believe it.
  */
-export const renderStrategyObservation = (key: StrategyGroupKey, findings: StrategyFinding[], n: number, window: StrategyWindow): string =>
-  `${strategySubjectPhrase(key)}: ${findings.map(renderStrategyFinding).join(", ")} (n=${Math.round(n)}, window ${window.from}..${window.to})`;
+/**
+ * The `from:` clause names the metrics this claim actually rests on.
+ *
+ * It is derived from the FINDINGS, not from the row's metric map, and the
+ * difference matters. `metricsFromRow` keeps a metric whose value is 0, and on
+ * the strategy grain most of the nine ARE 0 structurally — `pageview` and
+ * `exposure` are article-level and carry no node_id, so they cannot reach a node
+ * grain at all, and the three per-exposure rates therefore have no denominator
+ * (kugel-data migration 012's header; ATTRIBUTION.md §5). Listing "the metrics
+ * this row had values for" would present those structural zeroes as
+ * measurements, which is the exact confusion KI-29 describes: the wire cannot
+ * say "unavailable", so every missing measure arrives as 0.
+ *
+ * A finding only exists where a comparison was possible and material, so the
+ * findings' own metrics are the honest answer to "what was this learned from".
+ */
+export const renderStrategyObservation = (
+  key: StrategyGroupKey,
+  findings: StrategyFinding[],
+  n: number,
+  window: StrategyWindow
+): string => {
+  const from = [...new Set(findings.map((finding) => finding.metric))].sort();
+  return `${strategySubjectPhrase(key)}: ${findings.map(renderStrategyFinding).join(", ")} (n=${Math.round(n)}, window ${window.from}..${window.to}${
+    from.length ? `, from: ${from.join(", ")}` : ""
+  })`;
+};
 
 // ── playbook item text ───────────────────────────────────────────────────────
 
@@ -529,6 +564,14 @@ export type StrategyLearningDeps = RollupFetchDeps & {
 export type StrategyLearningResult = {
   /** Rows the sink returned, so "0 observations" can be told apart from "0 rows". */
   rows: number;
+  /**
+   * Of those rows, how many carried a `strategy` or an `intent`. The gap between
+   * `rows` and `rowsLabelled` is the whole KI-08 failure mode: the sink can serve
+   * a full window of perfectly good rows whose labels are all NULL, and every one
+   * of them is dropped by `strategyGroupsFromRows`. Without this number that
+   * looks identical to a quiet week.
+   */
+  rowsLabelled: number;
   groups: number;
   observations: Array<{ id: string; strategy?: string; intent?: string; n: number; findings: number; observation: string }>;
   promotion: StrategyPromotionOutcome;
@@ -538,11 +581,15 @@ export type StrategyLearningResult = {
   errors: Array<{ scope?: string; error: string }>;
 };
 
-const emptyResult = (): StrategyLearningResult => ({ rows: 0, groups: 0, observations: [], promotion: { promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
+const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], promotion: { promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
 
-/** The sink's `by=strategy` grain answers 503 until kugel-data migration 008 has run on the tenant's
- * deployment. That is a grain that does not exist here yet, not a failure — the same no-op an absent
- * sink gets, with nothing surfaced to the caller as an error. */
+/** The sink's `by=strategy` grain answers 503 until kugel-data serves it (migration 012, 2026-09).
+ * That is a grain that does not exist on this deployment yet, not a failure — the same no-op an
+ * absent sink gets, with nothing surfaced to the caller as an error.
+ *
+ * This used to name "migration 008". It was never 008: kugel-data's 008 is
+ * `008_experiment_keyed_by_control_item.sql` and its migrations were already at 011, so anyone who
+ * checked whether 008 had run got "yes" and concluded the grain should be working. */
 const GRAIN_UNAVAILABLE_STATUS = 503;
 
 /**
@@ -574,6 +621,7 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
   }
 
   result.rows = page.rows.length;
+  result.rowsLabelled = page.rows.filter((row) => asLabel(row.strategy) || asLabel(row.intent)).length;
   if (!page.rows.length) return result;
 
   const window: StrategyWindow = { from: params.from.slice(0, 10), to: params.to.slice(0, 10) };

@@ -284,7 +284,7 @@ first in line for budget eviction. Nothing is deleted behind an operator's back.
 
 Safe to deploy and schedule DAILY before anything else is true. With
 `TRACKING_SINK_URL` / `TRACKING_SINK_TOKEN` / `TRACKING_PROJECT_ID` unset it exits 0 with
-`status: "skipped_unconfigured"`. And until kugel-data **migration 008** has run on the
+`status: "skipped_unconfigured"`. And until kugel-data **migration 012** has run on the
 tenant's sink, the `by=strategy` grain answers 503: the job exits 0 with
 `status: "skipped_grain_unavailable"`, records nothing, and touches no playbook — the same
 no-op an absent sink gets, reported by its own name so an operator can see WHY there is
