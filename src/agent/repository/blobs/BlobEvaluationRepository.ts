@@ -1,4 +1,5 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
+import { sortNewestFirst } from "../newestFirst.js";
 import type { RecordEnvelope } from "../RecordEnvelope.js";
 import type { WorkspaceMutationMeta } from "../../mcp/workspace/store.js";
 import type { EvalResultFilters, EvaluationRepository, FeedbackFilters, RegressionReportFilters } from "../interfaces/EvaluationRepository.js";
@@ -17,7 +18,7 @@ const envelope = <T>(id: string, recordType: string, createdAt: string, data: T)
   ({ id, record_type: recordType, schema_version: `${recordType}.v1`, created_at: createdAt, updated_at: createdAt, data });
 
 const newestFirst = <T extends { createdAt: string }>(records: T[], limit?: number) =>
-  records.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit ?? 100);
+  sortNewestFirst(records, limit ?? 100);
 
 // Blob/GCS-backed evaluation substrate. Rubrics follow the skills current/versions layout;
 // results, pairwise comparisons, and feedback are append-only RecordEnvelope blobs (one immutable
@@ -69,7 +70,10 @@ export class BlobEvaluationRepository implements EvaluationRepository {
   async listRubricVersions(rubricId: string) {
     const { blobs } = await this.store.list({ prefix: `evaluation/rubric-versions/${rubricId}/` });
     const versions = (await Promise.all(blobs.map((blob) => getBlobJson<EvalRubricVersionSnapshot>(this.store, blob.key)))).filter((version): version is EvalRubricVersionSnapshot => Boolean(version));
-    return versions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    // Ascending by creation, unlike every other list here — and with a tiebreak, because two
+    // versions snapshotted in the same millisecond would otherwise come back in blob-listing order
+    // from this backend and insertion order from the memory one, for the same rubric.
+    return versions.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.versionId.localeCompare(b.versionId));
   }
   async restoreRubricVersion(rubricId: string, versionId: string, meta?: WorkspaceMutationMeta) {
     const version = (await this.listRubricVersions(rubricId)).find((candidate) => candidate.versionId === versionId);

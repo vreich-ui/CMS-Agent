@@ -1,11 +1,12 @@
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
+import { sortNewestFirst } from "../newestFirst.js";
 import type { ImprovementRepository } from "../interfaces/ImprovementRepository.js";
 import type { EvalDataset, ImprovementProposal, NodePlaybook, ProposalStatus, TrialRecord } from "../../improvement/improvementTypes.js";
 import { playbookSeeds } from "../../improvement/playbookSeeds.js";
 import { applyPlaybookDelta } from "../../improvement/playbook.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
-const newestFirst = <T extends { createdAt: string }>(records: T[]) => [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(clone);
+const newestFirst = <T extends { createdAt: string }>(records: T[]) => sortNewestFirst(records).map(clone);
 
 type ImprovementState = { proposals: Map<string, ImprovementProposal>; trials: Map<string, TrialRecord>; datasets: Map<string, EvalDataset>; playbooks: Map<string, NodePlaybook> };
 const createState = (): ImprovementState => ({ proposals: new Map(), trials: new Map(), datasets: new Map(), playbooks: new Map() });

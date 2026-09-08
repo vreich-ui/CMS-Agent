@@ -1,0 +1,124 @@
+{
+  "apiVersion": "run.googleapis.com/v1",
+  "kind": "Job",
+  "metadata": {
+    "name": "continuation-tick"
+  },
+  "spec": {
+    "template": {
+      "metadata": {
+        "annotations": {
+          "run.googleapis.com/execution-environment": "gen2"
+        }
+      },
+      "spec": {
+        "taskCount": 1,
+        "template": {
+          "spec": {
+            "serviceAccountName": "cms-agent-run@cms-agent-503015.iam.gserviceaccount.com",
+            "timeoutSeconds": "600",
+            "maxRetries": 0,
+            "containers": [
+              {
+                "image": "us-central1-docker.pkg.dev/cms-agent-503015/cms-agent/mcp-service@sha256:2b708bbf58d965a4aac4b5f55d5c68a55ff08bef16654122e6df292a73a6c618",
+                "command": [
+                  "node"
+                ],
+                "args": [
+                  "--import",
+                  "tsx",
+                  "src/agent/entrypoints/runContinuationTickMain.ts"
+                ],
+                "resources": {
+                  "limits": {
+                    "cpu": "1000m",
+                    "memory": "1Gi"
+                  }
+                },
+                "env": [
+                  {
+                    "name": "WORKSPACE_STORE",
+                    "value": "gcs"
+                  },
+                  {
+                    "name": "GCS_BUCKET",
+                    "value": "cms-agent-503015-cms-agent-state"
+                  },
+                  {
+                    "name": "CONTINUATION_TICK_BUDGET_MS",
+                    "value": "240000"
+                  },
+                  {
+                    "name": "TASK_TIMEOUT_MS",
+                    "value": "600000"
+                  },
+                  {
+                    "name": "DR_LURIE_MCP_ENDPOINT",
+                    "value": "https://drluriescience.netlify.app/mcp"
+                  },
+                  {
+                    "name": "PLATFORM_MCP_ENDPOINT",
+                    "value": "https://kugel-platform.netlify.app/mcp"
+                  },
+                  {
+                    "name": "FERNWELL_MCP_ENDPOINT",
+                    "value": "https://kugel-fernwell.netlify.app/mcp"
+                  },
+                  {
+                    "name": "ZILBERMAN_MCP_ENDPOINT",
+                    "value": "https://zilbermanfilmfoundation.netlify.app/mcp"
+                  },
+                  {
+                    "name": "OPENAI_API_KEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "latest",
+                        "name": "openai-api-key"
+                      }
+                    }
+                  },
+                  {
+                    "name": "DR_LURIE_MCP_TOKEN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "latest",
+                        "name": "dr-lurie-mcp-token"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PLATFORM_MCP_TOKEN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "latest",
+                        "name": "platform-mcp-token"
+                      }
+                    }
+                  },
+                  {
+                    "name": "FERNWELL_MCP_TOKEN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "latest",
+                        "name": "fernwell-mcp-token"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ZILBERMAN_MCP_TOKEN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "latest",
+                        "name": "zilberman-mcp-token"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

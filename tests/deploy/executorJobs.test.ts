@@ -64,16 +64,26 @@ describe("deploy/executor-jobs.txt", () => {
     }
   });
 
-  // The reverse direction is deliberately NOT asserted, because it is currently false and the
-  // falsehood is worth stating rather than hiding: `continuation-tick` — the plane with the largest
-  // blast radius, dispatching live content nodes every two minutes — is in this list but has NO
-  // deploy script in scripts/. It is configured entirely by hand, so nothing in the repository
-  // records its image, sizing, env or schedule. Writing that artifact is the outstanding half of
-  // S-14; until then, asserting "every listed job has a script" would just fail on the one job that
-  // most needs one.
-  it("records continuation-tick as the plane with no deploy artifact", () => {
+  // The reverse direction, now that it is true. Until 2026-09-08 `continuation-tick` -- the plane
+  // with the largest blast radius, dispatching live content nodes every two minutes -- sat in this
+  // list with NO deploy script. It was configured entirely by hand, so nothing in the repository
+  // recorded its image, sizing, env or schedule, and the only way to know what it was was to ask
+  // the live project. That was the outstanding half of S-14. Asserting the reverse is what stops it
+  // recurring: a job may not be listed here without an artifact that says what it is.
+  it("has a deploy script for every job in the list", () => {
     const scripted = new Set(jobCreatingScripts().map(({ job }) => job));
-    expect(scripted.has("continuation-tick")).toBe(false);
+    const unscripted = listedJobs().filter((job) => !scripted.has(job));
+    expect(
+      unscripted.map((job) => `${job} is in deploy/executor-jobs.txt with no deploy script in scripts/`)
+    ).toEqual([]);
+  });
+
+  it("has a schedule script for every job in the list", () => {
+    // Cloud Scheduler fires every one of these planes, and the cadence is as much a part of a plane
+    // as its env is. A schedule that exists only in the console is a plane nobody can reproduce.
+    const dir = readdirSync(repoFile("scripts"));
+    const missing = listedJobs().filter((job) => !dir.includes(`deploy-${job}-schedule.sh`));
+    expect(missing.map((job) => `${job} has no deploy-${job}-schedule.sh`)).toEqual([]);
   });
 });
 
