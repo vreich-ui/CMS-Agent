@@ -16,6 +16,41 @@
 // rather than a fabricated number, alongside the always-computable breakEvenConversions/floorUsd so a
 // caller can still reason about the offer without inventing a volume estimate.
 
+// 2026-09-08 — THE SAME DEFECT, RECURRED, AND THE TWO FIELDS THAT CLOSE IT FOR GOOD.
+// On run_1788769566432_5qnafb the node emitted estimatedRunCost:800 against a $3.86 run. W5 fixed the
+// arithmetic; the INPUT was still a model turn. runCostHistory.ts now derives the figure from measured
+// history and the conductor prefetches it (costPrefetch.ts), so this module gains only what it needs to
+// STATE THAT PROVENANCE in its own artifact:
+//
+//   runCostBasis  — where runCostUsd came from. "A historical mean is not a stated assumption."
+//   estimateBasis — whether the WHOLE estimate rests on live data. This is the field the
+//                   `ev_floor_blocked` skip predicate gates on (skipPredicates.ts), and the reason it
+//                   is derived HERE rather than authored by a node: a block is allowed to stop a run
+//                   only when it was EARNED — cost measured AND revenue from a live Monetizer query.
+//                   With Monetizer down, every money run yields "mixed" at best, the predicate never
+//                   fires, and the publishing pipeline stays up. That is the whole safety property.
+//   verdict       — the artifact's own conclusion, so a node copies a value instead of re-deriving one.
+
+// Where runCostUsd came from. Only the two MEASURED bases ("workflow_history", "accrued_run_cost")
+// count toward an earned block; "caller_override" is a test/dry-estimate path and "no_history" is the
+// honest absence of a figure.
+export type RunCostBasis = "workflow_history" | "accrued_run_cost" | "caller_override" | "no_history";
+
+// Where the revenue side came from. There is no third value on purpose: either a live Monetizer query
+// supplied the payout/conversion/volume this run, or they are assumptions.
+export type RevenueBasis = "monetizer_data" | "stated_assumption";
+
+// The basis of the estimate AS A WHOLE — the vocabulary the skip predicate reads.
+export type EstimateBasis = "monetizer_data" | "mixed" | "stated_assumption";
+
+// The ONE value that makes a block enforceable. Named here, next to the derivation, so the predicate
+// and the artifact can never drift about which word means "earned".
+export const EARNED_BLOCK_ESTIMATE_BASIS: EstimateBasis = "monetizer_data";
+
+export type EvFloorVerdict = "proceed" | "block" | "unknown";
+
+const MEASURED_RUN_COST_BASES: readonly RunCostBasis[] = ["workflow_history", "accrued_run_cost"];
+
 export type EvFloorInput = {
   // Real, non-fabricated run cost in USD — the caller is expected to have obtained this from
   // workflow_get_run_cost's ledger.totalCostUsdEstimate (or an equivalent live source), never a
@@ -30,6 +65,11 @@ export type EvFloorInput = {
   estimatedVolume?: number;
   // Multiple of runCostUsd the offer must clear to pass. Default 1 (break-even); >1 demands margin.
   floorMultiplier?: number;
+  // Provenance of runCostUsd. Omitted means the caller did not say, which is treated as unmeasured —
+  // never as measured, because an unstated provenance must never be able to earn a block.
+  runCostBasis?: RunCostBasis;
+  // Provenance of payoutUsd/conversionRate/estimatedVolume. Omitted means stated_assumption.
+  revenueBasis?: RevenueBasis;
 };
 
 export type EvFloorResult = {
@@ -45,6 +85,14 @@ export type EvFloorResult = {
   // null (not false) when expectedValueUsd could not be computed — a missing input is not "does not
   // meet the floor", it is "unknown", and the two must never be conflated.
   meetsFloor: boolean | null;
+  // Provenance, carried on the artifact so no reader has to ask the node where a number came from.
+  runCostBasis: RunCostBasis;
+  revenueBasis: RevenueBasis;
+  estimateBasis: EstimateBasis;
+  // "block" only when the floor was actually computed and missed. A null meetsFloor is "unknown",
+  // never "block" — the two must not be conflated, here least of all: `verdict` is what a skip
+  // predicate reads, and reading "unknown" as "block" would take the pipeline offline.
+  verdict: EvFloorVerdict;
   rationale: string;
 };
 
@@ -69,6 +117,16 @@ export function computeEvFloor(input: EvFloorInput): EvFloorResult {
     ? round2(payoutUsd * conversionRate * estimatedVolume)
     : null;
   const meetsFloor = expectedValueUsd === null ? null : expectedValueUsd >= floorUsd;
+  const verdict: EvFloorVerdict = meetsFloor === null ? "unknown" : meetsFloor ? "proceed" : "block";
+
+  const runCostBasis: RunCostBasis = input.runCostBasis ?? "no_history";
+  const revenueBasis: RevenueBasis = input.revenueBasis === "monetizer_data" ? "monetizer_data" : "stated_assumption";
+  // "Measured" on the revenue side means BOTH that the caller named a live source AND that the three
+  // figures it would have supplied are actually present. A caller claiming monetizer_data while
+  // omitting the payout has not measured anything.
+  const costMeasured = MEASURED_RUN_COST_BASES.includes(runCostBasis);
+  const revenueMeasured = revenueBasis === "monetizer_data" && payoutUsd !== null && conversionRate !== null && estimatedVolume !== null;
+  const estimateBasis: EstimateBasis = costMeasured && revenueMeasured ? "monetizer_data" : (costMeasured || revenueMeasured ? "mixed" : "stated_assumption");
 
   const rationale = [
     `floorUsd = runCostUsd(${runCostUsd}, real — never invented) x floorMultiplier(${floorMultiplier}) = ${floorUsd}.`,
@@ -77,8 +135,12 @@ export function computeEvFloor(input: EvFloorInput): EvFloorResult {
       : "payoutUsd not supplied (no offer selected, or payout unknown) — breakEvenConversions is null, not zero.",
     expectedValueUsd !== null
       ? `expectedValueUsd = payoutUsd x conversionRate(${conversionRate}) x estimatedVolume(${estimatedVolume}) = ${expectedValueUsd}, which ${meetsFloor ? "meets" : "does not meet"} floorUsd(${floorUsd}).`
-      : "conversionRate and/or estimatedVolume not supplied — expectedValueUsd and meetsFloor are null, never fabricated."
+      : "conversionRate and/or estimatedVolume not supplied — expectedValueUsd and meetsFloor are null, never fabricated.",
+    `runCostBasis = ${runCostBasis}; revenueBasis = ${revenueBasis}; estimateBasis = ${estimateBasis}. verdict = ${verdict}.`,
+    estimateBasis === "monetizer_data"
+      ? "Both sides came from live data this run, so a block here is EARNED and may stop the run."
+      : "At least one side is assumed rather than measured, so a block here is advisory only and never stops a run."
   ].join(" ");
 
-  return { artifact: "ev_floor.v1", runCostUsd, floorMultiplier, floorUsd, payoutUsd, conversionRate, estimatedVolume, expectedValueUsd, breakEvenConversions, meetsFloor, rationale };
+  return { artifact: "ev_floor.v1", runCostUsd, floorMultiplier, floorUsd, payoutUsd, conversionRate, estimatedVolume, expectedValueUsd, breakEvenConversions, meetsFloor, runCostBasis, revenueBasis, estimateBasis, verdict, rationale };
 }

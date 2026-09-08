@@ -101,6 +101,15 @@ export type NodeTimingAggregate = {
   emaDurationMs: number;
   p50DurationMs: number;
   p95DurationMs: number;
+  // 2026-09-08 — THE COST HALF, added because it was missing and something needed it.
+  // The ledger has always RECORDED costUsd (recordNodeTimingCompletion reads it back from the usage
+  // ledger); only the aggregate was duration-only, so "what does this node usually cost" had no
+  // answer and monetization_strategy's estimatedRunCost was left to a model turn — the $800-against-
+  // $3.86 defect. Same three statistics, same definitions, same folding order as the duration half.
+  emaCostUsd: number;
+  p50CostUsd: number;
+  p95CostUsd: number;
+  totalCostUsd: number;
 };
 
 // Pure aggregator — the ONLY place EMA/p50/p95 arithmetic happens, so it is testable against known
@@ -120,12 +129,20 @@ export function aggregateNodeTimingsByNode(records: readonly NodeTimingRecord[])
     let ema: number | undefined;
     for (const record of chronological) ema = foldEma(ema, record.durationMs);
     const sortedDurations = chronological.map((record) => record.durationMs).sort((a, b) => a - b);
+    let emaCost: number | undefined;
+    for (const record of chronological) emaCost = foldEma(emaCost, record.costUsd);
+    const sortedCosts = chronological.map((record) => record.costUsd).sort((a, b) => a - b);
+    const roundUsd = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
     result[nodeId] = {
       nodeId,
       count: chronological.length,
       emaDurationMs: Math.round(ema ?? 0),
       p50DurationMs: percentile(sortedDurations, 50),
-      p95DurationMs: percentile(sortedDurations, 95)
+      p95DurationMs: percentile(sortedDurations, 95),
+      emaCostUsd: roundUsd(emaCost ?? 0),
+      p50CostUsd: roundUsd(percentile(sortedCosts, 50)),
+      p95CostUsd: roundUsd(percentile(sortedCosts, 95)),
+      totalCostUsd: roundUsd(chronological.reduce((sum, record) => sum + record.costUsd, 0))
     };
   }
   return result;
