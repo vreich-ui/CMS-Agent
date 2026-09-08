@@ -2,6 +2,13 @@
 # Pin every Cloud Run executor JOB to the exact image DIGEST the cms-agent-mcp SERVICE is serving,
 # and — with --check — report which planes have drifted off it without deploying anything.
 #
+# It also reconciles the list against the project in BOTH directions, because the list can only ever
+# answer half the question. Listed but not in the project is ABSENT: the repository describes a plane
+# nobody built, which produces no logs and no failures to notice. In the project but not listed is
+# UNLISTED: a job running this image that nothing pins, which every deploy walks past while it keeps
+# executing nodes on the image it was created with. That second one is the 2026-09-07 incident seen
+# from the other side, and until now nothing reported it.
+#
 # WHY THIS FILE EXISTS
 #
 # A deploy built an image, pushed it, updated the service, and stopped. cloudbuild.deploy.yaml did
@@ -133,10 +140,80 @@ read_job_image() {
   return 1
 }
 
-# Four verdicts, deliberately not merged into one. "Stale" is a fact about production, "unverified"
-# is a fact about this check, "weak" is a fact about how a plane is pinned rather than to what, and
-# "missing" is a fact about the list. Reporting the second as the first is what made build
-# 281759b1 read as a broken fleet when the sync had actually worked.
+# Membership test over a space-padded string. Bash 3.2 is what macOS ships as /bin/bash and what
+# `npm run deploy:mcp` therefore runs (ad60201), so: no associative arrays.
+JOBS_SPACED=" $(echo $JOBS) "
+listed() { case "$2" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# ── PRE-FLIGHT ──────────────────────────────────────────────────────────────────────────────────
+# Every read happens here, before pin mode updates anything. Two reasons, both learned the hard way.
+#
+# FIRST: "no such job" and "cannot read job" are different answers that `describe` reports the same
+# way — a non-zero exit. Conflating them is dangerous in BOTH directions. An expired credential or a
+# lost IAM binding would read as absent, which in pin mode silently SKIPS a live plane (leaving it
+# stale, which is this whole file's bug) and in check mode invents a plane that does not exist and
+# sends someone to create one that is already there. So the two are told apart by what gcloud
+# actually says, and anything that is not a clean "Cannot find job" stops the run.
+#
+# SECOND: pin mode used to describe job 2 only after updating job 1. A credential expiring midway
+# then left a half-pinned fleet — some planes on the new artifact, some on the old, no error that
+# named which. Resolving every job up front means an access failure costs nothing.
+job_presence() { # 0 = present, 1 = absent, dies on anything else
+  local job="$1" err
+  if err="$(gcloud run jobs describe "$job" --project "$PROJECT" --region "$REGION" --format='value(metadata.name)' 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  case "$err" in
+    *"Cannot find job"*|*NOT_FOUND*|*"does not exist"*) return 1 ;;
+  esac
+  die "Cannot read job '$job' in $PROJECT / $REGION, and this is not a 'no such job' answer:
+    ${err%%$'\n'*}
+  Nothing has been changed. Fix the access first — treating this as 'absent' would skip a live plane
+  in pin mode and invent a missing one in check mode."
+}
+
+PRESENT=" "
+for JOB in $JOBS; do
+  if job_presence "$JOB"; then PRESENT="$PRESENT$JOB "; fi
+done
+
+# ── THE OTHER DIRECTION ─────────────────────────────────────────────────────────────────────────
+# The list answers "which planes should exist". It cannot answer "which planes DO exist", and that
+# is the half C-10 left open: a job built from the mcp-service image that nobody added to the list
+# is pinned by nothing, checked by nothing, and reported by nothing. That is exactly how
+# site-credential-reconciler and tracking-ingest went stale on 2026-09-07 — they existed, they ran
+# this image, and the sync did not know they were there.
+#
+# So both directions are reconciled and both fail. Listed-but-absent (below) says the repository
+# describes a plane nobody built. Present-but-unlisted (here) says the project runs a plane nobody
+# registered. Neither is a note: an unlisted plane executes workflow nodes on whatever image it was
+# created with, forever, and every deploy walks past it.
+#
+# Only jobs on THIS image repository count. A job built from another image is not an executor plane
+# and must never be pinned to mcp-service — that would point it at an artifact without its entrypoint.
+JOB_IMAGE_REPO="${JOB_IMAGE_REPO:-${REGION}-docker.pkg.dev/${PROJECT}/cms-agent/mcp-service}"
+UNLISTED=""
+ALL_JOBS=""
+for NAMEFIELD in 'metadata.name' 'name'; do
+  ALL_JOBS="$(gcloud run jobs list --project "$PROJECT" --region "$REGION" --format="value($NAMEFIELD)" 2>/dev/null || true)"
+  [ -n "$ALL_JOBS" ] && break
+done
+[ -n "$ALL_JOBS" ] || die "Could not list Cloud Run jobs in $PROJECT / $REGION. Refusing to report a fleet as complete when half the question could not be asked."
+for RAW in $ALL_JOBS; do
+  CANDIDATE="${RAW##*/}"
+  listed "$CANDIDATE" "$JOBS_SPACED" && continue
+  CANDIDATE_IMAGE="$(read_job_image "$CANDIDATE")" || continue
+  CANDIDATE_REPO="${CANDIDATE_IMAGE%@*}"
+  CANDIDATE_REPO="${CANDIDATE_REPO%:*}"
+  [ "$CANDIDATE_REPO" = "$JOB_IMAGE_REPO" ] || continue
+  say "UNLISTED $CANDIDATE — runs this image but is not in ${EXECUTOR_JOBS_FILE##*/}, so nothing pins it."
+  UNLISTED="$UNLISTED $CANDIDATE"
+done
+
+# Five verdicts, deliberately not merged into one. "Stale" is a fact about production, "unverified"
+# is a fact about this check, "weak" is a fact about how a plane is pinned rather than to what,
+# "missing" is a fact about the list, and "unlisted" is a fact about the project. Reporting the
+# second as the first is what made build 281759b1 read as a broken fleet when the sync had worked.
 STALE=""
 UNVERIFIED=""
 WEAK=""
@@ -144,7 +221,7 @@ MISSING=""
 CHANGED=""
 
 for JOB in $JOBS; do
-  if ! gcloud run jobs describe "$JOB" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+  if ! listed "$JOB" "$PRESENT"; then
     # PIN mode moves on: a job that does not exist cannot run stale code, and the service is
     # deployed and healthy regardless.
     #
@@ -248,8 +325,21 @@ if [ "$MODE" = check ] && [ -n "$MISSING" ]; then
   say "  never created produces no logs, no failures and no executions to look at. Create them with" >&2
   say "  their deploy scripts, or remove them from ${EXECUTOR_JOBS_FILE##*/} if they are not wanted." >&2
 fi
+if [ -n "$UNLISTED" ]; then
+  # Fails BOTH modes, unlike ABSENT. A listed plane that was never created cannot run stale code, so
+  # pin mode can walk past it. An unlisted plane is the opposite: it exists, it runs this image, and
+  # nothing pins it — so a deploy that ignores it ships exactly the split this file was written to
+  # prevent. Failing the deploy is the point.
+  say ""
+  say "✗ planes running $JOB_IMAGE_REPO that are not in ${EXECUTOR_JOBS_FILE##*/}:$UNLISTED" >&2
+  say "  Nothing pins them. Every deploy updates the service, repins the listed planes, and walks" >&2
+  say "  past these — so they keep executing workflow nodes on whatever image they were created" >&2
+  say "  with. This is the 2026-09-07 shape, from the other side of the list." >&2
+  say "  Add each to ${EXECUTOR_JOBS_FILE##*/} with a comment saying what it is and what a stale" >&2
+  say "  image would do, or delete the job if it is not wanted." >&2
+fi
 
-if [ -n "$STALE$UNVERIFIED" ] || { [ "$MODE" = check ] && [ -n "$MISSING" ]; }; then
+if [ -n "$STALE$UNVERIFIED$UNLISTED" ] || { [ "$MODE" = check ] && [ -n "$MISSING" ]; }; then
   exit 1
 fi
 

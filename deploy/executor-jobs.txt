@@ -2,6 +2,11 @@
 #
 # THIS IS THE ONLY LIST. scripts/pin-job-images.sh reads it, and cloudbuild.deploy.yaml runs that
 # same script — so the trigger path and the shell path cannot disagree about which planes exist.
+# Adding a job is one line here and nothing else, and since 2026-09-08 forgetting that line is
+# caught rather than silent: the check reconciles this file against the project in BOTH directions.
+# A name here with no job in us-central1 is ABSENT; a job running the mcp-service image whose name
+# is not here is UNLISTED, and that one fails the deploy too, because nothing pins it and every
+# release walks past it while it keeps executing nodes on the image it was created with.
 # Adding a job is one line here and nothing else. The previous arrangement kept the list in a
 # cloudbuild substitution (`_EXECUTOR_JOBS: continuation-tick`) that only the trigger could see,
 # and it went stale the moment jobs were added anywhere else: on 2026-09-07 two of the three live
