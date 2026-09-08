@@ -43,50 +43,53 @@ poller; it bypasses no stop.
 
 ## Deploy
 
+Two scripts, and neither of them starts a run.
+
     PROJECT=cms-agent-503015
     REGION=us-central1
-    REPO=cms-agent
-    BUCKET=cms-agent-503015-cms-agent-state
+    GCS_BUCKET=cms-agent-503015-cms-agent-state
     RUNTIME_SA=cms-agent-run@cms-agent-503015.iam.gserviceaccount.com
-    IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/continuation-tick:$(git rev-parse --short HEAD)"
 
-    # 1. Build. Same Dockerfile as the conductor job; only the entrypoint differs, overridden below.
-    gcloud builds submit --project "$PROJECT" --tag "$IMAGE" .
+    # Read. Describes the live job, diffs every declared field, prints the table, writes nothing.
+    # Non-zero on any difference in EITHER direction -- including a field the job has that the
+    # script does not declare, because a merge-style update leaves that one in place forever.
+    bash scripts/deploy-continuation-tick.sh
 
-    # 2. Create the job. --set-* is correct HERE because this CREATES the job; never copy these flags
-    #    into a later `jobs update` (see PHASE4_RUNBOOK — --set-env-vars ate six variables twice).
-    gcloud run jobs create continuation-tick \
-      --project "$PROJECT" --region "$REGION" --image "$IMAGE" \
-      --service-account "$RUNTIME_SA" \
-      --cpu 1 --memory 1Gi --max-retries 0 --task-timeout 300 \
-      --command node \
-      --args="--import,tsx,src/agent/entrypoints/runContinuationTickMain.ts" \
-      --set-env-vars "WORKSPACE_STORE=gcs,GCS_BUCKET=$BUCKET,CONTINUATION_TICK_BUDGET_MS=240000" \
-      --set-secrets "OPENAI_API_KEY=openai-api-key:latest"
+    # Write. An operator decision, taken deliberately, between ticks, after checking driverHealth.
+    APPLY=1 bash scripts/deploy-continuation-tick.sh
 
-    # 3. Dry check before scheduling anything: one manual execution, read the summary line.
-    gcloud run jobs execute continuation-tick --project "$PROJECT" --region "$REGION" --wait
+    # Cadence. A separate script, because how often this plane touches four live sites is a bigger
+    # decision than what env it carries, and the two should not ride on one keystroke.
+    SCHEDULER_SA="$RUNTIME_SA" bash scripts/deploy-continuation-tick-schedule.sh
 
-    # 4. Cloud Scheduler MUST be able to invoke the job. Without this the trigger returns
-    #    status.code 7 (PERMISSION_DENIED) and never creates an execution — the runtime SA carries
-    #    only roles/secretmanager.secretAccessor at project level. Job-scoped, least privilege.
+The shape those scripts declare was captured from the live project on 2026-09-08, before either
+existed: [continuation-tick.live-shape.md](continuation-tick.live-shape.md). Change a default in a
+script and change it there too, or the next reader cannot tell which file is the intent.
+
+**Creating the job from scratch** needs `IMAGE=<digest> APPLY=1`. After that `scripts/pin-job-images.sh`
+owns the image, so the deploy script deliberately declares none and reports the live digest as
+information rather than as a diff.
+
+**Neither script widens IAM.** Cloud Scheduler mints an OAuth token as `SCHEDULER_SA` and POSTs the
+Jobs v1 `:run` endpoint. Without `roles/run.invoker` **on the job**, every fire returns status code 7
+PERMISSION_DENIED: the scheduler records its own failure, the job records nothing because it never
+started, and the queue simply stops draining. Grant it once, job-scoped, least privilege:
+
     gcloud run jobs add-iam-policy-binding continuation-tick \
       --project "$PROJECT" --region "$REGION" \
       --member "serviceAccount:$RUNTIME_SA" --role roles/run.invoker
 
-    # 5. Schedule it. EVERY TWO MINUTES, not every minute: the first execution measured
-    #    "Started deployed execution in 2m16.3s" — a Cloud Run Job cold-starts this image slower
-    #    than a 60 s cadence, so a 1-minute schedule guarantees permanent overlap. Overlap is SAFE
-    #    (the dispatch claim makes the selector refuse an in-flight run) but it is pure waste.
-    #    Cloud Scheduler cannot express 30 s either way.
-    gcloud scheduler jobs create http continuation-tick-schedule \
-      --project "$PROJECT" --location "$REGION" --schedule "*/2 * * * *" \
-      --uri "https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT/jobs/continuation-tick:run" \
-      --http-method POST \
-      --oauth-service-account-email "$RUNTIME_SA"
+**Every two minutes, not every minute.** The first execution measured "Started deployed execution in
+2m16.3s" — this image cold-starts slower than a 60 s cadence, so a 1-minute schedule guarantees
+permanent overlap. Overlap is SAFE (the dispatch claim makes the selector refuse an in-flight run)
+but it is pure waste. Cloud Scheduler cannot express 30 s either way.
 
-`--task-timeout 300` with `CONTINUATION_TICK_BUDGET_MS=240000` keeps a tick inside its own task
-window: the budget is checked BETWEEN advances and never cuts a dispatch short, so the timeout is
+**There is deliberately no execute step in this section.** Shaping the plane and firing it are
+different decisions with different blast radii, and the schedule already fires it. A one-off run for
+diagnosis is an operator action taken knowingly, not a step in deploying.
+
+`--task-timeout 600` with `CONTINUATION_TICK_BUDGET_MS=240000` (the live values, and the script's
+defaults) keeps a tick inside its own task window: the budget is checked BETWEEN advances and never cuts a dispatch short, so the timeout is
 headroom, not a guillotine. A node's own timeout (120 s default) fits comfortably inside it.
 
 **It did not fit for `article_body` (2026-09-04).** With a 240 s budget inside a 300 s task, a node
@@ -97,8 +100,10 @@ the first attempt. Two things changed:
 - **`TASK_TIMEOUT_MS` (env, on the job).** W0 T1.2's deadline-aware dispatch reads it and refuses to
   START a node whose own timeout plus a 15 s margin does not fit in the task's REMAINING time; the
   tick returns `deferredDeadline` and the next tick starts that node with a full task ahead of it.
-  Set it to the same number of milliseconds as `--task-timeout`, or the check defends the wrong
-  ceiling. Default 300000 (the pre-C2.2 value) when unset.
+  It must equal `--task-timeout` in milliseconds or the check defends the wrong ceiling, which is
+  why `scripts/deploy-continuation-tick.sh` DERIVES it from `TASK_TIMEOUT_SECONDS` rather than
+  letting anyone type it twice (`tests/deploy/continuationTickScript.test.ts` asserts that). Default
+  300000 (the pre-C2.2 value) when unset — a default the live job no longer relies on.
 - **A node whose timeout cannot fit a WHOLE task is dispatched anyway**, deliberately: deferring it
   would refuse it on every future tick too. The fix for such a node is a larger `--task-timeout`
   (C2.2 raises it to 600 s), not a deferral loop.

@@ -53,9 +53,11 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 - Evidence (pre-fix): `cloudbuild.deploy.yaml:45` `_EXECUTOR_JOBS: continuation-tick` only.
 - Scenario: realised on 2026-09-07, on two jobs this entry did not anticipate. `site-credential-reconciler` was several builds behind; it rotates every tenant's scoped credential from the allowlist compiled into the image, so running it would have re-narrowed all four tenants to an older, smaller allowlist and **exited 0 looking like a success**. `tracking-ingest` was behind and missing the code that stamps `projectId`, so a tenant admin's Insights panel showed nothing while the data sat in the store. Three repins were done by hand that day.
 - Correction to this entry's original framing: `continuation-tick` was the one job that never drifted — it was the only name in `_EXECUTOR_JOBS`. The defect was never the sync logic, which was sound; it was that the list was a hand-maintained parallel copy, and the two jobs added later were never in it.
+- Update (2026-09-08): all five planes in `deploy/executor-jobs.txt` now have both a deploy script and a schedule script, `continuation-tick` included, and `tests/deploy/executorJobs.test.ts` asserts that direction rather than recording its absence. Being *listed* and being *reproducible* were two different properties, and only the first was ever checked.
 - Post-merge note (2026-09-06), still open: whether `conductor-run` still exists is **unverifiable from the repo** — it is named only by the Blobs-era PHASE1 runbook and a 2026-08-04 cost note (`docs/plan/HANDOFF.md:514`). It is deliberately NOT in `deploy/executor-jobs.txt`: an audit of the live project on 2026-09-07 found only the three jobs above. If it is ever found to exist, adding it is one line.
 
 ### C-11 `TASK_TIMEOUT_MS` is set by nothing, so the tick's deadline guard uses a default that may not match the job — **Medium**, confirmed
+- **Fixed (ops/tick-deploy-and-hygiene).** `scripts/deploy-continuation-tick.sh` declares the job's whole shape and DERIVES `TASK_TIMEOUT_MS` from the same shell variable as `--task-timeout`, so the two cannot be typed apart; `tests/deploy/continuationTickScript.test.ts` fails if anyone replaces the derivation with a literal. The 2026-09-08 recon found the live job already carrying `TASK_TIMEOUT_MS=600000` beside `--task-timeout 600` — correct, but set by hand and recorded nowhere, which is the same defect wearing a right answer. The script's default mode now proves that equality on demand instead of trusting it.
 - Evidence: `runContinuation.ts:141-147` (comment says it exists so code and `--task-timeout` "cannot drift"); no deploy artifact or runbook sets it (`docs/platform/CONTINUATION_TICK.md:58-64`).
 - Scenario: job `--task-timeout` raised above 300 s: the guard is merely conservative; set below 300 s: the guard over-estimates the remaining task time, starts a dispatch that cannot finish, and the platform kills the node mid-flight (the 2026-09-04 shape). Fix: set the env var wherever `--task-timeout` is set (runbook + a job deploy script).
 
@@ -191,6 +193,11 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 - Evidence: the deterministic, templated route (`learningRecord.ts`, "no model call and no free-text generation") runs only when `metadata.learningRecorderDeterministic === true` (`executor.ts:2494-2498`); no canonical literal sets it (`nodes.ts` 0 matches, `cloneConductorNodes.ts` 0, `captureConductorNodes.ts` only a comment). Consumers (`optimizer_analyze`, playbook curation, attention feed) treat every observation alike.
 - Scenario: a playbook is curated from an observation that says the publish succeeded because the model believed it did. Fix (implementation): set the flag in canonical code or make the deterministic record the default; until then, documentation labels the source (AGENT_ARCHITECTURE §6).
 
+### K-A12 `provider: "anthropic"` is fully wired in code and bound to no key on Cloud Run — **Medium**, confirmed (2026-09-08)
+- Evidence: `runnerRegistry.ts:15-18` routes any node whose `modelConfig.provider` is `anthropic` to `AnthropicNodeRunner`, which fails validation with "ANTHROPIC_API_KEY is required for anthropic execution" (`AnthropicNodeRunner.ts:80`) when the variable is unset. The 2026-09-08 recon found `ANTHROPIC_API_KEY` bound by NEITHER the `continuation-tick` job NOR the `cms-agent-mcp` service (`docs/platform/continuation-tick.live-shape.md`). Meanwhile genesis provisions that same key name into the Netlify `fleet_shared_keys` set for tenant sites (`tests/agent/capture/siteGenesisTrackingProvisioning.test.ts:161`), so the fleet already assumes it exists somewhere.
+- Nothing is broken today: no node or rubric outside tests declares `provider: "anthropic"`.
+- Scenario: the first node flipped to that provider fails on the tick plane within two minutes, across four tenant sites, as a per-node *validation* error rather than a deploy error — so it reads as a bad node, not as a missing binding, and the deploy that "caused" it will look clean. Fix: bind the secret on both planes before any node is switched, or make the runner refuse at registration time with a message that names the plane.
+
 ### K-A8 Unbounded agent loops are bounded — verified, no issue
 - `maxTurns`, `toolCallLimit`, timeouts, `MAX_STEPS`/`maxSteps`, `CONCURRENT_DISPATCH_LIMIT`, tick budgets, retry caps and budget gates all exist and are tested. Recursive tool use is impossible: nodes cannot call `workflow.*`/`node.execute` (not in the controlled registry).
 
@@ -242,7 +249,7 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 | Id | Severity | Finding | Fix |
 |---|---|---|---|
 | I-1 | Medium | Deploy artifact drift (C-12) | unify |
-| I-2 | Medium | `TASK_TIMEOUT_MS` unset (C-11) | set with `--task-timeout` |
+| I-2 | ~~Medium~~ **Fixed** | `TASK_TIMEOUT_MS` unset (C-11) | derived from `--task-timeout` in `scripts/deploy-continuation-tick.sh` |
 | I-3 | Medium | `conductor-run` image not synced (C-10) | `_EXECUTOR_JOBS` |
 | I-4 | Medium | No scripted rollback; `route-to-latest` only moves traffic forward | document `gcloud run services update-traffic --to-revisions` or add a `rollback` action to `cloud-run-plane.yml` |
 | I-5 | Medium | `/health` is shallow (no store, no client check); deploy verification checks variable names not values; `SERVICE_GIT_SHA` never stamped | add a `/ready` that reads `repository_get_health`; stamp SHA in the trigger |
@@ -250,6 +257,7 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 | I-7 | Medium | Legacy Netlify functions remain deployed and routed — **re-verified 2026-09-06** on the production deploy of `921367e` (8 functions, 13 redirects): `/api/mcp` 502, `/api/agent` 502, `/api/session` 401 (alive), `/.well-known/oauth-authorization-server` 200 (a live OAuth authorization server minting tokens into Netlify Blobs that the Cloud Run verifier never reads). Dead 502 surface plus a decoy auth surface (`AGENT_API_TOKEN`, Netlify OAuth) | remove functions except `session`; keep the modules for tests |
 | I-8 | Low | `MCP_ALLOWED_ORIGINS` only on the script path; a trigger-only fresh deploy denies the SPAs | add to trigger |
 | I-9 | Low | Ingest/GC jobs have no deploy artifact; whether they run is unknown | scripts like the reconciler's |
+| I-10 | Medium | `ANTHROPIC_API_KEY` bound on neither the tick job nor the service, while the provider path is complete (K-A12) | bind on both planes before any node declares `provider: "anthropic"` |
 | I-10 | Info | Secrets: no value leakage found in code, logs or records; `.dockerignore` excludes `.env*`; CI uses no secrets | — |
 
 ## T. Tests (from the test-suite audit; 290 files / ~2 760 tests, all passing, ~4 min)
