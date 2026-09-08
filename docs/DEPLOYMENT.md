@@ -23,11 +23,29 @@ Status: current as of commit `40424c4` (2026-09-05), derived from `cloudbuild.de
 2. `docker push`.
 3. `deploy()` → [`scripts/deploy-service.sh`](../scripts/deploy-service.sh), the single source for the service's shape: `--service-account cms-agent-run@… --cpu 1 --memory 1Gi --min-instances 1 --max-instances 4 --port 8080 --allow-unauthenticated` with **merge** flags `--update-env-vars` / `--update-secrets` (never `--set-*`: that replaced the whole environment and deleted the client-connection variables twice). `scripts/deploy-mcp.sh` runs the same script — see §3.
 4. Verify: served image == built image, resolving concurrent-build races by git ancestry (older build redeploys; newer build yields); 11 client variables present (`CMS_AGENT_PUBLIC_MCP_ENDPOINT`, `MCP_SCOPED_TOKENS_JSON`, `NETLIFY_API_TOKEN`, `{DR_LURIE,PDF_TOOL,PLATFORM,FERNWELL}_MCP_{ENDPOINT,TOKEN}`); `*_PUBLISH_ENABLED` reported advisory-only; `GET /health` must be 200.
-5. `sync-executor-planes`: runs `scripts/pin-job-images.sh`, which pins every job in [`deploy/executor-jobs.txt`](../deploy/executor-jobs.txt) — today `continuation-tick`, `site-credential-reconciler`, `tracking-ingest` — to the **digest** the just-deployed revision resolves to, then reads the image back through three known field paths (a stale plane fails the build; an unreadable path is reported as *unverified*, not stale; a job that does not exist is skipped, not failed). `scripts/deploy-mcp.sh` runs the same script, so the two release paths cannot disagree about which planes exist. Adding a plane is one line in that file and nothing else — the list used to be a `_EXECUTOR_JOBS` substitution visible only to the trigger, which is how two of the three jobs came to be synced by nothing at all (C-10).
+5. `sync-executor-planes`: runs `scripts/pin-job-images.sh`, which pins every job in [`deploy/executor-jobs.txt`](../deploy/executor-jobs.txt) — today `continuation-tick`, `site-credential-reconciler`, `tracking-ingest`, `strategy-learning`, `strategy-review` — to the **digest** the just-deployed revision resolves to, then reads the image back through three known field paths (a stale plane fails the build; an unreadable path is reported as *unverified*, not stale; a job that does not exist is skipped, not failed). `scripts/deploy-mcp.sh` runs the same script, so the two release paths cannot disagree about which planes exist. Adding a plane is one line in that file and nothing else — the list used to be a `_EXECUTOR_JOBS` substitution visible only to the trigger, which is how two of the three jobs came to be synced by nothing at all (C-10).
 
    Pinned by **digest**, not by the `:<SHORT_SHA>` tag, because a tag is a mutable pointer: two references spelled alike are similarly *named*, not provably the same *artifact*. The service escapes this without trying — Cloud Run resolves its tag to a digest when it creates the revision, and the revision is what serves — but a job records the literal reference it was given and no digest at all, so plane and service were genuinely not comparable as written.
 
 6. Between deploys: `npm run check:job-images` (or the `check-job-images` action of `cloud-run-plane.yml`, which also runs daily on a schedule) reports any plane whose image digest differs from the service's and exits non-zero. Read-only; it never repins.
+
+### The W21 learning loop (S-14)
+
+Three jobs, one chain, and each has a job script and a schedule script under `scripts/`:
+
+| Job | Reads | Writes | Schedule (UTC) |
+|---|---|---|---|
+| `tracking-ingest` | sink rollups, previous whole **day** | feedback outcomes in the evaluation store | `0 3 * * *` |
+| `strategy-learning` | sink rollups at the strategy grain, previous whole **day** | `tracking:strategy.v1` observations + playbook deltas on the writer/planning nodes | `0 4 * * *` |
+| `strategy-review` | those observations + `by=object` rollups, previous whole **week** | one `marginalia_create` thread on the governed strategy object — **never patches** | `0 5 * * 1` |
+
+The ordering is the contract, not the clock: `strategy-learning` must fire after `tracking-ingest` has written the day it reads, and `strategy-review` on the first day the week it reads is complete. Move one and move the rest.
+
+None of the three pins a window. Each defaults to its own trailing period, and a fixed `--from`/`--to` would re-read one frozen period forever — harmless for a pure reader, but `strategy-learning` writes observations (a frozen day would inflate the consecutive-window streak that gates every promotion) and `strategy-review` opens a thread a human reads (a frozen week would be a weekly duplicate in an editor's queue). `tests/deploy/executorJobs.test.ts` asserts this, and asserts that every job any deploy script can create is in `executor-jobs.txt`.
+
+`strategy-review` needs two independent pieces of configuration — the sink, and `EDITORIAL_STRATEGY_PROJECT_ID`/`_OBJECT_TYPE`/`_OBJECT_ID` naming the object an editor owns. Its script rejects a *partial* address (all three or none), because a half-set address is the one shape that could send a proposal to the wrong object. With none set the job is a clean named no-op that exits 0.
+
+**`continuation-tick` still has no deploy script.** It is in `executor-jobs.txt` and gets pinned, but its image, sizing, env and schedule are configured entirely by hand and recorded nowhere in this repository — and it is the plane with the largest blast radius, dispatching live content nodes every two minutes. That is the outstanding half of S-14.
 
 Build-time startup guard: both Dockerfiles import the entrypoint's whole module graph during `docker build` (`node --import tsx -e "await import('./src/agent/entrypoints/…')"`) so an image that cannot load fails the build instead of dying silently on Cloud Run with zero logs (2026-08-20 incident).
 
