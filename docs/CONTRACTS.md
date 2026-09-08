@@ -12,7 +12,7 @@ which is the right call for a nightly job and exactly what makes drift invisible
 
 | # | Consumer | Producer | Fields read | On drift | Coverage today |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `src/agent/improvement/strategyLearning.ts:142-144` (`strategyGroupsFromRows`) | kugel-data `/rollups?by=strategy` | `row.strategy`, `row.intent` — no camelCase or nested fallback, unlike every sibling reader | **silently wrong.** `if (!strategy && !intent) continue;` drops the row; the grain returns `[]` and `ingestStrategyRollups` writes zero observations with no error. Indistinguishable from a quiet week. Starves playbook promotion for all six `STRATEGY_PLAYBOOK_TARGET_NODES` and the angle-mix dimension — the only strategy-review dimension ever proven to fire. | `tests/agent/improvement/strategyLearning.test.ts` fixtures `strategyRow()`/`ordinaryRow()`/`thirdRow()` (l.45-89) use plain `strategy`/`intent`, **never cross-checked against kugel-data's real `by=strategy` shaping code** |
+| 1 | `src/agent/improvement/strategyLearning.ts:142-144` (`strategyGroupsFromRows`) | kugel-data `/rollups?by=strategy` | `row.strategy`, `row.intent` — no camelCase or nested fallback, unlike every sibling reader | **no rows at all, today.** The producer has never built this grain: `kugel-data` answers **503 "grain not implemented"** for `by=strategy` on purpose (`UNIMPLEMENTED_ROLLUP_GRAINS`, S-04), and `RollupBy` is `"object" \| "producer"`. So this reader has never seen a row. When the view IS built, `if (!strategy && !intent) continue;` drops any row whose columns are spelled differently, the grain returns `[]`, and `ingestStrategyRollups` writes zero observations with no error — indistinguishable from a quiet week, and starving playbook promotion for all six `STRATEGY_PLAYBOOK_TARGET_NODES`. | `tests/agent/improvement/strategyLearning.test.ts` fixtures `strategyRow()`/`ordinaryRow()`/`thirdRow()` (l.45-89) use plain `strategy`/`intent`, **never cross-checked against kugel-data's real `by=strategy` shaping code** |
 | 2 | `src/agent/improvement/trackingIngest.ts:115-118` (`producerField`), used at `:278-279` | kugel-data `/rollups?by=producer` (`netlify/functions/_shared/rollups.ts`) | `node_id`/`nodeId`, `run_id`/`runId`, plus a nested `producer.{…}` envelope | **silently wrong.** All spellings missing ⇒ `producerKeyOf` collapses to `"unknown:unknown"` and the record still saves. `optimizer.analyzeNode` for the real node then finds nothing and reads it as "no feedback", not as a broken pull. | `tests/agent/trackingIngest.test.ts:61`, `:193` — camelCase and nested envelope both asserted |
 | 3 | `src/agent/improvement/trackingIngest.ts:150-161` (`metricsFromRow`), all three grains | kugel-data `/rollups` | each key of `TRACKING_METRIC_KEYS` / `STRATEGY_METRIC_KEYS`, snake_case or camelCase or nested under `metrics{}` | **empty, by design.** A renamed measure column is absent from the map rather than zero-filled ("never fabricate"). Degrades gracefully — and silently: nothing reports that a column stopped arriving. | `tests/agent/trackingIngest.test.ts:61` covers the happy shapes; no test proves the rename path |
 | 4 | `src/agent/improvement/engagement.ts:140-148` (`medianRollupMetrics`) | kugel-data `/rollups?by=object` | `pageviews`, `sessions`, `completion_rate`, `cta_ctr`, `purchase_rate`, `p75_dwell_ms` | **empty.** `if (!values.length) continue;` ⇒ no median for that measure, so `engagement_below_site_median` quietly loses an input. | `tests/agent/improvement/engagementEvidence.test.ts:95-97,159-170`, snake_case fixtures only |
@@ -31,9 +31,13 @@ starts there rather than at the improvement/ modules.
 
 ## The three pinned in W4
 
-1. **`by=strategy` → `strategy` / `intent`** (row 1). The only sink reader with no fallback and no
-   provenance comment, in a module whose sibling grain had exactly this bug (S-04b) and shipped with
-   it. Widest silent-failure radius in the table.
+1. **`by=strategy` → `strategy` / `intent`** (row 1). Not a drift risk yet — a shape risk. The
+   producer answers 503 for this grain and always has, so the two field names in
+   `strategyLearning.ts` were never agreed with anyone; they are what a reader assumed a future view
+   would be called. The fixture records `producerState: "unimplemented"` so that `contract:check`
+   fails on the day that stops being true, which is the moment to agree the column names rather than
+   to discover them from an empty result. It is also the only sink reader with no fallback, in a
+   module whose sibling grain had exactly this bug (S-04b) and shipped with it.
 2. **`by=producer` → `node_id` / `run_id`** (row 2). Widest downstream fan-out: every feedback
    outcome record, and everything keyed off it. Already well tested — pinning it converts "we hope
    kugel-data still sends `node_id`" into a CI failure the day it stops.

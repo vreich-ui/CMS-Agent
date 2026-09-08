@@ -1,0 +1,17 @@
+{
+  "producer": "vreich-ui/kugel-data",
+  "path": "netlify/functions/_shared/rollups.ts",
+  "sha": "1c39eb18a1bd9f4c84fde52bd13fb5b50329ad08",
+  "capturedAt": "2026-09-08T11:53:51Z",
+  "shape": "GET /api/tracking-sink/rollups?by=strategy — NOT IMPLEMENTED by the producer",
+  "why": "strategyLearning.ts:142-144 reads row.strategy and row.intent with no fallback of any kind. There is no such view: the sink answers 503 \"grain not implemented\" on purpose (S-04), so this reader has never seen a row and its fixtures were never checked against a producer. This pin exists to FAIL when the grain becomes implemented, so the column names are agreed then rather than assumed.",
+  "producerState": "unimplemented",
+  "consumerReads": [
+    "strategy",
+    "intent"
+  ],
+  "excerpt": [
+    "export const UNIMPLEMENTED_ROLLUP_GRAINS: ReadonlySet<string> = new Set([\"strategy\"]);\n",
+    "  if (UNIMPLEMENTED_ROLLUP_GRAINS.has(trimmedBy)) {\n    return { ok: false, status: 503, error: \"grain not implemented\", grain: trimmedBy };\n  }"
+  ]
+}

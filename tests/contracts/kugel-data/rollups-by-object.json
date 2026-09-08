@@ -1,0 +1,51 @@
+{
+  "producer": "vreich-ui/kugel-data",
+  "path": "netlify/functions/_shared/rollups.ts",
+  "sha": "1c39eb18a1bd9f4c84fde52bd13fb5b50329ad08",
+  "capturedAt": "2026-09-08T11:53:51Z",
+  "shape": "GET /api/tracking-sink/rollups?by=object — one row per (object_id, variant_id, day)",
+  "why": "strategyReview.ts groupObjectRows and engagement.ts medianRollupMetrics read the same row through two different helpers with two different fixture sets, so a drift could degrade one while the other's tests stay green.",
+  "columns": [
+    "object_id",
+    "variant_id",
+    "day",
+    "pageviews",
+    "exposures",
+    "sessions",
+    "completion_rate",
+    "cta_ctr",
+    "buy_click_rate",
+    "purchase_rate",
+    "revenue_cents",
+    "p75_dwell_ms"
+  ],
+  "measures": [
+    "pageviews",
+    "exposures",
+    "sessions",
+    "completion_rate",
+    "cta_ctr",
+    "buy_click_rate",
+    "purchase_rate",
+    "revenue_cents",
+    "p75_dwell_ms"
+  ],
+  "sample": {
+    "object_id": "article_how-retinoids-work",
+    "variant_id": "v1",
+    "day": "2026-09-07",
+    "pageviews": 0,
+    "exposures": 0,
+    "sessions": 0,
+    "completion_rate": 0,
+    "cta_ctr": 0,
+    "buy_click_rate": 0,
+    "purchase_rate": 0,
+    "revenue_cents": 0,
+    "p75_dwell_ms": 0
+  },
+  "excerpt": [
+    "const MEASURE_COLUMNS = [\n  // pageviews (migration 005) is what makes a row exist at all before any experiment runs: it is both\n  // a measure and the fallback denominator behind cta_ctr / buy_click_rate / purchase_rate while an\n  // arm has no exposures. cms-agent's engagement.v1 metric vector carries it under the same name.\n  \"pageviews\",\n  \"exposures\",\n  \"sessions\",\n  \"completion_rate\",\n  \"cta_ctr\",\n  \"buy_click_rate\",\n  \"purchase_rate\",\n  \"revenue_cents\",\n  \"p75_dwell_ms\",\n] as const;",
+    "export function shapeObjectRow(row: Record<string, unknown>): ObjectRollupRow {\n  return {\n    object_id: String(row.object_id ?? \"\"),\n    variant_id: String(row.variant_id ?? \"\"),\n    day: toDay(row.day),\n    ...shapeMeasures(row),\n  };\n}"
+  ]
+}
