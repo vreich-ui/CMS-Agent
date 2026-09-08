@@ -108,6 +108,24 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 - The stale override itself was corrected during the 2026-09-07 token rotation, so no tenant is currently stranded.
 - **Open, unrelated to genesis:** the account-level `TRACKING_SINK_TOKEN` is stored with `is_secret=false`, i.e. readable by anyone with account access. Netlify forbids the `all` context on secrets, so making it secret means splitting it into explicit contexts.
 
+### C-19 `store:check`'s drift is CANONICAL being stale, and the documented remedy would delete a live capability — **High**, confirmed (measured against the live store 2026-09-08)
+- **Do NOT run `store:update`, and do NOT pass `--allow-prompt-shrink`, on the drift as it stands.** The script is sound; the direction is wrong for this particular divergence.
+- Measured drift (`WORKSPACE_STORE=gcs GCS_BUCKET=cms-agent-503015-cms-agent-state npm run store:check`): three writes and two refusals, all on two nodes.
+
+  | pair | store → canonical | effect of applying |
+  |---|---|---|
+  | `brief_architect.outputSchema` | 5699 → 3871 chars | removes 21 schema paths |
+  | `artifact_plan.outputSchema` | 4129 → 2542 | removes 19 |
+  | `artifact_plan.schema` | 4129 → 2542 | removes 19 |
+  | `brief_architect.prompt` | 9910 → 3939 (**−60%**) | refused by the 40% ceiling |
+  | `artifact_plan.prompt` | 9369 → 5206 (**−44%**) | refused by the 40% ceiling |
+
+- **What the removed paths are.** Both schemas lose the whole `style` block on their media slots — `style.visualStandardId` (with `minLength`), `style.override`, `style.instructions`. That is the hook by which a planned media slot carries a **brand visual standard**. `visualStandardId` is a live platform concept (`packages/core/admin/ImageryBoard.tsx`, `server/lib/brand-imagery-examples.ts`, `visual-standard-examples-jobs.ts`, `object-verbs.ts`, `mcp-tool-handlers.ts`) and appears **nowhere in CMS-Agent's `src/`**. Canonical `nodes.ts` has never known about it; the live store does.
+- **So the store is AHEAD of canonical here, not behind.** `overlayStoreNode` lets the store's prompt and schema override canonical, so the live behaviour IS the store's. Pushing canonical would silently strip the visual-standard hook from the two nodes that plan every generated image, and the two prompt refusals are almost certainly the instructions for filling that same block — which is why they are the same two nodes.
+- **Why this is a trap and not just a stale file.** A red `store:check` reads as "the store drifted, re-seed it", and the documented remedy for a refusal is `--allow-prompt-shrink`. Someone clearing the drift in good faith would delete a capability, and `store:check` would then go green — the loss looks like tidiness. `store:check` is not in CI (it needs a live store), so nothing else would catch it.
+- **Correct direction:** bring `nodes.ts` up to the live store (`scripts/seedNodesFromWorkspace.ts`, `npm run nodes:update`), not the reverse. That path currently refuses too — 14 problems as of 2026-09-07 — so the two-way divergence is real and needs a person to reconcile it node by node, starting with `brief_architect` and `artifact_plan`.
+- Related: K-A9 (every tail node's deterministic route is a store-overridable flag and `store:update` restores none of them) is the same hazard in a different field.
+
 ## K-D. Distributed-systems risks
 
 ### K-D1 Double dispatch after claim expiry — **High**, confidence: high (documented incidents in code)
