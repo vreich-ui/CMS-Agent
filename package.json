@@ -15,6 +15,7 @@
     "nodes:check": "tsx scripts/seedNodesFromWorkspace.ts",
     "nodes:update": "tsx scripts/seedNodesFromWorkspace.ts --write",
     "nodes:check:offline": "tsx scripts/seedNodesFromWorkspace.ts --from-canonical",
+    "env:audit": "tsx scripts/netlify-env-audit.ts",
     "store:check": "tsx scripts/reseedStoreFromCanonical.ts",
     "store:update": "tsx scripts/reseedStoreFromCanonical.ts --write",
     "nodes:apply": "tsx scripts/applyNodeOps.ts",
