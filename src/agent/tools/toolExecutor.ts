@@ -63,9 +63,10 @@ export async function executeTool(toolId: string, rawInput: unknown, context: To
   const toolExecutionId = makeId();
   const base = { toolExecutionId, runId: context.runId, nodeId: context.nodeId, toolId: tool.toolId, startedAt, inputSummary: summarize(input), riskLevel: tool.riskLevel, ...(context.projectId ? { projectId: context.projectId } : {}) };
   // In-process first (synchronous readers depend on it being set before this function returns), then
-  // durable. `recordToolExecution` never throws, so a store failure cannot turn a completed tool call
-  // into a failed one.
-  const finish = async (record: ToolExecutionRecord) => { records.set(toolExecutionId, record); await recordToolExecution(record); return record; };
+  // durable. `recordToolExecution` neither throws nor blocks — it starts the write and returns — so a
+  // store failure cannot turn a completed tool call into a failed one, and a slow store cannot make
+  // a tool call slower. Readers flush before answering (toolExecutionLedger).
+  const finish = (record: ToolExecutionRecord) => { records.set(toolExecutionId, record); recordToolExecution(record); return record; };
   // One AbortController per call, threaded through the handler as context.signal. Handlers that
   // reach an external transport (project.call_tool -> ProjectMcpAdapter -> mcpClient's fetch) forward
   // it all the way down, so the timeout branch below can actually stop the in-flight request instead
@@ -80,7 +81,7 @@ export async function executeTool(toolId: string, rawInput: unknown, context: To
     const policy = evaluateToolPolicy({ tool, context, node, skill, project });
     if (!policy.allowed) {
       const completedAt = now();
-      const record = await finish({ ...base, completedAt, durationMs: Date.parse(completedAt)-Date.parse(startedAt), status: "denied", errorCode: policy.code, approvalStatus: "missing" });
+      const record = finish({ ...base, completedAt, durationMs: Date.parse(completedAt)-Date.parse(startedAt), status: "denied", errorCode: policy.code, approvalStatus: "missing" });
       return { ok: false, denied: { code: policy.code, reasons: policy.reasons }, toolExecutionId: record.toolExecutionId };
     }
     const parsed = tool.inputSchema.parse(input);
@@ -89,13 +90,13 @@ export async function executeTool(toolId: string, rawInput: unknown, context: To
     const output = await Promise.race([Promise.resolve(tool.handler(parsed, contextForHandler)), timeout]);
     const checked = tool.outputSchema.parse(output);
     const completedAt = now();
-    const record = await finish({ ...base, completedAt, durationMs: Date.parse(completedAt)-Date.parse(startedAt), status: "success", outputSummary: summarize(checked), riskLevel: tool.riskLevel, approvalStatus: policy.approvalStatus });
+    const record = finish({ ...base, completedAt, durationMs: Date.parse(completedAt)-Date.parse(startedAt), status: "success", outputSummary: summarize(checked), riskLevel: tool.riskLevel, approvalStatus: policy.approvalStatus });
     return { ok: true, toolExecutionId: record.toolExecutionId, output: checked };
   } catch (error) {
     const completedAt = now();
     const code = error instanceof ZodError ? "validation_error" : error instanceof Error && error.message === "tool_timeout" ? "tool_timeout" : "tool_error";
     const validation = error instanceof ZodError ? describeValidationError(error, input) : undefined;
-    const record = await finish({ ...base, completedAt, durationMs: Date.parse(completedAt)-Date.parse(startedAt), status: code === "tool_timeout" ? "timeout" : "error", errorCode: code, riskLevel: tool.riskLevel, approvalStatus: tool.requiresApproval ? (context.approvedToolIds?.includes(tool.toolId) ? "approved" : "missing") : "not_required" });
+    const record = finish({ ...base, completedAt, durationMs: Date.parse(completedAt)-Date.parse(startedAt), status: code === "tool_timeout" ? "timeout" : "error", errorCode: code, riskLevel: tool.riskLevel, approvalStatus: tool.requiresApproval ? (context.approvedToolIds?.includes(tool.toolId) ? "approved" : "missing") : "not_required" });
     const message = validation ? validation.message : code === "tool_error" && error instanceof Error ? error.message : code;
     return { ok: false, toolExecutionId: record.toolExecutionId, error: { code, message, ...(validation ? { issues: validation.issues } : {}) } };
   }

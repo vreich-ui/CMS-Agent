@@ -4,6 +4,7 @@ import { ProjectMcpAdapter } from "../../../src/agent/projects/projectMcpAdapter
 import { FORBIDDEN_PROJECT_VERBS, PROJECT_VERB_AUTHORIZED_NODE_IDS } from "../../../src/agent/tools/forbiddenProjectVerbs.js";
 import { READ_TOOL_ALLOWLIST } from "../../../src/agent/projects/projectMcpAdapter.js";
 import { getRepositoryManager, repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { flushToolExecutionLedger } from "../../../src/agent/tools/toolExecutionLedger.js";
 import { BlobToolExecutionRepository } from "../../../src/agent/repository/blobs/BlobToolExecutionRepository.js";
 import type { McpTransport } from "../../../src/agent/projects/mcpClient.js";
 import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
@@ -34,7 +35,13 @@ const jsonResponse = (body: unknown) => new Response(JSON.stringify(body), { sta
 const okTransport: McpTransport = async (_endpoint, init) => jsonResponse({ jsonrpc: "2.0", id: JSON.parse(init.body as string).id, result: { structuredContent: { object_id: "obj_1" } } });
 const adapterDeps = { env, transport: okTransport };
 
+// Ledger writes are started off the caller's clock (toolExecutionLedger), so a reader flushes first
+// — exactly as the MCP read tools do. Reading without it would pass or fail on scheduling luck.
 const ledger = () => repositoryManager.getToolExecutionRepository();
+const readLedger = async (filters: Parameters<ReturnType<typeof ledger>["list"]>[0] = {}) => {
+  await flushToolExecutionLedger();
+  return ledger().list(filters);
+};
 
 beforeEach(() => {
   resetRepositoryManager();
@@ -62,7 +69,7 @@ describe("W3.2.1 — the call itself is unchanged", () => {
     expect(refused.ok).toBe(false);
     expect((refused as { code?: string }).code).toBe("read_tool_operation_not_permitted");
     // ...and the refusal is still recorded: a call that never reached the wire is still a call.
-    expect((await ledger().list({ runId: "run_1" })).map((record) => record.toolId)).toEqual(["object_create"]);
+    expect((await readLedger({ runId: "run_1" })).map((record) => record.toolId)).toEqual(["object_create"]);
   });
 });
 
@@ -74,8 +81,8 @@ describe("W3.2.1 — one durable record per call, on both axes", () => {
       routeId: "clone_stage", phaseId: "theme_bind", args: { theme: "t" }
     });
 
-    const byRun = await ledger().list({ runId: "run_2" });
-    const byNode = await ledger().list({ nodeId: "theme_bind" });
+    const byRun = await readLedger({ runId: "run_2" });
+    const byNode = await readLedger({ nodeId: "theme_bind" });
     expect(byRun).toHaveLength(1);
     expect(byNode).toEqual(byRun);
 
@@ -94,14 +101,14 @@ describe("W3.2.1 — one durable record per call, on both axes", () => {
     await invokeTenantTool({ ...engine, toolId: "object_get", nodeId: "clone_intake", routeId: "clone_stage", phaseId: "intake" });
     await invokeTenantTool({ ...engine, toolId: "object_get", nodeId: "article_body", caller: "model" });
 
-    expect(await ledger().list({ runId: "run_3", caller: "engine" })).toHaveLength(1);
-    expect(await ledger().list({ runId: "run_3", caller: "model" })).toHaveLength(1);
-    expect(await ledger().list({ runId: "run_3", routeId: "clone_stage" })).toHaveLength(1);
+    expect(await readLedger({ runId: "run_3", caller: "engine" })).toHaveLength(1);
+    expect(await readLedger({ runId: "run_3", caller: "model" })).toHaveLength(1);
+    expect(await readLedger({ runId: "run_3", routeId: "clone_stage" })).toHaveLength(1);
   });
 
   it("records an unattributed call under a named sentinel rather than dropping it", async () => {
     await invokeTenantTool({ projectId: config.projectId, project: config, adapterDeps, toolId: "object_inventory", caller: "engine" });
-    const [record] = await ledger().list({ runId: UNATTRIBUTED_RUN_ID });
+    const [record] = await readLedger({ runId: UNATTRIBUTED_RUN_ID });
     expect(record.nodeId).toBe(UNATTRIBUTED_NODE_ID);
   });
 
@@ -144,7 +151,7 @@ describe("W3.2.1 — FORBIDDEN_PROJECT_VERBS, one rule for both callers", () => 
         toolId: "object_publish", caller, runId: "run_5", nodeId: "article_body"
       })).rejects.toBeInstanceOf(ForbiddenTenantVerbError);
     }
-    const denied = await ledger().list({ runId: "run_5" });
+    const denied = await readLedger({ runId: "run_5" });
     expect(denied).toHaveLength(2);
     expect(denied.every((record) => record.status === "denied" && record.errorCode === "publish_verb_not_permitted")).toBe(true);
   });
@@ -169,7 +176,7 @@ describe("W3.2.1 — FORBIDDEN_PROJECT_VERBS, one rule for both callers", () => 
       projectId: config.projectId, project: config, adapterDeps, toolId: "object_publish", caller: "engine", runId: "run_7"
     });
     expect(result.ok).toBe(true);
-    expect((await ledger().list({ runId: "run_7" }))[0].nodeId).toBe(UNATTRIBUTED_NODE_ID);
+    expect((await readLedger({ runId: "run_7" }))[0].nodeId).toBe(UNATTRIBUTED_NODE_ID);
   });
 });
 
@@ -182,7 +189,7 @@ describe("W3.2.1 — the manifest check records, it does not gate", () => {
       toolId: "object_patch", caller: "engine", runId: "run_8", nodeId: "clone_intake", routeId: "clone_stage", phaseId: "intake"
     });
     expect(result.ok).toBe(true);
-    expect((await ledger().list({ runId: "run_8" }))[0].engineVerbUnlisted).toBe(true);
+    expect((await readLedger({ runId: "run_8" }))[0].engineVerbUnlisted).toBe(true);
   });
 
   it("says nothing about a route it has no manifest for", async () => {
@@ -191,7 +198,7 @@ describe("W3.2.1 — the manifest check records, it does not gate", () => {
       toolId: "object_patch", caller: "engine", runId: "run_9", nodeId: "publish_executor", routeId: "publish_executor"
     });
     // An absent manifest is not evidence of an unlisted verb. The publishing-tail routes have none.
-    expect((await ledger().list({ runId: "run_9" }))[0].engineVerbUnlisted).toBeUndefined();
+    expect((await readLedger({ runId: "run_9" }))[0].engineVerbUnlisted).toBeUndefined();
   });
 
   // capture_conductor and clone_conductor dispatch the shared publishing tail through their OWN stage
@@ -205,12 +212,12 @@ describe("W3.2.1 — the manifest check records, it does not gate", () => {
       toolId: "object_publish", caller: "engine", runId: "run_12", nodeId: "publish_executor",
       routeId: "capture_stage", phaseId: "publish_executor"
     });
-    expect((await ledger().list({ runId: "run_12" }))[0].engineVerbUnlisted).toBeUndefined();
+    expect((await readLedger({ runId: "run_12" }))[0].engineVerbUnlisted).toBeUndefined();
   });
 
   it("never flags a model call, whose authority is its grant and not a route", async () => {
     await invokeTenantTool({ projectId: config.projectId, project: config, adapterDeps, toolId: "object_patch", caller: "model", runId: "run_10", nodeId: "article_body" });
-    expect((await ledger().list({ runId: "run_10" }))[0].engineVerbUnlisted).toBeUndefined();
+    expect((await readLedger({ runId: "run_10" }))[0].engineVerbUnlisted).toBeUndefined();
   });
 });
 
@@ -269,6 +276,6 @@ describe("W3.2.1 — the closure form the engine routes take", () => {
     });
     const result = await callTool("deploy_status", { commit: "abc" });
     expect(result.ok).toBe(true);
-    expect((await ledger().list({ runId: "run_11" }))[0]).toMatchObject({ toolId: "deploy_status", caller: "engine", routeId: "release_executor" });
+    expect((await readLedger({ runId: "run_11" }))[0]).toMatchObject({ toolId: "deploy_status", caller: "engine", routeId: "release_executor" });
   });
 });

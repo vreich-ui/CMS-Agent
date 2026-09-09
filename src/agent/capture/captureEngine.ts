@@ -48,7 +48,7 @@ import {
 } from "./engine/emit.mjs";
 import { scoreCaptureFidelity, type FidelityReport } from "./engine/score.mjs";
 import { isUrlWithinPolicy, validateCapturePolicy, type ValidatedCapturePolicy } from "./engine/snapshot-v1.mjs";
-import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
+import { isTenantApprovalHeld, tenantAdapterFor, tenantApprovalHeldDetail, type TenantCallContext } from "../tools/tenantInvoke.js";
 // T15.7 (ADR-2026-08-25-publish-autonomy §6/§9) — the T14.5 side publish path (./engine/publish.mjs,
 // and this module's own capturePublishStep/buildPublishTransport that drove it) is DELETED. capture no
 // longer publishes or releases itself: it composes onto the shared publishing tail
@@ -260,6 +260,10 @@ async function callProjectTool(projectId: string, tool: string, args: Record<str
   // through the choke point here covers every capture verb at once (nine of them on emit_live alone).
   const adapter = tenantAdapterFor(config, { caller: "engine", ...deps.tenantContext });
   const call = await adapter.callTool(tool, args);
+  // A held call is not a failed one — see tenantInvoke.ts's isTenantApprovalHeld. Folding it into
+  // project_tool_call_failed sends an operator hunting a transport problem that never existed; the
+  // real fix is a policy flip, not a retry.
+  if (isTenantApprovalHeld(call)) throw new CaptureRefusal("tenant_verb_needs_approval", tenantApprovalHeldDetail(projectId, tool));
   if (!call.ok) throw new CaptureRefusal("project_tool_call_failed", `${tool} on ${projectId} failed: ${call.error ?? "unknown error"}`);
   const raw = call.result as Record<string, unknown> | undefined;
   if (isRecord(raw) && raw.isError) {

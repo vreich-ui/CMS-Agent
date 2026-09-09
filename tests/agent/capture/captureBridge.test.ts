@@ -334,8 +334,12 @@ describe("bounds and refusals: the authority gate still runs first and is never 
     await expect(captureCrawlStep({ targetProjectId: "zb-test", sourceUrl: SOURCE_URL }, blocked)).rejects.toMatchObject({ code: "project_tool_call_failed" });
     await expect(captureCrawlStep({ targetProjectId: "zb-test", sourceUrl: SOURCE_URL }, blocked)).rejects.toThrow(new RegExp(CREATE_CAPTURE_JOB_TOOL));
 
+    // W4-followup — a HELD verb (needs_approval) is refused before transport too, but it is not a
+    // failed call: it is a human's approval standing between the policy and the tool, so it gets its
+    // own named code rather than the generic transport-shaped one above.
     const held = { projectRepository: stubRepository(projectConfig({ toolPolicies: { [CREATE_CAPTURE_JOB_TOOL]: "needs_approval" } })) };
-    await expect(captureCrawlStep({ targetProjectId: "zb-test", sourceUrl: SOURCE_URL }, held)).rejects.toMatchObject({ code: "project_tool_call_failed" });
+    await expect(captureCrawlStep({ targetProjectId: "zb-test", sourceUrl: SOURCE_URL }, held)).rejects.toMatchObject({ code: "tenant_verb_needs_approval" });
+    await expect(captureCrawlStep({ targetProjectId: "zb-test", sourceUrl: SOURCE_URL }, held)).rejects.toThrow(new RegExp(CREATE_CAPTURE_JOB_TOOL));
     expect(calls).toHaveLength(0);
   });
 

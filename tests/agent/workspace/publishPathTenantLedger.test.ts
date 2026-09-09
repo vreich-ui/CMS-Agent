@@ -5,6 +5,7 @@ import { tenantCallToolFor } from "../../../src/agent/tools/tenantInvoke.js";
 import { PROJECT_VERB_AUTHORIZED_NODE_IDS } from "../../../src/agent/tools/forbiddenProjectVerbs.js";
 import { __test__ } from "../../../src/agent/workspace/executor.js";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { flushToolExecutionLedger } from "../../../src/agent/tools/toolExecutionLedger.js";
 import { createWorkspaceTools } from "../../../src/agent/mcp/workspace/tools.js";
 import type { McpTransport } from "../../../src/agent/projects/mcpClient.js";
 import type { ObjectPublishPlan } from "../../../src/agent/workspace/objectPublishExecution.js";
@@ -103,6 +104,7 @@ describe("W3.2.2 — a publish run's tenant verbs are in the ledger", () => {
     });
     expect(released.ok).toBe(true);
 
+    await flushToolExecutionLedger();
     const ledger = await repositoryManager.getToolExecutionRepository().list({ runId: RUN_ID, caller: "engine" });
     const verbs = ledger.map((record) => record.toolId);
     expect(verbs).toContain("object_publish");

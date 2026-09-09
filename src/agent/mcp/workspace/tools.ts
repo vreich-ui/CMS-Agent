@@ -35,6 +35,7 @@ import { skillStatuses, type SkillDefinition } from "../../skills/skillTypes.js"
 import { listTools as listControlledTools, getTool as getControlledTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { resolveNodeForExecution } from "../../workspace/nodeResolution.js";
 import { executeTool, getToolExecution, listToolExecutions } from "../../tools/toolExecutor.js";
+import { flushToolExecutionLedger } from "../../tools/toolExecutionLedger.js";
 import { filterRecordsByProject } from "../../improvement/projectScope.js";
 import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
 import { createSiteCredentialTools } from "./siteCredentialTools.js";
@@ -757,6 +758,8 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       // W3.2.1 — the durable ledger, before the run-record stubs: it holds the FULL record (caller,
       // routeId, project, summaries) where a stub holds five metadata fields, and it is the only
       // place an engine-invoked tenant verb has ever been written.
+      // W4-followup: ledger writes are started off the caller's clock, so a reader flushes first.
+      await flushToolExecutionLedger();
       const durable = await repositoryManager.getToolExecutionRepository().get(toolExecutionId, runId);
       if (durable) return ok({ execution: durable, source: "tool_execution_ledger" });
       for (const run of await listRuns({}, executionRepository)) {
@@ -780,6 +783,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
         && (!filters.routeId || record.routeId === filters.routeId)
         && (!filters.projectId || record.projectId === filters.projectId));
       const seen = new Set(inProcess.map((record) => record.toolExecutionId));
+      await flushToolExecutionLedger();
       const ledger = (await repositoryManager.getToolExecutionRepository().list(filters)).filter((record) => !seen.has(record.toolExecutionId));
       for (const record of ledger) seen.add(record.toolExecutionId);
       const persisted: unknown[] = [];
@@ -1011,6 +1015,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       //
       // Bounded on purpose: this is a summary for an operator deciding whether a tool policy change
       // is safe, not an audit export — tool.list_executions with a projectId filter is that.
+      await flushToolExecutionLedger();
       const records = await repositoryManager.getToolExecutionRepository().list({ projectId, limit: PROJECT_USED_BY_SAMPLE });
       const byNode = new Map<string, { nodeId: string; callers: Set<string>; routeIds: Set<string>; verbs: Set<string>; calls: number; lastAt?: string }>();
       for (const record of records) {

@@ -26,7 +26,7 @@ deterministic path knows how to wait for an approval.
 | dr-lurie | 40 | 0 | Every route verb permitted — but see the note below; this is not the reassurance it looks like |
 | zilberman | 40 | 7 | Three real gaps, one of them internally inconsistent |
 | platform | 40 | 2 | Two admin verbs held at `needs_approval`; both break a route that has no way to wait |
-| fernwell | 40 | 30 | Connection is `status: "disabled"` — expected, not a divergence |
+| fernwell | 40 | 30 | Dead tenant (operator, 2026-09-09). Not a divergence and not a backlog item |
 
 ## dr-lurie — 0 divergences, and the reason is worth naming
 
@@ -82,12 +82,16 @@ mark these routes as requiring an operator decision before dispatch (the publish
 that shape); teach the choke point to surface a held call as a named, resumable outcome; or accept
 that these two nodes are operator-run only on platform.
 
-## fernwell — expected, not a divergence
+## fernwell — dead
 
-`status: "disabled"`, `defaultToolPolicy: "blocked"`, and an allowlist of seven read verbs. 30 of 40
-required verb-instances are blocked, and every read-only stage (`clone_stage:intake`) passes. This is
-what a registered-but-switched-off tenant should look like. Re-run this check if fernwell is ever
-enabled — at that point the whole write half of every route needs a policy decision.
+`status: "disabled"`, `defaultToolPolicy: "blocked"`, an allowlist of seven read verbs, and 30 of 40
+required verb-instances blocked. The operator confirmed on 2026-09-09 that **fernwell is dead** — not
+paused, not pending. Its rows are recorded here only so a future reader of this table does not
+mistake them for a fleet-wide problem; there is nothing to fix and nothing to re-check.
+
+Its record is still registered and disabled rather than deleted, which is the right resting state: a
+disabled record keeps the id from being reused and keeps its history readable, and deleting it would
+be an irreversible operator action nobody has asked for.
 
 ## Scope, stated so it is not mistaken for completeness
 
@@ -141,4 +145,4 @@ above, and **genesis-lab-2 still has both gaps**.
 2. **platform's two `needs_approval` verbs** are a design decision, not a configuration one — a
    deterministic route has no approval loop to enter, so the intended confirmation lands as a stage
    failure. Its own task.
-3. **fernwell** needs nothing until it is enabled.
+3. ~~fernwell~~ — dead, closed.
