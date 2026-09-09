@@ -12,6 +12,7 @@ import {
   strategySightingsFromObservations,
   strategySiteBaseline,
   STRATEGY_OBSERVATION_SOURCE,
+  STRATEGY_OBSERVATION_MIN_N,
   STRATEGY_PLAYBOOK_TARGET_NODES,
   STRATEGY_PROMOTION_MIN_N
 } from "../../../src/agent/improvement/strategyLearning.js";
@@ -318,6 +319,63 @@ describe("ingestStrategyRollups", () => {
     expect(dwell.status).toBe("active");
     // The contradicting direction is not itself promoted off one window.
     expect(writer.items.some((item) => item.text.startsWith("Do not default to"))).toBe(false);
+  });
+
+  it("keeps the observation bar high enough for a ratio to mean anything", () => {
+    // Not a tautology: this is the DECISION, pinned. Below ~10 a p75 ratio is arithmetic on nothing,
+    // and the bar has to be crossed on purpose rather than lowered in passing.
+    expect(STRATEGY_OBSERVATION_MIN_N).toBeGreaterThanOrEqual(10);
+    // An observation stays cheaper than a lesson. If these two ever meet, the loop loses the
+    // provisional middle it needs to accumulate consecutive windows at all.
+    expect(STRATEGY_OBSERVATION_MIN_N).toBeLessThan(STRATEGY_PROMOTION_MIN_N);
+  });
+
+  // THE 2026-09-09 REGRESSION, PINNED. The first live run wrote seven observations at n=1..2 —
+  // "p75 dwell 6.5x site median (n=1)" among them. Promotion correctly refused them; the store did
+  // not, and `strategy-review` shows a HUMAN the store. A group under the observation bar must not
+  // reach it at all, however loud its ratio is.
+  it("does not write an observation for a group below the observation n bar, however extreme the ratio", async () => {
+    const noise = [
+      strategyRow({ n: 1, p75_dwell_ms: 400_000 }),
+      ordinaryRow(),
+      thirdRow()
+    ];
+    const result = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(noise))));
+
+    const written = (await learningRepository.listObservations()).filter((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE);
+    expect(written.some((entry) => entry.observation.includes("objection_first"))).toBe(false);
+    expect(result.observations.some((entry) => entry.strategy === "objection_first")).toBe(false);
+    expect(result.errors).toEqual([]);
+  });
+
+  // A held-back group is REPORTED, not dropped in silence: "0 observations" from a thin window and
+  // "0 observations" from a quiet one are different facts and an operator has to be able to tell them
+  // apart.
+  it("counts a group held back by the observation bar in `withheld`, with its n and finding count", async () => {
+    const noise = [
+      strategyRow({ n: 1, p75_dwell_ms: 400_000 }),
+      ordinaryRow(),
+      thirdRow()
+    ];
+    const result = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(noise))));
+
+    const held = result.withheld.find((entry) => entry.strategy === "objection_first");
+    expect(held).toBeDefined();
+    expect(held!.n).toBe(1);
+    expect(held!.findings).toBeGreaterThan(0);
+    expect(result.groups).toBeGreaterThan(result.observations.length);
+  });
+
+  // The bar is a FLOOR, not a new promotion gate: a group at the bar still observes, and still needs
+  // STRATEGY_PROMOTION_MIN_N before it can teach anything.
+  it("writes the observation for a group exactly at the observation bar, and still refuses to promote it", async () => {
+    const atBar = [strategyRow({ n: STRATEGY_OBSERVATION_MIN_N }), ordinaryRow(), thirdRow()];
+    for (const window of [WINDOW_1, WINDOW_2, WINDOW_3]) {
+      await ingestStrategyRollups({ projectId: "trk_demo", from: window.from, to: window.to }, deps(jsonFetch(page(atBar))));
+    }
+    const written = (await learningRepository.listObservations()).filter((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE);
+    expect(written).toHaveLength(3);
+    expect(await improvementRepository.getPlaybook("draft_writer")).toBeUndefined();
   });
 
   it("does not promote a finding whose group is below the n bar, however many windows it holds", async () => {

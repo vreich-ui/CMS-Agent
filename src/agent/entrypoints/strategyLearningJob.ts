@@ -1,7 +1,7 @@
 // T21.35: scheduled entrypoint for the strategy-learning pass (improvement/strategyLearning.ts).
 // Deliberately the SAME shape as trackingIngestJob.ts, its sibling on the same sink: a plain,
 // directly-testable function plus a thin CLI parser, no orchestration logic of its own, the previous
-// whole UTC day as the default window (the sink's rollups are day-grained), and an unconfigured sink
+// trailing window as the default (the sink's rollups are day-grained), and an unconfigured sink
 // as a clean named no-op rather than a crash — so this can be wired into a schedule before the
 // secrets exist, and before kugel-data migration 012 has brought the `by=strategy` grain up.
 //
@@ -19,12 +19,41 @@ import type { LearningRepository } from "../repository/interfaces/LearningReposi
 import type { ImprovementRepository } from "../repository/interfaces/ImprovementRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { bootstrapWorkspaceStore } from "./runConductorJob.js";
-import { previousUtcDay } from "./trackingIngestJob.js";
+const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
+
+/**
+ * Whole UTC days the default window spans.
+ *
+ * WHY NOT ONE DAY, WHICH IS WHAT THIS USED TO DO. `tracking-ingest` pulls the previous whole UTC day
+ * because it is INGESTING that day's events — one day in, one day stored. This job is not ingesting;
+ * it is looking for a difference between a group and the site, and the sink's `n` for a
+ * strategy/intent group on a single day is 1 or 2 on current traffic. A ratio computed off that is
+ * noise with a decimal point, which is exactly what the 2026-09-09 run produced. The evidence is
+ * already in the sink — 399 sessions across the days it holds — the window was just too narrow to
+ * see it.
+ *
+ * WHAT THIS WEAKENS, AND IT IS NOT NOTHING. STRATEGY_PROMOTION_MIN_WINDOWS requires a finding to
+ * hold the same direction across consecutive windows. On a DAILY schedule with a 14-day window,
+ * consecutive runs overlap by 13 days, so "two consecutive windows" is no longer two independent
+ * looks at the world — it is one look and a near-copy of it. That does not matter yet, because at
+ * n=1..2 nothing is near the promotion bar anyway, but it will the moment traffic reaches it. The
+ * clean fix is a schedule whose period matches its window (weekly job, 7-day window) rather than a
+ * bigger constant here. Left as a decision rather than absorbed: changing how often the loop teaches
+ * is a judgement about the loop, not a fix to this default.
+ */
+export const STRATEGY_LEARNING_DEFAULT_WINDOW_DAYS = 14;
+
+/** Trailing whole UTC days ending at today's UTC midnight — today is incomplete and is excluded. */
+export const trailingUtcDays = (days: number, reference: Date = new Date()): { from: string; to: string } => {
+  const end = new Date(Date.UTC(reference.getUTCFullYear(), reference.getUTCMonth(), reference.getUTCDate()));
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  return { from: isoDay(start), to: isoDay(end) };
+};
 
 export type StrategyLearningJobOptions = {
   /** Tracking partition to read (the sink's TRACKING_PROJECT_ID). Falls back to that env var. */
   projectId?: string;
-  /** Window bounds; default to the previous whole UTC day, the natural window for a daily schedule. */
+  /** Window bounds; default to the trailing STRATEGY_LEARNING_DEFAULT_WINDOW_DAYS whole UTC days. */
   from?: string;
   to?: string;
   /** Report what WOULD run (connection + resolved window + target nodes) without calling the sink or
@@ -87,7 +116,7 @@ export async function runStrategyLearningJob(options: StrategyLearningJobOptions
     };
   }
 
-  const defaults = previousUtcDay(options.now?.() ?? new Date());
+  const defaults = trailingUtcDays(STRATEGY_LEARNING_DEFAULT_WINDOW_DAYS, options.now?.() ?? new Date());
   const window: StrategyLearningWindow = { projectId, from: options.from?.trim() || defaults.from, to: options.to?.trim() || defaults.to };
   if (options.dryRun) return { status: "dry_run", window, targetNodes: [...STRATEGY_PLAYBOOK_TARGET_NODES], connection };
 
