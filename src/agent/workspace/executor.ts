@@ -20,6 +20,7 @@ import { clientAuthFailedError, preflightDriverAuth, resolveProjectCredentialNam
 import { mintPublishRequestId } from "./publishRequestId.js";
 import { getReducedContract } from "./contractPrefetch.js";
 import { getEditorialVoice } from "./voicePrefetch.js";
+import { getEditorialStrategy } from "../projects/genesisEditorialStrategy.js";
 import { getSitePrefetch } from "./sitePrefetch.js";
 import { CONTENT_ITEM_SHELL_FAILED_PREFIX, CONTENT_ITEM_SHELL_INPUT_KEY, ensureContentItemShell } from "./contentItemShell.js";
 import { buildDeterministicContractIntelligence } from "./deterministicContractIntelligence.js";
@@ -48,7 +49,7 @@ import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
 import { readVisualStandardMaterializer, runVisualStandardMaterialization } from "./visualStandardMaterialization.js";
 import { resolveGateId } from "./gateRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, EV_FLOOR_BLOCKED_PREDICATE, type SkippedDependencyEntry } from "./skipPredicates.js";
-import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch, declaresCostPrefetch, declaresTrafficPrefetch } from "./nodeGatingSeed.js";
+import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch, declaresStrategyPrefetch, declaresCostPrefetch, declaresTrafficPrefetch } from "./nodeGatingSeed.js";
 import { getRunCostEstimate, RUN_COST_ESTIMATE_INPUT_KEY } from "./costPrefetch.js";
 import { getTrafficEstimate, TRAFFIC_ESTIMATE_INPUT_KEY } from "./trafficPrefetch.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
@@ -1983,6 +1984,38 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       const message = error instanceof Error ? error.message : String(error);
       state.warnings = [...(state.warnings ?? []), "voice_prefetch_fallback:threw"];
       state.input = { ...(state.input as Record<string, unknown>), editorialVoiceError: message };
+    }
+  }
+
+  // W4 (2026-09-09, Wolf) — THE STRATEGY PREFETCH, alongside the voice and resolved exactly like it.
+  //
+  // The voice tells a node HOW this tenant writes. The governed `editorial_strategy` object
+  // (strat_<slug>) tells it WHAT the site has decided to commission — the goal, the offer, the
+  // audience segments, the topic weights, the angle mix, the funnel posture. Every planning node has
+  // been inferring that half from whatever the run happened to carry, while the one loop that
+  // PROPOSES changes to it (improvement/strategyReview.ts) wrote into an object nothing read.
+  //
+  // UNSET NEVER BLOCKS (Wolf, 2026-09-09), which is why this mirrors the voice block rather than the
+  // contract one. A tenant whose strategy object is still the genesis default — or has none at all —
+  // resolves to `source: "default"`/"fallback"/"unavailable" with a named warningCode, the run-visible
+  // warning is stamped, and the node runs. The warning is the whole point: a default strategy being
+  // silently obeyed is the state this change exists to make visible.
+  if (declaresStrategyPrefetch(nextNode)) {
+    try {
+      const strategyResult = await getEditorialStrategy(
+        { runId: run.runId, projectId: run.projectId },
+        { projectRepository: repositoryManager.getProjectRepository(), cache: conductorCache }
+      );
+      if (strategyResult.strategy) {
+        state.input = { ...(state.input as Record<string, unknown>), editorialStrategy: strategyResult.strategy, editorialStrategySource: strategyResult.source };
+      }
+      if (strategyResult.source !== "object" && strategyResult.warningCode) {
+        state.warnings = [...(state.warnings ?? []), `strategy_prefetch_fallback:${strategyResult.warningCode}`];
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      state.warnings = [...(state.warnings ?? []), "strategy_prefetch_fallback:threw"];
+      state.input = { ...(state.input as Record<string, unknown>), editorialStrategyError: message };
     }
   }
 

@@ -16,22 +16,36 @@
 # script deliberately does not set, and which enables nothing in the current build — the patch path
 # is not written. Setting it here would be a policy decision disguised as a deploy flag.
 #
-# TWO SIDES OF CONFIGURATION, AND BOTH ARE OPERATOR TASKS.
-#   1. The sink (TRACKING_SINK_URL / TRACKING_SINK_TOKEN / TRACKING_PROJECT_ID) — what it reads.
-#   2. The governed object (EDITORIAL_STRATEGY_PROJECT_ID / _OBJECT_TYPE / _OBJECT_ID) — what it
-#      proposes against, and WHOSE editor sees it. Deliberately configuration rather than a literal:
-#      the tenant MCP's object_type is a closed enum and the reviewed object differs per tenant, so
-#      hard-coding either would fabricate a type or pin every tenant to one id.
-# With either side unset the run is a clean "skipped_unconfigured" that NAMES the unset variables and
-# exits 0, so this schedule can exist ahead of both.
+# WHAT IT READS AND WHAT IT PROPOSES AGAINST — BOTH NOW COME OFF THE RECORD (W4, Wolf 2026-09-09).
+#   1. The SINK connection (TRACKING_SINK_URL / TRACKING_SINK_TOKEN) is still deployment
+#      configuration and still required: it is the one credentialed thing this job holds.
+#   2. The two ADDRESSES are not. The sink partition to read and the governed object to propose
+#      against are resolved PER TENANT from that tenant's own project record (tracking.projectId and
+#      objectDialect.strategyObjectId, each with a working convention behind it), so one run serves
+#      every active tenant instead of whichever one an operator wired into this script. That is the
+#      whole change: the old single-address shape meant the rest of the fleet got nothing, silently,
+#      forever, and the job's own output could not say so.
 #
-# IT ALSO NEEDS TO REACH THE TENANT. Writing the proposal is a marginalia_create call through
-# ProjectMcpAdapter against EDITORIAL_STRATEGY_PROJECT_ID's registered record. That record supplies
-# the endpoint; the bearer comes from EITHER the env var the record names (tokenEnvVar) OR the Secret
-# Manager reference it carries (tokenSecretRef, read at runtime). This script binds neither by
-# guessing — see the closing notes, which tell you how to check which of the two your project uses.
-# A tenant that refuses the write is reported as "marginalia_write_failed" with the delta intact; the
-# strategy object is never touched.
+# THE EDITORIAL_STRATEGY_* TRIPLE IS NOW AN OVERRIDE ONLY, NOT A REQUIREMENT.
+#   Setting all three pins the job to ONE tenant and one object — its exact pre-W4 behavior, which is
+#   what makes `--dry-run` against a single named tenant a debugging tool rather than a fleet walk.
+#   Leaving them unset is the NORMAL production setting: the job walks the registry. Unset is
+#   therefore no longer a "not useful yet" state to warn about, and this script no longer treats it
+#   as one. The three-or-none rule below survives untouched, because a PARTIAL address is still the
+#   one shape that can send a proposal to the wrong place.
+#   TRACKING_PROJECT_ID likewise stops being required: with it set (and the triple set) you get the
+#   single-tenant override; with it set alone it NARROWS the walk to the tenant resolving to that
+#   partition; unset, the walk covers everyone.
+# With the sink unset the run is a clean "skipped_unconfigured" that NAMES the unset variables and
+# exits 0, so this schedule can exist ahead of it.
+#
+# IT ALSO NEEDS TO REACH EACH TENANT. Writing a proposal is a marginalia_create call through
+# ProjectMcpAdapter against that tenant's registered record. The record supplies the endpoint; the
+# bearer comes from EITHER the env var the record names (tokenEnvVar) OR the Secret Manager reference
+# it carries (tokenSecretRef, read at runtime). This script binds neither by guessing — see the
+# closing notes. A tenant that refuses the write is reported, BY NAME, as that tenant's failed
+# outcome with the delta intact; every other tenant in the walk is unaffected, the strategy object is
+# never touched, and the job still exits 0.
 #
 # TOKEN HANDLING. The sink bearer is bound from Secret Manager, never passed as an env literal. Token
 # values are never command arguments, output, or project records.
@@ -46,7 +60,6 @@ die() { say ""; say "✗ $*"; exit 1; }
 : "${IMAGE:?set IMAGE to the immutable deployed CMS-Agent image}"
 : "${GCS_BUCKET:?set GCS_BUCKET}"
 : "${TRACKING_SINK_URL:?set TRACKING_SINK_URL to the full sink relay URL ending in /api/tracking-sink}"
-: "${TRACKING_PROJECT_ID:?set TRACKING_PROJECT_ID to the sink partition this job reads}"
 : "${RUNTIME_SA:?set RUNTIME_SA to the existing CMS-Agent runtime service account}"
 
 JOB="${JOB:-strategy-review}"
@@ -55,10 +68,17 @@ TRACKING_SINK_TOKEN_SECRET="${TRACKING_SINK_TOKEN_SECRET:-tracking-sink-token}"
 command -v gcloud >/dev/null || die "gcloud is not on PATH."
 gcloud secrets describe "$TRACKING_SINK_TOKEN_SECRET" --project "$PROJECT" >/dev/null 2>&1 \
   || die "Secret $TRACKING_SINK_TOKEN_SECRET is missing; create it without printing its value before configuring the job."
-[[ "$TRACKING_PROJECT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]] || die "TRACKING_PROJECT_ID must be a lowercase slug, got: $TRACKING_PROJECT_ID"
+# W4: OPTIONAL now. Set it only to narrow the run to one tenant's partition (with the triple below,
+# that is the full single-tenant override); leave it unset for the normal fleet-wide walk, which
+# resolves each tenant's partition from its own record.
+TRACKING_PROJECT_ID="${TRACKING_PROJECT_ID:-}"
+if [[ -n "$TRACKING_PROJECT_ID" ]]; then
+  [[ "$TRACKING_PROJECT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]] || die "TRACKING_PROJECT_ID must be a lowercase slug, got: $TRACKING_PROJECT_ID"
+fi
 
-# The strategy object address. All three or none: a partially-addressed object is the one shape that
-# could send a proposal to the wrong place, so it is rejected here rather than at runtime.
+# The strategy object address — an OVERRIDE since W4, not a requirement. All three or none: a
+# partially-addressed object is still the one shape that could send a proposal to the wrong place, so
+# it is rejected here rather than at runtime.
 EDITORIAL_STRATEGY_PROJECT_ID="${EDITORIAL_STRATEGY_PROJECT_ID:-}"
 EDITORIAL_STRATEGY_OBJECT_TYPE="${EDITORIAL_STRATEGY_OBJECT_TYPE:-}"
 EDITORIAL_STRATEGY_OBJECT_ID="${EDITORIAL_STRATEGY_OBJECT_ID:-}"
@@ -72,13 +92,16 @@ fi
 if [[ "$STRATEGY_SET" -eq 3 ]]; then
   # The CMS-Agent project id (e.g. dr-lurie), NOT the sink partition (drlurie) — S-21's four-id trap.
   [[ "$EDITORIAL_STRATEGY_PROJECT_ID" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]] || die "EDITORIAL_STRATEGY_PROJECT_ID must be a lowercase slug, got: $EDITORIAL_STRATEGY_PROJECT_ID"
-  if [[ "$EDITORIAL_STRATEGY_PROJECT_ID" == "$TRACKING_PROJECT_ID" ]]; then
+  if [[ -n "$TRACKING_PROJECT_ID" && "$EDITORIAL_STRATEGY_PROJECT_ID" == "$TRACKING_PROJECT_ID" ]]; then
     say "⚠  EDITORIAL_STRATEGY_PROJECT_ID and TRACKING_PROJECT_ID are the same string (\"$TRACKING_PROJECT_ID\")."
     say "   These are different id domains for one tenant: the sink's partition is spelled like \"drlurie\", the CMS-Agent project like \"dr-lurie\"."
     say "   If that is genuinely this tenant's spelling on both sides, ignore this; otherwise the proposal will be addressed to a project that does not exist."
   fi
 else
-  say "EDITORIAL_STRATEGY_* is unset — the job will run and exit 0 as a named no_strategy_object no-op until an operator names the object an editor owns."
+  say "EDITORIAL_STRATEGY_* is unset — this is the NORMAL production setting since W4 (Wolf, 2026-09-09), not a gap."
+  say "   The job walks every active tenant and resolves each one's sink partition and editorial_strategy object from its own project record"
+  say "   (tracking.projectId and objectDialect.strategyObjectId, each falling back to the conventional bare slug / strat_<slug>)."
+  say "   Set all three ONLY to pin the job to one tenant — that is the single-tenant debugging override."
 fi
 
 COMMON=(
@@ -94,7 +117,12 @@ COMMON=(
   --command node
   --args=--import,tsx,src/agent/entrypoints/strategyReviewJobMain.ts
 )
-ENV_VARS="^|^WORKSPACE_STORE=gcs|GCS_BUCKET=$GCS_BUCKET|TRACKING_SINK_URL=$TRACKING_SINK_URL|TRACKING_PROJECT_ID=$TRACKING_PROJECT_ID"
+ENV_VARS="^|^WORKSPACE_STORE=gcs|GCS_BUCKET=$GCS_BUCKET|TRACKING_SINK_URL=$TRACKING_SINK_URL"
+# Appended only when set, for the same merge-style reason the triple is: writing an empty value would
+# overwrite a live single-tenant pin with blank. Unset here means the fleet-wide walk.
+if [[ -n "$TRACKING_PROJECT_ID" ]]; then
+  ENV_VARS="$ENV_VARS|TRACKING_PROJECT_ID=$TRACKING_PROJECT_ID"
+fi
 # Appended only when all three are set: on the merge-style update path an empty value would overwrite
 # a good live address with blank, which is the one way this job could stop proposing in silence.
 if [[ "$STRATEGY_SET" -eq 3 ]]; then
@@ -111,6 +139,6 @@ else
 fi
 
 say "Configured $JOB without executing it. Verify $RUNTIME_SA has Secret Manager accessor on $TRACKING_SINK_TOKEN_SECRET before execution."
-say "This job OPENS A MARGINALIA THREAD a human reads. Execute once with --args=…,--dry-run first — it prints the resolved window, the sink connection state, the strategy object address and the autopatch flag, and writes nothing."
-say "Tenant reachability: the bearer for EDITORIAL_STRATEGY_PROJECT_ID comes from the env var its record names, or from the Secret Manager reference it carries. Check which with: project_get on that project and read tokenEnvVar / tokenSecretRef. If it is an env var, bind it on this job; if it is a secret ref, grant $RUNTIME_SA accessor on that secret."
+say "This job OPENS A MARGINALIA THREAD a human reads — one per tenant it has something to say to. Execute once with --args=…,--dry-run first: it prints ONE LINE PER TENANT (project id, sink partition, strategy object address), plus the resolved window, the sink connection state and the autopatch flag, and writes nothing. Read that list before the first live run; it is the list of editors who will get a thread."
+say "Tenant reachability: on the fleet-wide walk every tenant in the dry-run list must be reachable on its own; a tenant that is not is reported by name and stops nothing else. The bearer for each comes from the env var its record names, or from the Secret Manager reference it carries. Check which with: project_get on that project and read tokenEnvVar / tokenSecretRef. If it is an env var, bind it on this job; if it is a secret ref, grant $RUNTIME_SA accessor on that secret."
 say "Then schedule it with scripts/deploy-strategy-review-schedule.sh, and add $JOB to deploy/executor-jobs.txt if it is not there already."

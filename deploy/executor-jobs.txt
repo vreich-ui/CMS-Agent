@@ -44,9 +44,16 @@ tracking-ingest
 # rather than like a deploy fault. Runs daily at 04:00 UTC, after tracking-ingest.
 strategy-learning
 
-# Weekly. The only job whose output is addressed to a HUMAN — one marginalia thread on the governed
-# editorial_strategy object, carrying a proposed delta and its evidence. It never patches. A stale
-# image here puts an out-of-date claim, with an out-of-date bar behind it, in front of the editor
-# who owns the strategy; the thread reads as current because nothing in it says which build wrote
-# it. Runs Mondays at 05:00 UTC.
+# Weekly, ALL TENANTS, Mondays at 05:00 UTC. The only job whose output is addressed to a HUMAN —
+# one marginalia thread per tenant on that tenant's governed editorial_strategy object, carrying a
+# proposed delta and its evidence. It never patches. A stale image here puts an out-of-date claim,
+# with an out-of-date bar behind it, in front of the editor who owns the strategy; the thread reads
+# as current because nothing in it says which build wrote it.
+#
+# W4 (Wolf, 2026-09-09): the addresses come from the PROJECT RECORD, not from env vars. The job
+# walks every active content tenant and resolves each one's own strategy object and sink partition;
+# EDITORIAL_STRATEGY_PROJECT_ID / _OBJECT_TYPE / _OBJECT_ID survive only as a single-tenant
+# override for debugging one tenant with --dry-run. Leave all three UNSET on this job — setting
+# them silently narrows the weekly fan-out to one tenant, and nothing in the run output would say
+# the other three were never reviewed.
 strategy-review

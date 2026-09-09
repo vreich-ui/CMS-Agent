@@ -29,6 +29,14 @@
 //   capture_source_out_of_policy / capture_source_invalid — sourceUrl outside the target's bounds.
 //   netlify_token_missing        — newSite genesis without the standing NETLIFY_API_TOKEN
 //                                  prerequisite configured (by NAME) in this deployment.
+//   genesis_artifact_required    — W3 (Wolf, 2026-09-09): the fleet genesis policy requires a
+//                                  baseline artifact this newSite did not supply. Raised BEFORE any
+//                                  provisioning — no Netlify site, no build hook, no project record
+//                                  — and carries `missing` (the newSite field NAMES to supply) plus
+//                                  `waysOut` (supply now / lower the policy). The same code, fields
+//                                  and wording the platform's own mint returns; see
+//                                  src/agent/capture/genesisPolicy.ts for why the vocabulary is
+//                                  duplicated across two repos that cannot import each other.
 //   budget_exceeded              — budgetUsd below the workflow's entry-node reservation: the run
 //                                  would pause for budget before dispatching ANY node.
 //   unknown_run                  — site.duplicate_status for a run that does not exist.
@@ -45,6 +53,7 @@ import { resolvePublishAuthority } from "../../workspace/publishDecision.js";
 import { ProjectMcpAdapter, toConnectionState } from "../../projects/projectMcpAdapter.js";
 import { registryEndpointSchema } from "../../projects/projectAdmin.js";
 import { runSiteGenesis, type GenesisHumanChecklistItem, type SiteGenesisResult } from "../../capture/siteGenesis.js";
+import { GENESIS_ARTIFACTS, GENESIS_ARTIFACT_INPUT_FIELDS } from "../../capture/genesisPolicy.js";
 import { kickRun, resolveKickTimeBudgetMs, KICK_MAX_STEPS } from "../../workspace/runKick.js";
 import {
   maybeChainCloneAfterCapture,
@@ -98,7 +107,18 @@ const newSiteSchema = z.object({
   audience: z.string().min(2).max(200).optional(),
   // G4 — the bootstrap Owner. Genesis installs it as ADMIN_EMAILS + ROLE_EMAILS_ADMIN on the new
   // site; omitted, those stay on the human checklist exactly as before. Never invented.
-  ownerEmail: z.string().email().max(254).optional()
+  ownerEmail: z.string().email().max(254).optional(),
+  // W3 (Wolf, 2026-09-09) — the five genesis BASELINES, each an optional partial body forwarded
+  // verbatim to the platform scaffold's own genesis-input flags. Deliberately unvalidated beyond
+  // "is an object": the platform owns these body schemas and a second copy here would be a copy
+  // that drifts. Their existence is what makes the genesis policy's "SUPPLY NOW" door real — a
+  // refusal naming a field the caller cannot pass would be an outage, not a policy.
+  ...Object.fromEntries(
+    GENESIS_ARTIFACTS.map((artifact) => [
+      GENESIS_ARTIFACT_INPUT_FIELDS[artifact],
+      z.record(z.string(), z.unknown()).optional()
+    ])
+  )
 }).strict();
 
 const duplicateInput = z.object({
@@ -122,7 +142,17 @@ const duplicateJsonSchema = objectSchema({
     mcpEndpoint: { type: "string", format: "uri", maxLength: 512, description: "Optional override for the new tenant's MCP endpoint, stored on its registry record (https, no credentials/query/fragment — an endpoint is not a secret, the token still is). OMIT IT normally: genesis derives the endpoint from the Netlify site it just creates, so no endpoint has to be set by hand anywhere. Use it only when the tenant serves /mcp from a custom domain from day one." },
     niche: { type: "string", minLength: 2, maxLength: 200, description: "What this tenant publishes about, in the operator's own words (e.g. \"independent film preservation\"). Genesis never invents one. Supplying it is what lets the visual_identity house standard be written with a real brief instead of asking a human for one, and what lets a provisional editorial voice be filed on the record so the tenant's first runs are not voice-less." },
     audience: { type: "string", minLength: 2, maxLength: 200, description: "Who this tenant writes for (e.g. \"archivists and festival programmers\"). Pairs with niche: both are needed for the house-standard brief, and either one alone is enough for the provisional editorial voice." },
-    ownerEmail: { type: "string", format: "email", maxLength: 254, description: "The operator who will own this tenant. Genesis installs it as the site's ADMIN_EMAILS and ROLE_EMAILS_ADMIN bootstrap allowlists — the env write was always API-capable; what kept it a human step was that nobody had told genesis WHICH humans own the tenant. Omit it and those stay on the checklist. Note this does not enable Netlify Identity, which is console-only." }
+    ownerEmail: { type: "string", format: "email", maxLength: 254, description: "The operator who will own this tenant. Genesis installs it as the site's ADMIN_EMAILS and ROLE_EMAILS_ADMIN bootstrap allowlists — the env write was always API-capable; what kept it a human step was that nobody had told genesis WHICH humans own the tenant. Omit it and those stay on the checklist. Note this does not enable Netlify Identity, which is console-only." },
+    ...Object.fromEntries(
+      GENESIS_ARTIFACTS.map((artifact) => [
+        GENESIS_ARTIFACT_INPUT_FIELDS[artifact],
+        {
+          type: "object",
+          additionalProperties: true,
+          description: `Optional partial ${artifact} body, deep-merged onto the skeleton the platform scaffold would otherwise write. Supplying it marks the object provenance.set_by:"agent" instead of "genesis_default", which is what silences the "needs to be set" warning downstream. Required only when the fleet genesis policy lists ${artifact}: a newSite that omits a required one is refused genesis_artifact_required before anything is provisioned.`
+        }
+      ])
+    )
   }, ["name"]),
   budgetUsd: { type: "number", minimum: 0, description: `Optional per-run cost ceiling in USD (workflow.start_dry_run semantics); defaults to $${DEFAULT_SITE_DUPLICATE_BUDGET_USD} to ensure every autonomous duplication runs under an explicit ceiling. Refused as budget_exceeded when below the workflow's entry-node reservation — such a run could never dispatch its first node.` },
   executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: "Passed through to the run. \"mock\" is the cheap CI/test mode; deterministic capture stages run real engine code either way." }
@@ -223,6 +253,14 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
               niche: data.newSite.niche,
               audience: data.newSite.audience,
               ownerEmail: data.newSite.ownerEmail,
+              // W3: the supplied baselines, by their own field names. Spread rather than listed so
+              // adding a sixth artifact to the closed enum cannot be half-wired here.
+              ...Object.fromEntries(
+                GENESIS_ARTIFACTS.map((artifact) => GENESIS_ARTIFACT_INPUT_FIELDS[artifact]).flatMap((field) => {
+                  const value = (data.newSite as Record<string, unknown> | undefined)?.[field];
+                  return value === undefined ? [] : [[field, value] as const];
+                })
+              ),
               sourceUrl: data.sourceUrl
             },
             { projectRepository }
