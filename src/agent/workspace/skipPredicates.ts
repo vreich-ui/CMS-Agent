@@ -508,6 +508,21 @@ const readEvFloorBlock = (carrier: unknown): Record<string, unknown> | undefined
 
 const isEarnedBasis = (value: unknown): value is EstimateBasis => typeof value === "string" && normalizeToken(value) === EARNED_BLOCK_ESTIMATE_BASIS;
 
+// TWO ARTIFACT SHAPES, ONE PREDICATE. `monetize.ev_floor` returns ev_floor.v1 (expectedValueUsd,
+// floorUsd); the LIVE monetization_strategy node's own evFloor block — which predates this module and
+// carries a cluster-level model the tool has no equivalent for (clusterRole, supportingFor,
+// pass_via_cluster, currency, margin) — spells the same quantities expectedValue and estimatedRunCost.
+// The DECISION reads only `verdict` and `estimateBasis`, which both shapes spell identically, so this
+// helper exists purely so the recorded reason quotes real numbers instead of printing "undefined" into
+// an audit record. A figure neither shape carries renders as "not stated", never as a fabricated 0.
+const renderFigure = (evFloor: Record<string, unknown>, keys: readonly string[]): string => {
+  for (const key of keys) {
+    const value = evFloor[key];
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return "not stated";
+};
+
 function evaluateEvFloorBlocked(predicate: Extract<SkipPredicate, { when: "ev_floor_blocked" }>, context: SkipEvaluationContext): SkipVerdict {
   const basis: string[] = [];
   for (const carrier of carriersFor(context, ["monetization_strategy"])) {
@@ -518,6 +533,11 @@ function evaluateEvFloorBlocked(predicate: Extract<SkipPredicate, { when: "ev_fl
     const estimateBasis = evFloor.estimateBasis;
     basis.push(`evFloor.verdict: ${verdict ?? "not declared"}`);
     basis.push(`evFloor.estimateBasis: ${typeof estimateBasis === "string" ? estimateBasis : "not declared"}`);
+    // The two numbers the decision is ABOUT, recorded as facts rather than only interpolated into the
+    // reason — a node's seeded `reason` string wins over the computed one (readSkipPredicates lets an
+    // operator author it), so prose is not a reliable carrier for a figure. `basis` is.
+    basis.push(`evFloor.expectedValue: ${renderFigure(evFloor, ["expectedValueUsd", "expectedValue"])}`);
+    basis.push(`evFloor.runCost: ${renderFigure(evFloor, ["floorUsd", "estimatedRunCost"])}`);
     if (verdict !== "block") {
       return { skip: false, predicate, reason: `${context.nodeId} runs: the EV floor's verdict is "${verdict ?? "not declared"}", not a block.`, basis, warnings: [] };
     }
@@ -526,7 +546,7 @@ function evaluateEvFloorBlocked(predicate: Extract<SkipPredicate, { when: "ev_fl
       // on the artifact and readable by anyone, and it stops nothing.
       return { skip: false, predicate, reason: `${context.nodeId} runs: the EV floor says block, but on estimateBasis "${typeof estimateBasis === "string" ? estimateBasis : "not declared"}" rather than "${EARNED_BLOCK_ESTIMATE_BASIS}" — a block computed on assumed numbers is advisory and never stops a run.`, basis, warnings: [] };
     }
-    return { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} stopped: the EV floor blocks this piece on live Monetizer data (expectedValueUsd ${String(evFloor.expectedValueUsd)} against floorUsd ${String(evFloor.floorUsd)}), so the run is halted before the expensive post-brief chain rather than producing an article the numbers say is not worth its cost.`, basis, warnings: [] };
+    return { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} stopped: the EV floor blocks this piece on live Monetizer data (expected value ${renderFigure(evFloor, ["expectedValueUsd", "expectedValue"])} against a floor built on run cost ${renderFigure(evFloor, ["floorUsd", "estimatedRunCost"])}), so the run is halted before the expensive post-brief chain rather than producing an article the numbers say is not worth its cost.`, basis, warnings: [] };
   }
   basis.push("no ev_floor artifact on any carrier");
   return { skip: false, predicate, reason: `${context.nodeId} runs: no EV floor artifact is readable on this run, and an unanswered question is answered by running.`, basis, warnings: [] };

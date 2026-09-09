@@ -6,6 +6,7 @@ import { getRun, runNextNode, startDryRun } from "../../../src/agent/workspace/e
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { computeEvFloor } from "../../../src/agent/workspace/evFloor.js";
 import { buildNodeTimingRecord } from "../../../src/agent/workspace/nodeTimings.js";
+import { TRACKING_OUTCOME_SOURCE } from "../../../src/agent/improvement/trackingIngest.js";
 
 // ACCEPTANCE 3 and 4, at the CONDUCTOR level. skipPredicates decides; this proves what the executor
 // does with the decision — and specifically that an earned block STOPS THE RUN rather than skipping
@@ -42,7 +43,7 @@ describe("an EARNED EV block halts the run at brief_architect", () => {
 
   it("stops the run — status blocked, brief_architect never dispatched, and the publish tail never reached", async () => {
     const { runId, store } = await startToMonetization();
-    await withEvFloor(runId, store, computeEvFloor({ runCostUsd: 3.86, floorMultiplier: 1.25, payoutUsd: 20, conversionRate: 0.001, estimatedVolume: 100, runCostBasis: "workflow_history", revenueBasis: "monetizer_data" }));
+    await withEvFloor(runId, store, computeEvFloor({ runCostUsd: 3.86, floorMultiplier: 1.25, payoutUsd: 20, conversionRate: 0.001, estimatedVolume: 100, runCostBasis: "workflow_history", revenueBasis: "monetizer_data", volumeBasis: "tracking_engagement" }));
 
     const run = await advanceUntil(runId, store, reached("brief_architect"));
 
@@ -119,5 +120,56 @@ describe("the run-cost prefetch delivers a measured figure to monetization_strat
     expect(node.status).toBe("completed");
     expect((node.input as Record<string, unknown>).runCostEstimate).toMatchObject({ basis: "no_history", estimatedRunCostUsd: 0 });
     expect(node.warnings).toContain("cost_prefetch_degraded:cost_history_insufficient");
+  });
+});
+
+describe("the traffic prefetch delivers a measured volume to monetization_strategy", () => {
+  // MemoryEvaluationRepository keeps its state in a process-wide static keyed by backend name, so
+  // neither clear() nor resetRepositoryManager() isolates these. Each test therefore uses its OWN
+  // project id — which is also the isolation the prefetch itself relies on in production.
+  beforeEach(() => repositoryManager.getUsageRepository().clear());
+
+  const engagementRow = (projectId: string, sessions: number, over: Record<string, number> = {}) =>
+    repositoryManager.getEvaluationRepository().recordFeedback({
+      feedbackId: `fb_${projectId}_${sessions}`,
+      kind: "outcome",
+      projectId,
+      outcome: { source: TRACKING_OUTCOME_SOURCE, metrics: { sessions, pageviews: sessions * 2, ...over } },
+      createdAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString()
+    });
+
+  const trafficEstimateFor = async (projectId: string) => {
+    const store = new RepositoryManager().getExecutionRepository();
+    const started = await startDryRun({ executionMode: "mock", projectId, input: { contentClass: "money", topic: "Retinoid tolerance" } }, store);
+    const run = await advanceUntil(started.runId, store, reached("monetization_strategy"));
+    const node = run.nodes.find((entry) => entry.nodeId === "monetization_strategy")!;
+    return { node, estimate: (node.input as Record<string, unknown>).trafficEstimate as Record<string, unknown> };
+  };
+
+  it("puts the property's measured monthly sessions and purchase rate in the node's input", async () => {
+    // 900 sessions across the window -> 900/90*30 = 300 a month; purchase_rate 0.02 measured.
+    for (const sessions of [400, 300, 200]) await engagementRow("traffic-measured", sessions, { purchase_rate: 0.02 });
+
+    const { node, estimate } = await trafficEstimateFor("traffic-measured");
+
+    expect(estimate).toMatchObject({ artifact: "traffic_estimate.v1", basis: "tracking_engagement", expectedMonthlyTraffic: 300, sessions: 900, observedConversionRate: 0.02 });
+    expect(node.warnings ?? []).not.toContain("traffic_prefetch_degraded:traffic_history_insufficient");
+  });
+
+  it("never counts another property's traffic as this one's", async () => {
+    await engagementRow("some-other-tenant", 90000);
+
+    const { node, estimate } = await trafficEstimateFor("traffic-isolated");
+
+    expect(estimate).toMatchObject({ basis: "insufficient_data", expectedMonthlyTraffic: 0, sessions: 0 });
+    expect(node.warnings).toContain("traffic_prefetch_degraded:traffic_history_insufficient");
+  });
+
+  it("degrades loudly, never fatally, with no engagement history at all", async () => {
+    const { node, estimate } = await trafficEstimateFor("traffic-empty");
+
+    expect(node.status).toBe("completed");
+    expect(estimate).toMatchObject({ basis: "insufficient_data" });
+    expect(node.warnings).toContain("traffic_prefetch_degraded:traffic_history_insufficient");
   });
 });
