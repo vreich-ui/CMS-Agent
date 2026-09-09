@@ -48,8 +48,9 @@ import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
 import { readVisualStandardMaterializer, runVisualStandardMaterialization } from "./visualStandardMaterialization.js";
 import { resolveGateId } from "./gateRegistry.js";
 import { evaluateNodeSkip, renderSkippedDependencyPolicy, EV_FLOOR_BLOCKED_PREDICATE, type SkippedDependencyEntry } from "./skipPredicates.js";
-import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch, declaresCostPrefetch } from "./nodeGatingSeed.js";
+import { declaresContractPrefetch, declaresSitePrefetch, declaresVoicePrefetch, declaresCostPrefetch, declaresTrafficPrefetch } from "./nodeGatingSeed.js";
 import { getRunCostEstimate, RUN_COST_ESTIMATE_INPUT_KEY } from "./costPrefetch.js";
+import { getTrafficEstimate, TRAFFIC_ESTIMATE_INPUT_KEY } from "./trafficPrefetch.js";
 import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolvedVector, readResolvedVectorSources } from "./resolvedVectorClamp.js";
 import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried, nextAttemptNumber, NODE_ERROR_RETRIED_MARKER } from "./nodeAttemptHistory.js";
 import { toBlockage } from "../execution/blockage.js";
@@ -1945,6 +1946,30 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       const message = error instanceof Error ? error.message : String(error);
       state.warnings = [...(state.warnings ?? []), "cost_prefetch_degraded:threw"];
       state.input = { ...(state.input as Record<string, unknown>), costPrefetchError: message };
+    }
+  }
+
+  // 2026-09-09 — THE TRAFFIC PREFETCH. The cost prefetch above measured the EV floor's DENOMINATOR;
+  // this measures its numerator. `expectedValue = expectedCommission x assumedConversionRate x
+  // expectedMonthlyTraffic`, and until now both of those multipliers were authored by a model turn —
+  // the defective run asserted 400 monthly visits with nothing behind the number. The property's
+  // measured sessions and purchase rate (tracking sink rows the scheduled ingest job already wrote to
+  // the feedback ledger) now arrive in the node's input as `trafficEstimate`.
+  //
+  // This is what stops an "earned" block from being earned on fiction: evFloor.ts will not resolve
+  // estimateBasis to "monetizer_data" — the one value that halts a run — unless the volume carries
+  // volumeBasis "tracking_engagement". Same never-fails-a-node contract as every prefetch above: an
+  // unreadable ledger or too little traffic degrades to the insufficient_data estimate plus a named
+  // run-visible warning.
+  if (declaresTrafficPrefetch(nextNode)) {
+    try {
+      const trafficResult = await getTrafficEstimate({ projectId: run.projectId });
+      state.input = { ...(state.input as Record<string, unknown>), [TRAFFIC_ESTIMATE_INPUT_KEY]: trafficResult.estimate };
+      if (trafficResult.warningCode) state.warnings = [...(state.warnings ?? []), `traffic_prefetch_degraded:${trafficResult.warningCode}`];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      state.warnings = [...(state.warnings ?? []), "traffic_prefetch_degraded:threw"];
+      state.input = { ...(state.input as Record<string, unknown>), trafficPrefetchError: message };
     }
   }
 

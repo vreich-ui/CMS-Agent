@@ -45,6 +45,12 @@ export type NodeGatingSeedEntry = {
   // rewrites a node's metadata wholesale must not be able to switch it off by omission, and the number
   // it delivers is the ONE thing standing between the EV floor and another invented $800.
   costPrefetch?: true;
+  // 2026-09-09: the traffic prefetch (trafficPrefetch.ts) — the property's MEASURED monthly sessions
+  // and purchase rate, read from the tracking sink's already-ingested engagement rows and delivered as
+  // `trafficEstimate`. Declared here for the same reason the other four are, and load-bearing for the
+  // same reason the cost one is: without it, expectedValue's two biggest multipliers stay invented and
+  // an "earned" block can be earned on fiction.
+  trafficPrefetch?: true;
   // Why this node carries this policy. Kept in the data, not in a comment, so it travels into the
   // audit record and into anything that renders the policy.
   rationale: string;
@@ -71,6 +77,10 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
     // measured figure in its input (costPrefetch.ts) instead of estimating one. An EV-exempt run skips
     // before any prefetch runs, so this costs nothing on the runs it does not help.
     costPrefetch: true,
+    // 2026-09-09: expectedValue = commission x conversionRate x monthlyTraffic. The cost fix measured
+    // the floor; these two measure the numerator. Both prefetches run only on a run that got past the
+    // content-class skip below, so an EV-exempt run still pays for neither.
+    trafficPrefetch: true,
     skipWhen: [{
       when: "content_class_in",
       classes: EV_EXEMPT_CONTENT_CLASSES,
@@ -195,6 +205,7 @@ export function gatedMetadata(node: GatedNode): Record<string, unknown> | undefi
   if (seed.voicePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "voicePrefetch")) merged.voicePrefetch = seed.voicePrefetch;
   if (seed.sitePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "sitePrefetch")) merged.sitePrefetch = seed.sitePrefetch;
   if (seed.costPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "costPrefetch")) merged.costPrefetch = seed.costPrefetch;
+  if (seed.trafficPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "trafficPrefetch")) merged.trafficPrefetch = seed.trafficPrefetch;
   return merged;
 }
 
@@ -204,3 +215,4 @@ export const declaresContractPrefetch = (node: GatedNode): boolean => gatedMetad
 export const declaresVoicePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.voicePrefetch === true;
 export const declaresSitePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.sitePrefetch === true;
 export const declaresCostPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.costPrefetch === true;
+export const declaresTrafficPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.trafficPrefetch === true;
