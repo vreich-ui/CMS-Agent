@@ -107,6 +107,19 @@ Gates with stable ids are declared in `gateRegistry.ts` (per workflow × node) s
 
 ## 4. Skills
 
+CMS-Agent's `execution/nodeInstructions.ts` supplies the same node-plus-skill instruction core to
+`node.get_effective_prompt`, `OpenAINodeRunner` (including compatible providers), and
+`AnthropicNodeRunner`. Active skills are loaded at dispatch in assignment order, once per unique
+skill ID. Draft/deprecated skills produce warnings and contribute no instructions. Missing assigned
+skills or schema contradictions detected by the existing compatibility checker refuse provider
+dispatch with `invalid_node_configuration`. The preview contains the node prompt once and exposes
+skill-only text separately; provider wrappers, run context and playbooks remain separate. This is
+instruction composition, not enforcement of every skill completion criterion or a new tool grant.
+
+The DTC workspace handoff corrections are documented in
+[DTC_CAPABILITY_REPAIRS.md](DTC_CAPABILITY_REPAIRS.md). Their live authoring patches are separate
+from the code deployment; canonical node literals have deliberately not been re-seeded.
+
 13 seeded skills (`skills/seededSkills.ts`: `article_body_builder`, `article_structuring`, `artifact_handling`, `contract_intelligence`, `editorial_craft`, `editorial_review`, `factual_review`, `learning_observation`, `publication_readiness`, `seo_review`, `source_verification`, `web_research`, `structure_studio_standards_pack`). A skill is a versioned document (instructions, schemas, allowed tools, tool policy, memory policy, risk level) stored in `skills/*` with snapshots and events; `skill.assign` writes `node.assignedSkills`. Resolution (`skillResolver.resolveSkillsForNode`) filters by status and risk and contributes instructions + tool constraints. The `standardsPack.ts` skill carries a section-type registry snapshot for the structure studio. Skills never execute code.
 
 ## 5. Memory

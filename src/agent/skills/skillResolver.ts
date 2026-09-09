@@ -10,11 +10,15 @@ const unique = <T>(values: T[]) => [...new Set(values)];
 export type ResolveSkillOptions = { workspaceSystemPolicy?: string; projectPolicy?: string; runInstructions?: string; platformTools?: string[]; runAuthorizedTools?: string[]; riskPolicy?: WorkspaceRiskLevel };
 
 export async function resolveSkillsForNode(node: WorkspaceNode, repository: SkillRepository, options: ResolveSkillOptions = {}): Promise<SkillResolvedPolicy> {
-  const skillIds = node.assignedSkills ?? [];
-  const skills = (await Promise.all(skillIds.map((id) => repository.get(id)))).filter((skill): skill is SkillDefinition => Boolean(skill));
+  const skillIds = unique(node.assignedSkills ?? []);
+  // One repository read per resolution. The blob repository loads the skill document on every
+  // read; fetching each assigned skill separately multiplies that cost on every model dispatch.
+  const available = skillIds.length ? await repository.list({ skillIds }) : [];
+  const assigned = skillIds.map((id) => available.find((skill) => skill.skillId === id)).filter((skill): skill is SkillDefinition => Boolean(skill));
+  const skills = assigned.filter((skill) => skill.status === "active");
   const conflicts: SkillConflict[] = [];
-  for (const id of skillIds) if (!skills.some((skill) => skill.skillId === id)) conflicts.push({ severity: "blocker", source: id, message: `Assigned skill not found: ${id}` });
-  for (const skill of skills) if (skill.status !== "active") conflicts.push({ severity: "warning", source: skill.skillId, message: `Skill is ${skill.status}.` });
+  for (const id of skillIds) if (!assigned.some((skill) => skill.skillId === id)) conflicts.push({ severity: "blocker", source: id, message: `Assigned skill not found: ${id}` });
+  for (const skill of assigned) if (skill.status !== "active") conflicts.push({ severity: "warning", source: skill.skillId, message: `Skill is ${skill.status}; its instructions are not applied.` });
   // R-2: a real structural check (see schemaCompatibility.ts), not JSON.stringify equality. Only a
   // genuine contradiction — one no output could satisfy — is a blocker, and the conflict now names
   // which field contradicts instead of asserting that two schemas are not byte-identical.
@@ -30,11 +34,11 @@ export async function resolveSkillsForNode(node: WorkspaceNode, repository: Skil
   // skill.resolve_for_node and node.get_effective_tools can no longer report different verdicts for
   // the same node and tool.
   const decisions = new Map(
-    evaluateToolsForNode(node, skills, {
+    (requestedTools.length ? evaluateToolsForNode(node, skills, {
       platformAllowedTools: options.platformTools,
       runAuthorizedTools: options.runAuthorizedTools,
       ...(options.riskPolicy ? { maxRiskLevel: options.riskPolicy } : {})
-    }).map((decision) => [decision.toolId, decision])
+    }) : []).map((decision) => [decision.toolId, decision])
   );
   const effectiveTools = requestedTools.filter((tool) => decisions.get(tool)?.allowed).sort();
   const deniedTools = requestedTools.filter((tool) => !effectiveTools.includes(tool)).sort();

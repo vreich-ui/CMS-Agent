@@ -20,6 +20,7 @@ import { repositoryManager } from "../../runtime/repositories.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
+import { resolveNodeInstructions } from "../nodeInstructions.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { boundDependencyOutput, dependencyOutputMaxChars } from "./OpenAINodeRunner.js";
@@ -51,7 +52,7 @@ const stringFrom = (value: unknown) => typeof value === "string" && value.trim()
 const cfg = (node: WorkspaceNode) => ({ ...(node.modelConfig ?? {}), ...(node.executionConfig ?? {}) });
 const apiKeyEnv = (node: WorkspaceNode) => stringFrom(cfg(node).apiKeyEnv) ?? "ANTHROPIC_API_KEY";
 
-const instructions = (node: WorkspaceNode, playbookText: string, input?: unknown): string => [
+const instructions = (node: WorkspaceNode, playbookText: string, resolvedPrompt: string, input?: unknown): string => [
   "You are the CMS-Agent node runner running natively on Claude.",
   `Node: ${node.name} (${node.id})`,
   `Description: ${node.description}`,
@@ -59,7 +60,7 @@ const instructions = (node: WorkspaceNode, playbookText: string, input?: unknown
   // facts stated once by the conductor, so a node on either provider works from the same delivered
   // context instead of echoing a dependency's envelope. Absent when the input carries no runContext.
   renderRunContextInstruction(readRunContext(input)),
-  "Node prompt:", node.prompt,
+  resolvedPrompt,
   playbookText ? `Playbook (curated lessons for this node):\n${playbookText}` : "",
   "Assigned dependencies and memory are provided in the user message. Never reveal secrets.",
   "Return your result by calling the emit_output tool exactly once with a value matching its schema."
@@ -104,6 +105,8 @@ export class AnthropicNodeRunner implements NodeRunner {
   async run({ node, input }: NodeRunnerInput, context: NodeRunnerContext): Promise<NodeRunnerResult> {
     const valid = this.validateConfiguration(node);
     if (!valid.ok) return { ok: false, code: "invalid_node_configuration", message: valid.errors.join("; ") };
+    const resolvedInstructions = await resolveNodeInstructions(node);
+    if (resolvedInstructions.errors.length) return { ok: false, code: "invalid_node_configuration", message: resolvedInstructions.errors.join("; ") };
     const c = cfg(node);
     const model = stringFrom(c.model) ?? process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;
     const baseURL = (process.env.ANTHROPIC_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -134,7 +137,7 @@ export class AnthropicNodeRunner implements NodeRunner {
     const body = {
       model,
       max_tokens: numberFrom(c.maxOutputTokens) ?? 4096,
-      system: instructions(node, playbookText, input),
+      system: instructions(node, playbookText, resolvedInstructions.prompt, input),
       messages: [{ role: "user", content: messageContent }],
       tools: [{ name: "emit_output", description: "Emit this node's structured output. Call exactly once with the full result matching the schema.", input_schema: node.outputSchema as Record<string, unknown> }],
       tool_choice: { type: "tool", name: "emit_output" }
