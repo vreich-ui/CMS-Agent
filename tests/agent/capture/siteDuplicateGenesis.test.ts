@@ -151,7 +151,18 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     const envSets = result.genesis.ledger.filter((action) => action.step === "netlify_set_env" && action.kind === "dry_run");
     // No fleet tracking values are configured on THIS deployment (cleared in beforeEach), so genesis
     // installs only what it can derive — never an empty inherited value (T21.8).
-    expect(envSets.map((action) => (action as { data?: { key?: string } }).data?.key).sort()).toEqual(["CMS_AGENT_MCP_ENDPOINT", "CMS_AGENT_MCP_TOKEN", "NETLIFY_BUILD_HOOK_URL", "TRACKING_PROJECT_ID"]);
+    // G1/G4 added three: MCP_HTTP_AUTH_TOKEN is the tenant's inbound bearer, which genesis now
+    // MINTS rather than leaving a human to read out of a console; ARTIFACT_URL_INGEST_ALLOWED_HOSTS
+    // and PDF_TOOL_STORAGE_SITE_ID are values genesis can derive from the site it just created.
+    expect(envSets.map((action) => (action as { data?: { key?: string } }).data?.key).sort()).toEqual([
+      "ARTIFACT_URL_INGEST_ALLOWED_HOSTS",
+      "CMS_AGENT_MCP_ENDPOINT",
+      "CMS_AGENT_MCP_TOKEN",
+      "MCP_HTTP_AUTH_TOKEN",
+      "NETLIFY_BUILD_HOOK_URL",
+      "PDF_TOOL_STORAGE_SITE_ID",
+      "TRACKING_PROJECT_ID"
+    ]);
     expect(byStep.get("tracking_fleet_env:requires_human")).toBeDefined();
     // C-11: the sink pair is INHERITED from the account, so it is never "missing" on this
     // deployment's account — only the copied key can be. It is also never written as a site-level
@@ -225,7 +236,11 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(byId.get("enable_netlify_identity")!.detail).toContain("Invite only — this is a workspace, not a signup page");
     expect(byId.get("set_admin_emails")!.detail).toContain("Until the first invite exists this is the ONLY way in");
     expect(byId.get("github_repo_binding")!.envVars).toEqual(["GITHUB_REPOSITORY", "GITHUB_BRANCH", "GITHUB_CONTENT_TOKEN", "GITHUB_COMMIT_AUTHOR_EMAIL", "GITHUB_COMMIT_AUTHOR_NAME"]);
-    expect(byId.get("pdf_tool_storage_grant")!.envVars).toEqual(["PDF_TOOL_STORAGE_SITE_ID", "PDF_TOOL_STORAGE_TOKEN"]);
+    // G4 — the SITE ID half is closed (genesis just created the site, so it knows the id, and a
+    // mis-pasted id silently points this tenant's PDF artifacts at another tenant's blob stores).
+    // The TOKEN half is not, and honestly so: pdf-tool's set_storage_grant only ATTACHES a grant the
+    // caller already holds, and the token is a Netlify PAT — account authority, no API here.
+    expect(byId.get("pdf_tool_storage_grant")!.envVars).toEqual(["PDF_TOOL_STORAGE_TOKEN"]);
     // T21.8 — the tracking partition is the BARE slug (the sink's partition id); `trk_<slug>` is the
     // tracking_config OBJECT id and pointing the sink at it writes where nothing reads. With no fleet
     // sink values on this deployment, the sink pair stays a human item and the detail says why.
@@ -308,10 +323,14 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
         .map((action) => [String((action.data as { key?: string }).key), action.data as { isSecret: boolean; scopes: string[]; contexts: string[] }])
     );
     expect([...envSets.keys()].sort()).toEqual([
+      // G1/G4 — see the note on the same assertion in the first test.
+      "ARTIFACT_URL_INGEST_ALLOWED_HOSTS",
       "CMS_AGENT_MCP_ENDPOINT",
       "CMS_AGENT_MCP_TOKEN",
+      "MCP_HTTP_AUTH_TOKEN",
       "NETLIFY_AUTH_TOKEN",
       "NETLIFY_BUILD_HOOK_URL",
+      "PDF_TOOL_STORAGE_SITE_ID",
       "TRACKING_PROJECT_ID"
     ]);
     // C-11: TRACKING_SINK_URL/TOKEN are deliberately NOT here. They are account-level; a site-level

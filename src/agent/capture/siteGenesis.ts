@@ -63,6 +63,7 @@
 // replay exactly what genesis did and what remains. Entries carry ids and env var NAMES only;
 // secret values never appear in the ledger by construction.
 
+import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -71,6 +72,9 @@ import type { ProjectCapturePolicy, ProjectSummary } from "../projects/projectTy
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { ManagedScopedBearerCredentialRepository } from "../mcp/auth/managedScopedBearerCredentials.js";
 import { TRACKING_SINK_TOKEN_ENV, TRACKING_SINK_URL_ENV } from "../improvement/trackingIngest.js";
+import { createSecretVersion } from "../projects/secretManager.js";
+import { genesisTenantProfile } from "../projects/genesisTenantProfile.js";
+import { genesisEditorialVoiceFallback } from "../projects/genesisEditorialVoice.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -80,6 +84,19 @@ export const NETLIFY_API_TOKEN_ENV = "NETLIFY_API_TOKEN";
 export const NETLIFY_AUTH_TOKEN_ENV = "NETLIFY_AUTH_TOKEN";
 export const PLATFORM_REPO_ROOT_ENV = "PLATFORM_REPO_ROOT";
 export const SITE_GENESIS_NETLIFY_MODE_ENV = "SITE_GENESIS_NETLIFY_MODE";
+// G1 — where a minted tenant's bearer is taken into custody. Falls back to the reconciler's project
+// (the same GCP project every tenant secret already lives in) and then to the ambient Cloud Run
+// project, so a correctly-configured plane needs no new variable at all; an unset one degrades to
+// the human checklist rather than guessing a project to write secrets into.
+export const GENESIS_SECRET_MANAGER_PROJECT_ENV = "GENESIS_SECRET_MANAGER_PROJECT";
+const genesisSecretProject = (env: NodeJS.ProcessEnv): string | undefined =>
+  env[GENESIS_SECRET_MANAGER_PROJECT_ENV]?.trim()
+  || env.SITE_CREDENTIAL_RECONCILER_GCP_PROJECT?.trim()
+  || env.GOOGLE_CLOUD_PROJECT?.trim()
+  || undefined;
+/** The secret id a tenant's inbound bearer lives under. Matches the convention already in production
+ *  (zilberman: projects/cms-agent-503015/secrets/zilberman-mcp-token/versions/latest). */
+export const tenantTokenSecretId = (slug: string): string => `${slug}-mcp-token`;
 export const CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV = "CMS_AGENT_PUBLIC_MCP_ENDPOINT";
 export const CREATE_SITE_CLI_RELATIVE_PATH = "packages/core/cli/create-site.mjs";
 // The EXACT CMS-Agent tool surface a tenant's admin chat needs, and nothing more — this list IS
@@ -179,9 +196,17 @@ export class SiteGenesisRefusal extends Error {
 //   dry_run        — the Netlify dry-run mode recorded the exact intended call without network.
 //   requires_human — outside account authority in this environment; mirrored verbatim into the
 //                    humanChecklist. NEVER silently dropped: absence of capability is itself audited.
+//   executed_unverified — the WRITE really happened, but the check that would prove it works cannot
+//                    run yet and is deferred to a re-runnable caller (project.test_connection, the
+//                    credential reconciler). Introduced for tenant token custody (G1): a freshly
+//                    minted tenant has no deployed /mcp at all until its repo tree is committed and
+//                    built, and a Netlify functions env var needs a redeploy to take effect anyway.
+//                    Verifying inline would therefore fail on EVERY birth and demote a step that
+//                    genuinely succeeded back onto the human checklist — which is exactly the
+//                    outcome custody was meant to remove. This is a steady state, not a fault.
 export type GenesisAction = {
   step: string;
-  kind: "executed" | "dry_run" | "requires_human";
+  kind: "executed" | "dry_run" | "requires_human" | "executed_unverified";
   detail: string;
   at: string;
   data?: Record<string, unknown>;
@@ -559,7 +584,7 @@ export class NetlifyGenesisClient {
     siteId: string,
     key: string,
     value: string,
-    { isSecret = false, scopes = [...NETLIFY_DEFAULT_ENV_SCOPES], context, contexts }: { isSecret?: boolean; scopes?: string[]; context?: string; contexts?: string[] } = {}
+    { isSecret = false, scopes = [...NETLIFY_DEFAULT_ENV_SCOPES], context, contexts, onlyIfAbsent = false }: { isSecret?: boolean; scopes?: string[]; context?: string; contexts?: string[]; onlyIfAbsent?: boolean } = {}
   ): Promise<void> {
     const requested = contexts ?? (context ? [context] : undefined);
     const valueContexts = requested ?? (isSecret ? [...NETLIFY_SECRET_CONTEXTS] : ["all"]);
@@ -570,7 +595,7 @@ export class NetlifyGenesisClient {
       );
     }
     if (this.mode === "dry_run") {
-      this.record("netlify_set_env", `DRY-RUN: would set env var ${key} on site ${siteId} (name, scopes and contexts recorded; value never logged).`, { siteId, key, isSecret, scopes, contexts: valueContexts });
+      this.record("netlify_set_env", `DRY-RUN: would ${onlyIfAbsent ? "set env var ${key} on site ${siteId} ONLY IF it is not already set" : `set env var ${key} on site ${siteId}`} (name, scopes and contexts recorded; value never logged).`.replace("${key}", key).replace("${siteId}", siteId), { siteId, key, isSecret, scopes, contexts: valueContexts, ...(onlyIfAbsent ? { onlyIfAbsent: true } : {}) });
       return;
     }
     const keyUrl = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env/${encodeURIComponent(key)}?site_id=${encodeURIComponent(siteId)}`;
@@ -582,6 +607,14 @@ export class NetlifyGenesisClient {
         `Netlify env-var lookup failed for ${key}: HTTP ${existing.status}`,
         netlifyCallSummary("GET", keyUrl, existing.status)
       );
+    }
+    // G4 — `onlyIfAbsent` exists because createSite is IDEMPOTENT: a second genesis run against the
+    // same site name resolves the existing site rather than creating one, so an unconditional write
+    // of a genesis-supplied DEFAULT would silently discard whatever the operator curated since birth
+    // (extra ingest hosts, co-owners on ADMIN_EMAILS). A default is only a default the first time.
+    if (onlyIfAbsent && existing.ok) {
+      this.record("netlify_set_env", `Left existing env var ${key} on site ${siteId} untouched: genesis only supplies it as a birth default (name recorded; no value is read or written).`, { siteId, key, skipped: "already_set" });
+      return;
     }
     const variable = { key, scopes, values: valueContexts.map((valueContext) => ({ value, context: valueContext })), ...(isSecret ? { is_secret: true } : {}) };
     await this.request(existing.ok ? "PUT" : "POST", existing.ok ? keyUrl : collectionUrl, existing.ok ? variable : [variable], { redactErrorBody: true });
@@ -715,8 +748,17 @@ export function buildGenesisHumanChecklist(input: {
   // runSiteGenesis; optional here only so older callers of this pure builder keep compiling, in which
   // case the two items describe the steps as entirely un-run, which is the truthful default.
   visualIdentity?: GenesisVisualIdentityPlan;
+  // G1 — set when genesis MINTED this tenant's bearer and stored it, so the token-custody item is
+  // closed rather than merely described. Custody, not connectivity: see the executed_unverified note.
+  tenantTokenSecretRef?: string;
+  // G4 — the owner address genesis was given (and therefore installed), if any.
+  ownerEmail?: string;
+  // G4 — the site env vars genesis derived and set itself.
+  derivedEnvVars?: string[];
+  netlifySiteId?: string;
 }): GenesisHumanChecklistItem[] {
   const { slug, netlifySiteName, envPrefix } = input;
+  const derivedEnv = input.derivedEnvVars ?? [];
   const provisionedFleet = input.provisionedFleetEnvVars ?? [];
   const outstandingFleet = (keys: string[]): string[] => keys.filter((key) => !provisionedFleet.includes(key));
   const outstandingSinkVars = outstandingFleet([TRACKING_SINK_URL_ENV, TRACKING_SINK_TOKEN_ENV]);
@@ -767,9 +809,13 @@ export function buildGenesisHumanChecklist(input: {
     },
     {
       id: "set_admin_emails",
-      title: "Set ADMIN_EMAILS to the real operator email(s) — bootstrap Owners",
-      detail: "Runbook §3a step 2, verbatim: \"Set ADMIN_EMAILS on the site (Site settings → Environment variables) to the operator's real email address(es), comma-separated. These are bootstrap Owners … Until the first invite exists this is the ONLY way in.\" The env-var write is API-capable but the VALUE is an irreducible human decision — which humans own this tenant.",
-      envVars: ["ADMIN_EMAILS"],
+      title: input.ownerEmail
+        ? "Confirm the bootstrap Owner allowlist genesis installed (ADMIN_EMAILS / ROLE_EMAILS_ADMIN)"
+        : "Set ADMIN_EMAILS to the real operator email(s) — bootstrap Owners",
+      detail: input.ownerEmail
+        ? `Runbook §3a step 2. Genesis was given an owner address and installed it as both ADMIN_EMAILS and ROLE_EMAILS_ADMIN on the new site — the write was always API-capable; what used to make this human was that nobody had told genesis WHICH humans own the tenant. Confirm it is right, and add any co-owners comma-separated. Note this only makes /admin reachable: Netlify Identity itself still has to be enabled in the console (previous item), and the first Owner still has to accept.`
+        : "Runbook §3a step 2, verbatim: \"Set ADMIN_EMAILS on the site (Site settings → Environment variables) to the operator's real email address(es), comma-separated. These are bootstrap Owners … Until the first invite exists this is the ONLY way in.\" The env-var write is API-capable but the VALUE is an irreducible human decision — which humans own this tenant. Pass newSite.ownerEmail to site.duplicate and genesis installs it for you.",
+      envVars: ["ADMIN_EMAILS", ...(input.ownerEmail ? ["ROLE_EMAILS_ADMIN"] : [])],
       source: "site-provisioning-runbook.md §3a step 2"
     },
     {
@@ -780,16 +826,23 @@ export function buildGenesisHumanChecklist(input: {
     },
     {
       id: "artifact_ingest_hosts",
-      title: "Set ARTIFACT_URL_INGEST_ALLOWED_HOSTS — a policy choice, not a secret",
-      detail: "Runbook §3, verbatim: \"the hosts this client's agents may pull artifact images from — a policy choice, not a secret.\"",
+      title: derivedEnv.includes("ARTIFACT_URL_INGEST_ALLOWED_HOSTS")
+        ? "Extend ARTIFACT_URL_INGEST_ALLOWED_HOSTS if this tenant pulls images from anywhere but its own host"
+        : "Set ARTIFACT_URL_INGEST_ALLOWED_HOSTS — a policy choice, not a secret",
+      detail: derivedEnv.includes("ARTIFACT_URL_INGEST_ALLOWED_HOSTS")
+        ? "Runbook §3, verbatim: \"the hosts this client's agents may pull artifact images from — a policy choice, not a secret.\" Genesis set it to this tenant's OWN host, which is the only origin it can state without guessing. Every additional host — a client CDN, a stock library, a legacy domain — is a policy decision and has to be added by hand."
+        : "Runbook §3, verbatim: \"the hosts this client's agents may pull artifact images from — a policy choice, not a secret.\"",
       envVars: ["ARTIFACT_URL_INGEST_ALLOWED_HOSTS"],
       source: "site-provisioning-runbook.md §3"
     },
     {
       id: "pdf_tool_storage_grant",
       title: "pdf-tool storage grant — dedicated Netlify machine account + Blobs-scoped PAT for THIS tenant",
-      detail: "Runbook §3, verbatim: \"PDF_TOOL_STORAGE_SITE_ID/_TOKEN are per-site — provision a NEW dedicated Netlify machine account + Blobs-scoped PAT for THIS client (docs/agents/pdf-tool-storage-grant.md's 'Credential provisioning' steps); do not reuse another tenant's value.\" Netlify has no API to create another machine ACCOUNT from a token — account authority. Then probe: node scripts/provision-pdf-tool-stores.mjs (or re-run provisioning with --provision-only --known-tenant-site <each live tenant> for the collision check).",
-      envVars: ["PDF_TOOL_STORAGE_SITE_ID", "PDF_TOOL_STORAGE_TOKEN"],
+      detail: (derivedEnv.includes("PDF_TOOL_STORAGE_SITE_ID") ? `Genesis set PDF_TOOL_STORAGE_SITE_ID to the Netlify site it just created (${input.netlifySiteId ?? "the new site"}) — the half that actually goes wrong by hand, because pasting another tenant's id points this site's PDF artifacts at another tenant's blob stores and nothing complains. Only the TOKEN remains. ` : "") + "Runbook §3, verbatim: \"PDF_TOOL_STORAGE_SITE_ID/_TOKEN are per-site — provision a NEW dedicated Netlify machine account + Blobs-scoped PAT for THIS client (docs/agents/pdf-tool-storage-grant.md's 'Credential provisioning' steps); do not reuse another tenant's value.\" Netlify has no API to create another machine ACCOUNT from a token — account authority. Then probe: node scripts/provision-pdf-tool-stores.mjs (or re-run provisioning with --provision-only --known-tenant-site <each live tenant> for the collision check).",
+      // pdf-tool cannot mint this: set_storage_grant ATTACHES a grant the caller already holds and
+      // pdf-tool "holds no TENANT storage credentials of its own". The token is a Netlify PAT scoped
+      // to this site — account authority, not an API this deployment can exercise.
+      envVars: derivedEnv.includes("PDF_TOOL_STORAGE_SITE_ID") ? ["PDF_TOOL_STORAGE_TOKEN"] : ["PDF_TOOL_STORAGE_SITE_ID", "PDF_TOOL_STORAGE_TOKEN"],
       source: "site-provisioning-runbook.md §3 + docs/agents/pdf-tool-storage-grant.md"
     },
     {
@@ -815,7 +868,19 @@ export function buildGenesisHumanChecklist(input: {
       envVars: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", ...outstandingFleet([NETLIFY_AUTH_TOKEN_ENV])],
       source: "T11.7 env table / site-provisioning-runbook.md §3"
     },
-    input.registeredMcpEndpoint
+    input.tenantTokenSecretRef
+      ? {
+        // G1 — CLOSED. Genesis minted this tenant's bearer, installed it on the site and stored it
+        // in Secret Manager, and the record carries the reference; every plane resolves it from its
+        // own service-account identity with no per-plane, per-tenant variable. What is left is a
+        // CHECK, not a custody act, and it cannot pass until the site has actually deployed.
+        id: "deploy_side_mcp_env",
+        title: `Verify the tenant bearer genesis minted (no ${envPrefix}_MCP_TOKEN needs setting anywhere)`,
+        detail: `Registration contract step 2 is closed: genesis minted this tenant's inbound bearer, installed it as the site's MCP_HTTP_AUTH_TOKEN and stored it at ${input.tenantTokenSecretRef}, which the project record now names as tokenSecretRef. Nothing has to be pasted between consoles and no deployment needs editing — ${envPrefix}_MCP_TOKEN remains an OPTIONAL override that wins wherever a plane populates it. The ledger records this as executed_unverified on purpose: a Netlify functions env var takes effect on the next deploy, and this tenant has no published /mcp until its repo tree is committed and built. Once it is live, run project.test_connection to promote it. If that check fails, the fix is to re-run the mint — never to hand-edit the secret.`,
+        source: "project.get_registration_contract onboardingSteps 2-6",
+        verify: "project.test_connection — succeeds once the tenant has deployed; project.get shows tokenSource \"registry\"."
+      }
+      : input.registeredMcpEndpoint
       ? {
         // The endpoint half is CLOSED: genesis derived it from the site it just created and stored
         // it on the registry record, so nothing has to be set for it on this deployment (Wolf,
@@ -900,6 +965,11 @@ export type SiteGenesisInput = {
   // house look for a publication nobody has described.
   niche?: string;
   audience?: string;
+  // G4 — the bootstrap Owner. ADMIN_EMAILS is an ordinary Netlify env var with a push mechanism
+  // genesis already owns; it stayed a human step only because nobody had asked genesis for the one
+  // fact it needs. Supplying it closes set_admin_emails; omitting it leaves that item exactly as it
+  // was. Genesis never invents an owner address.
+  ownerEmail?: string;
 };
 
 export type SiteGenesisDeps = {
@@ -1200,6 +1270,143 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
       data: { projectId: slug, toolAllowlist: [...SITE_CLIENT_MANAGER_TOOLS], netlifySiteId: siteId }
     });
   }
+  // 3a. G4 — the checklist items that were only human because nobody had derived them. Each of
+  // these is an ordinary Netlify env var whose VALUE genesis already knows; leaving them to a person
+  // meant a paste step whose most common failure was a typo'd site id, not a missing decision.
+  const derivedSiteEnvVars: string[] = [];
+  {
+    const envAccount = accountId ?? `dryrun_account_${netlifySiteName}`;
+    const derived = derivedSiteEnvVars;
+
+    if (input.ownerEmail?.trim()) {
+      const ownerEmail = input.ownerEmail.trim();
+      // Both allowlists, deliberately. ADMIN_EMAILS is the bootstrap-Owner list that makes /admin
+      // usable at all; ROLE_EMAILS_ADMIN is the role allowlist the same person needs. Setting one
+      // and not the other is the shape of half-configured tenant that reads as "Identity is broken".
+      await netlify.setEnvVar(envAccount, siteId, "ADMIN_EMAILS", ownerEmail, { onlyIfAbsent: true });
+      await netlify.setEnvVar(envAccount, siteId, "ROLE_EMAILS_ADMIN", ownerEmail, { onlyIfAbsent: true });
+      derived.push("ADMIN_EMAILS", "ROLE_EMAILS_ADMIN");
+    }
+
+    // The tenant's own host is the one ingest origin genesis can state without guessing. Anything
+    // else — a client CDN, a stock library — is a decision, and stays on the checklist.
+    const canonicalHost = ((): string | undefined => {
+      try {
+        return siteUrl ? new URL(siteUrl).host : `${netlifySiteName}.netlify.app`;
+      } catch {
+        return `${netlifySiteName}.netlify.app`;
+      }
+    })();
+    if (canonicalHost) {
+      await netlify.setEnvVar(envAccount, siteId, "ARTIFACT_URL_INGEST_ALLOWED_HOSTS", canonicalHost, { onlyIfAbsent: true });
+      derived.push("ARTIFACT_URL_INGEST_ALLOWED_HOSTS");
+    }
+
+    // PDF-TOOL STORAGE GRANT — the SITE ID half only, and that limit is real rather than caution.
+    // pdf-tool's set_storage_grant does not MINT anything: it attaches a grant the caller already
+    // holds (`storage.siteId` + `storage.token`), and pdf-tool "holds no TENANT storage credentials
+    // of its own". The token half is a Netlify PAT scoped to this site — Netlify account authority,
+    // not an API this deployment can exercise — so it stays human. The site id half is the half that
+    // actually goes wrong in practice (pasting another tenant's id silently points one site's PDF
+    // artifacts at another's blob stores), and genesis has just created the site, so it knows it.
+    // NOT onlyIfAbsent: this one is authoritative. A stale or mis-pasted id silently points this
+    // tenant's PDF artifacts at another tenant's blob stores, so genesis correcting it is the point.
+    await netlify.setEnvVar(envAccount, siteId, "PDF_TOOL_STORAGE_SITE_ID", siteId);
+    derived.push("PDF_TOOL_STORAGE_SITE_ID");
+
+    ledger.push({
+      step: "derived_site_env",
+      kind: mode === "dry_run" ? "dry_run" : "executed",
+      detail: `Set the site env vars whose values are derivable at birth (names only): ${derived.join(", ")}.${input.ownerEmail?.trim() ? "" : " No ownerEmail was supplied, so ADMIN_EMAILS/ROLE_EMAILS_ADMIN were NOT set and stay on the checklist — genesis never invents an owner address."} PDF_TOOL_STORAGE_TOKEN is deliberately absent: it is a Netlify PAT scoped to this site, which is account authority no API here holds, and pdf-tool mints nothing (set_storage_grant only ATTACHES a grant the caller already has).`,
+      at: now(),
+      data: { projectId: slug, keys: derived, ownerEmailSupplied: Boolean(input.ownerEmail?.trim()), pdfToolStorageSiteId: siteId }
+    });
+  }
+
+  // 3b. G1 — TENANT BEARER CUSTODY. The inverse of step 3: that one mints the credential the SITE
+  // presents to CMS-Agent; this one mints the credential CMS-Agent presents to the SITE.
+  //
+  // Why this had to become a mint rather than a read. create-site.mjs auto-generates the site's
+  // MCP_HTTP_AUTH_TOKEN during provisioning and deliberately never prints it ("values never
+  // printed" — correct, and not a bug). So the value existed in exactly one place CMS-Agent could
+  // not reach, and `deploy_side_mcp_env` asked a human to carry it between two consoles on EVERY
+  // birth. Genesis already writes this site's Netlify env vars, so minting the value here means one
+  // secret with two homes and nobody in the middle. Written AFTER any create-site provisioning, so
+  // this value is the one that survives.
+  //
+  // Custody is the success condition, NOT connectivity — see the executed_unverified note on
+  // GenesisAction. A brand-new tenant has no deployed /mcp to handshake with.
+  let tenantTokenSecretRef: string | undefined;
+  const secretProject = genesisSecretProject(env);
+  const tokenSecretId = tenantTokenSecretId(slug);
+  // NEVER ROTATE A LIVE TENANT'S BEARER. createSite is idempotent — a second run against the same
+  // site name RESOLVES the existing site rather than creating one — and step 4 below refuses a
+  // duplicate registration only AFTER this point. Without this guard, re-running genesis against an
+  // established tenant would mint a new bearer, write it to the site (where it takes effect only on
+  // the next deploy) and overwrite the stored one, breaking a working tenant on the way to a
+  // `project_exists` refusal. Custody already held is custody; genesis has nothing to do here.
+  const existingRecord = await deps.projectRepository.get(slug);
+  if (existingRecord?.tokenSecretRef) {
+    tenantTokenSecretRef = existingRecord.tokenSecretRef;
+    ledger.push({
+      step: "tenant_mcp_token_custody",
+      kind: "executed_unverified",
+      detail: `This tenant's bearer is already in custody at ${existingRecord.tokenSecretRef} and genesis did NOT rotate it: re-minting would install a value the live site only picks up on its next deploy, breaking a tenant that currently works. To rotate deliberately, use the credential reconciler.`,
+      at: now(),
+      data: { projectId: slug, secretId: tokenSecretId, tokenSecretRef: existingRecord.tokenSecretRef, rotated: false }
+    });
+  } else if (mode === "dry_run") {
+    const envAccount = accountId ?? `dryrun_account_${netlifySiteName}`;
+    await netlify.setEnvVar(envAccount, siteId, "MCP_HTTP_AUTH_TOKEN", "", { isSecret: true, scopes: ["functions"], context: "production" });
+    ledger.push({
+      step: "tenant_mcp_token_custody",
+      kind: "dry_run",
+      detail: `DRY-RUN: would mint this tenant's inbound bearer, install it as the site's MCP_HTTP_AUTH_TOKEN (secret, functions-only), write it as a new version of Secret Manager secret "${tokenSecretId}"${secretProject ? ` in ${secretProject}` : ""}, and register the .../versions/latest reference on the project record as tokenSecretRef. No value would be returned or logged.`,
+      at: now(),
+      data: { projectId: slug, secretId: tokenSecretId, secretProject: secretProject ?? null }
+    });
+  } else if (!secretProject) {
+    // No custodian configured: do NOT mint. A token written to the site that this deployment cannot
+    // store is strictly worse than no token at all — it would overwrite whatever create-site.mjs
+    // generated with a value nobody holds, breaking a tenant that would otherwise have worked once
+    // a human read the original out of the console.
+    ledger.push({
+      step: "tenant_mcp_token_custody",
+      kind: "requires_human",
+      detail: `No Secret Manager project is configured on this deployment (${GENESIS_SECRET_MANAGER_PROJECT_ENV}, SITE_CREDENTIAL_RECONCILER_GCP_PROJECT and GOOGLE_CLOUD_PROJECT are all unset), so genesis did not mint this tenant's bearer: writing one to the site without being able to store it would overwrite the provisioning-generated value with one nobody holds. Custody stays the human step described in the checklist.`,
+      at: now(),
+      data: { projectId: slug, secretId: tokenSecretId }
+    });
+  } else {
+    const envAccount = accountId ?? await netlify.getSiteAccountId(siteId);
+    // 32 bytes, url-safe: the same class of value create-site.mjs generates, and nothing about the
+    // slug or the site is recoverable from it.
+    const tenantToken = randomBytes(32).toString("base64url");
+    const stored = await createSecretVersion({ projectId: secretProject, secretId: tokenSecretId, value: tenantToken }, { env });
+    if (!stored.ok) {
+      // ORDER MATTERS: the secret write comes FIRST, so a custody failure leaves the site's existing
+      // token untouched. Writing Netlify first and failing here would strand a live tenant behind a
+      // bearer no plane could resolve.
+      ledger.push({
+        step: "tenant_mcp_token_custody",
+        kind: "requires_human",
+        detail: `Genesis could not take custody of this tenant's bearer and therefore did not change the site's MCP_HTTP_AUTH_TOKEN: ${stored.error} Grant this deployment's service account roles/secretmanager.admin (or secretmanager.secrets.create + secretVersionAdder) on ${secretProject} and re-run; until then custody stays the human step in the checklist.`,
+        at: now(),
+        data: { projectId: slug, secretId: tokenSecretId, secretProject }
+      });
+    } else {
+      await netlify.setEnvVar(envAccount, siteId, "MCP_HTTP_AUTH_TOKEN", tenantToken, { isSecret: true, scopes: ["functions"], context: "production" });
+      tenantTokenSecretRef = stored.ref;
+      ledger.push({
+        step: "tenant_mcp_token_custody",
+        kind: "executed_unverified",
+        detail: `Minted this tenant's inbound bearer, installed it as the site's MCP_HTTP_AUTH_TOKEN (secret, functions-only) and stored it as ${stored.secretCreated ? "a new secret" : "a new version of the existing secret"} "${tokenSecretId}" in ${secretProject}; the record carries the .../versions/latest reference, so a rotation needs no registry write. NOT yet verified, and deliberately so: a functions env var takes effect on the next deploy, and this tenant has no published /mcp until its repo tree is committed and built. Run project.test_connection (or let the credential reconciler run) to promote this to executed.`,
+        at: now(),
+        data: { projectId: slug, secretId: tokenSecretId, secretProject, versionName: stored.versionName, tokenSecretRef: stored.ref, verifyWith: "project.test_connection" }
+      });
+    }
+  }
+
   ledger.push(...netlify.actions);
 
   // 4. CMS-Agent registration — the registration contract's step 1: the token by env var NAME (a
@@ -1207,6 +1414,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   // sets <SLUG>_MCP_ENDPOINT, plus the conservative seeded capture policy that authorizes exactly
   // the requested source origin.
   const seededCapturePolicy = seededGenesisCapturePolicy(sourceOrigin);
+  const genesisVoice = genesisEditorialVoiceFallback({ slug, ...(input.niche ? { niche: input.niche } : {}), ...(input.audience ? { audience: input.audience } : {}) });
   const mcpEndpoint = input.mcpEndpoint?.trim() || deriveTenantMcpEndpoint(netlifySiteName, siteUrl);
   const project = await createProject(deps.projectRepository, {
     projectId: slug,
@@ -1216,10 +1424,23 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     mcpEndpoint,
     authMode: "bearer_env",
     tokenEnvVar: `${envPrefix}_MCP_TOKEN`,
+    // G1 — the token's PREFERRED source, present whenever genesis took custody above. The env var
+    // NAME stays alongside it and still wins wherever a plane populates it, so this is additive: an
+    // operator keeps the break-glass override, and a plane carrying no tenant environment (the
+    // continuation-tick job) now authenticates anyway.
+    ...(tenantTokenSecretRef ? { tokenSecretRef: tenantTokenSecretRef } : {}),
     allowedTools: [],
-    // The emission stage's governed verbs (drafts-only; the forbidden publish/release/build/deploy
-    // verbs are refused pre-transport regardless of this list — see captureEngine).
-    defaultToolPolicy: "allowed",
+    // G5 — born with the same tool policy the migration will hold it to, so a minted tenant is never
+    // a version behind on its first read. Previously this was `defaultToolPolicy: "allowed"` with no
+    // policy map: every remote verb permitted by default, including verbs added to the tenant surface
+    // after birth. The profile names the emission and publish verbs explicitly instead.
+    ...genesisTenantProfile(),
+    // G6 tier 1 — a provisional voice ON THE RECORD, so the five voice-prefetch nodes and
+    // visual_identity_propose stop running voice-less on every minted tenant. Absent (and correctly
+    // so) when genesis was given neither a niche nor an audience: with nothing true to say, a
+    // fallback would be boilerplate wearing the tenant's name. Never a voiceObjectId — a DECIDED
+    // voice is a written object, and no writer node has run.
+    ...(genesisVoice ? { editorialVoiceFallback: genesisVoice } : {}),
     contentContract: { contentContract: "content_source.v1" },
     capturePolicy: seededCapturePolicy,
     status: "active"
@@ -1319,6 +1540,10 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     registeredMcpEndpoint: mcpEndpoint,
     // A key the new site HAS, whether genesis copied it or the account already supplied it (C-11).
     provisionedFleetEnvVars: [...genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key), ...inheritedFleetPresent],
+    ...(tenantTokenSecretRef ? { tenantTokenSecretRef } : {}),
+    ...(input.ownerEmail?.trim() ? { ownerEmail: input.ownerEmail.trim() } : {}),
+    derivedEnvVars: derivedSiteEnvVars,
+    ...(siteId ? { netlifySiteId: siteId } : {}),
     visualIdentity
   });
   return {
