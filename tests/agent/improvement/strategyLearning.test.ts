@@ -159,6 +159,61 @@ describe("strategyGroupsFromRows", () => {
   });
 });
 
+describe("strategySiteBaseline weights by n", () => {
+  // THE 2026-09-09 ARTIFACT, PINNED. Live shape: a handful of heavy cells and a long tail of thin
+  // ones. Unweighted, the tail owns the median and the heavy group reads as a monster. Weighted, the
+  // baseline is what a typical SESSION saw and the same group reads as ordinary.
+  const heavy = () => ({ strategy: "hook", intent: "educate", day: "2026-08-30", n: 42, completion_rate: 0.55, p75_dwell_ms: 160_000 });
+  const thin = (i: number) => ({ strategy: `thin_${i}`, intent: "educate", day: "2026-08-30", n: 1, completion_rate: 0.55, p75_dwell_ms: 1_800 });
+  const skewed = [heavy(), heavy(), heavy(), ...Array.from({ length: 9 }, (_, i) => thin(i))];
+
+  it("takes the value a typical SESSION sat at, not the value a typical ROW reported", () => {
+    // 126 of the 135 weight sits on the heavy cells, so the weighted median is theirs. The plain
+    // median is the thin value — 12 rows, 9 of them thin.
+    expect(strategySiteBaseline(skewed).p75_dwell_ms).toBe(160_000);
+  });
+
+  it("does not manufacture an enormous ratio out of a thin tail", () => {
+    const group = strategyGroupsFromRows(skewed).find((candidate) => candidate.strategy === "hook")!;
+    const dwell = strategyFindings(group, strategySiteBaseline(skewed)).find((finding) => finding.metric === "p75_dwell_ms");
+    // The group IS the typical session here, so there is no finding at all. Unweighted this same
+    // input reports it at ~89x and writes it down.
+    expect(dwell).toBeUndefined();
+  });
+
+  it("still reports a real difference — weighting removes the artifact, not the signal", () => {
+    const genuine = [...skewed, { strategy: "wall_of_text", intent: "educate", day: "2026-08-30", n: 40, completion_rate: 0.1, p75_dwell_ms: 4_000 }];
+    const group = strategyGroupsFromRows(genuine).find((candidate) => candidate.strategy === "wall_of_text")!;
+    const findings = strategyFindings(group, strategySiteBaseline(genuine));
+    expect(findings.find((finding) => finding.metric === "p75_dwell_ms")?.direction).toBe("below");
+    expect(findings.find((finding) => finding.metric === "completion_rate")?.direction).toBe("below");
+  });
+
+  // A generalisation of the old behaviour, not a different statistic: equal weights must reproduce
+  // the plain median exactly, including the even-length midpoint.
+  it("reduces to the ordinary median when every row carries the same n", () => {
+    const flat = [
+      { strategy: "a", intent: "x", day: "2026-08-30", n: 10, p75_dwell_ms: 1_000 },
+      { strategy: "b", intent: "x", day: "2026-08-30", n: 10, p75_dwell_ms: 2_000 },
+      { strategy: "c", intent: "x", day: "2026-08-30", n: 10, p75_dwell_ms: 3_000 },
+      { strategy: "d", intent: "x", day: "2026-08-30", n: 10, p75_dwell_ms: 5_000 }
+    ];
+    expect(strategySiteBaseline(flat).p75_dwell_ms).toBe(2_500);
+  });
+
+  // The weight rule must be the SAME one strategyGroupsFromRows applies, "no n means weight 1"
+  // included — if the two drift apart the ratio quietly compares two different populations again.
+  it("gives a row that states no n the same weight 1 the group aggregation gives it", () => {
+    const withoutN = [
+      { strategy: "a", intent: "x", day: "2026-08-30", p75_dwell_ms: 1_000 },
+      { strategy: "b", intent: "x", day: "2026-08-30", n: 5, p75_dwell_ms: 9_000 }
+    ];
+    // Weight 1 vs 5: the heavy value owns the median. Dropping the unweighted row, or giving it
+    // weight 0, would both change this.
+    expect(strategySiteBaseline(withoutN).p75_dwell_ms).toBe(9_000);
+  });
+});
+
 describe("strategySiteBaseline + strategyFindings", () => {
   const rows = [strategyRow(), ordinaryRow(), thirdRow()];
 

@@ -198,9 +198,51 @@ export function strategyGroupsFromRows(rows: Array<Record<string, unknown>>): St
 }
 
 /**
- * The site-wide figure for the SAME window: the per-metric median across every strategy/intent/day
- * cell the sink returned. A median rather than a mean because one runaway cell should not redefine
- * "typical", and across ROWS rather than groups because a row is the sink's own unit of measurement.
+ * The n-WEIGHTED median of a set of (value, weight) pairs: sort by value, walk the weights, and take
+ * the value at which the running weight first reaches half the total. With every weight equal this
+ * is the ordinary median; with unequal weights it is the value a randomly chosen SESSION sits at,
+ * not the value a randomly chosen ROW sits at.
+ *
+ * Interpolates the two straddling values on an exact half-and-half split, so an even, evenly
+ * weighted set behaves exactly as the previous unweighted implementation did — that equivalence is
+ * pinned by test rather than asserted here.
+ */
+const weightedMedian = (pairs: Array<{ value: number; weight: number }>, digits: number): number | undefined => {
+  if (!pairs.length) return undefined;
+  const sorted = [...pairs].sort((a, b) => a.value - b.value);
+  const total = sorted.reduce((sum, pair) => sum + pair.weight, 0);
+  if (total <= 0) return undefined;
+  const half = total / 2;
+  let running = 0;
+  for (let index = 0; index < sorted.length; index += 1) {
+    running += sorted[index]!.weight;
+    if (running > half) return round(sorted[index]!.value, digits);
+    // Exactly half the weight sits at or below this value: the median is the midpoint of this value
+    // and the next, mirroring the even-length case of a plain median.
+    if (running === half && index + 1 < sorted.length) return round((sorted[index]!.value + sorted[index + 1]!.value) / 2, digits);
+  }
+  return round(sorted[sorted.length - 1]!.value, digits);
+};
+
+/**
+ * The site-wide figure for the SAME window: the per-metric n-WEIGHTED median across every
+ * strategy/intent/day cell the sink returned.
+ *
+ * WHY WEIGHTED, AND WHAT WAS WRONG BEFORE. This used to be an UNWEIGHTED median across rows, while
+ * every group it is compared against is an n-weighted mean (`strategyGroupsFromRows`). Two different
+ * kinds of number on the two sides of one ratio. It survives while rows carry similar n and breaks
+ * as soon as they do not: on drlurie's first real 14-day window the sink returned 90 rows whose n
+ * ranged 1..42, the thin cells dragged the unweighted median for `p75_dwell_ms` down to 1893 ms, and
+ * the loop reported `hook`/`educate` at "85.1x site median" — a group that cannot plausibly hold a
+ * reader eighty-five times longer than typical. The finding was an artifact of the comparison, not a
+ * fact about the site.
+ *
+ * Weighting the baseline by the same `n` the group aggregation uses makes both sides answer the same
+ * question: what a typical SESSION saw, rather than what a typical ROW reported. A day on which one
+ * session bounced no longer counts as much as a day on which forty read to the end.
+ *
+ * STILL A MEDIAN, for the original reason: one runaway cell should not redefine "typical". And still
+ * across ROWS rather than groups, because a row is the sink's own unit of measurement.
  *
  * Only comparable (scale-free) metrics get one — see STRATEGY_COMPARABLE_KEYS. A metric no row
  * reported has NO site figure, and therefore produces no comparison at all.
@@ -208,15 +250,28 @@ export function strategyGroupsFromRows(rows: Array<Record<string, unknown>>): St
  * A group being compared is itself among the rows the median is taken over (exactly as a node's own
  * objects are among the site's in engagement.ts). With few groups that pulls the median toward the
  * group; the material-ratio margin is what keeps that from manufacturing a finding.
+ *
+ * WHAT THIS DOES NOT FIX. A metric whose weighted median is 0 — on this deployment `cta_ctr`,
+ * `buy_click_rate` and `purchase_rate`, because the typical session clicks nothing — still yields no
+ * finding at any group value, since a ratio against zero is not a number. That is arguably correct
+ * ("typical is zero") and arguably a blind spot on exactly the metrics that pay for the site, but it
+ * is a different decision (ratio vs absolute delta) and is deliberately left alone here.
  */
 export function strategySiteBaseline(rows: Array<Record<string, unknown>>): Partial<Record<StrategyComparableKey, number>> {
-  const projected = rows.map((row) => metricsFromRow(row, STRATEGY_COMPARABLE_KEYS));
+  // The weight MUST be the one `strategyGroupsFromRows` uses, including its "a row stating no n
+  // carries weight 1 rather than being dropped" rule. If the two ever diverge, the ratio silently
+  // goes back to comparing two different populations.
+  const projected = rows.map((row) => {
+    const n = rowCount(row);
+    return { weight: n > 0 ? n : 1, metrics: metricsFromRow(row, STRATEGY_COMPARABLE_KEYS) };
+  });
   const out: Partial<Record<StrategyComparableKey, number>> = {};
   for (const metricKey of STRATEGY_COMPARABLE_KEYS) {
-    const values = projected.map((metrics) => metrics[metricKey]).filter(isFinite_).sort((a, b) => a - b);
-    if (!values.length) continue;
-    const middle = values.length >> 1;
-    out[metricKey] = values.length % 2 ? values[middle]! : round((values[middle - 1]! + values[middle]!) / 2, metricKey === "p75_dwell_ms" ? 0 : 6);
+    const pairs = projected
+      .map(({ weight, metrics }) => ({ value: metrics[metricKey], weight }))
+      .filter((pair): pair is { value: number; weight: number } => isFinite_(pair.value));
+    const median = weightedMedian(pairs, metricKey === "p75_dwell_ms" ? 0 : 6);
+    if (median !== undefined) out[metricKey] = median;
   }
   return out;
 }
