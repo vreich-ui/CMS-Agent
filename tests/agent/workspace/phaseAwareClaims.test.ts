@@ -60,9 +60,16 @@ const runInFlight = (dispatchedAtMs: number, timeoutMs: number): WorkflowExecuti
 
 describe("W1.1 — every multi-phase route's claim tracks the phase actually in flight", () => {
   it("the registry declares phases for every route that has more than one wait in a dispatch", () => {
-    // The routes the incident class applies to. Named explicitly so removing a route's phases is a
-    // visible change to this list rather than a silent loss of coverage.
+    // The routes the incident class applies to: phases that run SEQUENTIALLY inside one dispatch.
+    // Named explicitly so removing a route's phases is a visible change rather than a silent loss of
+    // coverage. capture and clone are excluded on purpose — W3.1 marks them phaseKind "alternative"
+    // because the conductor dispatches those nodes once per stage, so a claim covers exactly the one
+    // phase that runs and a sequence walk would model a dispatch that never happens.
     expect(multiPhaseRouteIds().sort()).toEqual(["article_body", "artifact_materializer", "release_executor"]);
+    for (const manifest of ROUTE_MANIFESTS.filter((candidate) => candidate.phaseKind === "alternative")) {
+      expect(manifest.phases.length, `${manifest.id} declares stages`).toBeGreaterThan(1);
+      expect(multiPhaseRouteIds()).not.toContain(manifest.id);
+    }
     for (const manifest of ROUTE_MANIFESTS) {
       expect(manifest.phases.length, `${manifest.id} declares no phases`).toBeGreaterThan(0);
       for (const phase of manifest.phases) {
