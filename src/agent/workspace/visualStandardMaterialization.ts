@@ -39,11 +39,12 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import { effectiveToolPermission, type ProjectConnectionConfig, type ToolPermission } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
-import { ProjectMcpAdapter, type CallToolResult } from "../projects/projectMcpAdapter.js";
+import { type CallToolResult } from "../projects/projectMcpAdapter.js";
 import { describeMcpErrorResult } from "../projects/clientToolResult.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { visualStandardIdFor } from "./visualStandardIds.js";
+import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
 
 export const BRAND_IMAGERY_WRITER_NODE_ID = "brand_imagery_writer";
 export const VISUAL_STANDARD_MATERIALIZER_NODE_ID = "visual_standard_materializer";
@@ -264,9 +265,9 @@ const unwrapPayload = (raw: unknown): JsonRecord => {
   return structured;
 };
 
-const clientCallFor = (config: ProjectConnectionConfig, deps: VisualStandardDeps): ClientCall => {
+const clientCallFor = (config: ProjectConnectionConfig, deps: VisualStandardDeps, context: TenantCallContext): ClientCall => {
   const call = deps.callTool ?? ((cfg: ProjectConnectionConfig, tool: string, args: JsonRecord) => {
-    const adapter = new ProjectMcpAdapter(cfg);
+    const adapter = tenantAdapterFor(cfg, context);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), VISUAL_STANDARD_TIMEOUT_MS);
     return adapter.callTool(tool, args, controller.signal).finally(() => clearTimeout(timer));
@@ -381,7 +382,10 @@ export async function runVisualStandardMaterialization(
     return refused("visual_standard_sample_subjects_absent", `${BRAND_IMAGERY_PROPOSAL_ARTIFACT} carries no sampleSubjects; the body schema requires 1..6 and this node never invents a subject.`);
   }
 
-  const call = clientCallFor(config, deps);
+  // W3.2.2 — the sharpest node in the W3.1 audit: riskLevel admin, allowedTools [], six tenant verbs
+  // including site_apply_brand_imagery. Naming its route and node here is what finally puts those six
+  // calls in tool.list_executions.
+  const call = clientCallFor(config, deps, { caller: "engine", runId: run.runId, nodeId: "visual_standard_materializer", routeId: "visual_standard_materializer" });
 
   // 1. Does it already exist? A miss is the create path, not a failure.
   const existing = await call("object_get", { object_type: VISUAL_STANDARD_OBJECT_TYPE, object_id: visualStandardId });

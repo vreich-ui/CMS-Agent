@@ -23,11 +23,11 @@
 // tenant's platform build lacks is rejected with a capability-backlog entry, never coerced." The
 // target's LIVE registry is read at call time, never assumed from the library record's own
 // (possibly-stale, possibly-another-tenant's) view of what exists.
-import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { TemplateLibraryRecord } from "./templateLibraryTypes.js";
+import { tenantAdapterFor, type TenantAdapter, type TenantCallContext } from "../tools/tenantInvoke.js";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -37,7 +37,14 @@ export type InstantiateOutcome =
   | { ok: true; verb: "object_instantiate_template" | "object_instantiate_section_template"; targetProjectId: string; result: unknown }
   | { ok: false; refusal: InstantiateRefusal };
 
-export type InstantiateDeps = { projectRepository?: ProjectRepository; adapter?: ProjectMcpAdapter };
+export type InstantiateDeps = {
+  projectRepository?: ProjectRepository;
+  adapter?: TenantAdapter;
+  /** W3.2.2 — the run/node this instantiation is being made for, when there is one. An
+   *  operator-initiated instantiation legitimately has neither and is recorded under the ledger's
+   *  own sentinels rather than dropped. */
+  tenantContext?: TenantCallContext;
+};
 const projectsOf = (deps: InstantiateDeps = {}): ProjectRepository => deps.projectRepository ?? repositoryManager.getProjectRepository();
 
 const verbFor = (objectType: TemplateLibraryRecord["objectType"]): "object_instantiate_template" | "object_instantiate_section_template" | undefined => {
@@ -48,7 +55,7 @@ const verbFor = (objectType: TemplateLibraryRecord["objectType"]): "object_insta
 
 /** The live component registry's registered type names, read fresh at call time (never cached, never
  *  read from the library record's own — possibly stale, possibly another tenant's — view). */
-async function readRegisteredSectionTypes(adapter: ProjectMcpAdapter): Promise<Set<string>> {
+async function readRegisteredSectionTypes(adapter: TenantAdapter): Promise<Set<string>> {
   const read = await adapter.callReadTool("registry_get", { registry: "component" });
   if (!read.ok) return new Set();
   const payload = read.result;
@@ -93,7 +100,7 @@ export async function instantiateLibraryTemplate(
   if (!config) return { ok: false, refusal: { code: "unknown_project", reason: `Unknown projectId: ${targetProjectId}.` } };
   if (config.status === "disabled") return { ok: false, refusal: { code: "project_disabled", reason: `Project ${targetProjectId} is disabled; no instantiation may run against it.` } };
 
-  const adapter = deps.adapter ?? new ProjectMcpAdapter(config);
+  const adapter = deps.adapter ?? tenantAdapterFor(config, { caller: "engine", ...deps.tenantContext });
   const registeredTypes = await readRegisteredSectionTypes(adapter);
   const missing = input.record.sectionTypesUsed.filter((sectionType) => !registeredTypes.has(sectionType));
   if (missing.length > 0) {

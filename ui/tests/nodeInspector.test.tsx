@@ -495,3 +495,104 @@ describe("NodeInspector write path", () => {
     expect(screen.getByText("No pending changes.")).toBeInTheDocument();
   });
 });
+
+// W4.2 — THE SECOND TOOL LIST, and the acceptance the brief set by name.
+//
+// `visual_standard_materializer` is the sharpest case in the W3.1 capability audit: riskLevel
+// `admin`, `allowedTools: []`, and six tenant verbs including `site_apply_brand_imagery`, which
+// restyles an entire site. Every read-only surface in this product said "this node has no tools".
+// These cases pin that the inspector now says both true things at once — the grants that can never
+// fire, and the six verbs the engine calls regardless.
+const materializer = {
+  id: "visual_standard_materializer",
+  name: "Visual standard materializer",
+  kind: "executor",
+  prompt: "",
+  riskLevel: "admin",
+  status: "active",
+  allowedTools: [],
+  assignedSkills: [],
+  dependsOn: ["brand_imagery_proposer"],
+  requiredInputs: [],
+  inputSchema: { type: "object" },
+  outputSchema: { type: "object" },
+  metadata: { visualStandardMaterializerDeterministic: true }
+} as unknown as WorkspaceNode;
+
+// The six verbs exactly as routeRegistry.ts declares them for this route, in that order.
+const MATERIALIZER_ENGINE_TOOLS = [
+  { verb: "object_create", risk: "write", description: "Create the standard's object." },
+  { verb: "object_checkout", risk: "write", description: "Lock before patching." },
+  { verb: "object_patch", risk: "write", description: "Write the standard." },
+  { verb: "object_checkin", risk: "write", description: "Release the lock." },
+  { verb: "object_get", risk: "read", description: "Read the current standard." },
+  { verb: "site_apply_brand_imagery", risk: "admin", description: "Applies imagery site-wide." }
+];
+
+const materializerClient = (): McpClient => makeClient({
+  "node.get_effective_prompt": () => ({ prompt: "", nodePrompt: "", skillInstructions: "" }),
+  "node.get_effective_skills": () => ({ policy: { nodeId: materializer.id, skillIds: [], instructions: "", effectiveTools: [], requestedTools: [], deniedTools: [], conflicts: [] } }),
+  "node.get_effective_tools": () => ({
+    tools: [],
+    engine: MATERIALIZER_ENGINE_TOOLS,
+    capability: {
+      executionKind: "deterministic",
+      routeId: "visual_standard_materializer",
+      deadGrants: [],
+      findings: [{ code: "high_risk_engine_verb", detail: "Reaches 1 publish- or admin-risk tenant verb from engine code, while declaring no tools at all.", verbs: ["site_apply_brand_imagery"] }]
+    }
+  })
+});
+
+describe("NodeInspector — engine capability (W4.2)", () => {
+  const openTools = async () => {
+    render(<NodeInspector node={materializer} client={materializerClient()} project={project()} {...dockProps} nodes={[materializer]} />);
+    await userEvent.click(screen.getByRole("button", { name: "Tools" }));
+    return screen.getByLabelText("Engine tenant verbs");
+  };
+
+  it("shows all six engine verbs with a permission badge each", async () => {
+    const table = await waitFor(openTools);
+    for (const tool of MATERIALIZER_ENGINE_TOOLS) {
+      const row = within(table).getByRole("row", { name: new RegExp(tool.verb) });
+      expect(within(row).getByText(tool.risk)).toBeInTheDocument();
+    }
+    // Six verbs, not five and not the route's union with some other stage's.
+    expect(within(table).getAllByRole("row")).toHaveLength(MATERIALIZER_ENGINE_TOOLS.length + 1);
+  });
+
+  it("says the node runs a deterministic route, before saying what it may call", async () => {
+    await waitFor(openTools);
+    expect(screen.getByText("deterministic route")).toBeInTheDocument();
+    expect(screen.getByText(/never fire/)).toBeInTheDocument();
+  });
+
+  it("warns that an admin-risk verb is reached past every grant and risk check", async () => {
+    await waitFor(openTools);
+    const warnings = screen.getByLabelText("Capability warnings");
+    expect(within(warnings).getByText(/site_apply_brand_imagery/)).toBeInTheDocument();
+  });
+
+  // The rule the rest of this inspector already holds to, applied to the new half: a failed read says
+  // "unknown", never an empty state that reads as clean. "None" here would tell an operator that
+  // visual_standard_materializer touches no tenant — false in the most expensive possible way.
+  it("says the engine half is unknown, not empty, when the read fails", async () => {
+    const failing = makeClient({
+      "node.get_effective_prompt": () => ({ prompt: "", nodePrompt: "", skillInstructions: "" }),
+      "node.get_effective_skills": () => ({ policy: { nodeId: materializer.id, skillIds: [], instructions: "", effectiveTools: [], requestedTools: [], deniedTools: [], conflicts: [] } }),
+      "node.get_effective_tools": () => { throw new Error("resolver down"); }
+    });
+    render(<NodeInspector node={materializer} client={failing} project={project()} {...dockProps} nodes={[materializer]} />);
+    await userEvent.click(screen.getByRole("button", { name: "Tools" }));
+    await waitFor(() => expect(screen.getByText(/unknown — not empty/)).toBeInTheDocument());
+    expect(screen.queryByLabelText("Engine tenant verbs")).toBeNull();
+  });
+
+  it("keeps the two lists separate rather than folding tenant verbs into the grants table", async () => {
+    await waitFor(openTools);
+    // The model-tools heading is still there and still empty for this node — which is the true and
+    // previously ONLY statement the inspector made about it.
+    expect(screen.getByText(/what a model turn may call/)).toBeInTheDocument();
+    expect(screen.getByText(/what this node's route calls regardless of any grant/)).toBeInTheDocument();
+  });
+});

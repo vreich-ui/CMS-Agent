@@ -13,11 +13,11 @@
 // distinct `warningCode` when it did not return the live object, so the executor can stamp a
 // run-visible warning ("the live voice degraded to the seed" is then a run-level fact, not something
 // inferable only by reading this one node's input).
-import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import type { EditorialVoiceBody } from "../projects/projectHooks.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { conductorCache, type RunScopedCache } from "./conductor.js";
+import { tenantAdapterFor } from "../tools/tenantInvoke.js";
 
 export type VoicePrefetchWarningCode =
   | "voice_project_unresolved"
@@ -165,7 +165,7 @@ export async function getEditorialVoice(params: VoicePrefetchParams, deps: Voice
     }
 
     try {
-      const adapter = new ProjectMcpAdapter(config);
+      const adapter = tenantAdapterFor(config, { caller: "engine", runId: params.runId });
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), VOICE_PREFETCH_TIMEOUT_MS);
       let call: Awaited<ReturnType<typeof adapter.callReadTool>>;

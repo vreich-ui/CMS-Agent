@@ -26,8 +26,9 @@
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
-import { ProjectMcpAdapter, resolveProjectConnection, resolveProjectConnectionWithSecrets, type ProjectAdapterDeps } from "../projects/projectMcpAdapter.js";
+import { resolveProjectConnection, resolveProjectConnectionWithSecrets, type ProjectAdapterDeps } from "../projects/projectMcpAdapter.js";
 import { conductorCache, type RunScopedCache } from "./conductor.js";
+import { tenantAdapterFor } from "../tools/tenantInvoke.js";
 
 export const DRIVER_ENV_MISSING_PREFIX = "driver_env_missing:";
 export const driverEnvMissingWarning = (envVar: string): string => `${DRIVER_ENV_MISSING_PREFIX}${envVar}`;
@@ -188,7 +189,7 @@ export async function preflightDriverAuth(
       };
     }
 
-    const adapter = new ProjectMcpAdapter(config, { env, ...options.adapterDeps });
+    const adapter = tenantAdapterFor(config, { caller: "engine", runId: run.runId, adapterDeps: { env, ...options.adapterDeps } });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AUTH_PREFLIGHT_TIMEOUT_MS);
     let call;

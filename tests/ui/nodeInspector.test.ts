@@ -4,7 +4,11 @@
 // live. Each of those is a logic decision, tested here rather than through the DOM.
 import { describe, expect, it } from "vitest";
 import {
+  buildEngineToolRows,
   buildNodeToolRows,
+  capabilityWarnings,
+  describeExecutionKind,
+  summarizeEngineToolRows,
   deniedRequestedTools,
   formatFetchedAt,
   groupToolRowsByCategory,
@@ -490,5 +494,52 @@ describe("write failure classification", () => {
 
   it("survives an error with no details at all", () => {
     expect(classifyWriteFailure(new Error("network down"))).toMatchObject({ kind: "unknown", message: "network down" });
+  });
+});
+
+// W4.2 — the engine-capability model. The inspector's Tools tab could say two false things at once
+// about the same node before this existed: that a deterministic node's grants were live, and (for
+// visual_standard_materializer, allowedTools: []) that the node had no tools at all while its route
+// reached six tenant verbs including one that restyles a whole site.
+describe("engine capability (W4.2)", () => {
+  const engine = [
+    { verb: "object_create", risk: "write", description: "Create the standard's object." },
+    { verb: "site_apply_brand_imagery", risk: "admin", description: "Applies imagery site-wide." }
+  ];
+
+  it("flags publish- and admin-risk verbs, which are the two a node's riskLevel is meant to gate", () => {
+    const rows = buildEngineToolRows(engine);
+    expect(rows.map((row) => row.highRisk)).toEqual([false, true]);
+    expect(summarizeEngineToolRows(rows)).toEqual({ total: 2, highRisk: 1 });
+  });
+
+  it("says a deterministic node's grants can never fire, in the operator's words", () => {
+    const described = describeExecutionKind({ executionKind: "deterministic", routeId: "visual_standard_materializer", deadGrants: [], findings: [] });
+    expect(described.kind).toBe("deterministic");
+    expect(described.detail).toContain("never fire");
+    expect(described.detail).toContain("visual_standard_materializer");
+  });
+
+  it("stays quiet for a model node, whose grants are exactly what it can do", () => {
+    expect(describeExecutionKind({ executionKind: "model", deadGrants: [], findings: [] }).kind).toBe("model");
+    expect(capabilityWarnings({ executionKind: "model", deadGrants: [], findings: [] }, [])).toEqual([]);
+    // ...and with no capability read at all, it warns about nothing rather than guessing.
+    expect(capabilityWarnings(null, buildEngineToolRows(engine))).toEqual([]);
+  });
+
+  // A banner on every node is a banner nobody reads. These fire only where the grant list and the
+  // behaviour genuinely disagree.
+  it("warns once per real disagreement, naming the verb", () => {
+    const warnings = capabilityWarnings(
+      { executionKind: "deterministic", deadGrants: ["capture.crawl", "stage.get_output"], findings: [] },
+      buildEngineToolRows(engine)
+    );
+    expect(warnings).toHaveLength(2);
+    // The dangerous one first and marked high; the untidy one second and marked medium. Rendering
+    // both in the same red would make the red mean "this node has a note".
+    expect(warnings[0]).toMatchObject({ severity: "high" });
+    expect(warnings[0].message).toContain("site_apply_brand_imagery");
+    expect(warnings[1]).toMatchObject({ severity: "medium" });
+    expect(warnings[1].message).toContain("2 granted tool(s) can never fire");
   });
 });

@@ -102,13 +102,14 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
-import { ProjectMcpAdapter, type CallToolResult } from "../projects/projectMcpAdapter.js";
+import { type CallToolResult } from "../projects/projectMcpAdapter.js";
 import { describeMcpErrorResult } from "../projects/clientToolResult.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { stripCredentialShapedFields } from "../capture/captureEngine.js";
 import { readContentItemShell } from "./contentItemShell.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { isArticleTemplate, mapArticleRenderData, type MaterializedImageSlot, type RenderDataTemplate } from "./renderDataMapper.js";
+import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
 
 export const ARTIFACT_MATERIALIZER_NODE_ID = "artifact_materializer";
 
@@ -430,8 +431,8 @@ const unwrapPayload = (raw: unknown): Record<string, unknown> => {
   return stripCredentialShapedFields(unwrapped) as Record<string, unknown>;
 };
 
-const bridgeCallFor = (config: ProjectConnectionConfig, deps: MaterializerDeps): BridgeCall => {
-  const call = deps.callTool ?? ((cfg: ProjectConnectionConfig, tool: string, args: Record<string, unknown>) => new ProjectMcpAdapter(cfg).callTool(tool, args));
+const bridgeCallFor = (config: ProjectConnectionConfig, deps: MaterializerDeps, context: TenantCallContext): BridgeCall => {
+  const call = deps.callTool ?? ((cfg: ProjectConnectionConfig, tool: string, args: Record<string, unknown>) => tenantAdapterFor(cfg, context).callTool(tool, args));
   return async (tool, args) => {
     // Policy first, transport second: a blocked call must never reach the client at all.
     const blocked = evaluateBridgePolicy(config.projectId, tool, args);
@@ -829,7 +830,7 @@ export async function runArtifactMaterialization(
   // the window the bridge calls need.
   await deps.onPhase?.("plan");
 
-  const bridge = bridgeCallFor(config, deps);
+  const bridge = bridgeCallFor(config, deps, { caller: "engine", runId: run.runId, nodeId: "artifact_materializer", routeId: "artifact_materializer" });
 
   // C2 (BRIEF §3.10): IMAGE SLOTS FIRST, PDF SLOTS AFTER. A PDF's cover is `assets.images[] =
   // {assetId, blobKey}` naming an image that must already exist in the tenant's pdf-tool store — the

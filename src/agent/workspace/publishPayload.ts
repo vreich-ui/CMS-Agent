@@ -21,7 +21,7 @@
 // back to the normal model dispatch on any failure — exactly the deterministicContractIntelligence
 // contract. A bug here degrades to "spend the $2.73", never to a failed run or a malformed publish
 // candidate reaching the publication controller.
-import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
+import { tenantAdapterFor } from "../tools/tenantInvoke.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { stableHash } from "../improvement/improvementTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
@@ -153,7 +153,11 @@ export const readTopLevelObjectId = (body: Record<string, unknown>): string | nu
 let validateRequestShapeLogged = false;
 export const __resetValidateRequestShapeLog = (): void => { validateRequestShapeLogged = false; };
 
-export async function validateClientObjectOnce(params: { projectId: string; body: Record<string, unknown>; objectId?: string | number; objectType?: string }, deps: PublishPayloadDeps): Promise<PublishPayloadValidation> {
+export async function validateClientObjectOnce(params: { projectId: string; body: Record<string, unknown>; objectId?: string | number; objectType?: string;
+  /** W3.2.2 — the run and node this validate is made for. Optional so nothing that called this
+   *  before has to change; supplied by both real callers (the executor's publish_payload route and
+   *  its article_body validation loop), which is what makes the call attributable in the ledger. */
+  runId?: string; nodeId?: string }, deps: PublishPayloadDeps): Promise<PublishPayloadValidation> {
   const { patch, nodeCount } = buildArticleCandidatePatch(params.body, JUDGEMENT_SUBSTRATE_KEYS);
   const summary = describeCandidatePatch(patch, nodeCount);
   const config = await deps.projectRepository.get(params.projectId);
@@ -185,7 +189,7 @@ export async function validateClientObjectOnce(params: { projectId: string; body
   const blocking = policyFindings.filter((finding) => finding.severity === "error");
   if (blocking.length) return { attempted: false, tool: "object_validate", valid: false, issues: [], candidate_patch_summary: summary, error: `Blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}` };
 
-  const adapter = new ProjectMcpAdapter(config);
+  const adapter = tenantAdapterFor(config, { caller: "engine", runId: params.runId, nodeId: params.nodeId });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OBJECT_VALIDATE_TIMEOUT_MS);
   let call: Awaited<ReturnType<typeof adapter.callReadTool>>;
@@ -444,11 +448,11 @@ export const promoteRecordedInvalidVerdictToBlocker = (output: unknown, articleB
 // The one entry point executor.ts calls: read upstream, reuse article_body's engine-earned verdict or
 // make exactly ONE object_validate call, build. Every failure mode is returned as {ok:false} so the
 // caller's single decision stays "use it, or fall through to the model path".
-export async function runDeterministicPublishPayload(params: { projectId: string; clientProjectId: string; articleBody: unknown; artifactPlan?: unknown; requestId?: string }, deps: PublishPayloadDeps): Promise<PublishPayloadBuildResult> {
+export async function runDeterministicPublishPayload(params: { projectId: string; clientProjectId: string; articleBody: unknown; artifactPlan?: unknown; requestId?: string; runId?: string }, deps: PublishPayloadDeps): Promise<PublishPayloadBuildResult> {
   const read = readArticleBody(params.articleBody);
   if (!read.ok) return read;
   const objectId = readTopLevelObjectId(read.body);
   const recorded = readRecordedValidation(params.articleBody, read.body);
-  const validation = recorded ?? await validateClientObjectOnce({ projectId: params.projectId, body: read.body, objectId, objectType: read.envelope.clientObjectType as string }, deps);
+  const validation = recorded ?? await validateClientObjectOnce({ projectId: params.projectId, body: read.body, objectId, objectType: read.envelope.clientObjectType as string, runId: params.runId, nodeId: "publish_payload" }, deps);
   return buildDeterministicPublishPayload({ articleBody: params.articleBody, artifactPlan: params.artifactPlan, clientProjectId: params.clientProjectId, requestId: params.requestId }, validation);
 }

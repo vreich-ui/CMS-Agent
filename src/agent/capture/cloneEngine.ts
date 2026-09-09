@@ -52,6 +52,7 @@ import { buildTemplateDepositCandidates } from "../library/templateDeposit.js";
 import { TemplateLibraryStore } from "../library/templateLibraryStore.js";
 import { TemplateLibraryRefusal, type TemplateLibraryRecord } from "../library/templateLibraryTypes.js";
 import { buildCapabilityRequests, type CapabilityRequest } from "../workspace/capabilityBacklogRequest.js";
+import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
 import {
   applyCloneDelta,
   buildCloneIntake,
@@ -103,6 +104,8 @@ export class CloneLockConflict extends CloneRefusal {
 
 export type CloneDeps = {
   projectRepository?: ProjectRepository;
+  // W3.2.2 — see CaptureDeps.tenantContext: which run, node and stage this step runs for.
+  tenantContext?: TenantCallContext;
   executionRepository?: ExecutionRepository;
   // T15.31 (#207): injectable so tests exercise the deposit step against an in-memory store instead
   // of the real blob backend, exactly as projectRepository/executionRepository are.
@@ -233,7 +236,10 @@ export async function callProjectTool(projectId: string, tool: string, args: Rec
     throw error;
   }
 
-  const adapter = new ProjectMcpAdapter(config);
+  // W3.2.2 — every clone verb (and every pdf-template verb, which reuses this helper) goes through
+  // the choke point here. The retry loop below is untouched: a retried object_checkout is two tenant
+  // calls and is now recorded as two, which is what it always was.
+  const adapter = tenantAdapterFor(config, { caller: "engine", ...deps.tenantContext });
   const sleep = deps.sleepImpl ?? defaultSleep;
   const random = deps.randomImpl ?? defaultRandom;
   // The retry loop is scoped to object_checkout by construction — no other verb's failure is ever

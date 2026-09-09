@@ -44,10 +44,10 @@ import {
 // multi-object emission report). release_executor needs no capture-specific case at all: it is already
 // object-agnostic (reads only publish_executor's own `publishCommitted` flag), so the exact same
 // canonical release_executor dispatch (executor.ts, releaseExecution.ts) runs unchanged for capture.
-import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { isProjectPublishEnabled, type CallToolFn } from "./publisher.js";
 import { resolvePublishAuthority } from "./publishDecision.js";
 import { buildObjectPublishPlan, executeObjectPublish, type ObjectPublishPlan, type ObjectPublishSourceReport } from "./objectPublishExecution.js";
+import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 
 export const CAPTURE_STAGES = ["crawl", "map", "map_refine", "theme", "emit_dry", "emit_live", "score", "publish_payload", "publication_controller", "publish_executor", "report"] as const;
 export type CaptureStage = typeof CAPTURE_STAGES[number];
@@ -142,12 +142,17 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
   // W1.1 — the claim clock restarts HERE, after the run-facts resolution above and before the first
   // tenant call below, and the stage names itself on the run record. Optional and always safe to
   // omit: a caller that passes no claim gets exactly the pre-phase behaviour.
+  // W3.2.2 — WHO IS SPEAKING, threaded into every tenant call this stage makes. The route is the only
+  // place that knows all four facts (run, node, route, stage), and the stage matters: capture's stages
+  // are alternatives, so attributing a call to "capture_stage" alone would check it against a verb set
+  // no single dispatch ever uses.
+  const tenantContext = { caller: "engine", runId: run.runId, nodeId: input.node.id, routeId: "capture_stage", phaseId: stage } as const;
   await input.onPhase?.(stage);
   try {
     switch (stage) {
       case "crawl": {
         if (!sourceUrl) return refused("capture_source_missing", "The run's initialInput carries no sourceUrl; capture_crawl cannot create a job for an unnamed source.");
-        const step = await captureCrawlStep({ targetProjectId, sourceUrl, jobState: readCrawlJobState(run) });
+        const step = await captureCrawlStep({ targetProjectId, sourceUrl, jobState: readCrawlJobState(run) }, { tenantContext });
         if (step.phase === "pending") {
           return { kind: "pending", jobStateKey: CAPTURE_CRAWL_JOB_STAGE_KEY, jobState: step.jobState, warning: `capture_crawl_pending:${step.jobState.jobId}` };
         }
@@ -156,7 +161,7 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
       case "map": {
         const crawl = envelopeOf(run, "capture_crawl", CAPTURE_ARTIFACTS.snapshot);
         if (isOutcome(crawl)) return crawl;
-        const envelope = await captureMapStep({ targetProjectId, snapshot: crawl.snapshot });
+        const envelope = await captureMapStep({ targetProjectId, snapshot: crawl.snapshot }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "map_refine": {
@@ -168,7 +173,7 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
         // both legal. Suggestions are sanitized and re-validated inside captureMapStep; the mapper's
         // deterministic builder rejects anything invalid or unregistered, never coerces it.
         const classification = stageOutput(run, "block_classifier");
-        const envelope = await captureMapStep({ targetProjectId, snapshot: crawl.snapshot, suggestions: classification?.suggestions });
+        const envelope = await captureMapStep({ targetProjectId, snapshot: crawl.snapshot, suggestions: classification?.suggestions }, { tenantContext });
         const output = envelope.artifact === CAPTURE_ARTIFACTS.mapRefined
           ? (envelope as unknown as Record<string, unknown>)
           : {
@@ -185,7 +190,7 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
       case "theme": {
         const crawl = envelopeOf(run, "capture_crawl", CAPTURE_ARTIFACTS.snapshot);
         if (isOutcome(crawl)) return crawl;
-        const envelope = await captureThemeStep({ targetProjectId, snapshot: crawl.snapshot });
+        const envelope = await captureThemeStep({ targetProjectId, snapshot: crawl.snapshot }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "emit_dry": {
@@ -193,7 +198,7 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
         if (isOutcome(refined)) return refined;
         const theme = envelopeOf(run, "capture_theme", CAPTURE_ARTIFACTS.theme);
         if (isOutcome(theme)) return theme;
-        const envelope = await captureEmitStep({ targetProjectId, mapping: refined.mapping, theme: theme.theme, live: false });
+        const envelope = await captureEmitStep({ targetProjectId, mapping: refined.mapping, theme: theme.theme, live: false }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "emit_live": {
@@ -210,7 +215,7 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
           // rights permit extracted copy. When rights REQUIRE regeneration and an entry is missing,
           // that operation is quarantined — never emitted with extracted copy (captureEngine.ts).
           regenerated: readRegenerated(stageOutput(run, "copy_regenerator"))
-        });
+        }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "score": {
@@ -220,7 +225,7 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
         if (isOutcome(refined)) return refined;
         const theme = envelopeOf(run, "capture_theme", CAPTURE_ARTIFACTS.theme);
         if (isOutcome(theme)) return theme;
-        const envelope = await captureScoreStep({ targetProjectId, snapshot: crawl.snapshot, mapping: refined.mapping, theme: theme.theme });
+        const envelope = await captureScoreStep({ targetProjectId, snapshot: crawl.snapshot, mapping: refined.mapping, theme: theme.theme }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       // T15.7 (ADR-2026-08-25-publish-autonomy §6.2, §9) — capture_conductor's segment of the SHARED
@@ -317,7 +322,10 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
           return refused("capture_publish_plan_missing", "publish_payload produced no objectPublishPlan; publish_executor cannot execute without one.");
         }
         const { config } = await resolveCaptureAuthority(targetProjectId);
-        const callTool: CallToolFn = (tool, args) => new ProjectMcpAdapter(config).callTool(tool, args);
+        // W3.2.2 — object_checkout / object_publish / object_checkin for every object in the plan.
+        // The nodeId here is the stage's own node, which for this stage IS publish_executor — the
+        // exemption the forbidden-verb rule requires, and the same one the DTC path relies on.
+        const callTool: CallToolFn = tenantCallToolFor({ projectId: config.projectId, project: config, ...tenantContext });
         const result = await executeObjectPublish({ plan, callTool });
         const authority = resolvePublishAuthority(run);
         const publishCommitted = result.published.length > 0;

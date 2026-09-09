@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { McpClient } from "../mcp/client";
-import type { EffectivePrompt, EffectiveTool } from "../nodeInspector";
+import type { EffectivePrompt, EffectiveTool, EngineTool, NodeCapability } from "../nodeInspector";
 import type { SkillDefinition, SkillResolvedPolicy } from "../types/workspace";
 
 // Effective-layer loader for the S4 inspector (CHANGE-PLAN R-11, read-only phase).
@@ -18,6 +18,11 @@ import type { SkillDefinition, SkillResolvedPolicy } from "../types/workspace";
 export type NodeInspectorState = {
   effectivePrompt: EffectivePrompt | null;
   effectiveTools: EffectiveTool[] | null;
+  // W4.2 — the OTHER half of "what can this node do": the tenant verbs its deterministic route calls
+  // directly, and the audit that says whether its granted tools can fire at all. Both arrive on the
+  // same read as the tools, so a node's two lists can never be fetched from two different moments.
+  engineTools: EngineTool[] | null;
+  capability: NodeCapability | null;
   skillPolicy: SkillResolvedPolicy | null;
   // The registry the Skills tab offers for assignment. Workspace-wide rather than per-node, so a
   // failure here disables assignment without touching the rest of the inspector.
@@ -33,6 +38,8 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 export function useNodeInspector(client: McpClient, nodeId: string | null): NodeInspectorState {
   const [effectivePrompt, setEffectivePrompt] = useState<EffectivePrompt | null>(null);
   const [effectiveTools, setEffectiveTools] = useState<EffectiveTool[] | null>(null);
+  const [engineTools, setEngineTools] = useState<EngineTool[] | null>(null);
+  const [capability, setCapability] = useState<NodeCapability | null>(null);
   const [skillPolicy, setSkillPolicy] = useState<SkillResolvedPolicy | null>(null);
   const [skills, setSkills] = useState<SkillDefinition[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,6 +54,8 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
     if (!nodeId) {
       setEffectivePrompt(null);
       setEffectiveTools(null);
+      setEngineTools(null);
+      setCapability(null);
       setSkillPolicy(null);
       setSkills(null);
       setErrors([]);
@@ -61,7 +70,7 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
 
     const [prompt, tools, skills, registry] = await Promise.allSettled([
       client.call<EffectivePrompt>("node.get_effective_prompt", { nodeId }),
-      client.call<{ tools: EffectiveTool[] }>("node.get_effective_tools", { nodeId }),
+      client.call<{ tools: EffectiveTool[]; engine?: EngineTool[]; capability?: NodeCapability | null }>("node.get_effective_tools", { nodeId }),
       client.call<{ policy: SkillResolvedPolicy }>("node.get_effective_skills", { nodeId }),
       client.call<{ skills: SkillDefinition[] }>("skill.list")
     ]);
@@ -73,6 +82,8 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
     if (prompt.status === "rejected") failures.push(`Effective prompt unavailable: ${errorMessage(prompt.reason)}`);
 
     setEffectiveTools(tools.status === "fulfilled" ? tools.value.tools ?? [] : null);
+    setEngineTools(tools.status === "fulfilled" ? tools.value.engine ?? [] : null);
+    setCapability(tools.status === "fulfilled" ? tools.value.capability ?? null : null);
     if (tools.status === "rejected") failures.push(`Effective tools unavailable: ${errorMessage(tools.reason)}`);
 
     setSkillPolicy(skills.status === "fulfilled" ? skills.value.policy ?? null : null);
@@ -97,5 +108,5 @@ export function useNodeInspector(client: McpClient, nodeId: string | null): Node
     void reload();
   }, [reload]);
 
-  return { effectivePrompt, effectiveTools, skillPolicy, skills, loading, errors, fetchedAt, reload };
+  return { effectivePrompt, effectiveTools, engineTools, capability, skillPolicy, skills, loading, errors, fetchedAt, reload };
 }

@@ -42,7 +42,6 @@ import {
 // publish report is assembled from (three stage envelopes here, one emission report there). No
 // release-specific code exists here at all: release_executor is already object-agnostic (reads only
 // publish_executor's own `publishCommitted` flag), so the canonical dispatch runs unchanged for clone.
-import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { isProjectPublishEnabled, type CallToolFn } from "./publisher.js";
 import { resolvePublishAuthority } from "./publishDecision.js";
 import { buildObjectPublishPlan, executeObjectPublish, type ObjectPublishPlan } from "./objectPublishExecution.js";
@@ -62,6 +61,7 @@ import type { TemplateArtifactValue } from "../memory/memoryEnvelope.js";
 // the shared publishing tail. See pdfTemplateEngine.ts's own header for the full discipline/transport
 // argument.
 import { pdfTemplateIntakeStep, pdfTemplateMintStep, pdfTemplatePublishStep, depositPublishedPdfTemplatesStep, PDF_TEMPLATE_ARTIFACTS } from "../capture/pdfTemplateEngine.js";
+import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 
 export const CLONE_STAGES = ["intake", "mint", "theme_bind", "restamp", "publish_payload", "publication_controller", "publish_executor", "report", "pdf_intake", "pdf_mint", "pdf_publish"] as const;
 export type CloneStage = typeof CLONE_STAGES[number];
@@ -209,6 +209,9 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
   const { targetProjectId } = resolvedProject;
   // W1.1 — same boundary as capture: the claim clock restarts after project resolution and before the
   // first tenant call, and the stage names itself on the run record.
+  // W3.2.2 — see captureConductorRoutes: the stage, not just the route, because clone's stages are
+  // alternatives and theme_bind's admin verb belongs to theme_bind alone.
+  const tenantContext = { caller: "engine", runId: run.runId, nodeId: input.node.id, routeId: "clone_stage", phaseId: stage } as const;
   await input.onPhase?.(stage);
   try {
     switch (stage) {
@@ -223,22 +226,22 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         if (isOutcome(facts)) return facts;
         const envelope =
           facts.mode === "clone"
-            ? await cloneIntakeStep({ targetProjectId, captureRunId: facts.captureRunId })
-            : await cloneIntakeStep({ targetProjectId, structureBrief: facts.structureBrief });
+            ? await cloneIntakeStep({ targetProjectId, captureRunId: facts.captureRunId }, { tenantContext })
+            : await cloneIntakeStep({ targetProjectId, structureBrief: facts.structureBrief }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "mint": {
         const intake = envelopeOf(run, "clone_intake", CLONE_ARTIFACTS.intake);
         if (isOutcome(intake)) return intake;
         const design = stageOutput(run, "recipe_designer");
-        const envelope = await cloneMintStep({ targetProjectId, intake, design });
+        const envelope = await cloneMintStep({ targetProjectId, intake, design }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "theme_bind": {
         const intake = envelopeOf(run, "clone_intake", CLONE_ARTIFACTS.intake);
         if (isOutcome(intake)) return intake;
         const themeProposal = stageOutput(run, "theme_reconciler");
-        const envelope = await cloneThemeBindStep({ targetProjectId, intake, themeProposal });
+        const envelope = await cloneThemeBindStep({ targetProjectId, intake, themeProposal }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "restamp": {
@@ -252,7 +255,7 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         // reason it is optional on cloneRestampStep/buildRestampOps: a run that predates this node,
         // or a mock traversal that never populated it, must still restamp byte-identically to before.
         const adjudication = stageOutput(run, "fit_adjudicator");
-        const envelope = await cloneRestampStep({ targetProjectId, intake, mint, adjudication });
+        const envelope = await cloneRestampStep({ targetProjectId, intake, mint, adjudication }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       // T15.34 (#210; ADR-2026-08-25-structure-studio §7) — the pdf-template branch. THIS IS NOT THE
@@ -272,7 +275,7 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         const intake = envelopeOf(run, "pdf_template_intake", PDF_TEMPLATE_ARTIFACTS.intake);
         if (isOutcome(intake)) return intake;
         const design = stageOutput(run, "pdf_template_designer");
-        const envelope = await pdfTemplateMintStep({ targetProjectId, intake, design });
+        const envelope = await pdfTemplateMintStep({ targetProjectId, intake, design }, { tenantContext });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "pdf_publish": {
@@ -285,10 +288,10 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
             `Project "${targetProjectId}" is not publish-enabled (publishingPolicy.publishEnabled, or its per-project *_PUBLISH_ENABLED env override, is off); nothing was published to pdf-tool for it. This is the SAME kill-switch read publish_payload uses for CMS structure, applied here to a different store.`
           );
         }
-        const envelope = await pdfTemplatePublishStep({ targetProjectId, mint });
+        const envelope = await pdfTemplatePublishStep({ targetProjectId, mint }, { tenantContext });
         const authority = resolvePublishAuthority(run);
         const library = envelope.published.length > 0
-          ? await depositPublishedPdfTemplatesStep({ sourceProjectId: targetProjectId, mint, published: envelope.published })
+          ? await depositPublishedPdfTemplatesStep({ sourceProjectId: targetProjectId, mint, published: envelope.published }, { tenantContext })
           : undefined;
         const output = {
           ...envelope,
@@ -394,7 +397,9 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
           return refused("clone_publish_plan_missing", "publish_payload produced no objectPublishPlan; publish_executor cannot execute without one.");
         }
         const { config } = await resolveCloneAuthority(targetProjectId);
-        const callTool: CallToolFn = (tool, args) => new ProjectMcpAdapter(config).callTool(tool, args);
+        // W3.2.2 — same as capture's publish_executor stage: the plan's object verbs through the
+        // one door, attributed to this run's own publish node.
+        const callTool: CallToolFn = tenantCallToolFor({ projectId: config.projectId, project: config, ...tenantContext });
         const result = await executeObjectPublish({ plan, callTool });
         const authority = resolvePublishAuthority(run);
         const publishCommitted = result.published.length > 0;

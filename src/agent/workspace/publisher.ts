@@ -25,7 +25,6 @@ import { readContentItemShell } from "./contentItemShell.js";
 import { validateOutput } from "../execution/outputValidator.js";
 import { getWorkspaceNode } from "./nodes.js";
 import { redactSensitiveKeys } from "../observability/redaction.js";
-import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks, type PublishExecutionOutcome, type PublishObjectOrigin, type PublishProducerContext, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
@@ -40,6 +39,7 @@ import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import { assertRecipeAuthorshipAllowed } from "./publishableTypeCharter.js";
 import { producerContextForPublish } from "./nodeExecutionProvenance.js";
 import { artifactPlanVerifiedMediaRefsOf, envelopeVerifiedMediaRefsOf, isVerifiedMediaRef, mediaRefsOf } from "../projects/readinessContentChecks.js";
+import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 
 // request_id contract: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case, supplied by the
 // caller (never auto-generated). A malformed id is accepted at create but breaks every later step.
@@ -371,7 +371,15 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   }
 
   // All gates passed: drive the project's sanctioned publish sequence through its own MCP tools.
-  const callTool = deps.callTool ?? ((tool, args) => new ProjectMcpAdapter(config).callTool(tool, args));
+  // W3.2.2 — the DTC publish dialect's transport. Every verb a tenant's executePublish hook speaks
+  // crosses this closure, so routing it through the choke point is what puts a real publish in
+  // tool.list_executions for the first time. nodeId is publish_executor deliberately and not
+  // defensively: this closure IS that node's dispatch (publishRun is reached from the publish_executor
+  // route and from workflow_publish_run for the same node), and it is the id that makes
+  // FORBIDDEN_PROJECT_VERBS a pass here instead of a refusal — the same exemption
+  // project.call_tool has always given it. No routeId: the DTC tail has no manifest, and the
+  // choke point says nothing about a route it cannot check.
+  const callTool = deps.callTool ?? tenantCallToolFor({ projectId: config.projectId, project: config, caller: "engine", runId: run.runId, nodeId: "publish_executor" });
   const shell = readContentItemShell(run);
   const steps: PublishStep[] = [];
   // T15.29 (#205; ADR-2026-08-25-structure-studio §2.2) — enforcement point 3, the runtime write
