@@ -3001,6 +3001,9 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   const completedAt = now();
   delete state.dispatch;
   if (result.toolCalls?.length) state.toolCalls = result.toolCalls;
+  // W2.3 — runner-supplied run-visible notes (currently the budget reserve's source). Appended, never
+  // replacing: a runner note must not displace a warning the executor itself recorded.
+  if (result.ok && result.warnings?.length) state.warnings = [...(state.warnings ?? []), ...result.warnings];
   state.completedAt = completedAt;
   state.durationMs = duration(startedAt, completedAt);
   if (!result.ok) {

@@ -13,6 +13,11 @@ export type NodeRunnerResult = {
   model?: string;
   trace?: unknown;
   toolCalls?: NodeToolCallRecord[];
+  // W2.3 — run-visible notes the runner wants on the NODE, not just in its trace. The executor
+  // appends them to state.warnings, which workflow.get_run and the attention feed already read, so a
+  // decision the runner made about this dispatch (which budget reserve it priced turns against, say)
+  // is answerable from the run record without opening the execution.
+  warnings?: string[];
   // R-16's generic executor-level output-schema gate (executor.ts's executeRunnableNode) and a
   // runner's OWN pre-return validation (OpenAINodeRunner.ts, AnthropicNodeRunner.ts — both validate
   // to decide whether to retry on a malformed response) used to run validateOutput against the exact

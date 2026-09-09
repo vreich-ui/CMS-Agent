@@ -259,6 +259,10 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
     }
     else { state.status = "completed"; state.output = outputValidation.value; const provenance = buildNodeExecutionProvenance(effectiveNode, result.model, endedAt); if (provenance) state.provenance = provenance; run.status = "completed"; run.completedAt = endedAt; run.stageOutputs[node.id] = outputValidation.value; const artifact: ExecutionArtifact & { runId: string; executionId: string } = { id: `artifact_${executionId}`, nodeId: node.id, type: node.produces[0] ?? node.id, value: outputValidation.value, createdAt: endedAt, runId, executionId }; run.artifacts.push(artifact); await repos.workspaceRepository.saveStageOutput(node.id, outputValidation.value, `${runId}:${executionId}:${node.id}`); }
   }
+  // W2.3 — the same runner-supplied run-visible notes executeRunnableNode folds in. node.execute is
+  // the SECOND dispatch path; a diagnostic that appears on one and not the other is the class of gap
+  // the timing ledger's own two writers already taught us to close.
+  if (result.ok && result.warnings?.length) state.warnings = [...(state.warnings ?? []), ...result.warnings];
   run.updatedAt = endedAt; run.currentNodeId = undefined;
   // In openai mode the runner records real usage itself (OpenAINodeRunner); recording here too
   // double-counted every independent execution with fabricated token counts marked "actual".
