@@ -33,6 +33,13 @@ export type NodeGatingSeedEntry = {
   // the agent loop. Declared here so a store overlay that rewrites the node's metadata (say, to flip
   // approvalRequired) cannot silently switch the voice off; the seed is the floor.
   voicePrefetch?: true;
+  // W4 (2026-09-09, Wolf): the editorial-STRATEGY prefetch (projects/genesisEditorialStrategy.ts) —
+  // the tenant's governed `editorial_strategy` singleton (strat_<slug>) fetched deterministically
+  // before the agent loop and delivered as `editorialStrategy`. Declared here for the same reason
+  // voicePrefetch is: a store overlay that rewrites a node's metadata wholesale must not be able to
+  // switch it off by omission. The voice tells a node HOW to write; this tells it WHAT the site has
+  // decided to commission, which is the half every planning node has been guessing at.
+  strategyPrefetch?: true;
   // C5 (BRIEF §3.5): the site-level prefetch (sitePrefetch.ts) — the site's visual standards, its PDF
   // templates and its image-model policy contexts, fetched deterministically before the agent loop and
   // merged into the node's `prefetchedContract`. Declared here for the same reason voicePrefetch is:
@@ -68,6 +75,15 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
     skipWhen: [{ when: "no_external_claims" }],
     rationale: "research is dispatched only when something in the run indicates an external claim to verify. Explicit declaration first; docs/runbook content class as the documented fallback; an unclassified run still researches."
   },
+  // W4 (2026-09-09, Wolf) — the node that decides WHAT to commission is the one the governed strategy
+  // object is written for. It already declares voicePrefetch in its own metadata (nodes.ts); this adds
+  // the other half. No skipWhen and no other key: this entry exists to declare one prefetch, and
+  // gatedMetadata only fills keys the node itself does not declare, so nothing else about this node's
+  // policy moves.
+  topic_opportunity: {
+    strategyPrefetch: true,
+    rationale: "topic_opportunity chooses what the site commissions next; the governed editorial_strategy object is where the site's topic weights, angle mix and funnel posture are actually decided. Without it the node was inferring a strategy from whatever the run happened to carry."
+  },
   // The standing own-property EV/aggression waiver (publicationController's
   // own_property_ev_and_aggression_exemption) already decides the answer for these classes, so paying
   // a model to compute an EV floor that could not block anything is paying for a discarded number.
@@ -77,6 +93,13 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
     // measured figure in its input (costPrefetch.ts) instead of estimating one. An EV-exempt run skips
     // before any prefetch runs, so this costs nothing on the runs it does not help.
     costPrefetch: true,
+    // W4 (2026-09-09, Wolf): the governed strategy object. This is the publishing_conductor's
+    // monetization consumer, and `offer` and `funnel_aggression` are decided ON that object by the
+    // human who owns it — so a node computing an EV floor was, until now, reasoning about a
+    // commercial posture it could not read. The same rule as the two prefetches beside it: an
+    // EV-exempt run skips before any prefetch runs, so this costs nothing on the runs it does not
+    // help, and an unset (genesis-default) strategy warns and proceeds rather than blocking.
+    strategyPrefetch: true,
     // 2026-09-09: expectedValue = commission x conversionRate x monthlyTraffic. The cost fix measured
     // the floor; these two measure the numerator. Both prefetches run only on a run that got past the
     // content-class skip below, so an EV-exempt run still pays for neither.
@@ -138,6 +161,11 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
   brief_architect: {
     contractPrefetch: true,
     voicePrefetch: true,
+    // W4 (2026-09-09, Wolf): alongside the voice, and for the mirror-image reason. The voice sets the
+    // tone guardrails every downstream writer reads; the strategy sets what the brief is FOR — the
+    // goal, the offer, the angle mix and the funnel posture the site has decided. A brief written
+    // with one and not the other is a well-spoken piece about whatever the model felt like.
+    strategyPrefetch: true,
     skipWhen: [{
       when: "ev_floor_blocked",
       reason: "Run halted before brief_architect: monetization_strategy's EV floor blocks this piece on LIVE Monetizer data, so the expensive post-brief chain is not bought. A block computed on assumed numbers would not have stopped anything."
@@ -203,6 +231,7 @@ export function gatedMetadata(node: GatedNode): Record<string, unknown> | undefi
   if (seed.skipWhen !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "skipWhen")) merged.skipWhen = seed.skipWhen;
   if (seed.contractPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "contractPrefetch")) merged.contractPrefetch = seed.contractPrefetch;
   if (seed.voicePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "voicePrefetch")) merged.voicePrefetch = seed.voicePrefetch;
+  if (seed.strategyPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "strategyPrefetch")) merged.strategyPrefetch = seed.strategyPrefetch;
   if (seed.sitePrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "sitePrefetch")) merged.sitePrefetch = seed.sitePrefetch;
   if (seed.costPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "costPrefetch")) merged.costPrefetch = seed.costPrefetch;
   if (seed.trafficPrefetch !== undefined && !Object.prototype.hasOwnProperty.call(metadata, "trafficPrefetch")) merged.trafficPrefetch = seed.trafficPrefetch;
@@ -213,6 +242,7 @@ export function gatedMetadata(node: GatedNode): Record<string, unknown> | undefi
 // place rather than checking metadata here and a seed table there.
 export const declaresContractPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.contractPrefetch === true;
 export const declaresVoicePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.voicePrefetch === true;
+export const declaresStrategyPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.strategyPrefetch === true;
 export const declaresSitePrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.sitePrefetch === true;
 export const declaresCostPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.costPrefetch === true;
 export const declaresTrafficPrefetch = (node: GatedNode): boolean => gatedMetadata(node)?.trafficPrefetch === true;

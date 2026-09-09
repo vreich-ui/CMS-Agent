@@ -46,12 +46,27 @@ const codedError = (error: unknown): { code: string; message: string } & Record<
   if (!(error instanceof Error)) return null;
   const code = (error as { code?: unknown }).code;
   if (typeof code !== "string" || !code.length) return null;
-  const extra = error as { providerStatus?: unknown; providerMessage?: unknown; operatorAction?: unknown };
+  const extra = error as {
+    providerStatus?: unknown;
+    providerMessage?: unknown;
+    operatorAction?: unknown;
+    missing?: unknown;
+    waysOut?: unknown;
+  };
+  const strings = (value: unknown): string[] | null =>
+    Array.isArray(value) && value.every((item) => typeof item === "string") ? (value as string[]) : null;
   return {
     code, message: error.message,
     ...(typeof extra.providerStatus === "number" ? { providerStatus: extra.providerStatus } : {}),
     ...(typeof extra.providerMessage === "string" ? { providerMessage: extra.providerMessage } : {}),
-    ...(typeof extra.operatorAction === "string" ? { operatorAction: extra.operatorAction } : {})
+    ...(typeof extra.operatorAction === "string" ? { operatorAction: extra.operatorAction } : {}),
+    // W3 (Wolf, 2026-09-09): a BLOCKAGE must be actionable, not merely classified. `missing` names
+    // the input fields a caller would have to supply and `waysOut` names every door out of the
+    // refusal; both are useless if they stop at the throw site. Duck-typed for the same reason the
+    // three above are — this module stays uncoupled from the layers that raise them. Today the only
+    // raiser is SiteGenesisRefusal("genesis_artifact_required").
+    ...(strings(extra.missing) ? { missing: strings(extra.missing) } : {}),
+    ...(strings(extra.waysOut) ? { waysOut: strings(extra.waysOut) } : {})
   };
 };
 

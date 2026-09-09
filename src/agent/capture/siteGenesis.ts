@@ -75,6 +75,13 @@ import { TRACKING_SINK_TOKEN_ENV, TRACKING_SINK_URL_ENV } from "../improvement/t
 import { createSecretVersion } from "../projects/secretManager.js";
 import { genesisTenantProfile } from "../projects/genesisTenantProfile.js";
 import { genesisEditorialVoiceFallback } from "../projects/genesisEditorialVoice.js";
+import {
+  activeGenesisPolicy,
+  genesisArtifactCliArgs,
+  genesisArtifactRefusalMessage,
+  genesisArtifactWaysOut,
+  missingGenesisArtifacts
+} from "./genesisPolicy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -185,9 +192,24 @@ export class SiteGenesisRefusal extends Error {
   // credential reconciler's site_credential_reconcile.v1) can surface this verbatim without
   // breaking the "no bearer, no response body" rule that keeps those lines publishable. Absent by
   // design on refusals that carry no safe detail worth repeating.
-  constructor(readonly code: string, message: string, readonly safeSummary?: string) {
+  // W3 (Wolf, 2026-09-09): `genesis_artifact_required` needs two more fields to be ACTIONABLE
+  // rather than merely classified — WHICH input fields are missing, and the ways out. They are own
+  // properties rather than a nested bag, following ConverseError's precedent, because that is the
+  // shape `toolKit.codedError` lifts onto the wire envelope. Optional and unused by every other
+  // refusal, so nothing else changes shape.
+  readonly missing?: string[];
+  readonly waysOut?: string[];
+
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly safeSummary?: string,
+    details?: { missing?: string[]; waysOut?: string[] }
+  ) {
     super(`${code}: ${message}`);
     this.name = "SiteGenesisRefusal";
+    if (details?.missing) this.missing = details.missing;
+    if (details?.waysOut) this.waysOut = details.waysOut;
   }
 }
 
@@ -970,6 +992,23 @@ export type SiteGenesisInput = {
   // fact it needs. Supplying it closes set_admin_emails; omitting it leaves that item exactly as it
   // was. Genesis never invents an owner address.
   ownerEmail?: string;
+  // W3 (Wolf, 2026-09-09) — the genesis BASELINES, each an optional partial body deep-merged onto
+  // the skeleton the platform scaffold would otherwise write. They exist for two reasons and both
+  // matter: supplying one flips that baseline's `provenance.set_by` from "genesis_default" to
+  // "agent", which is what silences the "needs to be set" warning on every downstream consumer; and
+  // they are what makes the genesis policy's "SUPPLY NOW" door real. A refusal that names a field
+  // the caller has no way to pass is not a refusal, it is an outage — so the closed artifact enum
+  // in genesisPolicy.ts and these five fields are the same list, asserted by that module's test.
+  //
+  // Genesis does not read or validate the bodies. They travel verbatim to `create-site.mjs` as
+  // --editorial-strategy / --editorial-voice / --visual-standard / --logo / --tracking-config,
+  // where the platform's own schemas own them; inventing a shape here would be a second, drifting
+  // copy of the platform's body schemas.
+  editorialStrategy?: Record<string, unknown>;
+  editorialVoice?: Record<string, unknown>;
+  visualStandard?: Record<string, unknown>;
+  logo?: Record<string, unknown>;
+  trackingConfig?: Record<string, unknown>;
 };
 
 export type SiteGenesisDeps = {
@@ -1061,6 +1100,28 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(slug)) {
     throw new SiteGenesisRefusal("genesis_name_invalid", `newSite.name must be a lowercase kebab-case slug (e.g. "zilberman"); got "${input.name}".`);
   }
+
+  // W3 (Wolf, 2026-09-09) — THE GENESIS POLICY GATE, before any side effect of any kind.
+  //
+  // Deliberately here rather than downstream. `create-site.mjs` enforces the same policy at its own
+  // buildPlan, but this driver only REACHES the scaffold when a platform checkout is mounted; with
+  // none it skips straight past and goes on to create a Netlify site, a build hook, env vars and a
+  // registry project. Enforcing only downstream would therefore let the checkout-less path
+  // provision live infrastructure for a tenant the policy says may not exist — the refusal has to
+  // fire before the first API call, not after.
+  //
+  // The refusal carries the same code, the same `missing[]` INPUT FIELD names and the same two ways
+  // out as the platform's, because an operator meeting it on both surfaces must read one rule, not
+  // two failures. See src/agent/capture/genesisPolicy.ts for why the vocabulary is duplicated and
+  // what keeps the copies honest.
+  const missingArtifacts = missingGenesisArtifacts(activeGenesisPolicy(), input as unknown as Record<string, unknown>);
+  if (missingArtifacts.length) {
+    throw new SiteGenesisRefusal("genesis_artifact_required", genesisArtifactRefusalMessage(missingArtifacts), undefined, {
+      missing: missingArtifacts,
+      waysOut: genesisArtifactWaysOut(missingArtifacts)
+    });
+  }
+
   const netlifySiteName = (input.netlifySiteName ?? slug).trim();
   const envPrefix = envPrefixForSlug(slug);
   const sourceOrigin = new URL(input.sourceUrl).origin;
@@ -1099,7 +1160,20 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   // off the scaffold's own --json result — never assumed, and never re-derived here.
   let derivedFloorReported = false;
   if (platformRoot) {
-    const scaffold = await runCreateSiteCli(platformRoot, ["--name", slug, ...(input.netlifySiteName ? ["--netlify-site-name", netlifySiteName] : [])], { passToken: false, token });
+    // W3: the supplied baselines travel to the scaffold as its own genesis-input flags, so a tenant
+    // minted through this driver is born with authored objects (provenance.set_by "agent") rather
+    // than placeholders — and so the platform's own copy of the policy is satisfied by the same
+    // inputs that satisfied ours, instead of refusing one layer later for the same reason.
+    const scaffold = await runCreateSiteCli(
+      platformRoot,
+      [
+        "--name",
+        slug,
+        ...(input.netlifySiteName ? ["--netlify-site-name", netlifySiteName] : []),
+        ...genesisArtifactCliArgs(input as unknown as Record<string, unknown>)
+      ],
+      { passToken: false, token }
+    );
     scaffoldExecuted = true;
     derivedFloorReported = readDerivedHouseStandardFromScaffold(scaffold);
     ledger.push({
@@ -1441,6 +1515,15 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     // fallback would be boilerplate wearing the tenant's name. Never a voiceObjectId — a DECIDED
     // voice is a written object, and no writer node has run.
     ...(genesisVoice ? { editorialVoiceFallback: genesisVoice } : {}),
+    // W4 (2026-09-09, Wolf) — the SINK PARTITION, on the record, at birth. This is the same value
+    // written above as the site's own TRACKING_PROJECT_ID env var (the BARE slug; see the header
+    // note (4) and the setEnvVar call for why it is not `trk_<slug>`), recorded here so CMS-Agent's
+    // registry can answer "which partition belongs to this tenant" without reading the tenant's
+    // Netlify environment. Until this existed the answer lived ONLY on the site, so every job that
+    // reads the sink could read exactly one partition — whichever one its own deployment named — and
+    // the weekly strategy review was a single-tenant job for addressing reasons, not policy ones.
+    // Written unconditionally: a minted tenant's partition is never in doubt, genesis just chose it.
+    tracking: { projectId: slug },
     contentContract: { contentContract: "content_source.v1" },
     capturePolicy: seededCapturePolicy,
     status: "active"

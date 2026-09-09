@@ -696,6 +696,17 @@ export type StrategyReviewParams = {
   projectId: string;
   from: string;
   to: string;
+  /**
+   * W4 (2026-09-09, Wolf) — the governed strategy object address, resolved from the TENANT'S OWN
+   * RECORD by the caller. When present it wins over the EDITORIAL_STRATEGY_* env address outright.
+   *
+   * This is what turns a single-tenant loop into a per-tenant one. The env triple is one global
+   * address on a deployment, so as long as it was the ONLY way to name the object, the review could
+   * only ever serve whichever tenant an operator had wired into the job — the rest of the fleet got
+   * nothing, silently, forever. The env triple survives as exactly that: an override, kept because it
+   * is what makes `--dry-run` against one tenant a debugging tool rather than a fleet walk.
+   */
+  objectRef?: StrategyObjectRef;
 };
 
 export type StrategyReviewDeps = RollupFetchDeps & {
@@ -785,7 +796,11 @@ export async function reviewEditorialStrategy(params: StrategyReviewParams, deps
     return result;
   }
 
-  const objectRefState = strategyObjectRefState(env);
+  // Caller-supplied (per-tenant, from the record) FIRST; the global env triple second. A caller that
+  // resolved an address from a tenant's own record has strictly better information than a deployment
+  // env var, and mixing the two — reading tenant A's partition while proposing at tenant B's object —
+  // is the one failure this ordering exists to make impossible.
+  const objectRefState: StrategyObjectRefState = params.objectRef ? { configured: true, missing: [], ref: params.objectRef } : strategyObjectRefState(env);
   if (!objectRefState.ref) {
     result.reason = "no_strategy_object";
     result.detail = `No governed strategy object to propose against (${objectRefState.missing.join(", ")} unset) — no-op, not a failure. Setting these is an operator task.`;

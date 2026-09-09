@@ -5,6 +5,10 @@ import path from "node:path";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { resolveProjectCapturePolicy } from "../../../src/agent/projects/projectTypes.js";
+import {
+  clearGenesisPolicyProviderForTests,
+  setGenesisPolicyProvider
+} from "../../../src/agent/capture/genesisPolicy.js";
 
 // T12.11 ACCEPTANCE (newSite half): one site_duplicate call with `newSite` executes EVERY
 // automatable genesis step — the create-site scaffold via the platform seam (a stub checkout here,
@@ -104,6 +108,7 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
   });
 
   afterEach(async () => {
+    clearGenesisPolicyProviderForTests();
     vi.unstubAllGlobals();
     delete process.env.MCP_API_TOKEN;
     delete process.env.PDF_TOOL_MCP_ENDPOINT;
@@ -382,5 +387,98 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(policy.authenticatedAccess).toBe("prohibited");
     // No rights are presumed by derivation alone — raising them stays an explicit human project.update.
     expect(policy.rights).toEqual({ content: "prohibited", media: "prohibited" });
+  }, 90_000);
+  // ── W3 (Wolf, 2026-09-09) — the FLEET GENESIS POLICY, mirrored on this side ─────────────────
+  //
+  // The refusal has to fire BEFORE any mint, and this file is where that can actually be proved:
+  // the fetch stub above fails the test on any api.netlify.com request, and the stub CLI records
+  // every invocation. So "nothing was provisioned" is not a claim in a message — it is the absence
+  // of a scaffold invocation, the absence of a Netlify request, and the absence of a project
+  // record, all asserted.
+  //
+  // Enforcing only in `create-site.mjs` would not be enough and this is the case that shows why:
+  // when no platform checkout is mounted, genesis skips the scaffold entirely and goes straight on
+  // to create a Netlify site, a build hook, env vars and a registry project. The last test below
+  // is that path.
+
+  it("refuses a mint that omits a required baseline BEFORE anything is provisioned", async () => {
+    setGenesisPolicyProvider(() => ({ requiredArtifacts: ["editorial_strategy"] }));
+
+    const { rpcError } = await mcpCall("site_duplicate", {
+      sourceUrl: SOURCE_URL,
+      newSite: { name: "zilberman", netlifySiteName: "zilbermanfilmfoundation" },
+      executionMode: "mock"
+    });
+    // A tool that THROWS surfaces as a JSON-RPC error carrying the tool envelope in `data` — the
+    // same door every other catalogued genesis refusal (netlify_token_missing, genesis_name_invalid)
+    // comes back through, which is the point: this is one more catalogued refusal, not a new shape.
+    const envelope = (rpcError as { data?: { ok?: boolean; error?: { code?: string; message?: string; missing?: string[]; waysOut?: string[] } } })?.data;
+    expect(envelope?.ok).toBe(false);
+    expect(envelope?.error?.code).toBe("genesis_artifact_required");
+    // INPUT FIELD names, never object types — what the caller would have to put on `newSite`.
+    expect(envelope?.error?.missing).toEqual(["editorialStrategy"]);
+    expect(envelope?.error?.waysOut).toHaveLength(2);
+    expect(envelope?.error?.waysOut?.[0]).toMatch(/^supply now:/);
+    expect(envelope?.error?.waysOut?.[1]).toMatch(/^lower the policy:/);
+    expect(envelope?.error?.message).toMatch(/SUPPLY NOW/);
+    expect(envelope?.error?.message).toMatch(/LOWER THE POLICY/);
+
+    // NOTHING happened: no scaffold subprocess, no Netlify request, no registry project, no run.
+    await expect(readFile(path.join(platformRoot, "invocations.ndjson"), "utf8")).rejects.toThrow();
+    expect(netlifyRequests).toEqual([]);
+    expect(await repositoryManager.getProjectRepository().get("zilberman")).toBeFalsy();
+  }, 90_000);
+
+  it("supplying the required baseline passes, and it travels to the platform scaffold as its own flag", async () => {
+    setGenesisPolicyProvider(() => ({ requiredArtifacts: ["editorial_strategy"] }));
+
+    const { rpcError, structured } = await mcpCall("site_duplicate", {
+      sourceUrl: SOURCE_URL,
+      newSite: {
+        name: "zilberman",
+        netlifySiteName: "zilbermanfilmfoundation",
+        editorialStrategy: { goal: "Sell the archive residency." }
+      },
+      executionMode: "mock"
+    });
+    expect(rpcError).toBeUndefined();
+    expect((structured.data as { genesis: { projectId: string } }).genesis.projectId).toBe("zilberman");
+
+    // The body reached create-site verbatim, under the platform's own flag name — so the platform's
+    // copy of the policy is satisfied by the SAME input, instead of refusing one layer later.
+    const invocations = (await readFile(path.join(platformRoot, "invocations.ndjson"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0].argv).toEqual([
+      "--name",
+      "zilberman",
+      "--netlify-site-name",
+      "zilbermanfilmfoundation",
+      "--editorial-strategy",
+      '{"goal":"Sell the archive residency."}',
+      "--json"
+    ]);
+  }, 90_000);
+
+  it("refuses before provisioning even with NO platform checkout mounted — the path that would otherwise mint a live site", async () => {
+    // Without PLATFORM_REPO_ROOT the scaffold is skipped and put on the human checklist, and genesis
+    // proceeds to the Netlify half regardless. A gate that lived only in create-site.mjs would never
+    // run here, and this call would provision real infrastructure for a refused tenant.
+    delete process.env.PLATFORM_REPO_ROOT;
+    setGenesisPolicyProvider(() => ({ requiredArtifacts: ["logo", "tracking_config"] }));
+
+    const { rpcError } = await mcpCall("site_duplicate", {
+      sourceUrl: SOURCE_URL,
+      newSite: { name: "zilberman" },
+      executionMode: "mock"
+    });
+    const envelope = (rpcError as { data?: { ok?: boolean; error?: { code?: string; missing?: string[] } } })?.data;
+    expect(envelope?.ok).toBe(false);
+    expect(envelope?.error?.code).toBe("genesis_artifact_required");
+    expect(envelope?.error?.missing).toEqual(["logo", "trackingConfig"]);
+    expect(netlifyRequests).toEqual([]);
+    expect(await repositoryManager.getProjectRepository().get("zilberman")).toBeFalsy();
   }, 90_000);
 });

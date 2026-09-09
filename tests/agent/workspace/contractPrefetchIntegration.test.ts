@@ -45,8 +45,15 @@ describe("contract prefetch wired into node dispatch (F1, end to end through the
       // five reads too — a realistic site object (its pdf block naming the published default), one
       // published article template, and the image-model policy's own usage-context keys.
       const isVoiceGet = tool === "object_get" && objectType === "editorial_voice";
+      // W4 (2026-09-09): topic_opportunity, brief_architect and monetization_strategy also declare the
+      // STRATEGY prefetch, so this stub answers the tenant's editorial_strategy singleton too — with a
+      // DECIDED body (provenance.set_by "human"), because an undecided one would additionally stamp a
+      // strategy_object_unconfigured warning and this test is about read COUNTS, not about warnings.
+      const isStrategyGet = tool === "object_get" && objectType === "editorial_strategy";
       const result = request.method !== "tools/call"
         ? {}
+        : isStrategyGet
+          ? { structuredContent: { object: { name: "Stub strategy", goal: "g", offer: "o", audience_segments: ["a"], topic_weights: [], angle_mix: [], funnel_aggression: { tofu: 0.3, mofu: 0.3, bofu: 0.4 }, cadence: "weekly", provenance: { set_by: "human", set_at: "2026-09-01T00:00:00.000Z" } } } }
         : isVoiceGet
           ? { structuredContent: { object: { name: "Stub voice", audience: "a", tone: ["calm"], cadence: "c", lexicon: { prefer: [], avoid: [] }, claim_policy: "p", cta_policy: "cta", reader_safety_notes: "n", frameworks: [{ framework_id: "fw_x", label: "X", when_to_use: "always" }], default_framework: "fw_x" } } }
           : tool === "object_get" && objectType === "site"
@@ -104,6 +111,10 @@ describe("contract prefetch wired into node dispatch (F1, end to end through the
     // brief_architect, which is the first node to declare the contract prefetch.
     expect(remoteCalls).toEqual([
       "object_get(editorial_voice)",
+      // W4: topic_opportunity now reads the governed strategy alongside the voice — the same
+      // deterministic, once-per-run conductor read, sharing the same run-scoped cache, so the
+      // at-most-once property below still holds with one more prefetch in the list.
+      "object_get(editorial_strategy)",
       "object_contract(content_item)",
       "object_contract(site)",
       "object_get(site)",

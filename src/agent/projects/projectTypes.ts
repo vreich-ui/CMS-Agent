@@ -61,7 +61,93 @@ export type ProjectObjectDialect = {
   // one; voicePrefetch.ts then falls back to that project's own seeded voice (if any hook module
   // declares one) rather than guessing an id.
   voiceObjectId?: string;
+  // W4 (2026-09-09, Wolf) — the object id of this project's governed `editorial_strategy` singleton
+  // (e.g. "strat_drlurie"), fetched via object_get {object_type:"editorial_strategy", object_id}.
+  // Sibling of voiceObjectId above in every respect: one governed object per tenant, resolved once
+  // and deterministically (genesisEditorialStrategy.getEditorialStrategy) rather than re-fetched
+  // inside a node's own agent loop, and NEVER a substitute for another tenant's id.
+  //
+  // WHY IT IS AN OVERRIDE AND NOT THE ONLY ADDRESS. The strategy object is a SINGLETON PER TENANT
+  // with a conventional id — `strat_<slug>`, the same shape `voice_<slug>` and `vis_<slug>` already
+  // have — so a tenant that has never been hand-configured still has a resolvable address. That
+  // matters because the fan-out half of the strategy review must serve EVERY active tenant from its
+  // record, and every genesis-minted tenant is born with no objectDialect at all: if the pointer
+  // were the only address, the loop would silently cover exactly the tenants somebody remembered to
+  // configure, which is the failure mode this whole change exists to end. This field is therefore
+  // the escape hatch for a tenant whose object is NOT at the conventional id, not the normal path.
+  strategyObjectId?: string;
 };
+
+// W4 (2026-09-09, Wolf) — THE SINK PARTITION, ON THE RECORD.
+//
+// The tracking sink partitions every tenant's events by a BARE slug ("drlurie"), which site genesis
+// installs on the minted Netlify site as the env var TRACKING_PROJECT_ID (siteGenesis.ts). Until now
+// that value existed ONLY there: nothing in CMS-Agent's own registry knew which partition belonged to
+// which project, so every job that reads the sink could read exactly ONE partition — whichever one the
+// deployment's own TRACKING_PROJECT_ID named. That is why the weekly strategy review served a single
+// tenant: not a policy, an addressing limit.
+//
+// Note the id domains this deliberately keeps separate, because conflating them is the four-id trap
+// scripts/deploy-strategy-review.sh already warns about: the CMS-Agent project id is spelled
+// "dr-lurie", the sink partition "drlurie", and `trk_drlurie` is the per-tenant tracking_config OBJECT
+// id, which is not a partition at all and writes into a bucket nothing reads.
+export type ProjectTrackingBinding = {
+  // The sink partition id — the BARE slug, exactly the value genesis wrote into the site's
+  // TRACKING_PROJECT_ID. Never `trk_<slug>` and never the kebab-case project id.
+  projectId: string;
+};
+
+/**
+ * The conventional bare slug for a tenant: its project id with every non-alphanumeric character
+ * removed ("dr-lurie" → "drlurie"). This is the SAME derivation the platform side already uses for
+ * the governed singletons (`voice_drlurie`, `vis_drlurie`, `tax_drlurie`, `site_drlurie`) and the
+ * same one genesis relies on when it writes TRACKING_PROJECT_ID, so a tenant minted or registered
+ * under the normal convention needs no configuration at all to be addressable.
+ */
+export const conventionalTenantSlug = (projectId: string): string => projectId.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** The conventional id of a tenant's governed `editorial_strategy` singleton — `strat_<slug>`,
+ * the sibling of `voice_<slug>` and `vis_<slug>` (Wolf, 2026-09-09). */
+export const conventionalStrategyObjectId = (projectId: string): string => `strat_${conventionalTenantSlug(projectId)}`;
+
+export type TrackingPartitionResolution = {
+  projectId: string;
+  // Which source answered, so an operator reading a fan-out summary can see WHY a tenant is being
+  // read at the partition it is being read at — the same posture ProjectConnectionState.endpointSource
+  // takes for the endpoint.
+  source: "env" | "record" | "convention";
+  // Present only on the "convention" source: names, in the wording the deploy script has always used,
+  // the exact confusion a derived partition can hide. Never a blocker — a derived partition is right
+  // for every tenant registered under the normal convention, which is all of them today.
+  note?: string;
+};
+
+/**
+ * Resolve the sink partition to read for one project: ENV OVERRIDE (only where the caller has one —
+ * see below), then the record, then the convention.
+ *
+ * THE ENV OVERRIDE IS PASSED IN, NOT READ HERE, AND THAT IS THE POINT. `TRACKING_PROJECT_ID` is a
+ * single GLOBAL value on a deployment. Consulting it per project inside a fan-out would point every
+ * tenant in the loop at one tenant's partition — one env var quietly making the whole fleet read
+ * drlurie's numbers — so the caller decides whether an override is in scope at all. The single-tenant
+ * strategy-review path passes it (that is the debugging override that must keep working, unchanged);
+ * the per-tenant loop passes nothing.
+ */
+export function resolveTrackingPartition(
+  config: Pick<ProjectConnectionConfig, "projectId" | "tracking">,
+  envOverride?: string
+): TrackingPartitionResolution {
+  const override = envOverride?.trim();
+  if (override) return { projectId: override, source: "env" };
+  const recorded = config.tracking?.projectId?.trim();
+  if (recorded) return { projectId: recorded, source: "record" };
+  const derived = conventionalTenantSlug(config.projectId);
+  return {
+    projectId: derived,
+    source: "convention",
+    note: `Project "${config.projectId}" carries no tracking.projectId, so its sink partition was derived as "${derived}". These are different id domains for one tenant: the sink's partition is spelled like "drlurie", the CMS-Agent project like "dr-lurie", and trk_${derived} is the tracking_config OBJECT id, not a partition. If this tenant genuinely reads a different partition, set tracking.projectId on its record.`
+  };
+}
 
 // Durable, non-secret identity of a client site provisioned by site genesis. This is deliberately
 // separate from project status: disabling a client pauses normal work but must not hide its site
@@ -237,6 +323,13 @@ export type ProjectConnectionConfig = {
   // with `warningCode: "voice_object_unconfigured"`. A voice somebody actually authored is a live
   // `editorial_voice` object addressed by objectDialect.voiceObjectId, and outranks this.
   editorialVoiceFallback?: EditorialVoiceBody;
+  // W4 (2026-09-09, Wolf) — the tenant's SINK PARTITION, provisioned by genesis alongside the site's
+  // own TRACKING_PROJECT_ID env var (siteGenesis.ts). See ProjectTrackingBinding for why the value
+  // had to come onto the record: without it CMS-Agent's registry cannot say which partition belongs
+  // to which tenant, and every sink-reading job is therefore limited to the single partition its own
+  // deployment names. Absent is not a defect — resolveTrackingPartition derives the conventional bare
+  // slug — it just means nobody has overridden the convention.
+  tracking?: ProjectTrackingBinding;
   publishingPolicy: ProjectPublishingPolicy;
   status: ProjectStatus;
 };

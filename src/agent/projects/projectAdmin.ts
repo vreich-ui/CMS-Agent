@@ -33,7 +33,7 @@ import { isSecretVersionRef } from "./secretManager.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { defaultProjectConfigs } from "./defaultMigration.js";
 import { toProjectSummary } from "./projectRegistry.js";
-import { DEFAULT_PROJECT_CAPTURE_POLICY, projectAuthModes, projectStatuses, toolPermissions, type ClientSiteBinding, type ProjectCapturePolicy, type ProjectConnectionConfig, type ProjectPublishingPolicy, type ProjectSummary } from "./projectTypes.js";
+import { DEFAULT_PROJECT_CAPTURE_POLICY, projectAuthModes, projectStatuses, toolPermissions, type ClientSiteBinding, type ProjectCapturePolicy, type ProjectConnectionConfig, type ProjectObjectDialect, type ProjectPublishingPolicy, type ProjectSummary, type ProjectTrackingBinding } from "./projectTypes.js";
 
 // Lowercase-kebab project ids ("acme-daily"), matching the existing "dr-lurie" convention.
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -97,6 +97,39 @@ const clientSiteBindingSchema = z.object({
 // derived from the article_body node's own produces const (see projectRegistry.ts validate_handoff).
 const contentContractSchema = z.object({
   contentContract: z.string().min(1).default("content_source.v1")
+}).strict();
+
+// W4 (2026-09-09, Wolf) — the sink partition, as patchable non-secret configuration.
+//
+// Safe here for exactly the reasons clientSiteBinding is (T15.6): it is a bare tenant slug, it grants
+// no authority on its own, and site genesis already stamps it at birth for every minted tenant. What
+// this adds is the backfill path for the tenants that PREDATE genesis (dr-lurie, platform, fernwell)
+// — without it those three could only ever be read at whatever partition the deployment's own global
+// TRACKING_PROJECT_ID happened to name, which is the addressing limit that made the weekly strategy
+// review a single-tenant job. The pattern is the same lowercase-slug shape the deploy script has
+// always enforced on TRACKING_PROJECT_ID, so a kebab-case project id or a `trk_` object id — the two
+// wrong values in the four-id trap — cannot be stored as a partition by accident.
+const TRACKING_PARTITION_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
+const trackingBindingSchema = z.object({
+  projectId: z.string().regex(TRACKING_PARTITION_PATTERN, "tracking.projectId must be the sink's BARE partition slug (e.g. \"drlurie\") — not the kebab-case CMS-Agent project id and not a trk_ tracking_config object id.")
+}).strict();
+
+// W4 — the two GOVERNED-OBJECT POINTERS on the object dialect, patchable by name.
+//
+// Every field is optional here and the merge below is additive, so a caller can move exactly one
+// pointer without restating a dialect it did not come to change. What it CANNOT do is leave a project
+// holding a half-built dialect: updateProject re-checks the three required fields after the merge and
+// refuses, by name, rather than persisting an address a publish hook would later have to guess at.
+// Nothing about this widens publish authority — a dialect names WHERE a tenant's objects live, and
+// publishing through it is still gated by publishingPolicy, which stays server-controlled.
+const objectDialectPatchSchema = z.object({
+  siteObjectId: z.string().min(1).max(128).optional(),
+  taxonomyRegistryObjectId: z.string().min(1).max(128).optional(),
+  objectIdSource: z.enum(["server_minted", "request_id"]).optional(),
+  requestIdPattern: z.string().min(1).max(256).nullable().optional(),
+  defaultObjectType: z.string().min(1).max(128).nullable().optional(),
+  voiceObjectId: z.string().min(1).max(128).nullable().optional(),
+  strategyObjectId: z.string().min(1).max(128).nullable().optional()
 }).strict();
 
 const toolPermissionSchema = z.enum(toolPermissions);
@@ -191,6 +224,12 @@ export const projectUpdateSchema = z.object({
   // that predates genesis (dr-lurie, platform) without an env var + redeploy. null clears it, same
   // convention as mcpEndpoint/tokenSecretRef/tokenEnvVar above.
   clientSiteBinding: clientSiteBindingSchema.nullable().optional(),
+  // W4 (2026-09-09) — the two record fields the by-record strategy loop reads. Both are non-secret
+  // addressing configuration and both have a working convention behind them, so patching either is
+  // an OVERRIDE of a derivation, never the difference between a tenant being served and not. null
+  // clears, same convention as mcpEndpoint/tokenSecretRef/clientSiteBinding above.
+  tracking: trackingBindingSchema.nullable().optional(),
+  objectDialect: objectDialectPatchSchema.nullable().optional(),
   // T15.5 (2026-08-25, ADR-2026-08-25-publish-autonomy §2.2): the ONE deliberate crack in
   // "publishingPolicy is server-controlled" (see updateProject below and the comment at tools.ts's
   // projectPatchJsonSchema). Every other field on ProjectPublishingPolicy — publishEnabled (the hard
@@ -216,6 +255,12 @@ export type ProjectCreateInput = Omit<z.infer<typeof projectCreateSchema>, "capt
   // G6 — the provisional editorial voice genesis derives from the tenant's niche and audience. Not
   // on the public schema: a voice is content, and the path for content is the tenant's admin chat.
   editorialVoiceFallback?: EditorialVoiceBody;
+  // W4 (2026-09-09) — the sink partition genesis provisions for the tenant, recorded at birth beside
+  // the TRACKING_PROJECT_ID env var it writes onto the site itself. Trusted in-process only, for the
+  // same reason clientSiteBinding is: an MCP project.create declaring its own partition would be
+  // asserting a fact about a sink this workspace has not provisioned. project.update can still set it
+  // (a partition is non-secret addressing), which is the backfill path for pre-genesis tenants.
+  tracking?: ProjectTrackingBinding;
 };
 export type ProjectUpdateInput = z.infer<typeof projectUpdateSchema>;
 
@@ -256,6 +301,38 @@ const requireTokenSourceForBearer = (authMode: string, tokenEnvVar: string | und
     throw new ProjectAdminError("token_env_var_required", "authMode \"bearer_env\" requires a token source: tokenSecretRef (a Secret Manager version resource name — preferred, since it resolves on every executor plane with no deployment change) or tokenEnvVar (the NAME of the env var holding the bearer token, which must then be set on every plane that executes work).");
   }
 };
+
+// W4 (2026-09-09) — apply a pointer-level dialect patch, and refuse to persist a half-built dialect.
+//
+// The merge is additive so a caller can move one pointer (say objectDialect.strategyObjectId) without
+// restating the site/taxonomy/id-source triple it did not come to change, and `null` on an optional
+// field clears it. What is NOT tolerated is the resulting record: a dialect missing any of the three
+// REQUIRED fields is exactly the shape a publish hook has to guess at, and both object-native hooks
+// already refuse a run rather than guess (drLurie/hooks.ts, platform/hooks.ts, "missing_object_dialect").
+// Refusing here means that refusal never has to happen at publish time, on a run that has already been
+// paid for. A project with NO dialect at all is untouched by that rule as long as the patch supplies
+// the triple — and needs no patch merely to be addressable, because the governed singletons resolve by
+// convention (projectTypes.conventionalStrategyObjectId).
+function mergeObjectDialect(
+  projectId: string,
+  existing: ProjectObjectDialect | undefined,
+  patch: Record<string, string | null | undefined>
+): ProjectObjectDialect {
+  const merged: Record<string, unknown> = { ...(existing ?? {}) };
+  for (const [field, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (value === null) delete merged[field];
+    else merged[field] = value;
+  }
+  const missing = (["siteObjectId", "taxonomyRegistryObjectId", "objectIdSource"] as const).filter((field) => !merged[field]);
+  if (missing.length) {
+    throw new ProjectAdminError(
+      "object_dialect_incomplete",
+      `The patched objectDialect for "${projectId}" would be missing ${missing.join(", ")}. A dialect names WHERE this tenant's objects live, and a publish hook refuses a run rather than guess at a missing field — so a partial dialect is rejected here instead of at publish time. Supply the missing field(s) in the same patch, or pass objectDialect: null to remove the dialect entirely. Note that the governed singletons (voice_<slug>, strat_<slug>) resolve by convention with no dialect at all, so a pointer patch is an override, never a prerequisite.`
+    );
+  }
+  return merged as ProjectObjectDialect;
+}
 
 const requireValidClientSiteBinding = (binding: ClientSiteBinding | undefined) => {
   if (!binding) return;
@@ -299,6 +376,7 @@ export async function createProject(repository: ProjectRepository, input: Projec
     ...(input.toolPolicies ? { toolPolicies: { ...input.toolPolicies } } : {}),
     ...(input.definitionVersion !== undefined ? { definitionVersion: input.definitionVersion } : {}),
     ...(input.editorialVoiceFallback ? { editorialVoiceFallback: structuredClone(input.editorialVoiceFallback) } : {}),
+    ...(input.tracking ? { tracking: { ...input.tracking } } : {}),
     contentContract: { ...input.contentContract },
     capturePolicy: cloneCapturePolicy(input.capturePolicy ?? DEFAULT_PROJECT_CAPTURE_POLICY),
     publishingPolicy: { ...DEFAULT_PUBLISHING_POLICY },
@@ -347,6 +425,14 @@ export async function updateProject(repository: ProjectRepository, projectId: st
   if (patch.clientSiteBinding !== undefined) {
     if (patch.clientSiteBinding === null) delete next.clientSiteBinding;
     else next.clientSiteBinding = { ...patch.clientSiteBinding };
+  }
+  if (patch.tracking !== undefined) {
+    if (patch.tracking === null) delete next.tracking;
+    else next.tracking = { ...patch.tracking };
+  }
+  if (patch.objectDialect !== undefined) {
+    if (patch.objectDialect === null) delete next.objectDialect;
+    else next.objectDialect = mergeObjectDialect(projectId, existing.objectDialect, patch.objectDialect);
   }
   requireTokenSourceForBearer(next.authMode, next.tokenEnvVar, next.tokenSecretRef);
   requireCredentialFreeEndpoint(next.mcpEndpoint);
