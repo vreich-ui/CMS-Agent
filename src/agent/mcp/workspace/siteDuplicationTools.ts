@@ -88,7 +88,17 @@ const newSiteSchema = z.object({
   // needs no <SLUG>_MCP_ENDPOINT anywhere. Validated credential-free (https, no user:password@, no
   // query, no fragment) by the same schema project.create uses — the registry can still never hold
   // a credential, and the TOKEN is untouched: env var NAME only, as always.
-  mcpEndpoint: registryEndpointSchema.optional()
+  mcpEndpoint: registryEndpointSchema.optional(),
+  // C3 / G6 — the two facts a tenant's identity is derived from at birth. Both were declared on
+  // SiteGenesisInput from the start and neither was ever reachable through this tool, which is the
+  // only surface that runs genesis: `genesisHouseBrief` therefore never had a brief (the house
+  // visual standard asked a human for one on every birth), and the G6 editorial-voice fallback could
+  // never be written at all. A field the caller cannot supply is a field the feature does not have.
+  niche: z.string().min(2).max(200).optional(),
+  audience: z.string().min(2).max(200).optional(),
+  // G4 — the bootstrap Owner. Genesis installs it as ADMIN_EMAILS + ROLE_EMAILS_ADMIN on the new
+  // site; omitted, those stay on the human checklist exactly as before. Never invented.
+  ownerEmail: z.string().email().max(254).optional()
 }).strict();
 
 const duplicateInput = z.object({
@@ -109,7 +119,10 @@ const duplicateJsonSchema = objectSchema({
   newSite: objectSchema({
     name: { type: "string", minLength: 2, description: "Lowercase kebab-case slug for the new tenant (repo tree sites/<name>/, registry projectId, <NAME>_MCP_* env var names)." },
     netlifySiteName: { type: "string", minLength: 2, description: "Optional Netlify site name (the <name> in <name>.netlify.app) when it must differ from the slug." },
-    mcpEndpoint: { type: "string", format: "uri", maxLength: 512, description: "Optional override for the new tenant's MCP endpoint, stored on its registry record (https, no credentials/query/fragment — an endpoint is not a secret, the token still is). OMIT IT normally: genesis derives the endpoint from the Netlify site it just creates, so no endpoint has to be set by hand anywhere. Use it only when the tenant serves /mcp from a custom domain from day one." }
+    mcpEndpoint: { type: "string", format: "uri", maxLength: 512, description: "Optional override for the new tenant's MCP endpoint, stored on its registry record (https, no credentials/query/fragment — an endpoint is not a secret, the token still is). OMIT IT normally: genesis derives the endpoint from the Netlify site it just creates, so no endpoint has to be set by hand anywhere. Use it only when the tenant serves /mcp from a custom domain from day one." },
+    niche: { type: "string", minLength: 2, maxLength: 200, description: "What this tenant publishes about, in the operator's own words (e.g. \"independent film preservation\"). Genesis never invents one. Supplying it is what lets the visual_identity house standard be written with a real brief instead of asking a human for one, and what lets a provisional editorial voice be filed on the record so the tenant's first runs are not voice-less." },
+    audience: { type: "string", minLength: 2, maxLength: 200, description: "Who this tenant writes for (e.g. \"archivists and festival programmers\"). Pairs with niche: both are needed for the house-standard brief, and either one alone is enough for the provisional editorial voice." },
+    ownerEmail: { type: "string", format: "email", maxLength: 254, description: "The operator who will own this tenant. Genesis installs it as the site's ADMIN_EMAILS and ROLE_EMAILS_ADMIN bootstrap allowlists — the env write was always API-capable; what kept it a human step was that nobody had told genesis WHICH humans own the tenant. Omit it and those stay on the checklist. Note this does not enable Netlify Identity, which is console-only." }
   }, ["name"]),
   budgetUsd: { type: "number", minimum: 0, description: `Optional per-run cost ceiling in USD (workflow.start_dry_run semantics); defaults to $${DEFAULT_SITE_DUPLICATE_BUDGET_USD} to ensure every autonomous duplication runs under an explicit ceiling. Refused as budget_exceeded when below the workflow's entry-node reservation — such a run could never dispatch its first node.` },
   executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: "Passed through to the run. \"mock\" is the cheap CI/test mode; deterministic capture stages run real engine code either way." }
@@ -202,7 +215,18 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
         let targetProjectId: string;
         let humanChecklist: GenesisHumanChecklistItem[] = [];
         if (data.newSite) {
-          genesis = await runSiteGenesis({ name: data.newSite.name, netlifySiteName: data.newSite.netlifySiteName, mcpEndpoint: data.newSite.mcpEndpoint, sourceUrl: data.sourceUrl }, { projectRepository });
+          genesis = await runSiteGenesis(
+            {
+              name: data.newSite.name,
+              netlifySiteName: data.newSite.netlifySiteName,
+              mcpEndpoint: data.newSite.mcpEndpoint,
+              niche: data.newSite.niche,
+              audience: data.newSite.audience,
+              ownerEmail: data.newSite.ownerEmail,
+              sourceUrl: data.sourceUrl
+            },
+            { projectRepository }
+          );
           targetProjectId = genesis.projectId;
           humanChecklist = genesis.humanChecklist;
         } else {
