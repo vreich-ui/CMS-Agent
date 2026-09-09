@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DETERMINISTIC_ROUTE_METADATA_KEYS,
+  DETERMINISTIC_STAGE_MIN_TIMEOUT_MS,
+  declaresDeterministicRoute,
+  deterministicStageTimeoutMs,
+  nodeTimeoutMs,
   ROUTE_ERA_METADATA_KEYS,
   ROUTE_MANIFESTS,
   multiPhaseRouteIds,
@@ -168,15 +172,68 @@ describe("W0.1/W1.1 — route era is resolved from the same registry the phases 
     expect(resolveRouteEra({ id: "publish_executor", metadata: { publishExecutorDeterministic: "execute" } } as unknown as WorkspaceNode)).toBe("publishExecutorDeterministic:execute");
     expect(resolveRouteEra({ id: "artifact_materializer", metadata: { visualStandardMaterializerDeterministic: true } } as unknown as WorkspaceNode)).toBe("visualStandardMaterializerDeterministic");
     expect(resolveRouteEra({ id: "article_body", metadata: {} } as unknown as WorkspaceNode)).toBe("model");
-    // ATTRIBUTION IS NOT DISPATCH. artifact_materializer runs a deterministic bridge route and never
-    // reaches a model, but it is deliberately absent from DETERMINISTIC_ROUTE_METADATA_KEYS because
-    // that list also decides concurrent-batch eligibility. Attribution reads its own list, so the
-    // materializer's samples stop being filed under the model era.
+    // W1.4 — artifact_materializer runs a deterministic bridge route and never reaches a model. It was
+    // missing from the key list while every one of its siblings was in it, so its samples were filed
+    // under the model era AND it was the one deterministic route eligible for concurrent batching.
     expect(resolveRouteEra({ id: "artifact_materializer", metadata: { artifactMaterializerDeterministic: true } } as unknown as WorkspaceNode)).toBe("artifactMaterializerDeterministic");
-    expect(DETERMINISTIC_ROUTE_METADATA_KEYS).not.toContain("artifactMaterializerDeterministic");
-    expect(ROUTE_ERA_METADATA_KEYS).toContain("artifactMaterializerDeterministic");
+    expect(DETERMINISTIC_ROUTE_METADATA_KEYS).toContain("artifactMaterializerDeterministic");
+    // Attribution and dispatch agree today; the alias exists so a future divergence is a visible edit.
+    expect(ROUTE_ERA_METADATA_KEYS).toEqual(DETERMINISTIC_ROUTE_METADATA_KEYS);
     // A composed workflow's shared tail carries BOTH its own stage key and the inherited DTC key.
     // Declaration order decides, so the same node resolves to the same era on every sample.
     expect(resolveRouteEra({ id: "publish_executor", metadata: { publishExecutorDeterministic: "execute", cloneStageDeterministic: "publish" } } as unknown as WorkspaceNode)).toBe("publishExecutorDeterministic:execute");
+  });
+});
+
+// ACCEPTANCE — W1.4 (2026-09-09). THE ONE DETERMINISTIC ROUTE THAT WAS CONCURRENT-BATCH ELIGIBLE.
+//
+// `artifactMaterializerDeterministic` was missing from DETERMINISTIC_ROUTE_METADATA_KEYS while every
+// sibling route's key was in it. That list has exactly two consumers and the materializer needed
+// both: it was PLANNED at the 120s model default rather than the 300s deterministic floor its own
+// serial dispatch already claims, and it was eligible for concurrent batching — where the claim is
+// stamped once at nodeTimeoutMs with claim=false, so a whole multi-slot adopt/create/poll walk ran
+// under a 120s + 90s deadline with no per-slot re-stamping, against the 390s PER SLOT the same node
+// gets serially. The tick then reclaimed a live materialization and re-dispatched it.
+//
+// The scenario is reachable, not theoretical: artifact_materializer's dependencies (artifact_plan,
+// contract_intelligence, brief_architect) and review_aggregator's (the review quartet) are disjoint
+// chains, so both become runnable in the same advance and the canonical prefix takes them together.
+// This test stages exactly that state against the REAL node graph.
+describe("W1.4 — artifact_materializer is dispatched like the deterministic route it is", () => {
+  it("is excluded from the concurrent batch even when it is ready beside an eligible sibling", async () => {
+    const { __test__ } = await import("../../../src/agent/workspace/executor.js");
+    const nodes = await __test__.resolveConductorNodes(undefined, "publishing_conductor");
+    const materializer = nodes.find((node) => node.id === "artifact_materializer")!;
+    const aggregator = nodes.find((node) => node.id === "review_aggregator")!;
+
+    // Complete everything except those two, so both are ready in one advance and the aggregator —
+    // earlier in canonical order — is the batch head.
+    const run = __test__.buildInitialRun({ projectId: "dr-lurie", input: {} } as never, nodes as never) as WorkflowExecutionRecord;
+    for (const state of run.nodes) {
+      if (state.nodeId === "artifact_materializer" || state.nodeId === "review_aggregator") continue;
+      state.status = "completed";
+      run.stageOutputs[state.nodeId] = { artifact: `${state.nodeId}.v1` };
+    }
+
+    const ready = __test__.findRunnableNodes(run, nodes).map((node: { id: string }) => node.id);
+    expect(ready, "the staged state must actually make both runnable, or this test proves nothing").toContain("review_aggregator");
+    expect(ready).toContain("artifact_materializer");
+    expect(ready[0]).toBe("review_aggregator");
+
+    // The batch is a canonical PREFIX, so before W1.4 it swept the materializer up with the head.
+    const batch = __test__.selectConcurrentBatch(run, nodes, aggregator, undefined).map((node: { id: string }) => node.id);
+    expect(batch).not.toContain("artifact_materializer");
+  });
+
+  it("is planned at the deterministic stage floor, the same window its own dispatch claims", async () => {
+    const { __test__ } = await import("../../../src/agent/workspace/executor.js");
+    const nodes = await __test__.resolveConductorNodes(undefined, "publishing_conductor");
+    const materializer = nodes.find((node) => node.id === "artifact_materializer")!;
+
+    // The node declares a 120s model timeout; as a deterministic route it claims the 300s floor. Those
+    // two disagreed about the same node — the planner said 120s while the dispatch stamped 300s.
+    expect(nodeTimeoutMs(materializer)).toBe(120_000);
+    expect(deterministicStageTimeoutMs(materializer)).toBe(DETERMINISTIC_STAGE_MIN_TIMEOUT_MS);
+    expect(declaresDeterministicRoute(materializer)).toBe(true);
   });
 });

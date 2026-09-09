@@ -91,7 +91,31 @@ export const DETERMINISTIC_ROUTE_METADATA_KEYS = [
   "cloneStageDeterministic",
   // C5: visual_identity's second node (visualStandardMaterialization.ts). Boolean-valued, like
   // artifact_materializer's own route flag.
-  "visualStandardMaterializerDeterministic"
+  "visualStandardMaterializerDeterministic",
+  // W1.4 (2026-09-09) — artifact_materializer, which had been missing from this list since it was
+  // written while every one of its siblings was in it.
+  //
+  // The list has exactly two consumers, and the materializer needed both:
+  //   - plannedNodeTimeoutMs: it was planned at the 120s MODEL default, not the 300s deterministic
+  //     stage floor its own serial dispatch already claims (executor.ts stamps
+  //     deterministicStageTimeoutMs for it explicitly, so the two disagreed about the same node).
+  //   - isConcurrentDispatchEligible: it was the ONE deterministic route eligible for concurrent
+  //     batching, and the batch path claims once at nodeTimeoutMs with claim=false — so a batched
+  //     materializer ran a whole multi-slot adopt/create/poll walk under a 120s + 90s deadline with
+  //     no per-slot re-stamping, while the same node dispatched serially gets 390s PER SLOT. The
+  //     tick then reclaimed a live materialization and re-dispatched it: recoverable (job ids are
+  //     persisted before polling and adoption is tried first, so no duplicate tenant artifact), but
+  //     it burns the node's maxPollDispatches budget and reads as a stall.
+  //
+  // Reachable in practice: artifact_materializer's dependencies (artifact_plan,
+  // contract_intelligence, brief_architect) and review_aggregator's (the review quartet) are disjoint
+  // chains, so both become runnable in the same advance and the canonical prefix takes them together.
+  //
+  // The cost is parallelism, not money: the materializer no longer overlaps with the review chain on
+  // runs where it would have. That is the same trade every other deterministic route already makes,
+  // and it is the trade the batch path's single-claim design requires — one claim stamped for four
+  // nodes at once cannot be re-stamped per phase by one of them without racing its siblings.
+  "artifactMaterializerDeterministic"
 ] as const;
 
 export const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
@@ -100,21 +124,13 @@ export const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
     return declared !== undefined && declared !== false;
   });
 
-// ATTRIBUTION KEYS ARE NOT DISPATCH KEYS, and conflating them was a bug in the first cut of W0.1.
-//
-// DETERMINISTIC_ROUTE_METADATA_KEYS above governs DISPATCH: it decides concurrent-batch eligibility
-// (isConcurrentDispatchEligible) and which timeout floor a claim gets. `artifact_materializer` is
-// deliberately NOT in it — it is concurrent-batch eligible today — and adding it there would change
-// dispatch order, which is an operator decision, not a side effect of a ledger fix.
-//
-// But the materializer IS a deterministic route: it runs adopt/create/poll over the tenant bridge and
-// never reaches a model. Resolving its samples to the MODEL era, which is what leaving it out of the
-// list above did, is exactly the mis-attribution routeEra exists to end — the same class as
-// artifact_plan's era-mixed p95, just pointing the other way. So attribution reads its own list.
-export const ROUTE_ERA_METADATA_KEYS = [
-  ...DETERMINISTIC_ROUTE_METADATA_KEYS,
-  "artifactMaterializerDeterministic"
-] as const;
+// Attribution and dispatch ask different questions — "what program produced this sample" and "how is
+// this node dispatched" — and they briefly had different answers: artifact_materializer runs a
+// deterministic bridge route but was missing from the dispatch list, so its samples were filed under
+// the MODEL era. That was fixed by adding it to the list above rather than by splitting the two, since
+// on inspection it belonged in both. This alias exists so the distinction stays visible: if a route
+// ever needs attributing without changing how it is dispatched, it goes here and not above.
+export const ROUTE_ERA_METADATA_KEYS = DETERMINISTIC_ROUTE_METADATA_KEYS;
 
 // W0.1 — WHICH PROGRAM a timing sample describes, as a stable string. A nodeId is not a program:
 // contract_intelligence was a model dispatch and is now a deterministic mapping, and publish_executor
