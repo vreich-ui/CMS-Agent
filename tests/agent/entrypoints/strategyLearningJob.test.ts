@@ -60,21 +60,21 @@ describe("runStrategyLearningJob", () => {
     const result = await runStrategyLearningJob({ env: CONFIGURED_ENV, dryRun: true, fetchImpl: jsonFetch(rows(), 200, urls), now: () => new Date("2026-08-31T06:00:00Z") });
     expect(result.status).toBe("dry_run");
     if (result.status === "dry_run") {
-      expect(result.window).toEqual({ projectId: "trk_demo", from: "2026-08-30", to: "2026-08-31" });
+      expect(result.window).toEqual({ projectId: "trk_demo", from: "2026-08-17", to: "2026-08-31" });
       expect(result.targetNodes).toEqual([...STRATEGY_PLAYBOOK_TARGET_NODES]);
     }
     expect(urls).toEqual([]);
     expect(await repositoryManager.getLearningRepository().listObservations()).toEqual([]);
   });
 
-  it("defaults to the previous whole UTC day and records the window's observations", async () => {
+  it("defaults to the trailing 14 whole UTC days and records the window's observations", async () => {
     const result = await runStrategyLearningJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-08-31T06:00:00Z") });
     expect(result.status).toBe("completed");
     if (result.status === "completed") {
-      expect(result.window).toEqual({ projectId: "trk_demo", from: "2026-08-30", to: "2026-08-31" });
+      expect(result.window).toEqual({ projectId: "trk_demo", from: "2026-08-17", to: "2026-08-31" });
       expect(result.result.rows).toBe(3);
       expect(result.result.observations).toHaveLength(1);
-      expect(result.result.observations[0]!.observation).toContain("window 2026-08-30..2026-08-31");
+      expect(result.result.observations[0]!.observation).toContain("window 2026-08-17..2026-08-31");
       // One window is never enough to teach a node anything.
       expect(result.result.promotion.promoted).toEqual([]);
     }
@@ -158,6 +158,17 @@ describe("runStrategyLearningJob", () => {
     const result = await runStrategyLearningJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch({ rows: [] }) });
     expect(result.status).toBe("completed");
     if (result.status === "completed") expect(result.result).toMatchObject({ rows: 0, observations: [], errors: [] });
+  });
+
+  // The window default is the other half of the 2026-09-09 fix: the sink already held the evidence
+  // (399 sessions), the job was just looking at two days of it, so every group came back at n=1..2.
+  it("resolves the default window to the trailing 14 whole UTC days, excluding today", async () => {
+    const result = await runStrategyLearningJob({ env: CONFIGURED_ENV, dryRun: true, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-09-09T04:02:00Z") });
+    expect(result.status).toBe("dry_run");
+    if (result.status === "dry_run") {
+      expect(result.window.from).toBe("2026-08-26");
+      expect(result.window.to).toBe("2026-09-09");
+    }
   });
 
   it("honors an explicit window", async () => {

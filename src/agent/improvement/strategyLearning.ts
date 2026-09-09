@@ -83,6 +83,24 @@ export type StrategyComparableKey = typeof STRATEGY_COMPARABLE_KEYS[number];
 export const STRATEGY_PROMOTION_MIN_N = 100;
 /** Consecutive windows a finding must hold the same direction across before it becomes a lesson. */
 export const STRATEGY_PROMOTION_MIN_WINDOWS = 2;
+/**
+ * The sink's own `n` a group needs before its finding is written down AT ALL.
+ *
+ * Promotion has always had a bar. OBSERVATION had none, and the first live run made that asymmetry
+ * look like what it is. On 2026-09-09, against a 2-day window, this loop recorded seven observations
+ * at n=1..2 — among them "intent `reassure` (strategy `recommendation`): p75 dwell 6.5x site median
+ * (n=1)". Nothing was promoted; STRATEGY_PROMOTION_MIN_N held exactly as designed. But
+ * `strategy-review` — the one output in this system addressed to a HUMAN — reads OBSERVATIONS, not
+ * promotions. So a single session's dwell time was on its way into a person's weekly thread wearing
+ * the same clothes as a real finding.
+ *
+ * Deliberately far BELOW STRATEGY_PROMOTION_MIN_N rather than equal to it. The two bars answer
+ * different questions: an observation is a note that something might be true and is allowed to stay
+ * provisional, while a playbook item changes what every future piece is written to. Equalising them
+ * would throw away the provisional middle this loop needs in order to ever accumulate two consecutive
+ * windows of anything. 10 is the point below which a p75 ratio is arithmetic performed on nothing.
+ */
+export const STRATEGY_OBSERVATION_MIN_N = 10;
 /** A group's metric is materially ABOVE the site-wide figure at or over this ratio, and materially
  * BELOW it at or under STRATEGY_MATERIAL_BELOW_RATIO. Plain "different from the middle" is a coin
  * flip — half of everything is — so a finding worth writing down needs a margin. The low side mirrors
@@ -574,6 +592,14 @@ export type StrategyLearningResult = {
   rowsLabelled: number;
   groups: number;
   observations: Array<{ id: string; strategy?: string; intent?: string; n: number; findings: number; observation: string }>;
+  /**
+   * Groups that HAD a material finding and were not written down, because their `n` was under
+   * STRATEGY_OBSERVATION_MIN_N. Reported rather than dropped silently: a thin window and a window
+   * with nothing to say produce the same empty `observations` array, and an operator reading
+   * "0 observations" needs to be able to tell "nothing happened" from "seven things happened to
+   * too few people to be worth writing down yet".
+   */
+  withheld: Array<{ strategy?: string; intent?: string; n: number; findings: number }>;
   promotion: StrategyPromotionOutcome;
   /** Set when the pull did not happen at all and that is NOT a failure: the sink is not configured on
    * this deployment, or its `by=strategy` grain has not been migrated yet (503). */
@@ -581,7 +607,7 @@ export type StrategyLearningResult = {
   errors: Array<{ scope?: string; error: string }>;
 };
 
-const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], promotion: { promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
+const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], withheld: [], promotion: { promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
 
 /** The sink's `by=strategy` grain answers 503 until kugel-data serves it (migration 012, 2026-09).
  * That is a grain that does not exist on this deployment yet, not a failure — the same no-op an
@@ -632,6 +658,13 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
   for (const group of groups) {
     const findings = strategyFindings(group, baseline);
     if (!findings.length) continue;
+    // The n bar is applied BEFORE the write, not as a filter on the way out: the store is what
+    // `strategy-review` reads, so anything that reaches it is something a human may be shown. A
+    // group held back here is counted (see `withheld`) and never recorded.
+    if (group.n < STRATEGY_OBSERVATION_MIN_N) {
+      result.withheld.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}), n: group.n, findings: findings.length });
+      continue;
+    }
     const observation = renderStrategyObservation(group, findings, group.n, window);
     try {
       const saved = await deps.learningRepository.recordObservation(observation, {
