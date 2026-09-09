@@ -120,19 +120,25 @@ export async function getEditorialVoice(params: VoicePrefetchParams, deps: Voice
   const cache = deps.cache ?? conductorCache;
   const cacheKey = `voice:${params.projectId}`;
   return cache.getOrLoad(params.runId, cacheKey, async (): Promise<VoicePrefetchResult> => {
-    const fallback = getProjectHooks(params.projectId)?.editorialVoiceFallback;
+    // G6 — RECORD FIRST, HOOK SECOND. The hook property is how the two code tenants (dr-lurie,
+    // fernwell) have always carried their seeded voice and still do; the record field is the only
+    // place a DATA-defined tenant can carry one, which is why a minted tenant used to have none at
+    // all. A project holding both prefers its record: the record is editable without a deploy.
+    const hookFallback = getProjectHooks(params.projectId)?.editorialVoiceFallback;
 
     const config = await deps.projectRepository.get(params.projectId);
+    // An unknown projectId has no record to read, so the hook is the only fallback available here.
     if (!config) {
-      if (!fallback) return { source: "unavailable" };
+      if (!hookFallback) return { source: "unavailable" };
       return {
-        voice: fallback,
+        voice: hookFallback,
         source: "fallback",
         warningCode: "voice_project_unresolved",
         warning: `Unknown projectId: ${params.projectId}; falling back to the seeded editorial voice.`
       };
     }
 
+    const fallback = config.editorialVoiceFallback ?? hookFallback;
     const voiceObjectId = params.requestedVoiceObjectId ?? config.objectDialect?.voiceObjectId;
     if (!voiceObjectId) {
       // No live-voice convention declared for this project at all — a project this genuinely does

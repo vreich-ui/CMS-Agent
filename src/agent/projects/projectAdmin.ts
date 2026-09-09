@@ -27,6 +27,7 @@
 // Code-defined default projects (dr-lurie) are seeded/migrated from source on every read, so
 // deleting them would only resurrect them — delete refuses with a pointer to status="disabled".
 
+import type { EditorialVoiceBody } from "./drLurie/editorialVoice.js";
 import { z } from "zod";
 import { isSecretVersionRef } from "./secretManager.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
@@ -208,6 +209,13 @@ export type ProjectCreateInput = Omit<z.infer<typeof projectCreateSchema>, "capt
   // Trusted in-process genesis identity. Deliberately absent from projectCreateSchema so an MCP
   // project.create call cannot hand-mark a record as a generated client site.
   clientSiteBinding?: ClientSiteBinding;
+  // G5 — the profile version a genesis-minted tenant is born at, so its first migration pass is
+  // already a no-op. Same trust boundary as clientSiteBinding: an MCP caller declaring itself
+  // current would opt out of the very migration the field exists to enable.
+  definitionVersion?: number;
+  // G6 — the provisional editorial voice genesis derives from the tenant's niche and audience. Not
+  // on the public schema: a voice is content, and the path for content is the tenant's admin chat.
+  editorialVoiceFallback?: EditorialVoiceBody;
 };
 export type ProjectUpdateInput = z.infer<typeof projectUpdateSchema>;
 
@@ -289,6 +297,8 @@ export async function createProject(repository: ProjectRepository, input: Projec
     allowedTools: [...input.allowedTools],
     ...(input.defaultToolPolicy ? { defaultToolPolicy: input.defaultToolPolicy } : {}),
     ...(input.toolPolicies ? { toolPolicies: { ...input.toolPolicies } } : {}),
+    ...(input.definitionVersion !== undefined ? { definitionVersion: input.definitionVersion } : {}),
+    ...(input.editorialVoiceFallback ? { editorialVoiceFallback: structuredClone(input.editorialVoiceFallback) } : {}),
     contentContract: { ...input.contentContract },
     capturePolicy: cloneCapturePolicy(input.capturePolicy ?? DEFAULT_PROJECT_CAPTURE_POLICY),
     publishingPolicy: { ...DEFAULT_PUBLISHING_POLICY },

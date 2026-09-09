@@ -255,3 +255,121 @@ export async function accessSecretValue(ref: string, deps: SecretAccessDeps = {}
   secretCache.set(ref, { value, expiresAt: now() + SECRET_CACHE_TTL_MS });
   return { ok: true, value };
 }
+
+// ---------------------------------------------------------------------------------------------
+// T12.22 / G1 — the WRITE half. Until this existed, minting a tenant produced a token nobody could
+// take custody of: create-site.mjs auto-generates the site's MCP_HTTP_AUTH_TOKEN, pushes it to
+// Netlify, and deliberately never prints it ("values never printed"). CMS-Agent therefore could not
+// learn the value it must present to that tenant, so `deploy_side_mcp_env` was a human step on every
+// single birth — a person reading a secret out of one console and pasting it into another.
+//
+// The inversion this closes: CMS-Agent MINTS the value instead of receiving it. It already writes
+// the tenant's Netlify env vars (NetlifyGenesisClient.setEnvVar), so with a Secret Manager write it
+// owns both ends of one secret and no human is in the path.
+//
+// WHY THE REFERENCE POINTS AT `latest`. The registry stores .../versions/latest, not the pinned
+// version number this call returns. A rotation then takes effect on its own, bounded by
+// SECRET_CACHE_TTL_MS, with no registry write and no redeploy — which is the whole reason the read
+// path resolves ENV FIRST, RECORD SECOND. The pinned name is still returned for the audit ledger,
+// because "which version did birth create" is a real forensic question and `latest` cannot answer it.
+//
+// This does NOT widen what a caller can reach. The write needs roles/secretmanager.admin (or
+// secretVersionAdder + secrets.create) on the PLANE'S OWN identity — one IAM decision, made once,
+// outside this system, revocable without touching a line of code. A plane without it gets a refusal
+// naming the permission, and genesis degrades to the human checklist exactly as it does today.
+const SECRET_MANAGER_BASE = "https://secretmanager.googleapis.com/v1/";
+
+/** Secret ids are `[A-Za-z0-9_-]{1,255}` per the API. Pinned here so a slug can never smuggle a path
+ *  segment, a query, or a traversal into the resource name we are about to construct. */
+export const SECRET_ID_RE = /^[A-Za-z0-9_-]{1,255}$/;
+/** Same project-id shape SECRET_VERSION_REF_RE already enforces on the read side. */
+export const GCP_PROJECT_ID_RE = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+
+export type SecretWriteResult =
+  | { ok: true; ref: string; versionName: string; secretCreated: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Create (if absent) a secret and add a version holding `value`. Idempotent on the SECRET; every
+ * call adds a new VERSION, which is what makes this safe to re-run — a re-mint supersedes rather
+ * than collides.
+ *
+ * Returns the `.../versions/latest` ref to store on the registry record. Never returns, logs or
+ * quotes the value: like every failure string in this module, the errors below name reachability or
+ * permission only.
+ */
+export async function createSecretVersion(
+  input: { projectId: string; secretId: string; value: string },
+  deps: SecretAccessDeps = {}
+): Promise<SecretWriteResult> {
+  const { projectId, secretId, value } = input;
+  if (!GCP_PROJECT_ID_RE.test(projectId)) {
+    return { ok: false, error: `"${projectId}" is not a GCP project id (expected 6-30 chars, lowercase letters, digits and hyphens, starting with a letter).` };
+  }
+  if (!SECRET_ID_RE.test(secretId)) {
+    return { ok: false, error: `"${secretId}" is not a Secret Manager secret id (expected 1-255 chars of A-Z a-z 0-9 _ -).` };
+  }
+  // An empty secret is the one content check worth making: the read path already refuses an empty
+  // stored version at runtime, and creating one here would defer that failure to first use.
+  if (!value.trim()) return { ok: false, error: "refusing to store an empty secret value." };
+
+  const now = deps.now ?? Date.now;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const identity = await planeAccessToken(fetchImpl, now, deps.env ?? process.env, !deps.fetchImpl);
+  if ("error" in identity) {
+    return {
+      ok: false,
+      error: `could not obtain this plane's Google identity (${identity.error}) — every mechanism tried is listed, in the order it was tried.`
+    };
+  }
+  const headers = { authorization: `Bearer ${identity.token}`, "content-type": "application/json" };
+  const parent = `projects/${projectId}`;
+
+  // 1. Create the secret. ALREADY_EXISTS (409) is the normal path on a re-mint and is not an error.
+  let secretCreated = false;
+  let createResponse: Response;
+  try {
+    createResponse = await fetchImpl(`${SECRET_MANAGER_BASE}${parent}/secrets?secretId=${encodeURIComponent(secretId)}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ replication: { automatic: {} } })
+    });
+  } catch {
+    return { ok: false, error: "Secret Manager was unreachable from this plane." };
+  }
+  if (createResponse.ok) {
+    secretCreated = true;
+  } else if (createResponse.status !== 409) {
+    return {
+      ok: false,
+      error: `Secret Manager refused to create secret "${secretId}" (HTTP ${createResponse.status}) — confirm this plane's service account holds secretmanager.secrets.create on ${parent}.`
+    };
+  }
+
+  // 2. Add the version carrying the value.
+  let addResponse: Response;
+  try {
+    addResponse = await fetchImpl(`${SECRET_MANAGER_BASE}${parent}/secrets/${encodeURIComponent(secretId)}:addVersion`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ payload: { data: Buffer.from(value, "utf8").toString("base64") } })
+    });
+  } catch {
+    return { ok: false, error: "Secret Manager was unreachable from this plane while adding the version." };
+  }
+  if (!addResponse.ok) {
+    return {
+      ok: false,
+      error: `Secret Manager refused the version write on "${secretId}" (HTTP ${addResponse.status}) — confirm this plane's service account holds roles/secretmanager.secretVersionAdder on that secret.`
+    };
+  }
+  const body = (await readJson(addResponse)) as { name?: unknown } | undefined;
+  const versionName = typeof body?.name === "string" ? body.name : "";
+  if (!versionName) return { ok: false, error: "Secret Manager accepted the version write but returned no version name." };
+
+  const ref = `${parent}/secrets/${secretId}/versions/latest`;
+  // A freshly written value must not be shadowed by a stale cached read of the same ref, which is
+  // exactly what happens on a re-mint inside one process (the reconciler, or two genesis runs).
+  secretCache.delete(ref);
+  return { ok: true, ref, versionName, secretCreated };
+}

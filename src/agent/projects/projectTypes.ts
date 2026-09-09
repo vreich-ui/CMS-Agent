@@ -2,6 +2,7 @@
 // against (initialize, tools/list, contract discovery, dry validation). Publishing execution is NOT
 // part of this registry and remains disabled until a future explicit PUBLISH gate is implemented.
 
+import type { EditorialVoiceBody } from "./drLurie/editorialVoice.js";
 export const projectAuthModes = ["none", "bearer_env"] as const;
 export type ProjectAuthMode = typeof projectAuthModes[number];
 
@@ -224,6 +225,18 @@ export type ProjectConnectionConfig = {
   // through the object substrate — a publish hook that needs one and finds none must refuse rather
   // than substitute a default.
   objectDialect?: ProjectObjectDialect;
+  // G6 — the tenant's editorial voice of last resort, ON THE RECORD.
+  //
+  // This used to exist only as a `ProjectHooks.editorialVoiceFallback` property, which meant only a
+  // tenant with a CODE MODULE could have one: dr-lurie and fernwell each hand-write a
+  // *_VOICE_FALLBACK constant, and every genesis-minted tenant ran voice-less because there was
+  // nowhere for a data-defined tenant to put one. Resolution is RECORD FIRST, HOOK SECOND
+  // (voicePrefetch.ts), so the two code tenants keep resolving to exactly the body they always did.
+  //
+  // It is a FALLBACK, never the decided voice: getEditorialVoice reports it as `source: "fallback"`
+  // with `warningCode: "voice_object_unconfigured"`. A voice somebody actually authored is a live
+  // `editorial_voice` object addressed by objectDialect.voiceObjectId, and outranks this.
+  editorialVoiceFallback?: EditorialVoiceBody;
   publishingPolicy: ProjectPublishingPolicy;
   status: ProjectStatus;
 };
