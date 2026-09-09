@@ -5,7 +5,7 @@ import { getNodeRunner } from "../execution/runnerRegistry.js";
 import type { ExecutionMode } from "../execution/executionContext.js";
 import { validateOutput } from "../execution/outputValidator.js";
 import { recordModelUsage } from "../observability/modelUsage.js";
-import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
+import { recordNodeTimingCompletion, NODE_EXECUTE_ROUTE_ERA, type NodeTimingOutcome } from "./nodeTimings.js";
 import { nextAttemptNumber } from "./nodeAttemptHistory.js";
 import { resolveSkillsForNode } from "../skills/skillResolver.js";
 import { resolveEffectiveToolsForNode } from "../tools/toolResolver.js";
@@ -266,7 +266,7 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   // executeRunnableNode is the first); a ledger that only saw conductor-dispatched nodes would miss
   // every independent single-node execution entirely. Best-effort, same posture as executor.ts's own
   // hook: a timing-repository failure must never fail an otherwise-successful node.execute call.
-  await recordNodeTimingCompletion({ runId, workflowId: run.workflowId, nodeId: node.id, durationMs: state.durationMs ?? 0, outcome: state.status as NodeTimingOutcome }).catch(() => undefined);
+  await recordNodeTimingCompletion({ runId, workflowId: run.workflowId, nodeId: node.id, durationMs: state.durationMs ?? 0, outcome: state.status as NodeTimingOutcome, projectId: run.projectId, executionMode: run.executionMode, routeEra: NODE_EXECUTE_ROUTE_ERA, attempt: nextAttemptNumber(state) }).catch(() => undefined);
   // A4 -- the runner's own trace (imageRefs resolution counts/warnings, provider response id, etc.)
   // is surfaced here, one level up from `execution`, so a caller of node.execute/executeNode can
   // see WHY a node behaved the way it did (e.g. every imageRef silently 401ing) without scraping

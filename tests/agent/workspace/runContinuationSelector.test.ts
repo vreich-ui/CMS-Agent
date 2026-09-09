@@ -3,6 +3,7 @@ import { STALL_MARGIN_MS } from "../../../src/agent/workspace/executor.js";
 import {
   CONTINUATION_TICK_CRON,
   CONTINUATION_TICK_INTERVAL_MS,
+  DEPLOYED_TICK_DEFAULTS,
   continuationTickEnabled,
   decideRunContinuation,
   runContinuationTick,
@@ -99,9 +100,15 @@ describe("T5 continuation selector — which runs a scheduled tick re-enters", (
     for (const verdict of [...reenter, ...skipped]) expect(verdict.reason.length).toBeGreaterThan(0);
   });
 
-  it("publishes a one-minute schedule, the finest granularity Netlify cron offers", () => {
-    expect(CONTINUATION_TICK_CRON).toBe("* * * * *");
-    expect(CONTINUATION_TICK_INTERVAL_MS).toBe(60_000);
+  // W1.2 — these two constants have no runtime consumer; they exist so a reader knows the cadence,
+  // which makes a value that does not match the deployed schedule simply false. They said every
+  // minute while Cloud Scheduler had been running every two, and the stall analysis reasoned from
+  // them. They now state the deployed cadence, and scripts/twoPlaneDrift.ts asserts it against
+  // deploy-continuation-tick-schedule.sh so they cannot drift apart again unnoticed.
+  it("publishes the cadence the tick is actually deployed with", () => {
+    expect(CONTINUATION_TICK_CRON).toBe(DEPLOYED_TICK_DEFAULTS.cron);
+    expect(CONTINUATION_TICK_CRON).toBe("*/2 * * * *");
+    expect(CONTINUATION_TICK_INTERVAL_MS).toBe(120_000);
   });
 });
 

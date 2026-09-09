@@ -722,3 +722,43 @@ describe("artifact_materializer — the deterministic materialization loop (W8.3
     expect(argBlocked.calls.some((call) => call.tool === CREATE_TOOL && call.args.slot === "brochure")).toBe(false);
   });
 });
+
+// ACCEPTANCE — W1.1 (static-guesses brief, 2026-09-09). PER SLOT, NOT PER DISPATCH.
+//
+// This node's own header states the shape: "PER SLOT, PER DISPATCH: adopt, then create, then poll".
+// For a multi-slot spec that walks several bounded cycles inside ONE dispatch, under ONE claim sized
+// for the whole thing — which is precisely the shape that made article_body's claim describe only its
+// first phase and got a live node re-dispatched as a dead driver. The executor now hands this module
+// a phase claim; it re-stamps once before the tenant work begins and once per slot, so the claim
+// tracks the slot actually in flight rather than the dispatch as a whole.
+describe("W1.1 — the materializer re-stamps its dispatch claim per slot", () => {
+  it("claims `plan` once and `slot` once per non-terminal slot", async () => {
+    const phases: string[] = [];
+    const deps = bridge({ pollsToFinish: 1 });
+    const outcome = await runArtifactMaterialization(
+      { run: runFixture(FOUR_SLOTS), node },
+      { projectRepository, callTool: deps.callTool, onPhase: async (phase) => { phases.push(phase); } }
+    );
+
+    expect(outcome.kind).not.toBe("refused");
+    // The planning half is claimed exactly once — the spec read and retry reconciliation happen
+    // before any tenant call and must not spend the window those calls need.
+    expect(phases.filter((phase) => phase === "plan")).toHaveLength(1);
+    expect(phases[0]).toBe("plan");
+    // ...and every slot the dispatch actually worked gets its own window. More than one is the whole
+    // point: one claim for four slots is the defect.
+    expect(phases.filter((phase) => phase === "slot").length).toBeGreaterThan(1);
+  });
+
+  it("does not claim anything for work it never does", async () => {
+    // A spec with no slots returns before the bridge is ever built. A claim fired here would be a
+    // window opened for work that is not happening, which is the opposite failure to the one above.
+    const phases: string[] = [];
+    const deps = bridge({ pollsToFinish: 1 });
+    await runArtifactMaterialization(
+      { run: runFixture([]), node },
+      { projectRepository, callTool: deps.callTool, onPhase: async (phase) => { phases.push(phase); } }
+    );
+    expect(phases).toEqual([]);
+  });
+});

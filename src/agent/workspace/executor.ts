@@ -56,6 +56,7 @@ import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried, nextA
 import { toBlockage } from "../execution/blockage.js";
 import { decideNodeRetry, isAwaitingRetryBackoff, nextRetryAt, scheduleNodeRetry } from "./nodeRetryPolicy.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
+import { ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS, declaresDeterministicRoute, deterministicStageTimeoutMs, nodeTimeoutMs, phaseTimeoutMsFor, resolveRouteEra, STALL_MARGIN_MS, type PhaseClaim } from "./routeRegistry.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
 
 const WORKFLOW_ID = "publishing_conductor";
@@ -195,17 +196,11 @@ export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
 // "blocked" — which worked only because "blocked" was already in this set, and cost the ability to tell
 // an operator pause apart from a publish hold.
 const MAX_SAVE_RETRIES = 5;
-// Grace period past a dispatched node's own timeout before the dispatch is considered dead. The
-// runner's Promise.race timeout ends a live node at timeoutMs, so a "running" claim older than
-// timeoutMs + this margin means the driver process was killed mid-node (the ~300s serverless
-// ceiling), not that work is still happening.
-export const STALL_MARGIN_MS = 90_000;
-// T3 — the wall-clock the engine-owned VALIDATE phase of the article_body loop can legitimately
-// occupy after the model has already returned: one validator call per revalidation cycle plus the
-// initial one, at the 15s per-call abort publishPayload.ts applies (OBJECT_VALIDATE_TIMEOUT_MS),
-// plus one call's margin for the loop's own bookkeeping. The REVISION phase is a full second model
-// dispatch and re-claims with nodeTimeoutMs instead — see reclaimForPhase at the loop.
-export const ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS = (MAX_ENGINE_REVALIDATION_CYCLES + 2) * 15_000;
+// W1.1 — STALL_MARGIN_MS, the node/stage timeout resolvers, the deterministic-route metadata keys and
+// the per-phase windows all moved to routeRegistry.ts, where they sit beside the phase manifests that
+// consume them. Re-exported here because this module has been their import site since they existed
+// and every caller (tests included) names them through it.
+export { STALL_MARGIN_MS, ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS, DETERMINISTIC_STAGE_MIN_TIMEOUT_MS, resolveRouteEra } from "./routeRegistry.js";
 const now = () => new Date().toISOString();
 const makeRunId = () => `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 // R-9: system-generated, one per run, distinct from publish_payload's human-authored requestId
@@ -508,7 +503,11 @@ const stateById = (run: WorkflowExecutionRecord) => new Map(run.nodes.map((node)
 // the posture prepared.commit's own usage/stage-output side effects already take (both call sites
 // wrap this in .catch(() => undefined)).
 const TERMINAL_TIMING_OUTCOMES = new Set<ExecutionStatus>(["completed", "failed", "blocked", "cancelled", "skipped"]);
-async function recordNodeTiming(run: WorkflowExecutionRecord, nodeId: string): Promise<void> {
+// W0.1 — the attribution every sample now carries. `node` is optional only because two of the three
+// call sites below reach this from a loop that already holds the node and one does not; when it is
+// absent the sample records no routeEra and lands in the unattributed bucket, which is the same place
+// every pre-W0.1 record already sits. Nothing here can fail a run: the caller wraps it.
+async function recordNodeTiming(run: WorkflowExecutionRecord, nodeId: string, node?: WorkspaceNode): Promise<void> {
   const state = stateById(run).get(nodeId);
   if (!state || state.durationMs === undefined || !TERMINAL_TIMING_OUTCOMES.has(state.status)) return;
   await recordNodeTimingCompletion({
@@ -516,9 +515,26 @@ async function recordNodeTiming(run: WorkflowExecutionRecord, nodeId: string): P
     workflowId: run.workflowId,
     nodeId,
     durationMs: state.durationMs,
-    outcome: state.status as NodeTimingOutcome
+    outcome: state.status as NodeTimingOutcome,
+    // The attempt's own window: state.startedAt is re-set on every dispatch (scheduleNodeRetry
+    // deletes it and the next dispatch stamps a new one), so this is always THIS attempt's start.
+    ...(state.startedAt ? { attemptStartedAt: state.startedAt } : {}),
+    ...timingAttribution(run, node),
+    // From errorHistory, not from state.retry: a retry that SUCCEEDS clears state.retry, so reading
+    // it there would leave the surviving attempt — the only one that used to be recorded at all —
+    // as the one sample with no attempt number on it.
+    attempt: nextAttemptNumber(state)
   });
 }
+
+// The (projectId, executionMode, routeEra) triple, in one place so no writer can attribute a sample
+// differently from another. routeEra is resolved lazily through resolveRouteEra (declared below with
+// the route metadata keys it reads).
+const timingAttribution = (run: WorkflowExecutionRecord, node?: WorkspaceNode): { projectId?: string; executionMode?: string; routeEra?: string } => ({
+  ...(run.projectId ? { projectId: run.projectId } : {}),
+  executionMode: (run.executionMode ?? DEFAULT_EXECUTION_MODE) as string,
+  ...(node ? { routeEra: resolveRouteEra(node) } : {})
+});
 
 // W4 — DEPENDENCY SATISFACTION, WITH SKIPS.
 //
@@ -798,23 +814,6 @@ const stampDispatch = (state: NodeExecutionState, dispatchedAt: string, timeoutM
   state.dispatch = { ...(state.dispatch ?? {}), dispatchedAt, timeoutMs, driver, projectEndpointConfigured };
   state.lastDispatch = { dispatchedAt, driver, projectEndpointConfigured };
 };
-
-// The dispatched node's effective execution timeout — the same resolution the runner applies
-// (modelConfig/executionConfig.timeout, else the 120s default) — so the dispatch claim written to the
-// run record describes exactly how long a live execution could possibly take.
-const nodeTimeoutMs = (node: WorkspaceNode): number => {
-  const merged = { ...(node.modelConfig ?? {}), ...(node.executionConfig ?? {}) } as Record<string, unknown>;
-  const timeout = merged.timeout;
-  return typeof timeout === "number" && Number.isFinite(timeout) ? timeout : 120_000;
-};
-
-// T14.4 — a deterministic capture/clone stage is NOT a fast local computation. capture_emit_live
-// probes and ingests every asset on the target site and then walks creates/reuses over the project
-// MCP; on zilberman that is 100-200s of real network work. The model default (120_000) would let the
-// stall assessor call such a stage dead while it is still working, so the claim these stages publish
-// gets a floor. A node that configures a LONGER timeout keeps it.
-const DETERMINISTIC_STAGE_MIN_TIMEOUT_MS = 300_000;
-const deterministicStageTimeoutMs = (node: WorkspaceNode): number => Math.max(nodeTimeoutMs(node), DETERMINISTIC_STAGE_MIN_TIMEOUT_MS);
 
 const nodeBudgetUsdOf = (node: WorkspaceNode): number | undefined => {
   const merged = { ...(node.modelConfig ?? {}), ...(node.executionConfig ?? {}) } as Record<string, unknown>;
@@ -1144,7 +1143,7 @@ async function recordTerminationObservations(run: WorkflowExecutionRecord, nodes
     prepared.run.currentNodeId = currentNodeId;
     const saved = await store.saveRun(prepared.run);
     await prepared.commit?.().catch(() => undefined);
-    await recordNodeTiming(saved, node.id).catch(() => undefined);
+    await recordNodeTiming(saved, node.id, node).catch(() => undefined);
     return saved;
   } catch {
     // Best-effort: recording observations must never fail the run or mask its real terminal status.
@@ -1179,28 +1178,8 @@ export const CONCURRENT_DISPATCH_LIMIT = 4;
 // nothing; several of them read stage outputs OUTSIDE their own dependsOn (publish_payload reads
 // article_body, publication_controller reads its whole upstream closure), which is exactly what an
 // interleaved schedule would perturb; and one of them can publish.
-const DETERMINISTIC_ROUTE_METADATA_KEYS = [
-  "contractIntelligenceDeterministic",
-  "placementResolverDeterministic",
-  "publishPayloadDeterministic",
-  "publicationControllerDeterministic",
-  "publishExecutorDeterministic",
-  "releaseExecutorDeterministic",
-  "learningRecorderDeterministic",
-  // T12.9: the capture_conductor stages (captureConductorRoutes.ts). String-valued ("crawl", ...),
-  // which declaresDeterministicRoute below already treats as declared.
-  "captureStageDeterministic",
-  // T13.1: the clone_conductor stages (cloneConductorRoutes.ts). Same string-valued declaration.
-  "cloneStageDeterministic",
-  // C5: visual_identity's second node (visualStandardMaterialization.ts). Boolean-valued, like
-  // artifact_materializer's own route flag.
-  "visualStandardMaterializerDeterministic"
-] as const;
-const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
-  DETERMINISTIC_ROUTE_METADATA_KEYS.some((key) => {
-    const declared = node.metadata?.[key];
-    return declared !== undefined && declared !== false;
-  });
+// W1.1 — DETERMINISTIC_ROUTE_METADATA_KEYS, declaresDeterministicRoute and resolveRouteEra now live
+// in routeRegistry.ts alongside the phase manifests keyed off the same route identity.
 
 // T1 (2026-08-26) — WORKFLOW-OWNED STAGE ROUTES, and why they must outrank the shared tail's own.
 //
@@ -1398,7 +1377,7 @@ async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: Work
   // sequence the serial path uses: usage/stage-output mirror first, then T6's timing ledger, which lands
   // exactly one record per node completion because it reads the terminal state off the SAVED record.
   for (const commit of commits) await commit().catch(() => undefined);
-  for (const node of batch) await recordNodeTiming(saved, node.id).catch(() => undefined);
+  for (const node of batch) await recordNodeTiming(saved, node.id, node).catch(() => undefined);
   if (rejection !== undefined) throw rejection;
   return saved;
 }
@@ -1432,7 +1411,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     } else if (HALTED_EXECUTION_STATUSES.has(run.status)) return run;
 
     const nodes = await resolveConductorNodes(options.workspaceRepository, run.workflowId);
-    // Dispatch-claim bookkeeping (the ~300s silent-death fix). A node persisted as "running" either
+    // Dispatch-claim bookkeeping (the silent-death fix). A node persisted as "running" either
     // IS running somewhere (another driver, within its claim window) — in which case advancing here
     // would double-dispatch it — or its driver died mid-node and the claim has expired, in which case
     // the node is reclaimed to queued so the run is resumable instead of stuck "running" forever.
@@ -1440,6 +1419,32 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     if (inFlight) {
       const deadline = Date.parse(inFlight.dispatch!.dispatchedAt) + inFlight.dispatch!.timeoutMs + STALL_MARGIN_MS;
       if (Date.now() <= deadline) return run;
+      // W0.3 — RECORD THE RECLAIM BEFORE ERASING THE EVIDENCE OF IT.
+      //
+      // The seven deletes below are correct — a requeued node must not carry a half-finished
+      // attempt's state — but between them they destroy every fact about the attempt that just died:
+      // startedAt, durationMs and the claim all go, so the timing ledger never saw a single one of
+      // these. The result was that the ONE failure class this bookkeeping exists to handle was the
+      // one class invisible in the history of it, and a p95 computed from that history described only
+      // the dispatches that survived. The sample is captured here, from the live values, and
+      // recorded with terminatedBy:"reclaim" so it can be read as "this dispatch was taken back",
+      // never mistaken for a node that failed on its own merits.
+      //
+      // Recorded before the run is saved rather than after: the alternative is threading a deferred
+      // observation through every branch below, and a reclaim only ever happens on a claim that has
+      // already expired — so the worst case of a later CAS conflict is one extra sample describing a
+      // dispatch that really did die, which is the direction this ledger should err in.
+      //
+      // `attempt` here is the attempt this dispatch WAS, not a new one. A reclaim does not advance the
+      // retry counter (it deletes state but leaves state.retry and errorHistory alone, deliberately —
+      // the node goes back to queued to be dispatched again, and re-dispatching is not a new attempt
+      // in the orchestrator's accounting). So a reclaimed attempt and the dispatch that eventually
+      // finishes it share an attempt number, which is accurate: attempt N was dispatched twice because
+      // the first dispatch's driver died. `terminatedBy:"reclaim"` is what tells the two apart.
+      const reclaimed = {
+        startedAt: inFlight.startedAt ?? inFlight.dispatch!.dispatchedAt,
+        attempt: (inFlight.retry?.attempt ?? 0) + 1
+      };
       inFlight.status = "queued";
       delete inFlight.startedAt;
       delete inFlight.completedAt;
@@ -1450,6 +1455,17 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       delete inFlight.dispatch;
       inFlight.warnings = [...(inFlight.warnings ?? []), "stale_dispatch_reclaimed"];
       run.updatedAt = now();
+      await recordNodeTimingCompletion({
+        runId: run.runId,
+        workflowId: run.workflowId,
+        nodeId: inFlight.nodeId,
+        durationMs: Math.max(0, Date.now() - Date.parse(reclaimed.startedAt)),
+        outcome: "failed",
+        terminatedBy: "reclaim",
+        attempt: reclaimed.attempt,
+        attemptStartedAt: reclaimed.startedAt,
+        ...timingAttribution(run, nodes.find((node) => node.id === inFlight.nodeId))
+      }).catch(() => undefined);
     }
     const nextNode = findNextRunnableNode(run, nodes);
     try {
@@ -1563,7 +1579,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // T6 (Wave 3, ships dark): the node timing ledger's one hook into the main dispatch loop. Same
       // non-authoritative posture as the line above — recordNodeTiming is itself best-effort internally
       // and this call is not awaited-and-thrown on failure either.
-      await recordNodeTiming(saved, nextNode.id).catch(() => undefined);
+      await recordNodeTiming(saved, nextNode.id, nextNode).catch(() => undefined);
       // F4: the most common way a run reaches a learning-relevant terminal state — blocked (almost
       // always the publish-risk-without-approval gate above) or failed — happens right here, not in
       // the no-more-runnable-nodes branch reflection already covers.
@@ -1616,6 +1632,49 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   let run = initialRun;
   let state = stateById(run).get(nextNode.id) as NodeExecutionState;
   const startedAt = now();
+  // W1.1 — THE PHASE CLAIM, generalised.
+  //
+  // `reclaimForPhase` used to be a closure declared at the article_body loop, with that one route's
+  // phase timeouts written into its call sites. Every other multi-phase route — capture/clone stages,
+  // the artifact materializer's per-slot walk, the release executor's call-then-poll — kept the
+  // single-claim shape that caused the incident, and there was no place to see which routes had the
+  // problem. This is the same mechanism, taking its windows from routeRegistry's manifests, handed to
+  // any route that has phases.
+  //
+  // FAIL-OPEN, exactly as the closure was. A route id the registry does not know re-stamps nothing
+  // and the node keeps its original claim; a save conflict means another driver already moved the run,
+  // so the phase proceeds under the previous claim and the failure is NAMED rather than the window
+  // being silently widened or silently lost.
+  const restampedPhases = new Set<string>();
+  // ONE FAILURE ENDS RE-STAMPING FOR THIS DISPATCH. A failed save means another driver already moved
+  // the run, so this driver's `run` is stale and every later save will conflict too. Before phases
+  // generalised, a route re-stamped at most twice and retrying was harmless noise; a ten-slot
+  // materializer would now issue ten doomed saves and ten warnings for one underlying cause. The
+  // phase's own work proceeds either way — under the previous claim, exactly as it did before.
+  let claimSurrendered = false;
+  const claimForPhase = async (routeId: string, phaseId: string): Promise<void> => {
+    if (!claim || claimSurrendered) return;
+    const timeoutMs = phaseTimeoutMsFor(routeId, phaseId, nextNode);
+    if (timeoutMs === undefined) return;
+    try {
+      stampDispatch(state, now(), timeoutMs, options.driver ?? "http_run_all", state.dispatch?.projectEndpointConfigured ?? false);
+      // W1.3 — "why is this node's deadline 400s and not 90s" has to be answerable from the run
+      // record alone. One warning per distinct phase (not per re-stamp): a ten-slot materializer
+      // re-stamps ten times and should say "slot", once, not ten identical lines.
+      if (!restampedPhases.has(`${routeId}:${phaseId}`)) {
+        restampedPhases.add(`${routeId}:${phaseId}`);
+        state.warnings = [...(state.warnings ?? []), `claim_phase_restamped:${routeId}:${phaseId}`, `stall_deadline_source:${routeId}:${phaseId}:${timeoutMs}ms+${STALL_MARGIN_MS}ms`];
+      }
+      run = await store.saveRun(run);
+      state = stateById(run).get(nextNode.id) as NodeExecutionState;
+    } catch (error) {
+      claimSurrendered = true;
+      state.warnings = [...(state.warnings ?? []), `claim_phase_restamp_failed:${routeId}:${phaseId}:${error instanceof Error ? error.message : String(error)}`];
+    }
+  };
+  // The shape a route module receives: it names its own phase and knows nothing about claims, saves
+  // or the run record. Bound per route so a route cannot re-stamp under another route's windows.
+  const phaseClaimFor = (routeId: string): PhaseClaim => (phaseId: string) => claimForPhase(routeId, phaseId);
   // W-4 (run_1785405350649_9u5mjz): a node that cannot resolve its client must fail by name, never
   // guess. That run — a platform run — had review_aggregator instruct a Dr. Lurie CTA because client
   // identity reached nodes only via contract_intelligence's output, far downstream of the editorial
@@ -1939,7 +1998,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // EV floor is an optimization on spend; it must never be the reason a run cannot proceed.
   if (declaresCostPrefetch(nextNode)) {
     try {
-      const costResult = await getRunCostEstimate({ runId: run.runId, workflowId: run.workflowId });
+      const costResult = await getRunCostEstimate({ runId: run.runId, workflowId: run.workflowId, projectId: run.projectId });
       state.input = { ...(state.input as Record<string, unknown>), [RUN_COST_ESTIMATE_INPUT_KEY]: costResult.estimate };
       if (costResult.warningCode) state.warnings = [...(state.warnings ?? []), `cost_prefetch_degraded:${costResult.warningCode}`];
     } catch (error) {
@@ -2511,7 +2570,8 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       released = await runDeterministicReleaseExecutor({
         run,
         requestId: runContext.requestId,
-        deps: { callTool: releaseCallTool }
+        deps: { callTool: releaseCallTool },
+        onPhase: phaseClaimFor("release_executor")
       });
     } catch (error) {
       released = { ok: false, code: "threw", error: error instanceof Error ? error.message : String(error) };
@@ -2605,7 +2665,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
 
   // T14.4 — DISPATCH CLAIM FOR THE LONG DETERMINISTIC STAGES.
   //
-  // The model path's claim (further down, "the ~300s silent-death fix") sits AFTER the two branches
+  // The model path's claim (further down, "the silent-death fix") sits AFTER the two branches
   // below, so it never protected them. A capture/clone stage is deterministic but not quick, and while
   // it runs the record shows the node "running" with NO dispatch — which assessRunStall reads as an
   // idle driver, so runContinuation re-enters the SAME node while the first pass is still in flight.
@@ -2640,7 +2700,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   //               traversal keeps working. Both carry the refusal code as a run-visible warning.
   const captureStage = readCaptureStage(nextNode);
   if (captureStage) {
-    const staged = await runCaptureStage({ run, node: nextNode, stage: captureStage });
+    const staged = await runCaptureStage({ run, node: nextNode, stage: captureStage, onPhase: phaseClaimFor("capture_stage") });
     if (staged.kind === "pending") {
       const pendingAt = now();
       state.status = "queued";
@@ -2700,7 +2760,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   //               warning so CI graph traversal keeps working.
   const cloneStage = readCloneStage(nextNode);
   if (cloneStage) {
-    const staged = await runCloneStage({ run, node: nextNode, stage: cloneStage });
+    const staged = await runCloneStage({ run, node: nextNode, stage: cloneStage, onPhase: phaseClaimFor("clone_stage") });
     let refusal: { code: string; message: string } | undefined;
     if (staged.kind === "completed") {
       const stagedValidation = validateOutput(staged.output, nextNode.outputSchema);
@@ -2808,7 +2868,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   if (readArtifactMaterializer(nextNode)) {
     let materialized: Awaited<ReturnType<typeof runArtifactMaterialization>>;
     try {
-      materialized = await runArtifactMaterialization({ run, node: nextNode });
+      materialized = await runArtifactMaterialization({ run, node: nextNode }, { onPhase: phaseClaimFor("artifact_materializer") });
     } catch (error) {
       materialized = { kind: "refused", code: "threw", message: error instanceof Error ? error.message : String(error) };
     }
@@ -2903,7 +2963,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
     }
   }
 
-  // Dispatch claim (the ~300s silent-death fix): persist "this node is in flight, with this timeout"
+  // Dispatch claim (the silent-death fix): persist "this node is in flight, with this timeout"
   // BEFORE the model loop starts, so the run record can distinguish a live execution from a dead
   // driver at any moment (assessRunStall) and a successor advance can reclaim a stale claim instead
   // of the run sticking at status "running" forever. Skipped for the best-effort termination
@@ -2957,6 +3017,31 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       // the run-level entry is marked retried rather than never written. A self-healing driver that
       // erased its own failures would be the previous wave's defect, rebuilt one layer up.
       state.errors = [result.code, result.message];
+      // W0.3 — THE ATTEMPT THAT IS ABOUT TO BE ERASED. scheduleNodeRetry requeues the node and
+      // deletes startedAt/durationMs (correctly — a queued node has no duration), so this attempt
+      // never reaches a terminal status and recordNodeTiming's TERMINAL_TIMING_OUTCOMES gate never
+      // fires for it. A node retried twice therefore recorded ONE sample: the last attempt's
+      // duration, carrying every attempt's cost. Recording here makes attempts 1..n-1 real samples;
+      // `attemptStartedAt` windows each one to the spend it actually added, so the samples sum to the
+      // node's actual cost instead of multiplying it.
+      //
+      // WRITTEN BEFORE THE RUN'S OWN SAVE, and that is deliberate rather than an oversight of this
+      // file's "side effects after the durable commit" rule. That rule exists so a CAS conflict leaves
+      // no PHANTOM usage behind. This sample is not phantom: the attempt ran and the money was spent,
+      // and if the outer save conflicts, advanceRun re-executes the node with a fresh startedAt — so
+      // the re-execution's window does not overlap this one and nothing is counted twice. The same
+      // reasoning the reclaim write states applies here: an extra sample describing work that really
+      // happened is the direction this ledger should err in.
+      await recordNodeTimingCompletion({
+        runId: run.runId,
+        workflowId: run.workflowId,
+        nodeId: nextNode.id,
+        durationMs: state.durationMs ?? 0,
+        outcome: "failed",
+        attempt: retryDecision.attempt,
+        attemptStartedAt: startedAt,
+        ...timingAttribution(run, nextNode)
+      }).catch(() => undefined);
       scheduleNodeRetry(run, state, retryDecision, { code: result.code, message: result.message }, completedAt);
       // Only when this node was the run's ONLY work does the whole run have to wait: with a sibling
       // still runnable the tick should re-enter immediately and dispatch that instead.
@@ -3021,22 +3106,19 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // gap_adjudicator. Extending the initial claim to cover the worst case would instead hide a
   // genuinely dead driver for eleven minutes; re-stamping PER PHASE keeps stall detection honest at
   // the granularity of the work actually in flight, which is why it is the shape chosen here.
-  const reclaimForPhase = async (timeoutMs: number): Promise<void> => {
-    if (!claim) return;
-    try {
-      stampDispatch(state, now(), timeoutMs, options.driver ?? "http_run_all", state.dispatch?.projectEndpointConfigured ?? false);
-      run = await store.saveRun(run);
-      state = stateById(run).get(nextNode.id) as NodeExecutionState;
-    } catch (error) {
-      // A save conflict here means another driver already moved this run. The phase's own result is
-      // still worth having, so it proceeds under the previous claim and the failure is named rather
-      // than silently widening or silently losing the window.
-      state.warnings = [...(state.warnings ?? []), `article_body_claim_reclaim_failed:${error instanceof Error ? error.message : String(error)}`];
-    }
-  };
+  // W1.1 — this closure's body is now claimForPhase at the top of the function, and its two hard-coded
+  // windows are the `article_body` manifest's `validate` and `revision` phases. What was one route's
+  // patch is the mechanism every multi-phase route uses.
+  const reclaimForPhase = phaseClaimFor("article_body");
 
+  // W0.4 — the wall-clock of everything below, so the node's recorded duration can stop ending where
+  // its model call ends. `revisionMs` accumulates the revision dispatches separately, which is what
+  // makes the three phase samples DISJOINT: model + validate + revision never overlap, so their sum
+  // is bounded by the node's own duration rather than double-counting the revisions inside validate.
+  let revisionMs = 0;
   if (ownsValidationLoop(nextNode) && mode !== "mock" && readBodyForValidation(output)) {
-    await reclaimForPhase(ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS);
+    const validationPhaseStartedAt = now();
+    await reclaimForPhase("validate");
     try {
       const loop = await runArticleBodyValidationLoop(output as Record<string, unknown>, {
         // objectType threaded from the envelope the model just emitted (its schema requires
@@ -3062,7 +3144,8 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
           // A revision is a FULL second model dispatch — the phase claim must widen back out to a
           // model timeout for its duration, or the continuation tick reclaims mid-dispatch exactly
           // as it did before this fix.
-          await reclaimForPhase(nodeTimeoutMs(nextNode));
+          await reclaimForPhase("revision");
+          const revisionStartedAtMs = Date.now();
           const revision = await runner.run({
             node: effectiveNode,
             input: {
@@ -3070,6 +3153,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
               validationFeedback: buildValidationFeedback({ issues, body: rejectedBody, attempt })
             }
           }, { run, executionRepository: store, workspaceRepository: options.workspaceRepository });
+          revisionMs += Math.max(0, Date.now() - revisionStartedAtMs);
           if (revision.toolCalls?.length) state.toolCalls = [...(state.toolCalls ?? []), ...revision.toolCalls];
           return revision.ok ? { ok: true as const, output: revision.output } : { ok: false as const, code: revision.code, message: revision.message };
         }
@@ -3096,6 +3180,43 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       }
     } catch (error) {
       state.warnings = [...(state.warnings ?? []), `article_body_validation_loop_failed:${error instanceof Error ? error.message : String(error)}`];
+    }
+    // W0.4 — RE-STAMP THE DURATION THE NODE ACTUALLY TOOK.
+    //
+    // `completedAt`/`durationMs` were stamped the instant the model returned, which is the same place
+    // the dispatch claim was stamped and for the same reason: at the time, that WAS the end of the
+    // node. It has not been since the validation loop was seamed in here. Everything between that
+    // stamp and this line — up to three validator calls plus one full second model dispatch — was
+    // simply absent from the run record and from the ledger, understating article_body by up to
+    // ~345s. That understatement then fed a p95 that a stall threshold was going to be derived from,
+    // so the node with the longest legitimate tail was the node whose tail was least visible.
+    //
+    // The three phase samples are the same fact at finer grain, and they are what a per-phase claim
+    // (W1) needs in order to be set from measurement instead of from ARTICLE_BODY_VALIDATION_PHASE_
+    // TIMEOUT_MS's arithmetic. They carry no cost — the node's spend is recorded once, on its
+    // completion sample — and every node-level aggregate excludes them by default. Written before the
+    // outer save for the same reason the retry sample above is: a cost-free duration row describing
+    // work that really happened is safe to leave behind if that save conflicts.
+    const validationFinishedAt = now();
+    state.completedAt = validationFinishedAt;
+    state.durationMs = duration(startedAt, validationFinishedAt);
+    const modelPhaseMs = duration(startedAt, completedAt) ?? 0;
+    const validateAndReviseMs = Math.max(0, Date.parse(validationFinishedAt) - Date.parse(validationPhaseStartedAt));
+    const phases: { phase: string; durationMs: number }[] = [
+      { phase: "model", durationMs: modelPhaseMs },
+      { phase: "validate", durationMs: Math.max(0, validateAndReviseMs - revisionMs) },
+      ...(revisionMs > 0 ? [{ phase: "revision", durationMs: revisionMs }] : [])
+    ];
+    for (const phase of phases) {
+      await recordNodeTimingCompletion({
+        runId: run.runId,
+        workflowId: run.workflowId,
+        nodeId: nextNode.id,
+        durationMs: phase.durationMs,
+        outcome: "completed",
+        phase: phase.phase,
+        ...timingAttribution(run, nextNode)
+      }).catch(() => undefined);
     }
   }
 

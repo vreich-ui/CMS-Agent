@@ -21,7 +21,9 @@
 // tick touch, and which would it refuse" is answerable in a unit test with no repository, no network
 // and no schedule. The scheduled function is a thin shell over it.
 
-import { assessRunStall, nextDispatchTimeoutMs, runNextNode, DISPATCH_DEADLINE_MARGIN_MS, type RunStallInfo } from "./executor.js";
+import { assessRunStall, nextDispatchTimeoutMs, runNextNode, DISPATCH_DEADLINE_MARGIN_MS, type RunStallInfo, type RunStallTimingContext } from "./executor.js";
+import { aggregateNodeTimingsByNode } from "./nodeTimings.js";
+import type { NodeTimingRepository } from "../repository/interfaces/NodeTimingRepository.js";
 import { isOperatorPublishWithheld } from "./publishDecision.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "./executionTypes.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
@@ -81,7 +83,12 @@ export type ContinuationVerdict = {
 // queued run never carries a live claim (the claim and status "running" are written in the same save,
 // executeRunnableNode), which is why assessRunStall's "running"-only scope is sufficient here rather
 // than a second liveness notion invented for the tick.
-export const decideRunContinuation = (run: WorkflowExecutionRecord, at: Date = new Date()): ContinuationVerdict => {
+// W1.2 — `timing` is the run's measured per-node p95 (nodeTimings.aggregateNodeTimingsByNode, scoped
+// to this run's own tenant). The tick was the ONE unattended driver and it called assessRunStall
+// WITHOUT it, so the overdue signal — the only stall shape with a sense of scale — existed and was
+// never seen by the only caller that runs unattended. Optional: absent, every verdict is exactly what
+// it was.
+export const decideRunContinuation = (run: WorkflowExecutionRecord, at: Date = new Date(), timing?: RunStallTimingContext): ContinuationVerdict => {
   const base = { runId: run.runId, status: run.status };
   if (!CONTINUABLE_RUN_STATUSES.includes(run.status)) {
     return { ...base, reenter: false, code: "skip_not_active", reason: `Run status "${run.status}" is a stop the executor or an operator put there; the tick advances only ${CONTINUABLE_RUN_STATUSES.join("/")} runs. Clearing a block is an operator act (approval, a raised budgetUsd, resume_run), never a scheduled one.` };
@@ -100,7 +107,7 @@ export const decideRunContinuation = (run: WorkflowExecutionRecord, at: Date = n
   if (run.retryBackoffUntil && Date.parse(run.retryBackoffUntil) > at.getTime()) {
     return { ...base, reenter: false, code: "skip_retry_backoff", reason: `The run's only remaining work is an orchestrator retry that comes due at ${run.retryBackoffUntil}. A tick after that dispatches it — no human retry needed, and re-entering now would dispatch nothing.` };
   }
-  const stall = assessRunStall(run, at);
+  const stall = assessRunStall(run, at, timing);
   if (stall?.inFlightNodeId && !stall.stalledSuspected) {
     return { ...base, reenter: false, code: "skip_dispatch_in_flight", reason: `Node ${stall.inFlightNodeId} was dispatched at ${stall.dispatchedAt} and is inside its ${stall.timeoutMs}ms claim window — something is genuinely in flight. Re-entering would double-dispatch it.`, stall };
   }
@@ -112,22 +119,53 @@ export const decideRunContinuation = (run: WorkflowExecutionRecord, at: Date = n
 
 export type ContinuationSelection = { reenter: ContinuationVerdict[]; skipped: ContinuationVerdict[] };
 
-export const selectContinuableRuns = (runs: readonly WorkflowExecutionRecord[], at: Date = new Date()): ContinuationSelection => {
-  const verdicts = runs.map((run) => decideRunContinuation(run, at));
+export const selectContinuableRuns = (runs: readonly WorkflowExecutionRecord[], at: Date = new Date(), timingFor?: (run: WorkflowExecutionRecord) => RunStallTimingContext | undefined): ContinuationSelection => {
+  const verdicts = runs.map((run) => decideRunContinuation(run, at, timingFor?.(run)));
   return { reenter: verdicts.filter((verdict) => verdict.reenter), skipped: verdicts.filter((verdict) => !verdict.reenter) };
 };
 
-// The schedule, in the one form Netlify accepts (cron, whose finest granularity is one minute — a
-// 30s tick is not expressible there, so 60s is the floor and is what the acceptance run's "no idle
-// gap greater than the tick interval" is measured against).
-export const CONTINUATION_TICK_CRON = "* * * * *";
-export const CONTINUATION_TICK_INTERVAL_MS = 60_000;
+// W1.2 — THE TICK CONSTANTS, AND THE TWO KINDS OF DISAGREEMENT BETWEEN CODE AND DEPLOY.
+//
+// Before this, four numbers describing the same scheduled job lived in two places that had drifted:
+// the cron here said every minute while Cloud Scheduler was set to every two, the task timeout here
+// defaulted to 300s while the job is deployed with 600s, and the tick budget here defaulted to 45s
+// while the job is deployed with 240s. A reader reasoning about the tick from this file — which is
+// what the stall analysis did — got the wrong cadence for every one of them.
+//
+// The two disagreements are NOT the same kind of thing, and collapsing them would have been the wrong
+// fix:
+//   1. DOCUMENTARY. The cron and its interval have no runtime consumer at all; they exist so a reader
+//      knows the cadence. Nothing overrides them at deploy time, so a value that does not match the
+//      deployed schedule is simply false, and they are corrected to what is actually deployed.
+//   2. DELIBERATE. The task timeout and the tick budget ARE read at runtime, and the deploy script
+//      sets both as explicit env vars — so the defaults here are never load-bearing in production.
+//      They stay CONSERVATIVE on purpose: a too-small task timeout defers a dispatch by one tick,
+//      while a too-large one has the platform kill a process with a node in flight (2026-09-04:
+//      article_body, 12.7 minutes and ~$0.60 lost that way). Raising them to match deploy would make
+//      a process that somehow lost its env vars behave as if it had twice the time it does.
+//
+// DEPLOYED_TICK_DEFAULTS records the deploy-side half so both are visible together, and
+// scripts/twoPlaneDrift.ts asserts these values against the deploy scripts themselves — so the cron
+// can no longer drift silently, and the two env vars can no longer stop being set (which is the only
+// way the conservative fallbacks above could ever become live values).
+export const DEPLOYED_TICK_DEFAULTS = {
+  cron: "*/2 * * * *",
+  taskTimeoutSeconds: 600,
+  tickBudgetMs: 240_000
+} as const;
+
+// The schedule as deployed (Cloud Scheduler, scripts/deploy-continuation-tick-schedule.sh). Cron's
+// finest granularity is one minute, so a sub-minute tick is not expressible; the deployed cadence is
+// every two minutes.
+export const CONTINUATION_TICK_CRON = DEPLOYED_TICK_DEFAULTS.cron;
+export const CONTINUATION_TICK_INTERVAL_MS = 120_000;
 
 // Wall-clock budget for ONE tick's advance loop, checked BETWEEN node advances (a dispatch already in
 // progress is never cut short — the budget stops the loop starting another node, exactly as
-// RUN_DRIVER_TIME_BUDGET_MS does for workflow.run_all). Defaulted under the tick interval so ticks
-// rarely overlap; overlap is safe regardless (the dispatch claim plus the repository compare-and-swap
-// are what make concurrent drivers safe, not this number), it is merely wasteful.
+// RUN_DRIVER_TIME_BUDGET_MS does for workflow.run_all). Overlap between ticks is safe regardless (the
+// dispatch claim plus the repository compare-and-swap are what make concurrent drivers safe, not this
+// number), it is merely wasteful. The deployed value is DEPLOYED_TICK_DEFAULTS.tickBudgetMs; the
+// fallback below is the conservative one — see case 2 in the header above.
 export const CONTINUATION_TICK_BUDGET_MS = (() => {
   const configured = Number(process.env.CONTINUATION_TICK_BUDGET_MS);
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 45_000;
@@ -138,10 +176,11 @@ export const CONTINUATION_TICK_BUDGET_MS = (() => {
 export const continuationTickEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
   !["off", "false", "0"].includes((env.RUN_CONTINUATION_TICK ?? "on").trim().toLowerCase());
 
-// W0 T1.2 — the driver task's own wall-clock ceiling. On Cloud Run this is `--task-timeout` (600s
-// after C2.2; 300s when the incident happened) and the platform kills the task at it with no warning
-// and no chance to persist. Read from the environment so the code and the deploy flag cannot drift
-// apart silently, defaulted to the pre-C2.2 300s — the conservative direction, since a too-small
+// W0 T1.2 — the driver task's own wall-clock ceiling. On Cloud Run this is `--task-timeout` and the
+// platform kills the task at it with no warning and no chance to persist. Read from the environment,
+// which scripts/deploy-continuation-tick.sh sets from the SAME variable it passes to --task-timeout
+// (DEPLOYED_TICK_DEFAULTS.taskTimeoutSeconds, currently 600), so code and deploy flag cannot disagree
+// at runtime. The fallback stays at the pre-C2.2 300s — the conservative direction, since a too-small
 // value only defers a dispatch by one tick while a too-large one loses a node mid-flight.
 export const TASK_TIMEOUT_MS = (env: NodeJS.ProcessEnv = process.env): number => {
   const configured = Number(env.TASK_TIMEOUT_MS);
@@ -176,6 +215,9 @@ export type ContinuationTickDeps = {
   dispatchTimeoutMs?: (run: WorkflowExecutionRecord) => Promise<number | undefined>;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
+  // W1.2 — injected for tests; production reads the live node timing ledger so the tick's stall
+  // verdicts are measured against this tenant's own history.
+  nodeTimingRepository?: NodeTimingRepository;
   timeBudgetMs?: number;
   maxRuns?: number;
   maxStepsPerRun?: number;
@@ -266,7 +308,27 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
   const taskDeadline = tickStartedAt.getTime() + taskTimeoutMs;
   const dispatchTimeoutMs = deps.dispatchTimeoutMs ?? ((run: WorkflowExecutionRecord) => nextDispatchTimeoutMs(run, deps.workspaceRepository).catch(() => undefined));
   const runs = await deps.executionRepository.listRuns({});
-  const { reenter, skipped } = selectContinuableRuns(runs, clock());
+  // W1.2 — the measured history the tick never had. One read per (workflowId, projectId) the scan
+  // actually touches, memoized for the whole tick; scoped per tenant because four tenants share every
+  // workflowId and a pooled p95 describes none of them (W0.1). Wholly best-effort: a timing store this
+  // process cannot reach costs the tick its OVERDUE signal, never its ability to drive runs — the same
+  // posture the ledger resolution above takes.
+  const nodeTimingRepository = deps.nodeTimingRepository ?? repositoryManager.getNodeTimingRepository();
+  const timingCache = new Map<string, RunStallTimingContext>();
+  const timingFor = async (run: WorkflowExecutionRecord): Promise<RunStallTimingContext> => {
+    const key = `${run.workflowId}::${run.projectId ?? ""}`;
+    const cached = timingCache.get(key);
+    if (cached) return cached;
+    let context: RunStallTimingContext = {};
+    try {
+      const aggregates = aggregateNodeTimingsByNode(await nodeTimingRepository.list({ workflowId: run.workflowId, ...(run.projectId ? { projectId: run.projectId } : {}) }));
+      context = { p95DurationMsByNode: Object.fromEntries(Object.values(aggregates).map((aggregate) => [aggregate.nodeId, aggregate.p95DurationMs])) };
+    } catch { /* no history is not an error; the verdict is simply the one it was before W1.2 */ }
+    timingCache.set(key, context);
+    return context;
+  };
+  for (const run of runs) await timingFor(run);
+  const { reenter, skipped } = selectContinuableRuns(runs, clock(), (run) => timingCache.get(`${run.workflowId}::${run.projectId ?? ""}`));
   const selected = reenter.slice(0, Math.max(1, Math.floor(deps.maxRuns ?? DEFAULT_MAX_RUNS)));
   const driven: ContinuationRunReport[] = [];
   let timedOut = false;
@@ -294,7 +356,7 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
           continue;
         }
       }
-      while (current && decideRunContinuation(current, clock()).reenter && report.steps < maxSteps) {
+      while (current && decideRunContinuation(current, clock(), timingCache.get(`${current.workflowId}::${current.projectId ?? ""}`)).reenter && report.steps < maxSteps) {
         if (deps.signal?.aborted) { aborted = true; break; }
         if (clock().getTime() > deadline) { timedOut = true; break; }
         // W0 T1.2 — DEADLINE-AWARE DISPATCH. Ask how long the next dispatch could claim (the node's

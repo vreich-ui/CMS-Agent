@@ -15,6 +15,7 @@
 //               fabricate a crawl, mapping, theme, emission, or score — the placement_resolver
 //               precedent); on a MOCK run it falls through to MockNodeRunner with a run-visible
 //               warning so CI graph traversal keeps working.
+import type { PhaseClaim } from "./routeRegistry.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import {
@@ -133,11 +134,15 @@ const readCrawlJobState = (run: WorkflowExecutionRecord): CaptureCrawlJobState |
   };
 };
 
-export async function runCaptureStage(input: { run: WorkflowExecutionRecord; node: WorkspaceNode; stage: CaptureStage }): Promise<CaptureStageOutcome> {
+export async function runCaptureStage(input: { run: WorkflowExecutionRecord; node: WorkspaceNode; stage: CaptureStage; onPhase?: PhaseClaim }): Promise<CaptureStageOutcome> {
   const { run, stage } = input;
   const facts = resolveRunFacts(run);
   if (isOutcome(facts)) return facts;
   const { targetProjectId, sourceUrl } = facts;
+  // W1.1 — the claim clock restarts HERE, after the run-facts resolution above and before the first
+  // tenant call below, and the stage names itself on the run record. Optional and always safe to
+  // omit: a caller that passes no claim gets exactly the pre-phase behaviour.
+  await input.onPhase?.(stage);
   try {
     switch (stage) {
       case "crawl": {

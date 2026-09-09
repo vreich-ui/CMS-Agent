@@ -12,6 +12,7 @@
 //               precedent capture's crawl/map/theme/emit/score stages already rely on); on a MOCK run
 //               it falls through to MockNodeRunner with a run-visible warning so CI graph traversal
 //               keeps working.
+import type { PhaseClaim } from "./routeRegistry.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import {
@@ -201,11 +202,14 @@ const resolveRunProjectId = (run: WorkflowExecutionRecord): { targetProjectId: s
   return { targetProjectId: runProject };
 };
 
-export async function runCloneStage(input: { run: WorkflowExecutionRecord; node: WorkspaceNode; stage: CloneStage }): Promise<CloneStageOutcome> {
+export async function runCloneStage(input: { run: WorkflowExecutionRecord; node: WorkspaceNode; stage: CloneStage; onPhase?: PhaseClaim }): Promise<CloneStageOutcome> {
   const { run, stage } = input;
   const resolvedProject = resolveRunProjectId(run);
   if (isOutcome(resolvedProject)) return resolvedProject;
   const { targetProjectId } = resolvedProject;
+  // W1.1 — same boundary as capture: the claim clock restarts after project resolution and before the
+  // first tenant call, and the stage names itself on the run record.
+  await input.onPhase?.(stage);
   try {
     switch (stage) {
       case "intake": {
