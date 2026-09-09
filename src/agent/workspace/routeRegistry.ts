@@ -166,12 +166,52 @@ export type RoutePhase = {
   id: string;
   description: string;
   timeout: PhaseTimeoutSource;
+  // W3.1 — the tenant verbs THIS phase calls, where a route's stages differ. capture and clone are
+  // one stage per dispatch and the stages are not alike: clone_intake reads, theme_bind applies a
+  // site-wide theme. Attributing the whole route's verb set to every stage would report clone_intake
+  // as reaching an admin verb it never touches, which is precisely the kind of "close enough" claim
+  // an audit exists to stop making.
+  requiredTools?: RouteRequiredTool[];
+  // Set where this phase DOES reach the tenant but its verbs could not be attributed from source with
+  // confidence. Stated rather than guessed: an empty list here would read as "makes no tenant calls",
+  // which for capture_emit_live is false — it creates objects and ingests every asset on the site.
+  requiredToolsUnverified?: true;
+};
+
+// W3.1 — the TENANT VERBS a route calls on the project MCP while it runs.
+//
+// These are not registry tools and they are not node grants. A deterministic route reaches the tenant
+// through ProjectMcpAdapter directly: no node grant is consulted, no risk level is checked, and
+// nothing lands in the tool execution ledger. `tool.list_executions` structurally cannot show a
+// publish, a release, a crawl, a mint or a theme apply, because none of them goes through the tool
+// executor at all. Declaring them here is the first half of closing that: it makes the set knowable,
+// and it is what an operator's "which nodes need this verb" question is answered from.
+//
+// Declaring is NOT enforcing. Nothing in this wave routes a call differently or blocks one; the
+// choke point that makes every tenant call pass one gate and land in one ledger is the next wave.
+export type RouteRequiredTool = {
+  verb: string;
+  // The risk the verb carries on the tenant, in the registry's own vocabulary. `publish` and `admin`
+  // are the two that a node's own riskLevel is supposed to gate — and today does not, on this path.
+  risk: "read" | "write" | "publish" | "admin";
+  description: string;
 };
 
 export type RouteManifest = {
   id: string;
   description: string;
   phases: RoutePhase[];
+  // W3.1 — HOW THIS ROUTE'S PHASES RELATE, which two different readers need to know:
+  //   "sequential" — the phases run one after another INSIDE one dispatch (article_body's
+  //     model -> validate -> revision). This is the shape a single stamped claim misdescribes, so
+  //     these are the routes the W1 stall invariant walks.
+  //   "alternative" — the phases are mutually exclusive: the conductor dispatches the node once per
+  //     stage and the node IS one of them (capture and clone). Their claims were never at risk from
+  //     phase drift, and walking them as a sequence would model a dispatch that never happens.
+  // Defaults to "sequential" when omitted, because that is the shape that needs the guarantee.
+  phaseKind?: "sequential" | "alternative";
+  // Absent means "this route makes no tenant calls", not "unknown".
+  requiredTools?: RouteRequiredTool[];
 };
 
 // What a route module is handed so it can move its own claim forward at a phase boundary. Deliberately
@@ -215,16 +255,53 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
   // that would need it.
   {
     id: "capture_stage",
-    description: "capture_conductor's deterministic stages (crawl, map, map_refine, theme, emit_live, score). Phase ids are the stage values.",
+    description: "capture_conductor's deterministic stages. One stage per dispatch, so the phase IS the stage and the phase ids are the stage values.",
+    phaseKind: "alternative",
     phases: [
-      { id: "stage", description: "One stage's deterministic work over the project MCP. Every stage value resolves here.", timeout: "deterministic_stage" }
+      { id: "crawl", description: "Create or poll the pdf-tool crawl job.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "create_capture_job", risk: "write", description: "The crawl job itself." },
+        { verb: "get_capture_job_status", risk: "read", description: "Polled once per dispatch." },
+        { verb: "get_capture_snapshot", risk: "read", description: "The crawl's result." }
+      ] },
+      { id: "map", description: "Build the block mapping from the snapshot. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "map_refine", description: "Re-map with block_classifier's suggestions. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "theme", description: "Derive the theme from the snapshot. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "emit_dry", description: "Plan the emission without touching the tenant.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "emit_live", description: "Probe and ingest every asset on the target site, then walk creates/reuses over the project MCP — the long tail of this route.", timeout: "deterministic_stage", requiredToolsUnverified: true },
+      { id: "score", description: "Score the emission. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "report", description: "Summarize the run. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
   },
   {
     id: "clone_stage",
-    description: "clone_conductor's deterministic stages (intake, mint, theme_bind, restamp, pdf_*). No external job plane, so no polling phase. Phase ids are the stage values.",
+    description: "clone_conductor's deterministic stages. No external job plane, so no polling phase. One stage per dispatch; the phase ids are the stage values.",
+    phaseKind: "alternative",
     phases: [
-      { id: "stage", description: "One stage's deterministic work over the project MCP. Every stage value resolves here.", timeout: "deterministic_stage" }
+      { id: "intake", description: "Read the source structure and the target's inventory.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "object_get", risk: "read", description: "Read the source objects." },
+        { verb: "object_inventory", risk: "read", description: "What the target already holds." },
+        { verb: "registry_get", risk: "read", description: "Block/type registry." }
+      ] },
+      { id: "mint", description: "Create the cloned structure on the target.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "object_create", risk: "write", description: "Mint the cloned objects and imagery drafts." },
+        { verb: "object_checkout", risk: "write", description: "Lock before writing." }
+      ] },
+      { id: "theme_bind", description: "Apply the derived theme to the target SITE — the one admin-risk verb on this route.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "object_get", risk: "read", description: "Read the theme's object." },
+        { verb: "object_checkout", risk: "write", description: "Lock before writing." },
+        { verb: "object_checkin", risk: "write", description: "Release the lock." },
+        { verb: "site_apply_theme", risk: "admin", description: "Applies a theme site-wide." }
+      ] },
+      { id: "restamp", description: "Re-stamp layouts on the cloned objects.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "object_get", risk: "read", description: "Read what is being restamped." },
+        { verb: "object_checkout", risk: "write", description: "Lock before patching." },
+        { verb: "object_patch", risk: "write", description: "Apply the restamp." },
+        { verb: "object_checkin", risk: "write", description: "Release the lock." }
+      ] },
+      { id: "pdf_intake", description: "Read the PDF template brief.", timeout: "deterministic_stage", requiredToolsUnverified: true },
+      { id: "pdf_mint", description: "Create the PDF template.", timeout: "deterministic_stage", requiredToolsUnverified: true },
+      { id: "pdf_publish", description: "Publish the PDF template.", timeout: "deterministic_stage", requiredToolsUnverified: true },
+      { id: "report", description: "Summarize the clone. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
   },
   {
@@ -233,6 +310,11 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
     phases: [
       { id: "plan", description: "Read the spec and reconcile stored slot state.", timeout: "deterministic_stage" },
       { id: "slot", description: "One slot's adopt/create/poll cycle. Re-stamped per slot, so a ten-slot spec is ten windows rather than one.", timeout: "deterministic_stage" }
+    ],
+    requiredTools: [
+      { verb: "get_agent_artifact_by_slot", risk: "read", description: "Adopt an artifact a previous run already made." },
+      { verb: "create_agent_artifact_job", risk: "write", description: "Generate one when adoption found nothing." },
+      { verb: "get_agent_artifact_job_status", risk: "read", description: "Polled once per dispatch per slot." }
     ]
   },
   {
@@ -240,6 +322,17 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
     description: "visual_identity's second node: six tenant verbs including site_apply_brand_imagery.",
     phases: [
       { id: "materialize", description: "The tenant-side application of the visual standard.", timeout: "deterministic_stage" }
+    ],
+    // THE SHARPEST CASE IN THE AUDIT. This node is riskLevel `admin`, carries allowedTools: [], and
+    // reaches the tenant six times anyway — including site_apply_brand_imagery, which restyles the
+    // whole site. Its grant list says it can do nothing; the engine does all of it.
+    requiredTools: [
+      { verb: "object_create", risk: "write", description: "Create the standard's object." },
+      { verb: "object_checkout", risk: "write", description: "Lock before patching." },
+      { verb: "object_patch", risk: "write", description: "Write the standard." },
+      { verb: "object_checkin", risk: "write", description: "Release the lock." },
+      { verb: "object_get", risk: "read", description: "Read the current standard." },
+      { verb: "site_apply_brand_imagery", risk: "admin", description: "Applies imagery site-wide." }
     ]
   },
   {
@@ -248,9 +341,39 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
     phases: [
       { id: "release", description: "The release_to_production call itself, under its idempotency key.", timeout: "deterministic_stage" },
       { id: "poll", description: "deploy_status polling by commit after the call.", timeout: "deterministic_stage" }
+    ],
+    requiredTools: [
+      { verb: "release_to_production", risk: "publish", description: "Goes live. In engine code only release_executor calls it (AGENTS.md invariant 4)." },
+      { verb: "deploy_status", risk: "read", description: "Polled by commit to confirm the build landed." }
     ]
   }
 ] as const;
+
+// W3.1 — HOW A NODE RUNS, as one word.
+//
+// The engine already answers this, but only by asking `declaresDeterministicRoute` at four separate
+// points in the dispatch block. Naming it makes the question askable from outside the executor —
+// which is what an audit, a validator and (next wave) a choke point all need.
+export type NodeExecutionKind = "model" | "deterministic";
+
+export const resolveExecutionKind = (node: WorkspaceNode): NodeExecutionKind =>
+  declaresDeterministicRoute(node) ? "deterministic" : "model";
+
+// Which manifest a node's route belongs to. Returns undefined for a model dispatch, and for a
+// deterministic node whose route has no manifest yet — the two are distinguished by executionKind.
+export const resolveRouteId = (node: WorkspaceNode): string | undefined => {
+  const era = resolveRouteEra(node);
+  if (era === MODEL_ROUTE_ERA) return undefined;
+  const key = era.split(":")[0];
+  const byKey: Record<string, string> = {
+    captureStageDeterministic: "capture_stage",
+    cloneStageDeterministic: "clone_stage",
+    artifactMaterializerDeterministic: "artifact_materializer",
+    visualStandardMaterializerDeterministic: "visual_standard_materializer",
+    releaseExecutorDeterministic: "release_executor"
+  };
+  return byKey[key];
+};
 
 const MANIFEST_BY_ID = new Map(ROUTE_MANIFESTS.map((manifest) => [manifest.id, manifest]));
 
@@ -267,6 +390,27 @@ export const phaseTimeoutMsFor = (routeId: string, phaseId: string, node: Worksp
   return phase ? resolvePhaseTimeoutMs(phase.timeout, node) : undefined;
 };
 
-// Routes with more than one phase are the ones a single stamped claim can misdescribe. Used by the
-// invariant test, which walks every manifest rather than a hand-kept list.
-export const multiPhaseRouteIds = (): string[] => ROUTE_MANIFESTS.filter((manifest) => manifest.phases.length > 1).map((manifest) => manifest.id);
+// W3.1 — the tenant verbs a NODE reaches, which for a staged route is its stage's verbs and not the
+// whole route's. Returns undefined when the route declares them per phase and this node's phase is
+// marked unverified — "we did not establish this" and "this makes no tenant calls" must not read the
+// same, which is the whole point of requiredToolsUnverified.
+export const routeRequiredToolsFor = (routeId: string, phaseId?: string): RouteRequiredTool[] | undefined => {
+  const manifest = MANIFEST_BY_ID.get(routeId);
+  if (!manifest) return undefined;
+  const phase = phaseId ? manifest.phases.find((candidate) => candidate.id === phaseId) : undefined;
+  if (phase) {
+    if (phase.requiredToolsUnverified) return undefined;
+    if (phase.requiredTools) return [...phase.requiredTools];
+  }
+  // A route whose phases do not declare their own (artifact_materializer, release_executor,
+  // visual_standard_materializer) calls the same verbs whichever phase it is in.
+  return manifest.requiredTools ? [...manifest.requiredTools] : [];
+};
+
+// Routes whose phases run SEQUENTIALLY inside one dispatch — the ones a single stamped claim can
+// misdescribe. Used by the W1 invariant test, which walks every manifest rather than a hand-kept
+// list. A route whose phases are alternatives (one stage per dispatch) is excluded: its claim covers
+// exactly the one phase that runs, so there is nothing for a sequence walk to prove.
+export const multiPhaseRouteIds = (): string[] => ROUTE_MANIFESTS
+  .filter((manifest) => (manifest.phaseKind ?? "sequential") === "sequential" && manifest.phases.length > 1)
+  .map((manifest) => manifest.id);
