@@ -7,6 +7,7 @@ import type { HeaderMap } from "../runtime/auth.js";
 import { routeControlPlaneRequest, type RouterRequest } from "../mcp/http/controlPlaneRouter.js";
 import { bootstrapWorkspaceStore } from "./runConductorJob.js";
 import { validateScopedBearerTokenConfiguration } from "../mcp/auth/scopedBearerTokens.js";
+import { flushToolExecutionLedger } from "../tools/toolExecutionLedger.js";
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // MCP tool payloads are small; cap defends against abuse.
 
@@ -105,7 +106,15 @@ export function startMcpServer(port = Number(process.env.PORT ?? 8080)) {
   server.listen(port, () => console.error(`CMS-Agent MCP control plane listening on :${port} (store=${process.env.WORKSPACE_STORE ?? "memory"})`));
 
   // Cloud Run sends SIGTERM before reclaiming an instance; stop accepting connections and drain.
-  const shutdown = (signal: string) => { console.error(`${signal} received — draining connections.`); server.close(() => process.exit(0)); };
+  // Draining now means two things, not one. Ledger writes are deliberately started off the caller's
+  // clock (toolExecutionLedger), so a `process.exit(0)` the moment connections close would discard
+  // the audit records for the very calls this instance was serving when Cloud Run reclaimed it —
+  // exactly the last calls anyone would want a record of. The job entrypoints need no equivalent:
+  // they set process.exitCode and let Node exit naturally, which already waits on pending I/O.
+  const shutdown = (signal: string) => {
+    console.error(`${signal} received — draining connections.`);
+    server.close(() => { void flushToolExecutionLedger().finally(() => process.exit(0)); });
+  };
   for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => shutdown(signal));
   return server;
 }

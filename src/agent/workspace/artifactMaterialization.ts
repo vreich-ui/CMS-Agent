@@ -109,7 +109,7 @@ import { stripCredentialShapedFields } from "../capture/captureEngine.js";
 import { readContentItemShell } from "./contentItemShell.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { isArticleTemplate, mapArticleRenderData, type MaterializedImageSlot, type RenderDataTemplate } from "./renderDataMapper.js";
-import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
+import { isTenantApprovalHeld, tenantAdapterFor, tenantApprovalHeldDetail, type TenantCallContext } from "../tools/tenantInvoke.js";
 
 export const ARTIFACT_MATERIALIZER_NODE_ID = "artifact_materializer";
 
@@ -451,6 +451,9 @@ const bridgeCallFor = (config: ProjectConnectionConfig, deps: MaterializerDeps, 
     } catch (error) {
       return { ok: false, code: "bridge_threw", detail: error instanceof Error ? error.message : String(error) };
     }
+    // A held call is not a failed one — see tenantInvoke.ts's isTenantApprovalHeld. Reporting it as
+    // bridge_call_failed sends an operator hunting a transport problem this site never attempted.
+    if (isTenantApprovalHeld(result)) return { ok: false, code: "tenant_verb_needs_approval", detail: tenantApprovalHeldDetail(config.projectId, tool) };
     if (!result.ok) return { ok: false, code: "bridge_call_failed", detail: result.error ?? "unknown error" };
     const raw = result.result;
     if (isRecord(raw) && raw.isError) return { ok: false, code: "bridge_error_result", detail: describeMcpErrorResult(raw) };

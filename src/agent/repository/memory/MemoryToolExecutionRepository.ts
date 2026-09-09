@@ -31,6 +31,9 @@ export class MemoryToolExecutionRepository implements ToolExecutionRepository {
   }
 
   async list(filters: ToolExecutionFilters = {}): Promise<ToolExecutionRecord[]> {
+    // `limit` means the NEWEST n, then returned oldest-first — identical to the blob backend, which
+    // applies the same bound while walking keys newest-first. Two backends that disagree about what
+    // `limit` selects is a defect that only ever shows up in production.
     const found = [...this.records.values()]
       .filter((record) => matches(record, filters))
       .sort((a, b) => a.startedAt.localeCompare(b.startedAt));

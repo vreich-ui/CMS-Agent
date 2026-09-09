@@ -44,7 +44,7 @@ import { describeMcpErrorResult } from "../projects/clientToolResult.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import { visualStandardIdFor } from "./visualStandardIds.js";
-import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
+import { isTenantApprovalHeld, tenantAdapterFor, tenantApprovalHeldDetail, type TenantCallContext } from "../tools/tenantInvoke.js";
 
 export const BRAND_IMAGERY_WRITER_NODE_ID = "brand_imagery_writer";
 export const VISUAL_STANDARD_MATERIALIZER_NODE_ID = "visual_standard_materializer";
@@ -277,6 +277,9 @@ const clientCallFor = (config: ProjectConnectionConfig, deps: VisualStandardDeps
     if (blocked.length) return { ok: false, code: "tool_policy_blocked", detail: `${tool} is blocked by ${config.projectId}'s executable project policy: ${blocked.join(", ")}` };
     let result: CallToolResult;
     try { result = await call(config, tool, args); } catch (error) { return { ok: false, code: "client_threw", detail: error instanceof Error ? error.message : String(error) }; }
+    // A held call is not a failed one — see tenantInvoke.ts's isTenantApprovalHeld. Reporting it as
+    // client_call_failed sends an operator hunting a transport problem this site never attempted.
+    if (isTenantApprovalHeld(result)) return { ok: false, code: "tenant_verb_needs_approval", detail: tenantApprovalHeldDetail(config.projectId, tool) };
     if (!result.ok) return { ok: false, code: "client_call_failed", detail: result.error ?? "unknown error" };
     if (isRecord(result.result) && result.result.isError) return { ok: false, code: "client_error_result", detail: describeMcpErrorResult(result.result) };
     return { ok: true, payload: unwrapPayload(result.result) };

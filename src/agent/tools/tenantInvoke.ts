@@ -74,6 +74,27 @@ export type TenantInvocation = {
   adapterDeps?: ProjectAdapterDeps;
 };
 
+/**
+ * W4-followup — A CALL THE TENANT IS HOLDING FOR A HUMAN, not a call that failed.
+ *
+ * A verb whose per-project policy is `needs_approval` is refused by ProjectMcpAdapter BEFORE any
+ * transport: nothing was attempted, nothing is half-done, and the fix is an operator flipping one
+ * policy — not a retry, not a bug. Every caller that collapses it into "the call failed" tells an
+ * operator to go looking for a transport problem that does not exist.
+ *
+ * This is the W4.3 platform finding: `site_apply_theme` and `site_apply_brand_imagery` are held there
+ * deliberately, and `clone_stage:theme_bind` / `visual_standard_materializer` reported it as a generic
+ * stage failure — the intended "a human confirms before the whole site is restyled" arriving as
+ * something that reads like an outage. release_executor already drew this distinction for itself
+ * (its "declined" verdict); this makes it available to every route from the one door they all pass.
+ */
+export const isTenantApprovalHeld = (result: { ok: boolean; requiresApproval?: boolean; permission?: string }): boolean =>
+  result.ok === false && (result.requiresApproval === true || result.permission === "needs_approval");
+
+/** The sentence an operator can act on, for a route to put in its own refusal. */
+export const tenantApprovalHeldDetail = (projectId: string, verb: string): string =>
+  `"${verb}" is set to "needs approval" for project "${projectId}", so it was held before any transport — nothing was attempted and nothing is half-done. A deterministic route has no approval step to enter, so it stops here. An operator allows the verb for this project (Access page, or project.update toolPolicies) and re-runs the node.`;
+
 export class ForbiddenTenantVerbError extends Error {
   constructor(readonly nodeId: string | undefined, readonly verb: string) {
     super(forbiddenProjectVerbRefusal(nodeId, verb));
@@ -127,7 +148,7 @@ async function invoke<T extends { ok: boolean; error?: string }>(
   // ONE rule, both callers. The model path's exemption list is the engine path's exemption list.
   if (enforceForbiddenVerbs && FORBIDDEN_PROJECT_VERBS.has(toolId) && nodeId !== undefined && !PROJECT_VERB_AUTHORIZED_NODE_IDS.has(nodeId)) {
     const completedAt = now();
-    await recordToolExecution({
+    recordToolExecution({
       toolExecutionId, runId, nodeId: ledgerNodeId, toolId, projectId, caller, ...(routeId ? { routeId } : {}),
       startedAt, completedAt, durationMs: Date.parse(completedAt) - Date.parse(startedAt),
       status: "denied", errorCode: "publish_verb_not_permitted", inputSummary: summarizeForLedger(args),
@@ -143,7 +164,7 @@ async function invoke<T extends { ok: boolean; error?: string }>(
     // Same failure the call sites produced before: an unknown project is the caller's problem to
     // name, and it is recorded rather than swallowed.
     const completedAt = now();
-    await recordToolExecution({
+    recordToolExecution({
       toolExecutionId, runId, nodeId: ledgerNodeId, toolId, projectId, caller, ...(routeId ? { routeId } : {}),
       startedAt, completedAt, durationMs: Date.parse(completedAt) - Date.parse(startedAt),
       status: "error", errorCode: "unknown_project", inputSummary: summarizeForLedger(args),
@@ -167,20 +188,25 @@ async function invoke<T extends { ok: boolean; error?: string }>(
     ...(listed === false ? { engineVerbUnlisted: true as const } : {}),
     startedAt, completedAt,
     durationMs: Date.parse(completedAt) - Date.parse(startedAt),
-    status: thrown ? "error" : result.ok ? "success" : "error",
+    status: thrown ? "error" : result.ok ? "success" : isTenantApprovalHeld(result) ? "denied" : "error",
     inputSummary: summarizeForLedger(args),
     ...(thrown
       ? { errorCode: "tenant_call_threw" }
       : result.ok
         ? { outputSummary: summarizeForLedger(result) }
-        : { errorCode: "tenant_call_failed", outputSummary: summarizeForLedger({ error: result.error }) }),
+        : {
+            // A held call is not a failed call — see isTenantApprovalHeld. Distinguishing them in the
+            // ledger is what lets an operator filter "waiting on me" from "broken".
+            errorCode: isTenantApprovalHeld(result) ? "tenant_verb_needs_approval" : "tenant_call_failed",
+            outputSummary: summarizeForLedger({ error: result.error })
+          }),
     // The tenant's own permission model is what actually gates the call, and it has already run by
     // here. `not_required` states this record's own claim honestly: the choke point required no
     // approval of its own.
     riskLevel: FORBIDDEN_PROJECT_VERBS.has(toolId) ? "publish" : "write",
     approvalStatus: "not_required"
   };
-  await recordToolExecution(base);
+  recordToolExecution(base);
   if (thrown) throw thrown;
   return result;
 }

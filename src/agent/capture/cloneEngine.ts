@@ -52,7 +52,7 @@ import { buildTemplateDepositCandidates } from "../library/templateDeposit.js";
 import { TemplateLibraryStore } from "../library/templateLibraryStore.js";
 import { TemplateLibraryRefusal, type TemplateLibraryRecord } from "../library/templateLibraryTypes.js";
 import { buildCapabilityRequests, type CapabilityRequest } from "../workspace/capabilityBacklogRequest.js";
-import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
+import { isTenantApprovalHeld, tenantAdapterFor, tenantApprovalHeldDetail, type TenantCallContext } from "../tools/tenantInvoke.js";
 import {
   applyCloneDelta,
   buildCloneIntake,
@@ -250,6 +250,10 @@ export async function callProjectTool(projectId: string, tool: string, args: Rec
   let raw: Record<string, unknown> | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const call = await adapter.callTool(tool, wireArgs);
+    // A held call is refused BEFORE any wire attempt (tenantInvoke.ts's isTenantApprovalHeld) — it is
+    // the same refusal on every attempt, never a lock a retry could clear, so it must throw here and
+    // never reach the object_checkout retry loop below.
+    if (isTenantApprovalHeld(call)) throw new CloneRefusal("tenant_verb_needs_approval", tenantApprovalHeldDetail(projectId, tool));
     if (!call.ok) throw new CloneRefusal("project_tool_call_failed", `${tool} on ${projectId} failed: ${call.error ?? "unknown error"}`);
     raw = call.result as Record<string, unknown> | undefined;
     if (!(isRecord(raw) && raw.isError)) break;
