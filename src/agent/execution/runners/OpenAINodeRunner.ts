@@ -12,7 +12,15 @@ import { validateOutput } from "../outputValidator.js";
 import { resolveNodeInstructions } from "../nodeInstructions.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult, NodeToolCallRecord } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
-import { NodeBudgetExceededError, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
+import { NodeBudgetExceededError, prospectiveOutputTokens, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
+import { measuredDispatchCost } from "../../workspace/nodeTimings.js";
+
+// W2.1 — this lookup is new I/O on a path that previously computed its reserve synchronously, and a
+// blob read carries no timeout of its own. A stalled store must cost the dispatch its MEASUREMENT (a
+// wider, cap-priced reserve — the pre-W2 behaviour), never the dispatch itself.
+const MEASURED_RESERVE_LOOKUP_TIMEOUT_MS = 3_000;
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
+  Promise.race([promise, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms).unref?.())]);
 import { classifyProviderHttpError, operatorActionForBudgetExceeded, operatorActionForProviderHttpError, truncateProviderMessage } from "./providerHttpErrors.js";
 import { buildOpenAIImageBlocks, resolveImageRefs } from "./imageRefs.js";
 
@@ -327,6 +335,7 @@ export class OpenAINodeRunner implements NodeRunner {
     const { model, settings } = modelSettings(node);
     const maxOutputTokens = numberFrom(c.maxOutputTokens) ?? DEFAULT_OUTPUT_TOKEN_RESERVE;
     let priorSpendUsd = 0;
+    let measured: Awaited<ReturnType<typeof measuredDispatchCost>>;
     if (budgetGuardEngaged) {
       // R-20: prior spend is measured spend only — estimated/mock records never count against budgets.
       // Perf (mcp-client-abort-timeouts-memoization): executor.ts's advanceRun computes this SAME
@@ -337,7 +346,18 @@ export class OpenAINodeRunner implements NodeRunner {
       // priorRunSpendUsd undefined) falls back to querying it here exactly as before.
       const precomputed = numberFrom(context.priorRunSpendUsd);
       priorSpendUsd = precomputed !== undefined ? precomputed : (await summarizeModelUsage({ runId: context.run.runId })).actualCostUsdEstimate;
-      const reserve = estimateModelCost({ model, inputTokens: 1000, outputTokens: maxOutputTokens });
+      // W2.1 — the node's own measured history, scoped to this tenant. Best-effort in every sense: a
+      // cold ledger, an unreadable store or a node that has never run leaves `measured` undefined and
+      // every figure below is exactly what it was before this wave. See nodeTimings.measuredDispatchCost
+      // for why the timing ledger is the source rather than the usage ledger.
+      measured = await withTimeout(
+        measuredDispatchCost({ workflowId: context.run.workflowId, nodeId: node.id, projectId: context.run.projectId }),
+        MEASURED_RESERVE_LOOKUP_TIMEOUT_MS
+      ).catch(() => undefined);
+      // The PRE-DISPATCH reserve: can this node's ceiling cover even one turn? Priced from the output
+      // CAP, which for most nodes is several times what they emit — so this refused nodes whose budget
+      // comfortably covers their real work. Bounded above by measurement, never below.
+      const reserve = estimateModelCost({ model, inputTokens: 1000, outputTokens: prospectiveOutputTokens(maxOutputTokens, measured?.p95OutputTokens) });
       if (nodeBudgetUsd !== undefined && reserve > nodeBudgetUsd) {
         return { ok: false, code: "budget_exceeded", message: `Node "${node.id}"'s own budgetUsd ($${nodeBudgetUsd}) cannot cover even one model turn's reserve (~$${reserve}); raise modelConfig.budgetUsd or lower maxOutputTokens.`, details: { reserveUsdEstimate: reserve, nodeBudgetUsd, ceiling: "node" }, operatorAction: operatorActionForBudgetExceeded(nodeBudgetUsd, 0) };
       }
@@ -403,7 +423,13 @@ export class OpenAINodeRunner implements NodeRunner {
     // settings.maxTokens and updates this SAME object's maxOutputTokens field so the guard's
     // per-turn cost estimate (budgetGuard.ts's gate(), which reads config.maxOutputTokens on every
     // call) reflects the larger cap actually being sent, instead of silently under-pricing the retry.
-    const budgetGuardConfig = { nodeId: node.id, model, nodeBudgetUsd, runBudgetUsd, priorSpendUsd, maxOutputTokens };
+    const budgetGuardConfig = { nodeId: node.id, model, nodeBudgetUsd, runBudgetUsd, priorSpendUsd, maxOutputTokens, measuredOutputTokens: measured?.p95OutputTokens };
+    // W2.3 — which reserve priced this dispatch's turns, on the run record. "why did this node stop
+    // at $0.15 when it usually costs $0.04" is a question the record could not answer before: the
+    // reserve was a static function of a cap nobody had compared against reality.
+    const reserveSourceWarning = measured
+      ? `budget_reserve_source:measured:output_p95=${measured.p95OutputTokens}:cap=${maxOutputTokens}:cost_p95=$${measured.p95CostUsd.toFixed(4)}:n=${measured.sampleCount}`
+      : `budget_reserve_source:static:cap=${maxOutputTokens}:no_measured_history`;
     let agentModel = buildAgentModel(provider, model);
     if (budgetGuardEngaged) {
       const innerModel = typeof agentModel === "string" ? await new OpenAIProvider().getModel(agentModel) : agentModel;
@@ -611,6 +637,7 @@ export class OpenAINodeRunner implements NodeRunner {
           output: validated.value,
           usage: { ...usageFields, actual: true },
           model,
+          ...(budgetGuardEngaged ? { warnings: [reserveSourceWarning] } : {}),
           trace: {
             responseId: result.lastResponseId,
             toolCount: effective.length,

@@ -111,6 +111,11 @@ export type NodeTimingRecord = {
   // samples are a duration breakdown, never a node completion: they carry costUsd 0 and are excluded
   // from every node-level aggregate unless a caller asks for them.
   phase?: string;
+  // W2.1 — the token halves behind costUsd, for the same attempt window. Recorded because the budget
+  // guard needs the OUTPUT half specifically: its input term must stay the live, growing request size
+  // (that is the runaway detector), and only its output term may be replaced by measurement.
+  inputTokens?: number;
+  outputTokens?: number;
   // How the sample ended, when that is not visible from `outcome` alone. "reclaim" marks a dispatch
   // the executor took back as stale — the incident class that used to be invisible because a reclaim
   // deletes durationMs from the node state before anything records it.
@@ -381,6 +386,123 @@ export async function recordNodeTimingCompletion(input: RecordNodeTimingCompleti
   return store.record(buildNodeTimingRecord({
     ...record,
     costUsd: usage.actualCostUsdEstimate,
-    ...(usage.estimatedCostUsdEstimate > 0 ? { estimatedCostUsd: usage.estimatedCostUsdEstimate } : {})
+    ...(usage.estimatedCostUsdEstimate > 0 ? { estimatedCostUsd: usage.estimatedCostUsdEstimate } : {}),
+    ...(usage.inputTokens > 0 ? { inputTokens: usage.inputTokens } : {}),
+    ...(usage.outputTokens > 0 ? { outputTokens: usage.outputTokens } : {})
   }));
+}
+
+// W2.1 (2026-09-09) — THE MEASURED OUTPUT SIZE, and the one term of the reserve it may replace.
+//
+// THE DEFECT. The budget guard prices an upcoming model turn as
+// estimateModelCost(requestTokens, maxOutputTokens). `maxOutputTokens` is a CAP the node is permitted
+// to reach, not what it emits: narrative_movement is capped at 3500 and typically emits ~1100, so
+// every turn reserved roughly three times the node's real output cost.
+//
+// LIVE EVIDENCE (run_1788769566432_5qnafb, narrative_movement, node ceiling $0.15). One in-dispatch
+// attempt ran long and actually hit the 3500 cap — $0.121 accrued. The runner retried inside the same
+// dispatch, so the guard priced the next turn at the cap again ($0.121) and refused. Measured across
+// 40 dispatches this node's p95 is $0.090; the ceiling was never the problem.
+//
+// ONLY THE OUTPUT TERM. The reserve's INPUT term is estimateRequestTokens(request) — the live, growing
+// conversation about to be sent. That term IS the runaway detector: it is what would have caught
+// artifact_plan's 386,138-token dispatch, and it must keep rising turn over turn. An earlier cut of
+// this change capped the WHOLE prospective cost at the node's measured p95, which silently discarded
+// that live signal — a node with a cheap history could then balloon its context and be priced at its
+// history rather than at what it was about to spend, reproducing the exact overshoot the guard exists
+// to stop. So measurement replaces the OUTPUT tokens only, and never the input.
+//
+// STILL ONE-DIRECTIONAL. The replacement is Math.min(maxOutputTokens, measured p95 output), so the
+// reserve can only shrink and the guard can only fire later, never earlier. A cold ledger, a node
+// with no recorded output tokens, or a failed lookup leaves the cap in place and the guard behaves
+// exactly as it did.
+//
+// WHY THE TIMING LEDGER RATHER THAN THE USAGE LEDGER. The obvious source is usage records filtered by
+// {workflowId, nodeId}, but BlobUsageRepository indexes by runId alone, so that query scans and
+// downloads every usage blob in the store — on the dispatch path, per node. The timing ledger is
+// workflowId-indexed and, since W0.1, carries projectId, routeEra and ACTUAL-only figures. This is
+// what W0 was for.
+//
+// PER DISPATCH, NOT PER TURN. A NodeTimingRecord covers one whole dispatch, so for a multi-turn node
+// its output total exceeds one turn's and Math.min simply keeps the cap. It bites exactly where it
+// should: single-turn nodes, which is every node that has false-stopped.
+export const MIN_MEASURED_RESERVE_SAMPLES = 2;
+
+export type MeasuredDispatchCost = {
+  // The node's measured OUTPUT size, which is the only term the budget guard may replace. Cost is
+  // carried alongside for diagnostics (the run-visible reserve-source warning) and is NOT used to
+  // price a turn — see the header above for why capping total cost was wrong.
+  p95OutputTokens: number;
+  p50OutputTokens: number;
+  p95CostUsd: number;
+  sampleCount: number;
+};
+
+// ONE READ PER (workflow, tenant), NOT ONE PER NODE — and the reason is the same trap W0.3 hit.
+//
+// BlobNodeTimingRepository.list() keys by workflowId and then DOWNLOADS every blob under that prefix
+// before filtering. A per-node lookup on the dispatch path would therefore re-download the whole
+// workflow's timing history 25 times per run, growing forever as the ledger does. So the lookup is
+// per (workflowId, projectId): one list, aggregated across every node at once, memoized briefly.
+//
+// The TTL is short and the staleness it permits is harmless: this figure bounds a cost estimate, it
+// does not authorize spend, and a reserve computed from history that is five minutes old is not
+// meaningfully different from one computed now. The cache is keyed by projectId as well as workflowId
+// so a long-lived process serving four tenants can never hand one tenant another's costs.
+const MEASURED_COST_TTL_MS = 5 * 60_000;
+const MEASURED_COST_CACHE_LIMIT = 64;
+type MeasuredCostEntry = { expiresAt: number; byNode: Map<string, MeasuredDispatchCost> };
+const measuredCostCache = new Map<string, MeasuredCostEntry>();
+
+export const resetMeasuredDispatchCostCache = (): void => { measuredCostCache.clear(); };
+
+const buildMeasuredCosts = (records: readonly NodeTimingRecord[], minSamples: number): Map<string, MeasuredDispatchCost> => {
+  const byNode = new Map<string, { outputTokens: number[]; costs: number[] }>();
+  // Same population rule every other aggregate uses (no mock runs, no phase breakdowns), plus: a
+  // sample with no recorded outputTokens is pre-W2.1 and cannot answer the question being asked.
+  for (const record of selectAggregableTimings(records)) {
+    if (!Number.isFinite(record.outputTokens) || (record.outputTokens ?? 0) <= 0) continue;
+    const entry = byNode.get(record.nodeId) ?? { outputTokens: [], costs: [] };
+    entry.outputTokens.push(record.outputTokens as number);
+    entry.costs.push(record.costUsd);
+    byNode.set(record.nodeId, entry);
+  }
+  const result = new Map<string, MeasuredDispatchCost>();
+  for (const [nodeId, entry] of byNode) {
+    if (entry.outputTokens.length < minSamples) continue;
+    const outputs = [...entry.outputTokens].sort((a, b) => a - b);
+    const costs = [...entry.costs].sort((a, b) => a - b);
+    result.set(nodeId, {
+      p95OutputTokens: percentile(outputs, 95),
+      p50OutputTokens: percentile(outputs, 50),
+      p95CostUsd: percentile(costs, 95),
+      sampleCount: outputs.length
+    });
+  }
+  return result;
+};
+
+export async function measuredDispatchCost(
+  input: { workflowId: string; nodeId: string; projectId?: string; minSamples?: number },
+  store: NodeTimingRepository = repositoryManager.getNodeTimingRepository()
+): Promise<MeasuredDispatchCost | undefined> {
+  const minSamples = input.minSamples ?? MIN_MEASURED_RESERVE_SAMPLES;
+  // The cache is keyed by (workflow, tenant) and CANNOT be keyed by which store was asked, so it is
+  // used only for the process-wide default repository — the dispatch path, the only caller that needs
+  // it. A caller supplying its own store (a test, a one-off audit) always reads that store directly,
+  // which removes the "answered from another store's history" footgun rather than documenting it.
+  const cacheable = store === repositoryManager.getNodeTimingRepository();
+  const key = `${input.workflowId}::${input.projectId ?? ""}::${minSamples}`;
+  const now = Date.now();
+  if (cacheable) {
+    const cached = measuredCostCache.get(key);
+    if (cached && cached.expiresAt > now) return cached.byNode.get(input.nodeId);
+  }
+  const records = await store.list({ workflowId: input.workflowId, ...(input.projectId ? { projectId: input.projectId } : {}) });
+  const byNode = buildMeasuredCosts(records, minSamples);
+  if (cacheable) {
+    if (measuredCostCache.size >= MEASURED_COST_CACHE_LIMIT) measuredCostCache.clear();
+    measuredCostCache.set(key, { expiresAt: now + MEASURED_COST_TTL_MS, byNode });
+  }
+  return byNode.get(input.nodeId);
 }

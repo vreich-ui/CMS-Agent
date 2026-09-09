@@ -114,7 +114,35 @@ export type BudgetGuardConfig = {
   priorSpendUsd: number;
   // The node's configured output cap — the worst-case output cost reserved for each upcoming turn.
   maxOutputTokens: number;
+  // W2.1 — the node's MEASURED p95 OUTPUT TOKENS for one dispatch (nodeTimings.measuredDispatchCost),
+  // scoped to this tenant. Optional and one-directional: it can only lower the output reserve, never
+  // raise it, so the guard fires later than it does today and never earlier. Absent on a cold ledger
+  // or a failed lookup, which leaves the configured cap in place exactly as before.
+  measuredOutputTokens?: number;
 };
+
+// W2.1 — HOW MANY OUTPUT TOKENS TO RESERVE, and why only this term may be measured.
+//
+// `maxOutputTokens` is a CEILING the node is allowed to reach, not what it emits. narrative_movement
+// is capped at 3500 and typically emits ~1100, so every prospective turn reserved about three times
+// the node's real output cost. On run_1788769566432_5qnafb one attempt ran long and actually hit that
+// cap ($0.121 of a $0.15 ceiling); the in-dispatch retry was then priced at the cap AGAIN and refused
+// — on a node whose measured p95 across 40 dispatches is $0.090.
+//
+// THIS DELIBERATELY DOES NOT TOUCH THE INPUT TERM. gate() prices the input side from
+// estimateRequestTokens(request) — the live conversation about to be sent — and that term is the
+// runaway detector this whole module was written around ("artifact_plan consumed 386,138 input tokens
+// in one dispatch and the guard never fired"). Capping the TOTAL prospective cost at a node's
+// historical figure, which an earlier cut of this change did, silently discards that signal: a node
+// with a cheap history could balloon its context and be priced at its history instead of at what it
+// was about to spend. Only the output reserve is measured; the input side stays live and still grows
+// turn over turn until the guard stops it.
+//
+// One-directional: never above the configured cap, so the reserve can only shrink.
+export const prospectiveOutputTokens = (maxOutputTokens: number, measuredOutputTokens: number | undefined): number =>
+  measuredOutputTokens !== undefined && measuredOutputTokens > 0
+    ? Math.min(maxOutputTokens, measuredOutputTokens)
+    : maxOutputTokens;
 
 // Wraps a Model so every request is budget-gated and every response's actual usage is captured.
 // Deliberately a plain object wrapper, not an SDK subclass: the Model interface is two methods, and
@@ -154,7 +182,12 @@ export function wrapModelWithBudgetGuard(inner: Model, config: BudgetGuardConfig
     const requestTokens = lastItemWasToolError(request) && state.lastSuccessfulTurnInputTokens !== undefined
       ? Math.min(rawRequestTokens, state.lastSuccessfulTurnInputTokens)
       : rawRequestTokens;
-    const prospectiveTurnUsd = estimateModelCost({ model: config.model, inputTokens: requestTokens, outputTokens: config.maxOutputTokens });
+    const prospectiveTurnUsd = estimateModelCost({
+      model: config.model,
+      // LIVE, never measured — see prospectiveOutputTokens' note on why this term is untouched.
+      inputTokens: requestTokens,
+      outputTokens: prospectiveOutputTokens(config.maxOutputTokens, config.measuredOutputTokens)
+    });
     // Node ceiling: this node's own accrued spend + the upcoming turn. Run ceiling: everything the
     // run has spent (prior nodes + this node) + the upcoming turn. Whichever trips first stops the
     // turn; the details name the ceiling that tripped so the remedy is unambiguous.
