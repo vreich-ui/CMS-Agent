@@ -24,6 +24,23 @@
 // None of the three may be switched on until this ledger holds two runs' worth of samples for the
 // nodes they'd gate; switching early would let a cold, near-empty aggregate make exactly the kind of
 // static-guess decision this task exists to replace.
+//
+// ---------------------------------------------------------------------------------------------
+// 2026-09-09 — "SHIPS DARK" IS NO LONGER TRUE. READ THIS BEFORE TRUSTING THE HEADER ABOVE.
+//
+// Follow-up 2 landed on 2026-09-08: runCostHistory.ts derives `estimatedRunCost` from these records,
+// costPrefetch.ts hands it to monetization_strategy, and skipPredicates' EV floor can BLOCK a run on
+// the result. This file has a live production consumer that stops work. The header's "no decision
+// path reads this" was accurate when written and is now the most dangerous sentence in it.
+//
+// Follow-up 3 (per-node stall thresholds at p95 x 2) remains explicitly NOT built, and W1 establishes
+// why it should not be: for every node on publishing_conductor, p95 x 2 is BELOW the deadline the
+// claim already grants (timeoutMs + STALL_MARGIN_MS), so a p95-derived threshold is a no-op under its
+// own floor rule. The one apparent exception, artifact_plan at 235s against 210s, was an era-mixed
+// p95 — exactly the cold/dirty sample the paragraph above warns against, and exactly what routeEra
+// now prevents. The stall incident's real cause was a claim stamped for phase 1 of a 3-phase node;
+// see executor.ts's reclaimForPhase.
+// ---------------------------------------------------------------------------------------------
 
 import type { ExecutionStatus } from "./executionTypes.js";
 import { repositoryManager } from "../runtime/repositories.js";
@@ -36,24 +53,94 @@ import type { NodeTimingRepository } from "../repository/interfaces/NodeTimingRe
 // NodeExecutionState.status can never drift apart about what a terminal node state is called.
 export type NodeTimingOutcome = Exclude<ExecutionStatus, "queued" | "running" | "paused">;
 
+// W0.1 (2026-09-09) — THE ATTRIBUTION FIELDS, and why a warm ledger still was not an honest one.
+//
+// By 2026-09-09 this ledger held 26-41 samples per node on publishing_conductor — warm enough that
+// something (runCostHistory.ts's EV floor) had already started reading it in production. It was still
+// not evidence, for five separate reasons, each of which is one field below:
+//   - projectId: FOUR tenants (dr-lurie, zilberman, platform, fernwell) share every workflowId, and
+//     the only filter readers had was workflowId. One p95 was being computed across four different
+//     sites' content, and the EV floor derived from it was charging zilberman dr-lurie's prices.
+//   - routeEra: several nodes had their route flipped from a model dispatch to a deterministic one
+//     (contract_intelligence, artifact_plan, publication_controller). Samples from before and after
+//     that flip describe two different programs under one nodeId; artifact_plan's era-mixed p95 (118s
+//     against a deterministic route that now takes ~0.2s) was the single figure that made a
+//     "p95 x 2" stall threshold look like it would do something.
+//   - executionMode: mock runs record estimated cost. The budget guard reads ACTUAL cost only
+//     (R-20), so ledger cost and guard cost were two different numbers wearing one name.
+//   - attempt: an orchestrator retry recorded ONE sample whose duration was the last attempt's and
+//     whose cost was every attempt's, summed — the one combination that is wrong in both halves.
+//   - phase: article_body's duration was stamped before its validate/revision phases ran, clipping up
+//     to ~345s of real work off the very node whose claim window the stall incident turned on.
+//
+// EVERY ONE OF THEM IS OPTIONAL, deliberately. Records written before this wave carry none of them and
+// must keep aggregating — a migration that made the existing 26-41 samples per node unreadable would
+// buy honesty at the price of having no history at all. What the aggregators do instead is stated at
+// aggregateNodeTimingsByNode: unattributed records are used when nothing better exists and stand aside
+// the moment attributed samples for the same node arrive.
 export type NodeTimingRecord = {
   timingId: string;
   runId: string;
   workflowId: string;
   nodeId: string;
   durationMs: number;
+  // MEASURED, ACTUAL cost for THIS sample (status:"actual" usage only, and for THIS attempt alone —
+  // see recordNodeTimingCompletion for the delta arithmetic that keeps a retried node from billing
+  // its first attempt twice). Mock/estimated spend is carried separately below so it is visible
+  // without being countable.
   costUsd: number;
+  // The estimated half of the same usage window, kept beside costUsd rather than folded into it. A
+  // mock run's whole spend lands here and its costUsd is 0, which is the honest pair: a mock run
+  // moved no money.
+  estimatedCostUsd?: number;
   outcome: NodeTimingOutcome;
   recordedAt: string;
+  // The tenant this sample belongs to. Absent on pre-W0.1 records and on runs that carry no project.
+  projectId?: string;
+  // "openai" | "anthropic" | "mock" — the run's declared execution mode. Aggregates exclude "mock" by
+  // default; an absent value is never treated as mock.
+  executionMode?: string;
+  // WHICH PROGRAM produced this sample: a deterministic route's declaration (e.g.
+  // "publishExecutorDeterministic:execute", "captureStageDeterministic:crawl") or MODEL_ROUTE_ERA for
+  // a model dispatch. Absent on pre-W0.1 records — see UNATTRIBUTED_ROUTE_ERA.
+  routeEra?: string;
+  // 1-based attempt number. Present from the first attempt onward once a node has been retried; a
+  // node that succeeded first time may legitimately carry 1 or nothing at all.
+  attempt?: number;
+  // Set on a SUB-NODE sample (article_body's "model" / "validate" / "revision" segments). Phase
+  // samples are a duration breakdown, never a node completion: they carry costUsd 0 and are excluded
+  // from every node-level aggregate unless a caller asks for them.
+  phase?: string;
+  // How the sample ended, when that is not visible from `outcome` alone. "reclaim" marks a dispatch
+  // the executor took back as stale — the incident class that used to be invisible because a reclaim
+  // deletes durationMs from the node state before anything records it.
+  terminatedBy?: "reclaim";
 };
 
 export type NodeTimingFilters = {
   runId?: string;
   workflowId?: string;
   nodeId?: string;
+  projectId?: string;
   from?: string;
   to?: string;
 };
+
+// The routeEra written for a node dispatched to a model runner, as opposed to one that terminated in
+// a deterministic route. A literal rather than `undefined` so "we know this was a model dispatch" and
+// "we do not know what this was" stay distinguishable — the whole point of the field.
+export const MODEL_ROUTE_ERA = "model";
+
+// The bucket a pre-W0.1 record falls into: it was written before routes were attributed, so its era
+// is genuinely unknown and must not be asserted to be either one.
+export const UNATTRIBUTED_ROUTE_ERA = "unattributed";
+
+// node.execute's single-node path. Segregated from MODEL_ROUTE_ERA because an independent execution
+// is a different program even on the same node: it runs against supplied dependency outputs rather
+// than a live run's, and a node whose CONDUCTOR route is deterministic still reaches a model runner
+// here. (Those records already sit under workflowId "independent_node", so this is belt-and-braces
+// rather than the only thing keeping them apart.)
+export const NODE_EXECUTE_ROUTE_ERA = "node_execute";
 
 export type RecordNodeTimingInput = Omit<NodeTimingRecord, "timingId" | "recordedAt"> & Partial<Pick<NodeTimingRecord, "timingId" | "recordedAt">>;
 
@@ -110,40 +197,125 @@ export type NodeTimingAggregate = {
   p50CostUsd: number;
   p95CostUsd: number;
   totalCostUsd: number;
+  // W0.1 — WHICH SAMPLES THESE STATISTICS ARE ABOUT. `routeEra` names the program the figures
+  // describe; `eraExcludedCount` is how many samples for this nodeId were set aside because they
+  // belong to a different era (or to no attributed era at all). A caller that sees count:2 with
+  // eraExcludedCount:34 is looking at a thin-but-honest aggregate, not a broken one — which is
+  // exactly the state a node has just after its route flips.
+  routeEra: string;
+  eraExcludedCount: number;
 };
+
+export type NodeTimingAggregateOptions = {
+  // Mock runs record estimated spend against a ceiling that only counts actual spend. Excluded by
+  // default; a record with NO executionMode is never assumed to be mock.
+  includeMock?: boolean;
+  // Phase samples are a within-node duration breakdown, not node completions. Excluded by default so
+  // a node is never counted more times than it ran.
+  includePhases?: boolean;
+  // Restrict to one tenant. Records carrying no projectId are pre-W0.1 and are excluded when this is
+  // set — a sample that cannot be attributed to this tenant is not evidence about it.
+  projectId?: string;
+};
+
+const routeEraOf = (record: NodeTimingRecord): string => record.routeEra ?? UNATTRIBUTED_ROUTE_ERA;
+
+// The one filter every aggregator applies before counting anything. Stated once so the node view and
+// the era view can never disagree about which samples are countable.
+export function selectAggregableTimings(records: readonly NodeTimingRecord[], options: NodeTimingAggregateOptions = {}): NodeTimingRecord[] {
+  return records.filter((record) => {
+    if (!options.includePhases && record.phase !== undefined) return false;
+    if (!options.includeMock && record.executionMode === "mock") return false;
+    if (options.projectId !== undefined && record.projectId !== options.projectId) return false;
+    return true;
+  });
+}
+
+const summarize = (nodeId: string, routeEra: string, chronological: readonly NodeTimingRecord[], eraExcludedCount: number): NodeTimingAggregate => {
+  let ema: number | undefined;
+  for (const record of chronological) ema = foldEma(ema, record.durationMs);
+  const sortedDurations = chronological.map((record) => record.durationMs).sort((a, b) => a - b);
+  let emaCost: number | undefined;
+  for (const record of chronological) emaCost = foldEma(emaCost, record.costUsd);
+  const sortedCosts = chronological.map((record) => record.costUsd).sort((a, b) => a - b);
+  const roundUsd = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
+  return {
+    nodeId,
+    routeEra,
+    eraExcludedCount,
+    count: chronological.length,
+    emaDurationMs: Math.round(ema ?? 0),
+    p50DurationMs: percentile(sortedDurations, 50),
+    p95DurationMs: percentile(sortedDurations, 95),
+    emaCostUsd: roundUsd(emaCost ?? 0),
+    p50CostUsd: roundUsd(percentile(sortedCosts, 50)),
+    p95CostUsd: roundUsd(percentile(sortedCosts, 95)),
+    totalCostUsd: roundUsd(chronological.reduce((sum, record) => sum + record.costUsd, 0))
+  };
+};
+
+const chronologically = (records: readonly NodeTimingRecord[]): NodeTimingRecord[] => [...records].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+
+// W0.1 — THE ERA VIEW. One aggregate per (nodeId, routeEra) pair, keyed `${nodeId}::${routeEra}`.
+// This is the shape the ledger actually has: `artifact_plan` under the old model route and
+// `artifact_plan` under the W8 deterministic route are two programs, and the only reason they ever
+// shared a p95 is that nothing recorded which was which. Nothing here picks a winner between eras —
+// that judgement belongs to aggregateNodeTimingsByNode, which states its rule out loud.
+export function aggregateNodeTimingsByEra(records: readonly NodeTimingRecord[], options: NodeTimingAggregateOptions = {}): Record<string, NodeTimingAggregate> {
+  const usable = selectAggregableTimings(records, options);
+  const byKey = new Map<string, NodeTimingRecord[]>();
+  for (const record of usable) {
+    const key = `${record.nodeId}::${routeEraOf(record)}`;
+    const list = byKey.get(key);
+    if (list) list.push(record); else byKey.set(key, [record]);
+  }
+  const result: Record<string, NodeTimingAggregate> = {};
+  for (const [key, group] of byKey) {
+    const [nodeId] = key.split("::");
+    result[key] = summarize(nodeId, routeEraOf(group[0]), chronologically(group), 0);
+  }
+  return result;
+}
 
 // Pure aggregator — the ONLY place EMA/p50/p95 arithmetic happens, so it is testable against known
 // samples independent of any repository or MCP wiring. Records are grouped by nodeId, sorted by
 // recordedAt (EMA is order-sensitive; percentile is not, so it gets its own separate value-sort),
 // then folded. Takes every record passed in — callers window/filter (e.g. by workflowId, by runId)
 // before calling this, exactly as summarizeModelUsage's callers filter before summarizing.
-export function aggregateNodeTimingsByNode(records: readonly NodeTimingRecord[]): Record<string, NodeTimingAggregate> {
+// W0.1 — THE NODE VIEW, and the one judgement it makes.
+//
+// Both existing consumers (workflow.get_run_cost's plan.nodeTimingAggregates and createWorkspaceTools'
+// runStallTiming) key by nodeId and cannot key by anything else without changing meaning, so this
+// keeps returning one aggregate per nodeId. What changed is WHICH samples reach it.
+//
+// THE RULE, stated so it can be argued with: a node's aggregate describes its CURRENT era only —
+// the routeEra of its most recent attributed sample. Samples from any other era are excluded and
+// counted in eraExcludedCount. A node with only unattributed (pre-W0.1) samples keeps using them,
+// because a thin honest history beats none; the moment one attributed sample for that node lands, the
+// unattributed ones stand aside.
+//
+// THE COST OF THIS RULE, named rather than hidden: on the day a node's route flips, its aggregate
+// drops from ~30 samples to 1 and its p95 is briefly noisy. That is the correct direction. The
+// alternative — the behaviour being replaced — is `artifact_plan` reporting a confident 118s p95 for a
+// route that now returns in 0.2s, which is not a noisier number but a wrong one, and it was wrong in
+// the direction that made a stall threshold look justified. Every consumer of this function already
+// reads `count`; a thin aggregate announces itself, an era-mixed one does not.
+export function aggregateNodeTimingsByNode(records: readonly NodeTimingRecord[], options: NodeTimingAggregateOptions = {}): Record<string, NodeTimingAggregate> {
+  const usable = selectAggregableTimings(records, options);
   const byNode = new Map<string, NodeTimingRecord[]>();
-  for (const record of records) {
+  for (const record of usable) {
     const list = byNode.get(record.nodeId);
     if (list) list.push(record); else byNode.set(record.nodeId, [record]);
   }
   const result: Record<string, NodeTimingAggregate> = {};
   for (const [nodeId, nodeRecords] of byNode) {
-    const chronological = [...nodeRecords].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
-    let ema: number | undefined;
-    for (const record of chronological) ema = foldEma(ema, record.durationMs);
-    const sortedDurations = chronological.map((record) => record.durationMs).sort((a, b) => a - b);
-    let emaCost: number | undefined;
-    for (const record of chronological) emaCost = foldEma(emaCost, record.costUsd);
-    const sortedCosts = chronological.map((record) => record.costUsd).sort((a, b) => a - b);
-    const roundUsd = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
-    result[nodeId] = {
-      nodeId,
-      count: chronological.length,
-      emaDurationMs: Math.round(ema ?? 0),
-      p50DurationMs: percentile(sortedDurations, 50),
-      p95DurationMs: percentile(sortedDurations, 95),
-      emaCostUsd: roundUsd(emaCost ?? 0),
-      p50CostUsd: roundUsd(percentile(sortedCosts, 50)),
-      p95CostUsd: roundUsd(percentile(sortedCosts, 95)),
-      totalCostUsd: roundUsd(chronological.reduce((sum, record) => sum + record.costUsd, 0))
-    };
+    const chronological = chronologically(nodeRecords);
+    // Most recent ATTRIBUTED era; falls back to the unattributed bucket only when the node has no
+    // attributed sample at all.
+    const lastAttributed = [...chronological].reverse().find((record) => record.routeEra !== undefined);
+    const era = lastAttributed ? routeEraOf(lastAttributed) : UNATTRIBUTED_ROUTE_ERA;
+    const inEra = chronological.filter((record) => routeEraOf(record) === era);
+    result[nodeId] = summarize(nodeId, era, inEra, chronological.length - inEra.length);
   }
   return result;
 }
@@ -154,6 +326,16 @@ export type RecordNodeTimingCompletionInput = {
   nodeId: string;
   durationMs: number;
   outcome: NodeTimingOutcome;
+  projectId?: string;
+  executionMode?: string;
+  routeEra?: string;
+  attempt?: number;
+  phase?: string;
+  terminatedBy?: "reclaim";
+  // When THIS attempt began. Usage recorded from this instant onward is this attempt's spend and
+  // nothing earlier is — see the cost note on recordNodeTimingCompletion for why the alternative
+  // (reading back what previous samples already carry) was rejected.
+  attemptStartedAt?: string;
 };
 
 // Impure convenience wrapper — the ONE place a node completion becomes a persisted NodeTimingRecord.
@@ -163,7 +345,42 @@ export type RecordNodeTimingCompletionInput = {
 // call sites (executor.ts's executeRunnableNode dispatch and nodeRuntime.ts's executeNode) wrap this
 // in .catch(() => undefined) — a timing-repository failure must never fail the run or node execution
 // it is merely observing.
+// W0.2 — WHICH COST, and W0.3 — WHOSE ATTEMPT. Both defects lived in this one line.
+//
+// COST (W0.2). The old line recorded `totalCostUsdEstimate`, which sums actual AND estimated spend.
+// The budget guard that gates a run reads `actualCostUsdEstimate` only (R-20: a mock run's
+// deterministic estimates are money nobody spent). So the ledger's cost and the guard's cost were two
+// different figures under one name, and the EV floor built on the ledger was charging real runs for
+// mock ones. `costUsd` is now the ACTUAL half; the estimated half is kept beside it as
+// `estimatedCostUsd` so a mock sample is still fully visible, just not countable.
+//
+// ATTEMPT (W0.3). summarizeModelUsage sums every usage record for this (runId, nodeId) — which, after
+// an orchestrator retry, is every attempt. Recording that figure once per attempt would bill attempt 1
+// twice. `attemptStartedAt` windows the usage read to the attempt being recorded, so N samples for a
+// retried node sum to exactly the run's actual spend on it rather than N x the total.
+//
+// WHY A TIME WINDOW AND NOT A LEDGER DELTA. The obvious alternative — read back what previous samples
+// for this (runId, nodeId) already carry, and subtract — was written first and then removed, because
+// it is a performance trap: the blob timing repository indexes by workflowId only, so a
+// {runId, nodeId} list() scans the "node_timings/" prefix and downloads EVERY timing blob in the
+// store. That is an O(whole ledger) read on every node completion, in the hot path, growing forever.
+// The usage repository is runId-indexed and already supports a `from` filter, so windowing there
+// costs one cheap scoped read and is exact rather than reconstructed.
+//
+// PHASE SAMPLES carry no cost at all. They are a duration breakdown of ONE attempt, and a breakdown
+// that also consumed the budget would double-count within an attempt the way retries used to
+// double-count across them.
+//
+// FAIL-OPEN, as everywhere in this area: a usage read that throws is not this function's business to
+// handle — every call site wraps it in .catch(() => undefined) — and a costUsd that cannot be
+// established is 0, never a guess.
 export async function recordNodeTimingCompletion(input: RecordNodeTimingCompletionInput, store: NodeTimingRepository = repositoryManager.getNodeTimingRepository()): Promise<NodeTimingRecord> {
-  const usage = await summarizeModelUsage({ runId: input.runId, nodeId: input.nodeId });
-  return store.record(buildNodeTimingRecord({ ...input, costUsd: usage.totalCostUsdEstimate }));
+  const { attemptStartedAt, ...record } = input;
+  if (record.phase !== undefined) return store.record(buildNodeTimingRecord({ ...record, costUsd: 0 }));
+  const usage = await summarizeModelUsage({ runId: record.runId, nodeId: record.nodeId, ...(attemptStartedAt ? { from: attemptStartedAt } : {}) });
+  return store.record(buildNodeTimingRecord({
+    ...record,
+    costUsd: usage.actualCostUsdEstimate,
+    ...(usage.estimatedCostUsdEstimate > 0 ? { estimatedCostUsd: usage.estimatedCostUsdEstimate } : {})
+  }));
 }

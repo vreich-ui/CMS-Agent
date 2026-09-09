@@ -47,6 +47,7 @@
 //      `build_not_confirmed_live` / `build_ready_not_published` receipt (released:false, hook fired) is
 //      ledgered pending WITHOUT releaseUnconfirmed — the release landed, only verification is open.
 
+import type { PhaseClaim } from "./routeRegistry.js";
 import type { CallToolFn } from "./publisher.js";
 import { describeMcpErrorResult, isMcpErrorResult } from "../projects/clientToolResult.js";
 import { resolvePublishAuthority, type PublishAuthority } from "./publishDecision.js";
@@ -156,6 +157,9 @@ export type RunDeterministicReleaseExecutorParams = {
   // absent — never minted here.
   requestId?: string;
   deps?: ReleaseExecutorDeps;
+  // W1.1 — the executor's per-phase dispatch claim (routeRegistry.ts). Optional and always safe to
+  // omit: without it this module behaves exactly as it did under one claim for call-plus-poll.
+  onPhase?: PhaseClaim;
 };
 
 export type ReleaseExecutorOutcome =
@@ -253,6 +257,10 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
   const { run } = params;
   const deps = params.deps ?? {};
   const maxPollAttempts = deps.maxPollAttempts ?? MAX_POLL_ATTEMPTS_DEFAULT;
+  // W1.1 — this route is a release CALL followed by deploy_status POLLING inside one dispatch: two
+  // separate waits under what used to be a single claim. Each names itself, so a stall lands on the
+  // half that was actually in flight instead of on "release_executor" generically.
+  await params.onPhase?.("release");
 
   const publishExecutorOutput = isRecord(run.stageOutputs?.publish_executor) ? (run.stageOutputs.publish_executor as Record<string, unknown>) : undefined;
   const receipts = isRecord(publishExecutorOutput?.receipts) ? (publishExecutorOutput!.receipts as Record<string, unknown>) : undefined;
@@ -344,6 +352,7 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
     // about THE commit first (W1.3 polls by commit). Confirmed live ⇒ executed, and release_to_production
     // is never touched again. Anything else (not ready, rejected, threw) falls through to the keyed
     // re-call below, which replays the original receipt if the hook did go out.
+    await params.onPhase?.("poll");
     const pre = await pollDeployStatus(callTool, { commit: deployedSha });
     if (pre.kind === "ready") {
       const attempts = priorAttempts + 1;
@@ -428,6 +437,7 @@ export async function runDeterministicReleaseExecutor(params: RunDeterministicRe
   // publish receipt's commitSha (folded into deployedSha above). A bare {} only when NO identity
   // exists anywhere (both deploy_status fields are optional, so a bare call is schema-valid).
   const pollArgs: Record<string, unknown> = releaseId ? { deployId: releaseId } : deployedSha ? { commit: deployedSha } : {};
+  await params.onPhase?.("poll");
   const poll = await pollDeployStatus(callTool, pollArgs);
   if (poll.kind === "failed") {
     // release_to_production already succeeded — this is a VERIFICATION hiccup, not an unreleased

@@ -25,6 +25,9 @@ export class MemoryNodeTimingRepository implements NodeTimingRepository {
       if (filters.runId && record.runId !== filters.runId) return false;
       if (filters.workflowId && record.workflowId !== filters.workflowId) return false;
       if (filters.nodeId && record.nodeId !== filters.nodeId) return false;
+      // W0.1 — a pre-W0.1 record carries no projectId and therefore cannot satisfy a projectId
+      // filter. Excluding it is the point: an unattributable sample is not evidence about a tenant.
+      if (filters.projectId && record.projectId !== filters.projectId) return false;
       return inRange(record.recordedAt, filters);
     }).sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
   }

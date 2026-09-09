@@ -33,6 +33,10 @@ export class BlobNodeTimingRepository implements NodeTimingRepository {
       .filter((record) => !filters.workflowId || record.workflowId === filters.workflowId)
       .filter((record) => !filters.runId || record.runId === filters.runId)
       .filter((record) => !filters.nodeId || record.nodeId === filters.nodeId)
+      // W0.1 — projectId is a post-read filter rather than a second key prefix: workflowId remains
+      // the hot filter (every reader windows by workflow first), and a pre-W0.1 record carrying no
+      // projectId correctly fails this test rather than being counted for whichever tenant asked.
+      .filter((record) => !filters.projectId || record.projectId === filters.projectId)
       .filter((record) => inRange(record.recordedAt, filters))
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))
       .map((record) => clone(record));

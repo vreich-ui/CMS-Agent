@@ -27,11 +27,13 @@
 
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { handler as netlifyMcpHandler } from "../netlify/functions/mcp.mjs";
 import { routeControlPlaneRequest } from "../src/agent/mcp/http/controlPlaneRouter.js";
 import { DEPRECATED_TOOL_ALIASES } from "../src/agent/mcp/workspace/server.js";
+import { DEPLOYED_TICK_DEFAULTS } from "../src/agent/workspace/runContinuation.js";
 
 const DRIFT_TOKEN = "two-plane-drift-detector-token";
 const MANIFEST_PATH = path.resolve(fileURLToPath(new URL("../docs/mcp-tool-manifest.json", import.meta.url)));
@@ -212,7 +214,47 @@ const printDiff = (label: string, diff: SurfaceDiff): void => {
   }
 };
 
-export async function main(argv: string[]): Promise<number> {
+// 4. W1.2 — TICK CONSTANT PARITY (code vs the deploy scripts that actually configure the job).
+//
+// The continuation tick is described by four numbers, and before W1.2 the copy in code and the copy
+// in the deploy scripts had drifted on three of them: cron every-minute against an every-two-minutes
+// schedule, a 300s task-timeout default against a 600s deploy, a 45s tick budget against 240s. Nobody
+// noticed because nothing compared them — the stall analysis reasoned from the code's numbers and got
+// the cadence of the live plane wrong.
+//
+// This checks the two things that can actually go wrong:
+//   - the deployed cron matches DEPLOYED_TICK_DEFAULTS.cron, and the deployed task-timeout matches
+//     DEPLOYED_TICK_DEFAULTS.taskTimeoutSeconds / tickBudgetMs;
+//   - the job script still PASSES both env vars to the job. That second check is the load-bearing
+//     one: runContinuation.ts's fallbacks are deliberately conservative and are only correct as long
+//     as production never falls back to them.
+export function checkTickConstants(): string[] {
+  const failures: string[] = [];
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const jobScript = fs.readFileSync(path.resolve(repoRoot, "scripts/deploy-continuation-tick.sh"), "utf8");
+  const scheduleScript = fs.readFileSync(path.resolve(repoRoot, "scripts/deploy-continuation-tick-schedule.sh"), "utf8");
+
+  const shellDefault = (source: string, name: string): string | undefined =>
+    new RegExp(`^${name}="\\$\\{${name}:-([^}]*)\\}"`, "m").exec(source)?.[1];
+
+  const cron = shellDefault(scheduleScript, "CRON");
+  if (cron !== DEPLOYED_TICK_DEFAULTS.cron) failures.push(`deploy-continuation-tick-schedule.sh CRON default is ${JSON.stringify(cron)}, code says ${JSON.stringify(DEPLOYED_TICK_DEFAULTS.cron)} (runContinuation.DEPLOYED_TICK_DEFAULTS.cron)`);
+
+  const taskTimeoutSeconds = shellDefault(jobScript, "TASK_TIMEOUT_SECONDS");
+  if (Number(taskTimeoutSeconds) !== DEPLOYED_TICK_DEFAULTS.taskTimeoutSeconds) failures.push(`deploy-continuation-tick.sh TASK_TIMEOUT_SECONDS default is ${taskTimeoutSeconds}, code says ${DEPLOYED_TICK_DEFAULTS.taskTimeoutSeconds}`);
+
+  const budget = shellDefault(jobScript, "CONTINUATION_TICK_BUDGET_MS");
+  if (Number(budget) !== DEPLOYED_TICK_DEFAULTS.tickBudgetMs) failures.push(`deploy-continuation-tick.sh CONTINUATION_TICK_BUDGET_MS default is ${budget}, code says ${DEPLOYED_TICK_DEFAULTS.tickBudgetMs}`);
+
+  // The env vars must still REACH the job, or the conservative in-code fallbacks silently become the
+  // live values — the failure this parity check exists to make impossible.
+  for (const name of ["TASK_TIMEOUT_MS", "CONTINUATION_TICK_BUDGET_MS"]) {
+    if (!new RegExp(`^${name}=\\$${name}$`, "m").test(jobScript)) failures.push(`deploy-continuation-tick.sh no longer passes ${name} to the job; runContinuation.ts's conservative fallback would become the live value`);
+  }
+  return failures;
+}
+
+async function main(argv: string[]): Promise<number> {
   const write = argv.includes("--write");
   process.env.MCP_API_TOKEN = DRIFT_TOKEN;
   const warnings = reportEnvScoping();
@@ -268,6 +310,16 @@ export async function main(argv: string[]): Promise<number> {
     failed = true;
     console.error("alias parity      DRIFT");
     for (const failure of aliasFailures) console.error(`    - ${failure}`);
+  }
+
+  // 4. Tick constant parity.
+  const tickFailures = checkTickConstants();
+  if (tickFailures.length === 0) {
+    console.log(`tick constants    ok   cron ${DEPLOYED_TICK_DEFAULTS.cron}, task-timeout ${DEPLOYED_TICK_DEFAULTS.taskTimeoutSeconds}s, budget ${DEPLOYED_TICK_DEFAULTS.tickBudgetMs}ms match the deploy scripts`);
+  } else {
+    failed = true;
+    console.error("tick constants    DRIFT  code (runContinuation.ts) vs scripts/deploy-continuation-tick*.sh");
+    for (const failure of tickFailures) console.error(`    - ${failure}`);
   }
 
   return failed ? 1 : 0;

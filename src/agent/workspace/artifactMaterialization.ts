@@ -97,6 +97,7 @@
 // ours to paraphrase). One bad slot does not kill an article. A missing request id, a missing site id,
 // an unusable spec, an unreachable project or an exhausted poll budget are NODE refusals: none of them
 // can be true of one slot only, and none of them heals by continuing.
+import type { PhaseClaim } from "./routeRegistry.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 import type { WorkflowExecutionRecord } from "./executionTypes.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
@@ -244,6 +245,9 @@ const refused = (code: string, message: string): MaterializationOutcome => ({ ki
 export type MaterializerDeps = {
   projectRepository?: ProjectRepository;
   callTool?: (config: ProjectConnectionConfig, tool: string, args: Record<string, unknown>) => Promise<CallToolResult>;
+  // W1.1 — the executor's per-phase dispatch claim (routeRegistry.ts). Optional and always safe to
+  // omit: without it this module behaves exactly as it did when one claim covered every slot.
+  onPhase?: PhaseClaim;
 };
 
 /** True when this node is the deterministic materializer. Opt-in per node, same as every sibling route. */
@@ -820,6 +824,11 @@ export async function runArtifactMaterialization(
     };
   }
 
+  // W1.1 — the planning half is done; everything past this line is tenant-side work. The claim clock
+  // restarts here so the spec read, the retry reconciliation and the slot ordering above do not spend
+  // the window the bridge calls need.
+  await deps.onPhase?.("plan");
+
   const bridge = bridgeCallFor(config, deps);
 
   // C2 (BRIEF §3.10): IMAGE SLOTS FIRST, PDF SLOTS AFTER. A PDF's cover is `assets.images[] =
@@ -835,6 +844,11 @@ export async function runArtifactMaterialization(
   const advance = async (slot: MaterializationSlotSpec, context: SlotRenderContext): Promise<MaterializationOutcome | undefined> => {
     const existing = jobState.slots[slot.slotId];
     if (existing && isTerminalPhase(existing.phase)) return undefined;
+    // W1.1 — PER SLOT, NOT PER DISPATCH. Each slot is its own adopt -> create -> poll cycle, bounded
+    // on its own but walked several times inside ONE dispatch for a multi-slot spec: the same shape
+    // that made article_body's single claim describe only its first phase. Re-stamping here means a
+    // ten-slot spec is ten windows rather than one, so the claim tracks the slot actually in flight.
+    await deps.onPhase?.("slot");
     try {
       jobState.slots[slot.slotId] = await advanceSlot({ runId: run.runId, siteId, requestId, slot, state: existing, bridge, context, note: (warning) => warnings.push(warning) });
     } catch (error) {

@@ -21,7 +21,11 @@ import { repositoryManager } from "../runtime/repositories.js";
 import type { NodeTimingRepository } from "../repository/interfaces/NodeTimingRepository.js";
 import { estimateRunCostFromHistory, type RunCostEstimate } from "./runCostHistory.js";
 
-export type CostPrefetchWarningCode = "cost_history_unavailable" | "cost_history_insufficient" | "threw";
+// W0.5 — `ev_floor_history_pooled` joins the set: the estimate WAS produced and is usable, but it was
+// taken across every tenant running this workflow because the named tenant had too little history of
+// its own. That is a degradation, not a failure, and it follows the same loud-degradation convention
+// as the codes beside it — a floor derived from another site's economics should never be silent.
+export type CostPrefetchWarningCode = "cost_history_unavailable" | "cost_history_insufficient" | "ev_floor_history_pooled" | "threw";
 
 export type CostPrefetchResult = {
   estimate: RunCostEstimate;
@@ -29,7 +33,7 @@ export type CostPrefetchResult = {
   warning?: string;
 };
 
-export type CostPrefetchParams = { runId: string; workflowId: string };
+export type CostPrefetchParams = { runId: string; workflowId: string; projectId?: string };
 export type CostPrefetchDeps = { nodeTimingRepository?: NodeTimingRepository };
 
 // The key this estimate travels under in the node's input. Named as a constant so the executor, the
@@ -43,13 +47,23 @@ const noHistory = (reason: string): RunCostEstimate => ({ ...estimateRunCostFrom
 export async function getRunCostEstimate(params: CostPrefetchParams, deps: CostPrefetchDeps = {}): Promise<CostPrefetchResult> {
   const store = deps.nodeTimingRepository ?? repositoryManager.getNodeTimingRepository();
   try {
+    // Read the whole workflow's records and scope in the pure function rather than filtering at the
+    // repository: the pooled fallback needs both populations, and one read that serves both keeps the
+    // scoped and pooled figures derived from exactly the same rows.
     const records = await store.list({ workflowId: params.workflowId });
-    const estimate = estimateRunCostFromHistory({ records, excludeRunId: params.runId });
+    const estimate = estimateRunCostFromHistory({ records, excludeRunId: params.runId, projectId: params.projectId });
     if (estimate.basis === "no_history") {
       return {
         estimate,
         warningCode: "cost_history_insufficient",
-        warning: `No usable run-cost history for workflow "${params.workflowId}" (${estimate.sampleRuns} prior run(s) with recorded cost). The EV floor for this run is $0 and cannot block anything.`
+        warning: `No usable run-cost history for workflow "${params.workflowId}"${params.projectId ? ` on project "${params.projectId}"` : ""} (${estimate.sampleRuns} prior run(s) with recorded cost). The EV floor for this run is $0 and cannot block anything.`
+      };
+    }
+    if (estimate.scope === "pooled" && params.projectId) {
+      return {
+        estimate,
+        warningCode: "ev_floor_history_pooled",
+        warning: `The EV floor for this run was derived from POOLED history across every tenant running workflow "${params.workflowId}" — project "${params.projectId}" has too few attributable prior runs of its own. The figure ($${estimate.estimatedRunCostUsd}) reflects other sites' economics as much as this one's; it is used because a measured pooled number beats no number, not because it is this site's cost.`
       };
     }
     return { estimate };
