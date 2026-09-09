@@ -309,7 +309,7 @@ describe("collectSourcedBlockers — prefix-aware dedup (run_1786549907145_hf4wg
       { nodeId: "learning_recorder", output: { blockers: ["contract_intelligence: aggression_ceiling_missing: no ceiling declared."] } }
     ]);
     expect(collected).toHaveLength(1);
-    expect(collected[0]).toEqual({ nodeId: "contract_intelligence", blocker: "aggression_ceiling_missing: no ceiling declared." });
+    expect(collected[0]).toEqual({ nodeId: "contract_intelligence", blocker: "aggression_ceiling_missing: no ceiling declared.", sourceNodeIds: ["contract_intelligence", "learning_recorder"] });
   });
 
   it("does NOT collapse a blocker whose own vocabulary starts with a code that is not a node id", () => {

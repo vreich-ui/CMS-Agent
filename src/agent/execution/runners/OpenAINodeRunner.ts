@@ -9,6 +9,7 @@ import { executeTool } from "../../tools/toolExecutor.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
+import { resolveNodeInstructions } from "../nodeInstructions.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult, NodeToolCallRecord } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { NodeBudgetExceededError, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
@@ -271,7 +272,7 @@ export const maxOutputTokensCeiling = (): number => {
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_MAX_OUTPUT_TOKENS_CEILING;
 };
 
-function instructions(node: WorkspaceNode, deps: unknown, observations: unknown) {
+function instructions(node: WorkspaceNode, deps: unknown, resolvedPrompt: string) {
   return [
     "You are the CMS-Agent node runner. Return only structured JSON matching the output schema.",
     `Node: ${node.name} (${node.id})`,
@@ -281,7 +282,7 @@ function instructions(node: WorkspaceNode, deps: unknown, observations: unknown)
     // contractSource by echoing a dependency's output. Empty (and therefore absent from the system
     // prompt) for any dispatch whose input carries no runContext — a test double, a synthetic node.
     renderRunContextInstruction(readRunContext(deps)),
-    "Node prompt:", node.prompt,
+    resolvedPrompt,
     "Assigned dependencies and memory are provided in the user message. Never reveal secrets. Use only exposed tools."
   ].filter(Boolean).join("\n");
 }
@@ -303,6 +304,8 @@ export class OpenAINodeRunner implements NodeRunner {
     const c = cfg(node);
     const provider = resolveProvider(c);
     if (!process.env[provider.apiKeyEnv]) return { ok: false, code: "invalid_node_configuration", message: `${provider.apiKeyEnv} is required for ${provider.label} execution.` };
+    const resolvedInstructions = await resolveNodeInstructions(node);
+    if (resolvedInstructions.errors.length) return { ok: false, code: "invalid_node_configuration", message: resolvedInstructions.errors.join("; ") };
     // F2b (T-2, run_1785352838155_l544ye): the run's OWN budgetUsd ceiling was only ever evaluated
     // BETWEEN nodes (advanceRun's budget gate, before dispatch) — nothing inside a node's own turn
     // loop watched it, so a single node's turns could carry the run straight through the ceiling
@@ -406,7 +409,7 @@ export class OpenAINodeRunner implements NodeRunner {
       const innerModel = typeof agentModel === "string" ? await new OpenAIProvider().getModel(agentModel) : agentModel;
       agentModel = wrapModelWithBudgetGuard(innerModel, budgetGuardConfig, guardState);
     }
-    const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, playbookText), model: agentModel, modelSettings: settings, tools: sdkTools, outputType });
+    const agent = new Agent({ name: `cms_${node.id}`, instructions: instructions(node, input, resolvedInstructions.prompt), model: agentModel, modelSettings: settings, tools: sdkTools, outputType });
     // Dependency outputs used to be serialized TWICE into every prompt: once inside `input` (the
     // executor delivers them as input.dependencies) and again as a sibling `dependencyOutputs` key.
     // For a node like article_body that duplication alone doubled an 18K-char payload on every turn.

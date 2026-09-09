@@ -8,6 +8,7 @@ import { recordModelUsage } from "../observability/modelUsage.js";
 import { recordNodeTimingCompletion, NODE_EXECUTE_ROUTE_ERA, type NodeTimingOutcome } from "./nodeTimings.js";
 import { nextAttemptNumber } from "./nodeAttemptHistory.js";
 import { resolveSkillsForNode } from "../skills/skillResolver.js";
+import { resolveNodeInstructions } from "../execution/nodeInstructions.js";
 import { resolveEffectiveToolsForNode } from "../tools/toolResolver.js";
 import { DEFAULT_EXECUTION_MODE } from "./executor.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
@@ -128,8 +129,8 @@ export async function getNodeDetails(nodeId: string, repos = { workspaceReposito
 export async function getEffectivePrompt(nodeId: string, workspaceRepository = repositoryManager.getWorkspaceRepository(), preloadedNode?: WorkspaceNode) {
   const node = preloadedNode ?? await resolveNodeForExecution(nodeId, workspaceRepository);
   if (!node) throw new Error(`Unknown node: ${nodeId}`);
-  const skills = await resolveSkillsForNode(node, repositoryManager.getSkillRepository());
-  return redactSecrets({ prompt: [node.prompt, skills.instructions].filter(Boolean).join("\n\n"), nodePrompt: node.prompt, skillInstructions: skills.instructions });
+  const { prompt, nodePrompt, skillInstructions } = await resolveNodeInstructions(node);
+  return redactSecrets({ prompt, nodePrompt, skillInstructions });
 }
 
 // preloadedNode (same contract as getEffectivePrompt's above) lets executeNode pass down the node it

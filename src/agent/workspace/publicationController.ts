@@ -62,7 +62,7 @@ export type PublicationDecision = "go" | "no_go" | "blocked";
 
 // An upstream blocker with the node that raised it, so a waiver (or a hard block) can always name its
 // source. Order is the conductor's node order, not object-key order — determinism includes ordering.
-export type SourcedBlocker = { nodeId: string; blocker: string };
+export type SourcedBlocker = { nodeId: string; blocker: string; sourceNodeIds?: string[] };
 
 export type WaivedBlocker = SourcedBlocker & { rule: string; reason: string };
 
@@ -197,7 +197,7 @@ export function collectSourcedBlockers(stageOutputs: Array<{ nodeId: string; out
       text = text.slice(match[0].length);
     }
   };
-  const seen = new Set<string>();
+  const seen = new Map<string, SourcedBlocker>();
   const collected: SourcedBlocker[] = [];
   for (const { nodeId, output } of stageOutputs) {
     if (!isObject(output)) continue;
@@ -205,9 +205,17 @@ export function collectSourcedBlockers(stageOutputs: Array<{ nodeId: string; out
     for (const entry of blockers) {
       if (!nonEmptyString(entry)) continue;
       const key = identity(entry);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      collected.push({ nodeId, blocker: entry.trim() });
+      const existing = seen.get(key);
+      if (existing) {
+        // Keep every real source until project-specific classification runs. An earlier writer's
+        // advisory must not erase the same warning from the factual reviewer (or a promoted source).
+        const sources = existing.sourceNodeIds ?? [existing.nodeId];
+        if (!sources.includes(nodeId)) existing.sourceNodeIds = [...sources, nodeId];
+        continue;
+      }
+      const sourced = { nodeId, blocker: entry.trim() };
+      seen.set(key, sourced);
+      collected.push(sourced);
     }
   }
   return collected;
@@ -239,9 +247,12 @@ export function partitionBlockers(blockers: SourcedBlocker[], contentClass: stri
       waived.push({ ...entry, rule: WAIVER_RULE_ID, reason: WAIVER_REASON });
       continue;
     }
-    const classified = classifyBlockerSource(entry.nodeId, hardBlockerSources);
-    if (classified.class === "editorial") advisory.push({ ...entry, class: classified.class, rationale: classified.why });
-    else blocking.push(entry);
+    const sources = [...new Set([entry.nodeId, ...(entry.sourceNodeIds ?? [])])];
+    const strongest = sources.find((source) => classifyBlockerSource(source, hardBlockerSources).class === "integrity") ?? entry.nodeId;
+    const classified = classifyBlockerSource(strongest, hardBlockerSources);
+    const attributed = { ...entry, nodeId: strongest };
+    if (classified.class === "editorial") advisory.push({ ...attributed, class: classified.class, rationale: classified.why });
+    else blocking.push(attributed);
   }
   return { blocking, waived, advisory };
 }
@@ -302,6 +313,7 @@ export function buildPublicationDecision(params: {
     ...(waived.length ? [`Waived under ${WAIVER_RULE_ID}: ${waived.map(describeBlocker).join(" | ")}`] : []),
     ...(advisory.length ? [`Advisory (editorial, non-gating — recorded in advisories[]): ${advisory.map(describeBlocker).join(" | ")}`] : []),
     ...(blocking.length ? [`Upstream INTEGRITY blockers carried into this decision: ${upstreamBlockerLines.join(" | ")}`] : ["No unwaived upstream integrity blockers were present on any completed stage output."]),
+    ...blocking.filter((entry) => (entry.sourceNodeIds?.length ?? 0) > 1).map((entry) => `Deduplicated blocker sources: ${entry.sourceNodeIds!.join(", ")}; classified under ${entry.nodeId}: ${entry.blocker}`),
     ...(params.policyNotes ?? [])
   ];
 
