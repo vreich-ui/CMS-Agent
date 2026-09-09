@@ -1,7 +1,7 @@
 import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type PublishingPolicySnapshot, type RunDriver, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
-import { resolveProjectConnection, ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
+import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
@@ -58,6 +58,7 @@ import { decideNodeRetry, isAwaitingRetryBackoff, nextRetryAt, scheduleNodeRetry
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 import { ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS, declaresDeterministicRoute, deterministicStageTimeoutMs, nodeTimeoutMs, phaseTimeoutMsFor, resolveRouteEra, STALL_MARGIN_MS, type PhaseClaim } from "./routeRegistry.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
+import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -2331,7 +2332,8 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         artifactPlan: run.stageOutputs.artifact_plan,
         // W3 part 2: the publish request id travels as run context (engine-echoed), so this node no
         // longer depends on it being present in the exact upstream output it happens to read.
-        requestId: runContext.requestId
+        requestId: runContext.requestId,
+        runId: run.runId
       }, { projectRepository: repositoryManager.getProjectRepository() });
     } catch (error) {
       built = { ok: false, code: "threw", error: error instanceof Error ? error.message : String(error) };
@@ -2564,7 +2566,19 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // routes are: a mock run has no client reach.
   if (isReleaserNode(nextNode) && liveRun && nextNode.metadata?.releaseExecutorDeterministic === true) {
     const projectConfig = await repositoryManager.getProjectRepository().get(run.projectId);
-    const releaseCallTool = projectConfig ? (tool: string, args: Record<string, unknown>) => new ProjectMcpAdapter(projectConfig).callTool(tool, args) : undefined;
+    // W3.2.2 — release_to_production and its deploy_status polling, through the one door. This is the
+    // route whose manifest DOES list both verbs, so the ledger records them against a route that can
+    // actually be checked.
+    //
+    // nodeId is the DISPATCHED node's real id, not the literal "release_executor". That is the honest
+    // attribution, and it is also what makes the forbidden-verb rule mean something here: the rule
+    // exempts release_executor by id, so a workflow whose releaser node were named something else
+    // would be refused rather than quietly released. publishPathTenantLedger.test.ts resolves all four
+    // conductor workflows and asserts every publish/release node id is one of the two exempt ids, so
+    // that rename fails a test at build time instead of a publish at run time.
+    const releaseCallTool = projectConfig
+      ? tenantCallToolFor({ projectId: projectConfig.projectId, project: projectConfig, caller: "engine", runId: run.runId, nodeId: nextNode.id, routeId: "release_executor" })
+      : undefined;
     let released: Awaited<ReturnType<typeof runDeterministicReleaseExecutor>>;
     try {
       released = await runDeterministicReleaseExecutor({
@@ -3128,7 +3142,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
         // clientObjectType): the client's validate request schema REQUIRES object_type, and omitting
         // it was the run_1786549907145_hf4wgb regression — every loop validation 400'd on the request
         // shape before the body was judged.
-        validate: (body) => validateClientObjectOnce({ projectId: run.projectId, body, objectId: readTopLevelObjectId(body), objectType: typeof (output as Record<string, unknown>).clientObjectType === "string" ? ((output as Record<string, unknown>).clientObjectType as string) : undefined }, { projectRepository: repositoryManager.getProjectRepository() }),
+        validate: (body) => validateClientObjectOnce({ projectId: run.projectId, body, objectId: readTopLevelObjectId(body), objectType: typeof (output as Record<string, unknown>).clientObjectType === "string" ? ((output as Record<string, unknown>).clientObjectType as string) : undefined, runId: run.runId, nodeId: "article_body" }, { projectRepository: repositoryManager.getProjectRepository() }),
         // ONE bounded revision turn, engine-driven: the model is handed the client's own errors and
         // the exact paths they name, and asked for a corrected envelope. A fresh dispatch, so the
         // node's toolCallLimit is not what runs out; the runner records its own usage, so the turn is

@@ -71,6 +71,16 @@ export type ToolDefinition<I = unknown, O = unknown> = {
   metadata: Record<string, unknown>;
 };
 
+// W3.2.1 — WHO MADE THE CALL. A tenant verb can be reached two ways and until the choke point they
+// were indistinguishable in the ledger because only one of them was in it at all:
+//   "model"  — a model turn named the verb through a granted controlled tool (project.call_tool /
+//              project.call_read_tool). Passes evaluateToolPolicy, a risk check and an approval gate.
+//   "engine" — a deterministic route called it directly through ProjectMcpAdapter. No node grant is
+//              consulted and no risk level is checked; the route manifest is the only statement of
+//              what it is entitled to call.
+// A controlled tool that never leaves this process (workspace.*, files.*, ...) carries no caller.
+export type ToolCaller = "model" | "engine";
+
 export type ToolExecutionRecord = {
   toolExecutionId: string;
   runId: string;
@@ -85,6 +95,28 @@ export type ToolExecutionRecord = {
   errorCode?: string;
   riskLevel: WorkspaceRiskLevel;
   approvalStatus: "not_required" | "approved" | "missing";
+  // --- W3.2.1, all optional so every pre-existing record and every in-process controlled-tool
+  // record stays exactly the shape it was. ---
+  caller?: ToolCaller;
+  // The route manifest this call was made under, when the caller named one (routeRegistry.ts).
+  // Absent for a model turn and for an engine route that has no manifest yet.
+  routeId?: string;
+  // The tenant this verb was spoken to. Absent for a controlled tool that reaches no tenant.
+  projectId?: string;
+  // Set when caller is "engine", a routeId was given, that route HAS a manifest, and the manifest
+  // does not list this verb. Recorded, never enforced: the choke point is fail-open by charter, and
+  // a manifest that is merely incomplete must not be able to stop a publish.
+  engineVerbUnlisted?: true;
+};
+
+export type ToolExecutionFilters = {
+  runId?: string;
+  nodeId?: string;
+  toolId?: string;
+  caller?: ToolCaller;
+  routeId?: string;
+  projectId?: string;
+  limit?: number;
 };
 
 export type ToolDenial = { allowed: false; code: string; reasons: string[] };

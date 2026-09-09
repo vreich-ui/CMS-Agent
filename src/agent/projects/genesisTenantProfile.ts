@@ -23,9 +23,31 @@
 //      object_checkout, object_create, object_get, object_inventory, object_patch, registry_get and
 //      site_apply_theme; captureEngine names create_capture_job, get_capture_job_status and
 //      get_capture_snapshot.
-// (2) turned out to be a strict subset of (1), so the union IS zilberman's live set — which is the
-// reassuring outcome, not a reason to skip the check: it says the operator's hand-tuning already
-// covered emission, and it is why migrating zilberman produces an empty policy diff.
+// (2) turned out to be a strict subset of (1), so the union IS zilberman's live set — which read at
+// the time as the reassuring outcome.
+//
+// W4.3 CORRECTION (2026-09-09): it was not reassuring, it was the defect. Deriving the profile from
+// one live tenant's map copied that tenant's GAPS into every tenant minted afterwards, and the
+// containment check that was supposed to catch this only covered (2) — the capture/clone EMISSION
+// verbs. Emission is not the whole engine. The route manifests (routeRegistry.ts, complete since
+// W3.2.0) declare four more route families, and three of them needed verbs neither source had:
+//
+//   clone_stage:pdf_mint          create_pdf_template, validate_pdf_template,
+//                                 get_pdf_template_validation — while publish_pdf_template WAS
+//                                 permitted. A tenant allowed to publish a template it may not
+//                                 create; the pdf branch failed at mint and never reached the
+//                                 publish it was entitled to perform. Found live on zilberman and
+//                                 on genesis-lab-2, which is what proves it came from here.
+//   artifact_materializer         get_agent_artifact_by_slot, create_agent_artifact_job,
+//                                 get_agent_artifact_job_status — so every PDF and image slot on
+//                                 every run for a minted tenant reported blocked. Exactly the
+//                                 "minted tenant cannot do its job" class this profile exists to
+//                                 prevent, one node over.
+//   visual_standard_materializer  site_apply_brand_imagery — deliberately still withheld, see
+//                                 GENESIS_WITHHELD_ROUTE_VERBS below.
+//
+// The containment check now walks the route manifests instead of a hand-kept emission list, so the
+// next route that starts speaking a new verb fails a test here rather than stalling a tenant.
 //
 // object_publish and release_to_production stay "allowed" here deliberately. They are the verbs
 // publish_executor and release_executor exist to speak, and every OTHER node is refused them
@@ -33,8 +55,9 @@
 // harden anything; it would only break the two nodes that are already gated three ways.
 import type { ProjectConnectionConfig, ToolPermission } from "./projectTypes.js";
 
-/** Bump when the profile below changes in a way every minted tenant should inherit. */
-export const GENESIS_TENANT_DEFINITION_VERSION = 1;
+/** Bump when the profile below changes in a way every minted tenant should inherit.
+ *  v2 (W4.3): the pdf-template mint verbs and the agent-artifact job verbs. */
+export const GENESIS_TENANT_DEFINITION_VERSION = 2;
 
 /**
  * The remote verbs a genesis-minted tenant may speak. Ordered as the live record orders them
@@ -66,9 +89,15 @@ export const GENESIS_TENANT_TOOL_POLICIES: Readonly<Record<string, ToolPermissio
   list_artifacts_for_request: "allowed",
   list_artifacts_by_request: "allowed",
   list_artifacts_by_kind: "allowed",
+  get_agent_artifact_by_slot: "allowed",
+  create_agent_artifact_job: "allowed",
+  get_agent_artifact_job_status: "allowed",
   site_apply_theme: "allowed",
   object_publish: "allowed",
   release_to_production: "allowed",
+  create_pdf_template: "allowed",
+  validate_pdf_template: "allowed",
+  get_pdf_template_validation: "allowed",
   publish_pdf_template: "allowed",
   search_images: "allowed",
   deploy_status: "allowed",
@@ -77,9 +106,27 @@ export const GENESIS_TENANT_TOOL_POLICIES: Readonly<Record<string, ToolPermissio
 });
 
 /**
+ * Route verbs this profile deliberately does NOT grant a newborn tenant. The list is the point: with
+ * it, the containment test can demand that the profile cover every verb the route manifests declare,
+ * and any NEW gap fails that test — so a future gap has to be either granted or written down here as
+ * a decision. Without it, a gap and a decision look identical, which is how the pdf-template one
+ * survived for months.
+ *
+ * `site_apply_brand_imagery` restyles an entire site in one call. A tenant minted an hour ago has no
+ * brand standard worth applying site-wide and no operator has looked at it yet, so
+ * `visual_standard_materializer` is an operator-enabled node on a new tenant rather than a birthright.
+ * Granting it is a one-line policy change through `project.update` when that operator decides.
+ */
+export const GENESIS_WITHHELD_ROUTE_VERBS: readonly string[] = Object.freeze([
+  "site_apply_brand_imagery"
+]);
+
+/**
  * The verbs the capture and clone emission stages speak. Kept explicit so a future edit to the map
  * above cannot quietly drop one — `genesisTenantProfile.test.ts` asserts containment, which is the
  * whole safety property: a minted tenant that cannot emit is the bug this profile exists to prevent.
+ * Superseded in scope by the route-manifest containment check (emission is a subset of it), kept
+ * because it names the verbs that must never be dropped even if a manifest is edited.
  */
 export const GENESIS_EMISSION_VERBS: readonly string[] = Object.freeze([
   "object_checkout",

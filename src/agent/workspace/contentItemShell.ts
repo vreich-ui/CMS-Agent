@@ -21,11 +21,12 @@ import { firstMaterializedPlanValue } from "./materializedPlan.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { readCreateOutcome } from "../projects/objectDialect.js";
 import { describeMcpErrorResult, isMcpErrorResult } from "../projects/clientToolResult.js";
-import { ProjectMcpAdapter, type CallToolResult } from "../projects/projectMcpAdapter.js";
+import { type CallToolResult } from "../projects/projectMcpAdapter.js";
 import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { isProjectPublishEnabled } from "./publisher.js";
 import type { NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
+import { tenantAdapterFor } from "../tools/tenantInvoke.js";
 
 export const CONTENT_ITEM_SHELL_INPUT_KEY = "contentItemShell";
 export const CONTENT_ITEM_SHELL_FAILED_PREFIX = "content_item_shell_failed:";
@@ -101,7 +102,7 @@ export async function ensureContentItemShell(params: ContentItemShellParams, dep
   if (blocking.length) return failed("policy_blocked", `object_create blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}`);
 
   const callTool = deps.callTool ?? (async (projectConfig, tool, args) => {
-    const adapter = new ProjectMcpAdapter(projectConfig, { env: deps.env });
+    const adapter = tenantAdapterFor(projectConfig, { caller: "engine", runId: run.runId, adapterDeps: { env: deps.env } });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CONTENT_ITEM_SHELL_TIMEOUT_MS);
     try { return await adapter.callTool(tool, args, controller.signal); } finally { clearTimeout(timer); }

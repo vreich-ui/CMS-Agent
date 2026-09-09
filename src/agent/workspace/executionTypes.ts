@@ -290,6 +290,21 @@ export type WorkflowExecutionRecord = {
   // next node completion.
   retryBackoffUntil?: string;
   approvalsRequired: ApprovalRequired[];
+  // W3.3 — THE RUN'S OWN TOOL AUTHORIZATION, and the seam three inert denial reasons need.
+  //
+  // evaluateToolPolicy has always been able to refuse a call for `platform_tool_not_allowed` and
+  // `run_tool_not_authorized`, and to cap a call at a `maxRiskLevel` — but nothing at dispatch ever
+  // populated those context fields, so two of the three could not fire at all and the third fell back
+  // to the node's own riskLevel. The runner now populates all three from ONE builder
+  // (execution/dispatchAuthorization.ts) which reads these fields, so a run that carries an
+  // authorization gets it enforced and a run that does not behaves exactly as before.
+  //
+  // Nothing sets them yet, and that is stated rather than hidden: this wave makes the gate real and
+  // gives it a place to read from; deciding who writes it (the platform at run creation, an operator
+  // at start_dry_run) is a separate decision. Absent means UNRESTRICTED — fail-open, the standing rule
+  // of this programme — never "allow nothing".
+  authorizedTools?: string[];
+  platformAllowedTools?: string[];
   initialInput?: unknown;
   stageOutputs: Record<string, unknown>;
   dryRun: true;

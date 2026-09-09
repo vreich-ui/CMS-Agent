@@ -267,7 +267,29 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
       { id: "map_refine", description: "Re-map with block_classifier's suggestions. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
       { id: "theme", description: "Derive the theme from the snapshot. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
       { id: "emit_dry", description: "Plan the emission without touching the tenant.", timeout: "deterministic_stage", requiredTools: [] },
-      { id: "emit_live", description: "Probe and ingest every asset on the target site, then walk creates/reuses over the project MCP — the long tail of this route.", timeout: "deterministic_stage", requiredToolsUnverified: true },
+      // W3.2.0 — ATTRIBUTED FROM SOURCE, no longer unverified. The stage is captureEmitStep(live:true)
+      // (captureEngine.ts) and nothing else; every tenant call it makes goes through the ONE transport
+      // it builds (buildAdapterTransport -> callProjectTool -> ProjectMcpAdapter.callTool), and the
+      // vendored emitter behind it (capture/engine/emit.mjs) names its verb at every one of its
+      // fourteen `transport.call(...)` sites as a string LITERAL — nine distinct verbs, no dynamic
+      // dispatch, so this list is exhaustive rather than representative. The asset "probe" in this
+      // stage's description is an HTTP HEAD/GET against the source site (createAssetProbe), not a
+      // tenant verb; the tenant-side half of media is create_artifact_from_url.
+      //
+      // emit_dry above stays [] and that is checked, not assumed: buildEmissionPlan is synchronous and
+      // is handed no transport at all (captureEngine.ts returns the dry-run report before
+      // executeEmission is reached).
+      { id: "emit_live", description: "Probe and ingest every asset on the target site, then walk creates/reuses over the project MCP — the long tail of this route.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "object_inventory", risk: "read", description: "Derive the target site binding and the reuse-first inventories." },
+        { verb: "object_contract", risk: "read", description: "The target's own contract per required object type, validate-before-create." },
+        { verb: "object_get", risk: "read", description: "Route-collision probing and reuse of an existing object." },
+        { verb: "object_validate", risk: "read", description: "Validate each candidate body before and after it is written." },
+        { verb: "object_create", risk: "write", description: "Mint the emitted drafts (never published — forbidden verbs are refused pre-transport)." },
+        { verb: "object_checkout", risk: "write", description: "Lock an existing object before reusing it." },
+        { verb: "object_patch", risk: "write", description: "Apply the reuse patch." },
+        { verb: "object_checkin", risk: "write", description: "Release the reuse lock." },
+        { verb: "create_artifact_from_url", risk: "write", description: "Ingest one source asset into the target's artifact store." }
+      ] },
       { id: "score", description: "Score the emission. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
       { id: "report", description: "Summarize the run. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
@@ -298,9 +320,22 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
         { verb: "object_patch", risk: "write", description: "Apply the restamp." },
         { verb: "object_checkin", risk: "write", description: "Release the lock." }
       ] },
-      { id: "pdf_intake", description: "Read the PDF template brief.", timeout: "deterministic_stage", requiredToolsUnverified: true },
-      { id: "pdf_mint", description: "Create the PDF template.", timeout: "deterministic_stage", requiredToolsUnverified: true },
-      { id: "pdf_publish", description: "Publish the PDF template.", timeout: "deterministic_stage", requiredToolsUnverified: true },
+      // W3.2.0 — the pdf-template branch, attributed from source (capture/pdfTemplateEngine.ts). These
+      // verbs are pdf-tool's OWN template store, reached over the same project MCP: create/validate/
+      // publish_pdf_template never touch a CMS objectId and never pass through object_publish, which is
+      // exactly why pdf_publish is a separate route stage from the shared publishing tail.
+      //
+      // pdf_intake really does call nothing: pdfTemplateIntakeStep is synchronous, takes no deps, and
+      // reads the brief out of run.initialInput. [] here is a verified assertion, not a default.
+      { id: "pdf_intake", description: "Read the PDF template brief from the run's own input. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "pdf_mint", description: "Create the PDF template, then validate it and poll the validation report.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "create_pdf_template", risk: "write", description: "Mint the draft template in pdf-tool's template store." },
+        { verb: "validate_pdf_template", risk: "write", description: "Start a validation run against the brief's worst-case sample data (every renderer except pdfme)." },
+        { verb: "get_pdf_template_validation", risk: "read", description: "Bounded deterministic poll of that validation report." }
+      ] },
+      { id: "pdf_publish", description: "Publish the PDF template.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "publish_pdf_template", risk: "publish", description: "Goes live in pdf-tool's template store. Gated by the executor's generic publish-risk gate on the node's own riskLevel, and by the project's publishEnabled kill switch." }
+      ] },
       { id: "report", description: "Summarize the clone. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
   },

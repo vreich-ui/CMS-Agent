@@ -6,9 +6,12 @@ import { explainDenialReasons } from "../explain";
 import { useClientContract } from "../hooks/useClientContract";
 import { useNodeInspector } from "../hooks/useNodeInspector";
 import {
+  buildEngineToolRows,
   buildNodePatch,
   buildNodeToolRows,
+  capabilityWarnings,
   classifyWriteFailure,
+  describeExecutionKind,
   draftChanges,
   draftFromNode,
   formatFetchedAt,
@@ -23,6 +26,7 @@ import {
   runControlsEnabled,
   saveBlockers,
   SCHEMA_DRAFT_FIELDS,
+  summarizeEngineToolRows,
   summarizeSkillPolicy,
   summarizeToolRows,
   type InspectorTab,
@@ -96,7 +100,7 @@ const nameFor = (nodes: WorkspaceNode[], id: string) => nodes.find((candidate) =
 
 export function NodeInspector({ node, nodes, client, project, workspaceVersion, graphSaving, onAddDependency, onRemoveDependency, onDeleteNode, onClearSelection, onSaved, onReloadWorkspace }: Props) {
   const [tab, setTab] = useState<InspectorTab>("prompt");
-  const { effectivePrompt, effectiveTools, skillPolicy, skills, loading, errors, fetchedAt, reload } = useNodeInspector(client, node.id);
+  const { effectivePrompt, effectiveTools, engineTools, capability, skillPolicy, skills, loading, errors, fetchedAt, reload } = useNodeInspector(client, node.id);
   const contract = useClientContract(client, project?.projectId ?? null);
 
   const [draft, setDraft] = useState<NodeDraft>(() => draftFromNode(node));
@@ -124,6 +128,12 @@ export function NodeInspector({ node, nodes, client, project, workspaceVersion, 
   const rows = buildNodeToolRows({ allowedTools: draft.allowedTools }, effectiveTools ?? []);
   const storedRows = buildNodeToolRows(node, effectiveTools ?? []);
   const toolTotals = summarizeToolRows(storedRows);
+  // W4.2 — the second list. See nodeInspector.ts's "engine capability" section for why a tools tab
+  // that shows only the first one can be wrong in two directions about the same node.
+  const engineRows = buildEngineToolRows(engineTools);
+  const engineTotals = summarizeEngineToolRows(engineRows);
+  const execution = describeExecutionKind(capability);
+  const capabilityNotes = capabilityWarnings(capability, engineRows);
   const skillSummary = summarizeSkillPolicy(skillPolicy);
   const composition = promptComposition(effectivePrompt, node);
   const warnings = nodeWarnings(node, skillPolicy, storedRows);
@@ -254,6 +264,16 @@ export function NodeInspector({ node, nodes, client, project, workspaceVersion, 
       </div>}
 
       {tab === "tools" && <div className="node-inspector-panel" aria-label="Tools">
+        {/* HOW THIS NODE RUNS, before anything about what it may call — because the answer changes
+            what the table below MEANS. A deterministic node's grants cannot fire at all. */}
+        <p className="node-inspector-execution-kind">
+          <span className={`execution-kind-badge execution-kind-badge--${execution.kind}`}>{execution.label}</span>
+          <span className="muted"> {execution.detail}</span>
+        </p>
+        {capabilityNotes.length > 0 && <ul className="node-inspector-capability-warnings" aria-label="Capability warnings">
+          {capabilityNotes.map((note) => <li key={note.message} className={`node-inspector-capability-warning--${note.severity}`}>{note.message}</li>)}
+        </ul>}
+        <h4>Model tools <span className="muted">(what a model turn may call)</span></h4>
         <p className="muted">{toolTotals.own} requested by this node · {toolTotals.allowed} allowed by the resolver · {toolTotals.denied} requested but denied.</p>
         {effectiveTools === null
           ? <p className="empty-state">Effective tools could not be resolved, so own-vs-effective cannot be shown. Refresh to retry.</p>
@@ -288,6 +308,30 @@ export function NodeInspector({ node, nodes, client, project, workspaceVersion, 
                 </tbody>
               </table>
             </div>)}
+        {/* THE SECOND LIST. Not a subsection of the first: these verbs pass no grant, no risk check
+            and — before W3.2 — no ledger, so rendering them inside the grants table would have said
+            they are governed by it. They are not. */}
+        <h4>Engine tenant verbs <span className="muted">(what this node's route calls regardless of any grant)</span></h4>
+        {/* A FAILED READ IS NOT AN EMPTY LIST. `engineTools === null` means the resolver could not be
+            reached; rendering that as "None" would tell an operator this node touches no tenant, which
+            for visual_standard_materializer would be false in the most expensive possible way. */}
+        {engineTools === null
+          ? <p className="empty-state">Engine tenant verbs could not be resolved, so this half is unknown — not empty. Refresh to retry.</p>
+          : engineRows.length === 0
+          ? <p className="muted">None. This node reaches a tenant only through the granted tools above.</p>
+          : <>
+              <p className="muted">{engineTotals.total} tenant verb(s){engineTotals.highRisk > 0 ? `, ${engineTotals.highRisk} at publish or admin risk` : ""} — called by engine code through the project MCP. No node grant is consulted and no risk level is checked.</p>
+              <table className="node-inspector-tools node-inspector-engine-tools" aria-label="Engine tenant verbs">
+                <thead><tr><th scope="col">Verb</th><th scope="col">Risk</th><th scope="col">What it does</th></tr></thead>
+                <tbody>
+                  {engineRows.map((row) => <tr key={row.verb} className={row.highRisk ? "node-inspector-engine-row--high-risk" : undefined}>
+                    <th scope="row"><code>{row.verb}</code></th>
+                    <td><span className={`risk-badge risk-badge--${row.risk}`}>{row.risk}</span></td>
+                    <td>{row.description}</td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </>}
         {effectiveTools !== null && <>
           <Glossary id="denial" />
           <Glossary id="risk" />

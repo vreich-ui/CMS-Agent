@@ -78,10 +78,10 @@ import {
 } from "./strategyLearning.js";
 import { fetchRollupRows, metricsFromRow, trackingSinkConnectionState, type RollupFetchDeps } from "./trackingIngest.js";
 import { isMcpErrorResult, describeMcpErrorResult } from "../projects/clientToolResult.js";
-import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import type { LearningObservation } from "../mcp/workspace/store.js";
 import type { LearningRepository } from "../repository/interfaces/LearningRepository.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
+import { invokeTenantTool } from "../tools/tenantInvoke.js";
 
 // ── the operator policy flag ─────────────────────────────────────────────────
 
@@ -729,7 +729,9 @@ const defaultCallProjectTool = (projectRepository: ProjectRepository) =>
   async (ref: StrategyObjectRef, tool: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; error?: string }> => {
     const config = await projectRepository.get(ref.projectId);
     if (!config) return { ok: false, error: `unknown_project: no registered project "${ref.projectId}" to reach the strategy object through.` };
-    const call = await new ProjectMcpAdapter(config).callTool(tool, args);
+    // W3.2.2 — the strategy review job reaches tenants outside any run; the ledger records it under
+    // its own sentinels rather than not at all.
+    const call = await invokeTenantTool({ projectId: config.projectId, project: config, toolId: tool, args, caller: "engine" });
     return call.ok ? { ok: true, result: call.result } : { ok: false, error: call.error ?? `${tool} failed` };
   };
 

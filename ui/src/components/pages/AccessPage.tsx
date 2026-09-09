@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Glossary } from "../Glossary";
+import { ToolAdministrationPanel } from "../ToolAdministrationPanel";
 import { PermissionToggle } from "../PermissionToggle";
 import { buildToolRows, nextToolPolicies, permissionMeta, summarizePermissions } from "../../toolPermissions";
+import { buildUsedByRows, usedByEmptyReason, type ProjectUsedBy } from "../../toolAdministration";
 import type { McpClient } from "../../mcp/client";
 import type { ProjectSummary, ProjectToolsResult, ToolPermission } from "../../types/workspace";
 import type { StatusMessage } from "../../status";
@@ -54,6 +56,22 @@ export function AccessPage({ client, projects, projectsError, onRefreshProjects,
       .finally(() => { if (!cancelled) setToolsLoading(false); });
     return () => { cancelled = true; };
   }, [projectId, client]);
+
+  // W4.2 — WHO HAS ACTUALLY REACHED THIS TENANT, read from the tool execution ledger. This is the
+  // question the toggles above raise and could not answer: an operator flipping a verb to "blocked"
+  // had no way to see which nodes speak it, and for an engine-invoked verb (a publish, a release, a
+  // theme apply) there was nothing recorded anywhere to see.
+  const [usedBy, setUsedBy] = useState<ProjectUsedBy | null>(null);
+  useEffect(() => {
+    if (!projectId) { setUsedBy(null); return; }
+    let cancelled = false;
+    client.call<{ usedBy: ProjectUsedBy | null }>("project.get", { projectId })
+      .then((result) => { if (!cancelled) setUsedBy(result.usedBy ?? null); })
+      .catch(() => { if (!cancelled) setUsedBy(null); });
+    return () => { cancelled = true; };
+  }, [projectId, client]);
+  const usedByRows = buildUsedByRows(usedBy);
+  const usedByEmpty = usedByEmptyReason(usedBy);
 
   const [saving, setSaving] = useState<string | null>(null);
 
@@ -148,6 +166,36 @@ export function AccessPage({ client, projects, projectsError, onRefreshProjects,
 
       {summary && rows.length === 0 && !toolsLoading && <p className="empty-state">No tools to show for {summary.name} yet.</p>}
       {!summary && registered.length === 0 && <p className="empty-state">No registered project connections. Register one, then set its tool permissions here.</p>}
+
+      {summary && <div className="project-used-by" aria-label="Used by">
+        <h3>Used by</h3>
+        <p className="muted">
+          Which nodes have actually called {summary.name}, from the tool execution ledger — the verbs they spoke, the
+          route they spoke them under, and whether the call came from a model turn or straight from engine code. Calls,
+          not intentions.
+        </p>
+        {usedByEmpty
+          ? <p className="empty-state">{usedByEmpty}</p>
+          : <table aria-label="Tenant callers">
+              <thead><tr>
+                <th scope="col">Node</th><th scope="col">Calls</th><th scope="col">Caller</th><th scope="col">Route</th><th scope="col">Verbs</th><th scope="col">Last</th>
+              </tr></thead>
+              <tbody>
+                {usedByRows.map((row) => <tr key={row.nodeId}>
+                  <th scope="row"><code>{row.nodeId}</code></th>
+                  <td>{row.calls}</td>
+                  {/* An engine-invoked call passed no grant and no risk check, so it is the row an
+                      operator changing a policy most needs to notice. */}
+                  <td>{row.engineReached ? <strong>{row.callers.join(", ")}</strong> : row.callers.join(", ")}</td>
+                  <td>{row.routeIds.join(", ") || <span className="muted">—</span>}</td>
+                  <td>{row.verbs.map((verb) => <code key={verb}>{verb} </code>)}</td>
+                  <td className="muted">{row.lastAt ?? "—"}</td>
+                </tr>)}
+              </tbody>
+            </table>}
+      </div>}
     </section>
+
+    <ToolAdministrationPanel client={client} />
   </section>;
 }

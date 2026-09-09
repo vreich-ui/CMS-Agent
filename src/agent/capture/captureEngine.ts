@@ -48,6 +48,7 @@ import {
 } from "./engine/emit.mjs";
 import { scoreCaptureFidelity, type FidelityReport } from "./engine/score.mjs";
 import { isUrlWithinPolicy, validateCapturePolicy, type ValidatedCapturePolicy } from "./engine/snapshot-v1.mjs";
+import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
 // T15.7 (ADR-2026-08-25-publish-autonomy §6/§9) — the T14.5 side publish path (./engine/publish.mjs,
 // and this module's own capturePublishStep/buildPublishTransport that drove it) is DELETED. capture no
 // longer publishes or releases itself: it composes onto the shared publishing tail
@@ -103,7 +104,13 @@ export class CaptureRefusal extends Error {
   }
 }
 
-export type CaptureDeps = { projectRepository?: ProjectRepository };
+export type CaptureDeps = {
+  projectRepository?: ProjectRepository;
+  // W3.2.2 — which run, node and stage this step is being executed for. The conductor route knows all
+  // three and passes them; a direct caller (a test, an operator step) legitimately knows none and its
+  // calls are recorded under the ledger's sentinels rather than not at all.
+  tenantContext?: TenantCallContext;
+};
 const projectsOf = (deps: CaptureDeps = {}): ProjectRepository => deps.projectRepository ?? repositoryManager.getProjectRepository();
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -249,7 +256,9 @@ export function describeMcpErrorResult(raw: Record<string, unknown>): string {
 async function callProjectTool(projectId: string, tool: string, args: Record<string, unknown>, deps: CaptureDeps = {}): Promise<Record<string, unknown>> {
   const config = await projectsOf(deps).get(projectId);
   if (!config) throw new CaptureRefusal("unknown_project", `Unknown projectId: ${projectId}`);
-  const adapter = new ProjectMcpAdapter(config);
+  // W3.2.2 — the whole capture plane's tenant traffic passes through this one function, so routing it
+  // through the choke point here covers every capture verb at once (nine of them on emit_live alone).
+  const adapter = tenantAdapterFor(config, { caller: "engine", ...deps.tenantContext });
   const call = await adapter.callTool(tool, args);
   if (!call.ok) throw new CaptureRefusal("project_tool_call_failed", `${tool} on ${projectId} failed: ${call.error ?? "unknown error"}`);
   const raw = call.result as Record<string, unknown> | undefined;

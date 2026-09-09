@@ -12,13 +12,13 @@
 // is stored there after. Optional and best-effort: a caller that omits workspaceRepository, or a
 // store that errors on the lookup/write, gets exactly today's behavior — the raw fetch and reduction
 // still happen, just without cross-run reuse.
-import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import { stableHash } from "../improvement/improvementTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import { conductorCache, type RunScopedCache } from "./conductor.js";
 import { CONTRACT_REDUCER_VERSION, reduceContract, type ReducedContract } from "./contractReduction.js";
+import { tenantAdapterFor } from "../tools/tenantInvoke.js";
 
 // T2: `authFailed` separates "the client rejected THIS driver's credential" from every other reason a
 // prefetch can fail. The distinction is load-bearing: every other failure is a degradation the node
@@ -95,7 +95,10 @@ export async function getReducedContract(params: ContractPrefetchParams, deps: C
     const policyFindings = getProjectHooks(params.projectId)?.enforceCallToolPolicy?.({ tool: "object_contract", arguments: arguments_ }) ?? [];
     const blocking = policyFindings.filter((finding) => finding.severity === "error");
     if (blocking.length) return { ok: false, error: `Blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}` };
-    const adapter = new ProjectMcpAdapter(config);
+    // W3.2.2 — same adapter, same call, now through the one door: this read is engine-invoked and
+    // was invisible to tool.list_executions before. No routeId: contract prefetch serves whichever
+    // node asked for it, and naming a route it might not be on would be a guess.
+    const adapter = tenantAdapterFor(config, { caller: "engine", runId: params.runId });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CONTRACT_PREFETCH_TIMEOUT_MS);
     let call: Awaited<ReturnType<typeof adapter.callReadTool>>;

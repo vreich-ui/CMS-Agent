@@ -87,15 +87,17 @@ describe("W3.1 — the tenant verbs a route reaches without any grant", () => {
     expect(themeBind.findings.map((finding) => finding.code)).toContain("high_risk_engine_verb");
   });
 
-  // "We did not establish this" and "this calls nothing" must not read the same. capture_emit_live
-  // certainly reaches the tenant — it creates objects and ingests every asset on the target site —
-  // and an empty list would have asserted the opposite.
-  it("says so when a stage's verbs are not attributed, rather than reporting none", () => {
+  // "We did not establish this" and "this calls nothing" must not read the same. That distinction is
+  // still the model — see requiredToolsUnverified in routeRegistry.ts and its own acceptance in
+  // routeRequiredToolsAttribution.test.ts — but as of W3.2.0 no stage is left standing on the
+  // "unverified" side of it: capture_emit_live's nine verbs were attributed from emit.mjs's literal
+  // call sites, so what this case now pins is that the audit reports them rather than an empty list.
+  it("reports capture_emit_live's attributed verbs, and still says nothing for a stage that calls nothing", () => {
     const emitLive = auditNodeCapabilities(node({ id: "capture_emit_live", metadata: { captureStageDeterministic: "emit_live" } }));
-    expect(emitLive.engineToolsUnverified).toBe(true);
-    expect(emitLive.engineRequiredTools).toEqual([]);
+    expect(emitLive.engineToolsUnverified).toBeUndefined();
+    expect(emitLive.engineRequiredTools.map((tool) => tool.verb)).toContain("object_create");
     expect(emitLive.findings.map((finding) => finding.code)).toContain("engine_tenant_calls_unlisted");
-    expect(emitLive.findings.find((finding) => finding.code === "engine_tenant_calls_unlisted")!.detail).toContain("not yet attributed");
+    expect(emitLive.findings.find((finding) => finding.code === "engine_tenant_calls_unlisted")!.detail).toContain("tenant verb(s) directly");
 
     // ...and a stage that genuinely calls nothing says THAT, with no finding at all.
     const map = auditNodeCapabilities(node({ id: "capture_map", metadata: { captureStageDeterministic: "map" } }));
@@ -138,6 +140,9 @@ describe("W3.1 — the audit over the live graph", () => {
     expect(summary.nodesWithDeadGrants).toBe(22);
     expect(summary.deadGrantCount).toBeGreaterThan(60);
     // Every node that reaches a publish- or admin-risk tenant verb from engine code, by name.
-    expect(summary.nodesReachingHighRiskVerbs).toEqual(["release_executor", "theme_bind", "visual_standard_materializer"]);
+    // W3.2.0 added pdf_template_publish: publish_pdf_template was attributed to the clone route's
+    // pdf_publish stage, so the node that runs that stage now reports the publish-risk verb it always
+    // spoke. The node did not change; the audit stopped being blind to it.
+    expect(summary.nodesReachingHighRiskVerbs).toEqual(["pdf_template_publish", "release_executor", "theme_bind", "visual_standard_materializer"]);
   });
 });

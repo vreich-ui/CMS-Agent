@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   GENESIS_EMISSION_VERBS,
+  GENESIS_WITHHELD_ROUTE_VERBS,
   GENESIS_TENANT_DEFINITION_VERSION,
   GENESIS_TENANT_TOOL_POLICIES,
   genesisTenantProfile,
@@ -8,6 +9,7 @@ import {
 } from "../../../src/agent/projects/genesisTenantProfile.js";
 import { migrateDefaultProjectConfig } from "../../../src/agent/projects/defaultMigration.js";
 import { defaultProjectConnections } from "../../../src/agent/projects/defaultProjects.js";
+import { ROUTE_MANIFESTS } from "../../../src/agent/workspace/routeRegistry.js";
 import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 
 // G5 ACCEPTANCE. Two failures are possible here and they point in opposite directions, which is why
@@ -48,6 +50,52 @@ describe("G5 — the genesis tenant profile", () => {
     // from the map fails here rather than in production as a stalled clone run.
     for (const verb of GENESIS_EMISSION_VERBS) {
       expect(GENESIS_TENANT_TOOL_POLICIES[verb], `emission verb "${verb}" is not permitted by the genesis profile`).toBe("allowed");
+    }
+  });
+
+  // W4.3 — THE CHECK THAT WOULD HAVE CAUGHT THE ORIGINAL DEFECT.
+  //
+  // The emission containment above was real and insufficient: it covered the capture/clone emission
+  // stages, which is one route family out of five. The profile was derived from one live tenant's
+  // hand-tuned map, so that tenant's gaps became every minted tenant's gaps — zilberman and
+  // genesis-lab-2 both permitted `publish_pdf_template` while blocking the three verbs that create
+  // the template being published, and neither could run artifact_materializer at all.
+  //
+  // The route manifests have declared what every route calls since W3.2.0, so the check no longer
+  // needs a hand-kept list. A verb a route needs must be either GRANTED or written into
+  // GENESIS_WITHHELD_ROUTE_VERBS as a decision — a gap and a decision must not look alike.
+  it("permits every verb any route manifest declares, or names it as deliberately withheld", () => {
+    const declared = new Set<string>();
+    for (const manifest of ROUTE_MANIFESTS) {
+      for (const tool of manifest.requiredTools ?? []) declared.add(tool.verb);
+      for (const phase of manifest.phases) for (const tool of phase.requiredTools ?? []) declared.add(tool.verb);
+    }
+    expect(declared.size).toBeGreaterThan(0);
+
+    const withheld = new Set(GENESIS_WITHHELD_ROUTE_VERBS);
+    const missing = [...declared].filter((verb) => GENESIS_TENANT_TOOL_POLICIES[verb] !== "allowed" && !withheld.has(verb)).sort();
+    expect(missing, "route verbs a minted tenant needs but the genesis profile neither grants nor withholds").toEqual([]);
+  });
+
+  it("keeps every withheld verb a real route verb, so the list cannot become a dumping ground", () => {
+    const declared = new Set(ROUTE_MANIFESTS.flatMap((manifest) => [
+      ...(manifest.requiredTools ?? []).map((tool) => tool.verb),
+      ...manifest.phases.flatMap((phase) => (phase.requiredTools ?? []).map((tool) => tool.verb))
+    ]));
+    for (const verb of GENESIS_WITHHELD_ROUTE_VERBS) {
+      expect(declared.has(verb), `"${verb}" is withheld but no route declares it — remove it`).toBe(true);
+      // A withheld verb must also not be granted: the two lists would then contradict each other.
+      expect(GENESIS_TENANT_TOOL_POLICIES[verb]).toBeUndefined();
+    }
+  });
+
+  // The specific regression, named. Permitting a publish while blocking the create it depends on is
+  // not a safe conservative default — it is a run that fails one step before the step it is allowed
+  // to take.
+  it("does not permit a publish verb whose creation half is blocked", () => {
+    expect(GENESIS_TENANT_TOOL_POLICIES.publish_pdf_template).toBe("allowed");
+    for (const verb of ["create_pdf_template", "validate_pdf_template", "get_pdf_template_validation"]) {
+      expect(GENESIS_TENANT_TOOL_POLICIES[verb], `${verb} is needed to produce what publish_pdf_template publishes`).toBe("allowed");
     }
   });
 

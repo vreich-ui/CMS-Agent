@@ -487,3 +487,94 @@ export function classifyWriteFailure(error: unknown): WriteFailure {
   }
   return { kind: "unknown", code: code || "unknown", message: detailMessage, recovery: "The save did not complete. Nothing was written. Reload to confirm the current state before trying again." };
 }
+
+// ---------------------------------------------------------------------------- engine capability (W4.2)
+//
+// THE SECOND TOOL LIST, and why the inspector was misleading without it.
+//
+// Everything above this line describes ONE of the two things called "tool" in this system: the
+// controlled registry tools a MODEL turn may call, which pass a policy check, a risk check and the
+// tool execution ledger. The other kind is a TENANT MCP VERB — object_publish,
+// site_apply_brand_imagery, release_to_production — reached directly by a node's deterministic route.
+// Those pass no node grant and no risk check.
+//
+// So the Tools tab, showing only the first kind, could say two false things at once about the same
+// node. `visual_standard_materializer` is the case that proves it: riskLevel `admin`, allowedTools
+// [], and six tenant verbs including one that restyles an entire site. The tab said "this node has no
+// tools". It also said, for every deterministic node, that its grants were live — when a
+// deterministic route returns before a model runner is ever built, so none of them can fire.
+//
+// These models render both truths side by side: what a model turn may call, and what the engine will
+// call regardless.
+
+/** One tenant verb a node's route calls, as reported by node.get_effective_tools' `engine` array. */
+export type EngineTool = { verb: string; risk: string; description: string };
+
+export type NodeCapability = {
+  executionKind: "model" | "deterministic";
+  routeId?: string;
+  deadGrants: string[];
+  findings: Array<{ code: string; detail: string; verbs?: string[]; grants?: string[] }>;
+};
+
+export type EngineToolRow = EngineTool & {
+  /** publish/admin risk: the two levels a node's own riskLevel is supposed to gate and, on this
+   *  path, does not. Rendered as the loud badge. */
+  highRisk: boolean;
+};
+
+const HIGH_RISK_ENGINE_RISKS = new Set(["publish", "admin"]);
+
+export function buildEngineToolRows(engine: EngineTool[] | null | undefined): EngineToolRow[] {
+  return (engine ?? []).map((tool) => ({ ...tool, highRisk: HIGH_RISK_ENGINE_RISKS.has(tool.risk) }));
+}
+
+export const summarizeEngineToolRows = (rows: EngineToolRow[]) => ({
+  total: rows.length,
+  highRisk: rows.filter((row) => row.highRisk).length
+});
+
+/** What the executionKind badge says, in an operator's words rather than the engine's. */
+export function describeExecutionKind(capability: NodeCapability | null): { kind: string; label: string; detail: string } {
+  if (capability?.executionKind === "deterministic") {
+    return {
+      kind: "deterministic",
+      label: "deterministic route",
+      detail: capability.routeId
+        ? `This node runs engine code (route ${capability.routeId}), not a model turn. Any tools it is granted can never fire — the route returns before a model runner is built.`
+        : "This node runs engine code, not a model turn. Any tools it is granted can never fire — the route returns before a model runner is built."
+    };
+  }
+  return {
+    kind: "model",
+    label: "model dispatch",
+    detail: "This node runs a model turn. Its granted tools are the only way it reaches anything, and every call passes the policy check and the ledger."
+  };
+}
+
+export type CapabilityWarning = { severity: "high" | "medium"; message: string };
+
+/** The warnings a node earns when its grant list and its behaviour disagree. Empty when they agree —
+ *  an inspector that always shows a banner trains its reader to stop seeing it.
+ *
+ *  Severity is by KIND, not by count, for the same reason the drift list sorts that way: a dead grant
+ *  is untidy, and an admin-risk verb reached past every check is not. Rendering both in the same red
+ *  would make the red mean "this node has a note". */
+export function capabilityWarnings(capability: NodeCapability | null, engineRows: EngineToolRow[]): CapabilityWarning[] {
+  const warnings: CapabilityWarning[] = [];
+  if (!capability) return warnings;
+  const highRisk = engineRows.filter((row) => row.highRisk);
+  if (highRisk.length > 0) {
+    warnings.push({
+      severity: "high",
+      message: `Reaches ${highRisk.length} publish- or admin-risk tenant verb(s) from engine code, past every grant and risk check: ${highRisk.map((row) => row.verb).join(", ")}.`
+    });
+  }
+  if (capability.deadGrants.length > 0) {
+    warnings.push({
+      severity: "medium",
+      message: `${capability.deadGrants.length} granted tool(s) can never fire on this node: it terminates in a deterministic route.`
+    });
+  }
+  return warnings;
+}

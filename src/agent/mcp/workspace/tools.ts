@@ -33,11 +33,14 @@ import { normalizeSkillInput, skillDefinitionSchema, validateSkillDefinition } f
 import { resolveSkillsForNode } from "../../skills/skillResolver.js";
 import { skillStatuses, type SkillDefinition } from "../../skills/skillTypes.js";
 import { listTools as listControlledTools, getTool as getControlledTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
+import { resolveNodeForExecution } from "../../workspace/nodeResolution.js";
 import { executeTool, getToolExecution, listToolExecutions } from "../../tools/toolExecutor.js";
 import { filterRecordsByProject } from "../../improvement/projectScope.js";
 import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
 import { createSiteCredentialTools } from "./siteCredentialTools.js";
 import { createVisualIdentityTools } from "./visualIdentityTools.js";
+import { FORBIDDEN_PROJECT_VERBS } from "../../tools/forbiddenProjectVerbs.js";
+import { dispatchToolContext } from "../../execution/dispatchAuthorization.js";
 
 const emptyInput = z.object({}).strict();
 
@@ -383,9 +386,21 @@ const skillResolveInput = z.object({ nodeId: z.string().min(1), workspaceSystemP
 const controlledToolIdInput = z.object({ toolId: z.string().min(1) }).strict();
 const controlledToolTestInput = z.object({ toolId: z.string().min(1), input: z.unknown().default({}), runId: z.string().min(1).default("mcp-tool-test"), nodeId: z.string().min(1), projectId: z.string().min(1).optional(), skillId: z.string().min(1).optional(), approvedToolIds: z.array(z.string()).optional(), runAuthorizedTools: z.array(z.string()).optional(), platformAllowedTools: z.array(z.string()).optional(), maxRiskLevel: z.enum(workspaceRiskLevels).optional() }).strict();
 const effectiveToolsInput = z.object({ nodeId: z.string().min(1), runId: z.string().min(1).optional(), approvedToolIds: z.array(z.string()).optional(), runAuthorizedTools: z.array(z.string()).optional(), platformAllowedTools: z.array(z.string()).optional(), maxRiskLevel: z.enum(workspaceRiskLevels).optional() }).strict();
-const toolExecutionInput = z.object({ toolExecutionId: z.string().min(1) }).strict();
-const listToolExecutionsInput = z.object({ runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), toolId: z.string().min(1).optional() }).strict();
-const nodeToolInput = z.object({ nodeId: z.string().min(1) }).strict();
+// W3.2.2/W4.1 — `runId` on tool.get_execution is a HINT, not a filter: with it the durable ledger
+// answers in one key read, without it that lookup would be a scan of every run and is skipped.
+const toolExecutionInput = z.object({ toolExecutionId: z.string().min(1), runId: z.string().min(1).optional() }).strict();
+// W4.1 — caller/routeId. An engine-invoked tenant verb was unfindable before the choke point existed;
+// these are the two filters that make "what did this route actually call" answerable.
+const listToolExecutionsInput = z.object({ runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), toolId: z.string().min(1).optional(), caller: z.enum(["model", "engine"]).optional(), routeId: z.string().min(1).optional(), projectId: z.string().min(1).optional() }).strict();
+// W3.3 — node.get_effective_tools takes an optional runId so it can answer against the SAME
+// authorization the dispatch would run under (dispatchToolContext). Without one it keeps its old
+// context-free answer, which is the honest reply to "what does this node declare" as distinct from
+// "what would this run let it do".
+// W4.1 — how many of a tenant's most recent ledger rows project.get.usedBy summarizes. A cap rather
+// than everything: this is an operator's "who would I break" glance, and tool.list_executions with a
+// projectId filter is the unbounded view.
+export const PROJECT_USED_BY_SAMPLE = 500;
+const nodeToolInput = z.object({ nodeId: z.string().min(1), runId: z.string().min(1).optional() }).strict();
 const nodeValidateInput = z.object({ nodeId: z.string().min(1), value: z.unknown() }).strict();
 const nodePrepareInput = z.object({ nodeId: z.string().min(1), input: z.unknown().optional(), dependencyOutputs: z.record(z.string(), z.unknown()).optional(), modelConfig: z.record(z.string(), z.unknown()).optional() }).strict();
 const nodeExecuteInput = z.object({ nodeId: z.string().min(1), input: z.unknown().optional(), runId: z.string().min(1).optional(), dependencyOutputs: z.record(z.string(), z.unknown()).optional(), executionMode: z.enum(["mock", "openai"]).default(DEFAULT_EXECUTION_MODE), modelConfig: z.record(z.string(), z.unknown()).optional(), expectedWorkspaceVersion: z.number().int().nonnegative().optional() }).strict();
@@ -552,9 +567,9 @@ const effectiveToolsJsonSchema = objectSchema({ nodeId: { type: "string", minLen
 // toolExecutionId and rejects the filter fields; tool.list_executions takes only the filters. One
 // shared schema previously advertised all four fields as optional on both, so a caller following
 // the advertisement got validation_error either way.
-const getToolExecutionJsonSchema = objectSchema({ toolExecutionId: { type: "string", minLength: 1 } }, ["toolExecutionId"]);
-const listToolExecutionsJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, toolId: { type: "string", minLength: 1 } });
-const nodeToolJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 1 } }, ["nodeId"]);
+const getToolExecutionJsonSchema = objectSchema({ toolExecutionId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 } }, ["toolExecutionId"]);
+const listToolExecutionsJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, toolId: { type: "string", minLength: 1 }, caller: { type: "string", enum: ["model", "engine"] }, routeId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 } });
+const nodeToolJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 } }, ["nodeId"]);
 const nodeValidateJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 1 }, value: {} }, ["nodeId", "value"]);
 // Per-tool node JSON schemas. Each advertises EXACTLY what its Zod schema accepts, so a client is
 // never rejected for sending a field the schema advertised. (A single shared broad schema previously
@@ -651,7 +666,26 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // workspace.update_node_schema below.
     tool({ name: "node.get", description: "Get a safe complete node inspection record with compact summaries of this node's actual revisions; use changes tools for full historical snapshots.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => ok({ node: await getNodeDetails(nodeToolInput.parse(input).nodeId, { workspaceRepository, executionRepository }) }) }),
     tool({ name: "node.get_effective_prompt", description: "Resolve the effective prompt for one node without secrets.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => ok(await getEffectivePrompt(nodeToolInput.parse(input).nodeId, workspaceRepository)) }),
-    tool({ name: "node.get_effective_tools", description: "Resolve effective controlled tools for one node.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => ok({ tools: await resolveEffectiveToolsForNode(nodeToolInput.parse(input).nodeId) }) }),
+    tool({ name: "node.get_effective_tools", description: "Resolve what a node can actually do, in BOTH senses: `tools` are the controlled registry tools a model turn may call, and `engine` are the tenant MCP verbs the node's own deterministic route calls directly — which pass no grant and no risk check, and which no grant list has ever shown. With `runId`, resolves against the SAME authorization that run's dispatch uses (the node's risk cap, the run's authorized tools, the platform's allowed tools) — so the answer is what dispatch would actually allow, not a context-free reading of the node's grant list. Without `runId`, reports the node's own declaration.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => {
+      const data = nodeToolInput.parse(input);
+      const run = data.runId ? await getRun(data.runId, executionRepository) : undefined;
+      const node = await resolveNodeForExecution(data.nodeId, undefined, run?.workflowId);
+      // W4.1 — `engine` is the OTHER half of what a node can do, and the half no grant list has ever
+      // shown: the tenant verbs its route calls directly through ProjectMcpAdapter. Those pass no node
+      // grant and no risk check (they pass the choke point's own rule as of W3.2.1), so reporting only
+      // `tools` here answers "what may this node call" with half the truth. Empty for a model
+      // dispatch, which reaches the tenant only through a granted tool.
+      // The audit is computed once and reported whole: executionKind is what decides whether the
+      // `tools` list above can fire at all (a deterministic node returns before a model runner is
+      // built), so returning the grants without it invites the reader to believe the grants.
+      const audit = node ? auditNodeCapabilities(node) : undefined;
+      const capability = audit
+        ? { executionKind: audit.executionKind, ...(audit.routeId ? { routeId: audit.routeId } : {}), deadGrants: audit.deadGrants, findings: audit.findings }
+        : null;
+      const engine = audit?.engineRequiredTools ?? [];
+      if (!run || !node) return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId), engine, capability, resolvedAgainst: "node_declaration" });
+      return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId, dispatchToolContext({ run, node })), engine, capability, resolvedAgainst: "run_dispatch" });
+    } }),
     tool({ name: "node.get_effective_skills", description: "Resolve effective skill policy for one node.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); if (!node) throw new Error("Unknown node"); return ok({ policy: await resolveSkillsForNode(node, skillRepository) }); } }),
     tool({ name: "node.get_input_schema", description: "Get one node input schema.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); return ok({ schema: node?.inputSchema ?? null }); } }),
     tool({ name: "node.get_output_schema", description: "Get one node output schema.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); return ok({ schema: node?.outputSchema ?? null }); } }),
@@ -665,7 +699,39 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "node.retry", description: "Retry a previous independent node execution.", zodSchema: nodeRetryInput, inputSchema: nodeRetryJsonSchema, execute: async (input) => { const data = nodeRetryInput.parse(input); const run = await executionRepository.getRun(data.runId); const state = run?.nodes.find((node) => !data.nodeId || node.nodeId === data.nodeId); if (!run || !state) return ok({ execution: null }); return ok(await executeNode({ nodeId: state.nodeId, input: (state.input as any)?.input, dependencyOutputs: (state.input as any)?.dependencies, executionMode: run.executionMode ?? DEFAULT_EXECUTION_MODE }, { workspaceRepository, executionRepository })); } }),
     tool({ name: "node.cancel", description: "Cancel an independent node execution record.", zodSchema: nodeRetryInput, inputSchema: nodeRetryJsonSchema, execute: async (input) => { const data = nodeRetryInput.parse(input); const run = await executionRepository.getRun(data.runId); if (!run) return ok({ execution: null }); return ok({ execution: await executionRepository.saveRun({ ...run, status: "cancelled", nodes: run.nodes.map((node) => data.nodeId && node.nodeId !== data.nodeId ? node : { ...node, status: node.status === "completed" ? node.status : "cancelled" }), updatedAt: new Date().toISOString() }) }); } }),
 
-    tool({ name: "tool.list", description: "List controlled tool registry entries.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ tools: listControlledTools().map(({ handler, inputSchema, outputSchema, ...tool }) => tool) }); } }),
+    tool({ name: "tool.list", description: "List controlled tool registry entries, each with its REACHABILITY: which resolved nodes grant it, and which of those grants can actually fire. A grant on a node that terminates in a deterministic route can never be called through the tool executor — the node returns before a model runner is ever built — so `grantedBy` and `reachableFrom` are different lists and a tool with grants but no reachable ones is reported `dead: true`. Read-only.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => {
+      emptyInput.parse(input);
+      await workspaceRepository.ensureWorkspaceNodeSeeds();
+      // W4.1 — reachability is computed from the RESOLVED node set, not from the registry, because
+      // the registry knows nothing about who holds a grant. Two lists, deliberately not one:
+      //   grantedBy      every node whose allowedTools names the tool — what an operator edited.
+      //   reachableFrom  the subset that is model-dispatched — what can actually happen.
+      // W3.1's audit is what makes the second computable; before it, "23 nodes carry grants that can
+      // never fire" was a sentence in a brief rather than something a tool could answer.
+      const nodes = await workspaceRepository.getNodes();
+      const audits = nodes.map(auditNodeCapabilities);
+      const grantedBy = new Map<string, string[]>();
+      const reachableFrom = new Map<string, string[]>();
+      for (const audit of audits) {
+        for (const toolId of [...audit.modelGrants, ...audit.deadGrants]) grantedBy.set(toolId, [...(grantedBy.get(toolId) ?? []), audit.nodeId]);
+        for (const toolId of audit.modelGrants) reachableFrom.set(toolId, [...(reachableFrom.get(toolId) ?? []), audit.nodeId]);
+      }
+      return ok({ tools: listControlledTools().map(({ handler, inputSchema, outputSchema, ...tool }) => {
+        const granted = (grantedBy.get(tool.toolId) ?? []).sort();
+        const reachable = (reachableFrom.get(tool.toolId) ?? []).sort();
+        return {
+          ...tool,
+          reachability: {
+            grantedBy: granted,
+            reachableFrom: reachable,
+            // "dead" means granted and unreachable — a grant that reads as a capability and is not
+            // one. A tool nobody grants is NOT dead: it is legitimately reachable from surfaces other
+            // than the conductor (the improvement judge, admin chat) and from tool.test.
+            dead: granted.length > 0 && reachable.length === 0
+          }
+        };
+      }) });
+    } }),
     tool({ name: "tool.get", description: "Get one controlled tool definition.", zodSchema: controlledToolIdInput, inputSchema: controlledToolIdJsonSchema, execute: async (input) => { const toolDef = getControlledTool(controlledToolIdInput.parse(input).toolId); if (!toolDef) return ok({ tool: null }); const { handler, inputSchema, outputSchema, ...safe } = toolDef; return ok({ tool: safe }); } }),
     tool({ name: "tool.test", description: "Execute a controlled tool through policy and audit gateway.", zodSchema: controlledToolTestInput, inputSchema: controlledToolTestJsonSchema, execute: async (input) => { const data = controlledToolTestInput.parse(input); return ok(await executeTool(data.toolId, data.input, { runId: data.runId, nodeId: data.nodeId, projectId: data.projectId, skillId: data.skillId, approvedToolIds: data.approvedToolIds, runAuthorizedTools: data.runAuthorizedTools, platformAllowedTools: data.platformAllowedTools, maxRiskLevel: data.maxRiskLevel })); } }),
     tool({ name: "tool.get_effective_for_node", description: "Resolve effective controlled tools for a node.", zodSchema: effectiveToolsInput, inputSchema: effectiveToolsJsonSchema, execute: async (input) => { const data = effectiveToolsInput.parse(input); return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId, data) }); } }),
@@ -676,9 +742,14 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // never payloads), so both tools fall back to the persisted run records: executions are
     // listable by run after the process that made them is long gone.
     tool({ name: "tool.get_execution", description: "Get a controlled tool execution audit record: the full in-process record when this process executed it, else the persisted per-call stub from the run record. Requires toolExecutionId; use tool.list_executions to search by run/node/tool.", zodSchema: toolExecutionInput, inputSchema: getToolExecutionJsonSchema, execute: async (input) => {
-      const { toolExecutionId } = toolExecutionInput.parse(input);
+      const { toolExecutionId, runId } = toolExecutionInput.parse(input);
       const inProcess = getToolExecution(toolExecutionId);
       if (inProcess) return ok({ execution: inProcess, source: "in_process" });
+      // W3.2.1 — the durable ledger, before the run-record stubs: it holds the FULL record (caller,
+      // routeId, project, summaries) where a stub holds five metadata fields, and it is the only
+      // place an engine-invoked tenant verb has ever been written.
+      const durable = await repositoryManager.getToolExecutionRepository().get(toolExecutionId, runId);
+      if (durable) return ok({ execution: durable, source: "tool_execution_ledger" });
       for (const run of await listRuns({}, executionRepository)) {
         for (const node of run.nodes) {
           const stub = node.toolCalls?.find((call) => call.toolExecutionId === toolExecutionId);
@@ -689,21 +760,36 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     } }),
     tool({ name: "tool.list_executions", description: "List controlled tool execution audit records by runId/nodeId/toolId — in-process records merged with the per-call stubs persisted on run records, so a past run's tool activity stays listable.", zodSchema: listToolExecutionsInput, inputSchema: listToolExecutionsJsonSchema, execute: async (input) => {
       const filters = listToolExecutionsInput.parse(input);
-      const inProcess = listToolExecutions(filters);
+      // Three sources, narrowest first, deduplicated by toolExecutionId:
+      //   in_process            — this process's own records, the freshest answer.
+      //   tool_execution_ledger — W3.2.1's durable store. The ONLY source that can show an
+      //                           engine-invoked tenant verb (a publish, a release, a theme apply).
+      //   run_record            — the per-call stubs the runner persists on the run. Kept because
+      //                           they still answer for every run made before the ledger existed.
+      const inProcess = listToolExecutions(filters).filter((record) =>
+        (!filters.caller || record.caller === filters.caller)
+        && (!filters.routeId || record.routeId === filters.routeId)
+        && (!filters.projectId || record.projectId === filters.projectId));
       const seen = new Set(inProcess.map((record) => record.toolExecutionId));
+      const ledger = (await repositoryManager.getToolExecutionRepository().list(filters)).filter((record) => !seen.has(record.toolExecutionId));
+      for (const record of ledger) seen.add(record.toolExecutionId);
       const persisted: unknown[] = [];
-      const runs = filters.runId ? [await getRun(filters.runId, executionRepository)].filter((run) => run !== undefined) : await listRuns({}, executionRepository);
-      for (const run of runs) {
-        for (const node of run!.nodes) {
-          if (filters.nodeId && node.nodeId !== filters.nodeId) continue;
-          for (const stub of node.toolCalls ?? []) {
-            if (filters.toolId && stub.toolId !== filters.toolId) continue;
-            if (stub.toolExecutionId && seen.has(stub.toolExecutionId)) continue;
-            persisted.push({ ...stub, runId: run!.runId, nodeId: node.nodeId, source: "run_record" });
+      // A caller/routeId/projectId filter is a question only the ledger can answer, so the stub
+      // fallback is skipped rather than returning stubs that cannot satisfy it.
+      if (!filters.caller && !filters.routeId && !filters.projectId) {
+        const runs = filters.runId ? [await getRun(filters.runId, executionRepository)].filter((run) => run !== undefined) : await listRuns({}, executionRepository);
+        for (const run of runs) {
+          for (const node of run!.nodes) {
+            if (filters.nodeId && node.nodeId !== filters.nodeId) continue;
+            for (const stub of node.toolCalls ?? []) {
+              if (filters.toolId && stub.toolId !== filters.toolId) continue;
+              if (stub.toolExecutionId && seen.has(stub.toolExecutionId)) continue;
+              persisted.push({ ...stub, runId: run!.runId, nodeId: node.nodeId, source: "run_record" });
+            }
           }
         }
       }
-      return ok({ executions: [...inProcess, ...persisted] });
+      return ok({ executions: [...inProcess, ...ledger.map((record) => ({ ...record, source: "tool_execution_ledger" })), ...persisted] });
     } }),
     tool({ name: "skill.list", description: "List reusable workspace skills.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ skills: await skillRepository.list() }); } }),
     tool({ name: "skill.get", description: "Get one reusable workspace skill.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok({ skill: await skillRepository.get(skillIdInput.parse(input).skillId) ?? null }) }),
@@ -788,7 +874,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       if (data.runId !== undefined) {
         const run = await getRun(data.runId);
         if (!run) throw new Error(`unknown_run: ${data.runId}`);
-        const built = await runDeterministicPublishPayload({ projectId: run.projectId, clientProjectId: run.projectId, articleBody: run.stageOutputs.article_body, artifactPlan: run.stageOutputs.artifact_plan }, { projectRepository: repositoryManager.getProjectRepository() });
+        const built = await runDeterministicPublishPayload({ projectId: run.projectId, clientProjectId: run.projectId, articleBody: run.stageOutputs.article_body, artifactPlan: run.stageOutputs.artifact_plan, runId: run.runId }, { projectRepository: repositoryManager.getProjectRepository() });
         if (!built.ok) throw new Error(`cannot_project_publish_payload (${built.code}): ${built.error}`);
         // Validated against the publish_payload node's own outputSchema for the same reason the
         // executor does it: this projection is only worth anything if it is the artifact the node
@@ -906,7 +992,36 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "usage.get_summary", description: "Summarize estimated model token and cost usage with optional filters.", zodSchema: usageFiltersSchema, inputSchema: usageFiltersJsonSchema, execute: async (input) => ok({ summary: await summarizeModelUsage(usageFiltersSchema.parse(input), usageRepository) }) }),
     tool({ name: "usage.get_budget_status", description: "Return estimated budget status for a run or project.", zodSchema: budgetStatusInput, inputSchema: budgetStatusJsonSchema, execute: async (input) => ok({ budgetStatus: await getBudgetStatus(budgetStatusInput.parse(input), usageRepository) }) }),
     tool({ name: "project.list", description: "List registered project MCP connections with safe, non-secret metadata.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); const projects = await projectRepository.list(); const health = await driverHealthRepository.listTenantHealth().catch(() => []); const byProject = new Map(health.map((record) => [record.projectId, record])); return ok({ projects: projects.map((config) => ({ ...toProjectSummary(config), driverHealth: byProject.get(config.projectId) ?? null })) }); } }),
-    tool({ name: "project.get", description: "Get one registered project MCP connection with safe, non-secret metadata, plus the project's knowledge rules when a hook module provides them.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const projectId = projectIdInput.parse(input).projectId; const config = await projectRepository.get(projectId); return ok({ project: config ? { ...toProjectSummary(config), driverHealth: (await driverHealthRepository.getTenantHealth(projectId).catch(() => undefined)) ?? null } : null, knowledge: config ? getProjectHooks(projectId)?.knowledge ?? null : null }); } }),
+    tool({ name: "project.get", description: "Get one registered project MCP connection with safe, non-secret metadata, the project's knowledge rules when a hook module provides them, and `usedBy` — who has actually reached this tenant, read from the tool execution ledger: the nodes that called it, the routes they called it under, the verbs they spoke and whether each call came from a model turn or from engine code. Empty for a tenant nothing has called since the ledger began; never a claim about intent, only about calls that happened.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => {
+      const projectId = projectIdInput.parse(input).projectId;
+      const config = await projectRepository.get(projectId);
+      if (!config) return ok({ project: null, knowledge: null, usedBy: null });
+      // W4.1 — the Access page's "used by" question, answerable for the first time because W3.2.1's
+      // choke point writes an engine-invoked tenant call down. Before it, the only honest answer for
+      // a publish, a release or a theme apply was "we cannot tell you".
+      //
+      // Bounded on purpose: this is a summary for an operator deciding whether a tool policy change
+      // is safe, not an audit export — tool.list_executions with a projectId filter is that.
+      const records = await repositoryManager.getToolExecutionRepository().list({ projectId, limit: PROJECT_USED_BY_SAMPLE });
+      const byNode = new Map<string, { nodeId: string; callers: Set<string>; routeIds: Set<string>; verbs: Set<string>; calls: number; lastAt?: string }>();
+      for (const record of records) {
+        const entry = byNode.get(record.nodeId) ?? { nodeId: record.nodeId, callers: new Set<string>(), routeIds: new Set<string>(), verbs: new Set<string>(), calls: 0 };
+        if (record.caller) entry.callers.add(record.caller);
+        if (record.routeId) entry.routeIds.add(record.routeId);
+        entry.verbs.add(record.toolId);
+        entry.calls += 1;
+        if (!entry.lastAt || record.startedAt > entry.lastAt) entry.lastAt = record.startedAt;
+        byNode.set(record.nodeId, entry);
+      }
+      const usedBy = {
+        sampledCalls: records.length,
+        sampleLimit: PROJECT_USED_BY_SAMPLE,
+        nodes: [...byNode.values()]
+          .map((entry) => ({ nodeId: entry.nodeId, calls: entry.calls, callers: [...entry.callers].sort(), routeIds: [...entry.routeIds].sort(), verbs: [...entry.verbs].sort(), lastAt: entry.lastAt ?? null }))
+          .sort((a, b) => b.calls - a.calls)
+      };
+      return ok({ project: { ...toProjectSummary(config), driverHealth: (await driverHealthRepository.getTenantHealth(projectId).catch(() => undefined)) ?? null }, knowledge: getProjectHooks(projectId)?.knowledge ?? null, usedBy });
+    } }),
     tool({ name: "project.test_connection", description: "Run a primitive MCP initialize against a project's external server. Read-only; no publishing side effects.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok({ connection: await new ProjectMcpAdapter(config).testConnection() }); } }),
     tool({ name: "project.list_tools", description: "List a project's remote MCP tools via tools/list. Returns safe tool names and descriptions only.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok(await new ProjectMcpAdapter(config).listTools()); } }),
     tool({ name: "project.call_tool", description: "Call an approved tool on a registered project MCP server. The config permission model plus the project's executable policy apply: legacy artifact fallback tools and fallback artifact-source arguments (remote image URLs, copied artifact refs, repo paths, hand-authored blob keys) are blocked before any transport, even when the config marks the tool allowed.", zodSchema: projectCallToolInput, inputSchema: projectCallToolJsonSchema, execute: async (input) => {
@@ -917,6 +1032,26 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       const policyFindings = getProjectHooks(data.projectId)?.enforceCallToolPolicy?.({ tool: data.tool, arguments: data.arguments }) ?? [];
       const blocking = policyFindings.filter((finding) => finding.severity === "error");
       if (blocking.length) return ok({ call: { ok: false, projectId: data.projectId, connection: adapter.connectionState(), tool: data.tool, permission: "blocked" as const, blockedByPolicy: true, policyFindings: blocking, error: `Blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}` } });
+      // W3.2.3 — THE LAST UNGATED DOOR TO A PUBLISH VERB, closed.
+      //
+      // AGENTS.md invariant 4 has named this hole in prose since it was written: the publish gates
+      // cover publishRun and the dispatch of publish-risk nodes; `project_call_tool` on the wire
+      // reaches release_to_production "with no gate at all". FORBIDDEN_PROJECT_VERBS has guarded the
+      // model path since K-A10 and now guards the engine path too (W3.2.1) — this surface was the one
+      // caller still outside it.
+      //
+      // There is no node here to exempt, and that is the point rather than a limitation: the two
+      // exempt ids are DISPATCHED nodes inside a run, which have already passed the publish-risk gate,
+      // the controller decision and the operator decision. A hand-made wire call has passed none of
+      // them, so no caller on this surface is exempt — not an operator, not a test. The sanctioned
+      // route to a publish is workflow_publish_run (gates + operator decision) or a run whose
+      // publish_executor / release_executor dispatch reaches it.
+      //
+      // Refused in the SHAPE this surface already refuses things, not by throwing: a caller that
+      // handles the executable-policy block above handles this identically.
+      if (FORBIDDEN_PROJECT_VERBS.has(data.tool)) {
+        return ok({ call: { ok: false, projectId: data.projectId, connection: adapter.connectionState(), tool: data.tool, permission: "blocked" as const, blockedByPolicy: true, error: `publish_verb_not_permitted: "${data.tool}" may not be called through project_call_tool. This surface has no run, no publish gate and no operator decision behind it. Publish through workflow_publish_run, or through a run whose publish_executor/release_executor dispatch reaches the verb.` } });
+      }
       return ok({ call: await adapter.callTool(data.tool, data.arguments) });
     } }),
     // Read-only split of project.call_tool. project.call_tool covers both read-only contract

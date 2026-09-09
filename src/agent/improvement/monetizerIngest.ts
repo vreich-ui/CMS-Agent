@@ -7,10 +7,11 @@
 // connection is reached through the standard ProjectMcpAdapter (endpoint/token from env NAMES, never
 // persisted); callTool is injectable so tests never touch a live endpoint.
 import { monetizerProjectConfig } from "../projects/monetizer/definition.js";
-import { ProjectMcpAdapter, type CallToolResult } from "../projects/projectMcpAdapter.js";
+import { type CallToolResult } from "../projects/projectMcpAdapter.js";
 import type { EvaluationRepository } from "../repository/interfaces/EvaluationRepository.js";
 import type { WorkspaceActor } from "../workspace/changeTypes.js";
 import { makeImprovementId, type FeedbackRecord } from "./improvementTypes.js";
+import { invokeTenantTool } from "../tools/tenantInvoke.js";
 
 const now = () => new Date().toISOString();
 const MAX_METRICS = 100;
@@ -54,7 +55,10 @@ export type MonetizerIngestDeps = { evaluationRepository: EvaluationRepository; 
 // Pull the requested Monetizer signals and record each as a feedback OUTCOME. Never throws: a signal
 // that errors (connection not configured, remote failure) is captured per-signal and the rest proceed.
 export async function ingestMonetizerAnalytics(params: { nodeId?: string; runId?: string; signals?: MonetizerSignal[]; args?: Record<string, unknown>; actor?: string | WorkspaceActor; note?: string }, deps: MonetizerIngestDeps): Promise<MonetizerIngestResult> {
-  const callTool = deps.callTool ?? ((tool: string, args: Record<string, unknown>) => new ProjectMcpAdapter(monetizerProjectConfig, { env: deps.env }).callTool(tool, args));
+  const callTool = deps.callTool ?? ((tool: string, args: Record<string, unknown>) => invokeTenantTool({
+    projectId: monetizerProjectConfig.projectId, project: monetizerProjectConfig, toolId: tool, args,
+    caller: "engine", runId: params.runId, nodeId: params.nodeId, adapterDeps: { env: deps.env }
+  }));
   const signals = params.signals?.length ? params.signals : MONETIZER_SIGNALS;
   const result: MonetizerIngestResult = { ingested: [], errors: [] };
   for (const signal of signals) {

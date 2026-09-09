@@ -35,13 +35,14 @@
 // objectDialect.siteObjectId) return `{ warnings: [...] }` with every data field absent — the same
 // "clean no-op, not a degradation of something that should exist" posture voicePrefetch.ts uses for a
 // project with no voice concept wired at all.
-import { ProjectMcpAdapter, type ReadToolCallResult } from "../projects/projectMcpAdapter.js";
+import { type ReadToolCallResult } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks } from "../projects/projectHooks.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { conductorCache, type RunScopedCache } from "./conductor.js";
 import { extractContractPayload } from "./contractPrefetch.js";
 import type { ReducedContractBrandPalette, ReducedContractPdfTemplate, ReducedContractSiteLogo, ReducedContractVisualStandard } from "./contractReduction.js";
 import { visualStandardIdFor } from "./visualStandardIds.js";
+import { tenantAdapterFor, type TenantAdapter } from "../tools/tenantInvoke.js";
 
 export type SitePrefetchWarningCode =
   | "site_project_unresolved"
@@ -109,7 +110,7 @@ const blockingPolicyFindings = (projectId: string, tool: string, arguments_: Rec
     .filter((finding) => finding.severity === "error")
     .map((finding) => finding.code);
 
-async function callRead(adapter: ProjectMcpAdapter, tool: string, arguments_: Record<string, unknown>): Promise<ReadToolCallResult> {
+async function callRead(adapter: TenantAdapter, tool: string, arguments_: Record<string, unknown>): Promise<ReadToolCallResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SITE_PREFETCH_TIMEOUT_MS);
   try {
@@ -344,7 +345,7 @@ export async function getSitePrefetch(params: SitePrefetchParams, deps: SitePref
       return { warnings };
     }
 
-    const adapter = new ProjectMcpAdapter(config);
+    const adapter = tenantAdapterFor(config, { caller: "engine", runId: params.runId });
 
     // 1. overridePolicy — object_contract({object_type:'site'}). Always resolves; 'allow' is the
     // stated default for every degradation (blocked, unreachable, absent, or an unrecognized value).

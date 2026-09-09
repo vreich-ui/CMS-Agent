@@ -6,6 +6,7 @@ import { repositoryManager } from "../../runtime/repositories.js";
 import { getTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { toolInputJsonSchema } from "../../tools/toolJsonSchema.js";
 import { executeTool } from "../../tools/toolExecutor.js";
+import { dispatchToolContext } from "../dispatchAuthorization.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
@@ -369,7 +370,13 @@ export class OpenAINodeRunner implements NodeRunner {
     // such nodes anyway (node_tool_not_allowed), and skipping the lookup lets synthetic,
     // non-persisted nodes (the improvement judge/reflector) run through this runner without
     // tripping the resolver's unknown-node guard. Behavior for real nodes is unchanged.
-    const effective = node.allowedTools.length === 0 ? [] : (await resolveEffectiveToolsForNode(node.id, { runId: context.run.runId, workflowId: context.run.workflowId, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun })).filter((t) => t.allowed);
+    // W3.3 — ONE authorization, built once and used for BOTH the resolution below and every
+    // executeTool call this dispatch makes. It carries maxRiskLevel, platformAllowedTools and
+    // runAuthorizedTools, which nothing at dispatch ever populated before, so three declared denial
+    // reasons could not fire. `node.get_effective_tools` builds the same context from the same run and
+    // node, which is what makes the inspector's answer and the dispatch's behaviour the same answer.
+    const authorization = dispatchToolContext({ run: context.run, node, approvedToolIds: context.approvedToolIds });
+    const effective = node.allowedTools.length === 0 ? [] : (await resolveEffectiveToolsForNode(node.id, authorization)).filter((t) => t.allowed);
     // toolCallLimit is now enforced as an actual per-execution tool-call cap, not just an input to the
     // turn budget: nothing previously counted invocations against it, so "toolCallLimit: 5" bounded
     // nothing. Calls beyond the limit are refused with a named denial the model can read; maxTurns
@@ -396,7 +403,7 @@ export class OpenAINodeRunner implements NodeRunner {
           throw new Error(`tool_denied:tool_call_limit_exceeded: node "${node.id}" has used all ${toolCallLimit} of its allowed tool calls. Emit your structured output now from the inputs and results you already have; further tool calls will also be refused.`);
         }
         const startedAt = Date.now();
-        const result = await executeTool(t.toolId, redact(args), { runId: context.run.runId, nodeId: node.id, workflowId: context.run.workflowId, projectId: context.run.projectId, approvedToolIds: context.approvedToolIds, dryRun: context.run.dryRun });
+        const result = await executeTool(t.toolId, redact(args), authorization);
         toolCalls.push({ toolId: t.toolId, toolExecutionId: result.toolExecutionId, status: result.ok ? "success" : result.denied ? "denied" : "error", errorCode: result.ok ? undefined : result.denied?.code ?? result.error?.code, durationMs: Date.now() - startedAt });
         // B2 (T-2): forward the actual violation, not just its code. A thrown "tool_failed:validation_error"
         // with nothing else told the model what to change, so it burned its turn budget retrying blind;
