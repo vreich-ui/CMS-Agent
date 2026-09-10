@@ -89,6 +89,8 @@ describe("the blob backend's cost properties", () => {
   const PROJECT_INDEX_META_KEY = "tool_executions/project-index/!meta.v1.json";
   const store = () => {
     const blobs = new Map<string, unknown>();
+    const etags = new Map<string, string>();
+    let nextEtag = 1;
     const reads: string[] = [];
     let concurrentWrites = 0;
     let peakConcurrentWrites = 0;
@@ -96,14 +98,23 @@ describe("the blob backend's cost properties", () => {
       blobs, reads,
       peak: () => peakConcurrentWrites,
       client: {
-        setJSON: async (key: string, value: unknown) => {
+        setJSON: async (key: string, value: unknown, options?: { onlyIfNew?: boolean; onlyIfMatch?: string }) => {
           concurrentWrites += 1;
           peakConcurrentWrites = Math.max(peakConcurrentWrites, concurrentWrites);
           await new Promise((resolve) => setTimeout(resolve, 1));
+          if (options?.onlyIfNew && blobs.has(key)) { concurrentWrites -= 1; return { modified: false }; }
+          if (options?.onlyIfMatch && etags.get(key) !== options.onlyIfMatch) { concurrentWrites -= 1; return { modified: false }; }
           blobs.set(key, value);
+          const etag = `etag_${nextEtag++}`;
+          etags.set(key, etag);
           concurrentWrites -= 1;
+          return { modified: true, etag };
         },
         get: async (key: string) => { reads.push(key); return blobs.has(key) ? blobs.get(key) : null; },
+        getWithMetadata: async (key: string) => {
+          reads.push(key);
+          return blobs.has(key) ? { data: blobs.get(key), etag: etags.get(key) } : null;
+        },
         list: async ({ prefix }: { prefix: string }) => ({ blobs: [...blobs.keys()].filter((key) => key.startsWith(prefix)).map((key) => ({ key })) }),
         delete: async (key: string) => { blobs.delete(key); }
       }

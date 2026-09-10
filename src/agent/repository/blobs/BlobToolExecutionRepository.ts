@@ -18,6 +18,11 @@ const nodePrefix = (nodeId: string) => `${NODE_ROOT}${nodeId}/`;
 const runKey = (runId: string, toolExecutionId: string) => `${runPrefix(runId)}${toolExecutionId}.json`;
 const nodeKey = (nodeId: string, toolExecutionId: string) => `${nodePrefix(nodeId)}${toolExecutionId}.json`;
 const projectIndexKey = (projectId: string) => `${PROJECT_INDEX_ROOT}${encodeURIComponent(projectId)}.json`;
+// A contended compact index must never turn into a lossy last-writer-wins document. Entries that
+// exhaust their bounded CAS budget are instead durable, immutable deltas. A subsequent project
+// read merges and compacts them when the primary index is writable again.
+const projectPendingPrefix = (projectId: string) => `${PROJECT_INDEX_ROOT}${encodeURIComponent(projectId)}/pending/`;
+const projectPendingKey = (projectId: string, toolExecutionId: string) => `${projectPendingPrefix(projectId)}${encodeURIComponent(toolExecutionId)}.json`;
 
 type ToolExecutionIndexEntry = Pick<ToolExecutionRecord,
   "toolExecutionId" | "runId" | "nodeId" | "toolId" | "startedAt" | "status" | "riskLevel" | "approvalStatus" | "caller" | "routeId" | "projectId">;
@@ -104,19 +109,51 @@ export class BlobToolExecutionRepository implements ToolExecutionRepository {
     } satisfies ToolExecutionProjectIndexMeta);
   }
 
-  private async mergeProjectIndex(projectId: string, additions: ToolExecutionIndexEntry[]): Promise<void> {
-    if (!additions.length) return;
+  // Returns whether all additions are in the compact primary index. False means they are safely in
+  // their immutable pending keys; callers must retain those keys until a later compaction wins CAS.
+  private async mergeProjectIndex(projectId: string, additions: ToolExecutionIndexEntry[]): Promise<boolean> {
+    if (!additions.length) return true;
     const key = projectIndexKey(projectId);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const current = await getBlobJsonWithEtag<ToolExecutionProjectIndex>(this.store, key);
+      // Without an ETag we cannot prove an existing primary document has not changed. Do not
+      // degrade to an unconditional overwrite: durable pending entries preserve every writer.
+      if (current.data && !current.etag) break;
       const entries = new Map((current.data?.records ?? []).map((entry) => [entry.toolExecutionId, entry]));
       for (const entry of additions) entries.set(entry.toolExecutionId, entry);
-      const options: Parameters<BlobStoreClient["setJSON"]>[2] = attempt < 4
-        ? current.etag ? { onlyIfMatch: current.etag } : current.data ? undefined : { onlyIfNew: true }
-        : undefined;
+      const options: Parameters<BlobStoreClient["setJSON"]>[2] = current.etag ? { onlyIfMatch: current.etag } : { onlyIfNew: true };
       const write = await this.store.setJSON(key, { records: [...entries.values()] } satisfies ToolExecutionProjectIndex, options);
-      if (!write || (write as { modified?: boolean }).modified !== false) return;
+      if (!write || (write as { modified?: boolean }).modified !== false) return true;
     }
+    // Every pending key is an immutable call identity, so concurrent exhausted writers cannot
+    // overwrite each other. This is intentionally a bounded write path, not a retry-until-lucky
+    // loop that could hold up the ledger's nonblocking caller path.
+    await Promise.all(additions.map((entry) => this.store.setJSON(projectPendingKey(projectId, entry.toolExecutionId), entry)));
+    return false;
+  }
+
+  private async readProjectIndexEntries(projectId: string): Promise<ToolExecutionIndexEntry[]> {
+    const [index, listing] = await Promise.all([
+      getBlobJson<ToolExecutionProjectIndex>(this.store, projectIndexKey(projectId)),
+      this.store.list({ prefix: projectPendingPrefix(projectId) })
+    ]);
+    const pending = await Promise.all(listing.blobs.map(async (blob) => ({
+      key: blob.key,
+      entry: await getBlobJson<ToolExecutionIndexEntry>(this.store, blob.key)
+    })));
+    const entries = new Map((index?.records ?? []).map((entry) => [entry.toolExecutionId, entry]));
+    const durablePending = pending.filter((item): item is { key: string; entry: ToolExecutionIndexEntry } => item.entry !== null);
+    for (const { entry } of durablePending) entries.set(entry.toolExecutionId, entry);
+    if (durablePending.length) void this.compactPendingProjectEntries(projectId, durablePending);
+    return [...entries.values()];
+  }
+
+  private async compactPendingProjectEntries(projectId: string, pending: { key: string; entry: ToolExecutionIndexEntry }[]): Promise<void> {
+    try {
+      if (await this.mergeProjectIndex(projectId, pending.map(({ entry }) => entry))) {
+        await Promise.all(pending.map(({ key }) => this.store.delete(key)));
+      }
+    } catch { /* A later project read retries compaction; immutable pending entries remain visible. */ }
   }
 
   private async pruneProjectIndex(projectId: string, missingIds: Set<string>): Promise<void> {
@@ -124,10 +161,10 @@ export class BlobToolExecutionRepository implements ToolExecutionRepository {
     try {
       const key = projectIndexKey(projectId);
       const current = await getBlobJsonWithEtag<ToolExecutionProjectIndex>(this.store, key);
-      if (!current.data) return;
+      if (!current.data || !current.etag) return;
       const records = current.data.records.filter((entry) => !missingIds.has(entry.toolExecutionId));
       if (records.length === current.data.records.length) return;
-      await this.store.setJSON(key, { records } satisfies ToolExecutionProjectIndex, current.etag ? { onlyIfMatch: current.etag } : undefined);
+      await this.store.setJSON(key, { records } satisfies ToolExecutionProjectIndex, { onlyIfMatch: current.etag });
     } catch { /* best effort: a later reader drops and retries the same ghost safely. */ }
   }
 
@@ -154,8 +191,8 @@ export class BlobToolExecutionRepository implements ToolExecutionRepository {
 
     if (filters.projectId) {
       await this.ensureProjectIndex();
-      const index = await getBlobJson<ToolExecutionProjectIndex>(this.store, projectIndexKey(filters.projectId));
-      const selected = newestWindow((index?.records ?? []).filter((record) => matches(record, filters)), filters.limit);
+      const entries = await this.readProjectIndexEntries(filters.projectId);
+      const selected = newestWindow(entries.filter((record) => matches(record, filters)), filters.limit);
       const records = await Promise.all(selected.map((entry) => getBlobJson<ToolExecutionRecord>(this.store, runKey(entry.runId, entry.toolExecutionId))));
       const ghosts = new Set(selected.filter((_, index) => records[index] === null).map((entry) => entry.toolExecutionId));
       if (ghosts.size) void this.pruneProjectIndex(filters.projectId, ghosts);
