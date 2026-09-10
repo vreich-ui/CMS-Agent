@@ -66,11 +66,40 @@ export const workflowGet = (args: { workflowId: string }): Promise<Workflow | un
 
 // --- shapes with no fixture — fixture-mode guesses, see report ---------------
 
-export type JSONSchema = Record<string, unknown>;
+/** JSON Schema 2020-12 permits either an object or a boolean schema. */
+export type JSONSchema = Record<string, unknown> | boolean;
 
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
+}
+
+/** The two optimistic-concurrency tokens CMS-Agent actually accepts. */
+export interface WorkspacePrecondition {
+  expectedWorkspaceVersion?: number;
+  baseRevisionId?: string;
+}
+
+export interface SchemaEditPreparation {
+  /** Complete stored node sent to workspace_validate_node as `node`, never an unsupported patch. */
+  node: Record<string, unknown>;
+  precondition: WorkspacePrecondition;
+}
+
+export type SchemaSaveReadback =
+  | { state: 'confirmed'; schema: JSONSchema; workspaceVersion?: number }
+  | { state: 'uncertain'; message: string; workspaceVersion?: number };
+
+export class WorkspaceEditConflictError extends Error {
+  readonly currentVersion?: number;
+  readonly currentRevisionId?: string;
+
+  constructor(message: string, details: { currentVersion?: number; currentRevisionId?: string } = {}) {
+    super(message);
+    this.name = 'WorkspaceEditConflictError';
+    this.currentVersion = details.currentVersion;
+    this.currentRevisionId = details.currentRevisionId;
+  }
 }
 
 export interface EffectivePrompt {
@@ -266,9 +295,8 @@ export interface BudgetStatus {
 }
 
 export interface SchemaUpdateResult {
-  nodeId: string;
-  schema: JSONSchema;
-  applied: boolean;
+  node?: Record<string, unknown>;
+  workspaceVersion?: number;
 }
 
 // ============================== workspace ====================================
@@ -295,6 +323,10 @@ export interface SchemaUpdateResult {
  */
 export const workspaceGetGraph = (args?: { workflowId?: string }) =>
   callVerb<WorkspaceGraph>('workspace_get_graph', args?.workflowId ? { workflowId: args.workflowId } : {});
+
+/** Counts are a property of the resolved run graph, never the presentation phase catalog. */
+export const workspaceGetResolvedWorkflowNodeCount = async (workflowId: string): Promise<number> =>
+  (await workspaceGetGraph({ workflowId })).nodes.length;
 
 /** nodeId -> workflowId, from each workflow's phases (mirrors mockStore.ts). */
 function nodeIdsForWorkflow(workflowId: string): Set<string> | null {
@@ -363,21 +395,21 @@ export const workspaceUpdateNodePrompt = (args: { nodeId: string; prompt: string
   mutate<WorkflowNode | null>(
     'workspace_update_node_prompt',
     `Save the edited prompt for node ${args.nodeId}.`,
-    args,
+    { id: args.nodeId, prompt: args.prompt },
   );
 
-export const workspaceUpdateNodeTools = (args: { nodeId: string; tools: string[] }) =>
+export const workspaceUpdateNodeTools = (args: { nodeId: string; tools: string[] } & WorkspacePrecondition) =>
   mutate<WorkflowNode | null>(
     'workspace_update_node_tools',
     `Set the tool list for node ${args.nodeId} (${args.tools.length} tools).`,
-    args,
+    { id: args.nodeId, patch: { allowedTools: args.tools }, ...preconditionArgs(args) },
   );
 
-export const workspaceUpdateNodeSkills = (args: { nodeId: string; skills: string[] }) =>
+export const workspaceUpdateNodeSkills = (args: { nodeId: string; skills: string[] } & WorkspacePrecondition) =>
   mutate<WorkflowNode | null>(
     'workspace_update_node_skills',
     `Set the skill list for node ${args.nodeId} (${args.skills.length} skills).`,
-    args,
+    { id: args.nodeId, patch: { assignedSkills: args.skills }, ...preconditionArgs(args) },
   );
 
 /**
@@ -401,18 +433,18 @@ export const workspaceUpdateNodeModelConfig = (args: { nodeId: string; patch: Pa
     { id: args.nodeId, patch: { modelConfig: args.patch } },
   );
 
-export const workspaceUpdateNodeInputSchema = (args: { nodeId: string; schema: JSONSchema }) =>
+export const workspaceUpdateNodeInputSchema = (args: { nodeId: string; schema: JSONSchema } & WorkspacePrecondition) =>
   mutate<SchemaUpdateResult>(
     'workspace_update_node_input_schema',
     `Update the input schema for node ${args.nodeId}.`,
-    args,
+    { id: args.nodeId, schema: args.schema, ...preconditionArgs(args) },
   );
 
-export const workspaceUpdateNodeOutputSchema = (args: { nodeId: string; schema: JSONSchema }) =>
+export const workspaceUpdateNodeOutputSchema = (args: { nodeId: string; schema: JSONSchema } & WorkspacePrecondition) =>
   mutate<SchemaUpdateResult>(
     'workspace_update_node_output_schema',
     `Update the output schema for node ${args.nodeId}.`,
-    args,
+    { id: args.nodeId, schema: args.schema, ...preconditionArgs(args) },
   );
 
 export const workspaceUpdateNodeMetadata = (args: {
@@ -425,26 +457,212 @@ export const workspaceUpdateNodeMetadata = (args: {
     args,
   );
 
-/** Read-shaped — no confirmAction (HANDOFF §6 marks this "no confirm"). */
-export const workspaceValidateNode = (args: { nodeId: string; patch?: unknown }) =>
-  callVerb<ValidationResult>('workspace_validate_node', args);
+function preconditionArgs(args: WorkspacePrecondition): WorkspacePrecondition {
+  return {
+    ...(args.expectedWorkspaceVersion === undefined ? {} : { expectedWorkspaceVersion: args.expectedWorkspaceVersion }),
+    ...(args.baseRevisionId === undefined ? {} : { baseRevisionId: args.baseRevisionId }),
+  };
+}
+
+/** Read-shaped — validate the complete candidate with the actual `{ node }` contract. */
+export const workspaceValidateNode = async (args: { node: Record<string, unknown> }): Promise<ValidationResult> => {
+  const raw = await callVerb<{ valid?: unknown; errors?: unknown }>('workspace_validate_node', args);
+  return {
+    valid: raw.valid === true,
+    errors: Array.isArray(raw.errors) ? raw.errors.map(String) : raw.valid === true ? [] : ['The workspace rejected this node configuration.'],
+  };
+};
+
+/**
+ * Fetch the exact node and its only advertised workspace-wide concurrency
+ * tokens. The export is intentionally a save-time read, not a background
+ * screen fetch: it can be large and is used solely to avoid blind writes.
+ */
+export const workspacePrepareNodeEdit = async (nodeId: string): Promise<SchemaEditPreparation> => {
+  const [nodeEnvelope, workspace] = await Promise.all([
+    callVerb<{ node: Record<string, unknown> | null }>('workspace_get_node', { id: nodeId }),
+    callVerb<{ workspaceVersion?: unknown; currentRevisionId?: unknown }>('workspace_export_workspace', {}),
+  ]);
+  if (!nodeEnvelope.node) throw new Error(`Unknown node: ${nodeId}`);
+  return {
+    node: nodeEnvelope.node,
+    precondition: {
+      ...(typeof workspace.workspaceVersion === 'number' ? { expectedWorkspaceVersion: workspace.workspaceVersion } : {}),
+      ...(typeof workspace.currentRevisionId === 'string' ? { baseRevisionId: workspace.currentRevisionId } : {}),
+    },
+  };
+};
+
+/** @deprecated use workspacePrepareNodeEdit; kept temporarily for callers in this package. */
+export const workspacePrepareSchemaEdit = workspacePrepareNodeEdit;
+
+export function candidateWithSchema(prepared: SchemaEditPreparation, kind: 'input' | 'output', schema: JSONSchema): Record<string, unknown> {
+  // `schema` is a deprecated output alias. Keep it aligned only for candidate
+  // validation; the real output writer owns the stored alias behavior.
+  return kind === 'input'
+    ? { ...prepared.node, inputSchema: schema }
+    : { ...prepared.node, outputSchema: schema, schema };
+}
+
+function schemasEqual(a: JSONSchema | null, b: JSONSchema): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function conflictFrom(error: unknown): WorkspaceEditConflictError | null {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/\b(?:revision_conflict|workspace_version|conflict)\b/i.test(message)) return null;
+  const version = /current(?:Version| version)[:= ]+(\d+)/i.exec(message)?.[1];
+  const revision = /currentRevisionId[:= ]+([\w-]+)/i.exec(message)?.[1];
+  return new WorkspaceEditConflictError(message, {
+    ...(version ? { currentVersion: Number(version) } : {}),
+    ...(revision ? { currentRevisionId: revision } : {}),
+  });
+}
+
+/** Save a schema only after a complete-node validation, then prove it by reading it back. */
+export async function workspaceSaveSchemaWithReadback(args: {
+  nodeId: string;
+  kind: 'input' | 'output';
+  schema: JSONSchema;
+  prepared: SchemaEditPreparation;
+}): Promise<SchemaSaveReadback> {
+  const candidate = candidateWithSchema(args.prepared, args.kind, args.schema);
+  const validation = await workspaceValidateNode({ node: candidate });
+  if (!validation.valid) throw new Error(validation.errors.join(' ') || 'The workspace rejected this complete node configuration.');
+
+  let mutation: SchemaUpdateResult;
+  try {
+    mutation = args.kind === 'input'
+      ? await workspaceUpdateNodeInputSchema({ nodeId: args.nodeId, schema: args.schema, ...args.prepared.precondition })
+      : await workspaceUpdateNodeOutputSchema({ nodeId: args.nodeId, schema: args.schema, ...args.prepared.precondition });
+  } catch (error) {
+    const conflict = conflictFrom(error);
+    if (conflict) throw conflict;
+    throw error;
+  }
+
+  try {
+    const readback = args.kind === 'input'
+      ? await nodeGetInputSchema({ nodeId: args.nodeId })
+      : await nodeGetOutputSchema({ nodeId: args.nodeId });
+    if (schemasEqual(readback, args.schema)) {
+      return { state: 'confirmed', schema: readback, workspaceVersion: mutation.workspaceVersion };
+    }
+    return { state: 'uncertain', workspaceVersion: mutation.workspaceVersion, message: 'The workspace accepted the save, but the readback did not match. Reload before editing again.' };
+  } catch (error) {
+    return {
+      state: 'uncertain',
+      workspaceVersion: mutation.workspaceVersion,
+      message: `The workspace accepted the save, but committed readback failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+    };
+  }
+}
+
+export async function workspaceSaveToolsWithReadback(args: {
+  nodeId: string;
+  tools: string[];
+  prepared: SchemaEditPreparation;
+}): Promise<{ state: 'confirmed' } | { state: 'uncertain'; message: string }> {
+  const candidate = { ...args.prepared.node, allowedTools: args.tools };
+  const validation = await workspaceValidateNode({ node: candidate });
+  if (!validation.valid) throw new Error(validation.errors.join(' ') || 'The workspace rejected this complete node configuration.');
+  try {
+    await workspaceUpdateNodeTools({ nodeId: args.nodeId, tools: args.tools, ...args.prepared.precondition });
+  } catch (error) {
+    const conflict = conflictFrom(error);
+    if (conflict) throw conflict;
+    throw error;
+  }
+  try {
+    const readback = await workspaceGetNode({ nodeId: args.nodeId });
+    if (readback && JSON.stringify(readback.tools) === JSON.stringify(args.tools)) return { state: 'confirmed' };
+    return { state: 'uncertain', message: 'The workspace accepted the tool save, but readback did not match. Reload before editing again.' };
+  } catch (error) {
+    return { state: 'uncertain', message: `The workspace accepted the tool save, but committed readback failed: ${error instanceof Error ? error.message : 'unknown error'}` };
+  }
+}
+
+export async function workspaceSaveSkillsWithReadback(args: {
+  nodeId: string;
+  skills: string[];
+  prepared: SchemaEditPreparation;
+}): Promise<{ state: 'confirmed' } | { state: 'uncertain'; message: string }> {
+  const candidate = { ...args.prepared.node, assignedSkills: args.skills };
+  const validation = await workspaceValidateNode({ node: candidate });
+  if (!validation.valid) throw new Error(validation.errors.join(' ') || 'The workspace rejected this complete node configuration.');
+  try {
+    await workspaceUpdateNodeSkills({ nodeId: args.nodeId, skills: args.skills, ...args.prepared.precondition });
+  } catch (error) {
+    const conflict = conflictFrom(error);
+    if (conflict) throw conflict;
+    throw error;
+  }
+  try {
+    const readback = await workspaceGetNode({ nodeId: args.nodeId });
+    if (readback && JSON.stringify(readback.skills) === JSON.stringify(args.skills)) return { state: 'confirmed' };
+    return { state: 'uncertain', message: 'The workspace accepted the skill save, but readback did not match. Reload before editing again.' };
+  } catch (error) {
+    return { state: 'uncertain', message: `The workspace accepted the skill save, but committed readback failed: ${error instanceof Error ? error.message : 'unknown error'}` };
+  }
+}
 
 // ================================= node ======================================
 
 export const nodeGetEffectivePrompt = (args: { nodeId: string }) =>
   callVerb<EffectivePrompt>('node_get_effective_prompt', args);
 
-export const nodeGetEffectiveSkills = (args: { nodeId: string }) =>
-  callVerb<Skill[]>('node_get_effective_skills', args);
+export interface EffectiveSkillPolicy {
+  nodeId: string;
+  skillIds: string[];
+  effectiveTools: string[];
+  deniedTools: string[];
+  conflicts: Array<{ severity?: string; source?: string; message?: string }>;
+}
 
-export const nodeGetEffectiveTools = (args: { nodeId: string }) =>
-  callVerb<ToolDef[]>('node_get_effective_tools', args);
+export interface EffectiveTools {
+  /** Controlled model grants. These are not the deterministic engine route. */
+  tools: ToolDef[];
+  /** Tenant verbs a deterministic engine route invokes directly. */
+  engine: string[];
+  capability: { executionKind?: 'model' | 'deterministic'; routeId?: string; deadGrants?: string[]; findings?: unknown[] } | null;
+  resolvedAgainst?: string;
+}
 
-export const nodeGetInputSchema = (args: { nodeId: string }) =>
-  callVerb<JSONSchema>('node_get_input_schema', args);
+export const nodeGetEffectiveSkills = async (args: { nodeId: string }): Promise<EffectiveSkillPolicy> => {
+  const raw = await callVerb<{ policy?: EffectiveSkillPolicy } | EffectiveSkillPolicy>('node_get_effective_skills', args);
+  const policy = ('policy' in raw ? raw.policy : raw) as EffectiveSkillPolicy | undefined;
+  if (!policy) throw new Error(`No effective skill policy returned for ${args.nodeId}.`);
+  return policy;
+};
 
-export const nodeGetOutputSchema = (args: { nodeId: string }) =>
-  callVerb<JSONSchema>('node_get_output_schema', args);
+export const nodeGetEffectiveTools = async (args: { nodeId: string }): Promise<EffectiveTools> => {
+  const raw = await callVerb<{
+    tools?: Array<adapters.RawToolDef | ToolDef>;
+    engine?: unknown;
+    capability?: EffectiveTools['capability'];
+    resolvedAgainst?: string;
+  }>('node_get_effective_tools', args);
+  return {
+    tools: (raw.tools ?? []).map((tool) => ('toolId' in tool ? adapters.toToolDef(tool) : tool)),
+    engine: Array.isArray(raw.engine) ? raw.engine.filter((verb): verb is string => typeof verb === 'string') : [],
+    capability: raw.capability ?? null,
+    ...(raw.resolvedAgainst ? { resolvedAgainst: raw.resolvedAgainst } : {}),
+  };
+};
+
+function unwrapSchema(raw: { schema?: unknown } | JSONSchema | null, verb: string): JSONSchema {
+  const schema = raw && typeof raw === 'object' && !Array.isArray(raw) && 'schema' in raw ? raw.schema : raw;
+  if (schema === true || schema === false || (typeof schema === 'object' && schema !== null && !Array.isArray(schema))) {
+    return schema as JSONSchema;
+  }
+  throw new Error(`${verb} returned no JSON Schema.`);
+}
+
+export const nodeGetInputSchema = async (args: { nodeId: string }): Promise<JSONSchema> =>
+  unwrapSchema(await callVerb<{ schema?: unknown } | JSONSchema | null>('node_get_input_schema', args), 'node_get_input_schema');
+
+export const nodeGetOutputSchema = async (args: { nodeId: string }): Promise<JSONSchema> =>
+  unwrapSchema(await callVerb<{ schema?: unknown } | JSONSchema | null>('node_get_output_schema', args), 'node_get_output_schema');
 
 /** Read-shaped — no confirmAction (HANDOFF §6 marks this "no confirm"). */
 export const nodeValidateInput = (args: { nodeId: string; input: unknown }) =>

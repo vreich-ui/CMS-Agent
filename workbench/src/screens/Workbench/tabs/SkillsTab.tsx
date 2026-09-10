@@ -12,22 +12,27 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useSkills } from '../../../api/hooks';
 import { ActionCancelledError } from '../../../api/confirmAction';
 import { IS_READ_ONLY } from '../../../api/client';
-import { workspaceUpdateNodeSkills } from '../../../api/verbs';
+import {
+  workspacePrepareNodeEdit,
+  workspaceSaveSkillsWithReadback,
+  WorkspaceEditConflictError,
+} from '../../../api/verbs';
 import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
 import { Btn, Card, Chip } from '../../../components/primitives';
 import { toast } from '../../../components/Toasts';
 import { useStore } from '../../../store';
 import type { Skill, WorkflowNode } from '../../../types';
-import { useSkillResolution } from '../queries';
+import { useEffectiveSkills } from '../queries';
 import { Disclosure, ErrorNote, LoadingNote, READONLY_REASON, RegistryPicker, recordChange } from './Shared';
 
 export function SkillsTab({ node, nodeId }: { node: WorkflowNode; nodeId: string }) {
   const skillsQ = useSkills();
-  const effectiveQ = useSkillResolution(nodeId);
+  const effectiveQ = useEffectiveSkills(nodeId);
   const setScreen = useStore((s) => s.setScreen);
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [readbackUncertain, setReadbackUncertain] = useState(false);
 
   async function commit(nextSkills: string[], triggerEl: HTMLElement | null, label: string) {
     if (busy) return;
@@ -35,13 +40,27 @@ export function SkillsTab({ node, nodeId }: { node: WorkflowNode; nodeId: string
     setBusy(true);
     try {
       const before = node.skills;
-      await workspaceUpdateNodeSkills({ nodeId, skills: nextSkills });
+      const prepared = await workspacePrepareNodeEdit(nodeId);
+      const result = await workspaceSaveSkillsWithReadback({ nodeId, skills: nextSkills, prepared });
+      if (result.state !== 'confirmed') {
+        setReadbackUncertain(true);
+        await qc.invalidateQueries({ queryKey: ['node', nodeId] });
+        toast('Skill save needs verification', result.message);
+        return;
+      }
+      setReadbackUncertain(false);
       recordChange({ nodeId, kind: 'skills', label, before, after: nextSkills });
       await qc.invalidateQueries({ queryKey: ['node', nodeId] });
-      await qc.invalidateQueries({ queryKey: ['skillResolution', nodeId] });
-      toast('Skills updated', `workspace_update_node_skills → ${nextSkills.length} skill${nextSkills.length === 1 ? '' : 's'} assigned`);
+      await qc.invalidateQueries({ queryKey: ['effectiveSkills', nodeId] });
+      toast('Skills updated and verified', `workspace_update_node_skills → ${nextSkills.length} skill${nextSkills.length === 1 ? '' : 's'} confirmed by readback`);
     } catch (err) {
       if (err instanceof ActionCancelledError) return;
+      if (err instanceof WorkspaceEditConflictError) {
+        setReadbackUncertain(true);
+        await qc.invalidateQueries({ queryKey: ['node', nodeId] });
+        toast('Skill save conflict', `${err.message} Reloaded state is required before retrying.`);
+        return;
+      }
       toast('Update failed', err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setBusy(false);
@@ -70,7 +89,7 @@ export function SkillsTab({ node, nodeId }: { node: WorkflowNode; nodeId: string
     <Card
       label={
         <>
-          assigned skills <span className="pin live">live</span>
+          assigned skills <span className={`pin ${readbackUncertain ? '' : 'live'}`}>{readbackUncertain ? 'readback uncertain' : 'live'}</span>
         </>
       }
     >
@@ -109,20 +128,30 @@ export function SkillsTab({ node, nodeId }: { node: WorkflowNode; nodeId: string
         </Btn>
         <Disclosure openLabel="view effective resolution" closeLabel="hide effective resolution">
           {effectiveQ.isLoading ? (
-            <LoadingNote>resolving effective skills (skill_resolve_for_node)…</LoadingNote>
+            <LoadingNote>resolving effective skill policy…</LoadingNote>
           ) : effectiveQ.isError ? (
             <ErrorNote message={effectiveQ.error?.message} />
-          ) : effectiveQ.data && effectiveQ.data.length > 0 ? (
+          ) : effectiveQ.data && effectiveQ.data.skillIds.length > 0 ? (
             <div className="schemabox" style={{ whiteSpace: 'normal' }}>
-              {effectiveQ.data.map((s) => `${s.id} · v${s.version}`).join('\n')}
+              {effectiveQ.data.skillIds.join('\n')}
             </div>
           ) : (
             <p style={{ color: 'var(--faint)', fontSize: 12, margin: 0 }}>
-              skill_resolve_for_node resolves to nothing at run time for this node.
+              No skills resolve at run time for this node.
             </p>
           )}
+          {effectiveQ.data?.conflicts.map((conflict, index) => (
+            <p key={index} style={{ color: 'var(--bad)', fontSize: 12, margin: '6px 0 0' }}>
+              {conflict.message ?? 'Effective skill policy reported a conflict.'}
+            </p>
+          ))}
         </Disclosure>
       </div>
+      {readbackUncertain && (
+        <p style={{ color: 'var(--bad)', fontSize: 12.5, margin: '10px 0 0' }}>
+          The last skill save was accepted but is not verified by committed readback. Reload before changing assignments again.
+        </p>
+      )}
 
       <RegistryPicker<Skill>
           open={pickerOpen}

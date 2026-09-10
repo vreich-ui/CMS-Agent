@@ -40,9 +40,27 @@ function optNum(args: Args, key: string): number | undefined {
 }
 
 let mockIdCounter = 0;
+let mockWorkspaceVersion = 1;
+let mockRevisionId = 'mock-rev-1';
 function genId(prefix: string): string {
   mockIdCounter += 1;
   return `${prefix}_${Date.now()}_${mockIdCounter.toString(36)}`;
+}
+
+function assertMockPrecondition(a: Args) {
+  const expected = optNum(a, 'expectedWorkspaceVersion');
+  const base = optStr(a, 'baseRevisionId');
+  if (expected !== undefined && expected !== mockWorkspaceVersion) {
+    throw new Error(`workspace_version_conflict: expected ${expected}, current ${mockWorkspaceVersion}`);
+  }
+  if (base !== undefined && base !== mockRevisionId) {
+    throw new Error(`revision_conflict: expected ${base}, current ${mockRevisionId}`);
+  }
+}
+
+function commitMockWorkspace() {
+  mockWorkspaceVersion += 1;
+  mockRevisionId = `mock-rev-${mockWorkspaceVersion}`;
 }
 
 function schemaStub(nodeId: string, kind: 'input' | 'output'): Record<string, unknown> {
@@ -120,6 +138,7 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   workspace_get_graph: (a) => graphFor(str(a, 'workflowId')),
   workspace_get_nodes: () => ({ nodes: mockStore.getNodes() }),
   workspace_get_node: (a) => ({ node: mockStore.getNode(str(a, 'id')) ?? null }),
+  workspace_export_workspace: () => ({ workspaceVersion: mockWorkspaceVersion, currentRevisionId: mockRevisionId }),
   workspace_get_node_effective_config: (a) => {
     const node = mockStore.getNode(str(a, 'id'));
     return {
@@ -137,18 +156,30 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
     const node = mockStore.getNode(str(a, 'nodeId'));
     return { nodeId: str(a, 'nodeId'), prompt: node?.prompt ?? '', diverged: false, source: 'canonical' };
   },
-  node_get_effective_skills: (a) => skillsFor(mockStore.getNode(str(a, 'nodeId'))),
-  node_get_effective_tools: (a) => toolsFor(mockStore.getNode(str(a, 'nodeId'))).map(adapters.toToolDef),
+  node_get_effective_skills: (a) => {
+    const node = mockStore.getNode(str(a, 'nodeId'));
+    return { policy: { nodeId: str(a, 'nodeId'), skillIds: node?.assignedSkills ?? [], effectiveTools: node?.allowedTools ?? [], deniedTools: [], conflicts: [] } };
+  },
+  node_get_effective_tools: (a) => {
+    const node = mockStore.getNode(str(a, 'nodeId'));
+    const deterministic = node?.id === 'publish_payload';
+    return {
+      tools: toolsFor(node),
+      engine: deterministic ? ['project_call_tool'] : [],
+      capability: { executionKind: deterministic ? 'deterministic' : 'model', deadGrants: deterministic ? node?.allowedTools ?? [] : [], findings: [] },
+      resolvedAgainst: 'node_declaration',
+    };
+  },
   // Live nodes carry their own input/output JSON Schema (`inputSchema`/
   // `outputSchema`) — fall back to a labeled placeholder only for the rare
   // node this fixture set doesn't have one for.
   node_get_input_schema: (a) => {
     const node = mockStore.getNode(str(a, 'nodeId'));
-    return node?.inputSchema ?? schemaStub(str(a, 'nodeId'), 'input');
+    return { schema: node?.inputSchema ?? schemaStub(str(a, 'nodeId'), 'input') };
   },
   node_get_output_schema: (a) => {
     const node = mockStore.getNode(str(a, 'nodeId'));
-    return node?.outputSchema ?? schemaStub(str(a, 'nodeId'), 'output');
+    return { schema: node?.outputSchema ?? schemaStub(str(a, 'nodeId'), 'output') };
   },
   node_validate_input: (a) => {
     const hasInput = a.input !== undefined && a.input !== null;
@@ -479,11 +510,21 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   },
   workflow_publish_run: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'completed' }) ?? null,
 
-  workspace_update_node_prompt: (a) => mockStore.updateNode(str(a, 'nodeId'), { prompt: str(a, 'prompt') }) ?? null,
-  workspace_update_node_tools: (a) =>
-    mockStore.updateNode(str(a, 'nodeId'), { allowedTools: (a.tools as string[]) ?? [] }) ?? null,
-  workspace_update_node_skills: (a) =>
-    mockStore.updateNode(str(a, 'nodeId'), { assignedSkills: (a.skills as string[]) ?? [] }) ?? null,
+  workspace_update_node_prompt: (a) => mockStore.updateNode(str(a, 'id'), { prompt: str(a, 'prompt') }) ?? null,
+  workspace_update_node_tools: (a) => {
+    assertMockPrecondition(a);
+    const patch = (a.patch ?? {}) as { allowedTools?: string[] };
+    const updated = mockStore.updateNode(str(a, 'id'), { allowedTools: patch.allowedTools ?? [] }) ?? null;
+    if (updated) commitMockWorkspace();
+    return { node: updated, workspaceVersion: mockWorkspaceVersion };
+  },
+  workspace_update_node_skills: (a) => {
+    assertMockPrecondition(a);
+    const patch = (a.patch ?? {}) as { assignedSkills?: string[] };
+    const updated = mockStore.updateNode(str(a, 'id'), { assignedSkills: patch.assignedSkills ?? [] }) ?? null;
+    if (updated) commitMockWorkspace();
+    return { node: updated, workspaceVersion: mockWorkspaceVersion };
+  },
   // LIVE-VERIFIED CORRECTION (budget-override-and-ui-save): the live tool
   // takes `{id, patch: {modelConfig}}` and MERGES patch.modelConfig onto the
   // existing config (tools.ts's deepMergeRecords) — mirrored here so fixture
@@ -498,13 +539,36 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
     const merged = { ...(existing?.modelConfig ?? {}), ...incoming } as adapters.RawModelConfig;
     return mockStore.updateNode(id, { modelConfig: merged }) ?? null;
   },
-  workspace_update_node_input_schema: (a) => ({ nodeId: str(a, 'nodeId'), schema: a.schema ?? null, applied: true }),
-  workspace_update_node_output_schema: (a) => ({ nodeId: str(a, 'nodeId'), schema: a.schema ?? null, applied: true }),
+  workspace_update_node_input_schema: (a) => {
+    assertMockPrecondition(a);
+    const schema = a.schema as Record<string, unknown>;
+    // Fixture fault injection exercises the UI's honest readback-uncertain
+    // path without pretending this branch committed.
+    if ((schema as { __readbackFailure?: unknown })?.__readbackFailure === true) return { node: mockStore.getNode(str(a, 'id')) ?? null, workspaceVersion: mockWorkspaceVersion };
+    const updated = mockStore.updateNode(str(a, 'id'), { inputSchema: schema }) ?? null;
+    if (updated) commitMockWorkspace();
+    return { node: updated, workspaceVersion: mockWorkspaceVersion };
+  },
+  workspace_update_node_output_schema: (a) => {
+    assertMockPrecondition(a);
+    const schema = a.schema as Record<string, unknown>;
+    if ((schema as { __readbackFailure?: unknown })?.__readbackFailure === true) return { node: mockStore.getNode(str(a, 'id')) ?? null, workspaceVersion: mockWorkspaceVersion };
+    const updated = mockStore.updateNode(str(a, 'id'), { outputSchema: schema }) ?? null;
+    if (updated) commitMockWorkspace();
+    return { node: updated, workspaceVersion: mockWorkspaceVersion };
+  },
   workspace_update_node_metadata: (a) => {
     const metadata = (a.metadata ?? {}) as Partial<Pick<adapters.RawWorkflowNode, 'name' | 'description' | 'kind' | 'riskLevel'>>;
     return mockStore.updateNode(str(a, 'nodeId'), metadata) ?? null;
   },
-  workspace_validate_node: () => ({ valid: true, errors: [] }),
+  workspace_validate_node: (a) => {
+    const node = a.node as { inputSchema?: unknown; outputSchema?: unknown } | undefined;
+    if (!node || typeof node !== 'object') return { valid: false, errors: ['A complete node is required.'] };
+    if ((node.inputSchema as { __backendRefusal?: unknown } | undefined)?.__backendRefusal === true) {
+      return { valid: false, errors: ['The backend refused this candidate schema.'] };
+    }
+    return { valid: true, errors: [] };
+  },
 
   changes_restore: (a) => ({ nodeId: str(a, 'nodeId'), changeId: str(a, 'revisionId'), restored: true }),
 

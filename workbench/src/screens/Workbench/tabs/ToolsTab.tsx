@@ -6,11 +6,16 @@
 // moment of granting, not after the confirm dialog has already come and gone.
 
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTools } from '../../../api/hooks';
 import { ActionCancelledError } from '../../../api/confirmAction';
 import { IS_READ_ONLY } from '../../../api/client';
-import { workspaceUpdateNodeTools } from '../../../api/verbs';
+import {
+  nodeGetEffectiveTools,
+  workspacePrepareNodeEdit,
+  workspaceSaveToolsWithReadback,
+  WorkspaceEditConflictError,
+} from '../../../api/verbs';
 import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
 import { Btn, Card, RiskBadge } from '../../../components/primitives';
 import { toast } from '../../../components/Toasts';
@@ -26,8 +31,13 @@ export function ToolsTab({ node }: { node: WorkflowNode }) {
   const nodeId = node.id;
   const toolsQ = useTools();
   const qc = useQueryClient();
+  const effectiveQ = useQuery({
+    queryKey: ['effectiveTools', nodeId],
+    queryFn: () => nodeGetEffectiveTools({ nodeId }),
+  });
   const [busy, setBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [readbackUncertain, setReadbackUncertain] = useState(false);
 
   async function commit(nextTools: string[], triggerEl: HTMLElement | null, label: string) {
     if (busy) return;
@@ -35,12 +45,27 @@ export function ToolsTab({ node }: { node: WorkflowNode }) {
     setBusy(true);
     try {
       const before = node.tools;
-      await workspaceUpdateNodeTools({ nodeId, tools: nextTools });
+      const prepared = await workspacePrepareNodeEdit(nodeId);
+      const result = await workspaceSaveToolsWithReadback({ nodeId, tools: nextTools, prepared });
+      if (result.state !== 'confirmed') {
+        setReadbackUncertain(true);
+        await qc.invalidateQueries({ queryKey: ['node', nodeId] });
+        toast('Tool save needs verification', result.message);
+        return;
+      }
+      setReadbackUncertain(false);
       recordChange({ nodeId, kind: 'tools', label, before, after: nextTools });
       await qc.invalidateQueries({ queryKey: ['node', nodeId] });
-      toast('Tools updated', `workspace_update_node_tools → ${nextTools.length} tool${nextTools.length === 1 ? '' : 's'} allowed`);
+      await qc.invalidateQueries({ queryKey: ['effectiveTools', nodeId] });
+      toast('Tools updated and verified', `workspace_update_node_tools → ${nextTools.length} model grant${nextTools.length === 1 ? '' : 's'} confirmed by readback`);
     } catch (err) {
       if (err instanceof ActionCancelledError) return;
+      if (err instanceof WorkspaceEditConflictError) {
+        setReadbackUncertain(true);
+        await qc.invalidateQueries({ queryKey: ['node', nodeId] });
+        toast('Tool save conflict', `${err.message} Reloaded state is required before retrying.`);
+        return;
+      }
       toast('Update failed', err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setBusy(false);
@@ -62,7 +87,7 @@ export function ToolsTab({ node }: { node: WorkflowNode }) {
     <Card
       label={
         <>
-          allowed tools <span className="pin live">live</span> · {node.tools.length} of {toolsQ.data?.length ?? '…'} in the registry
+          allowed model grants <span className={`pin ${readbackUncertain ? '' : 'live'}`}>{readbackUncertain ? 'readback uncertain' : 'live'}</span> · {node.tools.length} of {toolsQ.data?.length ?? '…'} in the registry
         </>
       }
     >
@@ -103,6 +128,25 @@ export function ToolsTab({ node }: { node: WorkflowNode }) {
             </div>
           );
         })
+      )}
+      {readbackUncertain && (
+        <p style={{ color: 'var(--bad)', fontSize: 12.5, margin: '10px 0 0' }}>
+          The last tool save was accepted but is not verified by committed readback. Reload before changing grants again.
+        </p>
+      )}
+      {effectiveQ.isSuccess && (
+        <div className="editnote" style={{ display: 'block' }}>
+          <p className="note" style={{ margin: '10px 0 4px' }}>
+            execution: {effectiveQ.data.capability?.executionKind ?? 'unknown'} · model grants and engine verbs are separate capabilities.
+          </p>
+          {effectiveQ.data.engine.length > 0 ? (
+            <p className="note" style={{ margin: 0 }}>
+              engine route verbs: <span className="mono">{effectiveQ.data.engine.join(', ')}</span>
+            </p>
+          ) : (
+            <p className="note" style={{ margin: 0 }}>No direct engine route verbs reported for this node.</p>
+          )}
+        </div>
       )}
       <div className="editnote">
         <Btn

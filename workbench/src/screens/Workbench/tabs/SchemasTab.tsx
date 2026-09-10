@@ -5,22 +5,21 @@
 //   1. malformed JSON (a parse error, reported with line/column), and
 //   2. schema-invalid-but-parseable (workspace_validate_node's own message
 //      where it has one, plus a real local JSON-Schema-shape check — see
-//      Shared.tsx's doc comment on why the local check exists: the mock
-//      handler always reports {valid:true} regardless of input).
+//      Shared.tsx's doc comment on why the local check exists).
 //
-// workspace_update_node_input_schema/output_schema don't persist against
-// mockStore either (client.ts, not ours to edit) — so a successful save
-// writes into the local schema overlay (Shared.tsx), which is what's read
-// back afterwards instead of the ever-identical stub.
+// A successful mutation is never treated as proof by itself: the editor
+// reads the committed schema back before it says "live". A failed or
+// mismatched readback remains explicitly uncertain rather than becoming a
+// session-only overlay that can be mistaken for the workspace.
 
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ActionCancelledError } from '../../../api/confirmAction';
 import { IS_READ_ONLY } from '../../../api/client';
 import {
-  workspaceUpdateNodeInputSchema,
-  workspaceUpdateNodeOutputSchema,
-  workspaceValidateNode,
+  workspacePrepareNodeEdit,
+  workspaceSaveSchemaWithReadback,
+  WorkspaceEditConflictError,
   type JSONSchema,
 } from '../../../api/verbs';
 import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
@@ -31,14 +30,12 @@ import {
   clearLocalDraft,
   ErrorNote,
   getLocalDraft,
-  getSchemaOverlay,
   LoadingNote,
   parseJsonWithPosition,
   READONLY_REASON,
   recordChange,
   SchemaIssueList,
   setLocalDraft,
-  setSchemaOverlay,
   validateSchemaShape,
   type SchemaIssue,
   type SchemaKind,
@@ -55,14 +52,12 @@ export function SchemasTab({ nodeId }: { nodeId: string }) {
         kind="input"
         title="input schema"
         query={inputQ}
-        updateVerb={workspaceUpdateNodeInputSchema}
       />
       <SchemaEditor
         nodeId={nodeId}
         kind="output"
         title={`output schema · produces ${nodeId}.v1`}
         query={outputQ}
-        updateVerb={workspaceUpdateNodeOutputSchema}
       />
     </>
   );
@@ -73,18 +68,15 @@ function SchemaEditor({
   kind,
   title,
   query,
-  updateVerb,
 }: {
   nodeId: string;
   kind: SchemaKind;
   title: string;
   query: { data?: JSONSchema; isLoading: boolean; isError: boolean; error: { message?: string } | null };
-  updateVerb: (args: { nodeId: string; schema: JSONSchema }) => Promise<{ nodeId: string; schema: JSONSchema; applied: boolean }>;
 }) {
   const qc = useQueryClient();
   const field: 'inputSchema' | 'outputSchema' = kind === 'input' ? 'inputSchema' : 'outputSchema';
-  const overlay = getSchemaOverlay(nodeId, kind);
-  const effective = overlay ?? query.data;
+  const effective = query.data;
   const effectiveText = effective !== undefined ? JSON.stringify(effective, null, 2) : '';
 
   const editingNode = useRef(nodeId);
@@ -93,6 +85,7 @@ function SchemaEditor({
   const [parseError, setParseError] = useState<{ message: string; line?: number; column?: number } | null>(null);
   const [saving, setSaving] = useState(false);
   const [validOk, setValidOk] = useState(false);
+  const [readbackUncertain, setReadbackUncertain] = useState(false);
 
   useEffect(() => {
     if (editingNode.current === nodeId) return;
@@ -101,6 +94,7 @@ function SchemaEditor({
     setIssues([]);
     setParseError(null);
     setValidOk(false);
+    setReadbackUncertain(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
 
@@ -120,6 +114,7 @@ function SchemaEditor({
     setIssues([]);
     setParseError(null);
     setValidOk(false);
+    setReadbackUncertain(false);
     if (v !== effectiveText) setLocalDraft(nodeId, `${kind}SchemaText`, v);
     else clearLocalDraft(nodeId, `${kind}SchemaText`);
   }
@@ -129,6 +124,7 @@ function SchemaEditor({
     setIssues([]);
     setParseError(null);
     setValidOk(false);
+    setReadbackUncertain(false);
     clearLocalDraft(nodeId, `${kind}SchemaText`);
   }
 
@@ -146,37 +142,44 @@ function SchemaEditor({
 
     const shapeIssues = validateSchemaShape(parsed.value);
 
-    let backendIssues: SchemaIssue[] = [];
-    try {
-      const result = await workspaceValidateNode({ nodeId, patch: { [field]: parsed.value } });
-      if (!result.valid) {
-        backendIssues = result.errors.map((message) => ({ path: '$ · workspace_validate_node', message }));
-      }
-    } catch (err) {
-      backendIssues = [{ path: '$ · workspace_validate_node', message: err instanceof Error ? err.message : 'Validation call failed.' }];
-    }
-
-    const allIssues = [...backendIssues, ...shapeIssues];
-    if (allIssues.length > 0) {
-      setIssues(allIssues);
+    if (shapeIssues.length > 0) {
+      setIssues(shapeIssues);
       return;
     }
 
-    setValidOk(true);
     setNextConfirmTrigger(triggerEl);
     setSaving(true);
     try {
       const before = effective;
       const schema = parsed.value as JSONSchema;
-      await updateVerb({ nodeId, schema });
-      setSchemaOverlay(nodeId, kind, schema);
+      // The preparation call carries a real full node and the workspace's
+      // supported concurrency tokens. The save boundary validates that
+      // complete candidate, mutates, then reads the committed field back.
+      const prepared = await workspacePrepareNodeEdit(nodeId);
+      const result = await workspaceSaveSchemaWithReadback({ nodeId, kind, schema, prepared });
+      if (result.state !== 'confirmed') {
+        setReadbackUncertain(true);
+        setIssues([{ path: '$ · committed readback', message: result.message }]);
+        await qc.invalidateQueries({ queryKey: [`${kind}Schema`, nodeId] });
+        return;
+      }
       clearLocalDraft(nodeId, `${kind}SchemaText`);
       recordChange({ nodeId, kind: field, label: `${kind} schema edited`, before, after: schema });
       await qc.invalidateQueries({ queryKey: [`${kind}Schema`, nodeId] });
-      toast('Schema saved', `workspace_update_node_${kind}_schema → recorded in History`);
+      setValidOk(true);
+      setReadbackUncertain(false);
+      toast('Schema saved and verified', `workspace_update_node_${kind}_schema → committed readback recorded in History`);
     } catch (err) {
       if (err instanceof ActionCancelledError) return;
-      toast('Save failed', err instanceof Error ? err.message : 'Something went wrong.');
+      if (err instanceof WorkspaceEditConflictError) {
+        setReadbackUncertain(true);
+        setIssues([{ path: '$ · save conflict', message: `${err.message} Reloaded state is required before retrying.` }]);
+        await qc.invalidateQueries({ queryKey: [`${kind}Schema`, nodeId] });
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Something went wrong.';
+      setIssues([{ path: '$ · workspace save', message }]);
+      toast('Save failed', message);
     } finally {
       setSaving(false);
     }
@@ -186,8 +189,8 @@ function SchemaEditor({
     <Card
       label={
         <>
-          {title} <span className="pin live">live</span>
-          {overlay && <span className="mono" style={{ color: 'var(--faint)', marginLeft: 8 }}>edited this session</span>}
+          {title} <span className={`pin ${readbackUncertain ? '' : 'live'}`}>{readbackUncertain ? 'readback uncertain' : 'live'}</span>
+          {readbackUncertain && <span className="pin pinned" style={{ marginLeft: 6 }}>committed state uncertain</span>}
           {dirty && <span className="pin" style={{ marginLeft: 6, background: 'var(--acc-soft)', color: 'var(--acc)' }}>unsaved draft</span>}
         </>
       }

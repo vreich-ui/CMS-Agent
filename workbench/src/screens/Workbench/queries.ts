@@ -42,7 +42,7 @@ export function useInputSchema(nodeId: string | null | undefined, options?: Opti
   });
 }
 
-export function useEffectiveSkills(nodeId: string | null | undefined, options?: Options<Skill[]>) {
+export function useEffectiveSkills(nodeId: string | null | undefined, options?: Options<verbs.EffectiveSkillPolicy>) {
   return useQuery({
     queryKey: ['effectiveSkills', nodeId],
     queryFn: () => verbs.nodeGetEffectiveSkills({ nodeId: nodeId as string }),
@@ -105,13 +105,9 @@ export function usePlaybook(nodeId: string | null | undefined, options?: Options
   });
 }
 
-// Added by WP-32 (Skills tab) — the effective-resolution view is specced
-// against `skill_resolve_for_node` by name (HANDOFF's WP-32 line), a
-// separate verb from `node_get_effective_skills` (already wired above as
-// useEffectiveSkills for WP-12's read-only view) even though both resolve
-// to the same mock handler today (client.ts's skillsFor()). Kept as its own
-// hook/query key rather than reusing useEffectiveSkills so the verb actually
-// invoked matches the spec if the two ever diverge live.
+// Legacy skill-resolver view retained for callers outside the Workbench tabs.
+// The editable Skills tab uses useEffectiveSkills above because the real MCP
+// envelope reports policy, conflicts, and effective grants together.
 export function useSkillResolution(nodeId: string | null | undefined, options?: Options<Skill[]>) {
   return useQuery({
     queryKey: ['skillResolution', nodeId],
