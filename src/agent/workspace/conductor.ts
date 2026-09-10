@@ -10,6 +10,7 @@
 //      so a full rerun is only chosen when nothing cheaper applies.
 
 import { getProjectHooks } from "../projects/projectHooks.js";
+import { collectRunBlockages, type Blockage } from "../execution/blockage.js";
 import { toProjectSummary } from "../projects/projectRegistry.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import type { ModelUsageSummary } from "../observability/modelUsageTypes.js";
@@ -156,7 +157,7 @@ export function summarizeRunCost(run: WorkflowExecutionRecord, usage: ModelUsage
     stages,
     mostExpensiveNodeId: mostExpensive && mostExpensive.costUsdEstimate > 0 ? mostExpensive.nodeId : undefined,
     reusableNodeIds: stages.filter((stage) => stage.reusable).map((stage) => stage.nodeId),
-    remainingNodeIds: stages.filter((stage) => stage.status === "queued").map((stage) => stage.nodeId),
+    remainingNodeIds: stages.filter((stage) => stage.status === "queued" || stage.status === "blocked" || stage.status === "failed").map((stage) => stage.nodeId),
     ...(budgetEval ? { budget: { ...budgetEval, blocked: run.status === "blocked" && !!run.budgetBlock, reason: run.budgetBlock?.reason } } : {})
   };
 }
@@ -171,6 +172,9 @@ export type RunPlan = {
   recommendedEntrypoint?: "article_body";
   // Set with strategy "retry_node": the failed node workflow.retry_node should target.
   retryNodeId?: string;
+  // The primary recorded wall and its machine-actionable remedies. This is derived from run state;
+  // status="blocked" alone never manufactures an approval.
+  blocker?: Blockage;
   // True when the recommended strategy does less work than re-running the whole workflow.
   narrowerThanFullRun: boolean;
 };
@@ -196,9 +200,10 @@ function providerErrorSuffix(output: unknown): string {
 // exists yet.
 export function planRun(run: WorkflowExecutionRecord): RunPlan {
   const reusableStages = run.nodes.filter((node) => node.status === "completed").map((node) => node.nodeId);
-  const remainingStages = run.nodes.filter((node) => node.status === "queued").map((node) => node.nodeId);
+  const remainingStages = run.nodes.filter((node) => node.status === "queued" || node.status === "blocked" || node.status === "failed").map((node) => node.nodeId);
   const articleBodyReady = run.nodes.find((node) => node.nodeId === "article_body")?.status === "completed";
-  const base = { runId: run.runId, reusableStages, remainingStages } as const;
+  const blocker = collectRunBlockages(run)[0];
+  const base = { runId: run.runId, reusableStages, remainingStages, ...(blocker ? { blocker } : {}) } as const;
 
   // Terminal ≠ nothing-to-do. A run that FAILED on one node while carrying completed, reusable
   // stages has one obvious cheapest next step — retry that node — and this tool used to answer
@@ -220,10 +225,38 @@ export function planRun(run: WorkflowExecutionRecord): RunPlan {
     return { ...base, strategy: "poll", reason: "Run is terminal; poll status and artifacts instead of rerunning.", narrowerThanFullRun: true };
   }
   if (run.status === "blocked") {
-    const reason = run.budgetBlock
-      ? `Run paused for budget (estimated $${run.budgetBlock.spentUsdEstimate} of $${run.budgetBlock.budgetUsd} ceiling reached before ${run.budgetBlock.nextNodeId ?? "the next node"}); raise budgetUsd and resume, or accept the partial result. Resuming re-checks the ceiling.`
-      : "Run is blocked awaiting approval; supply approval and continue rather than restarting.";
-    return { ...base, strategy: "resume", reason, narrowerThanFullRun: true };
+    if (run.budgetBlock) {
+      return {
+        ...base,
+        strategy: "resume",
+        reason: `Run paused for budget (estimated $${run.budgetBlock.spentUsdEstimate} of $${run.budgetBlock.budgetUsd} ceiling reached before ${run.budgetBlock.nextNodeId ?? "the next node"}); raise the run budget, then resume. Resuming alone re-checks the unchanged ceiling.`,
+        narrowerThanFullRun: true
+      };
+    }
+    if (blocker?.code === "approval_required") {
+      return { ...base, strategy: "resume", reason: "Run is held at a publication approval gate; record the gate decision, then resume without recomputing completed stages.", narrowerThanFullRun: true };
+    }
+    if (blocker?.code === "economic_stop") {
+      return {
+        ...base,
+        strategy: "full_run",
+        reason: "Run was intentionally stopped by the verified economic floor. Retrying or resuming this run would read the same decision and block again; inspect its evidence and start a new run only after evidence or policy changes, or with an explicit configured override.",
+        narrowerThanFullRun: false
+      };
+    }
+    const blockedNode = run.nodes.find((node) => node.status === "blocked");
+    if (blockedNode) {
+      return {
+        ...base,
+        strategy: "retry_node",
+        retryNodeId: blockedNode.nodeId,
+        reason: blocker
+          ? `Run is blocked at ${blockedNode.nodeId} (${blocker.code}). Apply blocker.remedies to repair the recorded cause, then workflow.retry_node for this stage; completed stages remain reusable.`
+          : `Run is blocked at ${blockedNode.nodeId}, but no structured cause was recorded. Inspect that stage before retrying; completed stages remain reusable.`,
+        narrowerThanFullRun: true
+      };
+    }
+    return { ...base, strategy: "resume", reason: "Run is blocked without a recorded stage or approval cause. Inspect the run state before resuming; no approval is inferred from status alone.", narrowerThanFullRun: true };
   }
   if (articleBodyReady) {
     return { ...base, strategy: "late_stage_rerun", recommendedEntrypoint: "article_body", reason: "article_body is complete; a re-run can enter at the publish stages reusing the existing body instead of re-running ideation/research/draft.", narrowerThanFullRun: true };

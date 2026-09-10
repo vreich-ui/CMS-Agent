@@ -18,6 +18,7 @@
 // `contract_prefetch_failed`, `voice_prefetch_fallback` and `site_prefetch_degraded` use. An EV floor
 // is an optimization on spend; it must never be the reason a run cannot proceed.
 import { repositoryManager } from "../runtime/repositories.js";
+import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { NodeTimingRepository } from "../repository/interfaces/NodeTimingRepository.js";
 import { estimateRunCostFromHistory, type RunCostEstimate } from "./runCostHistory.js";
 
@@ -33,8 +34,20 @@ export type CostPrefetchResult = {
   warning?: string;
 };
 
-export type CostPrefetchParams = { runId: string; workflowId: string; projectId?: string };
-export type CostPrefetchDeps = { nodeTimingRepository?: NodeTimingRepository };
+// Bounded twice: one page for the tenant and one pooled page. The pure qualifier reports how many
+// candidates it rejected; fetching more to make that number look better would turn a dispatch into a
+// growing whole-history join.
+export const MAX_RUN_COST_HISTORY_CANDIDATES = 50;
+export type CostPrefetchParams = {
+  runId: string;
+  workflowId: string;
+  projectId?: string;
+  // Additive caller evidence. Until the conductor supplies the current route-era map, no historical
+  // run can prove it executed today's workflow and the result stays safely `no_history`.
+  currentRouteEras?: Readonly<Record<string, string>>;
+  now?: Date;
+};
+export type CostPrefetchDeps = { nodeTimingRepository?: NodeTimingRepository; executionRepository?: ExecutionRepository };
 
 // The key this estimate travels under in the node's input. Named as a constant so the executor, the
 // node prompt op and the tests all mean the same field.
@@ -45,13 +58,36 @@ export const RUN_COST_ESTIMATE_INPUT_KEY = "runCostEstimate";
 const noHistory = (reason: string): RunCostEstimate => ({ ...estimateRunCostFromHistory({ records: [] }), rationale: reason });
 
 export async function getRunCostEstimate(params: CostPrefetchParams, deps: CostPrefetchDeps = {}): Promise<CostPrefetchResult> {
-  const store = deps.nodeTimingRepository ?? repositoryManager.getNodeTimingRepository();
+  const timingStore = deps.nodeTimingRepository ?? repositoryManager.getNodeTimingRepository();
+  const executionStore = deps.executionRepository ?? repositoryManager.getExecutionRepository();
   try {
-    // Read the whole workflow's records and scope in the pure function rather than filtering at the
-    // repository: the pooled fallback needs both populations, and one read that serves both keeps the
-    // scoped and pooled figures derived from exactly the same rows.
-    const records = await store.list({ workflowId: params.workflowId });
-    const estimate = estimateRunCostFromHistory({ records, excludeRunId: params.runId, projectId: params.projectId });
+    const stamp = (estimate: RunCostEstimate): RunCostEstimate => ({ ...estimate, workflowId: params.workflowId, evaluatedAt: (params.now ?? new Date()).toISOString() });
+    if (!params.currentRouteEras || !Object.keys(params.currentRouteEras).length) {
+      const estimate = stamp(estimateRunCostFromHistory({ records: [], candidates: [], currentRouteEras: params.currentRouteEras, excludeRunId: params.runId, projectId: params.projectId }));
+      return {
+        estimate,
+        warningCode: "cost_history_insufficient",
+        warning: `No current route-era evidence was supplied for workflow "${params.workflowId}", so historical timing rows cannot be claimed as this workflow's completed cost. The EV floor is $0 and cannot block anything.`
+      };
+    }
+
+    // Project candidates are fetched independently so tenant history wins when it is sufficient.
+    // The pooled page is separately bounded and is only a labeled fallback in the pure qualifier.
+    const [projectPage, pooledPage] = await Promise.all([
+      params.projectId
+        ? executionStore.listRunsPage({ workflowId: params.workflowId, projectId: params.projectId, status: "completed", limit: MAX_RUN_COST_HISTORY_CANDIDATES })
+        : Promise.resolve({ runs: [] }),
+      executionStore.listRunsPage({ workflowId: params.workflowId, status: "completed", limit: MAX_RUN_COST_HISTORY_CANDIDATES })
+    ]);
+    const candidates = new Map([...projectPage.runs, ...pooledPage.runs].map((run) => [run.runId, run]));
+    const timingRows = await Promise.all([...candidates.values()].map((run) => timingStore.list({ runId: run.runId })));
+    const estimate = stamp(estimateRunCostFromHistory({
+      records: timingRows.flat(),
+      candidates: [...candidates.values()],
+      currentRouteEras: params.currentRouteEras,
+      excludeRunId: params.runId,
+      projectId: params.projectId
+    }));
     if (estimate.basis === "no_history") {
       return {
         estimate,
@@ -70,7 +106,7 @@ export async function getRunCostEstimate(params: CostPrefetchParams, deps: CostP
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      estimate: noHistory(`The node timing ledger could not be read (${message}), so no run-cost history is available. estimatedRunCostUsd is 0 and the EV floor blocks nothing.`),
+      estimate: { ...noHistory(`The node timing ledger could not be read (${message}), so no run-cost history is available. estimatedRunCostUsd is 0 and the EV floor blocks nothing.`), workflowId: params.workflowId, evaluatedAt: (params.now ?? new Date()).toISOString() },
       warningCode: "cost_history_unavailable",
       warning: message
     };

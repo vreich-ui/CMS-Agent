@@ -1,5 +1,10 @@
 # EV-floor node ops — `monetization_strategy` (2026-09-09)
 
+> **Historical record — do not apply these operations.** W4 (2026-09-10) makes the model-authored
+> `evFloor.verdict` and provenance labels advisory and moves the halt to an engine-owned decision.
+> Applying the operations below would restore the obsolete claim that a model label is load-bearing.
+> Use `authoritative-ev-node-ops.md` after compatible code is deployed.
+
 Three ops. The COST half of ops 1–3 was already applied to the live store on 2026-09-08 (workspace
 1046 → 1048); this file supersedes that record with the traffic half folded in, so applying it once
 after this branch deploys brings the node fully up to date in one pass. **Apply only after the code is

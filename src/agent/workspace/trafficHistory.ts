@@ -58,6 +58,11 @@ export type TrafficEstimate = {
   sessions: number;
   pageviews: number | null;
   sampleRecords: number;
+  // Added by trafficPrefetch. The pure estimator intentionally does not invent a tenant or clock;
+  // an authoritative consumer requires all three fields before this can stop a run.
+  projectId?: string;
+  windowStart?: string;
+  windowEnd?: string;
   rationale: string;
 };
 

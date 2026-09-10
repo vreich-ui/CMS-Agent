@@ -60,6 +60,10 @@ import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTiming
 import { ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS, declaresDeterministicRoute, deterministicStageTimeoutMs, nodeTimeoutMs, phaseTimeoutMsFor, resolveRouteEra, STALL_MARGIN_MS, type PhaseClaim } from "./routeRegistry.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
 import { tenantCallToolFor } from "../tools/tenantInvoke.js";
+import type { ToolExecutionRecord } from "../tools/toolTypes.js";
+import { getToolExecution } from "../tools/toolExecutor.js";
+import { flushToolExecutionLedger } from "../tools/toolExecutionLedger.js";
+import { buildAuthoritativeEconomicDecision, loadParentEconomicDecision } from "./economicDecision.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -1244,7 +1248,7 @@ const RUN_CONTEXT_SOURCE_NODE_IDS = new Set(["artifact_plan", "contract_intellig
 // another sibling's predicate reads, and every member is handed the same pre-batch snapshot.
 const wouldSkipBeforeDispatch = (run: WorkflowExecutionRecord, node: WorkspaceNode): boolean => {
   if (stateById(run).get(node.id)?.skipOverride) return false;
-  return evaluateNodeSkip(node, { initialInput: run.initialInput, stageOutputs: run.stageOutputs })?.skip === true;
+  return evaluateNodeSkip(node, { initialInput: run.initialInput, stageOutputs: run.stageOutputs, economicDecision: run.economicDecision })?.skip === true;
 };
 
 // Publish-risk is the hard exclusion: a publish-risk node is NEVER dispatched alongside anything. Its
@@ -1714,7 +1718,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // An operator's explicit retry of a skipped node sets skipOverride, which bypasses this: a retry is
   // the operator saying "run this one", and re-deciding it against them would be an infinite loop.
   if (!state.skipOverride) {
-    const verdict = evaluateNodeSkip(nextNode, { initialInput: run.initialInput, stageOutputs: run.stageOutputs });
+    const verdict = evaluateNodeSkip(nextNode, { initialInput: run.initialInput, stageOutputs: run.stageOutputs, economicDecision: run.economicDecision });
     if (verdict?.warnings.length) state.warnings = [...(state.warnings ?? []), ...verdict.warnings];
     // 2026-09-08 — THE ONE PREDICATE THAT STOPS A RUN INSTEAD OF SKIPPING A NODE.
     //
@@ -1739,6 +1743,20 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.skip = { reason: verdict.reason, predicate: verdict.predicate as Record<string, unknown> | undefined, basis: verdict.basis, evaluatedAt: completedAt };
       state.output = { artifact: `${nextNode.id}.decision`, dryRun: true, decision: "blocked", reason: verdict.reason, basis: verdict.basis };
       state.warnings = [...(state.warnings ?? []), `run_halted:${EV_FLOOR_BLOCKED_PREDICATE}`, "no_publication_performed"];
+      state.blockage = toBlockage(
+        {
+          code: "economic_stop",
+          message: verdict.reason,
+          details: {
+            predicate: EV_FLOOR_BLOCKED_PREDICATE,
+            decisionId: run.economicDecision?.decisionId,
+            reasonCode: run.economicDecision?.reasonCode,
+            basis: verdict.basis
+          },
+          operatorAction: "Inspect the recorded evidence and start a new run only after evidence or policy changes, or with an explicit configured override."
+        },
+        { node_id: nextNode.id, run_id: run.runId, surface: "run", attempt: nextAttemptNumber(state) }
+      );
       delete state.dispatch;
       run.status = "blocked";
       run.currentNodeId = nextNode.id;
@@ -2032,7 +2050,11 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   // EV floor is an optimization on spend; it must never be the reason a run cannot proceed.
   if (declaresCostPrefetch(nextNode)) {
     try {
-      const costResult = await getRunCostEstimate({ runId: run.runId, workflowId: run.workflowId, projectId: run.projectId });
+      const currentRouteEras = Object.fromEntries(nodes.map((node) => [node.id, resolveRouteEra(node)]));
+      const costResult = await getRunCostEstimate(
+        { runId: run.runId, workflowId: run.workflowId, projectId: run.projectId, currentRouteEras },
+        { executionRepository: store }
+      );
       state.input = { ...(state.input as Record<string, unknown>), [RUN_COST_ESTIMATE_INPUT_KEY]: costResult.estimate };
       if (costResult.warningCode) state.warnings = [...(state.warnings ?? []), `cost_prefetch_degraded:${costResult.warningCode}`];
     } catch (error) {
@@ -3125,6 +3147,52 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   }
   let output = result.output;
 
+  // W4 (2026-09-10) — AUTHORITATIVE ECONOMIC DECISION.
+  //
+  // monetization_strategy may choose an offer and explain a cluster relationship, but it cannot
+  // certify its own provenance. The decision is rebuilt here from the conductor-prefetched cost and
+  // traffic evidence plus the actual same-run project.call_read_tool ledger receipts. Supporting
+  // assets can inherit only a parent decision loaded here from the durable run repository; caller
+  // input is never accepted as parent authority. The decision is persisted
+  // on the run — a channel the model cannot write — and the EV halt reads only that field. The
+  // model's evFloor block stays on its output for compatibility/explanation, but cannot stop work.
+  if (nextNode.id === "monetization_strategy" && mode !== "mock") {
+    const input = isOutputRecord(state.input) ? state.input : {};
+    const toolExecutions: ToolExecutionRecord[] = [];
+    for (const call of result.toolCalls ?? []) {
+      if (!call.toolExecutionId) continue;
+      let record = getToolExecution(call.toolExecutionId);
+      if (!record) {
+        await flushToolExecutionLedger();
+        record = await repositoryManager.getToolExecutionRepository().get(call.toolExecutionId, run.runId);
+      }
+      if (record) toolExecutions.push(record);
+    }
+    const outputFloor = isOutputRecord(output) && isOutputRecord(output.evFloor) ? output.evFloor : undefined;
+    const parentLookup = await loadParentEconomicDecision({
+      supportingFor: outputFloor?.supportingFor,
+      currentRunId: run.runId,
+      projectId: run.projectId,
+      getRun: (parentRunId) => store.getRun(parentRunId)
+    });
+    if (parentLookup.warning) state.warnings = [...(state.warnings ?? []), parentLookup.warning];
+    const decision = buildAuthoritativeEconomicDecision({
+      runId: run.runId,
+      workflowId: run.workflowId,
+      projectId: run.projectId,
+      evaluatedAt: completedAt,
+      output,
+      costEstimate: input[RUN_COST_ESTIMATE_INPUT_KEY],
+      trafficEstimate: input[TRAFFIC_ESTIMATE_INPUT_KEY],
+      toolExecutions,
+      initialInput: run.initialInput,
+      parentEconomicDecision: parentLookup.decision
+    });
+    run.economicDecision = decision;
+    if (isOutputRecord(output)) output = { ...output, engineDecision: decision };
+    state.warnings = [...(state.warnings ?? []), `economic_decision:${decision.outcome}:${decision.reasonCode}`];
+  }
+
   // W3 part 1 (determinism program, 2026-08-12) — the ENGINE-owned validate→fix→revalidate loop for
   // article_body, seamed HERE: after the node's own agent loop has returned an envelope and before
   // anything (R-16, the artifact ledger, a downstream node) can read it.
@@ -3535,6 +3603,7 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
       delete node.durationMs;
       delete node.warnings;
       delete run.stageOutputs[node.nodeId];
+      if (node.nodeId === "monetization_strategy") delete run.economicDecision;
       run.artifacts = run.artifacts.filter((artifact) => artifact.nodeId !== node.nodeId);
       run.approvalsRequired = run.approvalsRequired.filter((approval) => approval.nodeId !== node.nodeId);
       try {

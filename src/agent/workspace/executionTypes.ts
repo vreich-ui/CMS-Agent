@@ -13,6 +13,7 @@
 // findNextRunnableNode / dependenciesReached), never as a failure and never as a blocker. A run never
 // takes this status; only a node does.
 import type { Blockage } from "../execution/blockage.js";
+import type { EconomicDecision } from "./economicDecision.js";
 
 export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled", "skipped"] as const;
 export type ExecutionStatus = typeof executionStatuses[number];
@@ -307,6 +308,10 @@ export type WorkflowExecutionRecord = {
   platformAllowedTools?: string[];
   initialInput?: unknown;
   stageOutputs: Record<string, unknown>;
+  // W4 (2026-09-10) — the engine-owned economic decision channel. A model may emit an evFloor
+  // object in monetization_strategy's stage output, but only the executor writes this run field.
+  // The pre-dispatch halt reads this field, never the model's provenance labels.
+  economicDecision?: EconomicDecision;
   dryRun: true;
   executionMode?: "mock" | "openai";
   // Monotonic revision used for optimistic concurrency control. A read carries the stored `rev`;

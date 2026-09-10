@@ -62,12 +62,18 @@ export async function getTrafficEstimate(params: TrafficPrefetchParams, deps: Tr
   try {
     const all = await store.listFeedback({ kind: "outcome", limit: FEEDBACK_PAGE_LIMIT });
     const now = params.now ?? new Date();
+    const stamp = (estimate: TrafficEstimate): TrafficEstimate => ({
+      ...estimate,
+      projectId: params.projectId,
+      windowStart: new Date(now.getTime() - estimate.windowDays * 24 * 60 * 60 * 1000).toISOString(),
+      windowEnd: now.toISOString()
+    });
     const windowStart = new Date(now.getTime() - TRAFFIC_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const oldestSeen = all.length ? all[all.length - 1].createdAt : undefined;
     const windowCovered = all.length < FEEDBACK_PAGE_LIMIT || (oldestSeen !== undefined && oldestSeen <= windowStart);
     if (!windowCovered) {
       return {
-        estimate: insufficient(`The engagement read came back at its ${FEEDBACK_PAGE_LIMIT}-record page cap without reaching back ${TRAFFIC_WINDOW_DAYS} days (oldest row seen: ${oldestSeen}), so rows inside this estimate's own window are missing from it. A traffic figure computed from a partial window would look measured and not be, so none is reported: expectedMonthlyTraffic is 0 and the volume side cannot earn a block.`),
+        estimate: stamp(insufficient(`The engagement read came back at its ${FEEDBACK_PAGE_LIMIT}-record page cap without reaching back ${TRAFFIC_WINDOW_DAYS} days (oldest row seen: ${oldestSeen}), so rows inside this estimate's own window are missing from it. A traffic figure computed from a partial window would look measured and not be, so none is reported: expectedMonthlyTraffic is 0 and the volume side cannot earn a block.`)),
         warningCode: "traffic_history_truncated",
         warning: `feedback outcome read hit the ${FEEDBACK_PAGE_LIMIT}-record cap for project "${params.projectId}" without covering the ${TRAFFIC_WINDOW_DAYS}-day window; the traffic estimate is withheld rather than computed from it.`
       };
@@ -75,7 +81,7 @@ export async function getTrafficEstimate(params: TrafficPrefetchParams, deps: Tr
     // Own-property rows only. An unstamped record cannot be proved to belong to this project, and a
     // traffic figure borrowed from another tenant would be a fabrication with a measured-looking label.
     const mine = all.filter((record) => record.projectId === params.projectId);
-    const estimate = estimateTrafficFromHistory({ records: mine, now });
+    const estimate = stamp(estimateTrafficFromHistory({ records: mine, now }));
     if (estimate.basis === "insufficient_data") {
       return {
         estimate,
@@ -87,7 +93,7 @@ export async function getTrafficEstimate(params: TrafficPrefetchParams, deps: Tr
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      estimate: insufficient(`The feedback ledger could not be read (${message}), so no engagement history is available. expectedMonthlyTraffic is 0 and the EV floor's volume side cannot earn a block.`),
+      estimate: { ...insufficient(`The feedback ledger could not be read (${message}), so no engagement history is available. expectedMonthlyTraffic is 0 and the EV floor's volume side cannot earn a block.`), projectId: params.projectId, windowStart: new Date((params.now ?? new Date()).getTime() - TRAFFIC_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString(), windowEnd: (params.now ?? new Date()).toISOString() },
       warningCode: "traffic_history_unavailable",
       warning: message
     };
