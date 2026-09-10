@@ -4,12 +4,14 @@ import { GcsStoreClient } from "../../src/agent/repository/gcs/gcsStoreClient.js
 import { registerCmsAgentStoreFactory, type BlobStoreClient } from "../../src/agent/repository/blobs/blobClient.js";
 import { BlobExecutionRepository } from "../../src/agent/repository/blobs/BlobExecutionRepository.js";
 import { BlobWorkspaceRepository } from "../../src/agent/repository/blobs/BlobWorkspaceRepository.js";
+import { BlobNodeTimingRepository } from "../../src/agent/repository/blobs/BlobNodeTimingRepository.js";
 import { BlobConversationTurnRepository } from "../../src/agent/repository/blobs/BlobConversationTurnRepository.js";
 import { MAX_CONVERSATION_TURNS, type ConversationTurnRecord } from "../../src/agent/conversations/conversationTurnTypes.js";
 import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
 import { RunConcurrencyError } from "../../src/agent/repository/interfaces/ExecutionRepository.js";
 import { migrateStore, verifyStore } from "../../src/agent/entrypoints/migrateStoreJob.js";
 import type { WorkflowExecutionRecord } from "../../src/agent/workspace/executionTypes.js";
+import type { NodeTimingRecord } from "../../src/agent/workspace/nodeTimings.js";
 
 // In-memory stand-in for a GCS bucket implementing exactly the surface GcsStoreClient touches:
 // per-object monotonic generations and ifGenerationMatch preconditions (412), 404s for missing
@@ -69,6 +71,11 @@ const conversationTurn = (index: number): ConversationTurnRecord => ({
   createdAt: new Date(Date.UTC(2026, 7, 9, 0, 0, index)).toISOString()
 });
 
+const nodeTiming = (timingId: string, runId: string): NodeTimingRecord => ({
+  timingId, runId, workflowId: "publishing", nodeId: "research", durationMs: 1000, costUsd: 2,
+  outcome: "completed", recordedAt: "2026-09-10T00:00:00.000Z", projectId: "dr-lurie", executionMode: "openai", routeEra: "model"
+});
+
 const savedEnv = { ...process.env };
 afterEach(() => {
   process.env = { ...savedEnv };
@@ -118,6 +125,18 @@ describe("GcsStoreClient (BlobStoreClient over GCS)", () => {
 });
 
 describe("lost-update race closed on GCS (Phase 2 acceptance)", () => {
+  it("self-heals legacy node timings into the bounded by-run index on the GCS-shaped backend", async () => {
+    const bucket = makeFakeBucket();
+    const store = clientFor(bucket);
+    // Pre-W3 timing storage had only the workflow axis.
+    await store.setJSON("node_timings/by-workflow/publishing/legacy_timing.json", nodeTiming("legacy_timing", "run_legacy"));
+    const repository = new BlobNodeTimingRepository(store);
+
+    expect((await repository.list({ runId: "run_legacy" })).map((record) => record.timingId)).toEqual(["legacy_timing"]);
+    expect(bucket.objects.has("node_timings/by-run/run_legacy/legacy_timing.json")).toBe(true);
+    expect(bucket.objects.has("node_timings/by-run/!meta.v1.json")).toBe(true);
+  });
+
   it("persists the bounded conversation mirror through the GCS-shaped store", async () => {
     const repository = new BlobConversationTurnRepository(clientFor(makeFakeBucket()));
     for (let index = 0; index <= MAX_CONVERSATION_TURNS; index++) await repository.record(conversationTurn(index));

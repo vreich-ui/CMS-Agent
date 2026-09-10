@@ -11,6 +11,9 @@ const clone = <T>(value: T): T => structuredClone(value);
 const flatKey = (timingId: string) => `node_timings/${timingId}.json`;
 const workflowPrefix = (workflowId: string) => `node_timings/by-workflow/${workflowId}/`;
 const workflowIndexedKey = (workflowId: string, timingId: string) => `${workflowPrefix(workflowId)}${timingId}.json`;
+const runPrefix = (runId: string) => `node_timings/by-run/${runId}/`;
+const runIndexedKey = (runId: string, timingId: string) => `${runPrefix(runId)}${timingId}.json`;
+const RUN_INDEX_META_KEY = "node_timings/by-run/!meta.v1.json";
 const keyFor = (record: Pick<NodeTimingRecord, "timingId" | "workflowId">) => record.workflowId ? workflowIndexedKey(record.workflowId, record.timingId) : flatKey(record.timingId);
 const inRange = (recordedAt: string, filters: NodeTimingFilters) => {
   const time = Date.parse(recordedAt);
@@ -21,12 +24,50 @@ const inRange = (recordedAt: string, filters: NodeTimingFilters) => {
 
 export class BlobNodeTimingRepository implements NodeTimingRepository {
   constructor(private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
+
+  private runIndexConfirmed = false;
+  private runIndexReady: Promise<void> | null = null;
+
+  // The run index is a read-cost contract for cost history. Existing timing rows live under the
+  // workflow prefix, so the first run-scoped read performs one complete, deduplicated backfill and
+  // stamps a marker only after every discoverable row has a by-run copy. A result limit elsewhere
+  // must never be mistaken for a bound on this compatibility migration.
+  private ensureRunIndex(): Promise<void> {
+    if (this.runIndexConfirmed) return Promise.resolve();
+    if (!this.runIndexReady) {
+      const ready = (async () => {
+        const meta = await getBlobJson<{ schemaVersion: string }>(this.store, RUN_INDEX_META_KEY);
+        if (meta?.schemaVersion !== "node_timing_run_index.v1") await this.backfillRunIndex();
+        this.runIndexConfirmed = true;
+      })();
+      this.runIndexReady = ready;
+      ready.catch(() => { if (this.runIndexReady === ready) this.runIndexReady = null; });
+    }
+    return this.runIndexReady;
+  }
+
+  private async backfillRunIndex(): Promise<void> {
+    const listing = await this.store.list({ prefix: "node_timings/" });
+    const rows = await Promise.all(listing.blobs
+      .filter((blob) => blob.key !== RUN_INDEX_META_KEY)
+      .map((blob) => getBlobJson<NodeTimingRecord>(this.store, blob.key)));
+    const unique = new Map(rows.filter((row): row is NodeTimingRecord => row !== null).map((row) => [row.timingId, row]));
+    await Promise.all([...unique.values()].map((row) => this.store.setJSON(runIndexedKey(row.runId, row.timingId), row)));
+    await this.store.setJSON(RUN_INDEX_META_KEY, { schemaVersion: "node_timing_run_index.v1", backfilledAt: new Date().toISOString() });
+  }
+
   async record(record: NodeTimingRecord): Promise<NodeTimingRecord> {
-    await this.store.setJSON(keyFor(record), record);
+    // A full node timing is immutable. Write the workflow and run axes together so a history query
+    // can join bounded run candidates without scanning the entire timing ledger on every dispatch.
+    await Promise.all([
+      this.store.setJSON(keyFor(record), record),
+      this.store.setJSON(runIndexedKey(record.runId, record.timingId), record)
+    ]);
     return clone(record);
   }
   async list(filters: NodeTimingFilters = {}): Promise<NodeTimingRecord[]> {
-    const prefix = filters.workflowId ? workflowPrefix(filters.workflowId) : "node_timings/";
+    if (filters.runId) await this.ensureRunIndex();
+    const prefix = filters.runId ? runPrefix(filters.runId) : filters.workflowId ? workflowPrefix(filters.workflowId) : "node_timings/";
     const result = await this.store.list({ prefix });
     const records = await Promise.all(result.blobs.map((blob) => getBlobJson<NodeTimingRecord>(this.store, blob.key)));
     return records.filter((record): record is NodeTimingRecord => record !== null)

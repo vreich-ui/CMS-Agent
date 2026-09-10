@@ -93,7 +93,7 @@ describe("the run-cost prefetch delivers a measured figure to monetization_strat
     repositoryManager.getNodeTimingRepository().clear();
   });
 
-  it("puts the workflow's measured p50 run cost in the node's input, so the model has nothing to invent", async () => {
+  it("does not promote timing rows to history without current route/run evidence", async () => {
     const store = new RepositoryManager().getExecutionRepository();
     const started = await startDryRun({ executionMode: "mock", projectId: "project-a", input: { contentClass: "money", topic: "Retinoid tolerance" } }, store);
     const seeded = (await getRun(started.runId, store))!;
@@ -106,8 +106,11 @@ describe("the run-cost prefetch delivers a measured figure to monetization_strat
     const node = run.nodes.find((entry) => entry.nodeId === "monetization_strategy")!;
     const estimate = (node.input as Record<string, unknown>).runCostEstimate as Record<string, unknown>;
 
-    expect(estimate).toMatchObject({ artifact: "run_cost_estimate.v1", basis: "workflow_history", estimatedRunCostUsd: 3.86, sampleRuns: 3 });
-    expect(node.warnings ?? []).not.toContain("cost_prefetch_degraded:cost_history_insufficient");
+    // The coordinator has not yet supplied the current route-era map and bounded completed run
+    // candidates to this executor call. Raw timing rows alone are not authoritative full-run cost
+    // samples, so the safe no-history outcome remains non-blocking rather than inventing a floor.
+    expect(estimate).toMatchObject({ artifact: "run_cost_estimate.v1", basis: "no_history", estimatedRunCostUsd: 0, candidateRuns: 0, coverageRuns: 0 });
+    expect(node.warnings).toContain("cost_prefetch_degraded:cost_history_insufficient");
   });
 
   it("degrades loudly, never fatally, when there is no history: a $0 floor and a named run-visible warning", async () => {
