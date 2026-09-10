@@ -317,6 +317,32 @@ describe("AnthropicNodeRunner W6a budget reservations and attempt accounting", (
     expect(usage).toMatchObject({ inputTokens: 130, outputTokens: 28, status: "actual", metadata: { attempt: 2, attemptsTotal: 2 } });
   });
 
+  it("records known usage from a schema-invalid attempt before a terminal classified provider response", async () => {
+    const runner = new AnthropicNodeRunner(sequentialFetchStub([
+      { json: messagesResponse({ content: [{ type: "tool_use", name: "emit_output", input: { wrong: true } }], usage: { input_tokens: 100, output_tokens: 20 } }) },
+      { status: 429, text: JSON.stringify({ error: { type: "rate_limit_error", message: "Slow down" } }) }
+    ]));
+    const result = await runner.run({ node: budgetedNode({ modelConfig: { provider: "anthropic", model: "claude-opus-4-8", maxOutputTokens: 500, retryCount: 1 } } as Partial<WorkspaceNode>), input: {} }, context());
+
+    expect(result).toMatchObject({ ok: false, code: "provider_rate_limit", providerStatus: 429, operatorAction: expect.stringContaining("Wait and retry") });
+    const usage = await repositoryManager.getUsageRepository().list({ runId: "run_anthropic" });
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ inputTokens: 100, outputTokens: 20, status: "actual", metadata: { partial: true, failureCode: "provider_rate_limit", attempt: 2, attemptsTotal: 2 } });
+  });
+
+  it("records known usage from a schema-invalid attempt before a terminal generic HTTP response", async () => {
+    const runner = new AnthropicNodeRunner(sequentialFetchStub([
+      { json: messagesResponse({ content: [{ type: "tool_use", name: "emit_output", input: { wrong: true } }], usage: { input_tokens: 100, output_tokens: 20 } }) },
+      { status: 400, text: "bad request" }
+    ]));
+    const result = await runner.run({ node: budgetedNode({ modelConfig: { provider: "anthropic", model: "claude-opus-4-8", maxOutputTokens: 500, retryCount: 1 } } as Partial<WorkspaceNode>), input: {} }, context());
+
+    expect(result).toMatchObject({ ok: false, code: "model_error", message: "anthropic_http_400: bad request", retryable: false });
+    const usage = await repositoryManager.getUsageRepository().list({ runId: "run_anthropic" });
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ inputTokens: 100, outputTokens: 20, status: "actual", metadata: { partial: true, failureCode: "model_error", attempt: 2, attemptsTotal: 2 } });
+  });
+
   it("does not let two concurrent Anthropic attempts reserve the same run-budget remainder", async () => {
     let resolveFirst: ((response: unknown) => void) | undefined;
     let startedFirst: (() => void) | undefined;
