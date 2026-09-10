@@ -42,6 +42,7 @@ import type {
   RawRubric,
   RawRun,
   RawRunCostLedger,
+  RawRunNode,
   RawSkill,
   RawToolDef,
   RawUsageSummary,
@@ -52,6 +53,60 @@ import type { ComparePair, Run, Workflow } from '../types';
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
+
+// ============================================================================
+// Fixture correction (workbench-node-output-and-run-freshness) — Defect A.
+//
+// This used to be the other way around: `stage_list_outputs` synthesized a
+// legacy-shaped record for EVERY "done" node in every run, and
+// `listNodeOutputs` (node_list_outputs) never carried an ordinary artifact
+// at all (no fixture row ever set `nodes[].output`). That's backwards from
+// production, where every executor completion path pushes exactly one
+// canonical run artifact per node and a legacy stage-store record is the
+// exception, not the rule (live evidence: run_1789034392364_o7bhnj /
+// capture_map — a canonical artifact existed, no stage record did).
+//
+// Rather than synthesize a canonical artifact for every completed/failed
+// node in all 55 fixture runs (a blast radius touching every other spec
+// that reads node_list_outputs — DriveCenter's "prior variant" picker,
+// Rail's override chip, the override modal's seed buttons), this scopes the
+// correction to a handful of explicit (runId, nodeId) scenarios on the one
+// run the Workbench suite already binds for "This run" coverage
+// (run_1787492010814_kxdbeb) — enough to exercise every precedence tier
+// outputResolution.ts defines, without changing what any other run/node
+// answers. Every fixture node outside these maps still answers "nothing
+// recorded" for node_list_outputs / stage_list_outputs, same as before.
+const RUN_A = 'run_1787492010814_kxdbeb';
+
+/** Canonical run-artifact scenarios — node_list_outputs entries with an
+ * ordinary `type` (never 'operator_override'). `input_triage` and
+ * `draft_writer` carry a canonical artifact and NO stage-store record (the
+ * common case this fix restores); `publish_payload` carries a canonical
+ * artifact AND a stage-store record for the same run, to prove precedence
+ * picks the canonical one. */
+const CANONICAL_ARTIFACTS: Record<string, { type: string }> = {
+  [`${RUN_A}:input_triage`]: { type: 'content_source.v1' },
+  [`${RUN_A}:draft_writer`]: { type: 'draft.v1' },
+  [`${RUN_A}:publish_payload`]: { type: 'publish_payload.v1' },
+};
+
+/** Legacy stage-store scenarios — `stage_list_outputs` entries.
+ * `publish_payload`'s id is shaped `${runId}:${nodeId}` (the executor's own
+ * convention) so it's attributable to this run, but still loses to the
+ * canonical artifact above (tier 2 beats tier 3). `research` carries ONLY a
+ * legacy record, with a random `stage_*` id (the pre-canonical-artifact
+ * convention) that proves nothing about which run wrote it — the
+ * stage-only compatibility-fallback case. */
+const LEGACY_STAGE_RECORDS: Record<string, { id: string; runScoped: boolean }> = {
+  [`${RUN_A}:publish_payload`]: { id: `${RUN_A}:publish_payload`, runScoped: true },
+  [`${RUN_A}:research`]: { id: 'stage_legacy_9f2k3q', runScoped: false },
+  // tests/verbargs.spec.ts's pre-existing regression guard for
+  // stageGetOutput's (runId, nodeId) composition predates this fixture
+  // correction and needs a "present" record to resolve against — kept as
+  // its own run-scoped entry rather than widening the blanket synthesis
+  // this whole change removed.
+  'run_1787567811920_hevotl:input_triage': { id: 'run_1787567811920_hevotl:input_triage', runScoped: true },
+};
 
 export interface RunFilter {
   workflowId?: string;
@@ -225,20 +280,41 @@ class MockStore {
     return { valid: issues.length === 0, issues };
   }
 
-  /** U3 — prior recorded outputs for a node, newest first. */
+  /**
+   * U3 / Defect A fixture correction — prior recorded outputs for a node,
+   * newest first. Two sources, exactly mirroring the live shape
+   * `node_list_outputs` actually returns (canonical artifacts pushed by an
+   * executor completion, plus any operator override on top):
+   *
+   *   - a node whose (runId, nodeId) pair is in CANONICAL_ARTIFACTS gets an
+   *     ordinary artifact entry — this is the "every completed node gets a
+   *     canonical run artifact" fact this fixture set used to contradict
+   *     (`n.output` was never set on any fixture row);
+   *   - a saved operator override (this session's own `saveStageOutput`
+   *     calls) is always unshifted to the front, regardless of whether a
+   *     canonical entry exists for that node — it must win precedence
+   *     whether or not the node has completed yet (drive mode overrides a
+   *     node's output before it has run at all).
+   */
   listNodeOutputs(nodeId: string, runId?: string): Array<Record<string, unknown>> {
     const out: Array<Record<string, unknown>> = [];
     for (const run of this.runs) {
       if (runId && run.runId !== runId) continue;
-      const hit = run.nodes.find((n) => n.nodeId === nodeId && n.output !== undefined);
-      if (!hit) continue;
+      const hit = run.nodes.find((n) => n.nodeId === nodeId);
+      const canonical = CANONICAL_ARTIFACTS[`${run.runId}:${nodeId}`];
+      if (!hit || !canonical) continue;
       out.push({
-        id: `${run.runId}:${nodeId}`,
+        id: `${run.runId}:${nodeId}:artifact`,
         runId: run.runId,
         nodeId,
-        type: 'stage_output',
+        type: canonical.type,
         createdAt: hit.completedAt ?? run.startedAt,
-        value: hit.output,
+        value: {
+          artifact: canonical.type,
+          nodeId,
+          runId: run.runId,
+          note: 'Fixture-mode canonical artifact placeholder — no live content captured for this node.',
+        },
       });
     }
     const override = this.stageOverrides.get(`${runId ?? ''}:${nodeId}`);
@@ -250,6 +326,38 @@ class MockStore {
         type: 'operator_override',
         createdAt: override.savedAt,
         value: override.value,
+        note: override.note,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Defect A fixture correction — the legacy stage-store, scoped by stage
+   * (== nodeId) only, never by run (mirrors the live `stage_list_outputs`
+   * contract — see verbs.ts's own doc comment on stageListOutputs). Only
+   * the handful of (runId, nodeId) pairs in LEGACY_STAGE_RECORDS answer
+   * anything; everything else in the fixture set has no legacy record, same
+   * as most completed nodes do live.
+   */
+  listLegacyStageOutputs(stage?: string): Array<{ id: string; stage: string; value: unknown; createdAt: string }> {
+    const out: Array<{ id: string; stage: string; value: unknown; createdAt: string }> = [];
+    for (const [key, rec] of Object.entries(LEGACY_STAGE_RECORDS)) {
+      const sep = key.indexOf(':');
+      const runId = key.slice(0, sep);
+      const nodeId = key.slice(sep + 1);
+      if (stage && nodeId !== stage) continue;
+      const run = this.runs.find((r) => r.runId === runId);
+      const hit = run?.nodes.find((n) => n.nodeId === nodeId);
+      out.push({
+        id: rec.id,
+        stage: nodeId,
+        value: {
+          note: rec.runScoped
+            ? 'Legacy stage-store record for this run — a compatibility fallback, superseded by the canonical run artifact when one exists.'
+            : "Legacy stage-store record — its id doesn't prove which run wrote it (pre-canonical-artifact convention).",
+        },
+        createdAt: hit?.completedAt ?? run?.startedAt ?? new Date(0).toISOString(),
       });
     }
     return out;
@@ -366,6 +474,24 @@ class MockStore {
 
   getRun(id: string): RawRun | undefined {
     return this.runs.find((r) => r.runId === id);
+  }
+
+  /**
+   * Test-support — patches one node entry's raw status (and, when given,
+   * the run's own top-level status alongside it). The static fixture set
+   * carries no 'running' or 'paused' RUN, and no per-node status this
+   * session hasn't already settled — this is how tests/thisRunOutput.spec.ts
+   * sets those up, and how it simulates a node crossing into a terminal
+   * state to exercise Defect B's "refresh without reload" path.
+   */
+  setNodeStatus(runId: string, nodeId: string, patch: Partial<RawRunNode>, runStatus?: string): RawRun | undefined {
+    const run = this.runs.find((r) => r.runId === runId);
+    if (!run) return undefined;
+    const idx = run.nodes.findIndex((n) => n.nodeId === nodeId);
+    if (idx === -1) return undefined;
+    run.nodes[idx] = { ...run.nodes[idx], ...patch };
+    if (runStatus !== undefined) run.status = runStatus;
+    return run;
   }
 
   /** Raw-field patch, used by the mutating-verb mock handlers. */

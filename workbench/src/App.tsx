@@ -76,6 +76,18 @@ const queryClient = new QueryClient({
   },
 });
 
+// Test/inspection hook only — no runtime behaviour depends on this. Exposes
+// the one QueryClient instance so the Playwright suite can assert on real
+// cache state (a query's dataUpdatedAt advancing under active-run polling,
+// or staying put once a run is terminal — see tests/thisRunOutput.spec.ts)
+// instead of guessing from render timing.
+// REVIEW FIX (R8) — DEV-only. Shipped unconditionally this handed any injected script
+// read AND write access (setQueryData) to cached run/output state; no credential lives
+// in the cache, but nothing needs this handle in a production bundle.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as { __queryClient?: typeof queryClient }).__queryClient = queryClient;
+}
+
 function ActiveScreen() {
   const screen = useStore((s) => s.screen);
   switch (screen) {

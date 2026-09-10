@@ -18,7 +18,7 @@
 // confirm dialog like every other mutating control in this file already
 // does (see handleRetry below).
 
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRetryNode } from '../../../api/hooks';
 import * as verbs from '../../../api/verbs';
@@ -30,7 +30,7 @@ import { toast } from '../../../components/Toasts';
 import { useStore } from '../../../store';
 import type { Run, WorkflowNode } from '../../../types';
 import { DEFAULT_GATE_COPY_CENTER, GATE_COPY, optimisticRunControl, type NodeRunStatus } from '../helpers';
-import { useEffectivePrompt, useInputSchema, useNodeExecutions, useStageOutput } from '../queries';
+import { useEffectivePrompt, useInputSchema, useNodeExecutions, useStageOutputsList } from '../queries';
 import { bumpApprovedExamples } from '../../Learning/overlay';
 import { Disclosure, ErrorNote, LoadingNote } from './Shared';
 // U3 — "an overridden node wears a distinct marker... 'This run' for an
@@ -38,7 +38,11 @@ import { Disclosure, ErrorNote, LoadingNote } from './Shared';
 // and with what note — never present an override as if the node produced
 // it." Same node_list_outputs reading, same ⎘ vocabulary, as Rail.tsx's
 // marker and the override modal.
-import { extractOutputList, findOverride, formatWhen } from '../../../components/drive/overrideStatus';
+import { extractOutputList, formatWhen } from '../../../components/drive/overrideStatus';
+// Defect A — the one precedence resolution (override > canonical artifact >
+// legacy stage record > honest empty message) replacing the old
+// stage-store-only read. See that module's header for the full story.
+import { boundedOutputText, resolveNodeOutput } from '../outputResolution';
 
 // U7 polish — operator copy, not developer copy (see tabs/Shared.tsx's
 // own READONLY_REASON, kept as a separate local copy per this file's
@@ -179,6 +183,47 @@ function CaptureButtons({ nodeId, runId }: { nodeId: string; runId: string }) {
   );
 }
 
+/**
+ * Defect A — bounded presentation for a large output value. Renders a
+ * capped prefix by default; the full value is never discarded, only
+ * withheld from the initial paint, and an explicit disclosure both says the
+ * true full size and reveals the rest on demand. Sized for the live
+ * capture_map evidence (~176,860 chars) staying inspectable without
+ * freezing the page on first render.
+ */
+function BoundedOutputView({ value }: { value: unknown }) {
+  const bounded = useMemo(() => boundedOutputText(value), [value]);
+  const [expanded, setExpanded] = useState(false);
+  if (!bounded.truncated) {
+    return <div className="promptbox" style={{ maxHeight: 220 }}>{bounded.full}</div>;
+  }
+  return (
+    <div>
+      <div className="promptbox" style={{ maxHeight: 220 }}>{expanded ? bounded.full : bounded.prefix}</div>
+      <p
+        style={{
+          fontSize: 11.5,
+          color: 'var(--faint)',
+          margin: '6px 0 0',
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+        }}
+      >
+        <span>
+          {expanded
+            ? `Showing the full value — ${bounded.fullLength.toLocaleString()} characters.`
+            : `Showing the first ${bounded.prefix.length.toLocaleString()} of ${bounded.fullLength.toLocaleString()} characters.`}
+        </span>
+        <Btn style={{ padding: '2px 9px', fontSize: 11.5 }} onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'show less' : 'show full value'}
+        </Btn>
+      </p>
+    </div>
+  );
+}
+
 export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; nodeId: string; run: Run; status: NodeRunStatus }) {
   const setTab = useStore((s) => s.setTab);
   const openModal = useStore((s) => s.openModal);
@@ -189,17 +234,57 @@ export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; 
   const execQ = useNodeExecutions(nodeId, run.id);
   const promptQ = useEffectivePrompt(nodeId);
   const schemaQ = useInputSchema(nodeId);
-  const outputQ = useStageOutput(run.id, nodeId);
-  // U3 — same query key Rail.tsx's override marker and the override modal
-  // use, so this banner, the rail chip, and the modal's own "already
-  // carries an override" note all agree, refreshed by the same invalidation.
+  // Defect A — node_list_outputs (the current-run canonical artifact +
+  // operator-override source) and stage_list_outputs (the legacy
+  // compatibility fallback) both feed one resolver instead of
+  // stage_get_output being asked to answer alone (see outputResolution.ts's
+  // header). Not gated on `status === 'completed'` any more: an override
+  // must win regardless of whether the node has finished (drive mode sets
+  // one before a node has even run) — see Rail.tsx's own override query for
+  // the narrower case that's still fine to gate on completion (a rail chip
+  // only worth asking about once a node could plausibly carry one from a
+  // *previous* run of this same node/run pair rendered elsewhere).
   const outputsQ = useQuery({
     queryKey: ['nodeOutputs', nodeId, run.id],
     queryFn: () => verbs.nodeListOutputs({ nodeId, runId: run.id }),
-    enabled: status === 'completed',
     retry: false,
   });
-  const override = findOverride(extractOutputList(outputsQ.data));
+  const stageOutputsQ = useStageOutputsList(nodeId);
+
+  const resolved = resolveNodeOutput({
+    status,
+    runId: run.id,
+    nodeId,
+    nodeOutputs: extractOutputList(outputsQ.data),
+    stageOutputs: stageOutputsQ.data ?? [],
+  });
+
+  // Defect B — when this node crosses into a terminal state (typically
+  // while useRun's active-run polling is refreshing `run` in the
+  // background), refetch everything downstream of that fact so the output
+  // appears without a page reload: this node's execution record, its
+  // canonical artifact + override source, the legacy fallback, the run's
+  // cost ledger, and the run lists that show its progress. Guarded so it
+  // fires only on a genuine transition (never on mount already-terminal,
+  // never repeatedly for a node that was already terminal last render).
+  // REVIEW FIX (R10) — keyed by node. A single ref meant selecting a running node and
+  // then a completed one looked like ONE node transitioning, firing a full
+  // invalidation burst on every such selection change.
+  const prevStatusRef = useRef<{ nodeId: string; status: NodeRunStatus } | null>(null);
+  useEffect(() => {
+    const previous = prevStatusRef.current;
+    const prev = previous && previous.nodeId === nodeId ? previous.status : null;
+    prevStatusRef.current = { nodeId, status };
+    const isTerminal = status === 'completed' || status === 'failed' || status === 'cancelled';
+    const wasTerminal = prev === 'completed' || prev === 'failed' || prev === 'cancelled';
+    if (prev !== null && !wasTerminal && isTerminal) {
+      qc.invalidateQueries({ queryKey: ['nodeExecutions', nodeId, run.id] });
+      qc.invalidateQueries({ queryKey: ['nodeOutputs', nodeId, run.id] });
+      qc.invalidateQueries({ queryKey: ['stageOutputs', nodeId] });
+      qc.invalidateQueries({ queryKey: ['runCost', run.id] });
+      qc.invalidateQueries({ queryKey: ['runs'] });
+    }
+  }, [status, nodeId, run.id, qc]);
 
   // WP-21: "↻ Retry this node" wired to the same confirm-gated useRetryNode
   // the dock's own Retry control uses — same optimistic-patch-then-rollback
@@ -329,24 +414,46 @@ export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; 
       )}
 
       <Card label="output">
-        {override && (
+        {resolved.source === 'override' && (
           // U3 — never presented as if the node produced it: says who, when,
-          // and with what note, every time this banner shows at all.
+          // and with what note, every time this banner shows at all. This
+          // is precedence tier 1 — it wins over a canonical artifact or a
+          // legacy stage record whenever one is also present.
           <p className="note" style={{ color: 'var(--run)', marginTop: 0 }}>
-            ⎘ this output was supplied by the operator, {formatWhen(override.createdAt)}
-            {override.note ? ` — note: "${override.note}"` : ' — no note given'}.
+            ⎘ this output was supplied by the operator, {formatWhen(resolved.createdAt)}
+            {resolved.overrideNote ? ` — note: "${resolved.overrideNote}"` : ' — no note given'}.
           </p>
         )}
-        {outputQ.isLoading ? (
+        {resolved.source === 'canonical' && (
+          <p className="note" style={{ color: 'var(--muted)', marginTop: 0, fontSize: 12 }}>
+            current-run artifact{resolved.artifactType ? ` · ${resolved.artifactType}` : ''}
+            {resolved.createdAt ? ` · ${formatWhen(resolved.createdAt)}` : ''} — from node_list_outputs.
+          </p>
+        )}
+        {resolved.source === 'legacy' && (
+          // Defect A — a legacy stage-store record is a compatibility
+          // fallback, not this run's own source of truth: said so
+          // explicitly, and never claims run-attribution the record's id
+          // doesn't actually prove (legacyScope === 'unscoped').
+          <p className="note" style={{ color: 'var(--acc)', marginTop: 0, fontSize: 12 }}>
+            ⚠ legacy stage-store record
+            {resolved.legacyScope === 'unscoped' ? " — its id doesn't confirm it belongs to this exact run" : ' for this run'}
+            {resolved.createdAt ? `, ${formatWhen(resolved.createdAt)}` : ''}. No current-run canonical artifact was
+            found for this node — this is a compatibility fallback.
+          </p>
+        )}
+        {outputsQ.isLoading || stageOutputsQ.isLoading ? (
           <LoadingNote>loading stage output…</LoadingNote>
-        ) : outputQ.isError ? (
-          <ErrorNote message={outputQ.error?.message} />
+        ) : outputsQ.isError ? (
+          <ErrorNote message={outputsQ.error?.message} />
+        ) : stageOutputsQ.isError ? (
+          <ErrorNote message={stageOutputsQ.error?.message} />
+        ) : resolved.source === 'empty' ? (
+          // Defect B — honest, per-state text: never "No stage output
+          // recorded" for a node that simply hasn't completed yet.
+          <p style={{ color: 'var(--muted)', fontSize: 12.5, margin: 0 }}>{resolved.emptyMessage}</p>
         ) : (
-          <div className="promptbox" style={{ maxHeight: 130 }}>
-            {override
-              ? JSON.stringify(override.value, null, 2)
-              : outputQ.data?.note ?? JSON.stringify(outputQ.data?.output ?? {}, null, 2)}
-          </div>
+          <BoundedOutputView value={resolved.value} />
         )}
         {status === 'completed' ? (
           <CaptureButtons nodeId={nodeId} runId={run.id} />

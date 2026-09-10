@@ -9,7 +9,7 @@ import { Skeleton } from '../../components/Skeleton';
 import { DriveCenter } from '../../components/drive/DriveCenter';
 import { useStore } from '../../store';
 import type { NodeTab } from '../../types';
-import { nodeRunStatus, orderedNodes } from './helpers';
+import { nodeStatusFromRun, runCurrentNodeCopy } from './helpers';
 import { DepsTab } from './tabs/DepsTab';
 import { HistoryTab } from './tabs/HistoryTab';
 import { LearningTab } from './tabs/LearningTab';
@@ -109,8 +109,12 @@ export function Center() {
     );
   }
 
-  const order = orderedNodes(workflow);
-  const status = run ? nodeRunStatus(run, nodeId, order) : null;
+  // Defect B — actual per-node run state (run.nodes[]), not positional
+  // inference: a node upstream of run.cur that was actually skipped must
+  // not be painted completed, and the run's own current node must read
+  // 'paused' (not 'blocked') while the run is genuinely just paused. See
+  // helpers.ts's nodeStatusFromRun doc comment.
+  const status = run ? nodeStatusFromRun(run, nodeId) : null;
   const unknownMeta = node.kind === 'unknown';
 
   return (
@@ -119,7 +123,7 @@ export function Center() {
         <h2>{node.name}</h2>
         <span className="id">{nodeId}</span>
         {unknownMeta ? <span className="mono">risk unknown</span> : <RiskBadge risk={node.risk} />}
-        {run && run.cur === nodeId && <Chip status={run.status}>run stopped here</Chip>}
+        {run && run.cur === nodeId && <Chip status={run.status}>{runCurrentNodeCopy(run.status)}</Chip>}
       </div>
       <p className="ndesc">{node.desc}</p>
       <TabBar

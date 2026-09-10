@@ -1634,7 +1634,93 @@ const failNodeOnClientAuth = (run: WorkflowExecutionRecord, state: NodeExecution
   return run;
 };
 
+// ── T3 (2026-09-10) — ONE RULE FOR "THIS NODE'S OUTPUT" ─────────────────────────────────────────────
+//
+// THE DEFECT, exactly (run_1789034392364_o7bhnj): `capture_map` completed, wrote
+// `run.stageOutputs[capture_map]` and a run artifact holding ~177KB of real `capture_map.v1` output,
+// and returned `{ run }` with NO `commit`. The generic model path's commit is the only thing that
+// mirrors a completed node into the workspace stage store (`saveStageOutput`), so the deterministic
+// capture branch never reached it: `node.list_outputs` had the artifact, `stage.list_outputs` had
+// only two records from OLDER runs, and the Workbench — which read the stage store — told the
+// operator "No stage output recorded for this node in this run" about a node that had produced one.
+//
+// Thirteen deterministic completion sites shared that shape (capture, clone, learning, publication and
+// release helpers, the mapped/skip fast paths). Bolting a `commit` onto each would have left the
+// fourteenth to whoever writes it next, so the mirror moves OUT of the paths and into this one
+// wrapper, which every dispatch already goes through.
+//
+// THE RULE, stated once:
+//   * The execution ledger — `run.stageOutputs` + `run.artifacts`, read by `node.list_outputs` — is the
+//     CANONICAL source of a node's output. Nothing here changes that, and the Workbench reads it first.
+//   * The workspace stage store is a COMPATIBILITY / operator surface. Every SUCCESSFUL node
+//     completion populates it, model path and deterministic path alike, with the same value the
+//     ledger holds, under the same idempotent id `${runId}:${nodeId}` that the model path already
+//     used. `saveStageOutput` upserts by id, so a retry overwrites its own record rather than adding
+//     a second one, and the two surfaces cannot hold divergent values for the same completion.
+//
+// Scope: only the DISPATCHED node's own stage output. Some capture/clone stages also park run-local
+// bookkeeping in `run.stageOutputs` under a synthetic job-state key; those are not node completions
+// and stay run-local, exactly as they are today. A node that ends blocked/failed writes no mirror —
+// its artifact still records what happened, which is the honest answer for a node that did not
+// succeed.
+//
+// Posture: the mirror is a best-effort side effect that runs AFTER the durable `saveRun`, like every
+// other commit in this file, so a discarded CAS attempt leaves no phantom record and a failed mirror
+// can never turn a successful tenant action into a failed one. It is not SILENT, though: a failure
+// emits a named diagnostic (ids only — no output values, no secrets) so it shows up in logs instead
+// of vanishing into the caller's `.catch(() => undefined)`.
+export const STAGE_OUTPUT_MIRROR_FAILED = "stage_output_mirror_failed";
+export const stageOutputMirrorId = (runId: string, nodeId: string): string => `${runId}:${nodeId}`;
+
+const stageOutputMirrorFor = (prepared: PreparedNode, node: WorkspaceNode, hadPriorOutput: boolean, priorOutput: unknown, options: RunAdvanceOptions): (() => Promise<void>) | undefined => {
+  const workspaceRepository = options.workspaceRepository;
+  // Same guard the model path has always carried: no repository, no mirror. Callers that supply one
+  // (every MCP entrypoint does) get the mirror for every path; callers that do not get it for none.
+  if (!workspaceRepository) return undefined;
+  const run = prepared.run;
+  if (run.nodes.find((entry) => entry.nodeId === node.id)?.status !== "completed") return undefined;
+  if (!Object.prototype.hasOwnProperty.call(run.stageOutputs, node.id)) return undefined;
+  const output = run.stageOutputs[node.id];
+  // This dispatch did not write the value (a completed node re-entered, a reconciliation pass): the
+  // record it would write is already there under the same id, so writing it again would be a second
+  // workspace mutation for no change.
+  if (hadPriorOutput && priorOutput === output) return undefined;
+  const runId = run.runId;
+  return async () => {
+    try {
+      await workspaceRepository.saveStageOutput(node.id, output, stageOutputMirrorId(runId, node.id));
+    } catch (error) {
+      // REVIEW FIX (R11): the reason is SCRUBBED before it is logged. A workspace-repository
+      // error can embed the request URL, and a GCS/blob signed URL carries its credential in
+      // the query string. Query strings go first, then the message is capped.
+      const reason = error instanceof Error ? `${error.name}: ${error.message.replace(/\?\S*/g, "?<redacted>").slice(0, 200)}` : "unknown";
+      console.warn(STAGE_OUTPUT_MIRROR_FAILED, JSON.stringify({ runId, nodeId: node.id, reason }));
+    }
+  };
+};
+
 async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode: WorkspaceNode, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions, claim = false): Promise<PreparedNode> {
+  const hadPriorOutput = Object.prototype.hasOwnProperty.call(initialRun.stageOutputs ?? {}, nextNode.id);
+  const priorOutput = hadPriorOutput ? initialRun.stageOutputs[nextNode.id] : undefined;
+  const prepared = await dispatchRunnableNode(initialRun, nextNode, nodes, store, options, claim);
+  const mirror = stageOutputMirrorFor(prepared, nextNode, hadPriorOutput, priorOutput, options);
+  if (!mirror) return prepared;
+  const inner = prepared.commit;
+  return {
+    run: prepared.run,
+    commit: async () => {
+      // Order and contract preserved: the path's own commit (usage telemetry) runs first and its
+      // failure still reaches the caller, but it can no longer swallow the mirror with it.
+      let innerError: unknown;
+      let innerFailed = false;
+      try { await inner?.(); } catch (error) { innerError = error; innerFailed = true; }
+      await mirror();
+      if (innerFailed) throw innerError;
+    }
+  };
+}
+
+async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNode: WorkspaceNode, nodes: WorkspaceNode[], store: ExecutionRepository, options: RunAdvanceOptions, claim = false): Promise<PreparedNode> {
   let run = initialRun;
   let state = stateById(run).get(nextNode.id) as NodeExecutionState;
   const startedAt = now();
@@ -3474,9 +3560,11 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
   return {
     run,
+    // T3: the workspace stage-output mirror that used to live here now runs for EVERY completion path
+    // in executeRunnableNode's wrapper, under the same id and with the same value. Usage telemetry is
+    // still this path's own.
     commit: async () => {
       if (mode === "mock") await recordDryRunNodeUsage(run, nextNode, state.input, output);
-      if (options.workspaceRepository) await options.workspaceRepository.saveStageOutput(nextNode.id, output, `${run.runId}:${nextNode.id}`);
     }
   };
 }
