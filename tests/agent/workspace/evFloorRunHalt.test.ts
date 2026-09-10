@@ -37,7 +37,7 @@ const withEvFloor = async (runId: string, store: ExecutionRepository, evFloor: u
     output: { ...run.stageOutputs.monetization_strategy as Record<string, unknown>, selectedOffer: { id: "offer_1", payoutUsd: 20, currency: "USD" } },
     costEstimate: { artifact: "run_cost_estimate.v1", estimatedRunCostUsd: 3.86, basis: "workflow_history", scope: "project", projectId: run.projectId, workflowId: run.workflowId, evaluatedAt: evaluatedAtIso, candidateRuns: 2, coverageRuns: 2, sampleRuns: 2, sampleRecords: 20, exclusionReasons: {}, observedRunCostsUsd: [3.86, 4.5], rationale: "qualified" },
     trafficEstimate: { artifact: "traffic_estimate.v1", expectedMonthlyTraffic: 100, observedConversionRate: 0.001, basis: "tracking_engagement", windowDays: 90, sessions: 300, pageviews: 400, sampleRecords: 3, projectId: run.projectId, windowStart, windowEnd: evaluatedAtIso, rationale: "measured" },
-    toolExecutions: [{ toolExecutionId: "tool_1", runId, nodeId: "monetization_strategy", toolId: "project.call_read_tool", startedAt: evaluatedAtIso, completedAt: evaluatedAtIso, status: "success", inputSummary: { projectId: "monetizer", tool: "offer.list", arguments: { clientProjectId: run.projectId } }, outputSummary: { offers: [{ id: "offer_1", payoutUsd: 20, currency: "USD" }] }, riskLevel: "read", approvalStatus: "not_required" }]
+    toolExecutions: [{ toolExecutionId: "tool_1", runId, nodeId: "monetization_strategy", toolId: "project.call_read_tool", startedAt: evaluatedAtIso, completedAt: evaluatedAtIso, status: "success", inputSummary: { projectId: "monetizer", tool: "search_offers", arguments: { clientProjectId: run.projectId } }, outputSummary: { offers: [{ id: "offer_1", payoutUsd: 20, currency: "USD" }] }, riskLevel: "read", approvalStatus: "not_required" }]
   });
   await store.saveRun(run);
 };
@@ -69,6 +69,7 @@ describe("an EARNED EV block halts the run before the first later paid stage", (
     expect(gate.skip?.basis).toContain("economicDecision.authority: cms_agent_engine");
     expect(gate.warnings).toContain("run_halted:ev_floor_blocked");
     expect(gate.warnings).toContain("no_publication_performed");
+    expect(gate.blockage).toMatchObject({ code: "economic_stop", remedies: [{ type: "cancel" }] });
     // Nothing downstream ran.
     for (const nodeId of ["research", "brief_architect", "contract_intelligence", "article_body", "publish_payload", "publication_controller", "publish_executor"]) {
       expect(statusOf(run, nodeId), `${nodeId} must not have run`).toBe("queued");

@@ -1743,6 +1743,20 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       state.skip = { reason: verdict.reason, predicate: verdict.predicate as Record<string, unknown> | undefined, basis: verdict.basis, evaluatedAt: completedAt };
       state.output = { artifact: `${nextNode.id}.decision`, dryRun: true, decision: "blocked", reason: verdict.reason, basis: verdict.basis };
       state.warnings = [...(state.warnings ?? []), `run_halted:${EV_FLOOR_BLOCKED_PREDICATE}`, "no_publication_performed"];
+      state.blockage = toBlockage(
+        {
+          code: "economic_stop",
+          message: verdict.reason,
+          details: {
+            predicate: EV_FLOOR_BLOCKED_PREDICATE,
+            decisionId: run.economicDecision?.decisionId,
+            reasonCode: run.economicDecision?.reasonCode,
+            basis: verdict.basis
+          },
+          operatorAction: "Inspect the recorded evidence and start a new run only after evidence or policy changes, or with an explicit configured override."
+        },
+        { node_id: nextNode.id, run_id: run.runId, surface: "run", attempt: nextAttemptNumber(state) }
+      );
       delete state.dispatch;
       run.status = "blocked";
       run.currentNodeId = nextNode.id;
@@ -3137,7 +3151,9 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
   //
   // monetization_strategy may choose an offer and explain a cluster relationship, but it cannot
   // certify its own provenance. The decision is rebuilt here from the conductor-prefetched cost and
-  // traffic evidence plus the actual same-run project.call_read_tool ledger receipts. It is persisted
+  // traffic evidence plus the actual same-run project.call_read_tool ledger receipts. Supporting
+  // assets can inherit only a parent decision loaded here from the durable run repository; caller
+  // input is never accepted as parent authority. The decision is persisted
   // on the run — a channel the model cannot write — and the EV halt reads only that field. The
   // model's evFloor block stays on its output for compatibility/explanation, but cannot stop work.
   if (nextNode.id === "monetization_strategy" && mode !== "mock") {
@@ -3152,6 +3168,10 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       }
       if (record) toolExecutions.push(record);
     }
+    const outputFloor = isOutputRecord(output) && isOutputRecord(output.evFloor) ? output.evFloor : undefined;
+    const supportingFor = typeof outputFloor?.supportingFor === "string" ? outputFloor.supportingFor.trim() : "";
+    const parentRunId = supportingFor.startsWith("economic:") ? supportingFor.slice("economic:".length) : "";
+    const parentRun = parentRunId && parentRunId !== run.runId ? await store.getRun(parentRunId) : undefined;
     const decision = buildAuthoritativeEconomicDecision({
       runId: run.runId,
       workflowId: run.workflowId,
@@ -3161,7 +3181,8 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       costEstimate: input[RUN_COST_ESTIMATE_INPUT_KEY],
       trafficEstimate: input[TRAFFIC_ESTIMATE_INPUT_KEY],
       toolExecutions,
-      initialInput: run.initialInput
+      initialInput: run.initialInput,
+      parentEconomicDecision: parentRun?.projectId === run.projectId ? parentRun.economicDecision : undefined
     });
     run.economicDecision = decision;
     if (isOutputRecord(output)) output = { ...output, engineDecision: decision };

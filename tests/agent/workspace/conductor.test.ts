@@ -4,6 +4,7 @@ import { drLurieProjectConfig } from "../../../src/agent/projects/drLurie/defini
 import type { ProjectRepository } from "../../../src/agent/repository/interfaces/ProjectRepository.js";
 import type { ModelUsageSummary } from "../../../src/agent/observability/modelUsageTypes.js";
 import type { WorkflowExecutionRecord, NodeExecutionState } from "../../../src/agent/workspace/executionTypes.js";
+import { toBlockage } from "../../../src/agent/execution/blockage.js";
 
 const projectRepositoryStub = (get: (id: string) => unknown) => ({ get: async (id: string) => get(id) }) as unknown as ProjectRepository;
 
@@ -147,6 +148,20 @@ describe("planRun", () => {
     expect(plan.remainingStages).toEqual(["artifact_materializer", "article_body"]);
     expect(plan.reusableStages).toEqual(["input_triage"]);
     expect(plan.reason).not.toMatch(/awaiting approval/i);
+  });
+  it("does not recommend retrying an intentional economic stop", () => {
+    const blocked: NodeExecutionState = {
+      nodeId: "reader_insight",
+      status: "blocked",
+      blockage: toBlockage(
+        { code: "economic_stop", message: "Verified EV is below the floor." },
+        { node_id: "reader_insight", run_id: "run_1", surface: "run" }
+      )
+    };
+    const plan = planRun(run({ nodes: [node("monetization_strategy", "completed"), blocked, node("article_body", "queued")], status: "blocked" }));
+    expect(plan).toMatchObject({ strategy: "full_run", narrowerThanFullRun: false, blocker: { code: "economic_stop" } });
+    expect(plan.retryNodeId).toBeUndefined();
+    expect(plan.reason).toMatch(/new run.*evidence or policy changes.*explicit configured override/i);
   });
   it("recommends a narrow late-stage re-run when article_body is already complete", () => {
     const plan = planRun(run({ nodes: [node("article_body", "completed"), node("publish_payload", "queued")], status: "queued" }));

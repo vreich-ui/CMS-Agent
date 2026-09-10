@@ -1,4 +1,5 @@
 import type { ToolExecutionRecord } from "../tools/toolTypes.js";
+import { MONETIZER_SAFE_READ_ONLY_TOOLS, monetizerProjectConfig } from "../projects/monetizer/definition.js";
 import { MIN_RUN_COST_HISTORY_SAMPLES, type RunCostEstimate } from "./runCostHistory.js";
 import type { TrafficEstimate } from "./trafficHistory.js";
 import { computeEvFloor, type EvFloorResult } from "./evFloor.js";
@@ -41,6 +42,8 @@ export type BuildEconomicDecisionInput = {
   trafficEstimate?: unknown;
   toolExecutions?: readonly ToolExecutionRecord[];
   initialInput?: unknown;
+  /** Loaded by the conductor from the durable parent run; never accepted from caller input. */
+  parentEconomicDecision?: unknown;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -58,6 +61,10 @@ const containsScalar = (value: unknown, expected: string | number, depth = 0): b
   if (isObject(value)) return Object.values(value).some((entry) => containsScalar(entry, expected, depth + 1));
   return false;
 };
+
+const MONETIZER_OFFER_SOURCE_TOOL = "search_offers";
+const isMonetizerOfferSourceTool = (tool: string): boolean =>
+  tool === MONETIZER_OFFER_SOURCE_TOOL && (MONETIZER_SAFE_READ_ONLY_TOOLS as readonly string[]).includes(tool);
 
 const offerReference = (offer: JsonObject): string | undefined =>
   token(offer.offerId) ?? token(offer.id) ?? token(offer.slug) ?? token(offer.name);
@@ -94,8 +101,7 @@ const explicitProceedOverride = (initialInput: unknown): { id: string; reason: s
   return id && reason ? { id, reason } : undefined;
 };
 
-const parentDecision = (initialInput: unknown, projectId: string, supportingFor: string | null, at: number): EconomicDecision | undefined => {
-  const value = isObject(initialInput) ? initialInput.parentEconomicDecision : undefined;
+const parentDecision = (value: unknown, projectId: string, supportingFor: string | null, at: number): EconomicDecision | undefined => {
   if (!isObject(value) || value.artifact !== ECONOMIC_DECISION_ARTIFACT || value.authority !== ECONOMIC_DECISION_AUTHORITY) return undefined;
   const evaluated = Date.parse(String(value.evaluatedAt ?? ""));
   if (value.projectId !== projectId
@@ -113,6 +119,16 @@ const parentDecision = (initialInput: unknown, projectId: string, supportingFor:
   return value as EconomicDecision;
 };
 
+/** The reference, payout and currency must coexist on one offer object in the source response. */
+const containsExactOfferRecord = (value: unknown, reference: string, payout: number, currency: string, depth = 0): boolean => {
+  if (depth > 8) return false;
+  if (Array.isArray(value)) return value.some((entry) => containsExactOfferRecord(entry, reference, payout, currency, depth + 1));
+  if (!isObject(value)) return false;
+  const candidate = amountAndCurrency(value, undefined);
+  if (offerReference(value) === reference && candidate.payout === payout && candidate.currency === currency) return true;
+  return Object.values(value).some((entry) => containsExactOfferRecord(entry, reference, payout, currency, depth + 1));
+};
+
 const verifiedOfferSource = (input: BuildEconomicDecisionInput, offer: JsonObject, payout: number, currency: string): EconomicDecision["offerSource"] | undefined => {
   const reference = offerReference(offer);
   if (!reference) return undefined;
@@ -124,8 +140,8 @@ const verifiedOfferSource = (input: BuildEconomicDecisionInput, offer: JsonObjec
     const args = record.inputSummary.arguments;
     // The source read must be explicitly scoped to the target tenant. A broad, cross-tenant offer
     // list can inform the model, but it cannot earn authority to stop this tenant's run.
-    if (!sourceProjectId || !tool || !containsScalar(args, input.projectId)) continue;
-    if (!containsScalar(record.outputSummary, reference) || !containsScalar(record.outputSummary, payout) || !containsScalar(record.outputSummary, currency)) continue;
+    if (sourceProjectId !== monetizerProjectConfig.projectId || !tool || !isMonetizerOfferSourceTool(tool) || !containsScalar(args, input.projectId)) continue;
+    if (!containsExactOfferRecord(record.outputSummary, reference, payout, currency)) continue;
     return { toolExecutionId: record.toolExecutionId, sourceProjectId, tool, offerReference: reference };
   }
   return undefined;
@@ -211,7 +227,7 @@ export function buildAuthoritativeEconomicDecision(input: BuildEconomicDecisionI
   if (override) return { ...base, outcome: "overridden", stop: false, reasonCode: `explicit_proceed_override:${override.id}`, notes: [...base.notes, override.reason] };
 
   if (cluster.clusterRole === "supporting_asset") {
-    const parent = parentDecision(input.initialInput, input.projectId, cluster.supportingFor, at);
+    const parent = parentDecision(input.parentEconomicDecision, input.projectId, cluster.supportingFor, at);
     if (parent) return { ...base, outcome: "pass_via_cluster", stop: false, reasonCode: "verified_passing_parent_decision", notes: [...base.notes, `Parent decision ${parent.decisionId} is current, same-tenant and non-blocking.`] };
     return { ...base, outcome: "advisory", stop: false, reasonCode: "cluster_parent_unverified", notes: [...base.notes, "A supporting-asset pass requires a current same-tenant parent economic decision whose decisionId matches supportingFor."] };
   }

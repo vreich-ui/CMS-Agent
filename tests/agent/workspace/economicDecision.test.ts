@@ -23,7 +23,7 @@ const traffic = (over: Record<string, unknown> = {}) => ({
 });
 const receipt = (over: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord => ({
   toolExecutionId: "tool_exec_1", runId: "run_1", nodeId: "monetization_strategy", toolId: "project.call_read_tool", startedAt: NOW, completedAt: NOW, status: "success",
-  inputSummary: { projectId: "monetizer", tool: "offer.list", arguments: { clientProjectId: "dr-lurie" } },
+  inputSummary: { projectId: "monetizer", tool: "search_offers", arguments: { clientProjectId: "dr-lurie" } },
   outputSummary: { ok: true, offers: [{ id: "offer_1", payoutUsd: 10, currency: "USD" }] }, riskLevel: "read", approvalStatus: "not_required", ...over
 });
 const decide = (over: Record<string, unknown> = {}) => buildAuthoritativeEconomicDecision({
@@ -55,7 +55,13 @@ describe("authoritative economic decisions", () => {
   it("rejects wrong-tenant and stale traffic windows", () => {
     expect(decide({ trafficEstimate: traffic({ projectId: "platform" }) })).toMatchObject({ outcome: "advisory", reasonCode: "traffic_evidence_unqualified" });
     expect(decide({ trafficEstimate: traffic({ windowEnd: "2026-09-08T00:00:00.000Z" }) })).toMatchObject({ outcome: "advisory", reasonCode: "traffic_evidence_unqualified" });
-    expect(decide({ toolExecutions: [receipt({ inputSummary: { projectId: "monetizer", tool: "offer.list", arguments: { clientProjectId: "platform" } } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
+    expect(decide({ toolExecutions: [receipt({ inputSummary: { projectId: "monetizer", tool: "search_offers", arguments: { clientProjectId: "platform" } } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
+  });
+
+  it("requires the source-derived Monetizer offer route and one exact source offer record", () => {
+    expect(decide({ toolExecutions: [receipt({ inputSummary: { projectId: "platform", tool: "search_offers", arguments: { clientProjectId: "dr-lurie" } } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
+    expect(decide({ toolExecutions: [receipt({ inputSummary: { projectId: "monetizer", tool: "performance", arguments: { clientProjectId: "dr-lurie" } } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
+    expect(decide({ toolExecutions: [receipt({ outputSummary: { offers: [{ id: "offer_1", payoutUsd: 99, currency: "USD" }, { id: "offer_2", payoutUsd: 10, currency: "USD" }] } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
   });
 
   it("rejects future or undersampled cost evidence", () => {
@@ -80,9 +86,10 @@ describe("authoritative economic decisions", () => {
       toolExecutions: [receipt({ runId: "parent", outputSummary: { offers: [{ id: "offer_1", payoutUsd: 1_500, currency: "USD" }] } })]
     });
     expect(parent).toMatchObject({ decisionId: "economic:parent", outcome: "verified_proceed", stop: false });
-    expect(decide({ output: support, initialInput: { parentEconomicDecision: parent } })).toMatchObject({ outcome: "pass_via_cluster", stop: false, reasonCode: "verified_passing_parent_decision" });
+    expect(decide({ output: support, parentEconomicDecision: parent })).toMatchObject({ outcome: "pass_via_cluster", stop: false, reasonCode: "verified_passing_parent_decision" });
+    expect(decide({ output: support, initialInput: { parentEconomicDecision: parent } })).toMatchObject({ outcome: "advisory", reasonCode: "cluster_parent_unverified" });
     const tamperedParent = { ...parent, calculation: { ...parent.calculation, expectedValueUsd: 999_999 } } as EconomicDecision;
-    expect(decide({ output: support, initialInput: { parentEconomicDecision: tamperedParent } })).toMatchObject({ outcome: "advisory", reasonCode: "cluster_parent_unverified" });
+    expect(decide({ output: support, parentEconomicDecision: tamperedParent })).toMatchObject({ outcome: "advisory", reasonCode: "cluster_parent_unverified" });
   });
 
   it("respects an explicit proceed override and run-configured absolute margin", () => {
