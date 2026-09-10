@@ -38,16 +38,19 @@ describe("vendored capture engine provenance", () => {
     expect(await hashVendoredEngineFile(entry.file)).toBe(entry.vendoredSha256);
   });
 
-  it("is byte-identical to upstream everywhere except the recorded deviations (screenshot-normalize.mjs lazy sharp import; clone.mjs's T15.30 demand-driven intake; theme.mjs's C3 imagery observations — the last two pending platform re-vendor)", () => {
-    // Three files may deviate today: screenshot-normalize.mjs since T12.16 (the module that actually
+  it("is byte-identical to upstream everywhere except the recorded deviations (screenshot-normalize.mjs lazy sharp import; clone.mjs's T15.30 demand-driven intake; theme.mjs's C3 imagery observations; emit.mjs's W1.1 media resumption — all but the sharp import pending platform re-vendor)", () => {
+    // Four files may deviate today: screenshot-normalize.mjs since T12.16 (the module that actually
     // needs sharp — score.mjs is byte-identical to upstream again), clone.mjs since T15.30/#206
-    // (buildCloneIntake's demand-driven structureBrief branch), and theme.mjs since C3 (observeImagery
+    // (buildCloneIntake's demand-driven structureBrief branch), theme.mjs since C3 (observeImagery
     // plus the report key that carries it, so a captured site's imagery becomes a DRAFT
-    // visual_standard instead of a dropped line) — each added CMS-Agent-side ahead of a platform-side
-    // companion vendoring this repo's worktree cannot perform, see provenance.ts's own comment on each
-    // entry. Any OTHER file deviating is undocumented drift and must fail this test.
+    // visual_standard instead of a dropped line), and emit.mjs since W1.1 (materializeMedia's
+    // resumption ledger + soft budget, so capture_emit_live converges on a media-heavy site instead
+    // of restarting its whole emission every reclaim) — each added CMS-Agent-side ahead of a
+    // platform-side companion vendoring this repo's worktree cannot perform, see provenance.ts's own
+    // comment on each entry. Any OTHER file deviating is undocumented drift and must fail this test.
     expect(CAPTURE_ENGINE_FILES.filter((entry) => entry.deviation).map((entry) => entry.file).sort()).toEqual([
       "clone.mjs",
+      "emit.mjs",
       "screenshot-normalize.mjs",
       "theme.mjs"
     ]);
@@ -63,6 +66,14 @@ describe("vendored capture engine provenance", () => {
         // property that keeps capture's rights discipline intact through this change.
         expect(entry.deviation).toMatch(/observeImagery/);
         expect(entry.deviation).toMatch(/STRUCTURAL/);
+        expect(entry.vendoredSha256).not.toBe(entry.upstreamSha256);
+      } else if (entry.file === "emit.mjs") {
+        // The deviation must say WHAT it added (the resumption ledger) and that every existing
+        // field/quarantine path/idempotency guarantee is unchanged — additive, never a rewrite of
+        // the drafts-only emission discipline.
+        expect(entry.deviation).toMatch(/W1\.1/);
+        expect(entry.deviation).toMatch(/mediaLedger/);
+        expect(entry.deviation).toMatch(/Additive only/);
         expect(entry.vendoredSha256).not.toBe(entry.upstreamSha256);
       } else {
         expect(entry.deviation).toBeUndefined();

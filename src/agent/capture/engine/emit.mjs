@@ -24,6 +24,16 @@ const clone = (value) => JSON.parse(JSON.stringify(value));
 
 export class EmissionError extends Error {}
 
+// W1.1 (routeRegistry.ts's own "NOT CLAIMED HERE" note) — materializeMedia issues ONE
+// create_artifact_from_url per asset: 295 of them on zilberman, sequentially, inside the single
+// captureEmitStep call executeEmission makes. That blew through the 300s+90s claim window every
+// time, so the node was reclaimed as stale_dispatch_reclaimed and re-dispatched — which restarted
+// all 295 calls from zero, forever. This budget is deliberately well under that window (not equal
+// to it: executeEmission also does a handful of inventory/contract calls before and the
+// plan.creates loop after, on the SAME dispatch when media finishes early) so a dispatch that is
+// still working stops on its own schedule instead of the stall assessor's.
+export const MEDIA_MATERIALIZE_BUDGET_MS = 180_000;
+
 function usage(message) {
   if (message) console.error(`Error: ${message}\n`);
   console.error(
@@ -859,7 +869,20 @@ async function patchExistingObject({ transport, objectType, objectId, body, trac
  * Execute a plan through an injected MCP transport.  Used by the CLI and by
  * the integration tests; it never imports core store modules.
  */
-export async function executeEmission({ plan, transport, projectPolicyResolver, modelAdapter = null, assetProbe = null }) {
+export async function executeEmission({
+  plan,
+  transport,
+  projectPolicyResolver,
+  modelAdapter = null,
+  assetProbe = null,
+  // W1.1 resumption: the manifestRef -> artifactRef map a PRIOR dispatch's materializeMedia
+  // finished, read back out of the run's stageOutputs (captureConductorRoutes.ts's
+  // readEmitLiveLedger, mirroring capture_crawl's readCrawlJobState/jobState). null on a fresh
+  // run and on every one-pass site — this is additive, not a new required call shape.
+  mediaLedger = null,
+  mediaBudgetMs = MEDIA_MATERIALIZE_BUDGET_MS,
+  now = Date.now,
+}) {
   if (!transport?.call) throw new EmissionError('An MCP transport is required for live emission.');
   if (typeof projectPolicyResolver !== 'function') throw new EmissionError('A project-policy resolver is required before target MCP calls.');
   const trace = [];
@@ -903,7 +926,23 @@ export async function executeEmission({ plan, transport, projectPolicyResolver, 
   // field can hold. Sections whose plan cannot be satisfied are dropped from
   // their body below and recorded in `assetGaps` — never hotlinked, never
   // half-bound, never a widened schema.
-  const artifactRefs = await materializeMedia({ plan, transport, capturePolicy, assetProbe, report, trace });
+  const media = await materializeMedia({
+    plan, transport, capturePolicy, assetProbe, report, trace,
+    ledger: mediaLedger, budgetMs: mediaBudgetMs, now,
+  });
+  if (media.incomplete) {
+    // Stop CLEANLY, before plan.creates ever runs: object creation binds materialized artifact
+    // refs into bodies (T12.14), so it can only proceed once every asset is resolved one way or
+    // another (materialized or quarantined). Nothing here throws — an exceeded soft budget with
+    // real assets still pending is the expected shape of a media-heavy site, not a failure.
+    return {
+      complete: false,
+      mediaLedger: Object.fromEntries(media.artifactRefs),
+      mediaDone: media.artifactRefs.size,
+      mediaTotal: new Set(plan.media.map((asset) => asset.manifestRef)).size,
+    };
+  }
+  const artifactRefs = media.artifactRefs;
   const resolveArtifactRef = (manifestRef) => artifactRefs.get(manifestRef) ?? null;
   const assetPlansByPage = new Map();
   for (const assetPlan of plan.assetPlans ?? []) {
@@ -1114,7 +1153,7 @@ export async function executeEmission({ plan, transport, projectPolicyResolver, 
     }
   }
 
-  return report;
+  return { ...report, complete: true };
 }
 
 /**
@@ -1128,22 +1167,39 @@ export async function executeEmission({ plan, transport, projectPolicyResolver, 
  * an artifact whose bridge response carries no well-formed reference is recorded
  * and simply never enters the map, so its section quarantines.
  */
-async function materializeMedia({ plan, transport, capturePolicy, assetProbe, report, trace }) {
-  const artifactRefs = new Map();
+async function materializeMedia({
+  plan, transport, capturePolicy, assetProbe, report, trace,
+  // W1.1 resumption (see MEDIA_MATERIALIZE_BUDGET_MS): a prior pass's manifestRef -> artifactRef
+  // map. Every entry in it is an asset that already has a materialized artifact and MUST NOT be
+  // re-ingested — that is what turned one stall into an infinite loop on zilberman (295 assets,
+  // re-fetched from zero on every reclaim).
+  ledger = null, budgetMs = MEDIA_MATERIALIZE_BUDGET_MS, now = Date.now,
+}) {
+  const artifactRefs = new Map(ledger ? Object.entries(ledger) : []);
   if (!canRetainMedia(capturePolicy)) {
     if (plan.media.length > 0) {
       report.mediaPolicy = { mediaRetention: 'prohibited', materialized: 0, declined: plan.media.length };
     }
-    return artifactRefs;
+    return { artifactRefs, incomplete: false };
   }
   const probe = assetProbe ?? createAssetProbe();
-  const seen = new Set();
+  // Seeded from the ledger too: an asset carried over from a prior pass is exactly as "seen" as
+  // one this pass already finished, and must be skipped the same way (no MCP call, no re-probe).
+  const seen = new Set(artifactRefs.keys());
   /** T14.2: assets whose captured URL was a thumbnail and whose verified original shipped instead. */
   const fidelityUpgrades = [];
   let lastAssetStartedAt = 0;
   const assetDelayMs = Number.isInteger(capturePolicy.delayMs) && capturePolicy.delayMs >= 0 ? capturePolicy.delayMs : 0;
+  const startedAt = now();
+  let incomplete = false;
   for (const asset of plan.media) {
     if (seen.has(asset.manifestRef)) continue;
+    if (now() - startedAt > budgetMs) {
+      // Soft budget hit with real assets still unprocessed: stop BEFORE starting one we cannot
+      // finish this dispatch, rather than getting cut off mid-asset by the claim's own reclaim.
+      incomplete = true;
+      break;
+    }
     seen.add(asset.manifestRef);
     // The rate-limit delay covers the PROBE too: it is the fetch, and it now
     // happens before the kind decision (T12.16) because only the bytes'
@@ -1238,7 +1294,7 @@ async function materializeMedia({ plan, transport, capturePolicy, assetProbe, re
     declined: seen.size - artifactRefs.size,
     ...(fidelityUpgrades.length > 0 ? { fidelityUpgrades } : {}),
   };
-  return artifactRefs;
+  return { artifactRefs, incomplete };
 }
 
 async function main() {
