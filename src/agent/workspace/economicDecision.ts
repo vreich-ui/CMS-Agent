@@ -54,14 +54,6 @@ const nonNegative = (value: unknown): value is number => finite(value) && value 
 const token = (value: unknown): string | undefined => typeof value === "string" && value.trim() ? value.trim() : undefined;
 const normalizedCurrency = (value: unknown): string | undefined => token(value)?.toUpperCase();
 
-const containsScalar = (value: unknown, expected: string | number, depth = 0): boolean => {
-  if (depth > 8) return false;
-  if (value === expected) return true;
-  if (Array.isArray(value)) return value.some((entry) => containsScalar(entry, expected, depth + 1));
-  if (isObject(value)) return Object.values(value).some((entry) => containsScalar(entry, expected, depth + 1));
-  return false;
-};
-
 const MONETIZER_OFFER_SOURCE_TOOL = "search_offers";
 const isMonetizerOfferSourceTool = (tool: string): boolean =>
   tool === MONETIZER_OFFER_SOURCE_TOOL && (MONETIZER_SAFE_READ_ONLY_TOOLS as readonly string[]).includes(tool);
@@ -137,10 +129,10 @@ const verifiedOfferSource = (input: BuildEconomicDecisionInput, offer: JsonObjec
     if (!isObject(record.inputSummary)) continue;
     const sourceProjectId = token(record.inputSummary.projectId);
     const tool = token(record.inputSummary.tool);
-    const args = record.inputSummary.arguments;
+    const args = isObject(record.inputSummary.arguments) ? record.inputSummary.arguments : undefined;
     // The source read must be explicitly scoped to the target tenant. A broad, cross-tenant offer
     // list can inform the model, but it cannot earn authority to stop this tenant's run.
-    if (sourceProjectId !== monetizerProjectConfig.projectId || !tool || !isMonetizerOfferSourceTool(tool) || !containsScalar(args, input.projectId)) continue;
+    if (sourceProjectId !== monetizerProjectConfig.projectId || !tool || !isMonetizerOfferSourceTool(tool) || token(args?.clientProjectId) !== input.projectId) continue;
     if (!containsExactOfferRecord(record.outputSummary, reference, payout, currency)) continue;
     return { toolExecutionId: record.toolExecutionId, sourceProjectId, tool, offerReference: reference };
   }
