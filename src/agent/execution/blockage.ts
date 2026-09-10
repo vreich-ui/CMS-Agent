@@ -180,6 +180,32 @@ export function toBlockage(source: BlockageSource, context: BlockageContext): Bl
           { id: "decline", type: "decline_gate", args: { ...(context.gate_id ? { gateId: context.gate_id } : {}), runId: context.run_id } }
         ]
       };
+    case "tenant_verb_needs_approval": {
+      const match = source.message.match(/^"([^"]+)" is set to "needs approval" for project "([^"]+)"/);
+      const verb = match?.[1];
+      const projectId = match?.[2];
+      return {
+        ...base,
+        kind: "approval",
+        details: {
+          ...(details ?? {}),
+          ...(verb ? { verb } : {}),
+          ...(projectId ? { projectId } : {}),
+          transportAttempted: false,
+          approvalTransportAvailable: false
+        },
+        remedies: [
+          {
+            id: "open_tenant_tool_policy",
+            type: "open_settings",
+            args: { path: "project_access", ...(projectId ? { projectId } : {}), ...(verb ? { tool: verb } : {}) },
+            default: true
+          },
+          { id: "retry", type: "retry", args: { runId: context.run_id, nodeId: context.node_id } },
+          { id: "cancel", type: "cancel" }
+        ]
+      };
+    }
     case "max_turns_exceeded": {
       const maxTurns = num(details?.maxTurns);
       const toolCallLimit = num(details?.toolCallLimit);
@@ -246,6 +272,17 @@ export function toBlockage(source: BlockageSource, context: BlockageContext): Bl
       if (CONFIG_CODE_PREFIXES.some((prefix) => source.code.startsWith(prefix))) {
         return { ...base, kind: "config", remedies: [{ id: "set_mcp_endpoint", type: "set_project_field", args: { field: "mcpEndpoint" }, default: true }, { id: "cancel", type: "cancel" }] };
       }
+      if (source.code.endsWith("_scope_missing") || source.code.endsWith("_input_missing") || source.code === "client_project_unresolved") {
+        return {
+          ...base,
+          kind: "config",
+          remedies: [
+            { id: "repair_scope", type: "open_settings", args: { path: "project_configuration", nodeId: context.node_id }, default: true },
+            { id: "retry", type: "retry", args: { runId: context.run_id, nodeId: context.node_id } },
+            { id: "cancel", type: "cancel" }
+          ]
+        };
+      }
       return { ...base, kind: "other", remedies: [{ id: "retry", type: "retry", args: { runId: context.run_id, nodeId: context.node_id }, default: true }, { id: "cancel", type: "cancel" }] };
     }
   }
@@ -311,8 +348,33 @@ export type RunLike = {
   runId: string;
   status?: string;
   budgetBlock?: RunBudgetBlockLike;
-  approvalsRequired?: ApprovalRequiredLike[];
-  nodes?: Array<{ nodeId: string; status?: string; blockage?: Blockage }>;
+  approvalsRequired?: Array<ApprovalRequiredLike & { source?: "operator_explicit" | "policy_autonomous" }>;
+  nodes?: Array<{
+    nodeId: string;
+    status?: string;
+    blockage?: Blockage;
+    errors?: string[];
+    warnings?: string[];
+    output?: unknown;
+  }>;
+};
+
+const errorFromStoppedNode = (node: NonNullable<RunLike["nodes"]>[number]): BlockageSource | undefined => {
+  const outputError = isBag(node.output) && isBag(node.output.error) ? node.output.error : undefined;
+  const outputCode = typeof outputError?.code === "string" ? outputError.code : undefined;
+  const outputMessage = typeof outputError?.message === "string" ? outputError.message : undefined;
+  const errorCode = node.errors?.find((value) => typeof value === "string" && value.trim())?.trim();
+  const warningCode = node.warnings
+    ?.map((value) => value.includes(":") ? value.slice(value.lastIndexOf(":") + 1) : value)
+    .find((value) => value === "tenant_verb_needs_approval" || value.endsWith("_scope_missing") || value.endsWith("_input_missing"));
+  const code = outputCode ?? errorCode ?? warningCode;
+  if (!code) return undefined;
+  return {
+    code,
+    message: outputMessage ?? node.errors?.[1] ?? `Node "${node.nodeId}" stopped with ${code}.`,
+    ...(outputError && "details" in outputError ? { details: outputError.details } : {}),
+    ...(typeof outputError?.operatorAction === "string" ? { operatorAction: outputError.operatorAction } : {})
+  };
 };
 
 /**
@@ -340,7 +402,14 @@ export function collectRunBlockages(run: RunLike): Blockage[] {
   for (const node of run.nodes ?? []) {
     // A node that has since been retried and completed is not a pending wall, whatever its old
     // state carried — only a node still stopped counts.
-    if (node.blockage && (node.status === "failed" || node.status === "blocked" || node.status === "cancelled")) push(node.blockage);
+    if (node.blockage && (node.status === "failed" || node.status === "blocked" || node.status === "cancelled")) {
+      push(node.blockage);
+      continue;
+    }
+    if (node.status === "failed" || node.status === "blocked") {
+      const source = errorFromStoppedNode(node);
+      if (source) push(toBlockage(source, { run_id: run.runId, node_id: node.nodeId, surface: "run" }));
+    }
   }
   if (run.budgetBlock) push(runBudgetBlockage(run.runId, run.budgetBlock));
   for (const approval of run.approvalsRequired ?? []) {
@@ -351,8 +420,27 @@ export function collectRunBlockages(run: RunLike): Blockage[] {
     // is held"). Treating an absent flag as pending put an Approve/Decline pair
     // on every finished, successful autonomous run and pinned the Needs-you
     // count forever.
-    if (approval.pending !== true) continue;
+    // Current look-ahead holds say pending:true. Older attempted publish-gate holds omitted the
+    // field, so retain them only while the RUN is still blocked. Autonomous-policy entries are
+    // advisory evidence and can never become a hold merely because another cause blocked the run.
+    if (approval.pending !== true && !(
+      run.status === "blocked"
+      && approval.pending === undefined
+      && approval.source !== "policy_autonomous"
+      && !/advisory only/i.test(approval.reason ?? "")
+    )) continue;
     push(approvalBlockage(run.runId, approval));
+  }
+  // A legacy blocked record can lack both a node error and an approval/budget marker. Preserve the
+  // uncertainty as data instead of guessing that "blocked" means approval.
+  if (run.status === "blocked" && out.length === 0) {
+    const node = run.nodes?.find((candidate) => candidate.status === "blocked");
+    if (node) {
+      push(toBlockage(
+        { code: "legacy_blocker_unknown", message: `Node "${node.nodeId}" is blocked, but this legacy run recorded no structured cause. Inspect the node state before choosing a recovery.` },
+        { run_id: run.runId, node_id: node.nodeId, surface: "run" }
+      ));
+    }
   }
   return out;
 }

@@ -90,6 +90,30 @@ describe("toBlockage — the rest of the table", () => {
     expect(blockage.scope.gate_id).toBe("editorial.publish");
   });
 
+  it("reports a tenant-policy hold without inventing an approval transport", () => {
+    const blockage = toBlockage(
+      {
+        code: "tenant_verb_needs_approval",
+        message: '"site_apply_theme" is set to "needs approval" for project "platform", so it was held before any transport — nothing was attempted.'
+      },
+      { node_id: "theme_bind", run_id: "run_9", surface: "run" }
+    );
+    expect(blockage.kind).toBe("approval");
+    expect(blockage.details).toMatchObject({ projectId: "platform", verb: "site_apply_theme", transportAttempted: false, approvalTransportAvailable: false });
+    expect(blockage.remedies.map((remedy) => remedy.type)).toEqual(["open_settings", "retry", "cancel"]);
+    expect(blockage.remedies.some((remedy) => remedy.type === "approve_gate")).toBe(false);
+  });
+
+  it("routes a missing site scope to project configuration and retry, not approval", () => {
+    const blockage = toBlockage(
+      { code: "artifact_site_scope_missing", message: "Project zilberman declares no objectDialect.siteObjectId." },
+      { node_id: "artifact_materializer", run_id: "run_z", surface: "run" }
+    );
+    expect(blockage.kind).toBe("config");
+    expect(blockage.remedies.map((remedy) => remedy.type)).toEqual(["open_settings", "retry", "cancel"]);
+    expect(blockage.remedies.some((remedy) => remedy.type === "approve_gate")).toBe(false);
+  });
+
   it("doubles the limit that was actually hit", () => {
     const turns = toBlockage({ code: "max_turns_exceeded", message: "x", details: { maxTurns: 6, toolCallLimit: 3 } }, { node_id: "n", surface: "run" });
     expect(turns.kind).toBe("limit");
@@ -201,6 +225,45 @@ describe("collectRunBlockages — what is NOT a wall", () => {
       approvalsRequired: [{ nodeId: "publish_executor", reason: "held", gateId: "editorial.publish", pending: true }]
     });
     expect(blockages.map((blockage) => blockage.code)).toEqual(["approval_required"]);
+  });
+
+  it("keeps an attempted legacy publish hold whose pending flag predates the current shape", () => {
+    const blockages = collectRunBlockages({
+      runId: "run_legacy",
+      status: "blocked",
+      nodes: [{ nodeId: "publish_executor", status: "blocked" }],
+      approvalsRequired: [{ nodeId: "publish_executor", reason: "explicit approval required", gateId: "editorial.publish" }]
+    });
+    expect(blockages.map((blockage) => blockage.code)).toEqual(["approval_required"]);
+  });
+
+  it("derives the historical Zilberman missing-scope wall from the recorded deterministic output", () => {
+    const blockages = collectRunBlockages({
+      runId: "run_z",
+      status: "blocked",
+      nodes: [{
+        nodeId: "artifact_materializer",
+        status: "blocked",
+        output: { error: { code: "artifact_site_scope_missing", message: "Project zilberman declares no objectDialect.siteObjectId." } },
+        warnings: ["artifact_materializer_deterministic_unavailable:artifact_site_scope_missing"]
+      }],
+      approvalsRequired: []
+    });
+    expect(blockages).toHaveLength(1);
+    expect(blockages[0]).toMatchObject({ code: "artifact_site_scope_missing", kind: "config", scope: { node_id: "artifact_materializer" } });
+    expect(blockages[0].remedies.some((remedy) => remedy.type === "approve_gate")).toBe(false);
+  });
+
+  it("preserves an unknown legacy blocker as unknown instead of manufacturing approval", () => {
+    const blockages = collectRunBlockages({
+      runId: "run_unknown",
+      status: "blocked",
+      nodes: [{ nodeId: "mystery", status: "blocked" }],
+      approvalsRequired: []
+    });
+    expect(blockages).toHaveLength(1);
+    expect(blockages[0].code).toBe("legacy_blocker_unknown");
+    expect(blockages[0].kind).toBe("other");
   });
 
   it("reports one gate once even when the node has been retried (its attempt has moved)", () => {

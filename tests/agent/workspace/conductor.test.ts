@@ -124,8 +124,29 @@ describe("planRun", () => {
   it("recommends polling for a terminal run", () => {
     expect(planRun(run({ nodes: [node("input_triage", "completed")], status: "completed" })).strategy).toBe("poll");
   });
-  it("recommends resuming a blocked run", () => {
-    expect(planRun(run({ nodes: [node("publication_controller", "blocked")], status: "blocked" })).strategy).toBe("resume");
+  it("recommends approving then resuming an actual approval hold", () => {
+    const plan = planRun(run({
+      nodes: [node("publication_controller", "blocked")],
+      status: "blocked",
+      approvalsRequired: [{ nodeId: "publication_controller", type: "approval_required", reason: "held", requestedAt: "t", pending: true }]
+    }));
+    expect(plan.strategy).toBe("resume");
+    expect(plan.blocker?.code).toBe("approval_required");
+    expect(plan.remainingStages).toContain("publication_controller");
+  });
+  it("recommends scope repair then retry for a non-approval blocked stage", () => {
+    const blocked: NodeExecutionState = {
+      nodeId: "artifact_materializer",
+      status: "blocked",
+      output: { error: { code: "artifact_site_scope_missing", message: "missing objectDialect.siteObjectId" } }
+    };
+    const plan = planRun(run({ nodes: [node("input_triage", "completed"), blocked, node("article_body", "queued")], status: "blocked" }));
+    expect(plan.strategy).toBe("retry_node");
+    expect(plan.retryNodeId).toBe("artifact_materializer");
+    expect(plan.blocker).toMatchObject({ code: "artifact_site_scope_missing", kind: "config" });
+    expect(plan.remainingStages).toEqual(["artifact_materializer", "article_body"]);
+    expect(plan.reusableStages).toEqual(["input_triage"]);
+    expect(plan.reason).not.toMatch(/awaiting approval/i);
   });
   it("recommends a narrow late-stage re-run when article_body is already complete", () => {
     const plan = planRun(run({ nodes: [node("article_body", "completed"), node("publish_payload", "queued")], status: "queued" }));
