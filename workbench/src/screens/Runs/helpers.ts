@@ -13,10 +13,11 @@ export function orderedNodes(wf: Workflow): string[] {
 /**
  * Per-node status of one run, for the Grid tab's cells. A node before the
  * run's stopped node (`cur`) reads as completed; the stopped node itself
- * carries the run's own status (paused reads as "blocked" here too — both
- * mean "stopped, needs a decision or a nudge", and the mockup's CSS only
- * ever styled the four statuses returned below); everything after reads as
- * queued. A run that finished normally is completed end to end.
+ * carries the run's own status; everything after reads as queued.
+ *
+ * REVIEW FIX (R4) — `paused` used to read as "blocked" here, leaving the Runs grid the
+ * one surface still contradicting the dock, rail, graph and center. Paused and blocked
+ * mean different things to an operator (nudge vs decide), so paused now reads paused. A run that finished normally is completed end to end.
  */
 export function nodeRunStatus(order: string[], run: Run, nodeId: string): string {
   if (run.status === 'completed') return 'completed';
@@ -27,6 +28,7 @@ export function nodeRunStatus(order: string[], run: Run, nodeId: string): string
     if (run.status === 'failed') return 'failed';
     if (run.status === 'cancelled') return 'cancelled';
     if (run.status === 'running') return 'running';
+    if (run.status === 'paused') return 'paused';
     return 'blocked';
   }
   return 'queued';

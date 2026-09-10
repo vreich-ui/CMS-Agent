@@ -48,6 +48,8 @@ const STATUS_META: Record<NodeRunStatus, { color: string; glyph: string; label: 
   completed: { color: 'var(--ok)', glyph: '✓', label: 'completed' },
   running: { color: 'var(--run)', glyph: '▶', label: 'running' },
   blocked: { color: 'var(--acc)', glyph: '⛔', label: 'blocked' },
+  // Defect B — distinct from 'blocked': an operator pause, not a gate hold.
+  paused: { color: 'var(--paused)', glyph: '⏸', label: 'paused' },
   failed: { color: 'var(--bad)', glyph: '✕', label: 'failed' },
   cancelled: { color: 'var(--faint)', glyph: '∅', label: 'cancelled' },
   queued: { color: 'var(--line2)', glyph: '·', label: 'queued' },

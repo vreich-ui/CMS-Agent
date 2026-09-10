@@ -179,7 +179,7 @@
   .grid thead th{text-align:center; padding:0 2px 8px; color:var(--muted); writing-mode:vertical-rl; transform:rotate(180deg); height:86px;}
   .cell{width:26px; height:17px; border-radius:4px; background:var(--panel3); display:block;}
   .cell.completed{background:var(--cell-ok);} .cell.blocked{background:var(--cell-gate);} .cell.failed{background:var(--cell-bad);}
-  .cell.queued{background:var(--panel3);}
+  .cell.queued{background:var(--panel3);} .cell.paused{background:var(--paused);}
 
   /* ---------- learning ---------- */
   .fly{display:flex; gap:8px; align-items:stretch; flex-wrap:wrap; margin:6px 0 18px;}

@@ -322,28 +322,22 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   // `{id, stage, value, createdAt}` — never a bare id list, and never keyed
   // by runId. verbs.ts's stageGetOutput composes on top of this list by
   // filtering for an id scoped to the requested run.
+  //
+  // Defect A fixture correction — this used to synthesize a record for
+  // EVERY "done" node in every run, which is backwards: most completed
+  // nodes carry a canonical `node_list_outputs` artifact and NO legacy
+  // stage-store record. See mockStore.ts's own comment on
+  // LEGACY_STAGE_RECORDS for the (small, explicit) scenario set this now
+  // answers from instead — everything else answers honestly empty.
   stage_list_outputs: (a) => {
     const stage = optStr(a, 'stage');
-    const outputs = mockStore
-      .getRuns()
-      .filter((run) => !stage || mockStore.getNodes(run.workflowId).some((n) => n.id === stage))
-      .flatMap((run) =>
-        mockStore
-          .getNodes(run.workflowId)
-          .slice(0, doneCount(run))
-          .filter((n) => !stage || n.id === stage)
-          .map((n) => ({
-            id: `${run.runId}:${n.id}`,
-            stage: n.id,
-            value: { note: 'No live stage output captured for this fixture — placeholder.' },
-            createdAt: run.startedAt,
-          })),
-      );
-    return { outputs };
+    return { outputs: mockStore.listLegacyStageOutputs(stage || undefined) };
   },
-  stage_get_output: (a) => ({
-    output: { id: str(a, 'id'), value: { note: 'No live stage output captured for this fixture — placeholder.' } },
-  }),
+  stage_get_output: (a) => {
+    const id = str(a, 'id');
+    const hit = mockStore.listLegacyStageOutputs().find((o) => o.id === id);
+    return { output: hit ? { id, value: hit.value } : { id, value: null } };
+  },
 
   // -- changes --
   // Real schema wraps in `{events}` (not a bare array) with eventId /

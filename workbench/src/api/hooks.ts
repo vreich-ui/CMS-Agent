@@ -101,11 +101,40 @@ export function useRuns(filters: RunFilters = {}, options?: Options<Run[]>) {
   });
 }
 
+/** Defect B — a bound run's status went stale under the app-wide 5-minute
+ *  staleTime + no-focus-refetch policy (App.tsx): the Workbench showed
+ *  `running` for a run the backend already held `paused` until a manual
+ *  refresh. That global policy is right for everything else (screen
+ *  switches must read cache, not refetch) — this is a narrow, single-query
+ *  exception: poll a bound run every few seconds for as long as its status
+ *  is non-terminal, and stop the instant it settles. `refetchInterval`
+ *  fires independently of `staleTime`/`refetchOnWindowFocus`, so this never
+ *  touches the global policy or any other query — see App.tsx's own note by
+ *  those defaults. */
+const ACTIVE_RUN_POLL_MS = 4000;
+// REVIEW FIX (R9) — `['run', runId]` is mounted by six components at once (TopBar,
+// Rail, Dock, Center, CommandPalette, GraphOverlay). Each observer schedules its OWN
+// interval timer, and drifting timers dedupe only while a fetch is genuinely in
+// flight, so six observers could produce several requests per window. A per-query
+// staleTime just under the interval makes a drifted refetch read cache instead: one
+// network read per interval, not one per observer. Scoped to this query — the global
+// 5-minute default in App.tsx is untouched.
+const ACTIVE_RUN_STALE_MS = ACTIVE_RUN_POLL_MS - 500;
+// 'skipped' is a terminal RunStatus too and was missing here, which would have left a
+// settled run polling forever.
+const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(['completed', 'failed', 'cancelled', 'skipped']);
+
 export function useRun(runId: string | null | undefined, options?: Options<Run | null>) {
   return useQuery({
     queryKey: ['run', runId],
     queryFn: () => verbs.workflowGetRun({ runId: runId as string }),
     enabled: Boolean(runId),
+    staleTime: ACTIVE_RUN_STALE_MS,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (!status) return false;
+      return TERMINAL_RUN_STATUSES.has(status) ? false : ACTIVE_RUN_POLL_MS;
+    },
     ...options,
   });
 }

@@ -87,6 +87,23 @@ export function useStageOutput(
   });
 }
 
+/**
+ * Defect A — the raw legacy stage-store list for one node's stage
+ * (`stage_list_outputs({stage: nodeId})`, never scoped by run — see
+ * verbs.stageListOutputs's own doc comment), for outputResolution.ts's
+ * tier-3 fallback. Distinct from `useStageOutput` above (which composes a
+ * single-run answer and used to be This-run's ONLY output source — see
+ * outputResolution.ts's header for why that was wrong on its own).
+ */
+export function useStageOutputsList(nodeId: string | null | undefined, options?: Options<verbs.StageOutputEntry[]>) {
+  return useQuery({
+    queryKey: ['stageOutputs', nodeId],
+    queryFn: () => verbs.stageListOutputs({ stage: nodeId as string }),
+    enabled: Boolean(nodeId),
+    ...options,
+  });
+}
+
 export function useChangesList(nodeId: string | null | undefined, options?: Options<verbs.ChangeRecord[]>) {
   return useQuery({
     queryKey: ['changes', nodeId],

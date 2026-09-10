@@ -4,20 +4,33 @@
 // the mockup does.
 
 import type { QueryClient } from '@tanstack/react-query';
-import type { Run, Workflow } from '../../types';
+import type { Run, RunStatus, Workflow } from '../../types';
 
 /** Every node id in a workflow, phase-grouped then flattened — the rail's display order. */
 export function orderedNodes(wf: Workflow): string[] {
   return wf.phases.flatMap(([, ids]) => ids);
 }
 
-export type NodeRunStatus = 'completed' | 'failed' | 'cancelled' | 'running' | 'blocked' | 'queued';
+// Defect B — 'paused' added as its own state (base.css already carries
+// `.dot.paused`/`.chip.paused`, styled distinctly from `.blocked` — this
+// type just hadn't caught up to what the design already supports). A run
+// the backend holds `paused` must never render its current node as
+// `blocked`: those mean different things (an operator-initiated pause the
+// run can resume from vs. a gate genuinely holding the run for a decision),
+// and conflating them is exactly what the live defect report described.
+export type NodeRunStatus = 'completed' | 'failed' | 'cancelled' | 'running' | 'blocked' | 'paused' | 'queued';
 
 /**
  * A node's status *within a specific bound run*, derived from the node's
  * position relative to the run's current node — mirrors the mockup exactly:
  * nodes before `run.cur` read as completed, the node at `run.cur` inherits
  * the run's own status, everything after is queued (not yet engaged).
+ *
+ * Kept for callers that still reason positionally (Rail.tsx, Runs/GridTab's
+ * own copy) — see `nodeStatusFromRun` below for the actual-state version
+ * Center.tsx now uses. Defect B fix: the current node used to fall through
+ * to 'blocked' for a paused run (no explicit case matched `run.status ===
+ * 'paused'`) — now it says so truthfully.
  */
 export function nodeRunStatus(run: Run, nodeId: string, order: string[]): NodeRunStatus {
   const i = order.indexOf(nodeId);
@@ -28,9 +41,38 @@ export function nodeRunStatus(run: Run, nodeId: string, order: string[]): NodeRu
     if (run.status === 'failed') return 'failed';
     if (run.status === 'cancelled') return 'cancelled';
     if (run.status === 'running') return 'running';
+    if (run.status === 'paused') return 'paused';
     return 'blocked';
   }
   return 'queued';
+}
+
+/**
+ * Defect B — status-specific copy for the "this is where the run currently
+ * sits" chip (Center.tsx's node header). The old copy was one string, "run
+ * stopped here", shown for every status including 'running' — which is not
+ * stopped at all — and 'paused', which reads as a gate hold rather than an
+ * operator-initiated pause. Falls back to the old generic copy only for a
+ * genuinely gate-holding status.
+ */
+export function runCurrentNodeCopy(status: RunStatus): string {
+  switch (status) {
+    case 'running':
+      return 'run is here now';
+    case 'paused':
+      return 'run paused here';
+    case 'failed':
+      return 'run failed here';
+    case 'cancelled':
+      return 'run cancelled here';
+    case 'completed':
+      return 'run completed here';
+    case 'queued':
+      return 'run queued here';
+    case 'blocked':
+    default:
+      return 'run stopped here';
+  }
 }
 
 /** Deterministic per-node bar heights for the dock timeline when real durationMs isn't available — same formula the mockup uses (`8 + (i*37)%30`), so a "no data" workflow still reads as a timeline rather than a flat line. */
@@ -303,6 +345,25 @@ export function layerGraph(nodeIds: string[], edges: Array<{ from: string; to: s
  */
 export function nodeStatusFromRun(run: Run | null | undefined, nodeId: string): NodeRunStatus {
   const entry = run?.nodes.find((n) => n.nodeId === nodeId);
+  // Defect B — a run-level pause or cancel doesn't necessarily leave a
+  // matching per-node status behind (the node's own last recorded status
+  // might still read 'running', 'queued' or 'blocked' from the instant the
+  // run stopped advancing it). For the run's OWN current node only, the
+  // run's status is the truthful one to show — this is additive to, not a
+  // replacement for, reading `run.nodes[]`: every other node (upstream,
+  // downstream, actually skipped) still reports its own real status.
+  if (run && run.cur === nodeId) {
+    // REVIEW FIX (R3) — guarded exactly like the cancelled branch below it. Unguarded,
+    // a run-level pause overwrote the node's REAL status, so pausing a run that had
+    // stopped on the publish-approval gate repainted that node 'paused' and the tab
+    // stopped rendering the gate card — the operator lost the only explanation of why
+    // the run stopped. A pause is the truthful status only for a node that had not
+    // itself reached a state of its own.
+    if (run.status === 'paused' && (!entry || entry.status === 'running' || entry.status === 'queued')) return 'paused';
+    if (run.status === 'cancelled' && (!entry || entry.status === 'running' || entry.status === 'queued' || entry.status === 'blocked')) {
+      return 'cancelled';
+    }
+  }
   if (!entry) return 'queued';
   switch (entry.status) {
     case 'completed':
@@ -315,6 +376,7 @@ export function nodeStatusFromRun(run: Run | null | undefined, nodeId: string): 
     case 'running':
       return 'running';
     case 'paused':
+      return 'paused';
     case 'blocked':
       return 'blocked';
     default:
