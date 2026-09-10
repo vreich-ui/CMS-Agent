@@ -86,6 +86,24 @@ export function artifactExtensionForContentType(contentType: unknown): string | 
 export function artifactKindForContentType(contentType: unknown, kindHint?: string): "image" | "pdf" | "doc" | null;
 /** T12.16 — the deterministic `<sha256><ext>` ingest filename, or null if unsafe. */
 export function artifactFilename(sha256: string, extension?: string | null): string | null;
+// W1.1 — the media resumption ledger: a manifestRef -> Major-Key artifact reference map, exactly
+// the shape materializeMedia's own internal artifactRefs Map carries (Object.fromEntries of it).
+export type EmissionMediaLedger = Record<string, string>;
+
+/** executeEmission's soft-budget outcome when media assets remain after MEDIA_MATERIALIZE_BUDGET_MS:
+ * no throw, no partial report — just what materializeMedia finished, for the caller to persist and
+ * resume with on the next dispatch. */
+export type EmissionIncomplete = {
+  complete: false;
+  mediaLedger: EmissionMediaLedger;
+  mediaDone: number;
+  mediaTotal: number;
+};
+
+export type EmissionOutcome = (EmissionReport & { complete: true }) | EmissionIncomplete;
+
+export const MEDIA_MATERIALIZE_BUDGET_MS: number;
+
 export function executeEmission(input: {
   plan: EmissionPlan;
   transport: EmissionTransport;
@@ -93,4 +111,11 @@ export function executeEmission(input: {
   modelAdapter?: { regenerateBody(input: { body: Record<string, unknown>; objectType: string; target: string; source: unknown }): Promise<Record<string, unknown>> } | null;
   assetProbe?: ((sourceUrl: string) => Promise<Record<string, unknown>>) | null;
   mapping?: unknown;
-}): Promise<EmissionReport>;
+  /** A prior dispatch's finished media, read back from run.stageOutputs. null/absent on a fresh
+   * run or a one-pass site. */
+  mediaLedger?: EmissionMediaLedger | null;
+  /** Soft wall-clock budget for materializeMedia's loop. Defaults to MEDIA_MATERIALIZE_BUDGET_MS. */
+  mediaBudgetMs?: number;
+  /** Clock override for tests; defaults to Date.now. */
+  now?: () => number;
+}): Promise<EmissionOutcome>;

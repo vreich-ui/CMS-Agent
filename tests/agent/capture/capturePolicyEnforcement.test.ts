@@ -153,8 +153,9 @@ describe("capture emission stays drafts-only", () => {
                   : {};
       return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ jsonrpc: "2.0", id: request.id, result: { structuredContent: { data } } }) } as unknown as Response;
     }));
-    const envelope = await captureEmitStep({ targetProjectId: "zb-test", mapping, theme, live: true }, deps);
-    const report = envelope.report as { createdObjects: Array<{ draftVerified: boolean }>; quarantines: Array<{ reason: string }> };
+    const step = await captureEmitStep({ targetProjectId: "zb-test", mapping, theme, live: true }, deps);
+    if ("phase" in step) throw new Error(`expected a completed emission, got a pending one: ${step.note}`);
+    const report = step.report as { createdObjects: Array<{ draftVerified: boolean }>; quarantines: Array<{ reason: string }> };
     expect(report.createdObjects.length).toBeGreaterThan(0);
     expect(report.createdObjects.every((object) => object.draftVerified === false)).toBe(true);
     expect(report.quarantines.some((entry) => entry.reason === "not_draft_only_response")).toBe(true);

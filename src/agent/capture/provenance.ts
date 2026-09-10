@@ -175,6 +175,21 @@ import { fileURLToPath } from "node:url";
 // one, matching this repo's publish.d.mts). Until that lands, the platform repo still carries the file
 // this repo no longer vendors or verifies — a stale, orphaned copy, not a divergent one, because
 // nothing in THIS repo reads or hashes it any more once the entry below is gone.
+//
+// W1.1 (2026-09-10) DEVIATED emit.mjs ALONE, CMS-Agent-side — NOT a re-vendor (upstreamSha256 stays
+// pinned to the pre-W1.1 platform commit). capture_emit_live's dispatch on a media-heavy site
+// (zilberman, 295 assets) grew to ~330-350 sequential MCP round-trips inside one executeEmission
+// call — past the claim window (routeRegistry.ts) every time, so the node was reclaimed as
+// stale_dispatch_reclaimed and re-dispatched, which restarted every one of those calls from zero,
+// forever (routeRegistry.ts's own "NOT CLAIMED HERE" note named this exact failure mode before a fix
+// existed for it). materializeMedia/executeEmission now accept an optional prior-pass ledger and
+// enforce a soft wall-clock budget (MEDIA_MATERIALIZE_BUDGET_MS); see CAPTURE_ENGINE_FILES's emit.mjs
+// entry below for the full deviation note and workspace/captureConductorRoutes.ts's
+// CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY for the caller side. PLATFORM-SIDE COMPANION CHANGE NOT
+// PERFORMED BY THIS COMMIT (a DIFFERENT agent's task per the vendored-engine rule — this repo's
+// worktree does not touch platform): port the same resumption ledger into
+// platform/packages/core/cli/capture/emit.mjs so the two copies converge and this file can be
+// re-vendored byte-identical again.
 
 export const CAPTURE_ENGINE_UPSTREAM = {
   repo: "vreich-ui/platform",
@@ -224,8 +239,31 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "275c701794ca98f3e294b8eff8dbce6860741fe806538796928bd744628f8089",
-    upstreamSha256: "275c701794ca98f3e294b8eff8dbce6860741fe806538796928bd744628f8089"
+    vendoredSha256: "988c136cd13412dcaf55930ce87012af1c77ed741fac62bd929736d2a044adaf",
+    upstreamSha256: "275c701794ca98f3e294b8eff8dbce6860741fe806538796928bd744628f8089",
+    deviation:
+      "W1.1 (2026-09-10, routeRegistry.ts's own 'NOT CLAIMED HERE' note) — materializeMedia issued " +
+      "one create_artifact_from_url per asset SEQUENTIALLY inside a single executeEmission call " +
+      "(295 of them on zilberman), with the manifestRef -> artifactRef map and its dedup set both " +
+      "local to that call. A media-heavy dispatch could not finish inside the claim window " +
+      "(routeRegistry.ts's DETERMINISTIC_STAGE_MIN_TIMEOUT_MS + STALL_MARGIN_MS), so the node was " +
+      "reclaimed as stale_dispatch_reclaimed and re-dispatched — which restarted the SAME calls " +
+      "from zero, forever. executeEmission and materializeMedia now take an optional prior-pass " +
+      "ledger (mediaLedger) and a soft wall-clock budget (MEDIA_MATERIALIZE_BUDGET_MS, a new " +
+      "exported constant, default 180000ms — comfortably under the claim window): an asset already " +
+      "in the ledger is skipped (no MCP call), and when the budget is exceeded with assets still " +
+      "unprocessed materializeMedia stops CLEANLY (never throws) and executeEmission returns " +
+      "`{ complete: false, mediaLedger, mediaDone, mediaTotal }` instead of a report — the " +
+      "plan.creates loop never runs on an incomplete pass. captureConductorRoutes.ts persists that " +
+      "ledger under CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY and re-queues the node, the same pattern " +
+      "CAPTURE_CRAWL_JOB_STAGE_KEY already used for capture_crawl. A one-pass site (every site " +
+      "measured before zilberman grew past ~300 assets) is unaffected: no ledger, budget never hit, " +
+      "`executeEmission` returns `{ ...report, complete: true }` exactly as it returned `report` " +
+      "before. Additive only — every existing field, quarantine path and idempotency guarantee is " +
+      "unchanged; this is the same vendored-engine rule as theme.mjs's C3 deviation above: the " +
+      "platform-side companion change is a different agent's task, so upstreamSha256 stays pinned " +
+      "to the pre-W1.1 platform commit until that lands and this file is re-vendored byte-identical " +
+      "again."
   },
   {
     file: "score.mjs",

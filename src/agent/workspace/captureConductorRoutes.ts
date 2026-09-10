@@ -6,11 +6,17 @@
 // deterministic route). Three outcomes exist:
 //   completed — the stage produced its envelope; the executor validates it against the node's own
 //               outputSchema and completes the node with zero usage recorded (the R-20 $0 rule).
-//   pending   — capture_crawl only: the pdf-tool job is not terminal. The executor RE-QUEUES the
-//               node (never spins inside one 30s project-call window); the long-run planes — the
-//               Cloud Run conductor job's advance loop and the run-continuation tick — re-drive it
-//               until a poll is terminal. The job id survives between advances in the run's
-//               stageOutputs under CAPTURE_CRAWL_JOB_STAGE_KEY.
+//   pending   — capture_crawl: the pdf-tool job is not terminal. The executor RE-QUEUES the node
+//               (never spins inside one 30s project-call window); the long-run planes — the Cloud
+//               Run conductor job's advance loop and the run-continuation tick — re-drive it until a
+//               poll is terminal. The job id survives between advances in the run's stageOutputs
+//               under CAPTURE_CRAWL_JOB_STAGE_KEY.
+//               capture_emit_live (W1.1): the same shape for a different reason. Its media loop can
+//               make ~300 sequential MCP round-trips in one dispatch (295 on zilberman) and blows
+//               through the claim window long before it's actually stuck; rather than widen the
+//               window (routeRegistry.ts explains why not), a dispatch that runs out of its own soft
+//               budget persists what it finished under CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY and gets
+//               re-queued the same way, resuming instead of restarting all ~300 calls from zero.
 //   refused   — a typed refusal. On a LIVE run the executor BLOCKS the node (a model must never
 //               fabricate a crawl, mapping, theme, emission, or score — the placement_resolver
 //               precedent); on a MOCK run it falls through to MockNodeRunner with a run-visible
@@ -30,6 +36,7 @@ import {
   CAPTURE_ARTIFACTS,
   type CaptureCrawlJobState,
   type CaptureEmissionEnvelope,
+  type CaptureEmitLiveLedger,
   type CaptureFidelityEnvelope,
   type CaptureMapEnvelope,
   type RegeneratedBody
@@ -56,6 +63,15 @@ export type CaptureStage = typeof CAPTURE_STAGES[number];
 // with a node id in run.stageOutputs.
 export const CAPTURE_CRAWL_JOB_STAGE_KEY = "capture_crawl:job";
 
+// W1.1 — capture_emit_live's cross-advance bookkeeping key, the SAME pattern as
+// CAPTURE_CRAWL_JOB_STAGE_KEY above: 295 create_artifact_from_url round-trips on zilberman exceed
+// the 390s claim window (routeRegistry.ts's DETERMINISTIC_STAGE_MIN_TIMEOUT_MS + STALL_MARGIN_MS),
+// so a dispatch that runs out of its soft media budget persists what it finished here and gets
+// re-queued instead of restarting all 295 calls from zero every reclaim (the incident
+// routeRegistry.ts's own capture_stage phase manifest names as "NOT CLAIMED HERE"). Also
+// ":"-suffixed so it can never collide with a node id.
+export const CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY = "capture_emit_live:ledger";
+
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
 export const readCaptureStage = (node: Pick<WorkspaceNode, "metadata">): CaptureStage | undefined => {
@@ -65,7 +81,7 @@ export const readCaptureStage = (node: Pick<WorkspaceNode, "metadata">): Capture
 
 export type CaptureStageOutcome =
   | { kind: "completed"; output: Record<string, unknown> }
-  | { kind: "pending"; jobStateKey: string; jobState: CaptureCrawlJobState; warning: string }
+  | { kind: "pending"; jobStateKey: string; jobState: CaptureCrawlJobState | CaptureEmitLiveLedger; warning: string }
   | { kind: "refused"; code: string; message: string };
 
 const refused = (code: string, message: string): CaptureStageOutcome => ({ kind: "refused", code, message });
@@ -132,6 +148,22 @@ const readCrawlJobState = (run: WorkflowExecutionRecord): CaptureCrawlJobState |
     createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString()
   };
+};
+
+// W1.1 — the emit_live analogue of readCrawlJobState above: the media ledger a PRIOR dispatch left
+// in run.stageOutputs, read back so this dispatch's captureEmitStep skips every asset already
+// materialized. No media, or a malformed record, reads as "nothing done yet" — never a reason to
+// refuse the stage.
+const readEmitLiveLedger = (run: WorkflowExecutionRecord): CaptureEmitLiveLedger | undefined => {
+  const value = stageOutput(run, CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY);
+  if (!value || !isRecord(value.media)) return undefined;
+  const media: Record<string, string> = {};
+  for (const [manifestRef, artifactRef] of Object.entries(value.media)) {
+    if (typeof artifactRef === "string" && artifactRef) media[manifestRef] = artifactRef;
+  }
+  const done = Object.keys(media).length;
+  if (done === 0) return undefined;
+  return { media, done, total: typeof value.total === "number" ? value.total : done };
 };
 
 export async function runCaptureStage(input: { run: WorkflowExecutionRecord; node: WorkspaceNode; stage: CaptureStage; onPhase?: PhaseClaim }): Promise<CaptureStageOutcome> {
@@ -206,7 +238,8 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
         if (isOutcome(refined)) return refined;
         const theme = envelopeOf(run, "capture_theme", CAPTURE_ARTIFACTS.theme);
         if (isOutcome(theme)) return theme;
-        const envelope = await captureEmitStep({
+        const priorLedger = readEmitLiveLedger(run);
+        const step = await captureEmitStep({
           targetProjectId,
           mapping: refined.mapping,
           theme: theme.theme,
@@ -214,9 +247,20 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
           // copy_regenerator's output when it ran; [] when it was deterministically skipped because
           // rights permit extracted copy. When rights REQUIRE regeneration and an entry is missing,
           // that operation is quarantined — never emitted with extracted copy (captureEngine.ts).
-          regenerated: readRegenerated(stageOutput(run, "copy_regenerator"))
+          regenerated: readRegenerated(stageOutput(run, "copy_regenerator")),
+          // W1.1 — resumes a prior dispatch's media work instead of re-issuing every
+          // create_artifact_from_url call from zero (see CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY).
+          mediaLedger: priorLedger?.media
         }, { tenantContext });
-        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+        if ("phase" in step && step.phase === "pending") {
+          return {
+            kind: "pending",
+            jobStateKey: CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY,
+            jobState: step.ledger,
+            warning: `capture_emit_live_pending:${step.ledger.done}/${step.ledger.total}`
+          };
+        }
+        return { kind: "completed", output: step as unknown as Record<string, unknown> };
       }
       case "score": {
         const crawl = envelopeOf(run, "capture_crawl", CAPTURE_ARTIFACTS.snapshot);

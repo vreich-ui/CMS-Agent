@@ -250,9 +250,19 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
   //
   // NOT CLAIMED HERE, and named so it is not mistaken for done: capture_emit_live's internal
   // probe -> ingest -> create walk is genuinely several waits inside one step call, and would need a
-  // phase claim threaded into captureEmitLiveStep itself to be covered at that grain. It fits the
-  // 300s + 90s window on the sites measured so far (100-200s on zilberman); a slower site is the case
-  // that would need it.
+  // phase claim threaded into captureEmitLiveStep itself to be covered at that grain. On zilberman
+  // it grew to ~330-350 sequential round-trips (295 create_artifact_from_url calls alone) and
+  // stopped fitting this window at all — every dispatch was reclaimed as stale_dispatch_reclaimed
+  // and restarted the whole emission from zero, forever. A phase claim alone would not have fixed
+  // that (the work still would not finish in one dispatch); what actually fixed it is RESUMPTION,
+  // not a wider or finer-grained claim: materializeMedia now enforces its own soft budget
+  // (emit.mjs's MEDIA_MATERIALIZE_BUDGET_MS, comfortably under this window) and stops cleanly with
+  // a manifestRef -> artifactRef ledger when assets remain, which captureConductorRoutes.ts persists
+  // under CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY and re-queues the node with — the same pattern
+  // CAPTURE_CRAWL_JOB_STAGE_KEY already uses for capture_crawl. The next dispatch skips every asset
+  // already in the ledger, so a media-heavy site converges over several dispatches instead of
+  // looping. A stage whose non-media work alone cannot fit this window is still the case a phase
+  // claim would be needed for; none has been measured yet.
   {
     id: "capture_stage",
     description: "capture_conductor's deterministic stages. One stage per dispatch, so the phase IS the stage and the phase ids are the stage values.",

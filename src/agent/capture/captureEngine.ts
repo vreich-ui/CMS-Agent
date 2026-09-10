@@ -42,8 +42,9 @@ import {
   buildDryRunReport,
   buildEmissionPlan,
   executeEmission,
+  type EmissionMediaLedger,
+  type EmissionOutcome,
   type EmissionPlan,
-  type EmissionReport,
   type EmissionTransport
 } from "./engine/emit.mjs";
 import { scoreCaptureFidelity, type FidelityReport } from "./engine/score.mjs";
@@ -675,6 +676,12 @@ export type CaptureEmissionEnvelope = {
   policy: CapturePolicyView;
 };
 
+// W1.1 — captureEmitStep(live:true)'s resumption ledger, the emit_live analogue of
+// CaptureCrawlJobState: what a prior dispatch's materializeMedia finished, plus enough of a header
+// (done/total) for the route's pending warning and for a reader of run.stageOutputs to see progress
+// without reconstructing it from the media map's size.
+export type CaptureEmitLiveLedger = { media: EmissionMediaLedger; done: number; total: number };
+
 const buildAdapterTransport = (projectId: string, forbiddenVerbs: ReadonlySet<string>, deps: CaptureDeps): EmissionTransport => ({
   async call(verb: string, args: Record<string, unknown>) {
     // Enforced here IN ADDITION to the vendored emitter's own checks: publish/release/build/deploy
@@ -701,17 +708,31 @@ function buildRegenerationAdapter(plan: EmissionPlan, regenerated: RegeneratedBo
   };
 }
 
+type CaptureEmitStepInput = {
+  targetProjectId: string;
+  mapping: unknown;
+  theme: unknown;
+  regenerated?: RegeneratedBody[];
+  repeatThreshold?: number;
+  // W1.1 — a prior dispatch's CaptureEmitLiveLedger.media, so this call skips every asset it
+  // already materialized instead of re-issuing all of create_artifact_from_url from zero.
+  mediaLedger?: EmissionMediaLedger;
+  mediaBudgetMs?: number;
+};
+
+export type CaptureEmitLivePending = { phase: "pending"; ledger: CaptureEmitLiveLedger; note: string };
+
+// Overloaded on the LITERAL `live` value so every existing dry-run caller (live omitted or
+// `false`) keeps getting the flat envelope it always got — unchanged, no `"phase" in step` guard
+// needed anywhere dry-run is used. Only a `live: true` caller's return type gains the pending arm,
+// because only executeEmission's live path can come back incomplete.
+export async function captureEmitStep(input: CaptureEmitStepInput & { live?: false }, deps?: CaptureDeps): Promise<CaptureEmissionEnvelope>;
+export async function captureEmitStep(input: CaptureEmitStepInput & { live: true }, deps?: CaptureDeps): Promise<CaptureEmissionEnvelope | CaptureEmitLivePending>;
+export async function captureEmitStep(input: CaptureEmitStepInput & { live?: boolean }, deps?: CaptureDeps): Promise<CaptureEmissionEnvelope | CaptureEmitLivePending>;
 export async function captureEmitStep(
-  input: {
-    targetProjectId: string;
-    mapping: unknown;
-    theme: unknown;
-    live?: boolean;
-    regenerated?: RegeneratedBody[];
-    repeatThreshold?: number;
-  },
+  input: CaptureEmitStepInput & { live?: boolean },
   deps: CaptureDeps = {}
-): Promise<CaptureEmissionEnvelope> {
+): Promise<CaptureEmissionEnvelope | CaptureEmitLivePending> {
   const { policy, projectId } = await resolveCaptureAuthority(input.targetProjectId, deps);
   let plan: EmissionPlan;
   try {
@@ -735,20 +756,33 @@ export async function captureEmitStep(
   const modelAdapter = policy.rights.content === "retain_allowed_origin_content"
     ? null
     : buildRegenerationAdapter(plan, input.regenerated ?? []);
-  let report: EmissionReport;
+  let outcome: EmissionOutcome;
   try {
-    report = await executeEmission({
+    outcome = await executeEmission({
       plan,
       transport: buildAdapterTransport(projectId, forbidden, deps),
       // R-C2 v2: the CMS-Agent project registry is the ONE operational policy home; the per-site MCP
       // deliberately does not expose capture policy, so the resolver answers from the registry read
       // this step already performed.
       projectPolicyResolver: async (target: string) => ({ project: { projectId: target, capturePolicy: policy } }),
-      modelAdapter
+      modelAdapter,
+      mediaLedger: input.mediaLedger ?? null,
+      mediaBudgetMs: input.mediaBudgetMs
     });
   } catch (error) {
     throw new CaptureRefusal("capture_emission_refused", error instanceof Error ? error.message : String(error));
   }
+  if (!outcome.complete) {
+    // Mirrors captureCrawlStep's { phase: "pending", jobState } — the route persists `ledger` under
+    // CAPTURE_EMIT_LIVE_LEDGER_STAGE_KEY and re-queues the node instead of retrying this dispatch,
+    // so the NEXT captureEmitStep call passes it back in as mediaLedger and resumes.
+    return {
+      phase: "pending",
+      ledger: { media: outcome.mediaLedger, done: outcome.mediaDone, total: outcome.mediaTotal },
+      note: `capture_emit_live_pending:${outcome.mediaDone}/${outcome.mediaTotal}`
+    };
+  }
+  const report = outcome;
   const created = report.createdObjects ?? [];
   const quarantines = report.quarantines ?? [];
   const undrafted = created.filter((object) => object.draftVerified !== true);
