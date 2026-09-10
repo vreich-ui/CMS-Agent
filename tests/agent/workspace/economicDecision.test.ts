@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ToolExecutionRecord } from "../../../src/agent/tools/toolTypes.js";
-import { buildAuthoritativeEconomicDecision, isAuthoritativeEconomicStop, type EconomicDecision } from "../../../src/agent/workspace/economicDecision.js";
+import { buildAuthoritativeEconomicDecision, isAuthoritativeEconomicStop, loadParentEconomicDecision, type EconomicDecision } from "../../../src/agent/workspace/economicDecision.js";
 
 const NOW = "2026-09-10T10:00:00.000Z";
 const output = (over: Record<string, unknown> = {}) => ({
@@ -32,6 +32,14 @@ const decide = (over: Record<string, unknown> = {}) => buildAuthoritativeEconomi
 });
 
 describe("authoritative economic decisions", () => {
+  it("bounds parent references and degrades repository failures without throwing", async () => {
+    const getRun = vi.fn(async () => { throw new Error("temporary store outage"); });
+    await expect(loadParentEconomicDecision({ supportingFor: "economic:parent", currentRunId: "run_1", projectId: "dr-lurie", getRun })).resolves.toEqual({ warning: "economic_parent_lookup_failed" });
+    expect(getRun).toHaveBeenCalledWith("parent");
+    getRun.mockClear();
+    await expect(loadParentEconomicDecision({ supportingFor: `economic:${"x".repeat(161)}`, currentRunId: "run_1", projectId: "dr-lurie", getRun })).resolves.toEqual({ warning: "economic_parent_reference_invalid" });
+    expect(getRun).not.toHaveBeenCalled();
+  });
   it("recomputes verified low EV from recorded inputs and can earn a stop", () => {
     const decision = decide();
     expect(decision).toMatchObject({ outcome: "verified_stop", stop: true, reasonCode: "verified_ev_below_floor", authority: "cms_agent_engine" });

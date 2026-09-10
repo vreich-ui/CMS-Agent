@@ -46,6 +46,32 @@ export type BuildEconomicDecisionInput = {
   parentEconomicDecision?: unknown;
 };
 
+export type ParentEconomicDecisionLookup = {
+  decision?: EconomicDecision;
+  warning?: "economic_parent_reference_invalid" | "economic_parent_lookup_failed";
+};
+
+/**
+ * Resolve model-selected cluster linkage without letting an unbounded identifier or a transient
+ * repository read discard an already-paid node result. Authority is still validated later.
+ */
+export async function loadParentEconomicDecision(input: {
+  supportingFor: unknown;
+  currentRunId: string;
+  projectId: string;
+  getRun: (runId: string) => Promise<{ projectId: string; economicDecision?: EconomicDecision } | undefined>;
+}): Promise<ParentEconomicDecisionLookup> {
+  if (typeof input.supportingFor !== "string") return {};
+  const match = input.supportingFor.trim().match(/^economic:([A-Za-z0-9._-]{1,160})$/);
+  if (!match || match[1] === input.currentRunId) return { warning: "economic_parent_reference_invalid" };
+  try {
+    const parent = await input.getRun(match[1]);
+    return parent?.projectId === input.projectId ? { decision: parent.economicDecision } : {};
+  } catch {
+    return { warning: "economic_parent_lookup_failed" };
+  }
+}
+
 type JsonObject = Record<string, unknown>;
 const isObject = (value: unknown): value is JsonObject => !!value && typeof value === "object" && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
