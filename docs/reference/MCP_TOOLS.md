@@ -2306,6 +2306,10 @@ Get a safe complete node inspection record with compact summaries of this node's
     "nodeId": {
       "type": "string",
       "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
@@ -2330,6 +2334,10 @@ Resolve the effective prompt for one node without secrets.
   "type": "object",
   "properties": {
     "nodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
       "type": "string",
       "minLength": 1
     }
@@ -2358,6 +2366,10 @@ Resolve effective skill policy for one node.
     "nodeId": {
       "type": "string",
       "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
@@ -2373,7 +2385,7 @@ Resolve effective skill policy for one node.
 
 Internal name: `node.get_effective_tools` · Effect: **read** · Autonomy: **safe**
 
-Resolve effective controlled tools for one node.
+Resolve what a node can actually do, in BOTH senses: `tools` are the controlled registry tools a model turn may call, and `engine` are the tenant MCP verbs the node's own deterministic route calls directly — which pass no grant and no risk check, and which no grant list has ever shown. With `runId`, resolves against the SAME authorization that run's dispatch uses (the node's risk cap, the run's authorized tools, the platform's allowed tools) — so the answer is what dispatch would actually allow, not a context-free reading of the node's grant list. Without `runId`, reports the node's own declaration.
 
 <details><summary>Input schema</summary>
 
@@ -2382,6 +2394,10 @@ Resolve effective controlled tools for one node.
   "type": "object",
   "properties": {
     "nodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
       "type": "string",
       "minLength": 1
     }
@@ -2408,6 +2424,10 @@ Get one node input schema.
   "type": "object",
   "properties": {
     "nodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
       "type": "string",
       "minLength": 1
     }
@@ -2475,6 +2495,10 @@ Get one node output schema.
   "type": "object",
   "properties": {
     "nodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
       "type": "string",
       "minLength": 1
     }
@@ -3603,7 +3627,7 @@ Remove an agent-registered project connection. Code-defined default projects can
 
 Internal name: `project.get` · Effect: **read** · Autonomy: **safe**
 
-Get one registered project MCP connection with safe, non-secret metadata, plus the project's knowledge rules when a hook module provides them.
+Get one registered project MCP connection with safe, non-secret metadata, the project's knowledge rules when a hook module provides them, and `usedBy` — who has actually reached this tenant, read from the tool execution ledger: the nodes that called it, the routes they called it under, the verbs they spoke and whether each call came from a model turn or from engine code. Empty for a tenant nothing has called since the ledger began; never a claim about intent, only about calls that happened.
 
 <details><summary>Input schema</summary>
 
@@ -6074,6 +6098,10 @@ Get a controlled tool execution audit record: the full in-process record when th
     "toolExecutionId": {
       "type": "string",
       "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
@@ -6089,7 +6117,7 @@ Get a controlled tool execution audit record: the full in-process record when th
 
 Internal name: `tool.list` · Effect: **read** · Autonomy: **safe**
 
-List controlled tool registry entries.
+List controlled tool registry entries, each with its REACHABILITY: which resolved nodes grant it, and which of those grants can actually fire. A grant on a node that terminates in a deterministic route can never be called through the tool executor — the node returns before a model runner is ever built — so `grantedBy` and `reachableFrom` are different lists and a tool with grants but no reachable ones is reported `dead: true`. Read-only.
 
 <details><summary>Input schema</summary>
 
@@ -6125,6 +6153,21 @@ List controlled tool execution audit records by runId/nodeId/toolId — in-proce
       "minLength": 1
     },
     "toolId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "caller": {
+      "type": "string",
+      "enum": [
+        "model",
+        "engine"
+      ]
+    },
+    "routeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "projectId": {
       "type": "string",
       "minLength": 1
     }
@@ -6616,7 +6659,7 @@ cancel_run updates run status only; node completion state is never mutated.
 
 Internal name: `workflow.get_run` · Effect: **read** · Autonomy: **safe**
 
-Get dry-run workflow execution state. detail:"compact" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,blockages,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch,blockage}]}. `blockages` is EVERY pending human-resolvable wall on the run (blockage.v1: what stopped plus the remedies that clear it — a budget raise, a gate approval, a limit) — always present, empty on a healthy run; detail:"full" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status "running" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.
+Get dry-run workflow execution state. detail:"compact" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,blockages,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch,blockage}]}. `blockages` is every recorded pending wall on the run in blockage.v1 form: budget, publication approval, tenant-policy hold, configuration/scope, authentication, validation/limit, or an explicitly unknown legacy cause. Each carries the remedies actually supported for that cause; status=blocked alone never fabricates an approval. The array is always present and empty on a healthy run. detail:"full" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status "running" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.
 
 <details><summary>Input schema</summary>
 
@@ -6682,7 +6725,7 @@ Return the reusable per-run context bundle (project contract, article_body schem
 
 Internal name: `workflow.get_run_cost` · Effect: **read** · Autonomy: **safe**
 
-Return a per-node cost ledger for a run plus a plan recommending the cheapest way to make progress: poll a terminal run, resume a blocked one, re-enter at the late-stage entrypoint reusing a finished article_body, or run in full. plan.nodeTimingAggregates surfaces measured per-node duration history (EMA/p50/p95/count) for this run's workflow, read-only — no plan field above it is derived from that history yet.
+Return a per-node cost ledger plus the cheapest honest recovery plan. Completed stages remain reusable; queued, failed, and blocked stages remain in remainingStages. plan.blocker is the primary recorded blockage.v1 cause and remedies, so a missing scope recommends repair+retry, a tenant-policy hold shows that no transport occurred, a budget hold recommends a raise before resume, and only a real publication gate recommends approval. plan.nodeTimingAggregates surfaces measured per-node duration history (EMA/p50/p95/count) for this run's workflow, read-only.
 
 <details><summary>Input schema</summary>
 
