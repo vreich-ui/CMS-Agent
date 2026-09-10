@@ -96,6 +96,54 @@ export const SITE_GENESIS_NETLIFY_MODE_ENV = "SITE_GENESIS_NETLIFY_MODE";
 // project, so a correctly-configured plane needs no new variable at all; an unset one degrades to
 // the human checklist rather than guessing a project to write secrets into.
 export const GENESIS_SECRET_MANAGER_PROJECT_ENV = "GENESIS_SECRET_MANAGER_PROJECT";
+// G7 — the DEPLOY binding. A Netlify site with no repo attached builds nothing, so genesis-lab-2 was
+// born as a site waiting for a human in the console; the hand path then offers the monorepo "package
+// directory", which leaves config resolution at the REPO ROOT and hands the new tenant dr-lurie's
+// netlify.toml. That is the whole failure. What the binding must be instead:
+//
+//     base = sites/<slug>   package_path = ""   cmd = ""   dir/functions_dir from the per-site toml
+//
+// `base` is what makes Netlify read sites/<slug>/netlify.toml — the scaffolded file says so in its
+// own header — and an empty cmd is what lets that file's build command win.
+//
+// Everything identity-bearing (which repo, which GitHub App installation) is COPIED from a site that
+// already builds rather than configured here: the fleet has exactly one repo, and a copied value
+// follows it if that ever changes. No GitHub App handshake is needed when the App is already
+// installed on the account (proven birthing kugel-fernwell, T14.3-checklist 2026-07-27).
+export const GENESIS_DEPLOY_REFERENCE_SITE_ENV = "GENESIS_DEPLOY_REFERENCE_SITE";
+export const GENESIS_DEPLOY_REFERENCE_SITE_DEFAULT = "zilbermanfilmfoundation";
+const genesisDeployReferenceSite = (env: NodeJS.ProcessEnv): string =>
+  env[GENESIS_DEPLOY_REFERENCE_SITE_ENV]?.trim() || GENESIS_DEPLOY_REFERENCE_SITE_DEFAULT;
+/** What genesis reads back off a Netlify site to decide whether it is bound, and bound CORRECTLY. */
+export type NetlifyBuildSettings = {
+  repoPath?: string;
+  repoUrl?: string;
+  provider?: string;
+  installationId?: number;
+  base?: string;
+  packagePath?: string;
+  cmd?: string;
+};
+
+/**
+ * Is this site attached to SOME repo? Deliberately generous — any of four fields counts.
+ *
+ * This predicate decides whether genesis is allowed to write, so its failure mode must be "declines
+ * to touch a site it should have configured" (a checklist item) and never "overwrites a live
+ * tenant's own binding" (an outage). A site linked outside the GitHub App flow can carry repo_url
+ * and no repo_path; keying on repo_path alone would read that as unbound and re-point it.
+ */
+export const isAttachedToRepo = (settings: NetlifyBuildSettings): boolean =>
+  Boolean(settings.repoPath || settings.repoUrl || settings.installationId !== undefined || settings.provider);
+
+/** The build binding a tenant is born with. `base` is the load-bearing field. */
+export type GenesisDeployBinding = {
+  provider: string;
+  repoPath: string;
+  repoBranch: string;
+  installationId?: number;
+  base: string;
+};
 const genesisSecretProject = (env: NodeJS.ProcessEnv): string | undefined =>
   env[GENESIS_SECRET_MANAGER_PROJECT_ENV]?.trim()
   || env.SITE_CREDENTIAL_RECONCILER_GCP_PROJECT?.trim()
@@ -509,6 +557,159 @@ export class NetlifyGenesisClient {
     return { hookId, url };
   }
 
+  /**
+   * Read the deploy binding of a site that already builds, so a new tenant inherits it.
+   *
+   * Two reads, not one: the LIST endpoint locates the site by name, and the single-site GET is what
+   * the binding is read from. The list projection is not guaranteed to carry `installation_id`, and
+   * a repo attached without the GitHub App installation is a site Netlify cannot clone — a failure
+   * that looks exactly like a correct binding from every field this code checks.
+   */
+  async readDeployBinding(referenceSiteName: string): Promise<{ provider: string; repoPath: string; repoBranch: string; installationId: number } | undefined> {
+    if (this.mode === "dry_run") return { provider: "github", repoPath: "vreich-ui/platform", repoBranch: "main", installationId: 0 };
+    const found = (await this.request("GET", `https://api.netlify.com/api/v1/sites?name=${encodeURIComponent(referenceSiteName)}`)) as unknown;
+    const listed = Array.isArray(found) ? (found as Array<Record<string, unknown>>).find((candidate) => candidate.name === referenceSiteName) : undefined;
+    const referenceId = typeof listed?.id === "string" ? listed.id : "";
+    if (!referenceId) return undefined;
+    const site = (await this.request("GET", `https://api.netlify.com/api/v1/sites/${encodeURIComponent(referenceId)}`)) as Record<string, unknown>;
+    const settings = site.build_settings && typeof site.build_settings === "object" ? (site.build_settings as Record<string, unknown>) : {};
+    const repoPath = typeof settings.repo_path === "string" ? settings.repo_path : "";
+    const installationId = typeof settings.installation_id === "number" ? settings.installation_id : undefined;
+    // Both or neither. Copying a repo without the installation that grants access to it produces a
+    // site that passes every check here and fails every clone.
+    if (!repoPath || installationId === undefined) return undefined;
+    return {
+      provider: typeof settings.provider === "string" ? settings.provider : "github",
+      repoPath,
+      repoBranch: typeof settings.repo_branch === "string" ? settings.repo_branch : "main",
+      installationId
+    };
+  }
+
+  /**
+   * Attach the repo and set the base directory, then RE-READ to confirm the write persisted.
+   *
+   * Two reasons for the re-read rather than trusting the response. Netlify has at least one
+   * documented write on this object that returns success and silently does not persist (the Identity
+   * external-provider body, T14.3-checklist), and the PATCH body shape for a build binding is not
+   * pinned by any doc we control — so this tries the documented `repo` envelope first and falls back
+   * to a flat `build_settings` before giving up. Whichever one the account actually accepts is the
+   * one the verification sees.
+   *
+   * WHAT COUNTS AS BOUND is the whole point, and it is four fields, not one:
+   *   repo attached · base = sites/<slug> · NO package directory · NO build command
+   * A site with the repo and nothing else is the kugel-genesis-lab-2 failure — it builds, from the
+   * repo-root netlify.toml, as another tenant. So "already has a repo" is not a reason to call this
+   * done; it is only a reason not to overwrite it.
+   */
+  async bindRepository(
+    siteId: string,
+    binding: GenesisDeployBinding
+  ): Promise<{ bound: boolean; skipped?: "already_bound"; observed?: NetlifyBuildSettings }> {
+    const shape = {
+      provider: binding.provider,
+      repo: binding.repoPath,
+      repo_path: binding.repoPath,
+      repo_branch: binding.repoBranch,
+      branch: binding.repoBranch,
+      installation_id: binding.installationId,
+      base: binding.base,
+      // The two fields that caused the failure this step exists to prevent: package_path must be
+      // EMPTY (a set one moves config resolution to the repo root) and cmd must be EMPTY (so the
+      // per-site netlify.toml's real build command is the one that runs). Netlify's framework
+      // detection populates cmd on its own when a repo is linked, which is why it is re-checked
+      // after the write rather than assumed.
+      package_path: "",
+      cmd: ""
+    };
+    const wanted = { repoPath: binding.repoPath, base: binding.base, packagePath: "", cmd: "" };
+
+    if (this.mode === "dry_run") {
+      // PLANNED, never `bound`. Nothing was written and nothing was verified, and a checklist that
+      // says otherwise sends an operator away from a site that will not build.
+      this.record(
+        "netlify_deploy_binding",
+        `DRY-RUN: would PATCH /api/v1/sites/${siteId} binding ${binding.repoPath}#${binding.repoBranch} with base "${binding.base}", package_path "" and cmd "" (so sites/<slug>/netlify.toml is the config Netlify reads), then re-read to confirm all four persisted.`,
+        { siteId, repoPath: binding.repoPath, base: binding.base }
+      );
+      return { bound: false };
+    }
+
+    const before = await this.readSiteBuildSettings(siteId);
+    if (isAttachedToRepo(before)) {
+      // Never re-point a site that is already attached. createSite is idempotent, so a second genesis
+      // run resolves the LIVE tenant — and an operator who moved a base directory, or pointed a
+      // tenant at its own repo, must not have that decision silently reverted at re-mint.
+      const correct = before.repoPath === binding.repoPath && before.base === binding.base && !before.packagePath && !before.cmd;
+      if (correct) {
+        this.record("netlify_deploy_binding", `Site ${siteId} is already bound to ${before.repoPath} with base "${before.base}" and no package directory. Left untouched.`, {
+          siteId,
+          skipped: "already_bound",
+          ...before
+        });
+        return { bound: true, skipped: "already_bound", observed: before };
+      }
+      // Attached but WRONG — the state a failed first attempt leaves behind, and the state the
+      // console's monorepo option produces. Genesis refuses to overwrite it and refuses to call it
+      // done; a human decides, because this may equally be a deliberate operator change.
+      this.actions.push({
+        step: "netlify_deploy_binding",
+        kind: "requires_human",
+        detail: `Site ${siteId} is already attached to a repo, so genesis did not overwrite it — but the binding is not what this tenant needs. It reads repo "${before.repoPath ?? ""}", base "${before.base ?? ""}", package_path "${before.packagePath ?? ""}", cmd "${before.cmd ?? ""}"; it needs repo "${binding.repoPath}", base "${binding.base}", package directory EMPTY and build command EMPTY. A package directory is what makes Netlify read the repo-root netlify.toml and build another tenant's config.`,
+        at: now(),
+        data: { siteId, skipped: "already_bound", wanted, observed: before }
+      });
+      return { bound: false, skipped: "already_bound", observed: before };
+    }
+
+    const errors: string[] = [];
+    let observed = before;
+    for (const body of [{ repo: shape }, { build_settings: shape }]) {
+      const envelope = "repo" in body ? "repo" : "build_settings";
+      await this.request("PATCH", `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}`, body).catch((error: unknown) => {
+        // A refusal here is data, not a reason to abort: the second envelope may still be accepted,
+        // and if neither is, the operator needs every error — a 403 (the token cannot write build
+        // settings) and a 422 (the body was malformed) are different fixes.
+        errors.push(`${envelope}: ${error instanceof Error ? error.message : String(error)}`);
+        return {};
+      });
+      observed = await this.readSiteBuildSettings(siteId);
+      if (observed.repoPath === binding.repoPath && observed.base === binding.base && !observed.packagePath && !observed.cmd) {
+        this.record(
+          "netlify_deploy_binding",
+          `Bound site ${siteId} to ${binding.repoPath}#${binding.repoBranch} with base "${binding.base}" (package directory and build command both cleared, so sites/${binding.base.split("/").pop()}/netlify.toml supplies the build). Verified by re-reading all four fields.`,
+          { siteId, repoPath: binding.repoPath, base: binding.base, envelope }
+        );
+        return { bound: true, observed };
+      }
+    }
+
+    this.actions.push({
+      step: "netlify_deploy_binding",
+      kind: "requires_human",
+      detail: `Could not confirm a deploy binding on site ${siteId}: after PATCHing both accepted body shapes the site still reads repo "${observed.repoPath ?? ""}", base "${observed.base ?? ""}", package_path "${observed.packagePath ?? ""}", cmd "${observed.cmd ?? ""}".${errors.length ? ` API errors: ${errors.join(" | ")}.` : ""} Set it in the Netlify console instead — base directory "${binding.base}", package directory EMPTY, build command EMPTY.`,
+      at: now(),
+      data: { siteId, wanted, observed, ...(errors.length ? { errors } : {}) }
+    });
+    return { bound: false, observed };
+  }
+
+  private async readSiteBuildSettings(siteId: string): Promise<NetlifyBuildSettings> {
+    const site = (await this.request("GET", `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}`)) as Record<string, unknown>;
+    const settings = site.build_settings && typeof site.build_settings === "object" ? (site.build_settings as Record<string, unknown>) : {};
+    const text = (key: string): string | undefined => (typeof settings[key] === "string" && settings[key] ? (settings[key] as string) : undefined);
+    return {
+      repoPath: text("repo_path"),
+      repoUrl: text("repo_url"),
+      provider: text("provider"),
+      installationId: typeof settings.installation_id === "number" ? settings.installation_id : undefined,
+      base: typeof settings.base === "string" ? settings.base : undefined,
+      packagePath: text("package_path"),
+      cmd: text("cmd")
+    };
+  }
+
+
   async getSiteAccountId(siteId: string): Promise<string> {
     if (this.mode === "dry_run") return `dryrun_account_${siteId}`;
     const site = (await this.request("GET", `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}`)) as Record<string, unknown>;
@@ -775,6 +976,10 @@ export function buildGenesisHumanChecklist(input: {
   tenantTokenSecretRef?: string;
   // G4 — the owner address genesis was given (and therefore installed), if any.
   ownerEmail?: string;
+  // G7 — set when genesis attached the repo AND verified the base directory by re-reading the site.
+  // False leaves the deploy-binding item on the checklist, which is the truthful state: a Netlify
+  // site with no repo (or with a package directory set) builds the wrong tenant's config or nothing.
+  deployBound?: boolean;
   // G4 — the site env vars genesis derived and set itself.
   derivedEnvVars?: string[];
   netlifySiteId?: string;
@@ -817,8 +1022,18 @@ export function buildGenesisHumanChecklist(input: {
   }
   items.push(
     {
+      id: "deploy_repo_binding",
+      title: input.deployBound && input.netlifyMode === "live"
+        ? "Deploy binding — genesis attached the repo and set the base directory (verify the first build)"
+        : "Deploy binding — attach vreich-ui/platform and set the BASE DIRECTORY (not a package directory)",
+      detail: input.deployBound && input.netlifyMode === "live"
+        ? `Genesis PATCHed the Netlify site to vreich-ui/platform with base directory "sites/${slug}", package directory EMPTY and build command EMPTY, and confirmed it by re-reading the site. Nothing to do unless the first build fails — in which case check the log's opening line: it must say "Config file /opt/build/repo/sites/${slug}/netlify.toml". The repo-root netlify.toml appearing there means a package directory came back.`
+        : `Netlify site ${input.netlifySiteName} has no verified deploy binding, so it will not build this tenant. In the console: Project configuration → Build & deploy → Build settings. Base directory "sites/${slug}"; package directory EMPTY; build command, publish directory and functions directory all EMPTY — sites/${slug}/netlify.toml supplies those. A PACKAGE directory instead of a BASE directory is the specific misconfiguration that makes Netlify read the repo-root netlify.toml and build another tenant's config (kugel-genesis-lab-2's first build, 2026-09-09).`,
+      source: "site-provisioning-runbook.md §3 / T14.3-checklist 2026-07-27"
+    },
+    {
       id: "github_repo_binding",
-      title: "GitHub repo binding — create/pick the content repo, mint a scoped write token, set the five vars",
+      title: "GitHub CONTENT repo binding — create/pick the content repo, mint a scoped write token, set the five vars",
       detail: "Runbook §3, verbatim: \"create or pick the client's content repo, mint a write token scoped to it (a fleet machine account with per-repo scope is fine — T11.10 decides the final posture), set the four vars on the new Netlify site.\" Creating the repo and minting the token is GitHub account authority — a second system no Netlify token reaches. Set the repo string directly in the Netlify console; never paste it into committed content.",
       envVars: ["GITHUB_REPOSITORY", "GITHUB_BRANCH", "GITHUB_CONTENT_TOKEN", "GITHUB_COMMIT_AUTHOR_EMAIL", "GITHUB_COMMIT_AUTHOR_NAME"],
       source: "site-provisioning-runbook.md §3"
@@ -1237,6 +1452,41 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     // continue past a site whose identity it cannot name.
     throw new SiteGenesisRefusal("netlify_api_failed", "Provisioning returned no Netlify site id; build hook and env defaults cannot be applied to an unnamed site.");
   }
+  // STEP 3c — the deploy binding. Ordered BEFORE the build hook deliberately: a build hook on a site
+  // with no repo attached is a URL that triggers nothing.
+  const deployBase = `sites/${slug}`;
+  const referenceSite = genesisDeployReferenceSite(env);
+  let deployBound = false;
+  {
+    const reference = await netlify.readDeployBinding(referenceSite).catch(() => undefined);
+    if (!reference) {
+      ledger.push({
+        step: "netlify_deploy_binding",
+        kind: "requires_human",
+        detail: `No deploy binding could be read from the reference site "${referenceSite}" (${GENESIS_DEPLOY_REFERENCE_SITE_ENV}), so genesis has no repo or GitHub App installation to copy. Bind ${netlifySiteName} by hand: repo vreich-ui/platform, base directory "${deployBase}", package directory EMPTY, build command EMPTY.`,
+        at: now(),
+        data: { referenceSite, base: deployBase }
+      });
+    } else {
+      // Uncaught, this could abort a genesis that would otherwise have succeeded: a transient 5xx on
+      // the site GET throws out of site.duplicate BEFORE any result is assembled, losing the build
+      // hook, every env var, token custody and the project record — and leaving an orphan Netlify
+      // site behind. The one step that already has a requires_human fallback must degrade to it.
+      const result = await netlify
+        .bindRepository(siteId, { ...reference, base: deployBase })
+        .catch((error: unknown) => {
+          ledger.push({
+            step: "netlify_deploy_binding",
+            kind: "requires_human",
+            detail: `The deploy binding could not be applied to ${netlifySiteName}: ${error instanceof Error ? error.message : String(error)}. Set it in the Netlify console — base directory "${deployBase}", package directory EMPTY, build command EMPTY — or re-run site.duplicate once the API is reachable.`,
+            at: now(),
+            data: { siteId, base: deployBase }
+          });
+          return { bound: false };
+        });
+      deployBound = result.bound;
+    }
+  }
   {
     // Build hook (the runbook by-hand step T12.12 §6 marked API-capable — closed here) + the
     // deterministic tenancy default. In live mode without a site-level accountId (delegated
@@ -1625,6 +1875,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     provisionedFleetEnvVars: [...genesisFleetEnv.provisioned.map((fleetVar) => fleetVar.key), ...inheritedFleetPresent],
     ...(tenantTokenSecretRef ? { tenantTokenSecretRef } : {}),
     ...(input.ownerEmail?.trim() ? { ownerEmail: input.ownerEmail.trim() } : {}),
+    deployBound,
     derivedEnvVars: derivedSiteEnvVars,
     ...(siteId ? { netlifySiteId: siteId } : {}),
     visualIdentity

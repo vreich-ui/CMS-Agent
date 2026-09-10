@@ -217,6 +217,11 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     expect(result.humanChecklist.map((item) => item.id)).toEqual([
       "commit_scaffold",
       "netlify_live_provisioning",
+      // G7 — the DEPLOY binding (which repo Netlify builds, and from which base directory), distinct
+      // from the CONTENT repo binding below it. It sat in neither column until 2026-09-10: no code
+      // set it and no checklist item named it, which is why kugel-genesis-lab-2 was born as a site
+      // waiting for a human and then built dr-lurie's netlify.toml.
+      "deploy_repo_binding",
       "github_repo_binding",
       "enable_netlify_identity",
       "set_admin_emails",

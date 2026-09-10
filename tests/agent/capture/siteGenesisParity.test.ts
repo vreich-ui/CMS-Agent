@@ -188,3 +188,40 @@ describe("G4 — the checklist items that were only human because nobody had der
     expect(grant.detail).toContain("PDF_TOOL_STORAGE_SITE_ID");
   });
 });
+
+describe("G7 — a minted tenant is born with a DEPLOY binding", () => {
+  it("plans the repo attach with base = sites/<slug>, and no package directory", async () => {
+    const { result } = await genesis();
+    const binding = step(result.ledger, "netlify_deploy_binding")!;
+    expect(binding.kind).toBe("dry_run");
+    // `base` is the load-bearing field: it is what makes Netlify read sites/acme/netlify.toml.
+    expect(binding.data?.base).toBe("sites/acme");
+    expect(binding.detail).toContain('package_path ""');
+    expect(binding.detail).toContain('cmd ""');
+  });
+
+  it("orders the binding BEFORE the build hook", async () => {
+    // A build hook on a site with no repo attached is a URL that triggers nothing.
+    const { result } = await genesis();
+    const steps = result.ledger.map((entry) => entry.step);
+    expect(steps.indexOf("netlify_deploy_binding")).toBeLessThan(steps.indexOf("netlify_build_hook"));
+  });
+
+  it("leaves the checklist item OPEN in dry-run, where nothing was written and nothing verified", async () => {
+    // The failure this guards: a default-mode run (dry_run IS the default) telling an operator the
+    // repo is attached and "confirmed by re-reading the site" when no API call was made at all.
+    // Same discipline as G1's token custody, which likewise stays open on the dry-run path.
+    const { result } = await genesis();
+    const item = result.humanChecklist.find((entry) => entry.id === "deploy_repo_binding")!;
+    expect(item.title).toContain("attach vreich-ui/platform");
+    expect(item.detail).toContain("package directory EMPTY");
+    expect(item.detail).not.toContain("Nothing to do");
+  });
+
+  it("keeps the CONTENT repo item separate from the deploy binding", async () => {
+    // These are two different repos for two different purposes, and conflating them is why the
+    // deploy binding had no owner in either column until now.
+    const { result } = await genesis();
+    expect(result.humanChecklist.find((entry) => entry.id === "github_repo_binding")!.title).toContain("CONTENT repo");
+  });
+});
