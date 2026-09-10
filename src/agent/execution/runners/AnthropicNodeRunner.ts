@@ -14,7 +14,7 @@
 // nodes, and tool-less conductor nodes). Bridging CMS-Agent's controlled tools into the Messages API
 // tool loop for tool-using conductor nodes is a tracked follow-up; such a node runs here without tool
 // access, so keep tool-using nodes on the OpenAI runner until that lands.
-import { recordModelUsage } from "../../observability/modelUsage.js";
+import { estimatePricedCost, recordModelUsage, summarizeModelUsage } from "../../observability/modelUsage.js";
 import { renderPlaybookForPrompt } from "../../improvement/playbook.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
@@ -24,7 +24,7 @@ import { resolveNodeInstructions } from "../nodeInstructions.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { boundDependencyOutput, dependencyOutputMaxChars } from "./OpenAINodeRunner.js";
-import { classifyProviderHttpError, operatorActionForProviderHttpError, truncateProviderMessage } from "./providerHttpErrors.js";
+import { classifyProviderHttpError, operatorActionForBudgetExceeded, operatorActionForProviderHttpError, truncateProviderMessage } from "./providerHttpErrors.js";
 import { buildAnthropicImageBlocks, extractImageRefs, resolveImageRefs, stripImageRefs } from "./imageRefs.js";
 
 const DEFAULT_MODEL = "claude-opus-4-8";
@@ -68,6 +68,55 @@ const instructions = (node: WorkspaceNode, playbookText: string, resolvedPrompt:
 
 type AnthropicMessagesResponse = { id?: string; stop_reason?: string; content?: Array<{ type: string; name?: string; input?: unknown }>; usage?: { input_tokens?: number; output_tokens?: number } };
 
+// A run can execute a small independent batch concurrently. The usage ledger only receives an
+// actual charge *after* a provider response, so two sibling attempts that both see the same
+// remainder must reserve it before either sends a request. Serializing the read-reserve sequence
+// also closes the smaller race where a sibling writes its actual usage after another attempt read a
+// stale summary. The repository ledger remains the cross-process source of truth; this map only
+// protects the in-flight interval no ledger can represent yet.
+const inFlightRunReservations = new Map<string, Map<symbol, number>>();
+const runReservationTails = new Map<string, Promise<void>>();
+const reserveRunBudget = async (input: {
+  runId: string;
+  budgetUsd: number;
+  priorSpendUsd: number;
+  accruedThisDispatchUsd: number;
+  thisAttemptUsd: number;
+}): Promise<{ accepted: false; spentUsd: number } | { accepted: true; release: () => void; spentUsd: number }> => {
+  const previous = runReservationTails.get(input.runId) ?? Promise.resolve();
+  let releaseTurn!: () => void;
+  const turn = new Promise<void>((resolve) => { releaseTurn = resolve; });
+  const tail = previous.then(() => turn);
+  runReservationTails.set(input.runId, tail);
+  await previous;
+  try {
+    // The executor's supplied spend remains a conservative floor; re-reading here is necessary to
+    // make concurrent local attempts see a sibling that completed after that earlier summary.
+    const liveSpendUsd = (await summarizeModelUsage({ runId: input.runId })).actualCostUsdEstimate;
+    const priorSpendUsd = Math.max(input.priorSpendUsd, liveSpendUsd);
+    const reservations = inFlightRunReservations.get(input.runId) ?? new Map<symbol, number>();
+    const reservedUsd = [...reservations.values()].reduce((total, value) => total + value, 0);
+    const spentUsd = priorSpendUsd + input.accruedThisDispatchUsd;
+    if (spentUsd + reservedUsd + input.thisAttemptUsd > input.budgetUsd) return { accepted: false, spentUsd };
+    const token = Symbol(input.runId);
+    reservations.set(token, input.thisAttemptUsd);
+    inFlightRunReservations.set(input.runId, reservations);
+    return {
+      accepted: true,
+      spentUsd,
+      release: () => {
+        reservations.delete(token);
+        if (reservations.size === 0) inFlightRunReservations.delete(input.runId);
+      }
+    };
+  } finally {
+    releaseTurn();
+    void tail.then(() => {
+      if (runReservationTails.get(input.runId) === tail) runReservationTails.delete(input.runId);
+    });
+  }
+};
+
 export class AnthropicNodeRunner implements NodeRunner {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
@@ -78,6 +127,7 @@ export class AnthropicNodeRunner implements NodeRunner {
   validateConfiguration(node: WorkspaceNode) {
     const errors: string[] = [];
     if (!node.outputSchema) errors.push("outputSchema is required.");
+    if (numberFrom(cfg(node).budgetUsd) !== undefined && numberFrom(cfg(node).budgetUsd)! < 0) errors.push("budgetUsd must be non-negative.");
     // K-A12. This fires as a per-NODE validation error, which is what makes it misleading: the
     // node is fine and the plane is not. `anthropic-api-key` exists in Secret Manager and is bound
     // to neither the cms-agent-mcp service nor any executor job, so the first node switched to this
@@ -121,12 +171,27 @@ export class AnthropicNodeRunner implements NodeRunner {
     // stays the plain string `userContent`, so the request body is byte-identical to today's.
     const rawImageRefs = extractImageRefs(input);
     const { resolved: resolvedImageRefs, warnings: imageRefWarnings } = await resolveImageRefs(rawImageRefs, { fetchImpl: this.fetchImpl });
+    // Dependencies arrive in one bounded envelope only. Keeping them inside input as well as in
+    // dependencyOutputs makes every retry pay for the same evidence twice and defeats the bound.
+    const strippedInput = stripImageRefs(input);
+    const inputRecord = strippedInput && typeof strippedInput === "object" && !Array.isArray(strippedInput)
+      ? strippedInput as Record<string, unknown>
+      : undefined;
+    const deliveredDependencies = inputRecord?.dependencies && typeof inputRecord.dependencies === "object"
+      ? inputRecord.dependencies as Record<string, unknown>
+      : undefined;
+    const { dependencies: _deliveredDependencies, ...inputSansDependencies } = inputRecord ?? {};
+    const dependencyMaxChars = dependencyOutputMaxChars();
+    const dependencyOutputs = Object.fromEntries(node.dependsOn.map((dependency) => [
+      dependency,
+      boundDependencyOutput(deliveredDependencies?.[dependency] ?? context.run.stageOutputs[dependency] ?? context.suppliedDependencies?.[dependency], dependencyMaxChars)
+    ]));
     const userContent = JSON.stringify(redact({
-      input: stripImageRefs(input),
+      input: inputRecord ? inputSansDependencies : strippedInput,
       // T12.22 fleet parity: the OpenAI runner bounds these; an unbounded confluence payload hangs
       // the same way on either provider, so the same bound applies here rather than waiting for
       // the second incident to prove it.
-      dependencyOutputs: Object.fromEntries(node.dependsOn.map((dependency) => [dependency, boundDependencyOutput(context.run.stageOutputs[dependency] ?? context.suppliedDependencies?.[dependency], dependencyOutputMaxChars())])),
+      dependencyOutputs,
       ...(playbookText ? { playbook: playbookText } : {}),
       outputSchema: node.outputSchema
     }));
@@ -147,6 +212,25 @@ export class AnthropicNodeRunner implements NodeRunner {
     // for parity in case a node's provider is switched to anthropic.
     const timeoutMs = numberFrom(c.timeout) ?? 120000;
     const maxRetries = Math.max(0, Math.floor(numberFrom(c.retryCount) ?? 0));
+    const nodeBudgetOverride = numberFrom(context.run.nodeBudgetOverrides?.[node.id]);
+    const nodeBudgetUsd = nodeBudgetOverride !== undefined ? nodeBudgetOverride : numberFrom(c.budgetUsd);
+    const runBudgetUsd = numberFrom(context.run.budgetUsd);
+    const budgetGuardEngaged = nodeBudgetUsd !== undefined || runBudgetUsd !== undefined;
+    // Use the executor's just-computed value where available, exactly as the OpenAI runner does;
+    // direct node execution falls back to the durable actual-usage ledger.
+    const priorRunSpendUsd = budgetGuardEngaged
+      ? (numberFrom(context.priorRunSpendUsd) ?? (await summarizeModelUsage({ runId: context.run.runId })).actualCostUsdEstimate)
+      : 0;
+    const cumulativeUsage = { inputTokens: 0, outputTokens: 0 };
+    const recordAccruedUsage = async (failureCode: string, attempt: number, extraMetadata?: Record<string, unknown>): Promise<void> => {
+      if (cumulativeUsage.inputTokens === 0 && cumulativeUsage.outputTokens === 0) return;
+      await recordModelUsage({
+        runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId,
+        nodeId: node.id, model, provider: "anthropic", inputTokens: cumulativeUsage.inputTokens, outputTokens: cumulativeUsage.outputTokens,
+        totalTokens: cumulativeUsage.inputTokens + cumulativeUsage.outputTokens, status: "actual",
+        metadata: { executionMode: "anthropic", partial: true, failureCode, attempt: attempt + 1, attemptsTotal: attempt + 1, ...extraMetadata }
+      }).catch(() => undefined);
+    };
     // W12 — tracked outside the loop for the same reason as OpenAINodeRunner: the truncation retry is
     // ONE bonus attempt at double the cap, granted independently of maxRetries/retryCount, and
     // `initialMaxOutputTokens` preserves the node's ORIGINAL configured cap for the failure message
@@ -159,6 +243,55 @@ export class AnthropicNodeRunner implements NodeRunner {
     // proof — this loop has the same shape: every branch either returns or bounds its own continue by
     // maxRetries, except the new truncation branch, which bounds itself by truncationRetryUsed).
     for (let attempt = 0; attempt <= maxRetries + 1; attempt++) {
+      // The guard prices the exact serialized Messages request that will be sent on THIS attempt,
+      // including a doubled max_tokens cap after a truncation retry. Actual charges from earlier
+      // attempts stay in cumulativeUsage, so a retry cannot spend the same remainder twice.
+      let releaseReservation: (() => void) | undefined;
+      if (budgetGuardEngaged) {
+        const accrued = estimatePricedCost({ model, inputTokens: cumulativeUsage.inputTokens, outputTokens: cumulativeUsage.outputTokens });
+        const prospective = estimatePricedCost({ model, inputTokens: Math.ceil(JSON.stringify(body).length / 4), outputTokens: body.max_tokens });
+        if (accrued.pricingUnknown || prospective.pricingUnknown) {
+          await recordAccruedUsage("budget_exceeded", attempt, { pricingUnknown: true });
+          return {
+            ok: false,
+            code: "budget_exceeded",
+            message: `Node "${node.id}" stopped before a model turn because "${model}" has no listed pricing and its budget cannot be enforced against a real rate.`,
+            details: { nodeId: node.id, pricingUnknown: true, ceiling: nodeBudgetUsd !== undefined ? "node" : "run" },
+            operatorAction: "Add the model to the pricing catalog or select a listed model before retrying."
+          };
+        }
+        if (nodeBudgetUsd !== undefined && accrued.costUsd + prospective.costUsd > nodeBudgetUsd) {
+          await recordAccruedUsage("budget_exceeded", attempt);
+          return {
+            ok: false,
+            code: "budget_exceeded",
+            message: `Node "${node.id}" stopped before the model turn that would cross its node budget.`,
+            details: { nodeId: node.id, ceiling: "node", budgetUsd: nodeBudgetUsd, spentUsdEstimate: accrued.costUsd, prospectiveTurnUsd: prospective.costUsd },
+            operatorAction: operatorActionForBudgetExceeded(nodeBudgetUsd, accrued.costUsd)
+          };
+        }
+        if (runBudgetUsd !== undefined) {
+          const reservation = await reserveRunBudget({
+            runId: context.run.runId,
+            budgetUsd: runBudgetUsd,
+            priorSpendUsd: priorRunSpendUsd,
+            accruedThisDispatchUsd: accrued.costUsd,
+            thisAttemptUsd: prospective.costUsd
+          });
+          if (!reservation.accepted) {
+            const spentUsd = reservation.spentUsd;
+            await recordAccruedUsage("budget_exceeded", attempt);
+            return {
+              ok: false,
+              code: "budget_exceeded",
+              message: `Node "${node.id}" stopped before the model turn that would cross the shared run budget.`,
+              details: { nodeId: node.id, ceiling: "run", budgetUsd: runBudgetUsd, spentUsdEstimate: spentUsd, prospectiveTurnUsd: prospective.costUsd },
+              operatorAction: operatorActionForBudgetExceeded(runBudgetUsd, spentUsd)
+            };
+          }
+          releaseReservation = reservation.release;
+        }
+      }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -192,7 +325,12 @@ export class AnthropicNodeRunner implements NodeRunner {
           return { ok: false, code: "model_error", message: `anthropic_http_${response.status}: ${detail.slice(0, 300)}`, retryable: response.status >= 500 || response.status === 429 };
         }
         const data = await response.json() as AnthropicMessagesResponse;
-        if (data.stop_reason === "refusal") return { ok: false, code: "model_error", message: "anthropic_refusal: the request was declined by the model's safety classifiers." };
+        cumulativeUsage.inputTokens += data.usage?.input_tokens ?? 0;
+        cumulativeUsage.outputTokens += data.usage?.output_tokens ?? 0;
+        if (data.stop_reason === "refusal") {
+          await recordAccruedUsage("model_error", attempt);
+          return { ok: false, code: "model_error", message: "anthropic_refusal: the request was declined by the model's safety classifiers." };
+        }
 
         // W12 truncation classification. PRIMARY signal: the Messages API's own stop_reason — "the
         // request must be prefilled with a maximally verbose completion" is never why stop_reason is
@@ -224,11 +362,7 @@ export class AnthropicNodeRunner implements NodeRunner {
             ? `This dispatch already retried once at double the cap (${capUsedThisAttempt} tokens) and was still truncated. Raise modelConfig.maxOutputTokens above ${capUsedThisAttempt} for this node and retry via workflow_retry_node.`
             : `Raise modelConfig.maxOutputTokens above ${capUsedThisAttempt} for this node — it is already at or above this runner's ${ceiling}-token retry ceiling, so no automatic retry was attempted — and retry via workflow_retry_node.`;
           const details = { nodeId: node.id, attempt: attempt + 1, initialMaxOutputTokens, cap: capUsedThisAttempt, outputTokens: observedOutputTokens, retriedAtDoubledCap: truncationRetryUsed, providerSignal: providerTruncated };
-          const inputTokensSoFar = data.usage?.input_tokens ?? 0;
-          const outputTokensSoFar = data.usage?.output_tokens ?? 0;
-          if (inputTokensSoFar > 0 || outputTokensSoFar > 0) {
-            await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "anthropic", inputTokens: inputTokensSoFar, outputTokens: outputTokensSoFar, totalTokens: inputTokensSoFar + outputTokensSoFar, status: "actual", metadata: { executionMode: "anthropic", partial: true, failureCode: "truncated", attempt: attempt + 1, cap: capUsedThisAttempt, initialMaxOutputTokens, retriedAtDoubledCap: truncationRetryUsed, providerSignal: providerTruncated } }).catch(() => undefined);
-          }
+          await recordAccruedUsage("truncated", attempt, { cap: capUsedThisAttempt, initialMaxOutputTokens, retriedAtDoubledCap: truncationRetryUsed, providerSignal: providerTruncated });
           return {
             ok: false,
             code: "truncated",
@@ -239,17 +373,17 @@ export class AnthropicNodeRunner implements NodeRunner {
 
         if (!toolUse) {
           if (attempt < maxRetries) continue;
+          await recordAccruedUsage("output_validation_failed", attempt);
           return { ok: false, code: "output_validation_failed", message: "Anthropic response contained no emit_output tool call." };
         }
         const validated = validateOutput(toolUse.input, node.outputSchema);
         if (!validated.ok) {
           if (attempt < maxRetries) continue;
+          await recordAccruedUsage("output_validation_failed", attempt);
           return { ok: false, code: "output_validation_failed", message: "Anthropic output did not match node.outputSchema.", details: validated.errors };
         }
-        const inputTokens = data.usage?.input_tokens ?? 0;
-        const outputTokens = data.usage?.output_tokens ?? 0;
-        const usageFields = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
-        await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "anthropic", ...usageFields, status: "actual", metadata: { executionMode: "anthropic" } }).catch(() => undefined);
+        const usageFields = { inputTokens: cumulativeUsage.inputTokens, outputTokens: cumulativeUsage.outputTokens, totalTokens: cumulativeUsage.inputTokens + cumulativeUsage.outputTokens };
+        await recordModelUsage({ runId: context.run.runId, requestId: context.run.requestId, workflowId: context.run.workflowId, projectId: context.run.projectId, nodeId: node.id, model, provider: "anthropic", ...usageFields, status: "actual", metadata: { executionMode: "anthropic", attempt: attempt + 1, attemptsTotal: attempt + 1 } }).catch(() => undefined);
         // outputValidated: true — see NodeRunner.ts and executor.ts's executeRunnableNode: this runner
         // already validated `output` against `node.outputSchema` immediately above (to decide whether
         // to retry), so the executor's own generic output-schema gate can skip re-running the identical
@@ -268,11 +402,12 @@ export class AnthropicNodeRunner implements NodeRunner {
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (context.signal?.aborted) return { ok: false, code: "cancelled", message: "Anthropic node execution was cancelled." };
-        if (/abort/i.test(message)) return { ok: false, code: "model_timeout", message: "Anthropic node execution timed out." };
-        if (attempt >= maxRetries) return { ok: false, code: "model_error", message };
+        if (context.signal?.aborted) { await recordAccruedUsage("cancelled", attempt); return { ok: false, code: "cancelled", message: "Anthropic node execution was cancelled." }; }
+        if (/abort/i.test(message)) { await recordAccruedUsage("model_timeout", attempt); return { ok: false, code: "model_timeout", message: "Anthropic node execution timed out." }; }
+        if (attempt >= maxRetries) { await recordAccruedUsage("model_error", attempt); return { ok: false, code: "model_error", message }; }
       } finally {
         clearTimeout(timer);
+        releaseReservation?.();
       }
     }
     return { ok: false, code: "model_error", message: "Anthropic node execution failed." };
