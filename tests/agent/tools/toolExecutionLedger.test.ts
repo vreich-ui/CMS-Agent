@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushToolExecutionLedger, recordToolExecution } from "../../../src/agent/tools/toolExecutionLedger.js";
 import { BlobToolExecutionRepository } from "../../../src/agent/repository/blobs/BlobToolExecutionRepository.js";
+import { MemoryToolExecutionRepository } from "../../../src/agent/repository/memory/MemoryToolExecutionRepository.js";
 import { getRepositoryManager, repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 import type { ToolExecutionRecord } from "../../../src/agent/tools/toolTypes.js";
 
@@ -85,6 +86,7 @@ describe("read-your-writes", () => {
 });
 
 describe("the blob backend's cost properties", () => {
+  const PROJECT_INDEX_META_KEY = "tool_executions/project-index/!meta.v1.json";
   const store = () => {
     const blobs = new Map<string, unknown>();
     const reads: string[] = [];
@@ -113,11 +115,12 @@ describe("the blob backend's cost properties", () => {
     await new BlobToolExecutionRepository(double.client as never).record(record({ toolExecutionId: "tool_exec_par_1" }));
     expect([...double.blobs.keys()].sort()).toEqual([
       "tool_executions/by-node/publish_executor/tool_exec_par_1.json",
-      "tool_executions/by-run/run_ledger/tool_exec_par_1.json"
+      "tool_executions/by-run/run_ledger/tool_exec_par_1.json",
+      "tool_executions/project-index/dr-lurie.json"
     ]);
-    // Sequential awaits would peak at 1. This is the whole latency fix, so it is asserted rather
-    // than assumed from reading the code.
-    expect(double.peak()).toBe(2);
+    // Sequential direct-index writes would peak at 1. The project-index CAS write may overlap too,
+    // but must never serialize the two immutable writes.
+    expect(double.peak()).toBeGreaterThanOrEqual(2);
   });
 
   // THE REGRESSION THIS EXISTS FOR. `project.get.usedBy` filters by projectId only, and projectId has
@@ -126,6 +129,9 @@ describe("the blob backend's cost properties", () => {
   // written to avoid, reintroduced by the one axis without an index.
   it("a limited read downloads only what it will return", async () => {
     const double = store();
+    // This is a steady-state ledger. A pre-index ledger first self-heals from a complete scan;
+    // that deliberate backfill is tested separately below and is not a limit-shaped read.
+    double.blobs.set(PROJECT_INDEX_META_KEY, { schemaVersion: "tool_execution_project_index.v1", backfilledAt: "2026-09-10T00:00:00.000Z" });
     const repository = new BlobToolExecutionRepository(double.client as never);
     for (let index = 0; index < 60; index += 1) {
       await repository.record(record({ toolExecutionId: `tool_exec_17888000000${String(index).padStart(2, "0")}_x`, runId: `run_${index}` }));
@@ -134,13 +140,13 @@ describe("the blob backend's cost properties", () => {
 
     const found = await repository.list({ projectId: "dr-lurie", limit: 5 });
     expect(found).toHaveLength(5);
-    // One wave of 25, not 60 — bounded by the limit rather than by the size of the store.
-    expect(double.reads.length).toBeLessThan(60);
-    expect(double.reads.length).toBeLessThanOrEqual(25);
+    // Meta + one project index + the five selected records: never the other 55 call blobs.
+    expect(double.reads.length).toBeLessThan(10);
   });
 
   it("a limited read returns the NEWEST records, oldest-first, matching the memory backend", async () => {
     const double = store();
+    double.blobs.set(PROJECT_INDEX_META_KEY, { schemaVersion: "tool_execution_project_index.v1", backfilledAt: "2026-09-10T00:00:00.000Z" });
     const repository = new BlobToolExecutionRepository(double.client as never);
     // Ids carry Date.now(), so key order is time order — which is what lets the bound be applied
     // from the listing alone, without reading a blob to find out how old it is.
@@ -153,5 +159,60 @@ describe("the blob backend's cost properties", () => {
     }
     const found = await repository.list({ projectId: "dr-lurie", limit: 2 });
     expect(found.map((entry) => entry.toolExecutionId)).toEqual(["tool_exec_1788800000002_x", "tool_exec_1788800000003_x"]);
+  });
+
+  it("uses the call timestamp and id tie-breaker, not run/id key order, for resumed runs and every limit", async () => {
+    const double = store();
+    double.blobs.set(PROJECT_INDEX_META_KEY, { schemaVersion: "tool_execution_project_index.v1", backfilledAt: "2026-09-10T00:00:00.000Z" });
+    const blob = new BlobToolExecutionRepository(double.client as never);
+    const memory = new MemoryToolExecutionRepository();
+    const entries = [
+      record({ toolExecutionId: "tool_exec_a", runId: "run_newer_id", startedAt: "2026-09-10T10:00:00.000Z" }),
+      record({ toolExecutionId: "tool_exec_z", runId: "run_resumed_old", startedAt: "2026-09-10T12:00:00.000Z" }),
+      record({ toolExecutionId: "tool_exec_b", runId: "run_tie", startedAt: "2026-09-10T12:00:00.000Z" })
+    ];
+    for (const entry of entries) {
+      await blob.record(entry);
+      await memory.record(entry);
+    }
+    for (const limit of [0, 1, 2, 3]) {
+      const expected = (await memory.list({ projectId: "dr-lurie", limit })).map((entry) => entry.toolExecutionId);
+      expect((await blob.list({ projectId: "dr-lurie", limit })).map((entry) => entry.toolExecutionId)).toEqual(expected);
+      // The node direct index has the same order and limit contract as the project index.
+      expect((await blob.list({ nodeId: "publish_executor", limit })).map((entry) => entry.toolExecutionId))
+        .toEqual((await memory.list({ nodeId: "publish_executor", limit })).map((entry) => entry.toolExecutionId));
+    }
+    // The tie resolves by execution id, so tool_exec_z is the single newest call.
+    expect((await blob.list({ projectId: "dr-lurie", limit: 1 })).map((entry) => entry.toolExecutionId)).toEqual(["tool_exec_z"]);
+  });
+
+  it("backfills every pre-index project once, then a sparse tenant read is project-bounded", async () => {
+    const double = store();
+    for (let index = 0; index < 101; index += 1) {
+      // Pre-index data: direct run/node copies only, as persisted by the prior ledger version.
+      double.blobs.set(`tool_executions/by-run/run_${index}/legacy_${index}.json`, record({ toolExecutionId: `legacy_${index}`, runId: `run_${index}`, projectId: index === 100 ? "sparse" : "other", startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString() }));
+    }
+    const first = new BlobToolExecutionRepository(double.client as never);
+    expect((await first.list({ projectId: "sparse", limit: 1 })).map((entry) => entry.toolExecutionId)).toEqual(["legacy_100"]);
+    expect(double.blobs.has(PROJECT_INDEX_META_KEY)).toBe(true);
+
+    double.reads.length = 0;
+    const steady = new BlobToolExecutionRepository(double.client as never);
+    expect((await steady.list({ projectId: "sparse", limit: 1 })).map((entry) => entry.toolExecutionId)).toEqual(["legacy_100"]);
+    // Meta + sparse project's index + the one selected record — not 101 ledger downloads.
+    expect(double.reads.length).toBeLessThanOrEqual(3);
+
+    double.reads.length = 0;
+    expect(await steady.list({ projectId: "absent", limit: 1 })).toEqual([]);
+    // An absent project is two small key reads, not a sparse-tenant fleet scan.
+    expect(double.reads.length).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps no-run tenant calls queryable through the project index", async () => {
+    const double = store();
+    double.blobs.set(PROJECT_INDEX_META_KEY, { schemaVersion: "tool_execution_project_index.v1", backfilledAt: "2026-09-10T00:00:00.000Z" });
+    const repository = new BlobToolExecutionRepository(double.client as never);
+    await repository.record(record({ toolExecutionId: "tool_exec_no_run", runId: "(no-run)", nodeId: "(no-node)", projectId: "dr-lurie" }));
+    expect((await repository.list({ projectId: "dr-lurie" })).map((entry) => entry.runId)).toEqual(["(no-run)"]);
   });
 });

@@ -15,12 +15,12 @@ import type { ToolExecutionFilters, ToolExecutionRecord } from "../../tools/tool
 // every object under it. `tool.list_executions` filters by run and by node, so BOTH are prefixes here
 // and neither is a post-read filter. The record is small and immutable — written exactly once, never
 // updated — so the by-node copy is the record itself rather than a pointer that would need a join:
-// two small writes at call time buy an O(matching) read on either axis.
+// concurrent immutable writes buy an O(matching) read on either direct axis.
 //
-// The unindexed case is named rather than hidden: a list with NEITHER runId nor nodeId (a bare toolId
-// filter, or no filter at all) does walk the whole by-run prefix. That is the same shape
-// tool.list_executions' existing run-record fallback already has (it lists every run), it is an
-// operator query and not a hot path, and it is bounded by `limit`.
+// Project is the third useful read axis. Its compact index self-heals on the first project-scoped
+// read so pre-index records remain discoverable; later reads choose by call timestamp/id before
+// fetching only the selected full records. A result `limit` never claims to bound the one-time
+// legacy backfill, nor an unindexed cross-project scan.
 export interface ToolExecutionRepository {
   record(record: ToolExecutionRecord): Promise<ToolExecutionRecord>;
   // `runId` is a HINT, not a filter: with it the lookup is one key read; without it the caller is

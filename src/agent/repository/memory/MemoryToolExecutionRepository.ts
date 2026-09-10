@@ -16,6 +16,9 @@ const matches = (record: ToolExecutionRecord, filters: ToolExecutionFilters): bo
   return true;
 };
 
+const chronological = (left: ToolExecutionRecord, right: ToolExecutionRecord): number =>
+  left.startedAt.localeCompare(right.startedAt) || left.toolExecutionId.localeCompare(right.toolExecutionId);
+
 export class MemoryToolExecutionRepository implements ToolExecutionRepository {
   private readonly records = new Map<string, ToolExecutionRecord>();
 
@@ -31,19 +34,18 @@ export class MemoryToolExecutionRepository implements ToolExecutionRepository {
   }
 
   async list(filters: ToolExecutionFilters = {}): Promise<ToolExecutionRecord[]> {
-    // `limit` means the NEWEST n, then returned oldest-first — identical to the blob backend, which
-    // applies the same bound while walking keys newest-first. Two backends that disagree about what
-    // `limit` selects is a defect that only ever shows up in production.
+    // `limit` means the newest n by the call clock (then deterministic id tie-break), returned in
+    // chronological order. A run id and a generated execution id are identities, never clocks.
     const found = [...this.records.values()]
       .filter((record) => matches(record, filters))
-      .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-    return filters.limit ? found.slice(-filters.limit) : found;
+      .sort(chronological);
+    return filters.limit === undefined ? found : filters.limit === 0 ? [] : found.slice(-filters.limit);
   }
 
   clear(): void { this.records.clear(); }
 
   // Same shape every other memory repository reports; the blob sibling carries the
-  // tool_executions.v1 store version because that is where a store version means something.
+  // tool_executions.v2 store version because that is where a store version means something.
   async health(): Promise<RepositoryHealth> {
     return healthyRepositoryStatus(this.backend);
   }

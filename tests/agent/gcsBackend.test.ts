@@ -5,6 +5,7 @@ import { registerCmsAgentStoreFactory, type BlobStoreClient } from "../../src/ag
 import { BlobExecutionRepository } from "../../src/agent/repository/blobs/BlobExecutionRepository.js";
 import { BlobWorkspaceRepository } from "../../src/agent/repository/blobs/BlobWorkspaceRepository.js";
 import { BlobNodeTimingRepository } from "../../src/agent/repository/blobs/BlobNodeTimingRepository.js";
+import { BlobToolExecutionRepository } from "../../src/agent/repository/blobs/BlobToolExecutionRepository.js";
 import { BlobConversationTurnRepository } from "../../src/agent/repository/blobs/BlobConversationTurnRepository.js";
 import { MAX_CONVERSATION_TURNS, type ConversationTurnRecord } from "../../src/agent/conversations/conversationTurnTypes.js";
 import { RepositoryManager } from "../../src/agent/repository/RepositoryManager.js";
@@ -12,6 +13,7 @@ import { RunConcurrencyError } from "../../src/agent/repository/interfaces/Execu
 import { migrateStore, verifyStore } from "../../src/agent/entrypoints/migrateStoreJob.js";
 import type { WorkflowExecutionRecord } from "../../src/agent/workspace/executionTypes.js";
 import type { NodeTimingRecord } from "../../src/agent/workspace/nodeTimings.js";
+import type { ToolExecutionRecord } from "../../src/agent/tools/toolTypes.js";
 
 // In-memory stand-in for a GCS bucket implementing exactly the surface GcsStoreClient touches:
 // per-object monotonic generations and ifGenerationMatch preconditions (412), 404s for missing
@@ -76,6 +78,11 @@ const nodeTiming = (timingId: string, runId: string): NodeTimingRecord => ({
   outcome: "completed", recordedAt: "2026-09-10T00:00:00.000Z", projectId: "dr-lurie", executionMode: "openai", routeEra: "model"
 });
 
+const toolExecution = (toolExecutionId: string, startedAt: string): ToolExecutionRecord => ({
+  toolExecutionId, runId: "(no-run)", nodeId: "(no-node)", toolId: "object_get", projectId: "sparse-tenant",
+  startedAt, status: "success", inputSummary: {}, riskLevel: "read", approvalStatus: "not_required", caller: "engine"
+});
+
 const savedEnv = { ...process.env };
 afterEach(() => {
   process.env = { ...savedEnv };
@@ -135,6 +142,23 @@ describe("lost-update race closed on GCS (Phase 2 acceptance)", () => {
     expect((await repository.list({ runId: "run_legacy" })).map((record) => record.timingId)).toEqual(["legacy_timing"]);
     expect(bucket.objects.has("node_timings/by-run/run_legacy/legacy_timing.json")).toBe(true);
     expect(bucket.objects.has("node_timings/by-run/!meta.v1.json")).toBe(true);
+  });
+
+  it("keeps concurrent project-ledger index writers through GCS generation CAS", async () => {
+    const bucket = makeFakeBucket();
+    const store = clientFor(bucket);
+    // A deployed v2 ledger has already completed its one-time legacy backfill. Start two repository
+    // instances simultaneously so both must contend on the same project-index document.
+    await store.setJSON("tool_executions/project-index/!meta.v1.json", { schemaVersion: "tool_execution_project_index.v1", backfilledAt: "2026-09-10T00:00:00.000Z" });
+    const left = new BlobToolExecutionRepository(store);
+    const right = new BlobToolExecutionRepository(store);
+    await Promise.all([
+      left.record(toolExecution("tool_exec_left", "2026-09-10T10:00:00.000Z")),
+      right.record(toolExecution("tool_exec_right", "2026-09-10T10:00:01.000Z"))
+    ]);
+
+    expect((await new BlobToolExecutionRepository(store).list({ projectId: "sparse-tenant" })).map((record) => record.toolExecutionId))
+      .toEqual(["tool_exec_left", "tool_exec_right"]);
   });
 
   it("persists the bounded conversation mirror through the GCS-shaped store", async () => {
