@@ -7,10 +7,9 @@
 //
 //   - `changes_list` always returns [] and `changes_compare` always returns
 //     an empty diff in mock mode; `changes_restore` doesn't touch mockStore.
-//   - `workspace_update_node_input_schema/output_schema` don't persist —
-//     `node_get_input_schema/output_schema` always return the same stub.
-//   - `workspace_validate_node` always returns {valid:true, errors:[]}
-//     regardless of input.
+//   - Fixture mutation handlers model the same readback and optimistic-
+//     concurrency envelope as the CMS-Agent MCP boundary, including explicit
+//     fault paths used by the focused Workbench tests.
 //
 // Rather than editing src/api/** (out of scope for this WP), every owned tab
 // records its own edits into a local, in-memory change log + draft/overlay
@@ -215,14 +214,14 @@ export function setSchemaOverlay(nodeId: string, kind: SchemaKind, schema: JSONS
 }
 
 // ============================================================================
-// Canonical-prompt snapshot — WP-31's "diff vs canonical." node_get_effective_
+// Session-baseline prompt snapshot — WP-31's "diff vs baseline." node_get_effective_
 // prompt's `diverged` flag always reads false in fixture mode (the mock
 // handler just echoes the live node's own prompt back at itself — there's no
 // separately-stored seed text to diverge from). The first prompt value this
 // session ever saw for a node IS that seed text, so it's cached here, once,
 // and used as the diff baseline regardless of how many times the node is
-// since edited — an honest stand-in for the canonical text a live backend
-// would carry.
+// since edited. It is explicitly a session baseline, not a claimed saved
+// revision or canonical prompt.
 // ============================================================================
 
 const CANONICAL_PROMPT = new Map<string, string>();
@@ -391,6 +390,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /** A real (if partial) JSON-Schema shape check — not full spec coverage, enough to refuse the common broken-schema mistakes with a path-specific reason. */
 export function validateSchemaShape(value: unknown, path = '$'): SchemaIssue[] {
   const issues: SchemaIssue[] = [];
+  // JSON Schema permits the boolean forms `true` and `false` as complete
+  // schemas; the MCP writer advertises that same object-or-boolean contract.
+  if (typeof value === 'boolean') return issues;
   if (!isPlainObject(value)) {
     issues.push({ path, message: 'must be a JSON object (e.g. { "type": "object", "properties": {…} }).' });
     return issues;

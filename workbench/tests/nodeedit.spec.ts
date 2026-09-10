@@ -69,7 +69,12 @@ test.describe('WP-31 prompt editing', () => {
     const appended = ' Tightened schema-adherence clause: name any field you cannot fill rather than omitting it.';
     const edited = `${original}${appended}`;
     await editor.click();
-    await page.keyboard.press('Control+End');
+    // Chromium's document-end shortcut is Ctrl+End in Linux CI and Cmd+↓ on
+    // macOS. Use the platform-native form so this remains a real-keypress
+    // append test rather than changing the contenteditable with .fill().
+    // Keep the real-keypress append path rather than .fill(), which changes
+    // a multi-line contenteditable's DOM structure.
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
     await page.keyboard.type(appended);
     await expect(page.locator('.center .pin', { hasText: 'unsaved draft' })).toBeVisible();
     await expect(saveBtn).toBeEnabled();
@@ -82,8 +87,8 @@ test.describe('WP-31 prompt editing', () => {
     await expect(page.locator('.center .pin', { hasText: 'unsaved draft' })).toHaveCount(0);
     await expect(editor).toHaveText(edited);
 
-    // --- Diff vs canonical: canonical (pre-edit) vs the now-saved text ---
-    await page.locator('.editnote button', { hasText: 'Diff vs canonical' }).click();
+    // --- Diff vs session baseline: first observation vs the now-saved text ---
+    await page.locator('.editnote button', { hasText: 'Diff vs session baseline' }).click();
     await expect(page.locator('.diffline.add, .diffline.del').first()).toBeVisible();
 
     // --- Effective-prompt preview visibly distinguishes injected content ---
@@ -97,7 +102,7 @@ test.describe('WP-31 prompt editing', () => {
 
     // --- History: the save is recorded, with a working diff ---
     // Was: asserted `.diffline.add`, the OLD Shared.tsx DiffLines engine's
-    // class (still correct above, for PromptTab's own "Diff vs canonical"
+    // class (still correct above, for PromptTab's own session-baseline diff
     // disclosure — that one intentionally wasn't touched). HistoryTab.tsx's
     // own doc comment says a locally-recorded row's inline diff now uses
     // "the SAME diff engine" as the diff & merge studio — ProseDiffView
@@ -182,7 +187,7 @@ test.describe('WP-33 schema validation', () => {
     await page.locator('.modal button', { hasText: 'Confirm' }).click();
     await expect(page.locator('#toasts')).toContainText('workspace_update_node_output_schema');
     await expect(outputCard.locator('.valnote')).toBeVisible();
-    await expect(outputCard).toContainText('edited this session');
+    await expect(outputCard).toContainText('live');
   });
 });
 

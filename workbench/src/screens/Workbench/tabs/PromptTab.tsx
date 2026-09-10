@@ -46,7 +46,7 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
     node.prompt ||
     `You are the ${node.name} in the ${wfName.toLowerCase()}.\n\n${node.desc}\n\nRead upstream stage outputs, honor the client contract, produce output matching the declared schema…`;
 
-  const canonical = canonicalPromptFor(nodeId, storedPrompt);
+  const sessionBaseline = canonicalPromptFor(nodeId, storedPrompt);
 
   // A real contenteditable, not a controlled React input: the DOM owns its
   // own text nodes (never re-rendered from `text`) so typing never fights
@@ -122,7 +122,7 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
     }
   }
 
-  const diffOps = diffLines(canonical, storedPrompt);
+  const diffOps = diffLines(sessionBaseline, storedPrompt);
   const skillIds = node.skills;
 
   return (
@@ -165,10 +165,10 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
             Discard draft
           </Btn>
         )}
-        <Disclosure openLabel="Diff vs canonical" closeLabel="Hide diff">
+        <Disclosure openLabel="Diff vs session baseline" closeLabel="Hide diff">
           <p className="note" style={{ marginTop: 0 }}>
-            canonical = the prompt first observed this session for {nodeId}; changes_compare called for the record
-            (returns no line diff in fixture mode — the lines below are computed locally against that baseline).
+            session baseline = the prompt first observed this session for {nodeId}; no saved revision is selected.
+            The lines below compare the saved prompt with that session baseline.
           </p>
           <DiffLines ops={diffOps} />
         </Disclosure>
