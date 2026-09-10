@@ -21,8 +21,8 @@
 //
 // The three conductors share a publish tail (publish_payload,
 // publication_controller, publish_executor, release_executor,
-// learning_recorder), which is why the per-workflow counts (24 + 16 + 18)
-// sum to more than the workspace's 48 distinct nodes.
+// learning_recorder). Counts belong to the resolved graph response, never
+// this presentation-only phase list.
 
 import type { Workflow } from '../types';
 
@@ -33,7 +33,7 @@ export const WORKFLOW_CATALOG: Record<string, Workflow> = {
     fn: 'DTC publishing specialist',
     icon: 'ic-pub',
     short: 'Strategy → research → draft → review → gated publish → release',
-    desc: '24-node article production line: strategy → research → draft → four-way review → build → gated publish → learning.',
+    desc: 'Article production line: strategy → research → draft → four-way review → build → gated publish → learning.',
     phases: [
       ['Intake', ['input_triage']],
       ['Strategy', ['placement_resolver', 'topic_opportunity', 'monetization_strategy', 'reader_insight']],
@@ -52,7 +52,7 @@ export const WORKFLOW_CATALOG: Record<string, Workflow> = {
     fn: 'Site cloning & template generation specialist',
     icon: 'ic-clone',
     short: 'Capture → recipes → theme bind → fit check → restamp → publish',
-    desc: '18-node pipeline: intake a capture, analyse layout, design and mint recipes, reconcile and bind theme, adjudicate fit, restamp pages, report — plus the PDF template workspace and the shared gated publish tail.',
+    desc: 'Pipeline: intake a capture, analyse layout, design and mint recipes, reconcile and bind theme, adjudicate fit, restamp pages, report — plus the PDF template workspace and the shared gated publish tail.',
     phases: [
       ['Intake & analysis', ['clone_intake', 'layout_analyst']],
       ['Recipes', ['recipe_designer', 'recipe_mint']],
@@ -69,7 +69,7 @@ export const WORKFLOW_CATALOG: Record<string, Workflow> = {
     fn: 'Site capture & fidelity specialist',
     icon: 'ic-capture',
     short: 'Crawl → map → theme → emit → score',
-    desc: '16-node pipeline: crawl → map → classify → refine → theme → dry emit → regenerate copy → live emit → score → adjudicate → report, then the shared gated publish tail.',
+    desc: 'Pipeline: crawl → map → classify → refine → theme → dry emit → regenerate copy → live emit → score → adjudicate → report, then the shared gated publish tail.',
     phases: [
       ['Crawl & map', ['capture_crawl', 'capture_map', 'block_classifier', 'capture_map_refine']],
       ['Theme & emit', ['capture_theme', 'capture_emit_dry', 'copy_regenerator', 'capture_emit_live']],

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRun, useWorkflows } from '../api/hooks';
+import { workspaceGetResolvedWorkflowNodeCount } from '../api/verbs';
 import { IS_MOCK } from '../api/client';
 import { performLogout, useAuthState } from './LoginGate';
 import { useStore } from '../store';
@@ -67,6 +68,13 @@ export function TopBar() {
   }
 
   const workflows = workflowsQ.data ?? [];
+  const workflowCountsQ = useQuery({
+    queryKey: ['resolvedWorkflowNodeCounts', workflows.map((workflow) => workflow.id)],
+    enabled: workflows.length > 0,
+    queryFn: async () => Object.fromEntries(
+      await Promise.all(workflows.map(async (workflow) => [workflow.id, await workspaceGetResolvedWorkflowNodeCount(workflow.id)] as const)),
+    ),
+  });
   const activeWf = workflows.find((w) => w.id === wf);
   const showRunChip = Boolean(runId) && screen === 'bench' && mode === 'run';
   const run = runQ.data;
@@ -142,7 +150,7 @@ export function TopBar() {
                 <span className="t">{w.name}</span>
                 <span className="sub">{w.short}</span>
               </span>
-              <span className="n">{w.phases.reduce((n, [, ids]) => n + ids.length, 0)} nodes</span>
+              <span className="n">{workflowCountsQ.data?.[w.id] ?? (workflowCountsQ.isError ? 'unknown' : '…')} nodes</span>
             </button>
           ))}
           <button className="dis" disabled>
