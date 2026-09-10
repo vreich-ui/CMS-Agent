@@ -236,6 +236,14 @@ export function planRun(run: WorkflowExecutionRecord): RunPlan {
     if (blocker?.code === "approval_required") {
       return { ...base, strategy: "resume", reason: "Run is held at a publication approval gate; record the gate decision, then resume without recomputing completed stages.", narrowerThanFullRun: true };
     }
+    if (blocker?.code === "economic_stop") {
+      return {
+        ...base,
+        strategy: "full_run",
+        reason: "Run was intentionally stopped by the verified economic floor. Retrying or resuming this run would read the same decision and block again; inspect its evidence and start a new run only after evidence or policy changes, or with an explicit configured override.",
+        narrowerThanFullRun: false
+      };
+    }
     const blockedNode = run.nodes.find((node) => node.status === "blocked");
     if (blockedNode) {
       return {

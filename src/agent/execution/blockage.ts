@@ -244,6 +244,11 @@ export function toBlockage(source: BlockageSource, context: BlockageContext): Bl
     case "input_validation_failed":
     case "node_not_ready":
       return { ...base, kind: "validation", remedies: [{ id: "cancel", type: "cancel" }] };
+    case "economic_stop":
+      // This is an intentional engine decision, not a transient node failure. Retrying the same
+      // node reads the same persisted decision and blocks again. A later run may proceed only with
+      // fresh evidence/policy or an explicit configured override, so this run offers no false fix.
+      return { ...base, kind: "other", remedies: [{ id: "cancel", type: "cancel" }] };
     case "paused":
       return { ...base, kind: "other", remedies: [{ id: "resume", type: "resume", args: { runId: context.run_id }, default: true }, { id: "cancel", type: "cancel" }] };
     case "cancelled":

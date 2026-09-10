@@ -16,16 +16,16 @@ tool grants, tenant policy, publishing authority, schedules, or any unrelated fi
 ### `monetization_strategy`
 
 - Prompt: preserve every current paragraph and append an **Engine decision policy** saying:
-  - scope the `project.call_read_tool` offer read explicitly to `clientProjectId` in the remote
-    operation arguments;
+  - call the Monetizer project's source-derived `search_offers` operation through
+    `project.call_read_tool`, scoped explicitly to `clientProjectId` in the remote arguments;
   - `runCostEstimate` and `trafficEstimate` are inputs to an explanation, not self-certifying
     evidence;
   - the conductor verifies the same-run read receipt, tenant, observation window, current-route cost
     population, currency, configured margin, cluster parent, and explicit override, then appends
     `engineDecision`;
   - model-authored `evFloor.verdict`, `estimateBasis`, arithmetic, and provenance cannot halt a run;
-  - `pass_via_cluster` requires a current same-tenant `parentEconomicDecision` whose `decisionId`
-    equals `supportingFor`.
+  - `pass_via_cluster` requires the conductor to load a current same-tenant parent decision from
+    the durable parent run whose `decisionId` equals `supportingFor`; caller input is not authority.
 - Input schema: preserve the current schema and add these optional evidence properties/children:
   - `runCostEstimate.workflowId: string`
   - `runCostEstimate.evaluatedAt: string, format date-time`
