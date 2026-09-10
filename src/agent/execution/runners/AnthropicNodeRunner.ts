@@ -313,6 +313,9 @@ export class AnthropicNodeRunner implements NodeRunner {
             const parsedBody = (() => { try { return JSON.parse(detail) as { error?: { message?: unknown } }; } catch { return undefined; } })();
             const rawMessage = parsedBody?.error?.message;
             const providerMessage = truncateProviderMessage(typeof rawMessage === "string" && rawMessage.trim() ? rawMessage.trim() : detail);
+            // This response has no usage envelope, but earlier retry attempts may have one.
+            // Preserve only that known prior usage before returning this terminal provider error.
+            await recordAccruedUsage(classified, attempt);
             return {
               ok: false,
               code: classified,
@@ -322,6 +325,9 @@ export class AnthropicNodeRunner implements NodeRunner {
               operatorAction: operatorActionForProviderHttpError(classified, "anthropic", `workflow.retry_node ${node.id}`)
             };
           }
+          // As above, do not fabricate usage for this non-OK response; record only usage
+          // accumulated by preceding attempts in this dispatch.
+          await recordAccruedUsage("model_error", attempt);
           return { ok: false, code: "model_error", message: `anthropic_http_${response.status}: ${detail.slice(0, 300)}`, retryable: response.status >= 500 || response.status === 429 };
         }
         const data = await response.json() as AnthropicMessagesResponse;
