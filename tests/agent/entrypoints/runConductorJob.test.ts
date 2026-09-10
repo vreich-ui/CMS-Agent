@@ -30,12 +30,11 @@ describe("runConductorJob (Cloud Run job entrypoint)", () => {
 
     expect(result.outcome).toBe("completed");
     expect(result.run.nodes.every((node) => node.status === "completed")).toBe(true);
-    // T7 (Wave 3): one step per node plus the finalizing advance that flips the run to completed, MINUS
-    // the four steps bounded concurrent dispatch saves on this graph — {monetization_strategy,
-    // reader_insight} share one advance, and the review quartet {human_texture, trust_factual,
-    // emotional_resonance, reader_simulation} shares one instead of four (run_1786557897658_elj34j's
-    // ~113 serial seconds). Every node still completes; only the number of driver passes changed.
-    expect(result.steps).toBe(result.run.nodes.length + 1 - 4);
+    // W6b: one step per node plus the finalizing advance, minus the three steps saved by dispatching
+    // the review quartet {human_texture, trust_factual, emotional_resonance, reader_simulation}
+    // together. monetization_strategy and reader_insight are deliberately sequential now: the latter
+    // is the first paid stage protected by the engine-owned economic decision.
+    expect(result.steps).toBe(result.run.nodes.length + 1 - 3);
     expect(exitCodeFor(result.outcome)).toBe(0);
   });
 

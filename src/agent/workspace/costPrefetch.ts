@@ -45,6 +45,7 @@ export type CostPrefetchParams = {
   // Additive caller evidence. Until the conductor supplies the current route-era map, no historical
   // run can prove it executed today's workflow and the result stays safely `no_history`.
   currentRouteEras?: Readonly<Record<string, string>>;
+  now?: Date;
 };
 export type CostPrefetchDeps = { nodeTimingRepository?: NodeTimingRepository; executionRepository?: ExecutionRepository };
 
@@ -60,8 +61,9 @@ export async function getRunCostEstimate(params: CostPrefetchParams, deps: CostP
   const timingStore = deps.nodeTimingRepository ?? repositoryManager.getNodeTimingRepository();
   const executionStore = deps.executionRepository ?? repositoryManager.getExecutionRepository();
   try {
+    const stamp = (estimate: RunCostEstimate): RunCostEstimate => ({ ...estimate, workflowId: params.workflowId, evaluatedAt: (params.now ?? new Date()).toISOString() });
     if (!params.currentRouteEras || !Object.keys(params.currentRouteEras).length) {
-      const estimate = estimateRunCostFromHistory({ records: [], candidates: [], currentRouteEras: params.currentRouteEras, excludeRunId: params.runId, projectId: params.projectId });
+      const estimate = stamp(estimateRunCostFromHistory({ records: [], candidates: [], currentRouteEras: params.currentRouteEras, excludeRunId: params.runId, projectId: params.projectId }));
       return {
         estimate,
         warningCode: "cost_history_insufficient",
@@ -79,13 +81,13 @@ export async function getRunCostEstimate(params: CostPrefetchParams, deps: CostP
     ]);
     const candidates = new Map([...projectPage.runs, ...pooledPage.runs].map((run) => [run.runId, run]));
     const timingRows = await Promise.all([...candidates.values()].map((run) => timingStore.list({ runId: run.runId })));
-    const estimate = estimateRunCostFromHistory({
+    const estimate = stamp(estimateRunCostFromHistory({
       records: timingRows.flat(),
       candidates: [...candidates.values()],
       currentRouteEras: params.currentRouteEras,
       excludeRunId: params.runId,
       projectId: params.projectId
-    });
+    }));
     if (estimate.basis === "no_history") {
       return {
         estimate,
@@ -104,7 +106,7 @@ export async function getRunCostEstimate(params: CostPrefetchParams, deps: CostP
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      estimate: noHistory(`The node timing ledger could not be read (${message}), so no run-cost history is available. estimatedRunCostUsd is 0 and the EV floor blocks nothing.`),
+      estimate: { ...noHistory(`The node timing ledger could not be read (${message}), so no run-cost history is available. estimatedRunCostUsd is 0 and the EV floor blocks nothing.`), workflowId: params.workflowId, evaluatedAt: (params.now ?? new Date()).toISOString() },
       warningCode: "cost_history_unavailable",
       warning: message
     };

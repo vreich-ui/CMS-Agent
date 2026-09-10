@@ -36,14 +36,12 @@ describe("Publishing Conductor runner state advancement", () => {
     await Promise.all(Array.from({ length: 8 }, () => runNextNode(run.runId, { executionRepository: store })));
     const final = (await getRun(run.runId, store))!;
 
-    // T7 (Wave 3): NINE distinct nodes for eight advances, still exactly one execution each. The head of
-    // the graph is no longer linear to the driver — monetization_strategy and reader_insight both hang
-    // off topic_opportunity and are independent of one another, so one advance dispatches both as a
-    // bounded concurrent batch. Completion order is still canonical node order, which is the property
-    // this test guards alongside "no node ever runs twice".
+    // W6b: eight distinct nodes for eight advances. reader_insight now waits for the authoritative
+    // economic decision written after monetization_strategy, so a verified stop cannot race a later
+    // paid stage in the old concurrent batch.
     expect(completedNodeIds(final)).toEqual([
       "input_triage", "placement_resolver", "topic_opportunity", "monetization_strategy",
-      "reader_insight", "research", "objection_mapping", "narrative_movement", "angle_strategy"
+      "reader_insight", "research", "objection_mapping", "narrative_movement"
     ]);
     // One artifact per completed node — no duplicates from a replayed node.
     expect(artifactNodeIds(final)).toEqual(completedNodeIds(final));
@@ -53,12 +51,12 @@ describe("Publishing Conductor runner state advancement", () => {
     // not change that arithmetic — a concurrent batch claims all its members in ONE save and merges
     // their results into ONE reconciliation save, so eight advances are still sixteen revisions.
     expect(final.rev).toBe(16);
-    expect(final.currentNodeId).toBe("brief_architect");
+    expect(final.currentNodeId).toBe("angle_strategy");
 
     // Usage is recorded once per completed node, not once per (possibly replayed) execution.
     const usage = await repositoryManager.getUsageRepository().list({ runId: run.runId });
-    expect(usage).toHaveLength(9);
-    expect(new Set(usage.map((record) => record.nodeId)).size).toBe(9);
+    expect(usage).toHaveLength(8);
+    expect(new Set(usage.map((record) => record.nodeId)).size).toBe(8);
   });
 
   it("advances deterministically through article_body -> publish_payload and stops before the publish-risk node", async () => {
