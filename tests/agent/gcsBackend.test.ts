@@ -161,6 +161,35 @@ describe("lost-update race closed on GCS (Phase 2 acceptance)", () => {
       .toEqual(["tool_exec_left", "tool_exec_right"]);
   });
 
+  it("keeps every immutable ledger entry after sustained project-index CAS contention", async () => {
+    const bucket = makeFakeBucket();
+    const store = clientFor(bucket);
+    const projectIndexKey = "tool_executions/project-index/sparse-tenant.json";
+    await store.setJSON("tool_executions/project-index/!meta.v1.json", { schemaVersion: "tool_execution_project_index.v1", backfilledAt: "2026-09-10T00:00:00.000Z" });
+    // Seed a generation so every primary-index writer must use a match precondition. The wrapper
+    // models a busy GCS object that loses every bounded CAS attempt; its other calls still use the
+    // GCS-shaped client and generation-aware fake bucket.
+    await store.setJSON(projectIndexKey, { records: [] });
+    const contendedStore = new Proxy(store, {
+      get(target, property) {
+        if (property === "setJSON") return (key: string, value: unknown, options?: { onlyIfMatch?: string }) => key === projectIndexKey && options?.onlyIfMatch
+          ? { modified: false }
+          : target.setJSON(key, value, options);
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    }) as BlobStoreClient;
+    const writers = Array.from({ length: 8 }, (_, index) => new BlobToolExecutionRepository(contendedStore));
+    await Promise.all(writers.map((repository, index) => repository.record(toolExecution(
+      `tool_exec_contended_${index}`,
+      `2026-09-10T10:00:${String(index).padStart(2, "0")}.000Z`
+    ))));
+
+    const records = await new BlobToolExecutionRepository(contendedStore).list({ projectId: "sparse-tenant" });
+    expect(records.map((record) => record.toolExecutionId)).toEqual(Array.from({ length: 8 }, (_, index) => `tool_exec_contended_${index}`));
+    expect([...bucket.objects.keys()].filter((key) => key.startsWith("tool_executions/project-index/sparse-tenant/pending/"))).toHaveLength(8);
+  });
+
   it("persists the bounded conversation mirror through the GCS-shaped store", async () => {
     const repository = new BlobConversationTurnRepository(clientFor(makeFakeBucket()));
     for (let index = 0; index <= MAX_CONVERSATION_TURNS; index++) await repository.record(conversationTurn(index));
