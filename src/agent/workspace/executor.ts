@@ -63,7 +63,7 @@ import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 import type { ToolExecutionRecord } from "../tools/toolTypes.js";
 import { getToolExecution } from "../tools/toolExecutor.js";
 import { flushToolExecutionLedger } from "../tools/toolExecutionLedger.js";
-import { buildAuthoritativeEconomicDecision } from "./economicDecision.js";
+import { buildAuthoritativeEconomicDecision, loadParentEconomicDecision } from "./economicDecision.js";
 
 const WORKFLOW_ID = "publishing_conductor";
 
@@ -3169,9 +3169,13 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       if (record) toolExecutions.push(record);
     }
     const outputFloor = isOutputRecord(output) && isOutputRecord(output.evFloor) ? output.evFloor : undefined;
-    const supportingFor = typeof outputFloor?.supportingFor === "string" ? outputFloor.supportingFor.trim() : "";
-    const parentRunId = supportingFor.startsWith("economic:") ? supportingFor.slice("economic:".length) : "";
-    const parentRun = parentRunId && parentRunId !== run.runId ? await store.getRun(parentRunId) : undefined;
+    const parentLookup = await loadParentEconomicDecision({
+      supportingFor: outputFloor?.supportingFor,
+      currentRunId: run.runId,
+      projectId: run.projectId,
+      getRun: (parentRunId) => store.getRun(parentRunId)
+    });
+    if (parentLookup.warning) state.warnings = [...(state.warnings ?? []), parentLookup.warning];
     const decision = buildAuthoritativeEconomicDecision({
       runId: run.runId,
       workflowId: run.workflowId,
@@ -3182,7 +3186,7 @@ async function executeRunnableNode(initialRun: WorkflowExecutionRecord, nextNode
       trafficEstimate: input[TRAFFIC_ESTIMATE_INPUT_KEY],
       toolExecutions,
       initialInput: run.initialInput,
-      parentEconomicDecision: parentRun?.projectId === run.projectId ? parentRun.economicDecision : undefined
+      parentEconomicDecision: parentLookup.decision
     });
     run.economicDecision = decision;
     if (isOutputRecord(output)) output = { ...output, engineDecision: decision };
