@@ -61,6 +61,7 @@ describe("authoritative economic decisions", () => {
   it("requires the source-derived Monetizer offer route and one exact source offer record", () => {
     expect(decide({ toolExecutions: [receipt({ inputSummary: { projectId: "platform", tool: "search_offers", arguments: { clientProjectId: "dr-lurie" } } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
     expect(decide({ toolExecutions: [receipt({ inputSummary: { projectId: "monetizer", tool: "performance", arguments: { clientProjectId: "dr-lurie" } } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
+    expect(decide({ toolExecutions: [receipt({ inputSummary: { projectId: "monetizer", tool: "search_offers", arguments: { clientProjectId: "platform", note: "dr-lurie" } } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
     expect(decide({ toolExecutions: [receipt({ outputSummary: { offers: [{ id: "offer_1", payoutUsd: 99, currency: "USD" }, { id: "offer_2", payoutUsd: 10, currency: "USD" }] } })] })).toMatchObject({ outcome: "advisory", reasonCode: "offer_source_unverified" });
   });
 
