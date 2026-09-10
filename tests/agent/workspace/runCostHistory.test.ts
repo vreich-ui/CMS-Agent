@@ -1,187 +1,97 @@
 import { describe, expect, it } from "vitest";
+import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 import { estimateRunCostFromHistory, MIN_RUN_COST_HISTORY_SAMPLES } from "../../../src/agent/workspace/runCostHistory.js";
-import { aggregateNodeTimingsByNode, type NodeTimingRecord } from "../../../src/agent/workspace/nodeTimings.js";
+import type { NodeTimingRecord } from "../../../src/agent/workspace/nodeTimings.js";
 
-// ACCEPTANCE 1 and 2 (EV-floor brief, 2026-09-08). The defect: monetization_strategy emitted
-// estimatedRunCost: 800 against a measured $3.86 run and demanded $1,000 of expected value. These
-// tests pin that the figure is DERIVED FROM MEASURED HISTORY, and that its absence is honest rather
-// than a large round number that silently blocks everything.
+const ROUTES = { research: "model", publish_executor: "publishExecutorDeterministic:execute" } as const;
 
-const record = (runId: string, nodeId: string, costUsd: number, recordedAt = "2026-09-01T00:00:00.000Z"): NodeTimingRecord => ({
-  timingId: `t_${runId}_${nodeId}`,
-  runId,
-  workflowId: "publishing",
-  nodeId,
-  durationMs: 1000,
-  costUsd,
-  outcome: "completed",
-  recordedAt
+const run = (runId: string, over: Partial<WorkflowExecutionRecord> = {}): WorkflowExecutionRecord => ({
+  runId, workflowId: "publishing", projectId: "dr-lurie", status: "completed", executionMode: "openai",
+  nodes: [{ nodeId: "research", status: "completed" }, { nodeId: "publish_executor", status: "skipped" }],
+  startedAt: "2026-09-10T00:00:00.000Z", updatedAt: "2026-09-10T00:10:00.000Z", artifacts: [], errors: [], approvalsRequired: [], stageOutputs: {}, dryRun: true,
+  ...over
+}) as WorkflowExecutionRecord;
+
+const timing = (runId: string, timingId: string, costUsd: number, over: Partial<NodeTimingRecord> = {}): NodeTimingRecord => ({
+  timingId, runId, workflowId: "publishing", nodeId: "research", durationMs: 1000, costUsd,
+  outcome: "completed", recordedAt: "2026-09-10T00:01:00.000Z", projectId: "dr-lurie", executionMode: "openai", routeEra: "model",
+  ...over
 });
 
-describe("estimateRunCostFromHistory — the run cost comes from the ledger, never from a guess", () => {
-  it("derives estimatedRunCostUsd as the p50 of prior run totals and names the basis", () => {
-    const records = [
-      record("run_a", "article_body", 1.51), record("run_a", "brief_architect", 2.35),
-      record("run_b", "article_body", 1.4), record("run_b", "brief_architect", 2.2),
-      record("run_c", "article_body", 1.9), record("run_c", "brief_architect", 3.1)
-    ];
-
-    const estimate = estimateRunCostFromHistory({ records });
-
-    // Run totals: 3.86, 3.60, 5.00 -> sorted [3.6, 3.86, 5] -> nearest-rank p50 = 3.86.
-    expect(estimate.estimatedRunCostUsd).toBe(3.86);
-    expect(estimate.basis).toBe("workflow_history");
-    expect(estimate.sampleRuns).toBe(3);
-    expect(estimate.observedRunCostsUsd).toEqual([3.6, 3.86, 5]);
-    expect(estimate.rationale).toContain("p50");
-    // The regression guard: nothing anywhere near the fabricated figure.
-    expect(estimate.estimatedRunCostUsd).toBeLessThan(10);
-  });
-
-  it("excludes the run being estimated — a run at node 4 must not floor itself on its own partial spend", () => {
-    const records = [
-      record("run_a", "input_triage", 4), record("run_b", "input_triage", 4),
-      record("run_now", "input_triage", 0.02)
-    ];
-
-    const estimate = estimateRunCostFromHistory({ records, excludeRunId: "run_now" });
-
-    expect(estimate.observedRunCostsUsd).toEqual([4, 4]);
-    expect(estimate.estimatedRunCostUsd).toBe(4);
-  });
-
-  it("falls back honestly with no history: a $0 floor, the fallback named in the rationale, and NOT a round number that blocks everything", () => {
-    const estimate = estimateRunCostFromHistory({ records: [] });
-
-    expect(estimate.basis).toBe("no_history");
-    expect(estimate.estimatedRunCostUsd).toBe(0);
-    expect(estimate.rationale).toMatch(/No usable run-cost history/);
-    expect(estimate.rationale).toMatch(/blocks nothing/);
-  });
-
-  it("refuses to estimate from a single run — one sample is noise, the same discipline the timing ledger states for its own consumers", () => {
-    const estimate = estimateRunCostFromHistory({ records: [record("run_a", "article_body", 3.86)] });
-
-    expect(MIN_RUN_COST_HISTORY_SAMPLES).toBe(2);
-    expect(estimate.basis).toBe("no_history");
-    expect(estimate.estimatedRunCostUsd).toBe(0);
-  });
-
-  it("ignores zero-cost runs as evidence about model spend, but never throws on them", () => {
-    const estimate = estimateRunCostFromHistory({ records: [record("run_a", "publish_executor", 0), record("run_b", "publish_executor", 0)] });
-
-    expect(estimate.sampleRuns).toBe(0);
-    expect(estimate.basis).toBe("no_history");
-  });
-});
-
-describe("the node timing aggregate now carries cost alongside duration", () => {
-  it("folds emaCostUsd / p50CostUsd / p95CostUsd / totalCostUsd per node", () => {
-    const aggregate = aggregateNodeTimingsByNode([
-      record("run_a", "article_body", 1.5, "2026-09-01T00:00:00.000Z"),
-      record("run_b", "article_body", 2.5, "2026-09-02T00:00:00.000Z")
-    ]).article_body;
-
-    expect(aggregate.count).toBe(2);
-    expect(aggregate.totalCostUsd).toBe(4);
-    // Nearest-rank on [1.5, 2.5]: p50 -> the smaller, p95 -> the larger (the definition nodeTimings.ts states).
-    expect(aggregate.p50CostUsd).toBe(1.5);
-    expect(aggregate.p95CostUsd).toBe(2.5);
-    // EMA with alpha 0.3, seeded on the first sample: 0.3*2.5 + 0.7*1.5 = 1.8.
-    expect(aggregate.emaCostUsd).toBeCloseTo(1.8, 6);
-  });
-});
-
-// ACCEPTANCE — W0.5 (static-guesses brief, 2026-09-09). Four tenants share every workflowId, so
-// "this workflow's prior run totals" meant "every tenant's, pooled". A live consumer that can BLOCK
-// a run was charging each site the average of four sites' economics.
-const tenantRecord = (runId: string, projectId: string | undefined, costUsd: number, recordedAt: string): NodeTimingRecord => ({
-  timingId: `t_${runId}`,
-  runId,
-  workflowId: "publishing",
-  nodeId: "article_body",
-  durationMs: 1000,
-  costUsd,
-  outcome: "completed",
-  recordedAt,
-  ...(projectId ? { projectId } : {})
-});
-
-describe("estimateRunCostFromHistory — one tenant's history, not four tenants' average", () => {
-  // dr-lurie runs expensive articles; zilberman runs cheap structure batches. Pooled, both get the
-  // same floor and both are wrong.
-  const records = [
-    tenantRecord("run_dl1", "dr-lurie", 4.0, "2026-09-01T00:00:00.000Z"),
-    tenantRecord("run_dl2", "dr-lurie", 4.4, "2026-09-02T00:00:00.000Z"),
-    tenantRecord("run_zb1", "zilberman", 0.3, "2026-09-03T00:00:00.000Z"),
-    tenantRecord("run_zb2", "zilberman", 0.5, "2026-09-04T00:00:00.000Z")
-  ];
-
-  it("gives zilberman a different floor from dr-lurie, each from its own runs", () => {
-    const drLurie = estimateRunCostFromHistory({ records, projectId: "dr-lurie" });
-    const zilberman = estimateRunCostFromHistory({ records, projectId: "zilberman" });
-
-    expect(drLurie.scope).toBe("project");
-    expect(zilberman.scope).toBe("project");
-    expect(drLurie.estimatedRunCostUsd).toBe(4);
-    expect(zilberman.estimatedRunCostUsd).toBe(0.3);
-    expect(drLurie.estimatedRunCostUsd).not.toBe(zilberman.estimatedRunCostUsd);
-    // Neither figure was contaminated by the other tenant's runs.
-    expect(drLurie.observedRunCostsUsd).toEqual([4, 4.4]);
-    expect(zilberman.observedRunCostsUsd).toEqual([0.3, 0.5]);
-  });
-
-  it("falls back to pooled history when a tenant has too little of its own, and SAYS it did", () => {
-    const fernwell = estimateRunCostFromHistory({ records, projectId: "fernwell" });
-    expect(fernwell.scope).toBe("pooled");
-    expect(fernwell.projectId).toBe("fernwell");
-    expect(fernwell.basis).toBe("workflow_history");
-    expect(fernwell.observedRunCostsUsd).toEqual([0.3, 0.5, 4, 4.4]);
-    expect(fernwell.rationale).toContain("POOLED ACROSS TENANTS");
-  });
-
-  it("omitting projectId behaves exactly as it did before scoping existed", () => {
-    const pooled = estimateRunCostFromHistory({ records });
-    expect(pooled.scope).toBe("pooled");
-    expect(pooled.projectId).toBeUndefined();
-    expect(pooled.rationale).not.toContain("POOLED ACROSS TENANTS");
-  });
-
-  it("pre-W0.1 records carry no projectId and are never counted as any tenant's own history", () => {
-    const legacy = [
-      tenantRecord("run_l1", undefined, 9.0, "2026-08-01T00:00:00.000Z"),
-      tenantRecord("run_l2", undefined, 9.5, "2026-08-02T00:00:00.000Z")
-    ];
-    const scoped = estimateRunCostFromHistory({ records: legacy, projectId: "dr-lurie" });
-    // Deep enough to be usable POOLED, but nothing in it can be attributed to dr-lurie — so the
-    // estimate is the pooled one, flagged, rather than a confident per-tenant figure.
-    expect(scoped.scope).toBe("pooled");
-    expect(scoped.estimatedRunCostUsd).toBe(9);
-  });
-
-  it("phase samples are a duration breakdown and never inflate the run total", () => {
-    const withPhases: NodeTimingRecord[] = [
-      tenantRecord("run_p1", "dr-lurie", 3.0, "2026-09-01T00:00:00.000Z"),
-      { ...tenantRecord("run_p1", "dr-lurie", 0, "2026-09-01T00:00:01.000Z"), timingId: "t_run_p1_phase", phase: "validate" },
-      tenantRecord("run_p2", "dr-lurie", 3.4, "2026-09-02T00:00:00.000Z")
-    ];
-    const estimate = estimateRunCostFromHistory({ records: withPhases, projectId: "dr-lurie" });
-    expect(estimate.observedRunCostsUsd).toEqual([3, 3.4]);
-    expect(estimate.sampleRecords).toBe(2);
-  });
-});
-
-// The minimum-samples rule is unchanged by scoping: below it, in BOTH populations, the estimate is 0
-// and the floor blocks nothing.
-describe("estimateRunCostFromHistory — an unmeasured floor still blocks nothing", () => {
-  it("returns 0 with scope 'none' when neither the tenant nor the pool has enough history", () => {
+describe("qualified run cost history", () => {
+  it("never treats aborted prefixes as completed cost samples", () => {
+    const complete = run("run_complete");
+    const failedA = run("run_prefix_a", { status: "failed" });
+    const failedB = run("run_prefix_b", { status: "cancelled" });
     const estimate = estimateRunCostFromHistory({
-      records: [tenantRecord("run_only", "dr-lurie", 4.0, "2026-09-01T00:00:00.000Z")],
-      projectId: "dr-lurie"
+      candidates: [failedA, failedB, complete], currentRouteEras: ROUTES, minSamples: 1,
+      records: [timing("run_prefix_a", "t_a", 0.1), timing("run_prefix_b", "t_b", 0.2), timing("run_complete", "t_complete", 5)]
     });
-    expect(estimate.estimatedRunCostUsd).toBe(0);
+
+    expect(estimate.estimatedRunCostUsd).toBe(5);
+    expect(estimate.observedRunCostsUsd).toEqual([5]);
+    expect(estimate.exclusionReasons.not_completed).toBe(2);
+    expect(estimate.candidateRuns).toBe(3);
+    expect(estimate.coverageRuns).toBe(1);
+  });
+
+  it("counts every real retry attempt once, dedupes timingId, and keeps zero-cost deterministic coverage", () => {
+    const complete = run("run_retried");
+    const estimate = estimateRunCostFromHistory({
+      candidates: [complete], currentRouteEras: ROUTES, minSamples: 1,
+      records: [
+        timing("run_retried", "attempt_1", 0.4, { outcome: "failed", attempt: 1 }),
+        timing("run_retried", "attempt_2", 1.1, { attempt: 2 }),
+        timing("run_retried", "attempt_2", 1.1, { attempt: 2, recordedAt: "2026-09-10T00:02:00.000Z" }),
+        timing("run_retried", "deterministic", 0, { nodeId: "publish_executor", routeEra: ROUTES.publish_executor })
+      ]
+    });
+
+    expect(estimate.observedRunCostsUsd).toEqual([1.5]);
+    expect(estimate.sampleRecords).toBe(3);
+    expect(estimate.coverageRuns).toBe(1);
+  });
+
+  it("rejects current, incomplete, mock, unattributed and foreign-era candidates explicitly", () => {
+    const current = run("run_now");
+    const incomplete = run("run_incomplete", { nodes: [{ nodeId: "research", status: "completed" }] });
+    const mock = run("run_mock", { executionMode: "mock" });
+    const foreignEra = run("run_old_route");
+    const missingAttribution = run("run_missing_attribution");
+    const estimate = estimateRunCostFromHistory({
+      excludeRunId: "run_now", candidates: [current, incomplete, mock, foreignEra, missingAttribution], currentRouteEras: ROUTES,
+      records: [
+        timing("run_old_route", "old", 5, { routeEra: "old-model" }),
+        timing("run_missing_attribution", "unattributed", 5, { projectId: undefined })
+      ]
+    });
+
     expect(estimate.basis).toBe("no_history");
-    expect(estimate.scope).toBe("none");
+    expect(estimate.exclusionReasons).toMatchObject({ current_run: 1, incomplete_stage_coverage: 1, mock_execution: 1, foreign_route_era: 1, missing_timing_attribution: 1 });
+    expect(estimate.sampleRuns).toBe(0);
+  });
+
+  it("uses qualifying project history before a separately labeled attributed pool", () => {
+    const ownA = run("own_a");
+    const ownB = run("own_b");
+    const otherA = run("other_a", { projectId: "zilberman" });
+    const otherB = run("other_b", { projectId: "zilberman" });
+    const records = [
+      timing("own_a", "own_a", 4), timing("own_b", "own_b", 4.4),
+      timing("other_a", "other_a", 0.3, { projectId: "zilberman" }), timing("other_b", "other_b", 0.5, { projectId: "zilberman" })
+    ];
+    const own = estimateRunCostFromHistory({ candidates: [ownA, ownB, otherA, otherB], records, currentRouteEras: ROUTES, projectId: "dr-lurie" });
+    const pooled = estimateRunCostFromHistory({ candidates: [otherA, otherB], records, currentRouteEras: ROUTES, projectId: "dr-lurie" });
+
+    expect(own).toMatchObject({ scope: "project", estimatedRunCostUsd: 4, sampleRuns: 2 });
+    expect(pooled).toMatchObject({ scope: "pooled", estimatedRunCostUsd: 0.3, sampleRuns: 2 });
+    expect(pooled.rationale).toContain("POOLED ACROSS ATTRIBUTED TENANTS");
+  });
+
+  it("returns the existing safe no-history outcome when evidence is absent or too thin", () => {
+    const estimate = estimateRunCostFromHistory({ records: [timing("orphan", "orphan", 5)] });
     expect(MIN_RUN_COST_HISTORY_SAMPLES).toBe(2);
+    expect(estimate).toMatchObject({ artifact: "run_cost_estimate.v1", basis: "no_history", scope: "none", estimatedRunCostUsd: 0, candidateRuns: 0, coverageRuns: 0 });
+    expect(estimate.rationale).toContain("blocks nothing");
   });
 });
