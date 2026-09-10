@@ -30,6 +30,7 @@ describe("Publishing Conductor workspace nodes", () => {
     // The offer decision needs the monetizer project reachable at runtime — read-only surface only.
     expect(node("monetization_strategy").allowedTools).toContain("project.call_read_tool");
     expect(node("monetization_strategy").allowedTools).not.toContain("project.call_tool");
+    expect(node("reader_insight")).toMatchObject({ dependsOn: ["topic_opportunity", "monetization_strategy"], requiredInputs: ["topic_opportunity", "monetization_strategy"] });
     // brief_architect's dependency is HARD: the brief is aimed at a selected offer, never written first.
     expect(node("brief_architect").dependsOn).toContain("monetization_strategy");
     expect(node("brief_architect").requiredInputs).toContain("monetization_strategy");

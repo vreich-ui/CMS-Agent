@@ -36,7 +36,7 @@
 // (a client object that contains no media reference at all). A run whose input declares nothing gets
 // the full pipeline, exactly as it does today.
 import { readDeclaredContentClass } from "./publicationController.js";
-import { EARNED_BLOCK_ESTIMATE_BASIS, type EstimateBasis } from "./evFloor.js";
+import { isAuthoritativeEconomicStop, type EconomicDecision } from "./economicDecision.js";
 import { gatedMetadata } from "./nodeGatingSeed.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -102,7 +102,7 @@ export type SkipPredicate =
   | { when: "clone_no_pdf_template_entries"; reason?: string }
   // 2026-09-08 — the EV floor's own gate, and the ONE predicate here whose firing STOPS A RUN rather
   // than skipping a node (executor.ts turns this exact predicate into a run-level halt; see the note
-  // on evaluateEvFloorBlocked below for why skipping brief_architect alone would be worse than doing
+  // on evaluateEvFloorBlocked below for why skipping the gate node alone would be worse than doing
   // nothing at all).
   //
   // Fires ONLY on an EARNED block: verdict "block" AND estimateBasis "monetizer_data" — i.e. the cost
@@ -183,6 +183,9 @@ export type SkipEvaluationContext = {
   dependsOn?: readonly string[];
   initialInput?: unknown;
   stageOutputs?: Record<string, unknown>;
+  // Engine-owned run state. Unlike stageOutputs, this is never authored by a node/model.
+  economicDecision?: EconomicDecision;
+  now?: Date;
 };
 
 export type SkipVerdict = {
@@ -488,68 +491,26 @@ function evaluateCloneNoPdfTemplateEntries(predicate: Extract<SkipPredicate, { w
 // DERIVED by that pure function, never authored by a model. Reading a model-authored verdict would
 // hand a node the power to stop a run by writing a word.
 //
-// WHY IT MUST NOT BE A PLAIN SKIP. brief_architect is the run's spine: contract_intelligence,
-// article_body and the whole publish tail treat a skipped dependency as satisfied-with-absent, so
-// skipping the brief alone would leave a LIVE TAIL writing and publishing an article against no brief
-// — strictly worse than no predicate at all. Declaring the predicate on all fifteen downstream nodes
-// instead would cascade correctly today and produce a run that reports `completed` with nothing
-// published (and would break the first time someone added a node and forgot the entry). So the
-// executor turns THIS predicate into a run-level halt at brief_architect's own pre-dispatch: one state
-// transition, no live tail, and a run whose status says plainly that it stopped on purpose.
-const EV_FLOOR_ARTIFACT = "ev_floor.v1";
-
-const readEvFloorBlock = (carrier: unknown): Record<string, unknown> | undefined => {
-  if (!isObject(carrier)) return undefined;
-  if (carrier.artifact === EV_FLOOR_ARTIFACT) return carrier;
-  const nested = carrier.evFloor;
-  if (isObject(nested)) return nested;
-  return undefined;
-};
-
-const isEarnedBasis = (value: unknown): value is EstimateBasis => typeof value === "string" && normalizeToken(value) === EARNED_BLOCK_ESTIMATE_BASIS;
-
-// TWO ARTIFACT SHAPES, ONE PREDICATE. `monetize.ev_floor` returns ev_floor.v1 (expectedValueUsd,
-// floorUsd); the LIVE monetization_strategy node's own evFloor block — which predates this module and
-// carries a cluster-level model the tool has no equivalent for (clusterRole, supportingFor,
-// pass_via_cluster, currency, margin) — spells the same quantities expectedValue and estimatedRunCost.
-// The DECISION reads only `verdict` and `estimateBasis`, which both shapes spell identically, so this
-// helper exists purely so the recorded reason quotes real numbers instead of printing "undefined" into
-// an audit record. A figure neither shape carries renders as "not stated", never as a fabricated 0.
-const renderFigure = (evFloor: Record<string, unknown>, keys: readonly string[]): string => {
-  for (const key of keys) {
-    const value = evFloor[key];
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
-  return "not stated";
-};
-
+// WHY IT MUST NOT BE A PLAIN SKIP. reader_insight is the first paid node after the decision and the
+// head of every later research/drafting path. A plain skipped dependency is satisfied-with-absent,
+// which would let successors continue. The executor therefore turns THIS predicate into a run-level
+// halt: one transition, no later model/write dispatch, and a run that says it stopped on purpose.
 function evaluateEvFloorBlocked(predicate: Extract<SkipPredicate, { when: "ev_floor_blocked" }>, context: SkipEvaluationContext): SkipVerdict {
-  const basis: string[] = [];
-  for (const carrier of carriersFor(context, ["monetization_strategy"])) {
-    if (isPlaceholder(carrier)) { basis.push("carrier: mock placeholder (dryRun) — not evidence"); continue; }
-    const evFloor = readEvFloorBlock(carrier);
-    if (!evFloor) continue;
-    const verdict = typeof evFloor.verdict === "string" ? normalizeToken(evFloor.verdict) : undefined;
-    const estimateBasis = evFloor.estimateBasis;
-    basis.push(`evFloor.verdict: ${verdict ?? "not declared"}`);
-    basis.push(`evFloor.estimateBasis: ${typeof estimateBasis === "string" ? estimateBasis : "not declared"}`);
-    // The two numbers the decision is ABOUT, recorded as facts rather than only interpolated into the
-    // reason — a node's seeded `reason` string wins over the computed one (readSkipPredicates lets an
-    // operator author it), so prose is not a reliable carrier for a figure. `basis` is.
-    basis.push(`evFloor.expectedValue: ${renderFigure(evFloor, ["expectedValueUsd", "expectedValue"])}`);
-    basis.push(`evFloor.runCost: ${renderFigure(evFloor, ["floorUsd", "estimatedRunCost"])}`);
-    if (verdict !== "block") {
-      return { skip: false, predicate, reason: `${context.nodeId} runs: the EV floor's verdict is "${verdict ?? "not declared"}", not a block.`, basis, warnings: [] };
-    }
-    if (!isEarnedBasis(estimateBasis)) {
-      // THE LINE THAT KEEPS PRODUCTION UP. A block computed on assumptions is advisory: it is recorded
-      // on the artifact and readable by anyone, and it stops nothing.
-      return { skip: false, predicate, reason: `${context.nodeId} runs: the EV floor says block, but on estimateBasis "${typeof estimateBasis === "string" ? estimateBasis : "not declared"}" rather than "${EARNED_BLOCK_ESTIMATE_BASIS}" — a block computed on assumed numbers is advisory and never stops a run.`, basis, warnings: [] };
-    }
-    return { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} stopped: the EV floor blocks this piece on live Monetizer data (expected value ${renderFigure(evFloor, ["expectedValueUsd", "expectedValue"])} against a floor built on run cost ${renderFigure(evFloor, ["floorUsd", "estimatedRunCost"])}), so the run is halted before the expensive post-brief chain rather than producing an article the numbers say is not worth its cost.`, basis, warnings: [] };
+  const decision = context.economicDecision;
+  if (!decision) {
+    return { skip: false, predicate, reason: `${context.nodeId} runs: no engine-owned economic decision is recorded on this run; model-authored EV labels are advisory only.`, basis: ["economicDecision: absent"], warnings: [] };
   }
-  basis.push("no ev_floor artifact on any carrier");
-  return { skip: false, predicate, reason: `${context.nodeId} runs: no EV floor artifact is readable on this run, and an unanswered question is answered by running.`, basis, warnings: [] };
+  const basis = [
+    `economicDecision.authority: ${decision.authority}`,
+    `economicDecision.outcome: ${decision.outcome}`,
+    `economicDecision.reasonCode: ${decision.reasonCode}`,
+    `economicDecision.expectedValueUsd: ${decision.calculation.expectedValueUsd ?? "not stated"}`,
+    `economicDecision.floorUsd: ${decision.calculation.floorUsd}`
+  ];
+  if (!isAuthoritativeEconomicStop(decision, context.now ?? new Date())) {
+    return { skip: false, predicate, reason: `${context.nodeId} runs: the engine-owned economic decision is ${decision.outcome} (${decision.reasonCode}), not a verified stop.`, basis, warnings: [] };
+  }
+  return { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} stopped: the engine verified expected value ${decision.calculation.expectedValueUsd} against floor ${decision.calculation.floorUsd} from same-run, same-tenant evidence.`, basis, warnings: [] };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -606,7 +567,7 @@ const evaluatePredicate = (predicate: SkipPredicate, context: SkipEvaluationCont
 export function evaluateNodeSkip(node: { id: string; dependsOn?: readonly string[]; metadata?: Record<string, unknown> | undefined }, context: Omit<SkipEvaluationContext, "nodeId" | "dependsOn">): SkipVerdict | undefined {
   const { predicates, warnings } = readSkipPredicates(gatedMetadata(node));
   if (!predicates.length && !warnings.length) return undefined;
-  const evaluationContext: SkipEvaluationContext = { nodeId: node.id, dependsOn: node.dependsOn, initialInput: context.initialInput, stageOutputs: context.stageOutputs };
+  const evaluationContext: SkipEvaluationContext = { nodeId: node.id, dependsOn: node.dependsOn, initialInput: context.initialInput, stageOutputs: context.stageOutputs, economicDecision: context.economicDecision, now: context.now };
   const basis: string[] = [];
   for (const predicate of predicates) {
     const verdict = evaluatePredicate(predicate, evaluationContext);

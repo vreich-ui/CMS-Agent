@@ -5,12 +5,13 @@ import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/execu
 import { getRun, runNextNode, startDryRun } from "../../../src/agent/workspace/executor.js";
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { computeEvFloor } from "../../../src/agent/workspace/evFloor.js";
+import { buildAuthoritativeEconomicDecision } from "../../../src/agent/workspace/economicDecision.js";
 import { buildNodeTimingRecord } from "../../../src/agent/workspace/nodeTimings.js";
 import { TRACKING_OUTCOME_SOURCE } from "../../../src/agent/improvement/trackingIngest.js";
 
 // ACCEPTANCE 3 and 4, at the CONDUCTOR level. skipPredicates decides; this proves what the executor
-// does with the decision — and specifically that an earned block STOPS THE RUN rather than skipping
-// brief_architect and leaving the publish tail alive to write and publish against no brief.
+// does with the decision — and specifically that an earned block STOPS THE RUN before reader_insight
+// rather than skipping one node and leaving the later paid/publication path alive.
 
 const advanceUntil = async (runId: string, store: ExecutionRepository, done: (run: WorkflowExecutionRecord) => boolean) => {
   let run = (await getRun(runId, store))!;
@@ -25,9 +26,19 @@ const reached = (nodeId: string) => (run: WorkflowExecutionRecord) => ["complete
 
 // Replace the mock fixture monetization_strategy produced with a real, non-placeholder artifact
 // carrying the EV floor. (A dryRun fixture is deliberately never evidence — see evFloorBlocked.test.)
-const withEvFloor = async (runId: string, store: ExecutionRepository, evFloor: unknown) => {
+const withEvFloor = async (runId: string, store: ExecutionRepository, evFloor: unknown, authoritative = false) => {
   const run = (await getRun(runId, store))!;
+  const evaluatedAt = new Date();
+  const evaluatedAtIso = evaluatedAt.toISOString();
+  const windowStart = new Date(evaluatedAt.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
   run.stageOutputs.monetization_strategy = { artifact: "monetization_strategy.v1", summary: "s", selectedOffer: null, offerRationale: "r", commercialIntent: "commercial", evFloor };
+  if (authoritative) run.economicDecision = buildAuthoritativeEconomicDecision({
+    runId, workflowId: run.workflowId, projectId: run.projectId, evaluatedAt: evaluatedAtIso,
+    output: { ...run.stageOutputs.monetization_strategy as Record<string, unknown>, selectedOffer: { id: "offer_1", payoutUsd: 20, currency: "USD" } },
+    costEstimate: { artifact: "run_cost_estimate.v1", estimatedRunCostUsd: 3.86, basis: "workflow_history", scope: "project", projectId: run.projectId, workflowId: run.workflowId, evaluatedAt: evaluatedAtIso, candidateRuns: 2, coverageRuns: 2, sampleRuns: 2, sampleRecords: 20, exclusionReasons: {}, observedRunCostsUsd: [3.86, 4.5], rationale: "qualified" },
+    trafficEstimate: { artifact: "traffic_estimate.v1", expectedMonthlyTraffic: 100, observedConversionRate: 0.001, basis: "tracking_engagement", windowDays: 90, sessions: 300, pageviews: 400, sampleRecords: 3, projectId: run.projectId, windowStart, windowEnd: evaluatedAtIso, rationale: "measured" },
+    toolExecutions: [{ toolExecutionId: "tool_1", runId, nodeId: "monetization_strategy", toolId: "project.call_read_tool", startedAt: evaluatedAtIso, completedAt: evaluatedAtIso, status: "success", inputSummary: { projectId: "monetizer", tool: "offer.list", arguments: { clientProjectId: run.projectId } }, outputSummary: { offers: [{ id: "offer_1", payoutUsd: 20, currency: "USD" }] }, riskLevel: "read", approvalStatus: "not_required" }]
+  });
   await store.saveRun(run);
 };
 
@@ -38,30 +49,34 @@ const startToMonetization = async () => {
   return { runId: started.runId, store };
 };
 
-describe("an EARNED EV block halts the run at brief_architect", () => {
+describe("an EARNED EV block halts the run before the first later paid stage", () => {
   beforeEach(() => repositoryManager.getUsageRepository().clear());
 
-  it("stops the run — status blocked, brief_architect never dispatched, and the publish tail never reached", async () => {
+  it("stops the run — reader_insight never dispatches and the paid/publication tail is never reached", async () => {
     const { runId, store } = await startToMonetization();
-    await withEvFloor(runId, store, computeEvFloor({ runCostUsd: 3.86, floorMultiplier: 1.25, payoutUsd: 20, conversionRate: 0.001, estimatedVolume: 100, runCostBasis: "workflow_history", revenueBasis: "monetizer_data", volumeBasis: "tracking_engagement" }));
+    await withEvFloor(runId, store, computeEvFloor({ runCostUsd: 3.86, floorMultiplier: 1.25, payoutUsd: 20, conversionRate: 0.001, estimatedVolume: 100, runCostBasis: "workflow_history", revenueBasis: "monetizer_data", volumeBasis: "tracking_engagement" }), true);
 
     const run = await advanceUntil(runId, store, reached("brief_architect"));
 
     expect(run.status).toBe("blocked");
-    expect(statusOf(run, "brief_architect")).toBe("blocked");
+    expect(statusOf(run, "reader_insight")).toBe("blocked");
     // NOT "skipped": a skipped brief reads as satisfied-with-absent downstream, which is exactly how a
     // half-run publishes an article nobody wrote a brief for.
     expect(statusOf(run, "brief_architect")).not.toBe("skipped");
     // Auditable, per rule 2: the predicate that decided and the facts it decided on, on the node.
-    const brief = run.nodes.find((node) => node.nodeId === "brief_architect")!;
-    expect(brief.skip?.predicate).toMatchObject({ when: "ev_floor_blocked" });
-    expect(brief.skip?.basis).toContain("evFloor.estimateBasis: monetizer_data");
-    expect(brief.warnings).toContain("run_halted:ev_floor_blocked");
-    expect(brief.warnings).toContain("no_publication_performed");
+    const gate = run.nodes.find((node) => node.nodeId === "reader_insight")!;
+    expect(gate.skip?.predicate).toMatchObject({ when: "ev_floor_blocked" });
+    expect(gate.skip?.basis).toContain("economicDecision.authority: cms_agent_engine");
+    expect(gate.warnings).toContain("run_halted:ev_floor_blocked");
+    expect(gate.warnings).toContain("no_publication_performed");
     // Nothing downstream ran.
-    for (const nodeId of ["contract_intelligence", "article_body", "publish_payload", "publication_controller", "publish_executor"]) {
+    for (const nodeId of ["research", "brief_architect", "contract_intelligence", "article_body", "publish_payload", "publication_controller", "publish_executor"]) {
       expect(statusOf(run, nodeId), `${nodeId} must not have run`).toBe("queued");
     }
+    const chargedAfterDecision = (await repositoryManager.getUsageRepository().list({ runId })).filter((record) =>
+      typeof record.nodeId === "string" && ["reader_insight", "research", "brief_architect", "draft_writer", "article_body"].includes(record.nodeId)
+    );
+    expect(chargedAfterDecision).toEqual([]);
     expect(run.stageOutputs.brief_architect).toBeUndefined();
   });
 

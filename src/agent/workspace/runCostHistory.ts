@@ -31,6 +31,11 @@ export type RunCostEstimate = {
   basis: RunCostBasis;
   scope: RunCostHistoryScope;
   projectId?: string;
+  // Stamped by costPrefetch at the repository boundary. The pure estimator leaves these absent;
+  // an engine decision requires both and therefore cannot mistake a hand-built/model-authored copy
+  // for the current workflow's fresh evidence.
+  workflowId?: string;
+  evaluatedAt?: string;
   // Auditable population counts: bounded candidates supplied by the repository, candidates that
   // proved complete/current-route/attributed, and paid run samples used by p50.
   candidateRuns: number;

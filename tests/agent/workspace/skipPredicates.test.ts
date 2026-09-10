@@ -331,10 +331,9 @@ describe("the gating seed carries the policy, and the store outranks it", () => 
     const gated = listWorkspaceNodes().filter((node) => gatedMetadata(node)?.skipWhen !== undefined).map((node) => node.id).sort();
     // W8 — artifact_materializer carries the same no_media_slots predicate as artifact_plan: a zero-media
     // run must skip BOTH, so the run's shape (and publishRequestId's mint-at-skip path) is unchanged.
-    // 2026-09-08 — brief_architect joins the list carrying `ev_floor_blocked`, the one predicate whose
-    // firing is a run HALT rather than a node skip (executor.ts). It is on exactly one node on purpose;
-    // see nodeGatingSeed.ts for why declaring it on the whole post-brief chain would be worse.
-    expect(gated).toEqual(["artifact_materializer", "artifact_plan", "brief_architect", "emotional_resonance", "human_texture", "monetization_strategy", "reader_simulation", "research"]);
+    // W6b — reader_insight carries `ev_floor_blocked`, the one predicate whose firing is a run HALT.
+    // It is the first paid node serialized after monetization_strategy and remains the single halt.
+    expect(gated).toEqual(["artifact_materializer", "artifact_plan", "emotional_resonance", "human_texture", "monetization_strategy", "reader_insight", "reader_simulation", "research"]);
     // Every seeded node is a real conductor node — a typo in an id would seed a policy onto nothing.
     const ids = new Set(listWorkspaceNodes().map((node) => node.id));
     for (const seededId of Object.keys(NODE_GATING_SEED)) expect(ids.has(seededId), `${seededId} is not a conductor node`).toBe(true);
