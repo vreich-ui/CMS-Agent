@@ -86,7 +86,9 @@ test('CMS-Agent W1 unwraps the effective skill-policy envelope instead of treati
 test('CMS-Agent W1 prompt calls first observation a session baseline', async ({ page }) => {
   await page.goto('/');
   await page.locator('nav.main button', { hasText: 'Workbench' }).click();
+  await page.locator('.rail .nrow', { hasText: 'draft_writer' }).click();
   await page.locator('.tabs button', { hasText: 'Prompt' }).click();
+  await page.getByRole('button', { name: 'Diff vs session baseline' }).click();
   await expect(page.getByText(/session baseline = the prompt first observed this session/i)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Diff vs session baseline' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Hide diff' })).toBeVisible();
 });

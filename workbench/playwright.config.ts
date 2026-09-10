@@ -1,6 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const CHROMIUM_PATH = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+// CI keeps a hermetic browser at the pinned Linux path. Local macOS worktrees use the installed
+// Chrome application unless an explicit executable override is supplied.
+const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+  ?? (process.platform === 'darwin'
+    ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    : '/opt/pw-browsers/chromium-1194/chrome-linux/chrome');
 
 export default defineConfig({
   testDir: './tests',
