@@ -25,7 +25,11 @@ describe("qualified run cost history", () => {
     const failedB = run("run_prefix_b", { status: "cancelled" });
     const estimate = estimateRunCostFromHistory({
       candidates: [failedA, failedB, complete], currentRouteEras: ROUTES, minSamples: 1,
-      records: [timing("run_prefix_a", "t_a", 0.1), timing("run_prefix_b", "t_b", 0.2), timing("run_complete", "t_complete", 5)]
+      records: [
+        timing("run_prefix_a", "t_a", 0.1), timing("run_prefix_b", "t_b", 0.2),
+        timing("run_complete", "t_complete", 5),
+        timing("run_complete", "t_complete_deterministic", 0, { nodeId: "publish_executor", routeEra: ROUTES.publish_executor })
+      ]
     });
 
     expect(estimate.estimatedRunCostUsd).toBe(5);
@@ -71,14 +75,27 @@ describe("qualified run cost history", () => {
     expect(estimate.sampleRuns).toBe(0);
   });
 
+  it("rejects a completed current-route run when a stage has no attributed timing row", () => {
+    const completeButUntimed = run("run_missing_stage_timing");
+    const estimate = estimateRunCostFromHistory({
+      candidates: [completeButUntimed], currentRouteEras: ROUTES, minSamples: 1,
+      records: [timing("run_missing_stage_timing", "research_only", 5)]
+    });
+
+    expect(estimate).toMatchObject({ basis: "no_history", coverageRuns: 0, sampleRuns: 0 });
+    expect(estimate.exclusionReasons).toMatchObject({ missing_stage_timing: 1 });
+  });
+
   it("uses qualifying project history before a separately labeled attributed pool", () => {
     const ownA = run("own_a");
     const ownB = run("own_b");
     const otherA = run("other_a", { projectId: "zilberman" });
     const otherB = run("other_b", { projectId: "zilberman" });
     const records = [
-      timing("own_a", "own_a", 4), timing("own_b", "own_b", 4.4),
-      timing("other_a", "other_a", 0.3, { projectId: "zilberman" }), timing("other_b", "other_b", 0.5, { projectId: "zilberman" })
+      timing("own_a", "own_a", 4), timing("own_a", "own_a_deterministic", 0, { nodeId: "publish_executor", routeEra: ROUTES.publish_executor }),
+      timing("own_b", "own_b", 4.4), timing("own_b", "own_b_deterministic", 0, { nodeId: "publish_executor", routeEra: ROUTES.publish_executor }),
+      timing("other_a", "other_a", 0.3, { projectId: "zilberman" }), timing("other_a", "other_a_deterministic", 0, { projectId: "zilberman", nodeId: "publish_executor", routeEra: ROUTES.publish_executor }),
+      timing("other_b", "other_b", 0.5, { projectId: "zilberman" }), timing("other_b", "other_b_deterministic", 0, { projectId: "zilberman", nodeId: "publish_executor", routeEra: ROUTES.publish_executor })
     ];
     const own = estimateRunCostFromHistory({ candidates: [ownA, ownB, otherA, otherB], records, currentRouteEras: ROUTES, projectId: "dr-lurie" });
     const pooled = estimateRunCostFromHistory({ candidates: [otherA, otherB], records, currentRouteEras: ROUTES, projectId: "dr-lurie" });

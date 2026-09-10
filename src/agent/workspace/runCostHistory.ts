@@ -20,6 +20,7 @@ export type RunCostExclusionReason =
   | "missing_project_attribution"
   | "missing_route_evidence"
   | "incomplete_stage_coverage"
+  | "missing_stage_timing"
   | "missing_timing_attribution"
   | "foreign_timing_project"
   | "missing_route_era"
@@ -106,6 +107,11 @@ const qualifies = (
     if (!row.routeEra) return { reason: "missing_route_era" };
     if (row.routeEra !== expectedEra) return { reason: "foreign_route_era" };
   }
+  // A completed run state alone is not cost evidence for every current stage. In particular, a
+  // deliberately skipped deterministic stage must still carry its attributed zero-cost timing row;
+  // otherwise treating the partial timing set as a complete run understates historical spend.
+  const timedStages = new Set(rows.filter((row) => routeEras[row.nodeId] !== undefined).map((row) => row.nodeId));
+  if (Object.keys(routeEras).some((nodeId) => !timedStages.has(nodeId))) return { reason: "missing_stage_timing" };
   return { records: rows.filter((row) => routeEras[row.nodeId] !== undefined) };
 };
 
@@ -140,7 +146,7 @@ const estimate = (
       ...shared,
       estimatedRunCostUsd: 0,
       basis: "no_history",
-      rationale: `No qualified run-cost history for workflow${input.projectId ? ` on project "${input.projectId}" or its attributed pool` : ""}: ${qualified.length}/${candidateRuns} bounded candidate run(s) covered every current stage and provenance check, but only ${costs.length} had actual spend (minimum ${minSamples}). estimatedRunCostUsd is 0 and the EV floor blocks nothing.`
+      rationale: `No qualified run-cost history for workflow${input.projectId ? ` on project "${input.projectId}" or its attributed pool` : ""}: ${qualified.length}/${candidateRuns} bounded candidate run(s) covered every current stage with attributed timing and passed provenance checks, but only ${costs.length} had actual spend (minimum ${minSamples}). estimatedRunCostUsd is 0 and the EV floor blocks nothing.`
     };
   }
 
@@ -150,7 +156,7 @@ const estimate = (
     ...shared,
     estimatedRunCostUsd,
     basis: "workflow_history",
-    rationale: `estimatedRunCostUsd = p50 (nearest-rank) of ${costs.length} qualified completed run total(s): [${costs.join(", ")}] -> ${estimatedRunCostUsd}. Every sample covered today's workflow stages, used real attributed timing attempts only, excluded this run, phases and duplicate timingIds, and included zero-cost deterministic stages for coverage but not spend.${pooled ? ` POOLED ACROSS ATTRIBUTED TENANTS: project "${input.projectId}" has only ${projectPaid.length} paid qualified sample(s), fewer than ${minSamples}.` : ""}`
+    rationale: `estimatedRunCostUsd = p50 (nearest-rank) of ${costs.length} qualified completed run total(s): [${costs.join(", ")}] -> ${estimatedRunCostUsd}. Every sample covered today's workflow stages with an attributed timing row for each, used real timing attempts only, excluded this run, phases and duplicate timingIds, and included zero-cost deterministic stages for coverage but not spend.${pooled ? ` POOLED ACROSS ATTRIBUTED TENANTS: project "${input.projectId}" has only ${projectPaid.length} paid qualified sample(s), fewer than ${minSamples}.` : ""}`
   };
 };
 
