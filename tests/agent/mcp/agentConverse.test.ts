@@ -29,7 +29,7 @@ describe("agent_converse MCP tool", () => {
     });
     const converse = createAgentTools({
       workspaceRepository: manager.getWorkspaceRepository(), projectRepository: manager.getProjectRepository(),
-      conversationTurnRepository: manager.getConversationTurnRepository(), usageRepository: manager.getUsageRepository(), conversationalRunner: runner
+      conversationTurnRepository: manager.getConversationTurnRepository(), usageRepository: manager.getUsageRepository(), skillRepository: manager.getSkillRepository(), conversationalRunner: runner
     }).find((tool) => tool.name === "agent.converse")!;
 
     expect(converse.inputSchema).toMatchObject({ additionalProperties: false, required: ["agent_ref", "project_id", "conversation_id", "turn_id", "actor", "context", "messages", "tools", "constraints"] });
@@ -46,7 +46,7 @@ describe("agent_converse MCP tool", () => {
     });
     const converse = createAgentTools({
       workspaceRepository: manager.getWorkspaceRepository(), projectRepository: manager.getProjectRepository(),
-      conversationTurnRepository: manager.getConversationTurnRepository(), usageRepository: manager.getUsageRepository(), conversationalRunner: runner
+      conversationTurnRepository: manager.getConversationTurnRepository(), usageRepository: manager.getUsageRepository(), skillRepository: manager.getSkillRepository(), conversationalRunner: runner
     }).find((tool) => tool.name === "agent.converse")!;
 
     await expect(converse.execute({ ...input, unknown: true })).rejects.toMatchObject({ code: "invalid_turn_request" });

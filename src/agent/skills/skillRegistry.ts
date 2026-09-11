@@ -44,6 +44,25 @@ export class MemorySkillRepository implements SkillRepository {
   async getSkillVersion() { return (await this.load()).skillVersion; }
   async list(filters: SkillListFilters = {}) { return (await this.load()).skills.filter((s) => (!filters.status || s.status === filters.status) && (!filters.skillIds?.length || filters.skillIds.includes(s.skillId))).map((s) => structuredClone(s)); }
   async get(skillId: string) { return (await this.load()).skills.find((s) => s.skillId === skillId); }
+  // F1 — mirrors ensureWorkspaceNodeSeeds (mcp/workspace/store.ts) exactly in shape and discipline:
+  // BlobSkillRepository.load() only seeds a COMPLETELY EMPTY store (see its override below), so a
+  // live store populated before a new canonical skill (e.g. structure_studio_standards_pack) shipped
+  // never receives it. `missing` is recomputed against the CURRENT document inside the mutate
+  // callback, so this stays correct however many times it is called; every existing skill row —
+  // whatever its version, status or instructions — is preserved byte-for-byte. Unlike
+  // ensureConversationalAgentSeeds there is deliberately no prompt-upgrade path for an existing row:
+  // an operator's edit is never reconciled against a newer canonical text here.
+  async ensureSkillSeeds(meta?: SkillMutationMeta): Promise<SkillDefinition[]> {
+    const current = await this.load();
+    const missing = seededSkillDefinitions.filter((seed) => !current.skills.some((skill) => skill.skillId === seed.skillId));
+    if (missing.length === 0) return current.skills.map((skill) => structuredClone(skill));
+    await this.mutate((doc) => {
+      const stillMissing = seededSkillDefinitions.filter((seed) => !doc.skills.some((skill) => skill.skillId === seed.skillId));
+      doc.skills = [...doc.skills, ...stillMissing];
+      return stillMissing[0]?.skillId;
+    }, meta ?? { actor: { kind: "system" }, source: "system", reason: "Seed skills newly added to the canonical set (F1)" }, "skill.seeded");
+    return (await this.load()).skills.map((skill) => structuredClone(skill));
+  }
   private async mutate(update: (doc: SkillDocument) => string | undefined, meta?: SkillMutationMeta, eventType = "skill.updated") { const doc = structuredClone(await this.load()); assertVersion(doc, meta); const before = structuredClone(doc.skills); const skillId = update(doc); doc.skills = doc.skills.map(assertValidSkill); doc.skillVersion += 1; doc.updatedAt = now(); const changed = skillId ? doc.skills.find((s) => s.skillId === skillId) : undefined; if (changed && skillId) doc.versions.push({ skillId, versionId: makeId("version"), skillVersion: doc.skillVersion, createdAt: doc.updatedAt, summary: meta?.summary, skill: structuredClone(changed) }); doc.events.push({ id: makeId("event"), type: eventType, skillId, actor: actorLabel(meta), summary: meta?.summary, skillVersion: doc.skillVersion, beforeHash: hashValue(before), afterHash: hashValue(doc.skills), createdAt: doc.updatedAt }); await this.save(doc); return doc.skillVersion; }
   async create(newSkill: SkillDefinition, meta?: SkillMutationMeta) { const skill = assertValidSkill({ ...newSkill, createdAt: newSkill.createdAt ?? now(), updatedAt: now() }); const skillVersion = await this.mutate((doc) => { if (doc.skills.some((s) => s.skillId === skill.skillId)) throw new Error(`Duplicate skill id: ${skill.skillId}`); doc.skills.push(skill); return skill.skillId; }, meta, "skill.created"); return { skill, skillVersion }; }
   async update(skillId: string, patch: Partial<SkillDefinition>, meta?: SkillMutationMeta) { let skill!: SkillDefinition; const skillVersion = await this.mutate((doc) => { const existing = doc.skills.find((s) => s.skillId === skillId); if (!existing) throw new Error(`Unknown skill: ${skillId}`); skill = assertValidSkill({ ...existing, ...patch, skillId, updatedAt: now() }); doc.skills = doc.skills.map((s) => s.skillId === skillId ? skill : s); return skillId; }, meta); return { skill, skillVersion }; }

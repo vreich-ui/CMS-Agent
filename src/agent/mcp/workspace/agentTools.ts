@@ -3,7 +3,9 @@ import type { ProjectRepository } from "../../repository/interfaces/ProjectRepos
 import type { WorkspaceRepository } from "../../repository/interfaces/WorkspaceRepository.js";
 import type { ConversationTurnRepository } from "../../repository/interfaces/ConversationTurnRepository.js";
 import type { UsageRepository } from "../../repository/interfaces/UsageRepository.js";
+import type { SkillRepository } from "../../repository/interfaces/SkillRepository.js";
 import { ConversationalRunner } from "../../conversations/conversationalRunner.js";
+import { resolveConversationSkills } from "../../conversations/conversationSkills.js";
 import { agentConverseInputSchema, agentConverseJsonSchema } from "../../conversations/conversationContract.js";
 import { classifyConversationalAgentPrompt, conversationalAgentStatuses, type ConversationalAgentDefinition } from "../../conversations/agentDefinitions.js";
 import { metaJson, mutationMeta, objectSchema, ok, tool, type WorkspaceTool } from "./toolKit.js";
@@ -43,19 +45,30 @@ const agentIdJson = { type: "string", pattern: "^agt_[a-z0-9_]+$" } as const;
  * The editable view of a definition. `promptState` tells an operator whether what they are looking
  * at is the shipped text, an older shipped text, or their own edit — the one thing a prompt editor
  * must never leave ambiguous.
+ *
+ * F2 — `skillReadiness` reports what a chat turn's skill injection (ConversationalRunner.run, via
+ * conversationSkills.ts) will actually apply for THIS agent right now, resolved through the exact
+ * same resolveConversationSkills() — so this view can never disagree with what the chat path does. A
+ * missing or inactive assigned skill never fails agent.get/list/update (they are read-only inspection
+ * tools); it is named here instead, the same "report, don't fail" discipline the chat turn itself
+ * follows.
  */
-const agentView = (agent: ConversationalAgentDefinition) => ({
-  id: agent.id,
-  role: agent.role,
-  name: agent.name,
-  prompt: agent.prompt,
-  promptState: classifyConversationalAgentPrompt(agent.prompt),
-  modelConfig: agent.modelConfig,
-  skills: agent.skills,
-  status: agent.status,
-  rev: agent.rev,
-  updatedAt: agent.updatedAt
-});
+const agentView = async (agent: ConversationalAgentDefinition, skillRepository: SkillRepository) => {
+  const skillReadiness = await resolveConversationSkills(agent, skillRepository);
+  return {
+    id: agent.id,
+    role: agent.role,
+    name: agent.name,
+    prompt: agent.prompt,
+    promptState: classifyConversationalAgentPrompt(agent.prompt),
+    modelConfig: agent.modelConfig,
+    skills: agent.skills,
+    skillReadiness: { applied: skillReadiness.applied, missing: skillReadiness.missing, inactive: skillReadiness.inactive },
+    status: agent.status,
+    rev: agent.rev,
+    updatedAt: agent.updatedAt
+  };
+};
 
 const resolveAgentJsonSchema = objectSchema({
   role: { type: "string", const: "client_manager" },
@@ -73,14 +86,17 @@ export type AgentToolDeps = {
   projectRepository: ProjectRepository;
   conversationTurnRepository: ConversationTurnRepository;
   usageRepository: UsageRepository;
+  // F2 — required so agent.list/get/update's skillReadiness is never a guess; the one real
+  // construction site (tools.ts) always has a skill repository (RepositoryManager builds one).
+  skillRepository: SkillRepository;
   conversationalRunner?: Pick<ConversationalRunner, "run">;
 };
 
 // CA2 deliberately resolves only the canonical workspace seed. Project-specific overrides and
 // conversational execution are later waves; callers discover an opaque ref instead of selecting
 // a node or implementation id.
-export function createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository, conversationalRunner }: AgentToolDeps): WorkspaceTool[] {
-  const runner = conversationalRunner ?? new ConversationalRunner({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository });
+export function createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository, skillRepository, conversationalRunner }: AgentToolDeps): WorkspaceTool[] {
+  const runner = conversationalRunner ?? new ConversationalRunner({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository, skillRepository });
   return [
     tool({
       name: "agent.resolve",
@@ -113,8 +129,9 @@ export function createAgentTools({ workspaceRepository, projectRepository, conve
       inputSchema: objectSchema({}, []),
       execute: async () => {
         await workspaceRepository.ensureConversationalAgentSeeds();
+        const agents = await workspaceRepository.listConversationalAgents();
         return ok({
-          agents: (await workspaceRepository.listConversationalAgents()).map(agentView),
+          agents: await Promise.all(agents.map((agent) => agentView(agent, skillRepository))),
           workspaceVersion: await workspaceRepository.getWorkspaceVersion()
         });
       }
@@ -129,7 +146,7 @@ export function createAgentTools({ workspaceRepository, projectRepository, conve
         await workspaceRepository.ensureConversationalAgentSeeds();
         const agent = await workspaceRepository.getConversationalAgent(data.id);
         if (!agent) throw new AgentResolveError("agent_unresolved", `No conversational agent matches "${data.id}".`);
-        return ok({ agent: agentView(agent), workspaceVersion: await workspaceRepository.getWorkspaceVersion() });
+        return ok({ agent: await agentView(agent, skillRepository), workspaceVersion: await workspaceRepository.getWorkspaceVersion() });
       }
     }),
     tool({
@@ -142,7 +159,7 @@ export function createAgentTools({ workspaceRepository, projectRepository, conve
         if (Object.keys(patch).length === 0) throw new Error("patch must change at least one field.");
         await workspaceRepository.ensureConversationalAgentSeeds();
         const result = await workspaceRepository.updateConversationalAgent(id, patch, meta);
-        return ok({ agent: agentView(result.agent), workspaceVersion: result.workspaceVersion });
+        return ok({ agent: await agentView(result.agent, skillRepository), workspaceVersion: result.workspaceVersion });
       }
     }),
     tool({
