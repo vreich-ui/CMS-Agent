@@ -40,6 +40,7 @@ import { filterRecordsByProject } from "../../improvement/projectScope.js";
 import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
 import { createSiteCredentialTools } from "./siteCredentialTools.js";
 import { createVisualIdentityTools } from "./visualIdentityTools.js";
+import { createOperationTools } from "./operationTools.js";
 import { FORBIDDEN_PROJECT_VERBS } from "../../tools/forbiddenProjectVerbs.js";
 import { dispatchToolContext } from "../../execution/dispatchAuthorization.js";
 
@@ -1156,6 +1157,10 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository, skillRepository }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),
-    ...createImprovementTools({ workspaceRepository, executionRepository, learningRepository, evaluationRepository: repositoryManager.getEvaluationRepository(), improvementRepository: repositoryManager.getImprovementRepository(), meta })
+    ...createImprovementTools({ workspaceRepository, executionRepository, learningRepository, evaluationRepository: repositoryManager.getEvaluationRepository(), improvementRepository: repositoryManager.getImprovementRepository(), meta }),
+    // A2 — read-only discovery surface over the operation catalog (operation.list/get/preflight).
+    // Code-registered descriptors only; no repository, no tenant call, no execution. See
+    // src/agent/operations/ for the catalog itself.
+    ...createOperationTools()
   ];
 }

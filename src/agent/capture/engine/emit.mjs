@@ -120,6 +120,17 @@ function requestedId(prefix, target, identity) {
   return `${prefix}_${sha(`${target}\0${identity}`, 18)}`;
 }
 
+/**
+ * The page id a plan ASKED for, for a pageRef. The live resolver
+ * (`pageOwnerIdByRef`, built in the executor from the target's existing
+ * routes) is always preferred — this is only the fallback for a pass that
+ * read no inventory, where the requested id is the only id there is.
+ */
+function requestedPageIdFor(plan, pageRef) {
+  const pagePlan = (plan.creates ?? []).find((operation) => operation.objectType === 'page' && operation.pageRef === pageRef);
+  return pagePlan?.requestedId ?? null;
+}
+
 function captureRequestTopic(plan) {
   const host = new URL(plan.source.targetUrl).hostname.replace(/^www\./, '');
   // Drop a conventional non-brand suffix when it is joined in a domain label
@@ -926,9 +937,30 @@ export async function executeEmission({
   // field can hold. Sections whose plan cannot be satisfied are dropped from
   // their body below and recorded in `assetGaps` — never hotlinked, never
   // half-bound, never a widened schema.
+  // W1 T1.5 (platform parity: packages/core/cli/capture/emit.mjs) — WHICH page
+  // id owns a captured request.
+  //
+  // Every asset is ingested under `captureRequestId(plan, pageRef)`, and a
+  // media op on that request only resolves if some governed object is
+  // registered as its owner. The owner is the page — but NOT, in general, the
+  // page id the plan ASKED for. `requestedId('page_capture', ...)` is a
+  // request: when the route already exists this emitter patches the EXISTING
+  // page (T12.28 reuse) and no `page_capture_<sha18>` object is ever created.
+  // That is the normal shape of a re-run, and it is why the live tenant's
+  // pages are named `page_home`, `page_filmography`, `page_partners`.
+  //
+  // Resolved here, from the SAME `existingPages` route match the creates loop
+  // makes below, before a single byte is ingested.
+  const pageOwnerIdByRef = new Map();
+  for (const operation of plan.creates) {
+    if (operation.objectType !== 'page' || !operation.pageRef) continue;
+    const collidingPage = existingPages.find((row) => routeOf(row) === operation.body.route) ?? null;
+    pageOwnerIdByRef.set(operation.pageRef, collidingPage?.object_id ?? operation.requestedId);
+  }
+
   const media = await materializeMedia({
     plan, transport, capturePolicy, assetProbe, report, trace,
-    ledger: mediaLedger, budgetMs: mediaBudgetMs, now,
+    ledger: mediaLedger, budgetMs: mediaBudgetMs, now, pageOwnerIdByRef,
   });
   if (media.incomplete) {
     // Stop CLEANLY, before plan.creates ever runs: object creation binds materialized artifact
@@ -1174,6 +1206,9 @@ async function materializeMedia({
   // re-ingested — that is what turned one stall into an infinite loop on zilberman (295 assets,
   // re-fetched from zero on every reclaim).
   ledger = null, budgetMs = MEDIA_MATERIALIZE_BUDGET_MS, now = Date.now,
+  // W1 T1.5: pageRef -> the page object id that will own that page's capture
+  // request. Resolved by the caller against the target's existing routes.
+  pageOwnerIdByRef = new Map(),
 }) {
   const artifactRefs = new Map(ledger ? Object.entries(ledger) : []);
   if (!canRetainMedia(capturePolicy)) {
@@ -1263,10 +1298,22 @@ async function materializeMedia({
     }
     try {
       const requestId = captureRequestId(plan, asset.pageRef);
+      const ownerPageId = pageOwnerIdByRef.get(asset.pageRef) ?? requestedPageIdFor(plan, asset.pageRef);
       const artifact = await transport.call('create_artifact_from_url', {
         requestId,
         artifactKind, contentType: resolved.contentType, sourceUrl: resolved.sourceUrl,
         expectedSizeBytes: resolved.expectedSizeBytes, expectedSha256: resolved.expectedSha256,
+        // W1 T1.5: a capture request id names no content_item and never will,
+        // so the page that these bytes are FOR is registered as its owner in
+        // the same call that stores them. The page object does not exist yet
+        // (it is created below, out of bodies that need these very artifact
+        // references) and the server deliberately does not require it to —
+        // the owner is checked at media-op time, not at ingest time.
+        // No resolvable page id (an asset whose pageRef has no page plan) means NO owner key at
+        // all: the server validates `owner` when it is present and would reject the whole ingest
+        // over a null object_id, turning a missing pointer into a lost artifact. Omitting it is
+        // exactly today's behaviour — the request simply has no registered owner.
+        ...(ownerPageId ? { owner: { object_type: 'page', object_id: ownerPageId } } : {}),
         // T12.16: WITHOUT this the server's createArtifactBlobKey has no
         // extension to append and mints `image/<requestId>/<sha256>`, which
         // fails MAJOR_KEY_ARTIFACT_REF_RE below — every artifact ingested and
