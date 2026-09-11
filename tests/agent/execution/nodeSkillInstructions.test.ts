@@ -12,10 +12,12 @@ vi.mock("@openai/agents", () => ({
 import { executeNode, getEffectivePrompt } from "../../../src/agent/workspace/nodeRuntime.js";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { listWorkspaceNodes } from "../../../src/agent/workspace/nodes.js";
+import { cloneConductorNodes } from "../../../src/agent/workspace/cloneConductorNodes.js";
 import { OpenAINodeRunner } from "../../../src/agent/execution/runners/OpenAINodeRunner.js";
 import { AnthropicNodeRunner } from "../../../src/agent/execution/runners/AnthropicNodeRunner.js";
 import { resolveNodeInstructions } from "../../../src/agent/execution/nodeInstructions.js";
 import { resolveSkillsForNode } from "../../../src/agent/skills/skillResolver.js";
+import { STANDARDS_PACK_SKILL_ID } from "../../../src/agent/skills/standardsPack.js";
 
 const base = () => ({ ...listWorkspaceNodes().find(n => n.id === "input_triage")!, assignedSkills: ["editorial_craft"], allowedTools: [] });
 const context = () => ({ run: { runId: "offline", workflowId: "publishing_conductor", projectId: "cms-agent-test", stageOutputs: {} } as any, executionRepository: {} as any });
@@ -82,6 +84,30 @@ describe("CMS-Agent resolved skill instructions", () => {
       expect(await runner.run({ node, input: {} }, context())).toMatchObject({ ok: false, code: "invalid_node_configuration" });
     }
     expect(captures.calls).toBe(0); expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  // F1 — a structure-studio node (clone_conductor's layout_analyst) whose store is missing
+  // structure_studio_standards_pack refuses before contacting either provider, exactly like the
+  // "missing" case above; the acceptance is that ensureSkillSeeds() clears it without a redeploy,
+  // never that a caller can bypass or ignore the blocker.
+  it("F1: a structure-studio node with the pack missing from the store bills neither provider, and the additive top-up clears it", async () => {
+    const studioNode = { ...cloneConductorNodes.find((n) => n.id === "layout_analyst")! };
+    expect(studioNode.assignedSkills).toContain(STANDARDS_PACK_SKILL_ID);
+    const repo = repositoryManager.getSkillRepository();
+    await repo.delete(STANDARDS_PACK_SKILL_ID);
+    const fetcher = vi.fn();
+    for (const runner of [new OpenAINodeRunner(), new AnthropicNodeRunner(fetcher)]) {
+      expect(await runner.run({ node: studioNode, input: {} }, context())).toMatchObject({ ok: false, code: "invalid_node_configuration" });
+    }
+    expect(captures.calls).toBe(0); expect(fetcher).not.toHaveBeenCalled();
+
+    await repo.ensureSkillSeeds();
+    const result = await new OpenAINodeRunner().run({ node: studioNode, input: {} }, context());
+    // The blocker is gone and the provider was actually reached — that is F1's whole claim. Whether
+    // this particular mocked reply happens to satisfy layout_analyst's own output schema is a
+    // different concern (exercised by the node's own fixture tests), not this one's.
+    expect(result).not.toMatchObject({ ok: false, code: "invalid_node_configuration" });
+    expect(captures.calls).toBe(1);
   });
 
   it("reads assigned skills once, deduplicates in assignment order, and grants no extra tools", async () => {

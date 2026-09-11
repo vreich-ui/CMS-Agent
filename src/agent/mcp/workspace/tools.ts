@@ -675,7 +675,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // DEPRECATED_TOOL_ALIASES in server.ts); same for node.get_execution and
     // workspace.update_node_schema below.
     tool({ name: "node.get", description: "Get a safe complete node inspection record with compact summaries of this node's actual revisions; use changes tools for full historical snapshots.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => ok({ node: await getNodeDetails(nodeToolInput.parse(input).nodeId, { workspaceRepository, executionRepository }) }) }),
-    tool({ name: "node.get_effective_prompt", description: "Resolve the effective prompt for one node without secrets.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => ok(await getEffectivePrompt(nodeToolInput.parse(input).nodeId, workspaceRepository)) }),
+    tool({ name: "node.get_effective_prompt", description: "Resolve the effective prompt for one node without secrets.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { await skillRepository.ensureSkillSeeds(); return ok(await getEffectivePrompt(nodeToolInput.parse(input).nodeId, workspaceRepository)); } }),
     tool({ name: "node.get_effective_tools", description: "Resolve what a node can actually do, in BOTH senses: `tools` are the controlled registry tools a model turn may call, and `engine` are the tenant MCP verbs the node's own deterministic route calls directly — which pass no grant and no risk check, and which no grant list has ever shown. With `runId`, resolves against the SAME authorization that run's dispatch uses (the node's risk cap, the run's authorized tools, the platform's allowed tools) — so the answer is what dispatch would actually allow, not a context-free reading of the node's grant list. Without `runId`, reports the node's own declaration.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => {
       const data = nodeToolInput.parse(input);
       const run = data.runId ? await getRun(data.runId, executionRepository) : undefined;
@@ -696,7 +696,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       if (!run || !node) return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId), engine, capability, resolvedAgainst: "node_declaration" });
       return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId, dispatchToolContext({ run, node })), engine, capability, resolvedAgainst: "run_dispatch" });
     } }),
-    tool({ name: "node.get_effective_skills", description: "Resolve effective skill policy for one node.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); if (!node) throw new Error("Unknown node"); return ok({ policy: await resolveSkillsForNode(node, skillRepository) }); } }),
+    tool({ name: "node.get_effective_skills", description: "Resolve effective skill policy for one node.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { await skillRepository.ensureSkillSeeds(); const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); if (!node) throw new Error("Unknown node"); return ok({ policy: await resolveSkillsForNode(node, skillRepository) }); } }),
     tool({ name: "node.get_input_schema", description: "Get one node input schema.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); return ok({ schema: node?.inputSchema ?? null }); } }),
     tool({ name: "node.get_output_schema", description: "Get one node output schema.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); return ok({ schema: node?.outputSchema ?? null }); } }),
     tool({ name: "node.validate_input", description: "Validate input against a node input schema.", zodSchema: nodeValidateInput, inputSchema: nodeValidateJsonSchema, execute: async (input) => { const data = nodeValidateInput.parse(input); const node = await workspaceRepository.getNode(data.nodeId); if (!node) throw new Error(`Unknown node: ${data.nodeId}`); return ok({ validation: validateAgainstNodeSchema(data.value, node.inputSchema) }); } }),
@@ -804,8 +804,8 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       }
       return ok({ executions: [...inProcess, ...ledger.map((record) => ({ ...record, source: "tool_execution_ledger" })), ...persisted] });
     } }),
-    tool({ name: "skill.list", description: "List reusable workspace skills.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ skills: await skillRepository.list() }); } }),
-    tool({ name: "skill.get", description: "Get one reusable workspace skill.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok({ skill: await skillRepository.get(skillIdInput.parse(input).skillId) ?? null }) }),
+    tool({ name: "skill.list", description: "List reusable workspace skills.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); await skillRepository.ensureSkillSeeds(); return ok({ skills: await skillRepository.list() }); } }),
+    tool({ name: "skill.get", description: "Get one reusable workspace skill.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => { await skillRepository.ensureSkillSeeds(); return ok({ skill: await skillRepository.get(skillIdInput.parse(input).skillId) ?? null }); } }),
     tool({ name: "skill.create", description: "Create a versioned reusable skill from a nested `skill` object; only skillId/name/description/instructions are required, other fields are defaulted.", zodSchema: skillCreateInput, inputSchema: skillCreateJsonSchema, execute: async (input) => { const data = skillCreateInput.parse(coerceSkillArg(input)); return ok(await skillRepository.create(skillDefinitionSchema.parse(normalizeSkillInput(data.skill)), meta(data))); } }),
     tool({ name: "skill.update", description: "Patch a reusable skill and create a version snapshot.", zodSchema: skillUpdateInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillUpdateInput.parse(input); return ok(await skillRepository.update(data.skillId, data.patch as Partial<SkillDefinition>, meta(data))); } }),
     tool({ name: "skill.delete", description: "Delete a reusable skill definition.", zodSchema: skillIdInput, inputSchema: skillIdJsonSchema, execute: async (input) => ok(await skillRepository.delete(skillIdInput.parse(input).skillId)) }),
@@ -816,7 +816,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "skill.get_version", description: "Get one skill version snapshot.", zodSchema: skillVersionInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillVersionInput.parse(input); return ok({ version: await skillRepository.getVersion(data.skillId, data.versionId) ?? null }); } }),
     tool({ name: "skill.restore_version", description: "Restore a skill from a previous version snapshot.", zodSchema: skillVersionInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillVersionInput.parse(input); return ok(await skillRepository.restoreVersion(data.skillId, data.versionId, meta(data))); } }),
     tool({ name: "skill.validate", description: "Validate skill schema, tool policy, and examples.", zodSchema: skillValidateInput, inputSchema: skillMutationJsonSchema, execute: async (input) => ok({ validation: validateSkillDefinition(skillValidateInput.parse(input).skill) }) }),
-    tool({ name: "skill.resolve_for_node", description: "Resolve assigned skills into deterministic instructions, tools, and conflicts for a node.", zodSchema: skillResolveInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillResolveInput.parse(input); const node = await workspaceRepository.getNode(data.nodeId); if (!node) throw new Error(`Unknown node: ${data.nodeId}`); return ok({ policy: await resolveSkillsForNode(node, skillRepository, { workspaceSystemPolicy: data.workspaceSystemPolicy, projectPolicy: data.projectPolicy, runInstructions: data.runInstructions, platformTools: data.platformTools, runAuthorizedTools: data.runAuthorizedTools, riskPolicy: data.riskPolicy }) }); } }),
+    tool({ name: "skill.resolve_for_node", description: "Resolve assigned skills into deterministic instructions, tools, and conflicts for a node.", zodSchema: skillResolveInput, inputSchema: skillMutationJsonSchema, execute: async (input) => { const data = skillResolveInput.parse(input); await skillRepository.ensureSkillSeeds(); const node = await workspaceRepository.getNode(data.nodeId); if (!node) throw new Error(`Unknown node: ${data.nodeId}`); return ok({ policy: await resolveSkillsForNode(node, skillRepository, { workspaceSystemPolicy: data.workspaceSystemPolicy, projectPolicy: data.projectPolicy, runInstructions: data.runInstructions, platformTools: data.platformTools, runAuthorizedTools: data.runAuthorizedTools, riskPolicy: data.riskPolicy }) }); } }),
     // T15.16 (#195) — the four reads below ensureWorkspaceNodeSeeds() first: a workspace document
     // created before capture_conductor/clone_conductor joined the governance-visible seed set
     // (workspaceStoreNodes.ts) is additively topped up with their missing rows on first read, the same
@@ -852,9 +852,61 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // unchanged. It answers "what can this node actually do", which the grant list alone does not: a
     // deterministic node's allowedTools can never fire, and its route reaches the tenant through
     // ProjectMcpAdapter with no grant, no risk check and no ledger entry. See nodeCapabilityAudit.ts.
-    tool({ name: "workspace.validate_node", description: "Validate a node or existing node id. `capabilities` additionally reports what the node can ACTUALLY do: its executionKind (model | deterministic), the grants that can fire, the grants that can never fire because the node terminates in a deterministic route, and the tenant MCP verbs that route calls directly — which pass no node grant, no risk check and no tool execution ledger. Read-only: nothing here blocks or reroutes a call.", zodSchema: validateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = validateNodeInput.parse(input); const node = data.node ?? (data.id ? await workspaceRepository.getNode(data.id) : undefined); return ok({ valid: !!node && validateJsonSchema((node as WorkspaceNode).inputSchema).length === 0 && validateJsonSchema((node as WorkspaceNode).outputSchema).length === 0, capabilities: node ? auditNodeCapabilities(node as WorkspaceNode) : null }); } }),
+    // F3 — `valid` covers ONLY schema validity (input/output JSON Schema well-formedness), unchanged
+    // by this addition. `readiness` is the separate, honest answer to "can this node actually
+    // dispatch right now": it folds in resolveSkillsForNode's blockers/warnings against the node's
+    // CURRENTLY ASSIGNED skills, something `valid` never captured — a node could read `valid: true`
+    // while a missing or inactive assigned skill would refuse it at dispatch (invalid_node_configuration).
+    // A deterministic node is never blocked BY a skill conflict: it completes with zero model calls,
+    // so a skill problem is surfaced as a warning, not a `runnable: false` — resolveSkillsForNode's
+    // instructions are simply never read for such a node's own dispatch.
+    tool({ name: "workspace.validate_node", description: "Validate a node or existing node id. `valid` covers JSON-Schema validity of the node's input/output schemas ONLY. `capabilities` additionally reports what the node can ACTUALLY do: its executionKind (model | deterministic), the grants that can fire, the grants that can never fire because the node terminates in a deterministic route, and the tenant MCP verbs that route calls directly — which pass no node grant, no risk check and no tool execution ledger. `readiness` is the separate, honest answer to whether the node can actually DISPATCH: its blockers/warnings from resolving the node's assigned skills, and `runnable`, which is false only when a blocker would actually stop dispatch — for a deterministic node a skill blocker is reported as a warning instead, since such a node completes with zero model calls and is never blocked by one. Read-only: nothing here blocks or reroutes a call.", zodSchema: validateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => {
+      const data = validateNodeInput.parse(input);
+      await skillRepository.ensureSkillSeeds();
+      const node = data.node ?? (data.id ? await workspaceRepository.getNode(data.id) : undefined);
+      const valid = !!node && validateJsonSchema((node as WorkspaceNode).inputSchema).length === 0 && validateJsonSchema((node as WorkspaceNode).outputSchema).length === 0;
+      const capabilities = node ? auditNodeCapabilities(node as WorkspaceNode) : null;
+      const readiness = node
+        ? await (async () => {
+          const policy = await resolveSkillsForNode(node as WorkspaceNode, skillRepository);
+          const isDeterministic = capabilities?.executionKind === "deterministic";
+          // A deterministic node never reads resolveSkillsForNode's instructions at dispatch, so a
+          // skill blocker can never stop IT specifically — demoted to a warning and said so, rather
+          // than reporting runnable:false for a node that will in fact run.
+          const blockers = policy.conflicts.filter((conflict) => conflict.severity === "blocker" && !isDeterministic);
+          const warnings = policy.conflicts.filter((conflict) => conflict.severity === "warning" || (conflict.severity === "blocker" && isDeterministic));
+          return {
+            runnable: blockers.length === 0,
+            executionKind: capabilities?.executionKind ?? "model",
+            blockers,
+            warnings,
+            ...(isDeterministic && policy.conflicts.some((conflict) => conflict.severity === "blocker") ? { note: "This node is deterministic: it completes with zero model calls and is never blocked by an assigned-skill conflict, so blockers above are reported as warnings here." } : {})
+          };
+        })()
+        : null;
+      return ok({ valid, capabilities, readiness });
+    } }),
     tool({ name: "workspace.audit_capabilities", description: "Whole-graph capability audit: how many nodes are model-dispatched vs deterministic, how many carry grants that can never fire, and which nodes reach publish- or admin-risk tenant verbs from engine code rather than through a granted tool. Read-only. Pass `id` for one node's detail; omit it for the summary across every resolved node.", zodSchema: optionalNodeId, inputSchema: optionalNodeIdJsonSchema, execute: async (input) => { const data = optionalNodeId.parse(input); await workspaceRepository.ensureWorkspaceNodeSeeds(); const nodes = await workspaceRepository.getNodes(); if (data.id) { const node = nodes.find((candidate) => candidate.id === data.id); return ok({ capabilities: node ? auditNodeCapabilities(node) : null }); } return ok({ summary: summarizeCapabilityAudit(nodes), nodes: nodes.map(auditNodeCapabilities).filter((audit) => audit.findings.length > 0) }); } }),
-    tool({ name: "workspace.get_node_effective_config", description: "Get safe resolved node execution config without secrets. Resolves for capture_conductor's and clone_conductor's own nodes as well as publishing_conductor's.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => { await workspaceRepository.ensureWorkspaceNodeSeeds(); const node = await workspaceRepository.getNode(nodeId.parse(input).id); return ok({ config: node ? { prompt: node.prompt, inputSchema: node.inputSchema, outputSchema: node.outputSchema, modelConfig: node.modelConfig ?? {}, assignedSkills: node.assignedSkills ?? [], effectiveTools: node.allowedTools, riskLevel: node.riskLevel, approvalRequirements: node.riskLevel === "publish" || node.riskLevel === "admin" ? ["explicit_approval"] : [] } : null }); } }),
+    // F3 — `assignedSkills` was raw ids only: an operator could not tell from this tool alone whether
+    // an assigned id actually resolves, to which version, or whether it is active — exactly the gap
+    // that let a node read fine here while blocking at dispatch. `effectiveSkills`/`skillConflicts`
+    // are resolved through the SAME resolveSkillsForNode() every other surface (node.get_effective_skills,
+    // the chat path via resolveConversationSkills) reads, so a version reported here can never drift
+    // from what a node dispatch or a chat turn actually applies.
+    tool({ name: "workspace.get_node_effective_config", description: "Get safe resolved node execution config without secrets. Resolves for capture_conductor's and clone_conductor's own nodes as well as publishing_conductor's. `effectiveSkills` reports each assigned skill actually resolved (id, version, status) and `skillConflicts` any blocker/warning from resolving them — the same resolution node.get_effective_skills and workspace.validate_node's readiness use, so the reported version can never disagree with what a dispatch would apply.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => {
+      await workspaceRepository.ensureWorkspaceNodeSeeds();
+      await skillRepository.ensureSkillSeeds();
+      const node = await workspaceRepository.getNode(nodeId.parse(input).id);
+      if (!node) return ok({ config: null });
+      const policy = await resolveSkillsForNode(node, skillRepository);
+      const assigned = policy.skillIds.length ? await skillRepository.list({ skillIds: policy.skillIds }) : [];
+      const byId = new Map(assigned.map((skill) => [skill.skillId, skill]));
+      const effectiveSkills = policy.skillIds.map((skillId) => {
+        const skill = byId.get(skillId);
+        return { skillId, version: skill?.version ?? null, status: skill?.status ?? null };
+      });
+      return ok({ config: { prompt: node.prompt, inputSchema: node.inputSchema, outputSchema: node.outputSchema, modelConfig: node.modelConfig ?? {}, assignedSkills: node.assignedSkills ?? [], effectiveSkills, skillConflicts: policy.conflicts, effectiveTools: node.allowedTools, riskLevel: node.riskLevel, approvalRequirements: node.riskLevel === "publish" || node.riskLevel === "admin" ? ["explicit_approval"] : [] } });
+    } }),
     tool({ name: "workspace.export_workspace", description: "Export workspace data.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok(await workspaceRepository.exportWorkspace()); } }),
     tool({ name: "workspace.import_workspace", description: "Import workspace data.", zodSchema: importWorkspace, inputSchema: importWorkspaceJsonSchema, execute: async (input) => { const data = importWorkspace.parse(input); return ok(await workspaceRepository.importWorkspace({ ...data, nodes: data.nodes as WorkspaceNode[] | undefined })); } }),
     // R-6: article_body.get_schema / article_body.validate are retired. They served the workspace-local
@@ -1101,7 +1153,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // SITE_CLIENT_MANAGER_TOOLS (siteGenesis.ts) precisely so `node_execute` never has to be:
     // it takes no nodeId, no executionMode, and writes nothing. See visualIdentityTools.ts.
     ...createVisualIdentityTools({ workspaceRepository, executionRepository, projectRepository }),
-    ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository }),
+    ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository, skillRepository }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),
     ...createImprovementTools({ workspaceRepository, executionRepository, learningRepository, evaluationRepository: repositoryManager.getEvaluationRepository(), improvementRepository: repositoryManager.getImprovementRepository(), meta })
