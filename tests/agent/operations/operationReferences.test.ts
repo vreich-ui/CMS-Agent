@@ -71,4 +71,12 @@ describe("typed operation references", () => {
     expect(validateReference({ surface: "web", templateId: "tmpl_1", tenantId: "t1" }, { tenantId: "t1" }).ok).toBe(true);
     expect(validateReference({ kind: "content_linked_asset", assetId: "asset_1", tenantId: "t1" }, { tenantId: "t1" }).ok).toBe(true);
   });
+
+  it("an AssetRef's surface hint is optional and accepts exactly 'web' | 'pdf' | null", () => {
+    expect(validateReference({ kind: "capture_artifact", assetId: "asset_1", tenantId: "t1" }, { tenantId: "t1" }).ok).toBe(true);
+    expect(validateReference({ kind: "capture_artifact", assetId: "asset_1", tenantId: "t1", surface: null }, { tenantId: "t1" }).ok).toBe(true);
+    expect(validateReference({ kind: "capture_artifact", assetId: "asset_1", tenantId: "t1", surface: "pdf" }, { tenantId: "t1" }).ok).toBe(true);
+    expect(validateReference({ kind: "capture_artifact", assetId: "asset_1", tenantId: "t1", surface: "web" }, { tenantId: "t1" }).ok).toBe(true);
+    expect(assetRefSchema.safeParse({ kind: "capture_artifact", assetId: "asset_1", tenantId: "t1", surface: "mobile_app" }).success).toBe(false);
+  });
 });

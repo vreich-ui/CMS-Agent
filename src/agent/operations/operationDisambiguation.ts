@@ -4,7 +4,7 @@
 // decide — "disambiguation" here means structural matching against the registered catalog only.
 import { listOperations } from "./operationCatalog.js";
 import type { OperationDescriptor } from "./operationTypes.js";
-import type { OperationReference, TemplateRef } from "./operationReferences.js";
+import type { AssetRef, OperationReference, TemplateRef } from "./operationReferences.js";
 
 export type DisambiguationContext = {
   surface?: "web" | "pdf" | null;
@@ -19,13 +19,23 @@ const byOperationId = (left: OperationDescriptor, right: OperationDescriptor) =>
 
 const isTemplateRef = (ref: OperationReference): ref is TemplateRef => "templateId" in ref && "surface" in ref;
 
-// The only ref kind this catalog can read a surface signal from today: TemplateRef carries its own
-// `surface` field explicitly. ObjectRef and AssetRef (operationReferences.ts) carry no surface at
-// all under the current contract, so an AssetRef contributes no signal here. (Flagged for the
-// coordinator: if an AssetRef is meant to be "PDF-bound" on its own, its type needs a field that
-// says so; nothing here invents one past the fixed reference shapes.)
+// AssetRef (operationReferences.ts) carries its own optional `surface` as a caller-declared hint —
+// same field name, same closed "web" | "pdf" enum as TemplateRef's, added at the coordinator's
+// direction so a PDF-bound (or web-bound) asset reference narrows disambiguation exactly like a
+// TemplateRef already does. `"surface" in ref` alone is not enough to identify an AssetRef here (a
+// TemplateRef also carries `surface`); `assetId` is the field only AssetRef has.
+const isAssetRef = (ref: OperationReference): ref is AssetRef => "assetId" in ref;
+
+// Every ref kind this catalog can read a surface signal from: a TemplateRef's `surface` is always
+// present; an AssetRef's is optional, so only a ref that actually declared one contributes. First
+// match in `refs` order wins — the same "first ref that carries a signal" rule for both kinds, so a
+// caller mixing an unscoped AssetRef with a scoped TemplateRef sees a signal exactly when the
+// scoped one appears, never a surprise ordering dependency between the two kinds.
 const surfaceSignalFromRefs = (refs: OperationReference[] | undefined): "web" | "pdf" | null => {
-  for (const ref of refs ?? []) if (isTemplateRef(ref)) return ref.surface;
+  for (const ref of refs ?? []) {
+    if (isTemplateRef(ref)) return ref.surface;
+    if (isAssetRef(ref) && ref.surface) return ref.surface;
+  }
   return null;
 };
 

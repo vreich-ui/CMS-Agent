@@ -36,6 +36,30 @@ describe("disambiguateOperation", () => {
     if ("resolved" in result) expect(result.resolved.operationId).toBe("pdf_template_family");
   });
 
+  it("a PDF-bound AssetRef in context resolves to the PDF operation, exactly as a PDF-bound TemplateRef does", () => {
+    const result = disambiguateOperation("I want to revise a template", {
+      refs: [{ kind: "stored_media", assetId: "asset_1", tenantId: "dr-lurie", surface: "pdf" }]
+    });
+    expect("resolved" in result).toBe(true);
+    if ("resolved" in result) expect(result.resolved.operationId).toBe("pdf_template_family");
+  });
+
+  it("a web-bound AssetRef in context resolves to the web operation with no alternatives", () => {
+    const result = disambiguateOperation("I want to revise a template", {
+      refs: [{ kind: "stored_media", assetId: "asset_1", tenantId: "dr-lurie", surface: "web" }]
+    });
+    expect("resolved" in result).toBe(true);
+    if ("resolved" in result) expect(result.resolved.operationId).toBe("image_template_revision");
+  });
+
+  it("an AssetRef with no declared surface contributes no signal, same as before this field existed", () => {
+    const result = disambiguateOperation("I want to revise a template", {
+      refs: [{ kind: "stored_media", assetId: "asset_1", tenantId: "dr-lurie" }]
+    });
+    expect("alternatives" in result).toBe(true);
+    if ("alternatives" in result) expect(result.alternatives.map((d) => d.operationId)).toEqual(["image_template_revision", "pdf_template_family"]);
+  });
+
   it("identical input produces identical output across repeated calls (pure, no clock, no randomness)", () => {
     const first = disambiguateOperation("I want to revise a template");
     const second = disambiguateOperation("I want to revise a template");

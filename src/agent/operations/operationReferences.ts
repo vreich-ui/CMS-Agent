@@ -25,7 +25,17 @@ export const assetRefSchema = z.object({
   kind: z.enum(assetRefKinds),
   assetId: z.string().min(1),
   tenantId: z.string().min(1),
-  checksum: z.string().min(1).optional()
+  checksum: z.string().min(1).optional(),
+  // Same strict-zod treatment as TemplateRef's own `surface` (the enum is closed to exactly "web" |
+  // "pdf") but OPTIONAL/nullable here, because unlike a TemplateRef an asset is not always bound to
+  // one surface. This is a CALLER-DECLARED HINT, not a fact this module verifies: where the stored
+  // artifact's own media type is known (an adopting executor reading the asset record itself), that
+  // known type wins over whatever a caller declared here. A caller — or a model turn proposing a
+  // plan — must never be able to steer routing to the PDF-only or web-only branch of an operation by
+  // simply declaring a surface the underlying artifact does not actually have; this field only ever
+  // narrows disambiguation among ALREADY-VALID candidate operations (operationDisambiguation.ts), it
+  // never substitutes for the artifact's real type at execution time.
+  surface: z.enum(["web", "pdf"]).nullable().optional()
 }).strict();
 export type AssetRef = z.infer<typeof assetRefSchema>;
 
