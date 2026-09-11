@@ -2,9 +2,11 @@
 // inventory and its change history. Read-only by declared effect (riskLevel "read"): this
 // descriptor's own contract never proposes a write.
 //
-// Implementing task: not yet assigned in the A6-A9 slate this catalog was built against (A6 visual,
-// A7 PDF family, A8 document render/preview, A9 image batch, A5 asset lookup). Flagged for the
-// coordinator to assign before a caller depends on this operation actually running.
+// Implementing task: A4. This operation is the read surface over the versioned site snapshot A4
+// builds (siteContext.ts's SiteSnapshot/SiteContextSource, candidates.ts, changeSet.ts) — an
+// executor for this descriptor is expected to assemble its response from a captured SiteSnapshot's
+// `objects` (and, for history, a later task's own change-event read) rather than inventing a second
+// way to enumerate a tenant's objects.
 import type { OperationDescriptor } from "../operationTypes.js";
 
 export const siteInventoryOperationV1: OperationDescriptor = {
