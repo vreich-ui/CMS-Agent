@@ -190,6 +190,20 @@ import { fileURLToPath } from "node:url";
 // worktree does not touch platform): port the same resumption ledger into
 // platform/packages/core/cli/capture/emit.mjs so the two copies converge and this file can be
 // re-vendored byte-identical again.
+//
+// W1 T1.5 (2026-09-11) DEVIATED emit.mjs AGAIN, CMS-Agent-side — still NOT a re-vendor
+// (upstreamSha256 unchanged). Platform is teaching the artifact bridge that a request id may be
+// owned by ANY governed object rather than only a content_item: every media op on a captured
+// request used to die with artifact_request_not_found, because capture mints a per-page request id
+// and captured pages are `page` objects. The emitter's half of that contract is to name the owning
+// page on ingest, so materializeMedia now passes `owner: { object_type: 'page', object_id }` on
+// every create_artifact_from_url. The owner id is resolved from the SAME existingPages route match
+// the creates loop makes — NOT from requestedId — because the dominant path is reuse: when a route
+// already exists the emitter patches the EXISTING page and no `page_capture_<sha18>` object is ever
+// created, which is why the live tenant's pages are page_home / page_filmography / page_partners.
+// PLATFORM-SIDE COMPANION CHANGE IS IN FLIGHT SEPARATELY (branch
+// runner/w1w2-artifact-owner-dedupe): once it lands, platform's own emit.mjs carries the equivalent
+// change and BOTH deviations can be retired in one re-vendor.
 
 export const CAPTURE_ENGINE_UPSTREAM = {
   repo: "vreich-ui/platform",
@@ -239,7 +253,7 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "988c136cd13412dcaf55930ce87012af1c77ed741fac62bd929736d2a044adaf",
+    vendoredSha256: "6636527cd4a9d6a6a776b6e5c6212c72b043c5c8cec0f1944638b1c52e5a10f0",
     upstreamSha256: "275c701794ca98f3e294b8eff8dbce6860741fe806538796928bd744628f8089",
     deviation:
       "W1.1 (2026-09-10, routeRegistry.ts's own 'NOT CLAIMED HERE' note) — materializeMedia issued " +
@@ -263,7 +277,19 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
       "unchanged; this is the same vendored-engine rule as theme.mjs's C3 deviation above: the " +
       "platform-side companion change is a different agent's task, so upstreamSha256 stays pinned " +
       "to the pre-W1.1 platform commit until that lands and this file is re-vendored byte-identical " +
-      "again."
+      "again. " +
+      "W1 T1.5 (2026-09-11) adds a SECOND deviation to the same file: materializeMedia now passes " +
+      "`owner: { object_type: 'page', object_id }` on every create_artifact_from_url, so the " +
+      "captured page is registered as the owner of its own capture request id and platform's " +
+      "artifact bridge stops answering artifact_request_not_found for media that no content_item " +
+      "will ever name. The owner id comes from the SAME existingPages route match the creates loop " +
+      "makes (collidingPage?.object_id ?? requestedId), resolved into a pageRef -> id map BEFORE " +
+      "any byte is ingested — never from requestedId alone, because a re-run patches the EXISTING " +
+      "page and mints no page_capture_<sha18> object at all. Additive only: one new optional " +
+      "parameter with an empty-Map default, one extra field on an outgoing payload the server " +
+      "treats as optional, and no change to the ledger, the budget, the quarantine paths or the " +
+      "drafts-only emission discipline. Its platform companion is branch " +
+      "runner/w1w2-artifact-owner-dedupe; when that lands both deviations retire in one re-vendor."
   },
   {
     file: "score.mjs",
