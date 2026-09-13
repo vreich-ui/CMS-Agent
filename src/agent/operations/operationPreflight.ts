@@ -17,6 +17,11 @@ import { getOperation } from "./operationCatalog.js";
 import { validateReference } from "./operationReferences.js";
 import type { OperationBlocker, OperationCapabilityGap, OperationCompletionCheck, OperationEffect } from "./operationTypes.js";
 import { validateOutput } from "../execution/outputValidator.js";
+import {
+  getOperationWorkflowBinding,
+  UNBOUND_OPERATION_IMPLEMENTING_TASK,
+  type OperationWorkflowBinding
+} from "./operationWorkflowBindings.js";
 
 export type PreflightRequest = {
   operationId: string;
@@ -42,6 +47,17 @@ export type PreflightResult = {
   capabilityGaps: OperationCapabilityGap[];
   effects: OperationEffect[];
   completion: OperationCompletionCheck[];
+  // ADDITIVE (operation-workflow-binding task). Whether a REGISTERED workflow genuinely implements
+  // this operation today (operationWorkflowBindings.ts) — never inferred from the operation merely
+  // being registered in the catalog, and never from a caller-supplied field (see the note on
+  // `request` below: only operationId/version/tenantId/input/configuredCapabilities are ever read).
+  // false means starting this operation (e.g. via workflow_start_dry_run) would fail or run the
+  // wrong thing; the accompanying capabilityGap (reason "not_supported") names why and what would
+  // fix it.
+  executable: boolean;
+  // The resolved binding when executable is true; null otherwise. Never a caller-supplied binding —
+  // always exactly what operationWorkflowBindings.ts's own table resolves for this operationId.
+  binding: OperationWorkflowBinding | null;
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -84,7 +100,9 @@ const unknownOperationResult = (request: PreflightRequest, registeredOperationId
   }],
   capabilityGaps: [],
   effects: [],
-  completion: []
+  completion: [],
+  executable: false,
+  binding: null
 });
 
 export function preflightOperation(request: PreflightRequest, deps: PreflightDeps = {}): PreflightResult {
@@ -145,6 +163,24 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
       remedy: `Configure "${capability}" for this tenant (see the operation's requiredCapabilities), then re-run preflight to confirm the gap is closed.`
     }));
 
+  // EXECUTABILITY (operation-workflow-binding task). Resolved purely from
+  // operationWorkflowBindings.ts's own table, keyed by the REGISTERED descriptor.operationId — never
+  // from any field on `request` (a caller-supplied `binding`/`executable`/`workflowId` on the input
+  // object is not a field this function reads at all; see the header comment above on `request`).
+  const binding = getOperationWorkflowBinding(descriptor.operationId);
+  const executable = binding !== null;
+  if (!executable) {
+    const implementingTask = UNBOUND_OPERATION_IMPLEMENTING_TASK[descriptor.operationId];
+    const taskPhrase = implementingTask ? `Task ${implementingTask}` : "A later task";
+    capabilityGaps.push({
+      capability: "workflow_binding",
+      requiredBy: descriptor.operationId,
+      reason: "not_supported",
+      evidence: { operationId: descriptor.operationId, implementingTask: implementingTask ?? null },
+      remedy: `${taskPhrase} has not yet shipped a registered workflow that implements "${descriptor.operationId}"; this operation cannot be started today. Re-run preflight once ${implementingTask ? `${implementingTask} ships` : "an implementing workflow is registered"} to confirm the gap is closed.`
+    });
+  }
+
   return {
     operationId: descriptor.operationId,
     selectedVersion: descriptor.version,
@@ -153,6 +189,8 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
     blockers,
     capabilityGaps,
     effects: descriptor.effects,
-    completion: descriptor.completion
+    completion: descriptor.completion,
+    executable,
+    binding
   };
 }

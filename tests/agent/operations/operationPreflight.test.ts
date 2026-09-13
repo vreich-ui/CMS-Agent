@@ -61,15 +61,66 @@ describe("preflightOperation", () => {
   it("reports a capability gap with a remedy for an unmet requiredCapability, performing zero probing calls", () => {
     const repository = throwingRepositoryDouble();
     const result = preflightOperation({ operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } }, { repository });
-    expect(result.capabilityGaps).toHaveLength(1);
-    expect(result.capabilityGaps[0]).toMatchObject({ capability: "site_inventory_read", requiredBy: "site_inventory", reason: "not_configured" });
-    expect(result.capabilityGaps[0].remedy.length).toBeGreaterThan(0);
+    const requiredCapabilityGap = result.capabilityGaps.find((gap) => gap.capability === "site_inventory_read");
+    expect(requiredCapabilityGap).toMatchObject({ capability: "site_inventory_read", requiredBy: "site_inventory", reason: "not_configured" });
+    expect(requiredCapabilityGap?.remedy.length).toBeGreaterThan(0);
     expect(repository.calls).toEqual([]);
   });
 
-  it("no capability gap is reported once configuredCapabilities covers requiredCapabilities", () => {
+  it("no requiredCapability gap is reported once configuredCapabilities covers requiredCapabilities (site_inventory is itself unbound, so its own workflow_binding gap remains)", () => {
     const result = preflightOperation({ operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" }, configuredCapabilities: ["site_inventory_read"] });
-    expect(result.capabilityGaps).toEqual([]);
+    expect(result.capabilityGaps.some((gap) => gap.capability === "site_inventory_read")).toBe(false);
+  });
+
+  it("an unbound operation (site_inventory) reports executable:false, binding:null, and a not_supported capability gap naming the implementing task", () => {
+    const result = preflightOperation({ operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" }, configuredCapabilities: ["site_inventory_read"] });
+    expect(result.executable).toBe(false);
+    expect(result.binding).toBeNull();
+    const gap = result.capabilityGaps.find((entry) => entry.reason === "not_supported");
+    expect(gap).toBeDefined();
+    expect(gap?.requiredBy).toBe("site_inventory");
+    expect(gap?.remedy).toContain("A4");
+  });
+
+  it("a bound operation (visual_identity_review_change) reports executable:true and its resolved binding", () => {
+    const result = preflightOperation({
+      operationId: "visual_identity_review_change",
+      tenantId: "dr-lurie",
+      input: { tenantId: "dr-lurie" },
+      configuredCapabilities: ["visual_identity_read", "visual_identity_propose"]
+    });
+    expect(result.executable).toBe(true);
+    expect(result.binding).toEqual({
+      operationId: "visual_identity_review_change",
+      workflowId: "visual_identity",
+      inputMapping: { tenantId: "projectId", autoApply: "apply" }
+    });
+    expect(result.capabilityGaps.some((gap) => gap.reason === "not_supported")).toBe(false);
+  });
+
+  it("an unknown operationId reports executable:false and binding:null alongside its unknown_operation blocker", () => {
+    const result = preflightOperation({ operationId: "not_a_real_operation_xyz", tenantId: "dr-lurie", input: {} });
+    expect(result.executable).toBe(false);
+    expect(result.binding).toBeNull();
+  });
+
+  it("a caller-supplied workflowId, binding, or executable field on the request is ignored entirely (executable/binding are resolved only from the registered descriptor's operationId)", () => {
+    const plain = preflightOperation({ operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+    const withJunk = preflightOperation({
+      operationId: "site_inventory",
+      tenantId: "dr-lurie",
+      input: { tenantId: "dr-lurie" },
+      // Fields a caller might send believing they can steer executability/binding directly — none
+      // of them is a field this type declares, and preflightOperation reads none of them.
+      ...({
+        workflowId: "publishing_conductor",
+        binding: { operationId: "site_inventory", workflowId: "publishing_conductor", inputMapping: {} },
+        executable: true
+      } as Record<string, unknown>)
+    } as Parameters<typeof preflightOperation>[0]);
+    expect(withJunk).toEqual(plain);
+    expect(withJunk.executable).toBe(false);
+    expect(withJunk.binding).toBeNull();
   });
 
   it("is read-only: completes normally against a repository double whose every write method throws, and calls none of it", () => {

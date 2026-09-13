@@ -61,7 +61,7 @@ export function createOperationTools(): WorkspaceTool[] {
     }),
     tool({
       name: "operation.preflight",
-      description: "Read-only discovery preflight for one operation: resolves and reports every default it would apply, validates input against the operation's inputSchema and every typed reference within it (including cross-tenant refusal), and reports capability gaps against configuredCapabilities. Performs zero writes and zero probes — no repository mutation, no tenant call.",
+      description: "Read-only discovery preflight for one operation: resolves and reports every default it would apply, validates input against the operation's inputSchema and every typed reference within it (including cross-tenant refusal), and reports capability gaps against configuredCapabilities. Also reports executable (whether a registered workflow genuinely implements this operation today) and binding (that resolved workflow binding, or null) — an operation with no registered implementing workflow reports executable:false plus a capability gap (reason not_supported) naming the task expected to add one. Performs zero writes and zero probes — no repository mutation, no tenant call.",
       zodSchema: operationPreflightInput,
       inputSchema: operationPreflightJsonSchema,
       execute: async (input) => ok(preflightOperation(operationPreflightInput.parse(input)))
