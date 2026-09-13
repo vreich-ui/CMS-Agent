@@ -29,6 +29,7 @@ import type { ProjectRepository } from "../repository/interfaces/ProjectReposito
 import { resolveProjectConnection, resolveProjectConnectionWithSecrets, type ProjectAdapterDeps } from "../projects/projectMcpAdapter.js";
 import { conductorCache, type RunScopedCache } from "./conductor.js";
 import { tenantAdapterFor } from "../tools/tenantInvoke.js";
+import { capturePreviewConfig } from "./capturePreviewDispatch.js";
 
 export const DRIVER_ENV_MISSING_PREFIX = "driver_env_missing:";
 export const driverEnvMissingWarning = (envVar: string): string => `${DRIVER_ENV_MISSING_PREFIX}${envVar}`;
@@ -74,10 +75,32 @@ export async function recordDriverEnvWarning(run: WorkflowExecutionRecord, warni
 let loggedEnvNames = false;
 export const __resetDriverEnvLogForTests = (): void => { loggedEnvNames = false; };
 
+/**
+ * W2.1/G6 — one line saying whether capture_score's draft-preview leg is wired on THIS plane.
+ *
+ * The leg degrades silently by design: with no token the stage reports
+ * `capture_preview_not_configured` and scores its structural half exactly as before, so a capture
+ * run never blocks on it. That is the right behaviour and it is also why an operator otherwise has
+ * no way to tell a plane that is missing the binding from one that has it — except by reading a
+ * finished run's `capturePreview` account. The binding is per-plane (the service and the
+ * continuation-tick job bind it separately), so "missing on one of them" is the realistic failure
+ * and it is invisible until a run happens to be advanced by the wrong one.
+ *
+ * NAMES AND NON-SECRET CONFIGURATION ONLY, like every other line this module logs.
+ */
+export function capturePreviewEnvLine(env: NodeJS.ProcessEnv = process.env): string {
+  const config = capturePreviewConfig(env);
+  return config
+    ? `[driver-env] capture preview: configured (repo ${config.repository}, workflow ${config.workflow}, ref ${config.ref})`
+    : "[driver-env] capture preview: CAPTURE_PREVIEW_GITHUB_TOKEN absent — capture_score will score without visual evidence and say so (capture_preview_not_configured)";
+}
+
 // Logs, once per process, which project MCP env vars are present and which are absent — by NAME only.
 export async function logProjectEnvNamesOnce(projectRepository: ProjectRepository, env: NodeJS.ProcessEnv = process.env, log: (line: string) => void = (line) => console.info(line)): Promise<void> {
   if (loggedEnvNames) return;
   loggedEnvNames = true;
+  // Outside the try below on purpose: a project-list failure must not swallow this line.
+  log(capturePreviewEnvLine(env));
   try {
     const projects = await projectRepository.list();
     const names = new Set<string>();
