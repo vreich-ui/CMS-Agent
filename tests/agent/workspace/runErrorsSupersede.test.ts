@@ -42,7 +42,11 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       expect(failed.nodes.find((n) => n.nodeId === "input_triage")!.status).toBe("failed");
       expect(failed.errors).toEqual(["input_triage:max_turns_exceeded"]);
 
-      const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store }))!;
+      // R2 (no-progress gate): unchanged input/node/capability state between attempts is deliberate
+      // here (this test is about run.errors bookkeeping, not about justifying a retry) — see
+      // executor.ts's RunAdvanceOptions doc comment for what retryJustification does and does not
+      // verify.
+      const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store, retryJustification: "test: bookkeeping only" }))!;
       expect(retried.nodes.find((n) => n.nodeId === "input_triage")!.status).toBe("completed");
       // The node itself no longer carries the resolved failure...
       expect(retried.nodes.find((n) => n.nodeId === "input_triage")!.errors).toBeUndefined();
@@ -82,7 +86,9 @@ describe("run-level errors array (T-2 defect: stale entries after a successful r
       const started = await startDryRun({ executionMode: "mock", projectId: "project-errs-2", input: "x" }, store);
 
       await runNextNode(started.runId, { executionRepository: store }); // input_triage fails
-      const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store }))!; // input_triage succeeds
+      // R2 (no-progress gate): same rationale as the test above — retryJustification stands in for an
+      // operator's own decision to retry an unchanged attempt.
+      const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store, retryJustification: "test: bookkeeping only" }))!; // input_triage succeeds
       await runNextNode(retried.runId, { executionRepository: store }); // placement_resolver succeeds (§2.16)
       const afterSecondNode = await runNextNode(retried.runId, { executionRepository: store }); // topic_opportunity fails
 

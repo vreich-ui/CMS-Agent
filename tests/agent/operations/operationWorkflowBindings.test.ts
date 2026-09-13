@@ -5,6 +5,8 @@ import { listRegisteredWorkflowIds } from "../../../src/agent/workspace/workflow
 import {
   getOperationWorkflowBinding,
   listOperationWorkflowBindings,
+  listBindingInputContractStatuses,
+  resolveBindingInputContract,
   UNBOUND_OPERATION_IMPLEMENTING_TASK
 } from "../../../src/agent/operations/operationWorkflowBindings.js";
 
@@ -58,5 +60,44 @@ describe("operationWorkflowBindings", () => {
     binding!.inputMapping.tenantId = "tampered";
     const again = getOperationWorkflowBinding("visual_identity_review_change");
     expect(again!.inputMapping.tenantId).toBe("projectId");
+  });
+
+  // R1c — resolveBindingInputContract() / listBindingInputContractStatuses() close the gap
+  // assertBindingIsSound never checked: that a binding's operation-side input, after inputMapping's
+  // rename, can actually satisfy the target workflow's entry node(s). THIS TEST ASSERTS THE CURRENT
+  // REAL STATE, DELIBERATELY, SO IT FLIPS TO PASSING THE MOMENT SOMEONE REPAIRS THE BINDING: today
+  // visual_identity_review_change's binding maps only {tenantId->projectId, autoApply->apply}, but
+  // brand_imagery_writer (visual_identity's entry node — the only node in the workflow with an empty
+  // dependsOn) requires `mode` and one of `references`/`brief`, none of which the mapping ever
+  // supplies. If a future change to either the operation's own inputSchema/defaults, the binding's
+  // inputMapping, or brand_imagery_writer's own inputSchema closes that gap, `satisfied` here becomes
+  // true and this assertion (not a throw, not a silent pass) is what will tell a reader that happened.
+  describe("R1c: binding input-contract status", () => {
+    it("the real visual_identity_review_change binding is detected as incomplete: KNOWN-INCOMPLETE, not working, naming mode and the references/brief anyOf", () => {
+      const status = resolveBindingInputContract(getOperationWorkflowBinding("visual_identity_review_change")!);
+      expect(status.resolved).toBe(true);
+      expect(status.contract).not.toBeNull();
+      // THE ASSERTION THAT MATTERS: this is currently false. A change that makes it true is the
+      // binding being repaired, not this test being wrong — see the comment above.
+      expect(status.contract!.satisfied).toBe(false);
+      const entryNodeCheck = status.contract!.entryNodeChecks.find((check) => check.nodeId === "brand_imagery_writer");
+      expect(entryNodeCheck).toBeDefined();
+      expect(entryNodeCheck!.unsatisfiedRequired).toEqual(["mode"]);
+      expect(entryNodeCheck!.anyOfBranches).toEqual([["references"], ["brief"]]);
+      expect(entryNodeCheck!.satisfiedAnyOfBranchIndex).toBeNull();
+      expect(entryNodeCheck!.unsupportedConstructs).toEqual([]);
+      expect(status.contract!.guaranteedTargetFields).toEqual(["apply", "projectId"]);
+    });
+
+    it("listBindingInputContractStatuses() reports one resolved status per registered binding, in operationId order", () => {
+      const statuses = listBindingInputContractStatuses();
+      expect(statuses.map((status) => status.operationId)).toEqual(listOperationWorkflowBindings().map((binding) => binding.operationId));
+      for (const status of statuses) expect(status.resolved).toBe(true);
+    });
+
+    it("resolveBindingInputContract never throws, even for a binding naming an operationId or workflowId this build cannot resolve (reported as resolved:false, contract:null)", () => {
+      const status = resolveBindingInputContract({ operationId: "not_a_real_operation_xyz", workflowId: "not_a_real_workflow_xyz", inputMapping: {} });
+      expect(status).toEqual({ operationId: "not_a_real_operation_xyz", workflowId: "not_a_real_workflow_xyz", resolved: false, contract: null });
+    });
   });
 });

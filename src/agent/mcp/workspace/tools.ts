@@ -414,7 +414,11 @@ async function resolvePublishRequestId(projectId: string, publishRequestId: stri
   }
   return publishRequestId;
 }
-const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional() }).strict();
+// R2 — retryJustification is read ONLY by workflow.retry_node (below); workflow.run_node accepts and
+// ignores it (shared schema) because it never re-dispatches a "failed" node in the first place
+// (findRunnableNodes only ever selects queued/dependency-ready nodes) — see executor.ts's
+// RunAdvanceOptions doc comment for what supplying it does and does not do.
+const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional(), retryJustification: z.string().min(1).optional() }).strict();
 const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional() }).strict();
 const runIdInput = z.object({ runId: z.string().min(1) }).strict();
 // T7: get_run defaults to the compact view; "full" is the old raw-record behaviour, opted into.
@@ -538,7 +542,7 @@ const setNodeBudgetOverrideJsonSchema = objectSchema({ runId: { type: "string", 
 // which is every strict client, and is why T6.6 could not be executed — was locked out of run_node,
 // run_until, run_all and retry_node. Verified live: the served workflow_run_all schema still shows
 // required: [] with no runId. Each tool now advertises exactly its own Zod shape.
-const runNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
+const runNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, retryJustification: { type: "string", minLength: 1, description: "workflow.retry_node only. Required to retry a node the no-progress gate has refused (unchanged input/node-definition/capability-state since its last terminal failure — see the node's own blockage/noProgress fields on workflow.get_run). Recorded verbatim for audit; never verified against anything real." } }, ["runId"]);
 const runUntilJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId", "nodeId"]);
 const runAllJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, budgetMs: { type: "number", minimum: RUN_DRIVER_TIME_BUDGET_FLOOR_MS, maximum: RUN_DRIVER_TIME_BUDGET_CEILING_MS, description: `Wall-clock budget for THIS call in ms (${RUN_DRIVER_TIME_BUDGET_FLOOR_MS}..${RUN_DRIVER_TIME_BUDGET_CEILING_MS}); default ${RUN_DRIVER_TIME_BUDGET_MS}. The loop stops dispatching when it is reached and the run continues on the scheduled continuation tick.` } }, ["runId"]);
 const runAllInput = z.object({ runId: z.string().min(1), approved: z.boolean().optional(), budgetMs: z.number().min(RUN_DRIVER_TIME_BUDGET_FLOOR_MS).max(RUN_DRIVER_TIME_BUDGET_CEILING_MS).optional() }).strict();
@@ -1152,7 +1156,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // without a second tool. The run's own between-node gate re-evaluates the (now higher) ceiling
     // against accrued spend on the very next advance and clears budgetBlock itself once it passes.
     tool({ name: "workflow.resume_run", description: "Resume a run: status becomes \"queued\". Optionally raise (or set) budgetUsd in the same call — the reachable form of the budget gate's own \"raise budgetUsd and resume\" remedy. Node completion state is never mutated.", zodSchema: resumeRunInput, inputSchema: resumeRunJsonSchema, execute: async (input) => { const data = resumeRunInput.parse(input); return ok({ run: await updateRunStatus(data.runId, "queued", executionRepository, data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {}) ?? null }); } }),
-    tool({ name: "workflow.retry_node", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Reset a completed or failed node back to queued and run the next dependency-ready node.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); return ok({ run: await retryNode(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_retry_node" }) ?? null }); } }),
+    tool({ name: "workflow.retry_node", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Reset a completed or failed node back to queued and run the next dependency-ready node. A failed node whose input, node definition and derived capability state are UNCHANGED since its last terminal failure is refused (no_progress) rather than re-dispatched — pass retryJustification to override, asserting a real fix this engine cannot see for itself.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); return ok({ run: await retryNode(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_retry_node", retryJustification: data.retryJustification }) ?? null }); } }),
     // P0 §2.2 — the operator veto channel: ONE named field (run.operatorPublishDecision), ONE setter
     // (this tool), ONE reader (publishDecision.isOperatorPublishWithheld, consumed by the publish
     // gates and the executor's publish-risk dispatch guard).
@@ -1294,8 +1298,10 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),
     ...createImprovementTools({ workspaceRepository, executionRepository, learningRepository, evaluationRepository: repositoryManager.getEvaluationRepository(), improvementRepository: repositoryManager.getImprovementRepository(), meta }),
     // A2 — read-only discovery surface over the operation catalog (operation.list/get/preflight).
-    // Code-registered descriptors only; no repository, no tenant call, no execution. See
-    // src/agent/operations/ for the catalog itself.
+    // Code-registered descriptors only; no tenant call, no execution. R2 Piece 2 added one repository
+    // read (project record, to derive capability facts), one best-effort durable-ledger write inside
+    // preflight (a genuine capability gap), and one plain read tool over that ledger
+    // (operation.list_capability_gaps) — see operationTools.ts for all three.
     ...createOperationTools()
   ];
 }

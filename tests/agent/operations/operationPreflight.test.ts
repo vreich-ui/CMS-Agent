@@ -100,20 +100,32 @@ describe("preflightOperation", () => {
     expect(gap?.remedy).toContain("A4");
   });
 
-  it("a bound operation (visual_identity_review_change) reports executable:true and its resolved binding", () => {
+  // R1c: this binding EXISTS (operationWorkflowBindings.ts's table has a row for it) but its mapped
+  // input ({projectId, apply}) cannot satisfy brand_imagery_writer's own required `mode` or its
+  // references/brief anyOf — see bindingInputContract.test.ts and operationWorkflowBindings.test.ts
+  // for the schema-level evidence. A binding existing is therefore NOT sufficient for
+  // executable:true; this test asserts the now-honest refusal, written so it flips back to
+  // executable:true the moment the binding (or the operation's own input contract) is repaired.
+  it("R1c: visual_identity_review_change's binding EXISTS but cannot satisfy its entry node's input contract, so preflight reports executable:false, binding:null, and names the missing fields", () => {
     const result = preflightOperation({
       operationId: "visual_identity_review_change",
       tenantId: "dr-lurie",
       input: { tenantId: "dr-lurie" },
       configuredCapabilities: ["visual_identity_read", "visual_identity_propose"]
     });
-    expect(result.executable).toBe(true);
-    expect(result.binding).toEqual({
-      operationId: "visual_identity_review_change",
-      workflowId: "visual_identity",
-      inputMapping: { tenantId: "projectId", autoApply: "apply" }
-    });
-    expect(result.capabilityGaps.some((gap) => gap.reason === "not_supported")).toBe(false);
+    expect(result.executable).toBe(false);
+    expect(result.binding).toBeNull();
+    const gap = result.capabilityGaps.find((entry) => entry.capability === "workflow_binding" && entry.reason === "not_supported");
+    expect(gap).toBeDefined();
+    expect(gap?.requiredBy).toBe("visual_identity_review_change");
+    expect(gap?.evidence).toMatchObject({ workflowId: "visual_identity", unsatisfiedEntryNodeIds: ["brand_imagery_writer"] });
+    expect((gap?.evidence as { unmetRequiredFields?: string[] })?.unmetRequiredFields).toContain("mode");
+    expect((gap?.evidence as { unmetAnyOfBranches?: string[][] })?.unmetAnyOfBranches).toEqual(
+      expect.arrayContaining([["references"], ["brief"]])
+    );
+    expect(gap?.remedy).toContain("mode");
+    expect(gap?.remedy).toContain("extending");
+    expect(gap?.remedy).toContain("binding");
   });
 
   it("an unknown operationId reports executable:false and binding:null alongside its unknown_operation blocker", () => {
@@ -269,14 +281,23 @@ describe("preflightOperation", () => {
       expect(unavailableGap?.evidence).toMatchObject({ projectStatus: "disabled" });
     });
 
-    it("visual_identity_review_change stays executable:true with its binding regardless of capability gaps, and the five unbound operations keep their not_supported workflow_binding gap", () => {
+    // R1c superseded this test's former claim that visual_identity_review_change "stays
+    // executable:true ... regardless of capability gaps" — capability derivation (R1, this block) and
+    // the binding's own input-contract soundness (R1c) are orthogonal axes, and this operation fails
+    // the SECOND one regardless of what R1 derives for the first. R1's own behavior (capability gaps
+    // are derived from trusted facts, never asserted) is otherwise unaffected — this operation simply
+    // ALSO carries the R1c workflow_binding gap on top, same as every unbound operation already did.
+    it("R1's capability derivation is unaffected by R1c: visual_identity_review_change still carries no visual_identity_read/propose capability gap once derived available, even though it now also carries R1c's workflow_binding gap; the five unbound operations keep their not_supported workflow_binding gap", () => {
       const bound = preflightOperation(
         { operationId: "visual_identity_review_change", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } },
         capabilitySourceFor(fullyProvisionedDrLurieFacts())
       );
-      expect(bound.executable).toBe(true);
-      expect(bound.binding).toEqual({ operationId: "visual_identity_review_change", workflowId: "visual_identity", inputMapping: { tenantId: "projectId", autoApply: "apply" } });
-      expect(bound.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
+      expect(bound.capabilityGaps.some((gap) => gap.capability === "visual_identity_read" || gap.capability === "visual_identity_propose")).toBe(false);
+      // R1c: the binding exists but cannot satisfy its entry node's input contract (see the dedicated
+      // R1c test above), so executable is honestly false and the workflow_binding gap IS present.
+      expect(bound.executable).toBe(false);
+      expect(bound.binding).toBeNull();
+      expect(bound.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
 
       const unboundIds = ["site_inventory", "pdf_template_family", "document_render", "asset_lookup_adopt", "image_template_revision"];
       for (const operationId of unboundIds) {

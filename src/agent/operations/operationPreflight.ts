@@ -37,6 +37,8 @@ import {
   UNBOUND_OPERATION_IMPLEMENTING_TASK,
   type OperationWorkflowBinding
 } from "./operationWorkflowBindings.js";
+import { getWorkflowDefinition } from "../workspace/workflowRegistry.js";
+import { checkBindingInputContract, resolveWorkflowEntryNodes, type OperationInputContractSource } from "./bindingInputContract.js";
 
 export type PreflightRequest = {
   operationId: string;
@@ -78,16 +80,20 @@ export type PreflightResult = {
   capabilityGaps: OperationCapabilityGap[];
   effects: OperationEffect[];
   completion: OperationCompletionCheck[];
-  // ADDITIVE (operation-workflow-binding task). Whether a REGISTERED workflow genuinely implements
-  // this operation today (operationWorkflowBindings.ts) — never inferred from the operation merely
-  // being registered in the catalog, and never from a caller-supplied field (see the note on
-  // `request` below: only operationId/version/tenantId/input/configuredCapabilities are ever read).
-  // false means starting this operation (e.g. via workflow_start_dry_run) would fail or run the
-  // wrong thing; the accompanying capabilityGap (reason "not_supported") names why and what would
-  // fix it.
+  // ADDITIVE (operation-workflow-binding task; hardened R1c). Whether a REGISTERED workflow
+  // genuinely implements this operation today AND can actually be reached with this operation's own
+  // input — never inferred from the operation merely being registered in the catalog, never from a
+  // binding merely existing in operationWorkflowBindings.ts's table (R1c: a binding row is necessary
+  // but not sufficient — see this function's own EXECUTABILITY comment below for why), and never from
+  // a caller-supplied field (see the note on `request` below: only
+  // operationId/version/tenantId/input/configuredCapabilities are ever read). false means starting
+  // this operation (e.g. via workflow_start_dry_run) would fail or run the wrong thing; the
+  // accompanying capabilityGap (reason "not_supported") names why and what would fix it.
   executable: boolean;
-  // The resolved binding when executable is true; null otherwise. Never a caller-supplied binding —
-  // always exactly what operationWorkflowBindings.ts's own table resolves for this operationId.
+  // The resolved binding when executable is true; null otherwise — including when a binding EXISTS
+  // but R1c's input-contract check finds it cannot be satisfied (a known-incomplete binding is not
+  // offered as usable). Never a caller-supplied binding — always exactly what
+  // operationWorkflowBindings.ts's own table resolves for this operationId.
   binding: OperationWorkflowBinding | null;
 };
 
@@ -238,13 +244,76 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
     }
   }
 
-  // EXECUTABILITY (operation-workflow-binding task). Resolved purely from
+  // EXECUTABILITY (operation-workflow-binding task, hardened R1c). Resolved purely from
   // operationWorkflowBindings.ts's own table, keyed by the REGISTERED descriptor.operationId — never
   // from any field on `request` (a caller-supplied `binding`/`executable`/`workflowId` on the input
   // object is not a field this function reads at all; see the header comment above on `request`).
+  //
+  // R1c — A BINDING EXISTING IS NOT ENOUGH. Before R1c, `executable` was simply `binding !== null`:
+  // any operation with a row in operationWorkflowBindings.ts's table was reported executable, even
+  // though nothing checked that the operation's OWN input, after the binding's inputMapping rename,
+  // could ever satisfy what the target workflow's entry node(s) actually require. Concretely,
+  // visual_identity_review_change's mapped input ({projectId, apply}) supplies NONE of
+  // brand_imagery_writer's required `mode` or its `references`/`brief` anyOf — so a caller trusting
+  // `executable:true` would register a request and start a run that dies at the entry node's own
+  // input validation, after a run record already exists. checkBindingInputContract() (a pure,
+  // schema-only check — see bindingInputContract.ts's own header) is what closes that: a binding now
+  // counts as executable only when it ALSO clears this check, computed fresh every call from the
+  // descriptor and the target workflow's live canonical node array (never cached, never assumed from
+  // the binding merely existing).
   const binding = getOperationWorkflowBinding(descriptor.operationId);
-  const executable = binding !== null;
-  if (!executable) {
+  let inputContractSatisfied = false;
+  if (binding) {
+    const workflowDefinition = getWorkflowDefinition(binding.workflowId);
+    // workflowDefinition is always found in practice (assertBindingIsSound already refused an
+    // unregistered workflowId at import time — see operationWorkflowBindings.ts); the `undefined`
+    // branch exists only so this never throws if that invariant is ever violated, and it fails
+    // closed (unsatisfied), never open.
+    if (workflowDefinition) {
+      const source: OperationInputContractSource = { requiredFields, defaultedFields: Object.keys(descriptor.defaults) };
+      const contract = checkBindingInputContract(binding.workflowId, binding.inputMapping, source, workflowDefinition.canonicalNodes());
+      inputContractSatisfied = contract.satisfied;
+      if (!contract.satisfied) {
+        const entryNodes = resolveWorkflowEntryNodes(workflowDefinition.canonicalNodes());
+        const unsatisfiedNodeIds = contract.entryNodeChecks.filter((check) => !check.satisfied).map((check) => check.nodeId);
+        // Name the EXACT fields that cannot be satisfied — a plain required field that's missing, and
+        // (separately) every anyOf branch that's unmet — so the gap is actionable without a reader
+        // having to re-derive it from the raw contract result.
+        const unmetRequiredFields = [...new Set(contract.entryNodeChecks.flatMap((check) => check.unsatisfiedRequired))];
+        const unmetAnyOfBranches = contract.entryNodeChecks
+          .filter((check) => check.anyOfBranches !== null && check.satisfiedAnyOfBranchIndex === null)
+          .flatMap((check) => check.anyOfBranches ?? []);
+        const unsupportedConstructs = [...new Set(contract.entryNodeChecks.flatMap((check) => check.unsupportedConstructs))];
+        capabilityGaps.push({
+          capability: "workflow_binding",
+          requiredBy: descriptor.operationId,
+          reason: "not_supported",
+          evidence: {
+            operationId: descriptor.operationId,
+            workflowId: binding.workflowId,
+            entryNodeIds: entryNodes.map((node) => node.id),
+            unsatisfiedEntryNodeIds: unsatisfiedNodeIds,
+            guaranteedTargetFields: contract.guaranteedTargetFields,
+            unmetRequiredFields,
+            unmetAnyOfBranches,
+            unsupportedConstructs
+          },
+          remedy: `The binding from "${descriptor.operationId}" to workflow "${binding.workflowId}" cannot satisfy entry node ${unsatisfiedNodeIds.join(", ") || "(none resolved)"}'s own input contract: it never supplies ${
+            [
+              unmetRequiredFields.length ? `required field(s) ${unmetRequiredFields.join(", ")}` : null,
+              unmetAnyOfBranches.length ? `any of ${unmetAnyOfBranches.map((branch) => `[${branch.join(", ")}]`).join(" or ")}` : null,
+              unsupportedConstructs.length ? `— and cannot even evaluate schema construct(s) ${unsupportedConstructs.join(", ")}` : null
+            ]
+              .filter(Boolean)
+              .join(", ")
+          }. Close this by either (1) extending "${descriptor.operationId}"'s own inputSchema/defaults and operationWorkflowBindings.ts's inputMapping to actually supply the missing field(s), or (2) binding "${descriptor.operationId}" to a different, already-accepting implementation. Re-run preflight once the binding is repaired to confirm the gap is closed.`
+        });
+      }
+    }
+  }
+  const executable = binding !== null && inputContractSatisfied;
+  const effectiveBinding = executable ? binding : null;
+  if (!binding) {
     const implementingTask = UNBOUND_OPERATION_IMPLEMENTING_TASK[descriptor.operationId];
     const taskPhrase = implementingTask ? `Task ${implementingTask}` : "A later task";
     capabilityGaps.push({
@@ -266,6 +335,6 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
     effects: descriptor.effects,
     completion: descriptor.completion,
     executable,
-    binding
+    binding: effectiveBinding
   };
 }
