@@ -1,4 +1,3 @@
-import { listWorkspaceNodes } from "./nodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type PublishingPolicySnapshot, type RunDriver, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
 import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
@@ -36,7 +35,7 @@ import { ARTIFACT_MATERIALIZER_NODE_ID, readArtifactMaterializer, runArtifactMat
 import { buildLearningObservations } from "./learningRecord.js";
 import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
 import { articleBodyFingerprint, enforcePublishExecutionEvidence, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority, PUBLICATION_CONTROLLER_NODE_ID } from "./publishDecision.js";
-import { getWorkflowDefinition } from "./workflowRegistry.js";
+import { lookupWorkflow } from "./workflowRegistry.js";
 import { resolvePublishableTypeCharter } from "./publishableTypeCharter.js";
 // T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
 // that drives runs, since they all import this module. See captureConductorWorkflow.ts.
@@ -374,11 +373,40 @@ const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): Work
 // §2.23: the canonical array is resolved through the workflow registry keyed by the run's
 // workflowId, so a future second workflow (different upstream + the same shared publishing tail)
 // plugs in by registering its composed node array — the store overlay below then applies unchanged,
-// and an authoring edit to a shared tail node reaches every workflow. An unregistered workflowId
-// resolves to the publishing_conductor canonical set, which is exactly what every run got before the
-// registry existed.
-export async function resolveConductorNodes(workspaceRepository?: WorkspaceRepository, workflowId: string = WORKFLOW_ID): Promise<WorkspaceNode[]> {
-  const canonical = getWorkflowDefinition(workflowId)?.canonicalNodes() ?? listWorkspaceNodes();
+// and an authoring edit to a shared tail node reaches every workflow.
+//
+// R1b — workflowId resolution now draws the line workflowRegistry.ts's header describes. GENUINELY
+// ABSENT (the JS value `undefined`, `null`, or `""` — a run persisted before this field existed, or a
+// caller that never set it) is the ONLY case that falls back to publishing_conductor, and it does so
+// via the default PARAMETER above for the plain "no second argument" call shape (the majority of
+// existing call sites, including every zero-arg test call); null/"" cannot trigger a JS default
+// parameter (only `undefined` does) so they are normalized explicitly below. A PRESENT, non-empty,
+// UNREGISTERED workflowId — an explicit id a caller (or a persisted run) actually named, that this
+// build does not know — is refused with a structured error instead of silently resolving to
+// publishing_conductor's full node array, tail included. This is defense-in-depth, not the only gate:
+// startDryRun() below refuses the identical case BEFORE a run record is created; this refusal exists
+// for every OTHER caller of this function that reads an ALREADY-PERSISTED run's workflowId
+// (resetRun, nextDispatchTimeoutMs, the run-advance path) — including a run persisted before this
+// change shipped, which could otherwise still reach the unfixed substitution through this one path.
+// Silently running the wrong (and possibly publish-capable) node set for a run whose own advance
+// machinery cannot even name what it is executing is strictly worse than stopping the run outright;
+// the run stays exactly where it was (queued/blocked) and is resumable once its workflowId is fixed.
+export async function resolveConductorNodes(workspaceRepository?: WorkspaceRepository, workflowId: string | null = WORKFLOW_ID): Promise<WorkspaceNode[]> {
+  // `null` cannot occur through this function's own TS type ordinarily, but a persisted run is JSON
+  // read back with no runtime validation of `workflowId: string` — a record old enough to predate the
+  // field can hand this function `undefined` (via the default parameter above) OR, depending on how it
+  // was ever written, `null`. Both, and `""`, are the SAME genuinely-absent case (see the block comment
+  // above) and get the SAME legacy resolution; only a real, non-empty, unregistered string is refused.
+  const resolvedWorkflowId = workflowId === null || workflowId === "" ? WORKFLOW_ID : workflowId;
+  const lookup = lookupWorkflow(resolvedWorkflowId);
+  if (!lookup.found) {
+    throw new WorkspaceToolError(
+      "unknown_workflow",
+      `No workflow is registered as "${resolvedWorkflowId}". Registered workflow ids: ${lookup.registeredWorkflowIds.join(", ")}.`,
+      { requestedWorkflowId: workflowId, registeredWorkflowIds: lookup.registeredWorkflowIds }
+    );
+  }
+  const canonical = lookup.definition.canonicalNodes();
   if (nodeSource() !== "store") return canonical;
   let stored: WorkspaceNode[];
   try {
@@ -996,6 +1024,30 @@ export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date
 }
 
 export async function startDryRun(data: StartDryRunInput, store: ExecutionRepository = repositoryManager.getExecutionRepository(), workspaceRepository?: WorkspaceRepository, projectRepository: ProjectRepository = repositoryManager.getProjectRepository()): Promise<WorkflowExecutionRecord> {
+  // R1b — THE WORKFLOW GATE, before the run record exists and therefore before anything can be spent
+  // or dispatched. workflow_start_dry_run is reachable with an ARBITRARY caller-supplied workflowId —
+  // platform's run_workspace_workflow passes args.workflow_id straight through with no catalog check
+  // of its own (commit 71789f4f on platform's fix/refuse-unexecutable-operations, left unfixed there)
+  // — and until this check existed, an unregistered id did not fail: resolveConductorNodes silently
+  // substituted the FULL publishing_conductor node array, publish/release tail included, for whatever
+  // the caller actually named. `data.workflowId` here is deliberately the RAW caller-supplied value,
+  // not the `?? WORKFLOW_ID`-defaulted one passed to resolveConductorNodes below — an omitted
+  // workflowId is the legitimate legacy case (see workflowRegistry.ts's header) and must keep
+  // resolving to publishing_conductor exactly as it always has; only an id the caller actually wrote
+  // down, that nobody registered, is refused. Mirrors operationCatalog.ts's getOperation() discipline
+  // (name the real registered alternatives, never fall through to a guess) via workflowRegistry.ts's
+  // lookupWorkflow — same split as operationCatalog/operationPreflight: the registry reports the
+  // truth, this call site decides to refuse.
+  if (data.workflowId) {
+    const lookup = lookupWorkflow(data.workflowId);
+    if (!lookup.found) {
+      throw new WorkspaceToolError(
+        "unknown_workflow",
+        `No workflow is registered as "${data.workflowId}". Registered workflow ids: ${lookup.registeredWorkflowIds.join(", ")}.`,
+        { requestedWorkflowId: data.workflowId, registeredWorkflowIds: lookup.registeredWorkflowIds }
+      );
+    }
+  }
   // W10 — THE SUBJECT GATE, before the run record exists and therefore before anything can be spent.
   // A live editorial run that names no subject cannot succeed: it reaches article_body with nothing to
   // write about, emits an empty body, and is correctly refused at the publish gate having paid for the

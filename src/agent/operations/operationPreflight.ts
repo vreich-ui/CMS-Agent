@@ -1,22 +1,37 @@
-// Read-only discovery preflight (A2). preflightOperation() answers "what would running this
-// operation need, and what — if anything — already blocks it", entirely from the operation's own
-// registered descriptor plus the caller's input. It never runs the operation.
+// Read-only discovery preflight (A2; capability derivation hardened R1). preflightOperation() answers
+// "what would running this operation need, and what — if anything — already blocks it", entirely from
+// the operation's own registered descriptor plus the caller's input and (for capability gaps) trusted
+// facts the caller already loaded. It never runs the operation.
 //
 // PERFORMS ZERO WRITES AND ZERO PROBES, BY CONSTRUCTION: this module holds no repository, no
 // tenant MCP adapter, no network client, and no clock-dependent state. It cannot mutate the
 // workspace or call a tenant because it is never handed anything capable of doing either — there is
 // no "try the write and see if it works" path available to reach for. `deps.repository` below exists
 // only so a test can hand this function a repository double (with every write method throwing) and
-// prove the double records zero calls: the function never references `deps` at all.
+// prove the double records zero calls: the function never references it at all. `deps.capabilitySource`
+// (R1, below) is likewise never awaited or fetched from — it is a plain SYNCHRONOUS function call over
+// data the caller already holds in memory, not a new I/O path.
 //
-// A capability gap is read from `configuredCapabilities` the CALLER already knows (e.g. from a
-// project record or env flag the caller consulted before calling preflight) — never fetched here.
-// That keeps the "no probing call" guarantee absolute rather than "true so far because nothing
-// happens to call the read method yet".
+// R1 — CAPABILITY GAPS ARE DERIVED, NEVER ASSERTED. This used to diff descriptor.requiredCapabilities
+// against `request.configuredCapabilities` — a caller-supplied array of strings accepted at face
+// value. A caller (a model turn reaching operation.preflight over MCP included) could claim
+// `configuredCapabilities: ["pdf_render", "asset_search", ...]` and make every capability gap for
+// those ids vanish, whether or not the tenant could do any of it: a forged claim WIDENED apparent
+// readiness. That is now structurally impossible. Availability is computed by
+// capabilityReadiness.ts's deriveTenantCapabilityAvailability() from `deps.capabilitySource(tenantId)`
+// — TRUSTED facts the caller already loaded from the project repository (an async read the CALLER
+// performs; this module only reads the synchronous result handed to it). `configuredCapabilities` is
+// DEPRECATED and may only NARROW that derived result, never widen it: effective availability =
+// derived-available AND (configuredCapabilities, when supplied, names it). When no capabilitySource is
+// supplied, or it returns nothing for this tenantId, the conservative result is that NOTHING is
+// assumed available — this module does NOT fall back to trusting the caller's configuredCapabilities
+// array as a substitute for real facts. See capabilityReadiness.ts's own header for what counts as a
+// trusted fact and why deriving from it is still zero I/O.
 import { getOperation } from "./operationCatalog.js";
 import { validateReference } from "./operationReferences.js";
 import type { OperationBlocker, OperationCapabilityGap, OperationCompletionCheck, OperationEffect } from "./operationTypes.js";
 import { validateOutput } from "../execution/outputValidator.js";
+import { deriveTenantCapabilityAvailability, type TenantCapabilityFacts } from "./capabilityReadiness.js";
 import {
   getOperationWorkflowBinding,
   UNBOUND_OPERATION_IMPLEMENTING_TASK,
@@ -28,15 +43,31 @@ export type PreflightRequest = {
   version?: number;
   tenantId: string;
   input: unknown;
-  /** Capabilities the caller already knows are configured for this tenant. Diffed against the
-   *  operation's requiredCapabilities; never fetched by this function. */
+  /**
+   * @deprecated Caller-supplied capability claims may only NARROW, never widen, the derived
+   * availability computed from trusted facts (see `PreflightDeps.capabilitySource`). Effective
+   * availability = derived-available AND (configuredCapabilities, when supplied, names it). This
+   * field can never make an otherwise-unavailable capability appear available — see this module's own
+   * header (R1) for why that used to be possible and no longer is.
+   */
   configuredCapabilities?: string[];
 };
 
-// Reserved for a later task's read-only capability lookup; never referenced by this module today.
-// See header comment — its whole purpose is to be handed a repository double a test can prove was
-// never called.
-export type PreflightDeps = { repository?: unknown };
+export type PreflightDeps = {
+  // Reserved for a later task's read-only lookup; never referenced by this module today. See header
+  // comment — its whole purpose is to be handed a repository double a test can prove was never called.
+  repository?: unknown;
+  /**
+   * R1. A SYNCHRONOUS accessor for trusted, already-loaded capability facts about one tenant. The
+   * CALLER (e.g. operationTools.ts's operation.preflight) performs the async repository read and
+   * hands this function a plain closure over the result — this module never awaits it, never retries
+   * it, and never treats its absence as license to trust `request.configuredCapabilities` instead.
+   * Returning `undefined` (including because the whole field was omitted, or the tenantId is unknown
+   * to the caller) is read as "no trusted facts for this tenant" and produces the conservative
+   * result: nothing is assumed available. See capabilityReadiness.ts for what these facts mean.
+   */
+  capabilitySource?: (tenantId: string) => TenantCapabilityFacts | undefined;
+};
 
 export type PreflightResult = {
   operationId: string;
@@ -105,9 +136,23 @@ const unknownOperationResult = (request: PreflightRequest, registeredOperationId
   binding: null
 });
 
-export function preflightOperation(request: PreflightRequest, deps: PreflightDeps = {}): PreflightResult {
-  void deps; // intentionally unused — see module header.
+// Prose remedy for a derived (not asserted) capability gap, keyed by the same real reason
+// deriveTenantCapabilityAvailability() produced — never a blanket "configure it" string, since what
+// would actually close the gap differs by reason (capabilityVocabulary.ts names the evidence).
+function capabilityGapRemedy(capability: string, reason: OperationCapabilityGap["reason"], tenantId: string): string {
+  switch (reason) {
+    case "not_configured":
+      return `Grant tenant "${tenantId}" the tool/verb (or object dialect) this capability's vocabulary entry names as its evidence — see capabilityVocabulary.ts and capabilityReadiness.ts for "${capability}" — then re-run preflight to confirm the gap is closed.`;
+    case "not_supported":
+      return `No tenant dialect or hook in this codebase can provide "${capability}" today (see capabilityVocabulary.ts); this is a systemic gap tenant configuration alone cannot close.`;
+    case "unavailable":
+      return `Tenant "${tenantId}" is currently disabled. Re-enable the project record, then re-run preflight to confirm "${capability}" is available again.`;
+    default:
+      return `Re-run preflight once "${capability}" is available for tenant "${tenantId}".`;
+  }
+}
 
+export function preflightOperation(request: PreflightRequest, deps: PreflightDeps = {}): PreflightResult {
   const lookup = getOperation(request.operationId, request.version);
   if (!lookup.found) return unknownOperationResult(request, lookup.registeredOperationIds);
   const descriptor = lookup.descriptor;
@@ -150,18 +195,48 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
     if (!validation.ok) blockers.push(validation.blocker);
   }
 
-  const configuredCapabilities = new Set(
-    Array.isArray(request.configuredCapabilities) ? request.configuredCapabilities.filter((entry): entry is string => typeof entry === "string") : []
+  // R1: derive first, narrow second — see module header. `tenantFacts` is undefined whenever the
+  // caller supplied no capabilitySource, or supplied one that has nothing for this tenantId; either
+  // way `derivedAvailability` stays null and every requiredCapability is reported as a gap below,
+  // regardless of what `configuredCapabilities` claims.
+  const tenantFacts = deps.capabilitySource?.(request.tenantId);
+  const derivedAvailability = tenantFacts ? deriveTenantCapabilityAvailability(tenantFacts) : null;
+  const narrowingSupplied = Array.isArray(request.configuredCapabilities);
+  const narrowedToCapabilities = new Set(
+    narrowingSupplied ? request.configuredCapabilities!.filter((entry): entry is string => typeof entry === "string") : []
   );
-  const capabilityGaps: OperationCapabilityGap[] = descriptor.requiredCapabilities
-    .filter((capability) => !configuredCapabilities.has(capability))
-    .map((capability) => ({
-      capability,
-      requiredBy: descriptor.operationId,
-      reason: "not_configured" as const,
-      evidence: { requiredCapabilities: descriptor.requiredCapabilities, configuredCapabilities: [...configuredCapabilities] },
-      remedy: `Configure "${capability}" for this tenant (see the operation's requiredCapabilities), then re-run preflight to confirm the gap is closed.`
-    }));
+
+  const capabilityGaps: OperationCapabilityGap[] = [];
+  for (const capability of descriptor.requiredCapabilities) {
+    if (!derivedAvailability) {
+      capabilityGaps.push({
+        capability,
+        requiredBy: descriptor.operationId,
+        reason: "not_configured",
+        evidence: { capability, tenantId: request.tenantId, capabilitySourceSupplied: false },
+        remedy: `No trusted capability facts were supplied for tenant "${request.tenantId}" (no capabilitySource was configured for this call, or it returned none for this tenant), so nothing is assumed available regardless of configuredCapabilities. Supply deps.capabilitySource backed by the tenant's real project record, then re-run preflight.`
+      });
+      continue;
+    }
+    const derived = derivedAvailability[capability];
+    if (!derived || !derived.available) {
+      const reason = derived && !derived.available ? derived.reason : "not_configured";
+      const evidence = derived ? derived.evidence : { capability, tenantId: request.tenantId };
+      capabilityGaps.push({ capability, requiredBy: descriptor.operationId, reason, evidence, remedy: capabilityGapRemedy(capability, reason, request.tenantId) });
+      continue;
+    }
+    // Derived as available. The caller's (deprecated) configuredCapabilities may still NARROW it out
+    // for this one call — it can never do the reverse (see PreflightRequest.configuredCapabilities).
+    if (narrowingSupplied && !narrowedToCapabilities.has(capability)) {
+      capabilityGaps.push({
+        capability,
+        requiredBy: descriptor.operationId,
+        reason: "not_configured",
+        evidence: { ...derived.evidence, narrowedOutByConfiguredCapabilities: true },
+        remedy: `Tenant "${request.tenantId}" is derived as having "${capability}" available, but this request's configuredCapabilities narrowed it out for this call. Include "${capability}" in configuredCapabilities (or omit the deprecated field entirely) to use the derived availability, then re-run preflight.`
+      });
+    }
+  }
 
   // EXECUTABILITY (operation-workflow-binding task). Resolved purely from
   // operationWorkflowBindings.ts's own table, keyed by the REGISTERED descriptor.operationId — never

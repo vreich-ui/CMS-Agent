@@ -11,6 +11,7 @@
 // (a model turn included) gets exactly one way to reach a real OperationDescriptor: name an id this
 // module actually holds.
 import { OPERATION_ID_PATTERN, type OperationDescriptor } from "./operationTypes.js";
+import { isKnownCapability } from "./capabilityVocabulary.js";
 
 const registry = new Map<string, OperationDescriptor>(); // key: `${operationId}@${version}`
 const latestVersionByOperationId = new Map<string, number>();
@@ -21,6 +22,18 @@ export function registerOperation(descriptor: OperationDescriptor): void {
   }
   if (!Number.isInteger(descriptor.version) || descriptor.version < 1) {
     throw new Error(`Invalid version for operation ${descriptor.operationId}: ${descriptor.version} (must be a positive integer)`);
+  }
+  // R1: requiredCapabilities is a closed vocabulary (capabilityVocabulary.ts), not a free-form string
+  // array — a descriptor naming a capability nobody has defined evidence for would let a required gap
+  // go undetectable (nothing could ever derive it available, but nothing would say why). Checked
+  // here, at registration, for the same reason OPERATION_ID_PATTERN is: fail loudly at import time,
+  // not silently at read time.
+  for (const capability of descriptor.requiredCapabilities) {
+    if (!isKnownCapability(capability)) {
+      throw new Error(
+        `Operation "${descriptor.operationId}" requires unknown capability "${capability}" — not registered in capabilityVocabulary.ts. Add it there with a description and evidence, and a matching rule in capabilityReadiness.ts, or fix the descriptor.`
+      );
+    }
   }
   const key = `${descriptor.operationId}@${descriptor.version}`;
   if (registry.has(key)) throw new Error(`Operation already registered: ${key}`);

@@ -18,6 +18,7 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
   return JSON.parse(response.body ?? "{}");
 };
 const structured = (res: any) => res.result?.structuredContent;
+const errorText = (res: any) => JSON.stringify(res.error?.data ?? res.error ?? {});
 
 describe("workspaceStoreSeedNodes — the store's governance-visible union", () => {
   // C5 added the fourth source: visual_identity's two nodes (brand_imagery_writer,
@@ -180,9 +181,16 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
     expect(publishPayload.dependsOn).toEqual(["recipe_mint", "theme_bind", "layout_restamp"]);
   });
 
-  it("an unregistered workflowId falls back to publishing_conductor's own topology (resolveConductorNodes' documented default)", async () => {
+  // R1b — an EXPLICIT, unregistered workflowId is refused rather than silently substituting
+  // publishing_conductor's own topology (the pre-R1b behaviour this test used to assert). Omitting
+  // workflowId entirely still merges every registered workflow's nodes (the test above this one) —
+  // that ABSENT case is unaffected.
+  it("an unregistered workflowId is refused, naming the registered ids, instead of falling back to publishing_conductor's topology", async () => {
     const res = await call("workspace.get_graph", { workflowId: "not_a_real_workflow" });
-    expect(structured(res).data.nodes.map((node: { id: string }) => node.id)).toEqual(listWorkspaceNodes().map((node) => node.id));
+    expect(structured(res)).toBeUndefined();
+    expect(errorText(res)).toContain("unknown_workflow");
+    expect(errorText(res)).toContain("not_a_real_workflow");
+    expect(errorText(res)).toContain("capture_conductor");
   });
 
   it("workspace.update_graph refuses to delete a capture/clone node without admin approval — the same floor publishing's nodes get", async () => {
