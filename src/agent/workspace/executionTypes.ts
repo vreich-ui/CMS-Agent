@@ -14,6 +14,8 @@
 // takes this status; only a node does.
 import type { Blockage } from "../execution/blockage.js";
 import type { EconomicDecision } from "./economicDecision.js";
+import type { NoProgressLedgerEntry } from "./noProgressFingerprint.js";
+import type { ProgressBudgets } from "./progressBudgets.js";
 
 export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled", "skipped"] as const;
 export type ExecutionStatus = typeof executionStatuses[number];
@@ -132,6 +134,14 @@ export type NodeExecutionState = {
   // operator saying "run this one", so the predicate is not re-evaluated on the next dispatch. Durable
   // (a retry that only cleared the skip record would be re-skipped immediately, forever).
   skipOverride?: boolean;
+  // R2 — the no-progress ledger entry from this node's LAST TERMINAL failure (nodeRetryPolicy's own
+  // classified backoff exhausted, or the code was never retryable). See noProgressFingerprint.ts for
+  // what it carries and how it is compared. DELIBERATELY NOT in retryNode's or scheduleNodeRetry's
+  // clear list — unlike errors/output/timing, which describe an attempt that is about to be
+  // superseded, this field's entire purpose is to persist ACROSS that clear so the next dispatch can
+  // still tell whether anything changed. Cleared only when a dispatch actually proceeds with changed
+  // conditions and then completes successfully (see executor.ts's dispatchRunnableNode).
+  noProgress?: NoProgressLedgerEntry;
 };
 
 // R-18 — `pending` distinguishes the two moments a publish gate is knowable:
@@ -392,6 +402,12 @@ export type WorkflowExecutionRecord = {
   // release_to_production already succeeded (so it is never called again) but deploy_status has not
   // yet confirmed — the next dispatch polls once more rather than re-releasing.
   releaseLedger?: Record<string, ReleaseLedgerEntry>;
+  // R2 — quality-revision and specialist-resolution-round counters (progressBudgets.ts). Persisted
+  // here for the same reason every other counter on this record is: survives pause/resume and a
+  // driver restart because it is written by the same CAS saveRun as everything else, never a side
+  // channel. See progressBudgets.ts's own header for what is (and, honestly, is not yet) wired to
+  // consult these.
+  progressBudgets?: ProgressBudgets;
 };
 
 // T15.6 (2026-08-25, ADR-2026-08-25-publish-autonomy §4.3) — see WorkflowExecutionRecord.releaseLedger

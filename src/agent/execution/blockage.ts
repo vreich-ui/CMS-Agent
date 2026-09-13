@@ -249,6 +249,15 @@ export function toBlockage(source: BlockageSource, context: BlockageContext): Bl
       // node reads the same persisted decision and blocks again. A later run may proceed only with
       // fresh evidence/policy or an explicit configured override, so this run offers no false fix.
       return { ...base, kind: "other", remedies: [{ id: "cancel", type: "cancel" }] };
+    case "no_progress":
+      // R2 (noProgressFingerprint.ts) — an UNQUALIFIED "retry" here would be the exact defect this
+      // code exists to stop: the whole point is that dispatching again with nothing changed cannot be
+      // expected to help. No remedy is offered beyond cancel; the message names what would actually
+      // unstick it (new input, a node revision, a capability change, or an explicit justification —
+      // see executor.ts's RunAdvanceOptions.retryJustification), and that remedy is not a button this
+      // contract can express today (retryJustification is a driver-level call argument, not a run/node
+      // field a generic "retry" remedy's args shape carries).
+      return { ...base, kind: "other", remedies: [{ id: "cancel", type: "cancel" }] };
     case "paused":
       return { ...base, kind: "other", remedies: [{ id: "resume", type: "resume", args: { runId: context.run_id }, default: true }, { id: "cancel", type: "cancel" }] };
     case "cancelled":

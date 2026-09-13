@@ -158,6 +158,11 @@ describe("OpenAINodeRunner truncation retry (W12)", () => {
 
     // An operator raising modelConfig.maxOutputTokens and retrying is exactly workflow_retry_node —
     // it must still work: the failure must not have left the run in a non-retryable terminal state.
+    // R2 (no-progress gate): the raise itself is what makes this a legitimate retry rather than a
+    // repeat of an unchanged attempt — it bumps the node's own updatedAt (a "relevant state
+    // revision", noProgressFingerprint.ts), so this is the actual operator action the comment above
+    // describes, not merely a differently-scripted mock.
+    await repositoryManager.getWorkspaceRepository().updateNode("input_triage", { modelConfig: { maxTurns: 3, toolCallLimit: 2, timeout: 90000, maxOutputTokens: 4000 } }, {});
     runResults = [succeedAttempt()];
     run = await retryNode(started.runId, failedNode!.nodeId);
     const retried = run?.nodes.find((n: any) => n.nodeId === failedNode!.nodeId);

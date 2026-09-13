@@ -15,6 +15,7 @@ import type { ChangeRepository } from "./interfaces/ChangeRepository.js";
 import type { EvaluationRepository } from "./interfaces/EvaluationRepository.js";
 import type { ImprovementRepository } from "./interfaces/ImprovementRepository.js";
 import type { ConversationTurnRepository } from "./interfaces/ConversationTurnRepository.js";
+import type { CapabilityGapRepository } from "./interfaces/CapabilityGapRepository.js";
 import { BlobArtifactRepository } from "./blobs/BlobArtifactRepository.js";
 import { BlobEvaluationRepository } from "./blobs/BlobEvaluationRepository.js";
 import { BlobImprovementRepository } from "./blobs/BlobImprovementRepository.js";
@@ -28,6 +29,7 @@ import { BlobDriverHealthRepository } from "./blobs/BlobDriverHealthRepository.j
 import { BlobWorkspaceRepository } from "./blobs/BlobWorkspaceRepository.js";
 import { BlobChangeRepository } from "./blobs/BlobChangeRepository.js";
 import { BlobConversationTurnRepository } from "./blobs/BlobConversationTurnRepository.js";
+import { BlobCapabilityGapRepository } from "./blobs/BlobCapabilityGapRepository.js";
 import { BlobSkillRepository, MemorySkillRepository } from "../skills/skillRegistry.js";
 import { MemoryArtifactRepository } from "./memory/MemoryArtifactRepository.js";
 import { MemoryExecutionRepository } from "./memory/MemoryExecutionRepository.js";
@@ -42,6 +44,7 @@ import { MemoryChangeRepository } from "./memory/MemoryChangeRepository.js";
 import { MemoryEvaluationRepository } from "./memory/MemoryEvaluationRepository.js";
 import { MemoryImprovementRepository } from "./memory/MemoryImprovementRepository.js";
 import { MemoryConversationTurnRepository } from "./memory/MemoryConversationTurnRepository.js";
+import { MemoryCapabilityGapRepository } from "./memory/MemoryCapabilityGapRepository.js";
 
 export type RepositoryBackend = "memory" | "json" | "blobs" | "gcs";
 
@@ -105,6 +108,8 @@ export type RepositoryHealthSummary = {
   evaluation: RepositoryHealth;
   improvement: RepositoryHealth;
   conversationTurns: RepositoryHealth;
+  // R2 Piece 2 — the durable, deduplicated capability-gap ledger (capability-gaps/{tenantId}/*.json).
+  capabilityGap: RepositoryHealth;
 };
 
 const resolveBackend = (context: Partial<RepositoryContext>) => context.backend ?? (process.env.WORKSPACE_STORE as RepositoryBackend | undefined) ?? "memory";
@@ -126,6 +131,7 @@ export class RepositoryManager {
   private readonly evaluationRepository: EvaluationRepository;
   private readonly improvementRepository: ImprovementRepository;
   private readonly conversationTurnRepository: ConversationTurnRepository;
+  private readonly capabilityGapRepository: CapabilityGapRepository;
 
   constructor(context: Partial<RepositoryContext> = {}) {
     this.context = resolveContext(context);
@@ -147,6 +153,7 @@ export class RepositoryManager {
       this.evaluationRepository = new BlobEvaluationRepository();
       this.improvementRepository = new BlobImprovementRepository();
       this.conversationTurnRepository = new BlobConversationTurnRepository();
+      this.capabilityGapRepository = new BlobCapabilityGapRepository();
       this.workspaceRepository.attachChangeSink?.(this.changeRepository);
       return;
     }
@@ -165,6 +172,7 @@ export class RepositoryManager {
     this.evaluationRepository = new MemoryEvaluationRepository(this.context.backend);
     this.improvementRepository = new MemoryImprovementRepository(this.context.backend);
     this.conversationTurnRepository = new MemoryConversationTurnRepository(this.context.backend);
+    this.capabilityGapRepository = new MemoryCapabilityGapRepository(this.context.backend);
     this.workspaceRepository.attachChangeSink?.(this.changeRepository);
   }
 
@@ -185,6 +193,8 @@ export class RepositoryManager {
   getEvaluationRepository(): EvaluationRepository { return this.evaluationRepository; }
   getImprovementRepository(): ImprovementRepository { return this.improvementRepository; }
   getConversationTurnRepository(): ConversationTurnRepository { return this.conversationTurnRepository; }
+  // R2 Piece 2 — the durable, deduplicated capability-gap ledger.
+  getCapabilityGapRepository(): CapabilityGapRepository { return this.capabilityGapRepository; }
 
   // G3 (T-2 re-run, run_1785405350649_9u5mjz): the project repository's own health() has always
   // existed, but this summary never once called it — the project registry had NO representation in
@@ -193,7 +203,7 @@ export class RepositoryManager {
   // operator or startup check reading repository.get_health instead of leaving them reachable only by
   // calling project repo health directly.
   async getRepositoryHealth(): Promise<RepositoryHealthSummary> {
-    const [workspace, execution, artifact, learning, usage, nodeTiming, toolExecution, driverHealth, project, skill, change, evaluation, improvement, conversationTurns] = await Promise.all([
+    const [workspace, execution, artifact, learning, usage, nodeTiming, toolExecution, driverHealth, project, skill, change, evaluation, improvement, conversationTurns, capabilityGap] = await Promise.all([
       this.workspaceRepository.health(),
       this.executionRepository.health(),
       this.artifactRepository.health(),
@@ -207,9 +217,10 @@ export class RepositoryManager {
       this.changeRepository.health(),
       this.evaluationRepository.health(),
       this.improvementRepository.health(),
-      this.conversationTurnRepository.health()
+      this.conversationTurnRepository.health(),
+      this.capabilityGapRepository.health()
     ]);
-    const storageHealth = [workspace, execution, artifact, learning, usage, nodeTiming, toolExecution, driverHealth, project, skill, change, evaluation, improvement, conversationTurns].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
-    return { backend: this.context.backend, storageHealth, build: planeBuildIdentity(), workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, nodeTiming, toolExecution, driverHealth, project, skill, change, evaluation, improvement, conversationTurns };
+    const storageHealth = [workspace, execution, artifact, learning, usage, nodeTiming, toolExecution, driverHealth, project, skill, change, evaluation, improvement, conversationTurns, capabilityGap].every((status) => status.readable && status.writable) ? "healthy" : "degraded";
+    return { backend: this.context.backend, storageHealth, build: planeBuildIdentity(), workspaceVersion: await this.workspaceRepository.getWorkspaceVersion(), workspace, execution, artifact, learning, usage, nodeTiming, toolExecution, driverHealth, project, skill, change, evaluation, improvement, conversationTurns, capabilityGap };
   }
 }

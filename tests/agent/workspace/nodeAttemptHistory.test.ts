@@ -42,7 +42,12 @@ describe("W0 T0.1 — failure history survives a retry", () => {
       expect(failed.status).toBe("failed");
       expect(failed.errors).toEqual(["input_triage:max_turns_exceeded"]);
 
-      const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store }))!;
+      // R2 (no-progress gate): input, node definition and capability state are all deliberately
+      // unchanged between the two attempts — this test is about errorHistory/run.errors bookkeeping,
+      // not about justifying a retry — so an explicit retryJustification stands in for "an operator
+      // looked into it" the way a real caller would supply one; see executor.ts's RunAdvanceOptions
+      // doc comment.
+      const retried = (await retryNode(started.runId, "input_triage", { executionRepository: store, retryJustification: "test: bookkeeping only" }))!;
       const node = retried.nodes.find((state) => state.nodeId === "input_triage")!;
       expect(node.status).toBe("completed");
 

@@ -55,6 +55,9 @@ import { ENGINE_RESOLVED_VECTOR_POLICY, applyResolvedVectorClamp, declaresResolv
 import { appendNodeAttempt, dropUnretriedNodeErrors, markRunErrorsRetried, nextAttemptNumber, NODE_ERROR_RETRIED_MARKER } from "./nodeAttemptHistory.js";
 import { toBlockage } from "../execution/blockage.js";
 import { decideNodeRetry, isAwaitingRetryBackoff, nextRetryAt, scheduleNodeRetry } from "./nodeRetryPolicy.js";
+import { checkNoProgress, recordTerminalFailure, type AttemptConditions } from "./noProgressFingerprint.js";
+import { loadTenantCapabilityFacts } from "../operations/capabilityFactsLoader.js";
+import { deriveTenantCapabilityAvailability } from "../operations/capabilityReadiness.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 import { ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS, declaresDeterministicRoute, deterministicStageTimeoutMs, nodeTimeoutMs, phaseTimeoutMsFor, resolveRouteEra, STALL_MARGIN_MS, type PhaseClaim } from "./routeRegistry.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
@@ -821,7 +824,18 @@ function withRunLock<T>(runId: string, task: () => Promise<T>): Promise<T> {
   return result;
 }
 
-export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean; driver?: RunDriver };
+// R2 — retryJustification: the ONE sanctioned override for the no-progress gate (noProgressFingerprint
+// .ts's checkNoProgress), threaded here rather than added as a new top-level retryNode parameter so
+// every driver's call shape (RunAdvanceOptions) stays the single place a caller's intent enters. A
+// non-empty string is read as "the caller asserts a real, externally-visible fix that this engine's
+// fingerprint cannot see" (see noProgressFingerprint.ts's own "WHAT IS NOT COVERED" note — a rotated
+// client credential is the canonical example) and is recorded verbatim onto the node's noProgress
+// ledger entry (NodeExecutionState.noProgress.lastOverrideJustification) for audit, THE SAME PLACE a
+// human reviewing the run would look. It is NEVER verified — supplying text is not proof anything
+// changed — so it is deliberately narrow: it bypasses the PRE-DISPATCH refusal for exactly one
+// dispatch, never the underlying classified retry budget (nodeRetryPolicy.ts, untouched) and never any
+// gate this module does not own (a publish gate, an approval, a budget ceiling).
+export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean; driver?: RunDriver; retryJustification?: string };
 
 // S1 — dispatch provenance. Resolves, for THIS process, whether the run's project MCP endpoint env var
 // is set (never its value), so the claim written at dispatch says what the dispatching driver could
@@ -3192,6 +3206,51 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
     // Mock run: fall through to the MockNodeRunner placeholder below so CI traversal keeps working.
   }
 
+  // R2 — THE NO-PROGRESS GATE, IMMEDIATELY BEFORE THE FIRST PAID DISPATCH, same $0 discipline as the
+  // auth preflight directly below (and placed before it: a dispatch that would repeat an identical
+  // failed attempt is refused on the CONDITIONS alone, whether or not this driver's own credentials
+  // are fine). See noProgressFingerprint.ts for what "identical" means and why conditionsHash — not
+  // the full fingerprint, which also needs a not-yet-known new failure — is the correct pre-dispatch
+  // comparison. `attemptConditions` is computed once here and reused below when a failure goes
+  // terminal, so the two can never observe a different `state.input`/capability snapshot than each
+  // other. Gated on `claim` for the same reason authPreflight is: the concurrent-batch path
+  // (dispatchConcurrentBatch) stamps its own claim before calling in here with claim=false and is
+  // outside this gate's coverage, exactly as it is already outside authPreflight's.
+  let attemptConditions: AttemptConditions | undefined;
+  if (claim) {
+    const capabilityFacts = await loadTenantCapabilityFacts(run.projectId, repositoryManager.getProjectRepository());
+    attemptConditions = {
+      workflowId: run.workflowId,
+      nodeId: nextNode.id,
+      nodeDefinitionRevision: nextNode.updatedAt,
+      input: state.input,
+      capabilityAvailability: capabilityFacts ? deriveTenantCapabilityAvailability(capabilityFacts) : undefined
+    };
+    const noProgressCheck = checkNoProgress(state.noProgress, attemptConditions);
+    if (noProgressCheck.blocked && !options.retryJustification) {
+      const completedAt = now();
+      const entry = noProgressCheck.entry;
+      const message = `Node "${nextNode.id}" would repeat attempt #${entry.occurrences} of the identical failed attempt (code "${entry.code}") with unchanged workflow/node identity, node definition, input and capability state. Nothing this engine can see has changed since the last terminal failure at ${entry.lastAttemptAt}, so dispatching again cannot be expected to produce a different result. Supply a new authorized input, a node/prompt revision, a tenant capability change, or an explicit retryJustification asserting a real externally-visible fix, then retry.`;
+      state.status = "failed";
+      state.startedAt = state.startedAt ?? startedAt;
+      state.completedAt = completedAt;
+      state.durationMs = duration(state.startedAt ?? startedAt, completedAt);
+      state.errors = ["no_progress", message];
+      state.output = { error: { code: "no_progress", message } };
+      state.blockage = toBlockage(
+        { code: "no_progress", message, details: { occurrences: entry.occurrences, firstAttemptAt: entry.firstAttemptAt, lastAttemptAt: entry.lastAttemptAt, underlyingCode: entry.code, components: entry.components } },
+        { node_id: nextNode.id, run_id: run.runId, surface: "run", attempt: nextAttemptNumber(state) }
+      );
+      delete state.dispatch;
+      run.status = "failed";
+      run.currentNodeId = nextNode.id;
+      run.errors = [...run.errors, `${nextNode.id}:no_progress`];
+      run.updatedAt = completedAt;
+      // No usage record: no model call happened, so the R-20 $0 rule applies — same as authPreflight.
+      return { run };
+    }
+  }
+
   // T1 — AUTHENTICATED PREFLIGHT, IMMEDIATELY BEFORE THE FIRST PAID DISPATCH.
   //
   // Everything above this line is free: deterministic stages, skip predicates, prefetches. Everything
@@ -3322,6 +3381,14 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
       return { run };
     }
     state.status = result.code === "approval_required" ? "blocked" : result.code === "cancelled" ? "cancelled" : "failed";
+    // R2 — record the no-progress ledger entry ONLY for a genuinely TERMINAL, ordinarily-retryable
+    // failure ("failed", not "blocked"/"cancelled" — a gate hold or a cancellation is a decision, not
+    // a wall the fingerprint concept applies to, matching nodeRetryPolicy's own NEVER_AUTO_RETRIED_
+    // CODES carve-out). `attemptConditions` is undefined when this dispatch was never claim-gated
+    // (dispatchConcurrentBatch) — see the gate's own comment above for why that path is out of scope.
+    if (state.status === "failed" && attemptConditions) {
+      state.noProgress = recordTerminalFailure(state.noProgress, attemptConditions, result.code, result.message, completedAt, options.retryJustification);
+    }
     state.errors = [result.code, result.message];
     // Provider-error-details: providerStatus/providerMessage/operatorAction ride along on the
     // persisted error so every reader of this node's output (workflow_get_run, node_get_latest_output,
@@ -3655,6 +3722,11 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
   // W1 T1.1 — the scheduled-retry marker described a node that had not yet succeeded. It has now.
   delete state.retry;
   delete run.retryBackoffUntil;
+  // R2 — real progress was just made (the node completed and passed its own outputSchema), so any
+  // no-progress ledger from an earlier terminal failure of this node no longer describes the current
+  // state of the world. Cleared here rather than left to be overwritten by a future failure so a
+  // reader of a COMPLETED node never sees a stale "this would repeat" entry.
+  delete state.noProgress;
   state.output = output;
   const provenance = buildNodeExecutionProvenance(effectiveNode, result.model, completedAt);
   if (provenance) state.provenance = provenance;

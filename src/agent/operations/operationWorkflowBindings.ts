@@ -43,9 +43,11 @@
 // Every workflowId below is checked against workflowRegistry.ts's OWN registry at import time
 // (assertBindingIsSound) — a binding naming an id nobody registered fails loudly at import, the same
 // discipline registerOperation() already enforces for the operation catalog itself.
-import { listRegisteredWorkflowIds } from "../workspace/workflowRegistry.js";
+import { listRegisteredWorkflowIds, getWorkflowDefinition } from "../workspace/workflowRegistry.js";
 import { VISUAL_IDENTITY_WORKFLOW_ID } from "../workspace/visualIdentityWorkflow.js";
+import { getOperation } from "./operationCatalog.js";
 import type { OperationId } from "./operationTypes.js";
+import { checkBindingInputContract, type BindingInputContractResult, type OperationInputContractSource } from "./bindingInputContract.js";
 
 export type OperationWorkflowBinding = {
   operationId: OperationId;
@@ -98,6 +100,66 @@ function assertBindingIsSound(binding: OperationWorkflowBinding): void {
       `operationWorkflowBindings: operation "${binding.operationId}" is bound to workflow "${binding.workflowId}", which workflowRegistry.ts has not registered. Register the workflow first, or remove this binding.`
     );
   }
+}
+
+// R1c — THE GAP assertBindingIsSound NEVER CLOSED. assertBindingIsSound (above) only checks that
+// `workflowId` names something workflowRegistry.ts registered; it never checks that this OPERATION'S
+// OWN INPUT, after `inputMapping`'s rename, can satisfy what the target workflow's entry node(s)
+// actually require. A binding can pass assertBindingIsSound at import time and still be a binding to
+// a workflow that will refuse its input at the very first node, every single run — exactly what the
+// real binding below currently is (see the test file for the evidence: visual_identity_review_change
+// maps to {projectId, apply}, but brand_imagery_writer requires `mode` and one of `references`/`brief`
+// — none of which the mapped input ever supplies).
+//
+// resolveBindingInputContract() is that missing check, made an INSPECTABLE, EXPORTED RESULT rather
+// than a second import-time assertion. It is DELIBERATELY NOT CALLED from the BINDINGS registration
+// loop below, and DELIBERATELY NEVER THROWS: the one real binding today IS incomplete by this check
+// (see above), and this module's own registration loop running at import time must still succeed —
+// throwing here would take the whole service down on every boot, for a gap that operationPreflight.ts
+// (R1c) already reports honestly at request time via `executable:false` and a named capabilityGap.
+// A binding failing this check is a KNOWN-INCOMPLETE BINDING, not a broken one: it still passes
+// assertBindingIsSound (the workflow genuinely exists and is genuinely the right one to eventually
+// bind to), it is simply not yet WIRED to accept this operation's actual input. Closing that gap means
+// either extending the operation's own input contract + inputMapping, or repairing/replacing the
+// target node's inputSchema — not throwing at import, and not silently pretending here that it's fine.
+//
+// Call this (or listBindingInputContractStatuses() below) from a test or an operator tool to SEE the
+// gap in code; operationPreflight.ts calls the same underlying checkBindingInputContract() (with the
+// descriptor and canonical nodes it already has in hand) to make the gap REFUSE a run before it starts
+// — see that module's own header (R1c) for why that is the behavior that actually matters.
+export type BindingInputContractStatus = {
+  operationId: OperationId;
+  workflowId: string;
+  // false only when the operation itself, or the workflow it is bound to, is not currently registered
+  // (e.g. this is called before registerOperations.ts's side effects have run) — a caller-environment
+  // fact, not a verdict about the binding's own soundness. `contract` is null in that case: there is
+  // nothing to report a verdict about yet.
+  resolved: boolean;
+  contract: BindingInputContractResult | null;
+};
+
+function operationInputContractSource(inputSchema: Record<string, unknown>, defaults: Record<string, unknown>): OperationInputContractSource {
+  const requiredFields = Array.isArray(inputSchema.required) ? inputSchema.required.filter((field): field is string => typeof field === "string") : [];
+  return { requiredFields, defaultedFields: Object.keys(defaults) };
+}
+
+export function resolveBindingInputContract(binding: OperationWorkflowBinding): BindingInputContractStatus {
+  const operation = getOperation(binding.operationId);
+  const workflow = getWorkflowDefinition(binding.workflowId);
+  if (!operation.found || !workflow) {
+    return { operationId: binding.operationId, workflowId: binding.workflowId, resolved: false, contract: null };
+  }
+  const source = operationInputContractSource(operation.descriptor.inputSchema as Record<string, unknown>, operation.descriptor.defaults);
+  const contract = checkBindingInputContract(binding.workflowId, binding.inputMapping, source, workflow.canonicalNodes());
+  return { operationId: binding.operationId, workflowId: binding.workflowId, resolved: true, contract };
+}
+
+// Every registered binding's input-contract status, sorted by operationId (same determinism
+// discipline as listOperationWorkflowBindings()). Requires registerOperations.ts's side effects to
+// have already run for `resolved:true` on any entry — callers that need that (this module's own test
+// file included) import it first, same as every other test that needs the operation catalog populated.
+export function listBindingInputContractStatuses(): BindingInputContractStatus[] {
+  return listOperationWorkflowBindings().map(resolveBindingInputContract);
 }
 
 const bindingsByOperationId = new Map<string, OperationWorkflowBinding>();

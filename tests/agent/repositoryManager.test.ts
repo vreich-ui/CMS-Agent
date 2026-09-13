@@ -75,7 +75,9 @@ describe("RepositoryManager", () => {
       change: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       evaluation: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
       improvement: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
-      conversationTurns: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
+      conversationTurns: { backend: "memory", readable: true, writable: true, version: "memory.v1" },
+      // R2 Piece 2: the durable, deduplicated capability-gap ledger, same memory health shape.
+      capabilityGap: { backend: "memory", readable: true, writable: true, version: "memory.v1" }
     });
   });
 
@@ -93,7 +95,8 @@ describe("RepositoryManager", () => {
       manager.getChangeRepository(),
       manager.getEvaluationRepository(),
       manager.getImprovementRepository(),
-      manager.getConversationTurnRepository()
+      manager.getConversationTurnRepository(),
+      manager.getCapabilityGapRepository()
     ]) {
       await expect(repository.health()).resolves.toEqual({ backend: "memory", readable: true, writable: true, version: "memory.v1" });
     }
