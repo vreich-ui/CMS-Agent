@@ -28,17 +28,22 @@
 //     the identical contract this descriptor states. This is the one operation with a real,
 //     wired-into-the-executor implementation today.
 //
-//   site_inventory (A4), asset_lookup_adopt (A5), pdf_template_family (A7), document_render (A8),
-//   image_template_revision (A9) — UNBOUND. Each descriptor file
-//   (src/agent/operations/descriptors/*.ts) says "CONTRACT ONLY, no implementation here". Concretely:
-//   siteContext.ts's own header states its SiteContextSource implementation "is reserved for a
-//   later task"; capture_conductor performs a site CRAWL and emission (captureConductorNodes.ts),
-//   which is not a read of the CURRENT inventory no matter how related the vocabulary sounds — it is
-//   deliberately NOT bound to site_inventory. No registered workflow's node array performs a
+//   asset_lookup_adopt (A5), pdf_template_family (A7), document_render (A8), image_template_revision
+//   (A9) — UNBOUND to any WORKFLOW. Each descriptor file (src/agent/operations/descriptors/*.ts)
+//   says "CONTRACT ONLY, no implementation here". Concretely: capture_conductor performs a site
+//   CRAWL and emission (captureConductorNodes.ts), which is not a read of the CURRENT inventory no
+//   matter how related the vocabulary sounds. No registered workflow's node array performs a
 //   search_assets/adopt_asset, designs or publishes a PDF template family, renders an existing
 //   document to PDF, or revises a batch of web template images. An honest unbound here is what lets
 //   preflightOperation() report executable:false with a named remedy instead of a run that fails at
 //   workflow_start_dry_run with no explanation.
+//
+//   site_inventory (A4) — NOT in this module's table, and deliberately NOT in
+//   UNBOUND_OPERATION_IMPLEMENTING_TASK below either: A4 shipped it as a registered EXECUTOR
+//   (operationExecutorBindings.ts), not a workflow. It is implemented — just not by THIS registry.
+//   getOperationWorkflowBinding("site_inventory") correctly still returns null (there genuinely is
+//   no workflow binding for it); operationPreflight.ts checks operationExecutorBindings.ts as a
+//   sibling source of "genuinely implemented" before falling back to this module's unbound-gap path.
 //
 // Every workflowId below is checked against workflowRegistry.ts's OWN registry at import time
 // (assertBindingIsSound) — a binding naming an id nobody registered fails loudly at import, the same
@@ -85,9 +90,10 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
 // preflightOperation() to name a concrete remedy instead of a bare "not supported". Kept beside the
 // binding table because both describe the same operation -> execution-status axis: when a task
 // below actually ships a real implementing workflow, move that operationId out of this map and into
-// BINDINGS above (with its own evidence comment) rather than editing preflightOperation.ts.
+// BINDINGS above (with its own evidence comment) rather than editing preflightOperation.ts. An
+// operation whose implementing task shipped an EXECUTOR instead (operationExecutorBindings.ts) is
+// also removed from here — site_inventory (A4) is the one example; see this module's header.
 export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {
-  site_inventory: "A4",
   asset_lookup_adopt: "A5",
   pdf_template_family: "A7",
   document_render: "A8",

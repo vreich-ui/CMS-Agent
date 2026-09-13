@@ -37,6 +37,7 @@ import {
   UNBOUND_OPERATION_IMPLEMENTING_TASK,
   type OperationWorkflowBinding
 } from "./operationWorkflowBindings.js";
+import { getOperationExecutorBinding, checkExecutorInputContract, type PublicOperationExecutorBinding } from "./operationExecutorBindings.js";
 import { getWorkflowDefinition } from "../workspace/workflowRegistry.js";
 import { checkBindingInputContract, resolveWorkflowEntryNodes, type OperationInputContractSource } from "./bindingInputContract.js";
 
@@ -90,11 +91,20 @@ export type PreflightResult = {
   // this operation (e.g. via workflow_start_dry_run) would fail or run the wrong thing; the
   // accompanying capabilityGap (reason "not_supported") names why and what would fix it.
   executable: boolean;
-  // The resolved binding when executable is true; null otherwise — including when a binding EXISTS
-  // but R1c's input-contract check finds it cannot be satisfied (a known-incomplete binding is not
-  // offered as usable). Never a caller-supplied binding — always exactly what
+  // The resolved WORKFLOW binding when executable is true via a workflow; null otherwise —
+  // including when a binding EXISTS but R1c's input-contract check finds it cannot be satisfied (a
+  // known-incomplete binding is not offered as usable), and including when this operation is
+  // implemented by an EXECUTOR instead (see `executorBinding` below) — an operation is bound to
+  // exactly one of the two (operationExecutorBindings.ts asserts this at import), so the two fields
+  // are never both non-null. Never a caller-supplied binding — always exactly what
   // operationWorkflowBindings.ts's own table resolves for this operationId.
   binding: OperationWorkflowBinding | null;
+  // ADDITIVE (A4). The resolved EXECUTOR binding when executable is true via a registered executor
+  // (operationExecutorBindings.ts) — site_inventory is the one example today. null otherwise,
+  // including when a binding exists but its own input-contract check (checkExecutorInputContract)
+  // cannot be satisfied, or its required capabilities are not (yet) derived-available for this
+  // tenant — see the EXECUTOR EXECUTABILITY comment below for exactly what gates this to true.
+  executorBinding: PublicOperationExecutorBinding | null;
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -139,7 +149,8 @@ const unknownOperationResult = (request: PreflightRequest, registeredOperationId
   effects: [],
   completion: [],
   executable: false,
-  binding: null
+  binding: null,
+  executorBinding: null
 });
 
 // Prose remedy for a derived (not asserted) capability gap, keyed by the same real reason
@@ -311,9 +322,57 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
       }
     }
   }
-  const executable = binding !== null && inputContractSatisfied;
-  const effectiveBinding = executable ? binding : null;
-  if (!binding) {
+  const workflowExecutable = binding !== null && inputContractSatisfied;
+
+  // EXECUTOR EXECUTABILITY (A4). Sibling of the workflow check above, for an operation implemented
+  // by a registered EXECUTOR (operationExecutorBindings.ts) instead of a workflow — site_inventory is
+  // the one example today. The equivalent guarantee checkExecutorInputContract gives is narrower than
+  // R1c's workflow check (no entry-node graph, no field-rename table — see that module's own header):
+  // it asks only whether every field the executor's OWN declared inputSchema requires is already
+  // guaranteed present on this operation's own merged input, under the identical name.
+  //
+  // UNLIKE THE WORKFLOW BRANCH ABOVE, this is ALSO gated on capability readiness
+  // (`capabilityReadinessPassed`, read from `capabilityGaps` as it stands right here — after the
+  // requiredCapabilities loop above, and after the workflow-binding block above it, which only ever
+  // pushes its OWN "workflow_binding" gap when `binding` is non-null; an operation with a workflow
+  // binding never also has an executor binding — asserted mutually exclusive at import
+  // (operationExecutorBindings.ts) — so that gap and this executor branch are never both live for the
+  // same operation, and `capabilityReadinessPassed` means exactly "every requiredCapability derived
+  // available" for the one case that reaches here) — this task's own requirement is that
+  // site_inventory reports executable:true only "once its capability readiness passes", not merely
+  // "the input contract could work in principle". The workflow branch does not carry the same
+  // requirement (visual_identity_review_change's own test pins its current, capability-independent
+  // behavior) and is left exactly as it was.
+  const capabilityReadinessPassed = capabilityGaps.length === 0;
+  const executorBinding = getOperationExecutorBinding(descriptor.operationId);
+  let executorInputContractSatisfied = false;
+  if (executorBinding) {
+    const source: OperationInputContractSource = { requiredFields, defaultedFields: Object.keys(descriptor.defaults) };
+    const contract = checkExecutorInputContract(executorBinding, source);
+    executorInputContractSatisfied = contract.satisfied;
+    if (!contract.satisfied) {
+      capabilityGaps.push({
+        capability: "executor_binding",
+        requiredBy: descriptor.operationId,
+        reason: "not_supported",
+        evidence: {
+          operationId: descriptor.operationId,
+          executorId: executorBinding.executorId,
+          guaranteedFields: contract.guaranteedFields,
+          unsatisfiedRequired: contract.unsatisfiedRequired,
+          unsupportedConstructs: contract.unsupportedConstructs
+        },
+        remedy: `The executor "${executorBinding.executorId}" bound to "${descriptor.operationId}" declares an inputSchema requiring ${contract.unsatisfiedRequired.join(", ") || "construct(s) this check cannot evaluate"}, which "${descriptor.operationId}"'s own inputSchema/defaults do not guarantee. Close this by extending the operation's own inputSchema/defaults, or the executor's declared inputSchema, to agree. Re-run preflight once repaired to confirm the gap is closed.`
+      });
+    }
+  }
+  const executorExecutable = executorBinding !== null && executorInputContractSatisfied && capabilityReadinessPassed;
+
+  const executable = workflowExecutable || executorExecutable;
+  const effectiveBinding = workflowExecutable ? binding : null;
+  const effectiveExecutorBinding = executorExecutable ? executorBinding : null;
+
+  if (!binding && !executorBinding) {
     const implementingTask = UNBOUND_OPERATION_IMPLEMENTING_TASK[descriptor.operationId];
     const taskPhrase = implementingTask ? `Task ${implementingTask}` : "A later task";
     capabilityGaps.push({
@@ -321,7 +380,7 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
       requiredBy: descriptor.operationId,
       reason: "not_supported",
       evidence: { operationId: descriptor.operationId, implementingTask: implementingTask ?? null },
-      remedy: `${taskPhrase} has not yet shipped a registered workflow that implements "${descriptor.operationId}"; this operation cannot be started today. Re-run preflight once ${implementingTask ? `${implementingTask} ships` : "an implementing workflow is registered"} to confirm the gap is closed.`
+      remedy: `${taskPhrase} has not yet shipped a registered workflow or executor that implements "${descriptor.operationId}"; this operation cannot be started today. Re-run preflight once ${implementingTask ? `${implementingTask} ships` : "an implementing workflow or executor is registered"} to confirm the gap is closed.`
     });
   }
 
@@ -335,6 +394,7 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
     effects: descriptor.effects,
     completion: descriptor.completion,
     executable,
-    binding: effectiveBinding
+    binding: effectiveBinding,
+    executorBinding: effectiveExecutorBinding
   };
 }

@@ -83,21 +83,37 @@ describe("preflightOperation", () => {
     expect(repository.calls).toEqual([]);
   });
 
-  it("no requiredCapability gap is reported once a trusted capabilitySource derives it available (site_inventory is itself unbound, so its own workflow_binding gap remains)", () => {
+  it("no requiredCapability gap is reported once a trusted capabilitySource derives it available (A4: site_inventory now has a registered EXECUTOR, so once capability readiness passes it reports executable:true with zero gaps at all)", () => {
     const deps = capabilitySourceFor(fullyProvisionedDrLurieFacts());
     const result = preflightOperation({ operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } }, deps);
     expect(result.capabilityGaps.some((gap) => gap.capability === "site_inventory_read")).toBe(false);
-    expect(result.capabilityGaps.some((gap) => gap.reason === "not_supported")).toBe(true); // workflow_binding, unrelated to R1
+    expect(result.capabilityGaps).toEqual([]);
+    expect(result.executable).toBe(true);
+    expect(result.binding).toBeNull();
+    expect(result.executorBinding).not.toBeNull();
+    expect(result.executorBinding?.executorId).toBe("site_inventory_executor");
   });
 
-  it("an unbound operation (site_inventory) reports executable:false, binding:null, and a not_supported capability gap naming the implementing task", () => {
+  it("site_inventory reports executable:false and a not_configured capability gap (never not_supported) when no trusted capabilitySource is supplied — its executor binding EXISTS and its own input contract is satisfied, so the only thing missing is capability readiness", () => {
     const result = preflightOperation({ operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" }, configuredCapabilities: ["site_inventory_read"] });
     expect(result.executable).toBe(false);
     expect(result.binding).toBeNull();
+    expect(result.executorBinding).toBeNull();
+    const gap = result.capabilityGaps.find((entry) => entry.capability === "site_inventory_read");
+    expect(gap).toBeDefined();
+    expect(gap?.reason).toBe("not_configured");
+    expect(result.capabilityGaps.some((entry) => entry.reason === "not_supported")).toBe(false);
+  });
+
+  it("a genuinely unbound operation (asset_lookup_adopt) reports executable:false, binding:null, executorBinding:null, and a not_supported capability gap naming the implementing task", () => {
+    const result = preflightOperation({ operationId: "asset_lookup_adopt", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", query: "logo" } });
+    expect(result.executable).toBe(false);
+    expect(result.binding).toBeNull();
+    expect(result.executorBinding).toBeNull();
     const gap = result.capabilityGaps.find((entry) => entry.reason === "not_supported");
     expect(gap).toBeDefined();
-    expect(gap?.requiredBy).toBe("site_inventory");
-    expect(gap?.remedy).toContain("A4");
+    expect(gap?.requiredBy).toBe("asset_lookup_adopt");
+    expect(gap?.remedy).toContain("A5");
   });
 
   // R1c: this binding EXISTS (operationWorkflowBindings.ts's table has a row for it) but its mapped
@@ -287,7 +303,7 @@ describe("preflightOperation", () => {
     // the SECOND one regardless of what R1 derives for the first. R1's own behavior (capability gaps
     // are derived from trusted facts, never asserted) is otherwise unaffected — this operation simply
     // ALSO carries the R1c workflow_binding gap on top, same as every unbound operation already did.
-    it("R1's capability derivation is unaffected by R1c: visual_identity_review_change still carries no visual_identity_read/propose capability gap once derived available, even though it now also carries R1c's workflow_binding gap; the five unbound operations keep their not_supported workflow_binding gap", () => {
+    it("R1's capability derivation is unaffected by R1c: visual_identity_review_change still carries no visual_identity_read/propose capability gap once derived available, even though it now also carries R1c's workflow_binding gap; the four still-unbound operations (A4's site_inventory excluded — see its own tests) keep their not_supported workflow_binding gap", () => {
       const bound = preflightOperation(
         { operationId: "visual_identity_review_change", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } },
         capabilitySourceFor(fullyProvisionedDrLurieFacts())
@@ -299,7 +315,10 @@ describe("preflightOperation", () => {
       expect(bound.binding).toBeNull();
       expect(bound.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
 
-      const unboundIds = ["site_inventory", "pdf_template_family", "document_render", "asset_lookup_adopt", "image_template_revision"];
+      // A4: site_inventory is deliberately EXCLUDED here — it is no longer unbound (it has a
+      // registered executor), so it no longer carries a "workflow_binding" not_supported gap; see
+      // the dedicated site_inventory tests above for its own (different) current behavior.
+      const unboundIds = ["pdf_template_family", "document_render", "asset_lookup_adopt", "image_template_revision"];
       for (const operationId of unboundIds) {
         const result = preflightOperation({ operationId, tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
         expect(result.executable).toBe(false);

@@ -198,10 +198,11 @@ describe("operation.preflight / operation.list_capability_gaps (MCP surface, rea
   it("discovers a genuine gap on an unregistered tenant and durably records exactly one occurrence", async () => {
     const { preflight, listGaps } = tools();
     const result = (await preflight.execute({ operationId: "site_inventory", tenantId: "unregistered-tenant", input: { tenantId: "unregistered-tenant" }, sourceRef: "run_a" })) as { data: { capabilityGaps: OperationCapabilityGap[] } };
-    // Both a genuine (not_configured, vocabulary-known) and a non-genuine (not_supported, unbound
-    // workflow_binding) gap surface in the per-call response — preflightOperation itself is untouched.
+    // A4: site_inventory now has a registered EXECUTOR whose own input contract IS satisfiable, so no
+    // "workflow_binding"/"executor_binding" gap is pushed here at all — the ONLY gap is the genuine,
+    // vocabulary-known capability gap (no trusted facts exist for an unregistered tenant).
     expect(result.data.capabilityGaps.some((g) => g.capability === "site_inventory_read" && g.reason === "not_configured")).toBe(true);
-    expect(result.data.capabilityGaps.some((g) => g.capability === "workflow_binding")).toBe(true);
+    expect(result.data.capabilityGaps.some((g) => g.capability === "workflow_binding" || g.capability === "executor_binding")).toBe(false);
 
     const listed = (await listGaps.execute({ tenantId: "unregistered-tenant" })) as { data: { capabilityGaps: Array<{ capability: string; occurrenceCount: number }> } };
     // Only the genuine, vocabulary-known gap became a durable record — workflow_binding did not.
