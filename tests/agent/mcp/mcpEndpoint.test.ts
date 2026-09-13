@@ -1,7 +1,8 @@
-import { describe, expect, it, afterEach, beforeEach } from "vitest";
-import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { describe, expect, it, afterEach, beforeEach, vi } from "vitest";
+import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
+import "../../../src/agent/operations/registerOperations.js";
 
 const event = (body: unknown, token = "test-token") => ({
   httpMethod: "POST",
@@ -319,5 +320,117 @@ describe("scoped bearer tokens and cross-project list tools", () => {
     expect(response.statusCode).toBe(200);
     const notes = rowsOf(response).map((record) => record.note);
     expect(notes).toEqual(expect.arrayContaining(["own", "foreign", "legacy"]));
+  });
+});
+
+// K-M11 (2026-09-13, owner-authorized fix) — operation.execute/operation.preflight scope entirely
+// by `tenantId` (operationTools.ts), never `projectId`/`project_id`, and the pre-fix
+// `requestedProject` (mcpEndpoint.ts) read only those two literal keys — so a scoped bearer for one
+// tenant could name any OTHER tenant's `tenantId` and reach `operation_preflight` (already granted,
+// #318) for it, unrefused. `requestedProject` now reads `tenantId`/`tenant_id` alongside
+// `projectId`/`project_id` (same identifier space — see that function's own header and
+// capabilityFactsLoader.ts), refusing any call where the recognized spellings disagree. This block
+// used to PROVE THE GAP; it now proves the fix, for both tools that carry `tenantId`
+// (`operation_execute`, `operation_preflight`), both spellings (`tenantId` and `tenant_id`), and
+// keeps an own-tenant success path so "refuse everything" cannot pass silently. `mcpEndpoint.ts`'s
+// auth order and the rest of its scoped-request checks are unchanged — only the set of argument keys
+// `requestedProject` reads was widened.
+describe("scoped bearer tokens and operation.execute/operation.preflight's tenantId (K-M11)", () => {
+  const SCOPED_PLATFORM = "scoped-test-platform-opexec";
+  const SCOPED_DRLURIE = "scoped-test-drlurie-opexec";
+
+  beforeEach(() => {
+    resetRepositoryManager();
+    process.env.MCP_API_TOKEN = "test-token";
+    process.env.MCP_SCOPED_TOKENS_JSON = JSON.stringify({
+      [SCOPED_PLATFORM]: { projects: ["platform"], toolAllowlist: ["operation_execute", "operation_preflight"] },
+      [SCOPED_DRLURIE]: { projects: ["dr-lurie"], toolAllowlist: ["operation_execute", "operation_preflight"] }
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.MCP_SCOPED_TOKENS_JSON;
+    vi.unstubAllGlobals();
+    delete process.env.DR_LURIE_MCP_ENDPOINT;
+    delete process.env.DR_LURIE_MCP_TOKEN;
+  });
+
+  const scopedCall = async (token: string, name: string, args: Record<string, unknown>) => {
+    const response = await handler({
+      httpMethod: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })
+    });
+    return { ...response, json: response.body ? JSON.parse(response.body) : undefined };
+  };
+
+  for (const tool of ["operation_execute", "operation_preflight"]) {
+    it(`refuses a bearer scoped to "platform" naming a foreign tenantId ("dr-lurie") for ${tool}`, async () => {
+      const response = await scopedCall(SCOPED_PLATFORM, tool, { operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+      expect(response.statusCode).toBe(401);
+    });
+
+    it(`refuses the same foreign tenant spelled tenant_id (snake_case) for ${tool}`, async () => {
+      const response = await scopedCall(SCOPED_PLATFORM, tool, { operationId: "site_inventory", tenant_id: "dr-lurie", input: { tenantId: "dr-lurie" } });
+      expect(response.statusCode).toBe(401);
+    });
+  }
+
+  // The widened check requires every recognized spelling present on a call to agree — a call naming
+  // its OWN project but a FOREIGN tenantId is refused exactly like naming the foreign tenantId alone,
+  // not "whichever key resolves first wins".
+  it("refuses a call whose projectId and tenantId disagree, even when projectId names the bearer's own project", async () => {
+    const response = await scopedCall(SCOPED_PLATFORM, "operation_preflight", { operationId: "site_inventory", projectId: "platform", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+    expect(response.statusCode).toBe(401);
+  });
+
+  // Positive control: the fix does not "refuse everything". A bearer scoped to dr-lurie naming its
+  // OWN tenantId is let through to the tool.
+  it("allows a bearer scoped to \"dr-lurie\" naming its own tenantId", async () => {
+    const response = await scopedCall(SCOPED_DRLURIE, "operation_preflight", { operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json.result.structuredContent.data).toMatchObject({ operationId: "site_inventory", executable: true });
+  });
+
+  // Reachable by a scoped chat bearer for its OWN tenant, and A4's read-only gate still refuses a
+  // non-read operation through this transport — the gate lives in the tool (checkOperationIsReadOnly)
+  // and is not bypassed by reaching it via a scoped bearer instead of the full bearer.
+  it("reached through a scoped bearer for its OWN tenant, a non-read operation is still refused — the read-only gate is not bypassed by this transport", async () => {
+    const response = await scopedCall(SCOPED_DRLURIE, "operation_execute", { operationId: "document_render", tenantId: "dr-lurie", input: {} });
+    expect(response.statusCode).toBe(200);
+    expect(response.json.result.structuredContent.data).toMatchObject({ executed: false, refusal: { code: "not_read_only" } });
+  });
+
+  // Reachable by a scoped chat bearer for its own tenant, executing a genuine read-only operation end
+  // to end (mirrors operationExecuteTool.test.ts's full-bearer version of this same scenario, through
+  // the scoped-bearer transport instead, now that the bearer's own tenant ("dr-lurie") matches the
+  // tenantId it names).
+  it("reached through a scoped bearer for its OWN tenant, site_inventory (read-only) executes end to end", async () => {
+    process.env.DR_LURIE_MCP_ENDPOINT = "https://dr-lurie.example/mcp";
+    process.env.DR_LURIE_MCP_TOKEN = "secret-token";
+    const remoteFetch = vi.fn(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { method: string; params?: { name?: string; arguments?: Record<string, unknown> } };
+      if (request.method !== "tools/call") return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05" } }) } as unknown as Response;
+      const toolName = request.params?.name ?? "";
+      const args = request.params?.arguments ?? {};
+      const result =
+        toolName === "object_inventory" && args.object_type === "visual_standard"
+          ? { structuredContent: { items: [{ object_id: "vis_drlurie", object_type: "visual_standard", version: 3, content_revision: 2, status: "active", updated_at: "2026-09-01T00:00:00.000Z" }] } }
+          : toolName === "object_contract" && args.object_type === "visual_standard"
+            ? { structuredContent: { contract: { body_schema: { type: "object", required: [], properties: {} } } } }
+            : toolName === "registry_get"
+              ? { structuredContent: { items: [] } }
+              : {};
+      return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", remoteFetch);
+
+    const response = await scopedCall(SCOPED_DRLURIE, "operation_execute", { operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", objectType: "visual_standard" } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json.result.structuredContent.data.executed).toBe(true);
+    expect(response.json.result.structuredContent.data.refusal).toBeNull();
+    expect(response.json.result.structuredContent.data.result.objects).toEqual([
+      expect.objectContaining({ objectId: "vis_drlurie", objectType: "visual_standard", status: "active" })
+    ]);
   });
 });

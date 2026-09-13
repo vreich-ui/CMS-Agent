@@ -96,14 +96,33 @@ const authenticate = async (headers: HeaderMap): Promise<AuthOutcome> => {
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
+// K-M11 (2026-09-13, owner-authorized): `tenantId`/`tenant_id` are read here alongside
+// `projectId`/`project_id`, not as a second scoping dimension but because they ARE the first one —
+// `operationTools.ts`'s `operation.preflight`/`operation.execute`/`operation.list_capability_gaps`
+// scope entirely by `tenantId`, and `capabilityFactsLoader.ts`'s `projectRepository.get(tenantId)` /
+// `tenantId: config.projectId` is the proof they share one identifier space under two field
+// spellings. Before this, a call naming only `tenantId` returned `undefined` here exactly like a
+// call naming nothing at all — `operation_preflight` (already granted, #318) let a bearer scoped to
+// one tenant read ANY tenant's capability facts, and the same shape would have made
+// `operation_execute` a cross-tenant site_inventory read the day it was added to
+// SITE_CLIENT_MANAGER_TOOLS. Audited (2026-09-13): those three are the ONLY wire tools whose input
+// schema carries `tenantId` anywhere in this codebase (`grep -rl tenantId src/agent/mcp/`), and none
+// of the three has a legitimate reason for a scoped bearer to name a tenant other than its own — each
+// is "read/act on THIS ONE tenant", never a cross-tenant listing — so requiring all four spellings to
+// agree is safe for every current caller, not just these three.
+//
+// All four keys must agree where more than one is present — the same "no mismatch" rule the
+// camel/snake pair already enforced, now over four spellings of one value instead of two.
 const requestedProject = (argumentsValue: unknown): string | undefined | null => {
   if (!isPlainObject(argumentsValue)) return undefined;
-  const camel = argumentsValue.projectId;
-  const snake = argumentsValue.project_id;
-  if (camel !== undefined && (typeof camel !== "string" || !camel)) return null;
-  if (snake !== undefined && (typeof snake !== "string" || !snake)) return null;
-  if (camel !== undefined && snake !== undefined && camel !== snake) return null;
-  return (camel ?? snake) as string | undefined;
+  let result: string | undefined;
+  for (const value of [argumentsValue.projectId, argumentsValue.project_id, argumentsValue.tenantId, argumentsValue.tenant_id]) {
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !value) return null;
+    if (result !== undefined && result !== value) return null;
+    result = value;
+  }
+  return result;
 };
 
 // S-26 / K-M9 — run-addressed tools (workflow_get_run, workflow_publish_run, workflow_run_all,
@@ -152,9 +171,10 @@ const isRunInScope = async (runId: string, policy: ScopedBearerTokenPolicy): Pro
 
 // Scoped callers receive the normal initialize response, but tools/list is reduced to its exact
 // wire-name allowlist. Each tools/call is also checked here before dispatch; the server-side filter
-// is defence in depth for the SDK path. Calls that name projectId/project_id must be in scope; calls
-// without one are bounded by the explicit tool allowlist ALONE, which is why a tool that lists across
-// projects when unfiltered must be named in PROJECT_REQUIRED_SCOPED_TOOLS and refused without one.
+// is defence in depth for the SDK path. Calls that name projectId/project_id (or, K-M11, the same
+// identifier under tenantId/tenant_id) must be in scope; calls without any of the four are bounded by
+// the explicit tool allowlist ALONE, which is why a tool that lists across projects when unfiltered
+// must be named in PROJECT_REQUIRED_SCOPED_TOOLS and refused without one.
 const isScopedMessageAllowed = async (message: unknown, policy: ScopedBearerTokenPolicy): Promise<boolean> => {
   if (!isPlainObject(message) || typeof message.method !== "string") return false;
   // Scoped site credentials are for the MCP tool channel only. Keep the session handshake and

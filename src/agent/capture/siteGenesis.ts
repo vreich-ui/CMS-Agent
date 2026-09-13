@@ -242,7 +242,33 @@ export const SITE_CLIENT_MANAGER_TOOLS = [
   // touches a run, or reaches the tenant's own MCP server.
   "operation_list",
   "operation_get",
-  "operation_preflight"
+  "operation_preflight",
+  // W6 (2026-09-13, owner-authorized): operation_execute, the A4 execution entrypoint
+  // (src/agent/mcp/workspace/operationTools.ts). Widening this constant was deliberately WITHHELD
+  // when this entry was first evaluated: operation_execute and operation_preflight above both scope
+  // by `tenantId`, never `projectId`/`project_id`, and mcpEndpoint.ts's scoped-bearer project pin
+  // read only the latter two — so a tenant's scoped bearer naming a DIFFERENT tenant's tenantId was
+  // not refused at the door (K-M11, docs/KNOWN_ISSUES.md). That is fixed first, in the same PR
+  // (mcpEndpoint.ts's `requestedProject` now also reads `tenantId`/`tenant_id`, refusing any
+  // scoped call whose recognized spellings disagree with the bearer's own policy.projects) — see
+  // that function's own header for the evidence tenantId and projectId are one identifier space,
+  // not two. Only with that pin in place does this line stop being a cross-tenant read.
+  //
+  // What IS guaranteed once the pin holds: a tenant's scoped bearer can call operation_execute only
+  // for ITS OWN tenantId (mcpEndpoint.ts), and even then only for an operation whose every declared
+  // effect is riskLevel "read" (checkOperationIsReadOnly, operationTools.ts's own gate, enforced in
+  // the tool — not this transport, and not bypassable by reaching it through a scoped bearer instead
+  // of the full bearer). Today that means only `site_inventory`; every other registered operation
+  // (asset_lookup_adopt, document_render, image_template_revision, pdf_template_family,
+  // visual_identity_review_change) is refused with `not_read_only` regardless of caller or tenant.
+  //
+  // What is NOT guaranteed: this is Platform dispatch routing an admin-chat turn to a NEW tool, not
+  // a change to what the tool itself does — operation_execute's read-only gate, capability-gap
+  // ledger writes, and executor behavior are exactly what A4 shipped (operationTools.ts, unchanged
+  // by this entry). Existing registered tenants do not receive this grant until
+  // site-credential-reconciler is run with --apply (docs/mcp-scoped-bearer-auth.md); this task does
+  // not run it.
+  "operation_execute"
 ] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";

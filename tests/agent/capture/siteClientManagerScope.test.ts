@@ -47,7 +47,10 @@ describe("site client_manager scoped-token allowlist", () => {
     // Read-only, start nothing — see siteGenesis.ts's SITE_CLIENT_MANAGER_TOOLS comment.
     "operation_list",
     "operation_get",
-    "operation_preflight"
+    "operation_preflight",
+    // W6 (2026-09-13, owner-authorized, K-M11 fixed first): operation_execute — see
+    // siteGenesis.ts's SITE_CLIENT_MANAGER_TOOLS comment for what is and is not guaranteed.
+    "operation_execute"
   ];
 
   it("covers exactly Platform's bridge — no missing tool (401 at the door) and no extra (blast radius)", () => {
