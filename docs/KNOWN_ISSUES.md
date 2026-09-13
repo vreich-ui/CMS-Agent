@@ -249,7 +249,7 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 - Scenario: "who called `workflow_publish_run` at 14:02 and with what result" is answerable only if the call mutated something with change history; read-only and failed calls leave no trace beyond Cloud Run's `POST /mcp 200`.
 - Fix (implementation): one structured line per `tools/call` (tool, actor kind/id, project arg, latency, ok/code, requestId, `K_REVISION`), with redaction.
 
-### K-O2 Build identity is half-wired — **Low**: `SERVICE_GIT_SHA`/`SERVICE_DEPLOYED_AT` read null (`RepositoryManager.ts:76-77`; the comment at `:63-65` says so); only `K_REVISION` identifies the build. Fix: stamp in `cloudbuild.deploy.yaml` `--update-env-vars`.
+### K-O2 Build identity is half-wired — **Fixed**: `scripts/deploy-service.sh` now stamps `SERVICE_GIT_SHA` (from `IMAGE`'s own commit tag) and `SERVICE_DEPLOYED_AT` (the deploy's own UTC clock) into `ENV_PAIRS`, so both release paths set them (`RepositoryManager.ts:76-77` reads them; they still read null on a service that has never gone through this script since the fix).
 
 ### T-14b The `by=strategy` grain now exists, and the consumer can tell an empty one from an unlabelled one — **Fixed** (2026-09-08)
 - kugel-data migration 012 builds `v_strategy_window` and the sink serves `by=strategy`; `UNIMPLEMENTED_ROLLUP_GRAINS` is empty. `tests/contracts/kugel-data/rollups-by-strategy.json` is re-captured as `producerState: "implemented"` and pins `n` — the column whose absence would be silent, since `rowCount` weights a row without one at 1 rather than dropping it.
@@ -274,7 +274,7 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 | I-2 | ~~Medium~~ **Fixed** | `TASK_TIMEOUT_MS` unset (C-11) | derived from `--task-timeout` in `scripts/deploy-continuation-tick.sh` |
 | I-3 | Medium | `conductor-run` image not synced (C-10) | `_EXECUTOR_JOBS` |
 | I-4 | Medium | No scripted rollback; `route-to-latest` only moves traffic forward | document `gcloud run services update-traffic --to-revisions` or add a `rollback` action to `cloud-run-plane.yml` |
-| I-5 | Medium | `/health` is shallow (no store, no client check); deploy verification checks variable names not values; `SERVICE_GIT_SHA` never stamped | add a `/ready` that reads `repository_get_health`; stamp SHA in the trigger |
+| I-5 | Medium | `/health` is shallow (no store, no client check); deploy verification checks variable names not values; ~~`SERVICE_GIT_SHA` never stamped~~ **fixed** (K-O2, `deploy-service.sh`) | add a `/ready` that reads `repository_get_health` |
 | I-6 | Low | Dozens of code-read variables (≥55 by static grep, more counting dynamically composed names) absent from `.env.example`; `SNOOCLE_*`, `ANTHROPIC_VERSION`, `WORKSPACE_STORE_PATH` are dead | regenerate `.env.example` from [DEPLOYMENT.md](DEPLOYMENT.md) §5 |
 | I-7 | Medium | Legacy Netlify functions remain deployed and routed — **re-verified 2026-09-06** on the production deploy of `921367e` (8 functions, 13 redirects): `/api/mcp` 502, `/api/agent` 502, `/api/session` 401 (alive), `/.well-known/oauth-authorization-server` 200 (a live OAuth authorization server minting tokens into Netlify Blobs that the Cloud Run verifier never reads). Dead 502 surface plus a decoy auth surface (`AGENT_API_TOKEN`, Netlify OAuth) | remove functions except `session`; keep the modules for tests |
 | I-8 | Low | `MCP_ALLOWED_ORIGINS` only on the script path; a trigger-only fresh deploy denies the SPAs | add to trigger |

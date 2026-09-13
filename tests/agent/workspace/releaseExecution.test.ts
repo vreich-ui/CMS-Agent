@@ -407,6 +407,22 @@ describe("W1.1 — a recoverable release failure is never ledgered terminal", ()
     expect(calls).toEqual(["release_to_production", "deploy_status", "deploy_status"]);
   });
 
+  it('a bare released:false, status:"building" receipt (release_executor never passes wait_for_deploy, so the site answers before any build finishes) is the hook firing, not a decline — ledgered pending, falls through to the deploy_status poll', async () => {
+    const { callTool, calls } = stubCallTool({
+      release_to_production: () => ({ released: false, status: "building", targetCommit: "sha_w11_building" }),
+      deploy_status: () => ({ deployStatus: "building" })
+    });
+    const run = committedRun();
+    const first = await runDeterministicReleaseExecutor({ run, deps: { callTool } });
+    if (!first.ok || first.kind !== "pending") throw new Error("expected a pending outcome");
+    expect(first.ledgerEntry).toMatchObject({ status: "pending", deployedSha: "sha_w11_building" });
+    expect(first.ledgerEntry).not.toHaveProperty("releaseUnconfirmed");
+
+    const second = await runDeterministicReleaseExecutor({ run: withLedger(run, first.ledgerEntry), deps: { callTool } });
+    expect((second as { kind: string }).kind).toBe("pending");
+    expect(calls).toEqual(["release_to_production", "deploy_status", "deploy_status"]);
+  });
+
   it('ledger:"pending" when the release landed but verification gave up — re-pollable, never re-released', async () => {
     const { callTool, calls } = stubCallTool({
       release_to_production: () => ({ released: true, releaseId: "dep_1", targetCommit: "abc123" }),

@@ -89,6 +89,11 @@ describe("scripts/deploy-service.sh — cms-agent-mcp resource pins", () => {
     }
   });
 
+  it("stamps the build identity RepositoryManager.ts reads (K-O2): commit sha off IMAGE's own tag, deployed-at off the deploy's own clock", () => {
+    expect(deployService).toMatch(/SERVICE_GIT_SHA=\$\{IMAGE##\*:\}/);
+    expect(deployService).toMatch(/SERVICE_DEPLOYED_AT=\$\(date -u \+%FT%TZ\)/);
+  });
+
   it("builds the origin list with the ^|^ delimiter rather than by hand", () => {
     // The live value was found spliced into nonsense on 2026-09-07 precisely because a comma list of
     // URLs was assembled by hand. Every origin contains "://", so ":" cannot be the delimiter.
