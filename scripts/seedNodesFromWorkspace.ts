@@ -56,6 +56,7 @@ import { recipeAuthorityConformanceIssues } from "../src/agent/workspace/publish
 import { seededSkillDefinitions } from "../src/agent/skills/seededSkills.js";
 import type { SkillDefinition } from "../src/agent/skills/skillTypes.js";
 import type { WorkspaceNode } from "../src/agent/workspace/nodeTypes.js";
+import { openAiIncompatibleRootKeywords } from "../src/agent/execution/openaiResponseSchema.js";
 
 const NODES_PATH = fileURLToPath(new URL("../src/agent/workspace/nodes.ts", import.meta.url));
 const SKILLS_PATH = fileURLToPath(new URL("../src/agent/skills/seededSkills.ts", import.meta.url));
@@ -440,6 +441,18 @@ ${body}
 `;
 };
 
+// B1 — OpenAI response_format lint. ADVISORY, never a refusal: a root-level combinator is a legal,
+// correct invariant (outputValidator enforces it in full post-turn, at every depth) that the
+// Responses API simply will not accept in a response_format schema. It is stripped from the schema
+// SENT to the model — the reason `research` failed every live OpenAI dispatch Sep 9-13 before the
+// derivation existed — so the author needs to know that node's rule is prompt-and-post-turn only.
+// This is the drift gate's job precisely because the store is where these keywords get added.
+export const responseFormatLintNotes = (nodes: WorkspaceNode[]): string[] =>
+  nodes
+    .map((node) => ({ id: node.id, stripped: openAiIncompatibleRootKeywords(node.outputSchema) }))
+    .filter(({ stripped }) => stripped.length > 0)
+    .map(({ id, stripped }) => `${id}: ${stripped.join(", ")}`);
+
 const main = async () => {
   const args = process.argv.slice(2);
   const write = args.includes("--write");
@@ -481,6 +494,9 @@ const main = async () => {
     .map(({ node, existing }) => `${node.id}: [${existing!.dependsOn.join(", ")}] -> [${node.dependsOn.join(", ")}]`);
 
   say(`graph             valid`);
+  const responseFormatNotes = responseFormatLintNotes(ordered);
+  say(`openai schema     ${responseFormatNotes.length ? `${responseFormatNotes.length} node(s) carry root keywords OpenAI response_format rejects — stripped when sent, still enforced post-turn` : "no root-level combinators"}`);
+  for (const note of responseFormatNotes) say(`                  ${note}`);
   say(`nodes added       ${added.length ? added.join(", ") : "none"}`);
   say(`edges changed     ${edgeChanges.length ? "" : "none"}`);
   for (const change of edgeChanges) say(`                  ${change}`);

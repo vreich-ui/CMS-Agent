@@ -15,6 +15,7 @@ import type { NodeRunner, NodeRunnerInput, NodeRunnerResult, NodeToolCallRecord 
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { NodeBudgetExceededError, prospectiveOutputTokens, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
 import { measuredDispatchCost } from "../../workspace/nodeTimings.js";
+import { deriveOpenAIResponseSchema, responseSchemaStripWarning } from "../openaiResponseSchema.js";
 
 // W2.1 — this lookup is new I/O on a path that previously computed its reserve synchronously, and a
 // blob read carries no timeout of its own. A stalled store must cost the dispatch its MEASUREMENT (a
@@ -419,7 +420,13 @@ export class OpenAINodeRunner implements NodeRunner {
     // Synthetic improvement nodes have no playbook, so judge prompts stay uncontaminated.
     const playbook = await repositoryManager.getImprovementRepository().getPlaybook(node.id).catch(() => undefined);
     const playbookText = playbook ? renderPlaybookForPrompt(playbook) : "";
-    const outputType = { type: "json_schema" as const, name: `${node.id}_output`, strict: false, schema: node.outputSchema as any };
+    // B1 — the Responses API refuses a response_format schema with a ROOT combinator ("schema must
+    // not have allOf at the top level"), which is exactly how the four DTC handoff contracts express
+    // their invariants. Send the derived schema; keep node.outputSchema whole for the post-turn
+    // validator below and for the prompt payload, which still shows the model every conditional rule.
+    const derivedResponseSchema = deriveOpenAIResponseSchema(node.outputSchema);
+    const responseSchemaWarnings = derivedResponseSchema.stripped.length ? [responseSchemaStripWarning(node.id, derivedResponseSchema.stripped)] : [];
+    const outputType = { type: "json_schema" as const, name: `${node.id}_output`, strict: false, schema: derivedResponseSchema.schema as any };
     // Per-model-request budget guard (see budgetGuard.ts). The previous agent_start-hook guard read a
     // usage object that stays empty during the loop, so its accrued-spend term never grew and
     // artifact_plan carried a $3 ceiling to 138% in one dispatch. Wrapping the Model itself gates
@@ -437,6 +444,10 @@ export class OpenAINodeRunner implements NodeRunner {
     const reserveSourceWarning = measured
       ? `budget_reserve_source:measured:output_p95=${measured.p95OutputTokens}:cap=${maxOutputTokens}:cost_p95=$${measured.p95CostUsd.toFixed(4)}:n=${measured.sampleCount}`
       : `budget_reserve_source:static:cap=${maxOutputTokens}:no_measured_history`;
+    // Run-visible notes for this dispatch (executor appends them to the node's warnings). A stripped
+    // root combinator belongs here and not in an error: the dispatch is correct, but that node's
+    // invariants are weaker model-side than its schema reads, and the record is where that shows.
+    const dispatchWarnings = [...(budgetGuardEngaged ? [reserveSourceWarning] : []), ...responseSchemaWarnings];
     let agentModel = buildAgentModel(provider, model);
     if (budgetGuardEngaged) {
       const innerModel = typeof agentModel === "string" ? await new OpenAIProvider().getModel(agentModel) : agentModel;
@@ -644,7 +655,10 @@ export class OpenAINodeRunner implements NodeRunner {
           output: validated.value,
           usage: { ...usageFields, actual: true },
           model,
-          ...(budgetGuardEngaged ? { warnings: [reserveSourceWarning] } : {}),
+          // B1 — a stripped root combinator is a warning on the run record, not a failure: the
+          // dispatch is correct, but the model-side enforcement of that node's invariants is weaker
+          // than its schema reads, and the record is where that has to be visible.
+          ...(dispatchWarnings.length ? { warnings: dispatchWarnings } : {}),
           trace: {
             responseId: result.lastResponseId,
             toolCount: effective.length,
