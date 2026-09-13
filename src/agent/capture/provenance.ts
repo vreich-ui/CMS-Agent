@@ -229,8 +229,13 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "map.mjs",
-    vendoredSha256: "c233bb27f931657f08f6b51c3e73dfdaf863f95c0ae4c22fb5dec1e27501166d",
-    upstreamSha256: "c233bb27f931657f08f6b51c3e73dfdaf863f95c0ae4c22fb5dec1e27501166d"
+    vendoredSha256: "58419ba634bc32bdcff11b3660845ac045cfdcebcbf229f15e06e7084a68e9f1",
+    // G1 (2026-09-13): a captured `route` href is now resolved through the crawl's own redirect
+    // knowledge (requestedUrl vs. url on a page, or a duplicate_redirect_target skip record) before
+    // being written down — see map.mjs's buildRedirectMap/linkTarget. Ported to BOTH copies in the
+    // same change, so this file stays byte-identical to platform's — upstreamSha256 is bumped
+    // alongside vendoredSha256 rather than recorded as a deviation.
+    upstreamSha256: "58419ba634bc32bdcff11b3660845ac045cfdcebcbf229f15e06e7084a68e9f1"
   },
   {
     file: "theme.mjs",
@@ -253,7 +258,7 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
   },
   {
     file: "emit.mjs",
-    vendoredSha256: "6636527cd4a9d6a6a776b6e5c6212c72b043c5c8cec0f1944638b1c52e5a10f0",
+    vendoredSha256: "748da89a0d40695338a9e938eac98d3ce011bd447d5ac72a47f4c6e2ed31cd33",
     upstreamSha256: "275c701794ca98f3e294b8eff8dbce6860741fe806538796928bd744628f8089",
     deviation:
       "W1.1 (2026-09-10, routeRegistry.ts's own 'NOT CLAIMED HERE' note) — materializeMedia issued " +
@@ -289,7 +294,19 @@ export const CAPTURE_ENGINE_FILES: readonly VendoredEngineFile[] = [
       "parameter with an empty-Map default, one extra field on an outgoing payload the server " +
       "treats as optional, and no change to the ledger, the budget, the quarantine paths or the " +
       "drafts-only emission discipline. Its platform companion is branch " +
-      "runner/w1w2-artifact-owner-dedupe; when that lands both deviations retire in one re-vendor."
+      "runner/w1w2-artifact-owner-dedupe; when that lands both deviations retire in one re-vendor. " +
+      "G2 (2026-09-13) adds a THIRD deviation, applied to BOTH copies in the same change: navigation " +
+      "reuse (T12.28's collidingNav) matched against a raw object_inventory row, but InventoryRow " +
+      "(platform's packages/core/server/lib/object-inventory.ts) never carries `role` on a " +
+      "navigation summary row — only recipe types (template/section_template/theme) get a " +
+      "body-derived summary — so navRoleOf(row) was null for every row and collidingNav never " +
+      "matched; both navigation creates fell through to object_create and hit the target's real id " +
+      "collision as requested_id_unavailable, exactly the failure T12.28 was written to eliminate. " +
+      "A new navRoleRows resolver (mirroring pageRouteRows) now probes object_get for any " +
+      "navigation row missing a role before the reuse match runs. Unlike the two deviations above, " +
+      "this one WAS ported to platform's emit.mjs in the same change, so upstreamSha256 above is " +
+      "stale by exactly this fix on top of the pre-W1.1 commit; it stays pinned rather than bumped " +
+      "because there is no new upstream commit hash to point it at from this worktree."
   },
   {
     file: "score.mjs",

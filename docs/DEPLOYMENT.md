@@ -109,7 +109,7 @@ Complete inventory with file:line evidence, defaults and which artifact sets eac
 | `PLATFORM_REPO_ROOT`, `SITE_GENESIS_NETLIFY_MODE` | `siteGenesis.ts` | platform checkout for `create-site.mjs`; `live` enables real Netlify writes | — / `dry_run` | none |
 | `CMS_AGENT_SITE_BINDINGS_JSON` | `siteCredentialReconciler.ts` | one-time project→Netlify-site backfill map | `{}` | reconciler script |
 | `SITE_CREDENTIAL_RECONCILER_GCP_PROJECT`, `_REGION`, `_JOB` | `mcp/workspace/siteCredentialTools.ts` | lets `site_credentials_apply` fire the job | — / — / `site-credential-reconciler` | none |
-| `K_SERVICE`, `K_REVISION`, `SERVICE_GIT_SHA`, `SERVICE_DEPLOYED_AT` | `RepositoryManager.ts:74-77` | build identity in `repository_get_health` | Cloud Run sets `K_*`; the SHA/date stamps are set by nothing (report null) | runtime |
+| `K_SERVICE`, `K_REVISION`, `SERVICE_GIT_SHA`, `SERVICE_DEPLOYED_AT` | `RepositoryManager.ts:74-77` | build identity in `repository_get_health` | Cloud Run sets `K_*`; `deploy-service.sh` stamps `SERVICE_GIT_SHA` from `IMAGE`'s own commit tag and `SERVICE_DEPLOYED_AT` from the deploy's own UTC clock (report null before that deploy first lands) | trigger, scripts |
 
 ### 5.2 Models and runners
 
