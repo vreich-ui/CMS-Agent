@@ -9,6 +9,7 @@ import {
   resolveBindingInputContract,
   UNBOUND_OPERATION_IMPLEMENTING_TASK
 } from "../../../src/agent/operations/operationWorkflowBindings.js";
+import { listOperationExecutorBindings } from "../../../src/agent/operations/operationExecutorBindings.js";
 
 describe("operationWorkflowBindings", () => {
   it("is deterministic and sorted by operationId across calls", () => {
@@ -46,12 +47,13 @@ describe("operationWorkflowBindings", () => {
     expect(getOperationWorkflowBinding("not_a_real_operation_xyz")).toBeNull();
   });
 
-  it("every registered catalog operation is accounted for as exactly bound or exactly named with an implementing task, never both", () => {
-    const boundIds = new Set(listOperationWorkflowBindings().map((binding) => binding.operationId));
+  it("every registered catalog operation is accounted for as exactly one of: workflow-bound, executor-bound (A4), or named with an implementing task — never more than one", () => {
+    const workflowBoundIds = new Set(listOperationWorkflowBindings().map((binding) => binding.operationId));
+    const executorBoundIds = new Set(listOperationExecutorBindings().map((binding) => binding.operationId));
     const unboundIds = new Set(Object.keys(UNBOUND_OPERATION_IMPLEMENTING_TASK));
     for (const operationId of listOperationIds()) {
-      expect(boundIds.has(operationId) && unboundIds.has(operationId)).toBe(false);
-      expect(boundIds.has(operationId) || unboundIds.has(operationId)).toBe(true);
+      const memberships = [workflowBoundIds.has(operationId), executorBoundIds.has(operationId), unboundIds.has(operationId)];
+      expect(memberships.filter(Boolean).length).toBe(1);
     }
   });
 
