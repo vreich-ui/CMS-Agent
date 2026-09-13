@@ -45,6 +45,11 @@ export type FidelityReport = {
     defects: Array<{ code: string; severity: "defect"; pageRef: string; blockRef?: string; viewportId?: string; blockStatus?: string; gapId?: string; detail: string }>;
     defectCount: number;
     evidenceComplete: boolean;
+    /** W2.1/G6-T2 — set by cms-agent (never by the vendored scorer) when this block came from the
+     * platform CI preview run rather than from local files. */
+    provenance?: Record<string, unknown>;
+    /** W2.1/G6-T2 — set when an external visual report was supplied and REFUSED, naming why. */
+    externalEvidenceRefused?: string;
   };
   /** Present only when the mapping planned at least one asset section (T12.14). */
   assets?: AssetBindingEvidence;

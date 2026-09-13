@@ -799,17 +799,144 @@ export async function captureEmitStep(
 
 // ---------------------------------------------------------------------------------------------
 // Stage: score (governed rubric; visual evidence explains, never authorizes).
+
+/**
+ * W2.1/G6-T3 — THE SILENT ZERO, MADE LOUD.
+ *
+ * `scoreCaptureFidelity` has enumerated every hole in the visual evidence since T12.10
+ * (`visual.defects`, `visual.evidenceComplete`), and the CLI exits non-zero on any of them. The
+ * conductor stage did not: it read `rubric` and `report`, completed the node normally, and let the
+ * summary's "visual 0 scored / 34 unavailable" clause be the only trace. Downstream, gap_adjudicator
+ * — an AI node reading that envelope — paraphrased the zero into "the visual comparison could not be
+ * completed", which reads like a transient tooling hiccup rather than what it is: NO pipeline stage
+ * produces draft-preview screenshots yet, so there is nothing on the other side of the diff.
+ *
+ * This function turns `evidenceComplete: false` into a named, machine-readable field on the stage
+ * output, carrying the counts and the DOMINANT reason, so a run is legible from its own record
+ * without re-deriving anything from `report.visual.comparisons`.
+ *
+ * It changes no verdict. `rubric` is untouched and this field authorizes nothing — visual evidence
+ * explains, it never authorizes (capture-runbook §4). It reports.
+ *
+ * Reasons are tallied over `visual.defects[].detail`, which is uniform across both defect shapes the
+ * scorer emits: a per-comparison defect carries its `reason` there, and a page with no scored
+ * comparison at all carries `no_scored_visual_comparison_for_emitted_page`. Ties break on the reason
+ * string so the dominant reason is deterministic for a given report.
+ */
+export type CaptureVisualEvidence = {
+  evidenceComplete: boolean;
+  scoredCount: number;
+  unavailableCount: number;
+  pagesWithoutScoredComparison: number;
+  /** The most frequent `detail` across `visual.defects`; null when the evidence is complete. */
+  dominantReason: string | null;
+  reasons: Array<{ reason: string; count: number }>;
+  /** Human-readable, present ONLY when the evidence is incomplete. */
+  warning: string | null;
+};
+
+export function summarizeVisualEvidence(visual: FidelityReport["visual"]): CaptureVisualEvidence {
+  const tally = new Map<string, number>();
+  for (const defect of visual.defects ?? []) {
+    const reason = typeof defect.detail === "string" && defect.detail ? defect.detail : (defect.code ?? "unknown");
+    tally.set(reason, (tally.get(reason) ?? 0) + 1);
+  }
+  const reasons = [...tally.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason));
+  const pagesWithoutScoredComparison = (visual.pagesWithoutScoredComparison ?? []).length;
+  const dominantReason = visual.evidenceComplete ? null : (reasons[0]?.reason ?? null);
+  return {
+    evidenceComplete: visual.evidenceComplete,
+    scoredCount: visual.scoredCount,
+    unavailableCount: visual.unavailableCount,
+    pagesWithoutScoredComparison,
+    dominantReason,
+    reasons,
+    warning: visual.evidenceComplete
+      ? null
+      : `capture_visual_evidence_incomplete: ${visual.scoredCount} scored / ${visual.unavailableCount} unavailable across ${(visual.comparisons ?? []).length} comparison(s); ${pagesWithoutScoredComparison} emitted page(s) have no scored comparison at all. Dominant reason: ${dominantReason ?? "unknown"}. This is a hole in the run's evidence, not a fidelity verdict \u2014 the rubric is unchanged.`
+  };
+}
+
+/**
+ * W2.1/G6-T2 — GRAFTING THE CI RUN'S VISUAL EVIDENCE ONTO THIS RUN'S REPORT.
+ *
+ * The pixel diff happens on the platform repo's CI, which is the only plane holding both sides of
+ * every pair (capturePreviewDispatch.ts explains why). What comes back is a complete
+ * `capture-fidelity-report.v1` produced by the SAME vendored scorer over the SAME snapshot and
+ * mapping — so its `visual` block is the block this run's own scorer would have produced if it
+ * could resolve the bytes, and nothing else in it is used: the rubric, coverage, gap report and
+ * theme verdict all stay locally computed, from the registry's own policy.
+ *
+ * A graft is a claim about evidence, so it is CHECKED rather than trusted. Three gates, and a
+ * failure of any of them keeps the local (all-unavailable) block with a named reason — never a
+ * silent substitution:
+ *
+ *   1. the document is a fidelity report of the expected schema version;
+ *   2. it was scored against THIS target project;
+ *   3. every comparison it carries names a (pageRef, blockRef, viewportId) triple this run's own
+ *      mapping also produced. A report from a different capture of the same site would fail here,
+ *      which is the whole point — its numbers describe different pixels.
+ */
+export type ExternalVisualEvidence = {
+  visual: FidelityReport["visual"];
+  grafted: boolean;
+  reason?: string;
+};
+
+const comparisonKey = (comparison: Record<string, unknown>): string =>
+  `${String(comparison.pageRef)}\u0000${String(comparison.blockRef)}\u0000${String(comparison.viewportId)}`;
+
+export function graftExternalVisualEvidence(
+  local: FidelityReport,
+  external: unknown,
+  provenance: Record<string, unknown> = {}
+): ExternalVisualEvidence {
+  const refuse = (reason: string): ExternalVisualEvidence => ({ visual: local.visual, grafted: false, reason });
+  if (!isRecord(external)) return refuse("external_visual_report_not_an_object");
+  if (external.schemaVersion !== "capture-fidelity-report.v1") return refuse("external_visual_report_wrong_schema");
+  if (external.target !== local.target) return refuse("external_visual_report_targets_another_project");
+  const visual = isRecord(external.visual) ? external.visual : undefined;
+  if (!visual || !Array.isArray(visual.comparisons)) return refuse("external_visual_report_has_no_comparisons");
+  const localKeys = new Set((local.visual.comparisons ?? []).map((comparison) => comparisonKey(comparison)));
+  if (localKeys.size === 0) return refuse("this_run_declares_no_visual_comparisons_to_match");
+  for (const comparison of visual.comparisons) {
+    if (!isRecord(comparison) || !localKeys.has(comparisonKey(comparison))) {
+      return refuse("external_visual_report_scored_a_different_mapping");
+    }
+  }
+  return {
+    visual: { ...(visual as unknown as FidelityReport["visual"]), provenance: { plane: "platform_ci", ...provenance } },
+    grafted: true
+  };
+}
+
 export type CaptureFidelityEnvelope = {
   artifact: typeof CAPTURE_ARTIFACTS.fidelity;
   summary: string;
   targetProjectId: string;
   rubric: FidelityReport["rubric"];
   report: FidelityReport;
+  /** W2.1/G6-T3 — always present, so "the evidence is complete" is stated rather than inferred. */
+  visualEvidence: CaptureVisualEvidence;
   policy: CapturePolicyView;
 };
 
 export async function captureScoreStep(
-  input: { targetProjectId: string; snapshot: unknown; mapping: unknown; theme: unknown; previewManifest?: unknown; screenshotRoot?: string },
+  input: {
+    targetProjectId: string;
+    snapshot: unknown;
+    mapping: unknown;
+    theme: unknown;
+    previewManifest?: unknown;
+    screenshotRoot?: string;
+    /** W2.1/G6-T2 — a `capture-fidelity-report.v1` produced by the platform CI preview job over
+     * THIS run's snapshot and mapping. Only its `visual` block is used, and only after
+     * graftExternalVisualEvidence's three gates pass. */
+    externalVisualReport?: unknown;
+    externalVisualProvenance?: Record<string, unknown>;
+  },
   deps: CaptureDeps = {}
 ): Promise<CaptureFidelityEnvelope> {
   const { policy, projectId } = await resolveCaptureAuthority(input.targetProjectId, deps);
@@ -828,12 +955,23 @@ export async function captureScoreStep(
   } catch (error) {
     throw new CaptureRefusal("capture_score_failed", error instanceof Error ? error.message : String(error));
   }
+  if (input.externalVisualReport !== undefined) {
+    const grafted = graftExternalVisualEvidence(report, input.externalVisualReport, input.externalVisualProvenance ?? {});
+    report = grafted.grafted
+      ? { ...report, visual: grafted.visual }
+      : // A refused graft must be visible: the local block stays (every pair unavailable) and the
+        // REASON travels with it, so the run says "the preview evidence was rejected because X"
+        // rather than the generic "no preview" the stage reported before this leg existed.
+        { ...report, visual: { ...report.visual, externalEvidenceRefused: grafted.reason } };
+  }
+  const visualEvidence = summarizeVisualEvidence(report.visual);
   return {
     artifact: CAPTURE_ARTIFACTS.fidelity,
-    summary: `Fidelity verdict "${report.rubric.verdict}": coverage ${(report.rubric.coverage.score * 100).toFixed(2)}% (${report.rubric.coverage.mappedBlocks}/${report.rubric.coverage.relevantBlocks}, minimum ${(report.rubric.coverage.minimum * 100).toFixed(0)}%), tokens ${report.rubric.tokensComplete.met ? "complete" : "incomplete"}, gaps ${report.rubric.gapsEnumerated.met ? "enumerated" : "NOT enumerated"}; visual ${report.visual.scoredCount} scored / ${report.visual.unavailableCount} unavailable.`,
+    summary: `Fidelity verdict "${report.rubric.verdict}": coverage ${(report.rubric.coverage.score * 100).toFixed(2)}% (${report.rubric.coverage.mappedBlocks}/${report.rubric.coverage.relevantBlocks}, minimum ${(report.rubric.coverage.minimum * 100).toFixed(0)}%), tokens ${report.rubric.tokensComplete.met ? "complete" : "incomplete"}, gaps ${report.rubric.gapsEnumerated.met ? "enumerated" : "NOT enumerated"}; visual ${report.visual.scoredCount} scored / ${report.visual.unavailableCount} unavailable.${visualEvidence.warning ? ` WARNING \u2014 ${visualEvidence.warning}` : ""}`,
     targetProjectId: projectId,
     rubric: report.rubric,
     report,
+    visualEvidence,
     policy: policyView(policy)
   };
 }
