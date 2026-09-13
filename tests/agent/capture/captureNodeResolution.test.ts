@@ -122,9 +122,13 @@ describe("T12.15 — capture_conductor's AI nodes resolve for execution without 
     // capture_conductor's nodes are not reachable through publishing_conductor's registry entry...
     expect(findCanonicalNodeById("block_classifier", "publishing_conductor")).toBeUndefined();
     expect(findCanonicalNodeById("block_classifier", "capture_conductor")?.id).toBe("block_classifier");
-    // ...and an unregistered stamp searches every registered workflow, matching resolveConductorNodes'
-    // rule that an unknown workflowId still resolves against the publishing_conductor canonical set.
-    expect(findCanonicalNodeById("draft_writer", "some_legacy_stamp")?.id).toBe("draft_writer");
+    // ...and — R1b — an EXPLICIT, unregistered stamp is resolved against ONLY that (nonexistent)
+    // workflow and returns undefined: it no longer widens into scanning every registered workflow the
+    // way a genuinely ABSENT workflowId (no second argument at all) legitimately still does below.
+    // Scanning everything for an explicit-but-wrong id would still have handed back draft_writer's
+    // canonical definition (allowedTools included) for a run whose OWN workflowId names nothing real —
+    // exactly the substitution resolveConductorNodes (executor.ts) now refuses at the run level.
+    expect(findCanonicalNodeById("draft_writer", "some_legacy_stamp")).toBeUndefined();
     expect(findCanonicalNodeById("block_classifier")?.id).toBe("block_classifier");
   });
 });

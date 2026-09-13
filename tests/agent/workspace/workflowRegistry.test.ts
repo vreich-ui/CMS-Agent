@@ -6,13 +6,16 @@ import { __test__, publishingConductorWorkflowId } from "../../../src/agent/work
 import { mockOutputForNode } from "../../../src/agent/execution/runners/MockNodeRunner.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
 
-// §2.23 — minimal multi-workflow plumbing at the seam that matters. The registry now carries THREE
-// shipped entries: publishing_conductor (the canonical array), capture_conductor (since T12.9,
-// registered by captureConductorWorkflow.ts) and, since T13.1, clone_conductor (registered by
-// cloneConductorWorkflow.ts) — both side-effect-imported by executor.ts, which this file imports, so
-// all three registrations are present here exactly as on every run-driving plane. Everything an
-// existing run does is byte-identical (unknown workflowIds still fall back to the publishing_conductor
-// canonical set).
+// §2.23 — minimal multi-workflow plumbing at the seam that matters. The registry carries FOUR shipped
+// entries: publishing_conductor (the canonical array), capture_conductor (since T12.9, registered by
+// captureConductorWorkflow.ts), clone_conductor (since T13.1, registered by cloneConductorWorkflow.ts)
+// and visual_identity (C5, registered by visualIdentityWorkflow.ts) — all side-effect-imported by
+// executor.ts, which this file imports, so all four registrations are present here exactly as on
+// every run-driving plane. A genuinely ABSENT workflowId (no second argument / `undefined`) still
+// falls back to the publishing_conductor canonical set, byte-identical to every run before the
+// registry existed; R1b (2026-09) closed the DIFFERENT case this file used to also call "unknown
+// workflowId" — an EXPLICIT, non-empty id nobody registered — which no longer falls back to anything:
+// see "refuses an unregistered EXPLICIT workflowId" below.
 
 describe("§2.23 workflow registry", () => {
   it("ships publishing_conductor, capture_conductor, clone_conductor and visual_identity as the registered workflows, resolving the canonical arrays", () => {
@@ -67,8 +70,32 @@ describe("§2.23 workflow registry", () => {
     expect(resolved.find((node) => node.id === "publish_executor")?.riskLevel).toBe("publish");
   });
 
-  it("keeps behavior byte-identical for existing runs: an unregistered workflowId resolves the publishing_conductor canonical set", async () => {
-    const resolved = await __test__.resolveConductorNodes(undefined, "some_legacy_stamp");
+  it("keeps behavior byte-identical for existing runs: an ABSENT workflowId (no second argument) resolves the publishing_conductor canonical set", async () => {
+    const resolved = await __test__.resolveConductorNodes(undefined);
     expect(resolved.map((node) => node.id)).toEqual(listWorkspaceNodes().map((node) => node.id));
+  });
+
+  // R1b — the defect this task closes. Before this change, resolveConductorNodes' fallback made no
+  // distinction between "no workflowId at all" (legitimately publishing_conductor, above) and "an
+  // explicit id nobody registered" — both resolved to the SAME full publishing_conductor array,
+  // publish/release tail included. A caller naming a real, specific, wrong id got the DTC publishing
+  // pipeline instead of an error telling it the id was wrong.
+  it("refuses an unregistered EXPLICIT workflowId instead of silently substituting publishing_conductor's node array", async () => {
+    await expect(__test__.resolveConductorNodes(undefined, "some_legacy_stamp")).rejects.toMatchObject({
+      name: "WorkspaceToolError",
+      code: "unknown_workflow",
+      message: expect.stringContaining("some_legacy_stamp"),
+      details: expect.objectContaining({
+        requestedWorkflowId: "some_legacy_stamp",
+        registeredWorkflowIds: listRegisteredWorkflowIds()
+      })
+    });
+  });
+
+  it("treats null and empty-string workflowId the same as absent — the legacy adapter, not a refusal", async () => {
+    const nullResolved = await __test__.resolveConductorNodes(undefined, null);
+    const emptyResolved = await __test__.resolveConductorNodes(undefined, "");
+    expect(nullResolved.map((node) => node.id)).toEqual(listWorkspaceNodes().map((node) => node.id));
+    expect(emptyResolved.map((node) => node.id)).toEqual(listWorkspaceNodes().map((node) => node.id));
   });
 });

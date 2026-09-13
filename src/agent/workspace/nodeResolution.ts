@@ -64,12 +64,23 @@ import "./visualIdentityWorkflow.js";
 // workflowId — the run's workflowId — drives which registry entry is consulted: a registered id is
 // searched ALONE, so a run resolves its own workflow's canonical definitions and no other's. Callers
 // with no run in hand (nodeRuntime.ts's independent single-node execution) pass none, and every
-// registered workflow is searched in registration order (publishing_conductor first). An UNREGISTERED
-// workflowId also searches them all, matching resolveConductorNodes' rule that an unknown stamp still
-// resolves against publishing_conductor.
+// registered workflow is searched in registration order (publishing_conductor first).
+//
+// R1b — an EXPLICIT, non-empty workflowId nobody registered is NO LONGER treated as "no workflowId":
+// it used to widen into the same all-workflows scan as the "no run in hand" case, which was the same
+// defect as resolveConductorNodes' old fallback wearing a different hat — a persisted run carrying an
+// unregistered workflowId reaches THIS function directly for a single node (toolResolver.ts's
+// resolveEffectiveToolsForNode/resolvePolicySubjects, tools.ts's node.execute path), bypassing
+// resolveConductorNodes' own refusal entirely, and the scan would still hand back e.g.
+// publish_executor's or article_body's canonical definition — including tool grants — for a run whose
+// own topology resolveConductorNodes now refuses to build at all. An explicit id is resolved against
+// THAT ONE registered workflow only; if it is not registered, this returns undefined (same as "no
+// canonical definition anywhere"), same as any other miss. Only a workflowId that is itself absent —
+// `undefined` or `""`, the genuine "no run in hand" / legacy-record case — falls through to the
+// all-workflows scan below.
 export function findCanonicalNodeById(nodeId: string, workflowId?: string): WorkspaceNode | undefined {
-  const workflowIds = workflowId && getWorkflowDefinition(workflowId) ? [workflowId] : listRegisteredWorkflowIds();
-  for (const id of workflowIds) {
+  if (workflowId) return getWorkflowDefinition(workflowId)?.canonicalNodes().find((node) => node.id === nodeId);
+  for (const id of listRegisteredWorkflowIds()) {
     const found = getWorkflowDefinition(id)?.canonicalNodes().find((node) => node.id === nodeId);
     if (found) return found;
   }
