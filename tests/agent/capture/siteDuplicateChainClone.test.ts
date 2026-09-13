@@ -153,6 +153,39 @@ describe("maybeChainCloneAfterCapture", () => {
     }
   );
 
+  it("a prior \"refused\" record is not sticky: once the capture run itself later reaches \"completed\" the chain proceeds and starts a clone; a further call after that (now \"started\") is already_decided", async () => {
+    const capture = await buildCaptureRun({ status: "blocked" });
+    const firstOutcome = await maybeChainCloneAfterCapture(capture, chainDeps());
+    expect(firstOutcome.action).toBe("refused");
+    if (firstOutcome.action !== "refused") throw new Error("unreachable");
+    expect(firstOutcome.code).toBe("chain_capture_not_terminal_success");
+
+    // The capture run itself later reaches its terminal SUCCESS state (e.g. an operator clears the
+    // gate that had it "blocked", or a retried tick drives it home) — the SAME request record still
+    // carries the stale "refused" chain from the first call.
+    const store = repositoryManager.getExecutionRepository();
+    const stillRefused = (await getRun(capture.runId, store))!;
+    const completed: WorkflowExecutionRecord = { ...stillRefused, status: "completed", updatedAt: new Date().toISOString() };
+    await store.saveRun(completed);
+
+    const secondOutcome = await maybeChainCloneAfterCapture(completed, chainDeps());
+    expect(secondOutcome.action).toBe("chained");
+    if (secondOutcome.action !== "chained") throw new Error("unreachable");
+
+    const persisted = await getRun(capture.runId, store);
+    const request = persisted!.stageOutputs[SITE_DUPLICATION_REQUEST_STAGE_KEY] as Record<string, unknown>;
+    expect((request.chain as Record<string, unknown>).status).toBe("started");
+    expect((request.chain as Record<string, unknown>).cloneRunId).toBe(secondOutcome.cloneRunId);
+
+    // A third call now finds a "started" chain — THAT is sticky, so no second clone is ever minted.
+    const thirdOutcome = await maybeChainCloneAfterCapture(persisted!, chainDeps());
+    expect(thirdOutcome.action).toBe("already_decided");
+
+    const cloneRuns = await store.listRuns({ workflowId: CLONE_CONDUCTOR_WORKFLOW_ID });
+    expect(cloneRuns).toHaveLength(1);
+    expect(cloneRuns[0].runId).toBe(secondOutcome.cloneRunId);
+  });
+
   it("does nothing to a capture run that is not yet halted (still parked mid-flight)", async () => {
     const capture = await buildCaptureRun({ status: "running" });
     const outcome = await maybeChainCloneAfterCapture(capture, chainDeps());

@@ -125,7 +125,13 @@ export async function maybeChainCloneAfterCapture(run: WorkflowExecutionRecord, 
   const request = readRequest(run);
   if (!request) return { action: "not_applicable" };
   const existingChain = request.chain;
-  if (isRecord(existingChain) && (existingChain.status === "started" || existingChain.status === "refused")) {
+  // Only a chain that has already STARTED a clone run short-circuits here — that decision minted a
+  // real run and must never be revisited. A prior "refused" record is NOT sticky: it was refused
+  // against the run's status AT THE TIME, and the run may since have left its blocked/paused state
+  // and reached "completed" on a later tick or retry. Falling through re-evaluates against the run's
+  // CURRENT status below, which still refuses (and overwrites the record) while not yet completed,
+  // and chains (also overwriting the record) once it is.
+  if (isRecord(existingChain) && existingChain.status === "started") {
     return { action: "already_decided", chain: existingChain as unknown as DuplicationChainState };
   }
 

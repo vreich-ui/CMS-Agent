@@ -136,8 +136,11 @@ export const RELEASE_CALL_TIMEOUT_SECONDS = 40;
 // release_to_production statuses that mean the build hook DID fire and only verification is still open
 // (the site's own contract text: "released:false with status build_not_confirmed_live means the build
 // did not finish within the wait budget (re-check deploy_status)"; build_ready_not_published means the
-// build is ready but Auto Publishing is locked). Neither is a decline: re-calling would at best replay.
-const HOOK_FIRED_UNCONFIRMED_STATUSES = new Set(["build_not_confirmed_live", "build_ready_not_published"]);
+// build is ready but Auto Publishing is locked). "building" belongs here too: release_executor never
+// passes `wait_for_deploy`, so the site returns released:false, status:"building" the moment the hook
+// fires, before any build has had time to finish — that is the hook firing, not a decline. Neither
+// status is a decline: re-calling would at best replay.
+const HOOK_FIRED_UNCONFIRMED_STATUSES = new Set(["build_not_confirmed_live", "build_ready_not_published", "building"]);
 
 const MAX_POLL_ATTEMPTS_DEFAULT = 8;
 

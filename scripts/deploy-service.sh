@@ -64,6 +64,14 @@ ENV_PAIRS=(
   "MCP_STATE_STORE=blobs"
   "GCS_BUCKET=${GCS_BUCKET}"
   "CMS_AGENT_PUBLIC_MCP_ENDPOINT=${PUBLIC_MCP_ENDPOINT}"
+  # Build identity for repository_get_health (RepositoryManager.ts:72,79) — same shape pdf-tool's
+  # render-service has stamped since T12.19. The commit sha comes off IMAGE's own tag: both callers
+  # already tag it with the commit (cloudbuild.deploy.yaml's ${SHORT_SHA}; deploy-mcp.sh's IMAGE_TAG,
+  # which defaults to `git rev-parse --short HEAD`), so this reads it back rather than re-deriving it
+  # from git — a re-derive here would answer "what commit is this shell's checkout on", not "what
+  # commit is in the image being deployed", and those can differ.
+  "SERVICE_GIT_SHA=${IMAGE##*:}"
+  "SERVICE_DEPLOYED_AT=$(date -u +%FT%TZ)"
   "DR_LURIE_MCP_ENDPOINT=https://drluriescience.netlify.app/mcp"
   "PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp"
   "PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp"
