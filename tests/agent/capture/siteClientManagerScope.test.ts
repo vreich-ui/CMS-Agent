@@ -41,7 +41,13 @@ describe("site client_manager scoped-token allowlist", () => {
     // on it, and mcpEndpoint.ts refuses either tool from a scoped bearer that names no project at
     // all (PROJECT_REQUIRED_SCOPED_TOOLS) — the unfiltered call returns the whole workspace.
     "feedback_list",
-    "learning_list_observations"
+    "learning_list_observations",
+    // W5 (2026-09-13, publication-identity incident): the read-only operation-catalog family the
+    // landed CLIENT_MANAGER_PROMPT rev 7's "Operations come before plans" section depends on.
+    // Read-only, start nothing — see siteGenesis.ts's SITE_CLIENT_MANAGER_TOOLS comment.
+    "operation_list",
+    "operation_get",
+    "operation_preflight"
   ];
 
   it("covers exactly Platform's bridge — no missing tool (401 at the door) and no extra (blast radius)", () => {

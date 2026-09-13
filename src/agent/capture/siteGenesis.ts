@@ -229,7 +229,20 @@ export const SITE_CLIENT_MANAGER_TOOLS = [
   // granting them would hand one tenant the workspace's shared learning state (every other tenant's
   // curated playbook lessons and optimizer proposals).
   "feedback_list",
-  "learning_list_observations"
+  "learning_list_observations",
+  // W5 (2026-09-13, publication-identity incident) — the read-only operation-catalog family
+  // (src/agent/mcp/workspace/operationTools.ts). The landed CLIENT_MANAGER_PROMPT rev 7 tells the
+  // agent to resolve standard requests against this catalog before assembling anything by hand
+  // ("Operations come before plans"), but a tenant's scoped chat bearer could not previously call
+  // any of the three — the instruction was unreachable from a real site chat. All three are
+  // read-only and start nothing: operation_list enumerates code-registered descriptors,
+  // operation_get fetches one, and operation_preflight performs exactly one read-only lookup of the
+  // TENANT'S OWN project record (never a tenant MCP call) to report capability gaps and whether a
+  // workflow implementing the operation actually exists. None of the three writes to the workspace,
+  // touches a run, or reaches the tenant's own MCP server.
+  "operation_list",
+  "operation_get",
+  "operation_preflight"
 ] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";
