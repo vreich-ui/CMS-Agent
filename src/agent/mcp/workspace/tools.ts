@@ -11,7 +11,8 @@ import { createImprovementTools } from "./improvementTools.js";
 import { createAgentTools } from "./agentTools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { collectRunBlockages, type Blockage } from "../../execution/blockage.js";
-import { DEFAULT_EXECUTION_MODE, MAX_LIST_RUNS_LIMIT, assessRunStall, type RunStallTimingContext, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, resetRun, retryNode, resolveConductorNodes, runModeSummary, runNextNode, setNodeBudgetOverride, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
+import { DEFAULT_EXECUTION_MODE, DISPATCH_DEADLINE_MARGIN_MS, type DispatchClaimKind, MAX_LIST_RUNS_LIMIT, assessRunStall, type RunStallTimingContext, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, nextDispatchPlan, resetRun, retryNode, resolveConductorNodes, runModeSummary, runNextNode, setNodeBudgetOverride, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
+import { DETERMINISTIC_STAGE_MIN_TIMEOUT_MS, STALL_MARGIN_MS } from "../../workspace/routeRegistry.js";
 import { listRegisteredWorkflowIds } from "../../workspace/workflowRegistry.js";
 import { resolvePublishAuthority } from "../../workspace/publishDecision.js";
 import { conductorCache, getRunContext, planRun, summarizeRunCost, RUN_CONTEXT_KEY } from "../../workspace/conductor.js";
@@ -153,6 +154,81 @@ export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
   }))
 });
 const RUN_LIVE_STATUSES: string[] = ["queued", "running"];
+
+// D9 — THE CLAIM CEILING, and why a wider claim window is the one fix that is not allowed here.
+//
+// A single workflow.run_next_node / run_node / run_until / run_all call blocks synchronously on
+// advanceRun -> executeRunnableNode for the WHOLE of whatever node it dispatches. The driver's own
+// time budget above is checked only BETWEEN advances, never during one, and there is no
+// AbortController on the outer HTTP call — so a node that claims 300s is 300s of one MCP request. The
+// calling client's request timeout (~180s, client-side and outside this repo) reaches that first: it
+// kills the driver mid-node, the node keeps its dispatch claim for its full timeout plus
+// STALL_MARGIN_MS (390s for a deterministic stage) with nothing behind it, and the run is stranded
+// until the claim expires. Observed twice in one incident on capture_emit_live; "advance the run
+// manually" is the advice that walks an operator straight into it.
+//
+// Widening the claim is a REJECTED fix — it moves the cliff, it does not remove it. What removes it is
+// refusing the dispatch: this driver does not start a node whose claim it cannot own, and says which
+// driver can (the scheduled continuation tick holds a whole Cloud Run task window, not a request).
+//
+// THE CEILING IS NOT A NEW NUMBER. It is DETERMINISTIC_STAGE_MIN_TIMEOUT_MS — the floor routeRegistry
+// gives the stages that reach the network and may spend 100-200s of real external work. The fit test
+// is the one runContinuation's deadline guard already uses (`fitsAFreshTask`), with the driver's
+// window in place of the task's.
+//
+// THE CEILING IS A NUMBER, AND A NUMBER ALONE IS NOT THE TEST. The first cut of this guard compared
+// only the milliseconds and refused `article_body` — a plain model node whose own modelConfig.timeout
+// is 300000, numerically identical to a capture stage's claim. The two are not the same kind of claim
+// and only one of them strands a run (executor.DispatchClaimKind):
+//   - a MODEL claim is a bound. OpenAINodeRunner races the provider call against that exact timeout,
+//     so the node ends, the driver regains control, and the result is persisted. Owning it in a
+//     request is what this surface has always done and what the run-driving tests assert.
+//   - a DETERMINISTIC-STAGE claim is a floor, not a bound. Nothing races those routes — the executor
+//     awaits them bare — so the window describes work that runs as long as it runs. That is the claim
+//     an MCP request cannot own, and it is exactly the claim capture_emit_live was orphaned holding.
+// So the refusal is `claimKind === "deterministic_stage"` AND the window does not fit. Every model
+// dispatch on every conductor, including the 300000ms ones, is dispatched exactly as before.
+export const RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS = DETERMINISTIC_STAGE_MIN_TIMEOUT_MS;
+
+// A NORMAL, NAMED, NON-ADVANCING OUTCOME — the same shape the time-budget stop already returns (the
+// run as persisted, plus a driverNote), not an error. The run is healthy, nothing is in flight and
+// nothing failed; an error would throw the run view away and read to every client as "retry me", which
+// is the one thing a caller must not do here.
+type DispatchClaimRefusal = {
+  code: "dispatch_claim_exceeds_driver_ceiling";
+  nodeId: string;
+  nodeIds: string[];
+  claimKind: DispatchClaimKind;
+  plannedClaimMs: number;
+  ceilingMs: number;
+  driverBudgetMs: number;
+  unreclaimableForMs: number;
+};
+
+const dispatchClaimRefusalNote = (refusal: DispatchClaimRefusal, namedNodeId?: string): string =>
+  `${namedNodeId === refusal.nodeId ? `Node ${refusal.nodeId} is the node you named, and naming it does not shorten its claim: it` : `The next runnable node (${refusal.nodeId})`} plans a ${refusal.plannedClaimMs}ms deterministic-stage dispatch claim — a stall-detection floor over work nothing races, not a bound like a model node's own timeout — past the ${refusal.ceilingMs}ms ceiling this driver may own in one request (its own time budget between advances is ${RUN_DRIVER_TIME_BUDGET_MS}ms, set below every real caller's request timeout). It was NOT dispatched and nothing is in flight: driving it here would have the caller's request timeout kill this driver mid-node and leave the node claimed — unreclaimable for ${refusal.unreclaimableForMs}ms — with nobody behind it. The run's state is persisted and this is not a failure. The scheduled continuation tick advances this node on its own (it holds a whole task window rather than a request), or run the Cloud Run conductor job (scripts/run-conductor-job) for the rest of the run; calling this tool again returns this same refusal.`;
+
+// Priced BEFORE the dispatch, from the claim the executor will actually stamp (executor.nextDispatchPlan
+// -> plannedNodeTimeoutMs). Fail-open exactly as the continuation tick's resolver does: a pricing read
+// that throws must never be the reason a run stops advancing.
+const dispatchClaimRefusal = async (run: WorkflowExecutionRecord | undefined, workspaceRepository?: Parameters<typeof nextDispatchPlan>[1]): Promise<DispatchClaimRefusal | undefined> => {
+  if (!run || HALTED_RUN_STATUSES.includes(run.status)) return undefined;
+  const plan = await nextDispatchPlan(run, workspaceRepository).catch(() => undefined);
+  if (!plan || plan.willSkipBeforeDispatch) return undefined;
+  if (plan.claimKind !== "deterministic_stage") return undefined;
+  const fitsOneDriverCall = plan.plannedTimeoutMs + DISPATCH_DEADLINE_MARGIN_MS <= RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS;
+  if (fitsOneDriverCall) return undefined;
+  return {
+    code: "dispatch_claim_exceeds_driver_ceiling",
+    nodeId: plan.nodeId,
+    nodeIds: plan.nodeIds,
+    claimKind: plan.claimKind,
+    plannedClaimMs: plan.plannedTimeoutMs,
+    ceilingMs: RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS,
+    driverBudgetMs: RUN_DRIVER_TIME_BUDGET_MS,
+    unreclaimableForMs: plan.plannedTimeoutMs + STALL_MARGIN_MS
+  };
+};
 
 const workspaceNodeImport = z.object({
   id: z.string().min(1),
@@ -1002,10 +1078,69 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // for when the node payloads are what you actually came for.
     tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state. detail:\"compact\" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,blockages,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch,blockage}]}. `blockages` is every recorded pending wall on the run in blockage.v1 form: budget, publication approval, tenant-policy hold, configuration/scope, authentication, validation/limit, or an explicitly unknown legacy cause. Each carries the remedies actually supported for that cause; status=blocked alone never fabricates an approval. The array is always present and empty on a healthy run. detail:\"full\" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status \"running\" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.", zodSchema: getRunInput, inputSchema: getRunJsonSchema, execute: async (input) => { const data = getRunInput.parse(input); const run = await getRun(data.runId, executionRepository); const timing = run ? await runStallTiming(run.workflowId, run.projectId) : undefined; return ok({ run: run ? (data.detail === "full" ? run : compactRun(run)) : null, detail: data.detail, mode: run ? runModeSummary(run) : null, stall: run ? assessRunStall(run, new Date(), timing) ?? null : null }); } }),
     tool({ name: "workflow.list_runs", description: "List compact dry-run workflow summaries, newest first, paged (default 20 rows, max 100; `page.nextCursor` fetches the next page) with optional status and startedAt time-range filters. Node inputs/outputs, stage outputs, and artifact values are intentionally omitted; call workflow.get_run for one selected run. Each row carries the caller-supplied `requestId` it was started with (when it has one), so a page of runs can be joined back to the requests that asked for them, plus a `mode` block naming what produced it and a `stall` block on status \"running\" rows naming whether the driver is alive.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => { const { runs, page } = await listRunsPage(listRunsInput.parse(input), executionRepository); const timingByWorkflow = new Map<string, RunStallTimingContext>(); for (const key of new Set(runs.map((run) => `${run.workflowId}::${run.projectId ?? ""}`))) { const [workflowId, projectId] = key.split("::"); timingByWorkflow.set(key, await runStallTiming(workflowId, projectId || undefined)); } const at = new Date(); return ok({ runs: runs.map((run) => { const stall = assessRunStall(run, at, timingByWorkflow.get(`${run.workflowId}::${run.projectId ?? ""}`)); return { ...summarizeRunForList(run), mode: runModeSummary(run), ...(stall ? { stall } : {}) }; }), page }); } }),
-    tool({ name: "workflow.run_next_node", description: "Run exactly one dependency-ready Publishing Conductor node, stopping before publish-risk nodes unless approved is true.", zodSchema: runNextNodeInput, inputSchema: runNextNodeJsonSchema, execute: async (input) => { const data = runNextNodeInput.parse(input); return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); } }),
-    tool({ name: "workflow.run_node", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Run dependency-ready nodes; when nodeId is given, advance the run until that node completes. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); if (!data.nodeId) return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) }); const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS; let timedOut = false; let run = await getRun(data.runId, executionRepository); for (let i = 0; run && i < 100 && !HALTED_RUN_STATUSES.includes(run.status); i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }); const state = run.nodes.find((node) => node.nodeId === data.nodeId); if (state && state.status !== "queued" && state.status !== "running") break; } return ok({ run, ...(timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) }); } }),
-    tool({ name: "workflow.run_until", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Run dependency-ready nodes until the named node completes, then stop. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs.", zodSchema: runUntilInput, inputSchema: runUntilJsonSchema, execute: async (input) => { const data = runUntilInput.parse(input); const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS; let timedOut = false; let run = await getRun(data.runId, executionRepository); run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved })); for (let i=0; run && i<100 && !HALTED_RUN_STATUSES.includes(run.status) && run.nodes.find((n) => n.nodeId === data.nodeId)?.status !== "completed"; i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }); if (run.nodes.find((n) => n.nodeId === data.nodeId)?.status === "completed") break; } return ok({ run, ...(timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) }); } }),
-    tool({ name: "workflow.run_all", description: `Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Run all dependency-ready nodes, stopping before publish-risk nodes unless explicit approval exists. Drives the run for at most budgetMs (default ${RUN_DRIVER_TIME_BUDGET_MS}ms, ceiling ${RUN_DRIVER_TIME_BUDGET_CEILING_MS}ms — always below the caller's request timeout) and returns a COMPACT run view {run:{runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch}]}, driverNote?, continued} — no node inputs/outputs/stageOutputs/artifacts (use workflow.get_run for the full record). continued=true means the run is still queued/running and the scheduled continuation tick will advance it; call again to drive it sooner.`, zodSchema: runAllInput, inputSchema: runAllJsonSchema, execute: async (input) => { const data = runAllInput.parse(input); const budgetMs = driverBudgetMs(data.budgetMs); const deadline = Date.now() + budgetMs; let timedOut = false; let run = await getRun(data.runId, executionRepository); run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_run_all" })); for (let i=0; run && i<100 && !HALTED_RUN_STATUSES.includes(run.status); i++) { if (Date.now() > deadline) { timedOut = true; break; } run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_run_all" }); } if (!run) throw new WorkspaceToolError("run_not_found", `Run ${data.runId} was not found.`, { runId: data.runId }); return ok({ run: compactRun(run), ...(timedOut ? { driverNote: driverTimeBudgetNote(budgetMs) } : {}), continued: RUN_LIVE_STATUSES.includes(run.status) }); } }),
+    tool({ name: "workflow.run_next_node", description: `Run exactly one dependency-ready Publishing Conductor node, stopping before publish-risk nodes unless approved is true. REFUSES to dispatch a node whose planned dispatch claim exceeds ${RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS}ms — the ceiling an in-request driver may own — returning the persisted run plus {driverRefusal:{code:"dispatch_claim_exceeds_driver_ceiling",nodeId,plannedClaimMs,ceilingMs},driverNote}. That is a normal outcome, not an error, and retrying returns it again: such a node is advanced by the scheduled continuation tick or the Cloud Run conductor job, which hold a task window rather than a request.`, zodSchema: runNextNodeInput, inputSchema: runNextNodeJsonSchema, execute: async (input) => {
+      const data = runNextNodeInput.parse(input);
+      const current = await getRun(data.runId, executionRepository);
+      const refusal = await dispatchClaimRefusal(current, workspaceRepository);
+      if (current && refusal) return ok({ run: current, driverRefusal: refusal, driverNote: dispatchClaimRefusalNote(refusal) });
+      return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) });
+    } }),
+    tool({ name: "workflow.run_node", description: `Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Run dependency-ready nodes; when nodeId is given, advance the run until that node completes. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs. A node whose planned dispatch claim exceeds the driver's per-request claim ceiling (${RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS}ms) is REFUSED rather than driven: the call returns the persisted run with {driverRefusal:{code:"dispatch_claim_exceeds_driver_ceiling",nodeId,plannedClaimMs,ceilingMs},driverNote} and dispatches nothing - a normal outcome, not an error. Driving it here would have the caller's request timeout kill this driver mid-node and leave the node claimed with no driver behind it; the scheduled continuation tick or the Cloud Run conductor job advances such a node instead. Naming a node explicitly does not lift the ceiling - it shortens no claim - so the refusal applies to nodeId calls too.`, zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => {
+      const data = runNodeInput.parse(input);
+      let run = await getRun(data.runId, executionRepository);
+      // D9 — an operator naming a node directly states a different INTENT, not a different claim: the
+      // node still owns its window for its full timeout and this call is still one request. The
+      // refusal is therefore the same refusal, worded for the named node when it is the one refused.
+      let refusal = await dispatchClaimRefusal(run, workspaceRepository);
+      if (!data.nodeId) {
+        if (run && refusal) return ok({ run, driverRefusal: refusal, driverNote: dispatchClaimRefusalNote(refusal, data.nodeId) });
+        return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) });
+      }
+      const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS;
+      let timedOut = false;
+      for (let i = 0; run && !refusal && i < 100 && !HALTED_RUN_STATUSES.includes(run.status); i++) {
+        if (Date.now() > deadline) { timedOut = true; break; }
+        run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved });
+        const state = run.nodes.find((node) => node.nodeId === data.nodeId);
+        if (state && state.status !== "queued" && state.status !== "running") break;
+        refusal = await dispatchClaimRefusal(run, workspaceRepository);
+      }
+      return ok({ run, ...(refusal ? { driverRefusal: refusal, driverNote: dispatchClaimRefusalNote(refusal, data.nodeId) } : timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) });
+    } }),
+    tool({ name: "workflow.run_until", description: `Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Run dependency-ready nodes until the named node completes, then stop. Stops cleanly with driverNote when the request's time budget runs out; call again to continue, or use the conductor job for long runs. A node whose planned dispatch claim exceeds the driver's per-request claim ceiling (${RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS}ms) is REFUSED rather than driven: the call returns the persisted run with {driverRefusal:{code:"dispatch_claim_exceeds_driver_ceiling",nodeId,plannedClaimMs,ceilingMs},driverNote} and dispatches nothing - a normal outcome, not an error. Driving it here would have the caller's request timeout kill this driver mid-node and leave the node claimed with no driver behind it; the scheduled continuation tick or the Cloud Run conductor job advances such a node instead.`, zodSchema: runUntilInput, inputSchema: runUntilJsonSchema, execute: async (input) => {
+      const data = runUntilInput.parse(input);
+      const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS;
+      let timedOut = false;
+      let run = await getRun(data.runId, executionRepository);
+      run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }));
+      let refusal = await dispatchClaimRefusal(run, workspaceRepository);
+      for (let i=0; run && !refusal && i<100 && !HALTED_RUN_STATUSES.includes(run.status) && run.nodes.find((n) => n.nodeId === data.nodeId)?.status !== "completed"; i++) {
+        if (Date.now() > deadline) { timedOut = true; break; }
+        run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved });
+        if (run.nodes.find((n) => n.nodeId === data.nodeId)?.status === "completed") break;
+        refusal = await dispatchClaimRefusal(run, workspaceRepository);
+      }
+      return ok({ run, ...(refusal ? { driverRefusal: refusal, driverNote: dispatchClaimRefusalNote(refusal, data.nodeId) } : timedOut ? { driverNote: DRIVER_TIME_BUDGET_NOTE } : {}) });
+    } }),
+    tool({ name: "workflow.run_all", description: `Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Run all dependency-ready nodes, stopping before publish-risk nodes unless explicit approval exists. Drives the run for at most budgetMs (default ${RUN_DRIVER_TIME_BUDGET_MS}ms, ceiling ${RUN_DRIVER_TIME_BUDGET_CEILING_MS}ms — always below the caller's request timeout) and returns a COMPACT run view {run:{runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch}]}, driverNote?, continued} — no node inputs/outputs/stageOutputs/artifacts (use workflow.get_run for the full record). continued=true means the run is still queued/running and the scheduled continuation tick will advance it; call again to drive it sooner. A node whose planned dispatch claim exceeds the driver's per-request claim ceiling (${RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS}ms) is REFUSED rather than driven: the call returns the persisted run with {driverRefusal:{code:"dispatch_claim_exceeds_driver_ceiling",nodeId,plannedClaimMs,ceilingMs},driverNote} and dispatches nothing - a normal outcome, not an error. Driving it here would have the caller's request timeout kill this driver mid-node and leave the node claimed with no driver behind it; the scheduled continuation tick or the Cloud Run conductor job advances such a node instead.`, zodSchema: runAllInput, inputSchema: runAllJsonSchema, execute: async (input) => {
+      const data = runAllInput.parse(input);
+      const budgetMs = driverBudgetMs(data.budgetMs);
+      const deadline = Date.now() + budgetMs;
+      let timedOut = false;
+      let run = await getRun(data.runId, executionRepository);
+      run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_run_all" }));
+      // D9 — the same claim ceiling the single-step drivers apply. run_all is the loop this surface's
+      // callers actually use, so leaving it out would have made the refusal a fiction: one run_all
+      // call would go on owning the 300s claim the other three now decline.
+      let refusal = await dispatchClaimRefusal(run, workspaceRepository);
+      for (let i=0; run && !refusal && i<100 && !HALTED_RUN_STATUSES.includes(run.status); i++) {
+        if (Date.now() > deadline) { timedOut = true; break; }
+        run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_run_all" });
+        refusal = await dispatchClaimRefusal(run, workspaceRepository);
+      }
+      if (!run) throw new WorkspaceToolError("run_not_found", `Run ${data.runId} was not found.`, { runId: data.runId });
+      return ok({ run: compactRun(run), ...(refusal ? { driverRefusal: refusal, driverNote: dispatchClaimRefusalNote(refusal) } : timedOut ? { driverNote: driverTimeBudgetNote(budgetMs) } : {}), continued: RUN_LIVE_STATUSES.includes(run.status) });
+    } }),
     // R-18: pause_run reports "paused", not "blocked". "blocked" already carried two distinct meanings
     // (publish-approval hold and budget hold); overloading it with a third made an operator pause
     // unreadable. "paused" is in the executor's non-advanceable set, so pausing still stops the run.

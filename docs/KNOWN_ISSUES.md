@@ -249,7 +249,8 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 - Scenario: "who called `workflow_publish_run` at 14:02 and with what result" is answerable only if the call mutated something with change history; read-only and failed calls leave no trace beyond Cloud Run's `POST /mcp 200`.
 - Fix (implementation): one structured line per `tools/call` (tool, actor kind/id, project arg, latency, ok/code, requestId, `K_REVISION`), with redaction.
 
-### K-O2 Build identity is half-wired — **Low**: `SERVICE_GIT_SHA`/`SERVICE_DEPLOYED_AT` read null (`RepositoryManager.ts:76-77`; the comment at `:63-65` says so); only `K_REVISION` identifies the build. Fix: stamp in `cloudbuild.deploy.yaml` `--update-env-vars`.
+### K-O2 Build identity is half-wired — **Low**, **Fixed**: `SERVICE_GIT_SHA`/`SERVICE_DEPLOYED_AT` read null (`RepositoryManager.ts:76-77`; the comment at `:63-65` said so); only `K_REVISION` identified the build.
+- **Fixed.** `scripts/deploy-service.sh`'s `ENV_PAIRS` now stamps `SERVICE_GIT_SHA` (read off the deployed image's own tag, so a hand deploy of an older already-built image reports that image's commit rather than this checkout's HEAD) and `SERVICE_DEPLOYED_AT` (UTC deploy time). `cloudbuild.deploy.yaml`'s trigger path and `scripts/deploy-mcp.sh`'s hand path both run this same script, so they stamp both fields identically.
 
 ### T-14b The `by=strategy` grain now exists, and the consumer can tell an empty one from an unlabelled one — **Fixed** (2026-09-08)
 - kugel-data migration 012 builds `v_strategy_window` and the sink serves `by=strategy`; `UNIMPLEMENTED_ROLLUP_GRAINS` is empty. `tests/contracts/kugel-data/rollups-by-strategy.json` is re-captured as `producerState: "implemented"` and pins `n` — the column whose absence would be silent, since `rowCount` weights a row without one at 1 rather than dropping it.

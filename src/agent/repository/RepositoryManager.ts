@@ -64,8 +64,9 @@ export type RepositoryConfig = z.infer<typeof repositoryConfigSchema>;
  *  `revision` costs nothing to populate: Cloud Run sets K_REVISION in every container it starts, so
  *  this identifies the exact revision that served THIS call with no deploy-time wiring at all, and
  *  the revision maps to a commit-tagged image in the console. `gitSha`/`deployedAt` are stamped by
- *  the deploy (SERVICE_GIT_SHA / SERVICE_DEPLOYED_AT) exactly as pdf-tool's render-service does since
- *  T12.19; they read null until that wiring lands, which is honest rather than absent. */
+ *  the deploy (SERVICE_GIT_SHA / SERVICE_DEPLOYED_AT, set in scripts/deploy-service.sh's ENV_PAIRS)
+ *  exactly as pdf-tool's render-service does since T12.19; they read null only for a revision
+ *  deployed before that wiring landed (KNOWN_ISSUES K-O2), which is honest rather than absent. */
 export type PlaneBuildIdentity = {
   revision: string | null;
   service: string | null;

@@ -43,6 +43,21 @@
 // site.duplicate_status already reads (`chain.status:"refused"`, `chain.code`, `chain.reason`), so
 // "why didn't my clone start" has one answer in one place.
 //
+// D10 — A REFUSAL IS ONLY STICKY IF ITS CAUSE IS. `chain.status:"refused"` used to be sticky
+// unconditionally, same as `"started"`. That is correct for a refusal like "chain_budget_exhausted":
+// the accrued spend it names is already final, so re-evaluating the SAME terminal run can never
+// change the answer. It is WRONG for `"chain_capture_not_terminal_success"`, which names a fact about
+// the run's status AT THE MOMENT this function last ran — not about the capture run's eventual fate.
+// Both call sites (this module's header, above) re-invoke on every later halt of the same run, so a
+// capture that was merely "blocked" (an operator gate, not a failure) when first evaluated and later
+// reaches "completed" must get a second look, or the clone silently never starts even though the
+// capture the operator was waiting on finished cleanly. So: `"started"` stays sticky, always; a
+// `"refused"` with any code OTHER than `"chain_capture_not_terminal_success"` stays sticky, always;
+// a `"chain_capture_not_terminal_success"` refusal is re-evaluated exactly when the FRESH `run.status`
+// is now `"completed"` (see the guard just below `readRequest`). The superseded refusal is never
+// dropped silently — it is carried forward as `chain.supersededRefusals[]`, the same
+// keep-not-erase convention nodeAttemptHistory.ts's `errorHistory[]` uses for a retried node.
+//
 // BUDGET (issue #188 point 3). The ORIGINAL site.duplicate call's `budgetUsd`, when the caller
 // supplied one, is the ceiling for the WHOLE chain — not a fresh ceiling handed to the clone run for
 // free. The clone run's OWN `budgetUsd` is set to (original total − capture's own accrued spend),
@@ -77,9 +92,28 @@ import type { UsageRepository } from "../repository/interfaces/UsageRepository.j
 // (tests included) keep resolving the same string from the same familiar path.
 export const SITE_DUPLICATION_REQUEST_STAGE_KEY = "site_duplicate:request";
 
+// D10 — a refusal this module later re-evaluates and supersedes (today: only the
+// "chain_capture_not_terminal_success" code, once the run goes on to complete) is recorded here
+// rather than being overwritten with no trace. `supersededAt` is this function's own clock read at
+// the moment it decided to re-evaluate; `refusedAt` is preserved from the original refusal.
+export type SupersededChainRefusal = { code: string; reason: string; refusedAt: string; supersededAt: string };
+
 export type DuplicationChainState =
-  | { status: "started"; cloneRunId: string; startedAt: string; budgetUsd?: number }
-  | { status: "refused"; code: string; reason: string; refusedAt: string };
+  | { status: "started"; cloneRunId: string; startedAt: string; budgetUsd?: number; supersededRefusals?: SupersededChainRefusal[] }
+  | { status: "refused"; code: string; reason: string; refusedAt: string; supersededRefusals?: SupersededChainRefusal[] };
+
+// The refusal code that names transient run state rather than a fact about the capture run's
+// eventual outcome — the ONLY code a later evaluation is allowed to re-open. Every other refusal this
+// module mints (today: "chain_budget_exhausted") is sticky forever, same as "started".
+const REEVALUABLE_REFUSAL_CODE = "chain_capture_not_terminal_success";
+
+// Mirrors nodeAttemptHistory.ts's MAX_NODE_ATTEMPT_HISTORY: bound the history rather than let it grow
+// without limit. In practice a capture run can only ever supersede ONE prior refusal — once a
+// refusal's code is anything but REEVALUABLE_REFUSAL_CODE, or the run reaches it while still not
+// "completed", the existing decision is sticky and this module never runs again for that run — but
+// the shape stays a list, not a single optional field, so a second reevaluable cause, if one is ever
+// added, needs no new field.
+const MAX_SUPERSEDED_CHAIN_REFUSALS = 5;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -124,10 +158,30 @@ export async function maybeChainCloneAfterCapture(run: WorkflowExecutionRecord, 
   if (!HALTED_EXECUTION_STATUSES.has(run.status)) return { action: "not_applicable" };
   const request = readRequest(run);
   if (!request) return { action: "not_applicable" };
-  const existingChain = request.chain;
-  if (isRecord(existingChain) && (existingChain.status === "started" || existingChain.status === "refused")) {
-    return { action: "already_decided", chain: existingChain as unknown as DuplicationChainState };
+  const existingChain = isRecord(request.chain) ? (request.chain as unknown as DuplicationChainState) : undefined;
+  if (existingChain?.status === "started") {
+    return { action: "already_decided", chain: existingChain };
   }
+  // D10 — a "refused" decision is sticky UNLESS it was refused for being not-yet-terminal AND the
+  // fresh `run.status` (guaranteed halted by the check above) is now "completed". Every other refused
+  // code, and a still-not-completed run, is sticky exactly as before.
+  const reevaluate = existingChain?.status === "refused" && existingChain.code === REEVALUABLE_REFUSAL_CODE && run.status === "completed";
+  if (existingChain?.status === "refused" && !reevaluate) {
+    return { action: "already_decided", chain: existingChain };
+  }
+  // Falls through to re-decide. The refusal being superseded is carried forward (never silently
+  // dropped) onto whatever THIS pass decides, below.
+  const supersededRefusal: SupersededChainRefusal | undefined = reevaluate && existingChain?.status === "refused"
+    ? { code: existingChain.code, reason: existingChain.reason, refusedAt: existingChain.refusedAt, supersededAt: new Date().toISOString() }
+    : undefined;
+  // Generic over the specific member (not just `DuplicationChainState`) so callers keep the
+  // discriminant-narrowed type of the literal they passed in — e.g. still `.code`-accessible right
+  // after a call with a `{status:"refused",...}` literal, exactly as before this helper existed.
+  const withSupersededHistory = <T extends DuplicationChainState>(chain: T): T => {
+    if (!supersededRefusal) return chain;
+    const priorHistory = existingChain?.status === "refused" ? existingChain.supersededRefusals ?? [] : [];
+    return { ...chain, supersededRefusals: [...priorHistory, supersededRefusal].slice(-MAX_SUPERSEDED_CHAIN_REFUSALS) };
+  };
 
   // Read-modify-write against the FRESHEST persisted state (not the possibly-stale `run` a caller
   // handed in), the same reload-before-write discipline every other read-modify-write in this
@@ -142,7 +196,7 @@ export async function maybeChainCloneAfterCapture(run: WorkflowExecutionRecord, 
 
   if (run.status !== "completed") {
     const reason = `Capture run ${run.runId} did not reach a terminal SUCCESS state (status: "${run.status}"); a clone must never start against a partial or withheld capture snapshot. The chain is refused — the capture's own output is left exactly where the executor put it, and nothing here retried or proceeded past it.`;
-    const chain: DuplicationChainState = { status: "refused", code: "chain_capture_not_terminal_success", reason, refusedAt: new Date().toISOString() };
+    const chain: DuplicationChainState = withSupersededHistory({ status: "refused", code: "chain_capture_not_terminal_success", reason, refusedAt: new Date().toISOString() });
     return { action: "refused", code: chain.code, reason, captureRun: await persistChain(chain) };
   }
 
@@ -157,7 +211,7 @@ export async function maybeChainCloneAfterCapture(run: WorkflowExecutionRecord, 
     const entry = entryNodeReservationUsd(CLONE_CONDUCTOR_WORKFLOW_ID);
     if (remaining < entry.reservationUsd) {
       const reason = `The chain's shared budgetUsd ($${originalBudgetUsd}) has $${remaining} remaining after capture's own accrued spend ($${roundUsd(captureSpent)}) — below clone_conductor's entry-node reservation ($${entry.reservationUsd} for ${entry.nodeId}). Starting the clone would mint a run that could never dispatch its first node, so the chain refuses instead of silently double-spending capture's own budget on a run born blocked.`;
-      const chain: DuplicationChainState = { status: "refused", code: "chain_budget_exhausted", reason, refusedAt: new Date().toISOString() };
+      const chain: DuplicationChainState = withSupersededHistory({ status: "refused", code: "chain_budget_exhausted", reason, refusedAt: new Date().toISOString() });
       return { action: "refused", code: chain.code, reason, captureRun: await persistChain(chain) };
     }
     cloneBudgetUsd = remaining;
@@ -175,7 +229,7 @@ export async function maybeChainCloneAfterCapture(run: WorkflowExecutionRecord, 
     deps.workspaceRepository
   );
 
-  const chain: DuplicationChainState = { status: "started", cloneRunId: started.runId, startedAt: new Date().toISOString(), ...(cloneBudgetUsd !== undefined ? { budgetUsd: cloneBudgetUsd } : {}) };
+  const chain: DuplicationChainState = withSupersededHistory({ status: "started", cloneRunId: started.runId, startedAt: new Date().toISOString(), ...(cloneBudgetUsd !== undefined ? { budgetUsd: cloneBudgetUsd } : {}) });
   const captureRun = await persistChain(chain);
 
   // Deliberately NOT driven any further here — see this module's header. `started` is "queued",

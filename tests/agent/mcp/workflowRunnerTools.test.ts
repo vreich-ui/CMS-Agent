@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 import { resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
+import { RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS } from "../../../src/agent/mcp/workspace/tools.js";
+import { DETERMINISTIC_STAGE_MIN_TIMEOUT_MS } from "../../../src/agent/workspace/routeRegistry.js";
 
 // Drives the workflow runner through the real MCP endpoint (auth, JSON-RPC, tool dispatch) rather
 // than the executor in isolation, so the tool wiring and the state-advancement fix are exercised
@@ -93,6 +95,49 @@ describe("workflow runner MCP tools (end-to-end)", () => {
     const catalog = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const runNode = catalog.json.result.tools.find((tool: { name: string }) => tool.name === "workflow_run_node");
     expect(runNode.inputSchema.properties).not.toHaveProperty("dependencies");
+  });
+
+  // D9 — DRIVING A LONG NODE FROM AN MCP CLIENT USED TO ORPHAN IT. capture_crawl is a deterministic
+  // capture stage: its dispatch claims DETERMINISTIC_STAGE_MIN_TIMEOUT_MS (300s), and the whole of
+  // that claim is spent inside ONE synchronous workflow.run_* call — the driver's time budget is only
+  // checked BETWEEN advances and there is no abort on the outer request. The calling client's own
+  // request timeout (~180s) therefore reached the driver first, killed it mid-node, and left the node
+  // claimed with nobody behind it for timeoutMs + STALL_MARGIN_MS. The drivers now price the dispatch
+  // BEFORE starting it and refuse to own a claim past their ceiling — a named, non-advancing outcome,
+  // not an error, and not a wider claim window.
+  it("refuses to dispatch a node whose planned claim exceeds the in-request driver ceiling, and dispatches nothing", async () => {
+    const started = await call("workflow.start_dry_run", { executionMode: "mock", projectId: "platform", workflowId: "capture_conductor", input: { sourceUrl: "https://example.com/", targetProjectId: "platform" } });
+    const runId = started.data.run.runId as string;
+    expect(started.data.run.currentNodeId).toBe("capture_crawl");
+
+    const refused = await call("workflow.run_next_node", { runId });
+    expect(refused.data.driverRefusal).toMatchObject({
+      code: "dispatch_claim_exceeds_driver_ceiling",
+      nodeId: "capture_crawl",
+      plannedClaimMs: DETERMINISTIC_STAGE_MIN_TIMEOUT_MS,
+      ceilingMs: RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS
+    });
+    // The note has to be actionable on its own: which node, how wide its claim, and who drives it now.
+    expect(refused.data.driverNote).toContain("capture_crawl");
+    expect(refused.data.driverNote).toContain("continuation tick");
+
+    // NOTHING was dispatched — no claim stamped, no status moved. This is the assertion that separates
+    // a refusal from a failed dispatch: a stamped claim with no driver is the defect itself.
+    const after = (await call("workflow.get_run", { runId, detail: "full" })).data.run;
+    expect(nodeStatus(after, "capture_crawl")).toBe("queued");
+    expect(after.nodes.every((node: any) => node.dispatch === undefined)).toBe(true);
+    expect(after.errors).toEqual([]);
+
+    // Every in-request driver answers the same way; run_all still reports the run as one the
+    // continuation tick will carry (continued), rather than pretending it is finished.
+    const until = await call("workflow.run_until", { runId, nodeId: "capture_map" });
+    expect(until.data.driverRefusal.nodeId).toBe("capture_crawl");
+    const named = await call("workflow.run_node", { runId, nodeId: "capture_crawl" });
+    expect(named.data.driverRefusal.nodeId).toBe("capture_crawl");
+    expect(named.data.driverNote).toContain("the node you named");
+    const all = await call("workflow.run_all", { runId });
+    expect(all.data.driverRefusal.nodeId).toBe("capture_crawl");
+    expect(all.data.continued).toBe(true);
   });
 
   it("reset then resume does not restore any pre-reset completed node state", async () => {
