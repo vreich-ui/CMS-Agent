@@ -46,6 +46,21 @@ only Secret Manager secret NAMES and their pinned version alias.**
 | `DR_LURIE_MCP_TOKEN` | `dr-lurie-mcp-token` | `latest` |
 | `FERNWELL_MCP_TOKEN` | `fernwell-mcp-token` | `latest` |
 | `ZILBERMAN_MCP_TOKEN` | `zilberman-mcp-token` | `latest` |
+| `CAPTURE_PREVIEW_GITHUB_TOKEN` (conditional) | `capture-preview-github-token` | `latest` |
+
+**`CAPTURE_PREVIEW_GITHUB_TOKEN` is bound only when the secret exists.** It is the token
+`capture_score`'s draft-preview leg uses to dispatch the platform repo's `capture-preview` workflow
+and read the fidelity report back (`src/agent/workspace/capturePreviewDispatch.ts`). With no token
+the stage reports `capture_preview_not_configured` and scores exactly as it did before, so the
+binding is genuinely optional — and `deploy-continuation-tick.sh` asks Secret Manager rather than
+taking an operator flag, so the declared shape matches the live job in both directions whether the
+secret exists or not. **Do not set this by hand in the console:** an env var the script does not
+declare reads `(not declared)` in `--check` and counts as drift. Create the secret, then
+`APPLY=1 bash scripts/deploy-continuation-tick.sh`.
+
+The token is a GitHub fine-grained PAT scoped to `vreich-ui/platform` with **Actions: Read and
+write** (dispatch the workflow, list its runs and artifacts) and **Contents: Read and write** (write
+the four stage documents as git blobs and read the report blob back). Nothing else.
 
 ### IAM on the job
 
@@ -77,7 +92,14 @@ digest-pinned; cpu `1`, memory `1Gi`.
 - Secrets the service has and the job does NOT: `MCP_API_TOKEN`, `MCP_SCOPED_TOKENS_JSON`,
   `NETLIFY_API_TOKEN`, `PDF_TOOL_MCP_TOKEN`, `TRACKING_SINK_TOKEN`.
 - Secrets both bind: `OPENAI_API_KEY`, `PLATFORM_MCP_TOKEN`, `DR_LURIE_MCP_TOKEN`,
-  `FERNWELL_MCP_TOKEN`, `ZILBERMAN_MCP_TOKEN` — all `:latest`.
+  `FERNWELL_MCP_TOKEN`, `ZILBERMAN_MCP_TOKEN` — all `:latest`. Plus
+  `CAPTURE_PREVIEW_GITHUB_TOKEN` (W2.1/G6) on both planes once its secret exists: `capture_score`
+  can be advanced from either, so a token on only one would score a run's visual half depending on
+  which plane happened to pick the node up.
+- NOT covered by any deploy script: the `conductor-run` job (created by hand per
+  `docs/platform/PHASE1_RUNBOOK.md`). A capture run driven entirely by that job scores its structural
+  half normally and reports `capture_preview_not_configured` for the visual half until the same
+  binding is added there. Recorded rather than scripted — that job has no declared shape to keep.
 
 ## Findings (report only — not fixed here)
 

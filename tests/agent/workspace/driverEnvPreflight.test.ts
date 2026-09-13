@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { runContinuationTick } from "../../../src/agent/workspace/runContinuation.js";
-import { __resetDriverEnvLogForTests, logProjectEnvNamesOnce, preflightDriverEnv } from "../../../src/agent/workspace/driverEnvPreflight.js";
+import { __resetDriverEnvLogForTests, capturePreviewEnvLine, logProjectEnvNamesOnce, preflightDriverEnv } from "../../../src/agent/workspace/driverEnvPreflight.js";
 import { getRun, runNextNode, startDryRun } from "../../../src/agent/workspace/executor.js";
 import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
@@ -77,10 +77,41 @@ describe("driver env preflight", () => {
     const env = { PLATFORM_MCP_ENDPOINT: "https://secret.example/mcp?token=abc" };
     await logProjectEnvNamesOnce(repositoryManager.getProjectRepository(), env, (line) => lines.push(line));
     await logProjectEnvNamesOnce(repositoryManager.getProjectRepository(), env, (line) => lines.push(line));
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("PLATFORM_MCP_ENDPOINT");
-    expect(lines[0]).toContain("DR_LURIE_MCP_ENDPOINT");
-    expect(lines[0]).not.toContain("secret.example");
+    // Two lines on the first call (project env vars + W2.1/G6's capture-preview line), none on the
+    // second — "once per cold start" covers every line this function emits, not just the first.
+    expect(lines).toHaveLength(2);
+    const projectLine = lines.find((line) => line.includes("project env vars"))!;
+    expect(projectLine).toContain("PLATFORM_MCP_ENDPOINT");
+    expect(projectLine).toContain("DR_LURIE_MCP_ENDPOINT");
+    for (const line of lines) expect(line).not.toContain("secret.example");
+  });
+
+  // W2.1/G6 — capture_score's preview leg degrades silently by design, and the binding is PER-PLANE
+  // (the cms-agent-mcp service and the continuation-tick job bind it separately). "Configured on one
+  // plane, missing on the other" is therefore the realistic failure, and it is invisible in a run
+  // that happened to be advanced by the configured one. This line is how an operator sees it.
+  it("says on every cold start whether the capture-preview leg is wired on THIS plane, by name", async () => {
+    const absent = capturePreviewEnvLine({});
+    expect(absent).toContain("CAPTURE_PREVIEW_GITHUB_TOKEN absent");
+    expect(absent).toContain("capture_preview_not_configured");
+
+    const configured = capturePreviewEnvLine({
+      CAPTURE_PREVIEW_GITHUB_TOKEN: "ghp-a-real-secret-value",
+      CAPTURE_PREVIEW_REPOSITORY: "vreich-ui/platform"
+    } as NodeJS.ProcessEnv);
+    expect(configured).toContain("configured");
+    expect(configured).toContain("vreich-ui/platform");
+    expect(configured).toContain("capture-preview.yaml");
+    // Names and non-secret configuration only — the token value never reaches a log line.
+    expect(configured).not.toContain("ghp-a-real-secret-value");
+  });
+
+  it("emits the capture-preview line even when the project list cannot be read", async () => {
+    const lines: string[] = [];
+    const broken = { list: async () => { throw new Error("store unavailable"); } } as never;
+    await logProjectEnvNamesOnce(broken, {}, (line) => lines.push(line));
+    expect(lines.some((line) => line.includes("capture preview:"))).toBe(true);
+    expect(lines.some((line) => line.includes("could not enumerate project env vars"))).toBe(true);
   });
 
   it("stamps dispatch provenance (driver + projectEndpointConfigured) and keeps it after completion", async () => {

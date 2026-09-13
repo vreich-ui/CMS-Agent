@@ -68,6 +68,9 @@ PLATFORM_MCP_TOKEN_SECRET="${PLATFORM_MCP_TOKEN_SECRET:-platform-mcp-token}"
 DR_LURIE_MCP_TOKEN_SECRET="${DR_LURIE_MCP_TOKEN_SECRET:-dr-lurie-mcp-token}"
 FERNWELL_MCP_TOKEN_SECRET="${FERNWELL_MCP_TOKEN_SECRET:-fernwell-mcp-token}"
 ZILBERMAN_MCP_TOKEN_SECRET="${ZILBERMAN_MCP_TOKEN_SECRET:-zilberman-mcp-token}"
+# W2.1/G6 — the token capture_score uses to dispatch the platform repo's capture-preview workflow
+# and read its report back. OPTIONAL BY EXISTENCE, see the binding below.
+CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET="${CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET:-capture-preview-github-token}"
 
 APPLY="${APPLY:-}"
 
@@ -91,6 +94,32 @@ PLATFORM_MCP_TOKEN=$PLATFORM_MCP_TOKEN_SECRET:latest
 DR_LURIE_MCP_TOKEN=$DR_LURIE_MCP_TOKEN_SECRET:latest
 FERNWELL_MCP_TOKEN=$FERNWELL_MCP_TOKEN_SECRET:latest
 ZILBERMAN_MCP_TOKEN=$ZILBERMAN_MCP_TOKEN_SECRET:latest"
+
+# W2.1/G6 — CAPTURE_PREVIEW_GITHUB_TOKEN, bound ONLY WHEN THE SECRET EXISTS.
+#
+# capture_score's preview leg (capturePreviewDispatch.ts) dispatches the platform repo's
+# capture-preview workflow and reads the fidelity report back. With no token it degrades to a named
+# `capture_preview_not_configured` and the stage scores exactly as it did before — so the binding is
+# genuinely optional, and declaring it unconditionally would fail every deploy of this plane until
+# somebody happened to create the secret.
+#
+# THE SECRET'S EXISTENCE IS THE SWITCH, deliberately, and there is no operator flag to remember. The
+# --check above diffs the declared shape against the live job IN BOTH DIRECTIONS: a live binding this
+# script does not declare reads "(not declared)" and counts as drift. An opt-in variable would
+# therefore have to be re-supplied on every future invocation or the plane would start reporting
+# drift against itself — which is exactly the trap that makes hand-setting this in the console the
+# wrong move. Asking Secret Manager cannot go stale: create the secret and the next APPLY binds it,
+# delete it and the next APPLY unbinds it, and --check tells the truth either way.
+#
+# A NAME, NEVER A VALUE: this reads the secret's metadata only, like every other binding here.
+if gcloud secrets describe "$CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
+  SECRET_PAIRS="$SECRET_PAIRS
+CAPTURE_PREVIEW_GITHUB_TOKEN=$CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET:latest"
+else
+  say "· Secret \"$CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET\" does not exist in $PROJECT — capture_score's"
+  say "  draft-preview leg stays off and this job declares no CAPTURE_PREVIEW_GITHUB_TOKEN binding."
+  say "  Create the secret to turn it on; nothing else in this script changes."
+fi
 
 # bash 3.2 on macOS: no mapfile, no associative arrays, no ${var,,}.
 join_on() {

@@ -117,6 +117,21 @@ SECRET_PAIRS=(
   "NETLIFY_API_TOKEN=${NETLIFY_API_TOKEN_SECRET:-netlify-api-token}:latest"
 )
 
+# W2.1/G6 — CAPTURE_PREVIEW_GITHUB_TOKEN, bound ONLY WHEN THE SECRET EXISTS, exactly as
+# scripts/deploy-continuation-tick.sh binds it (that file carries the full reasoning). capture_score
+# can be advanced from either plane, so both need the token or a capture run scores its visual half
+# on whichever plane happens to pick the node up and not on the other.
+#
+# Optional by existence rather than by flag: with no token the stage reports
+# `capture_preview_not_configured` and scores as before, so an unconditional binding would fail this
+# deploy for every deployment that has not created the secret. A name is read, never a value.
+CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET="${CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET:-capture-preview-github-token}"
+if gcloud secrets describe "${CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET}" --project "${PROJECT}" >/dev/null 2>&1; then
+  SECRET_PAIRS+=("CAPTURE_PREVIEW_GITHUB_TOKEN=${CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET}:latest")
+else
+  printf '%s\n' "==> secret \"${CAPTURE_PREVIEW_GITHUB_TOKEN_SECRET}\" absent in ${PROJECT}; capture_score's draft-preview leg stays off."
+fi
+
 # gcloud splits list flags on commas, and MCP_ALLOWED_ORIGINS is itself a comma-separated list of
 # URLs. The ^delim^ prefix overrides the separator. "|" is safe; ":" is NOT, because every origin
 # contains "://" and gcloud would split mid-URL and reject the fragment.

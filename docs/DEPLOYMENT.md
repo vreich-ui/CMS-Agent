@@ -132,6 +132,7 @@ Complete inventory with file:line evidence, defaults and which artifact sets eac
 | `PROJECT_ID`, `EXECUTION_MODE`, `RUN_INPUT_JSON`, `RUN_INPUT_FILE`, `RESUME_RUN_ID`, `RUN_APPROVED`, `MAX_STEPS`, `RUN_BUDGET_USD` | conductor job | per-execution defaults (flags override) | `dr-lurie` / `openai` / … |
 | `CONVERSATION_ID`, `MIGRATE_PREFIX`, `MONETIZER_INGEST_*`, `TRACKING_PROJECT_ID`, `TRACKING_INGEST_*` | GC / migrate / ingest jobs | see the entrypoint headers | — |
 | `SITE_DUPLICATE_KICK_BUDGET_MS` | `workspace/runKick.ts` | in-call kick after `site.duplicate` | 60 000 |
+| `CAPTURE_PREVIEW_GITHUB_TOKEN` (secret), `CAPTURE_PREVIEW_REPOSITORY`, `CAPTURE_PREVIEW_WORKFLOW`, `CAPTURE_PREVIEW_REF`, `CAPTURE_PREVIEW_GITHUB_API_BASE_URL` | `workspace/capturePreviewDispatch.ts` | W2.1/G6 — `capture_score`'s draft-preview leg: dispatches the platform repo's `capture-preview` workflow and reads the fidelity report back. **The token is the switch**: unset, the stage reports `capture_preview_not_configured` and scores as before. Bound on the `cms-agent-mcp` service and the `continuation-tick` job whenever its Secret Manager secret exists (never by hand — an undeclared live env var is drift). Fine-grained PAT on `vreich-ui/platform`: Actions read/write + Contents read/write | — / `vreich-ui/platform` / `capture-preview.yaml` / `main` / api.github.com |
 
 ### 5.4 Tenant connections (dynamic names)
 

@@ -38,6 +38,7 @@ flowchart LR
 | Tenant MCP tokens (`<CLIENT>_MCP_TOKEN`) | Cloud Run env (secret binding) or Secret Manager version named by `tokenSecretRef` | env var NAME or resource NAME on the project record | Secret Manager version; 5-min in-process cache |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` | Cloud Run env (secret) | `modelConfig.apiKeyEnv` NAME | redeploy |
 | `NETLIFY_API_TOKEN` | Secret Manager | name | — |
+| `CAPTURE_PREVIEW_GITHUB_TOKEN` | Secret Manager `capture-preview-github-token` → Cloud Run env (service + `continuation-tick`, bound only when the secret exists) | name only | rotate the secret version; redeploy both planes |
 | Netlify Blobs credentials | Netlify runtime context (legacy) | — | — |
 | Plane identity for Secret Manager | GCE metadata server token (`secretManager.ts:planeAccessToken`) | — | automatic |
 
