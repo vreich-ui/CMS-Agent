@@ -5,16 +5,24 @@
 // here calls a tenant, mutates the workspace, or grants authority — see operationTypes.ts's header
 // for the same discipline this whole kernel shares.
 //
-// WHAT SiteContextSource IS EXPECTED TO BIND TO, LATER, AND BY WHOM: a later task (A6-A9) wires a
-// real implementation of this interface over the SAME tenant read calls sitePrefetch.ts and
-// contractPrefetch.ts already make deterministically (object_list, object_contract, and — for
-// registry-shaped reference data that is not itself a typed content object, e.g. visual_standard
-// listings, published PDF templates, image model policy contexts — the tenant's registry_get tool).
-// getRevisionId has NO confirmed live equivalent today: no tenant in this codebase exposes a single
-// "site revision" stamp the way this port's cache wants one. A later task may find one (a workspace
-// change-event cursor, a site object's own updatedAt) or may simply always return null — this module
-// stays correct either way because every cache lookup already falls back to the content digest when
-// the source reports no revision (see getSiteSnapshot below).
+// WHAT SiteContextSource IS EXPECTED TO BIND TO, LATER, AND BY WHOM: A6's executor
+// (visualIdentityReviewChangeExecutor.ts) consumes this port entirely through dependency injection
+// and still does not implement a live adapter — the real binding needs the SAME tenant read calls
+// sitePrefetch.ts and contractPrefetch.ts already make deterministically (object_list,
+// object_contract, and — for registry-shaped reference data that is not itself a typed content
+// object, e.g. visual_standard listings, published PDF templates, image model policy contexts — the
+// tenant's registry_get tool), which is Platform-side wiring out of this task's scope; see A6's
+// report for the precise adapter shape a follow-up task should build.
+// DECIDED (coordinator, A6): getRevisionId returns null, always. No tenant in this codebase exposes
+// a single "site revision" stamp, and none is being added — the SNAPSHOT'S OWN CONTENT DIGEST is the
+// authoritative staleness key, not a revision label. This is why every SiteContextObject below
+// carries the tenant's own `version` / `content_revision` fields verbatim (object_list's own wire
+// shape) rather than just `fields`: those two counters are part of the digest input precisely so an
+// object bumped elsewhere — by another run, another operator, another operation — invalidates a
+// change set (changeSet.ts's isChangeSetStale) even though nobody here ever reads a revision stamp.
+// Every cache lookup already falls back to the content digest when the source reports no revision
+// (see getSiteSnapshot below), so a real adapter that always returns null needs no special-casing
+// anywhere in this module — it already IS the only path this module exercises.
 import { contentDigest } from "./contentHash.js";
 
 // One object's current, tenant-side state as this snapshot saw it. Field names mirror the tenant's
