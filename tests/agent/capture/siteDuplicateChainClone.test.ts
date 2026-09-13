@@ -153,6 +153,65 @@ describe("maybeChainCloneAfterCapture", () => {
     }
   );
 
+  describe("D10 — a refusal caused by transient run state is re-evaluated once the run reaches a terminal success", () => {
+    it("refused while blocked, then the run completes -> the chain is re-evaluated and starts, carrying the prior refusal forward", async () => {
+      const store = repositoryManager.getExecutionRepository();
+      const capture = await buildCaptureRun({ status: "blocked" });
+
+      const firstOutcome = await maybeChainCloneAfterCapture(capture, chainDeps());
+      expect(firstOutcome.action).toBe("refused");
+      if (firstOutcome.action !== "refused") throw new Error("unreachable");
+      expect(firstOutcome.code).toBe("chain_capture_not_terminal_success");
+
+      // The capture run goes on to complete — e.g. an operator clears the gate and the
+      // run-continuation tick drives it home hours later. This is exactly the real incident this
+      // regression covers (zilberman run_1789034392364_o7bhnj: refused while blocked, completed
+      // ~23h afterward, clone never ran). The persisted request record's `chain` still says
+      // "refused" at this point — nothing here has re-evaluated it yet.
+      const blocked = (await getRun(capture.runId, store))!;
+      const completed = await store.saveRun({ ...blocked, status: "completed", updatedAt: new Date().toISOString() });
+
+      const secondOutcome = await maybeChainCloneAfterCapture(completed, chainDeps());
+      expect(secondOutcome.action).toBe("chained");
+      if (secondOutcome.action !== "chained") throw new Error("unreachable");
+
+      const persisted = await getRun(capture.runId, store);
+      const request = persisted!.stageOutputs[SITE_DUPLICATION_REQUEST_STAGE_KEY] as Record<string, unknown>;
+      const chain = request.chain as Record<string, unknown>;
+      expect(chain.status).toBe("started");
+      expect(chain.cloneRunId).toBe(secondOutcome.cloneRunId);
+
+      // The superseded refusal is never silently dropped — it is carried forward, named, onto the
+      // chain that now supersedes it (the same keep-not-erase convention as nodeAttemptHistory.ts's
+      // errorHistory[]).
+      const history = chain.supersededRefusals as Array<Record<string, unknown>>;
+      expect(history).toHaveLength(1);
+      expect(history[0].code).toBe("chain_capture_not_terminal_success");
+      expect(history[0].refusedAt).toBeTruthy();
+      expect(history[0].supersededAt).toBeTruthy();
+
+      const cloneRuns = await store.listRuns({ workflowId: CLONE_CONDUCTOR_WORKFLOW_ID });
+      expect(cloneRuns).toHaveLength(1);
+    });
+
+    it("a refusal for any OTHER reason (e.g. budget exhaustion) stays sticky even though the run is already terminal", async () => {
+      const capture = await buildCaptureRun({ status: "completed", budgetUsd: 0.15 });
+      await recordActualSpend(capture.runId, 0.14);
+
+      const first = await maybeChainCloneAfterCapture(capture, chainDeps());
+      expect(first.action).toBe("refused");
+      if (first.action !== "refused") throw new Error("unreachable");
+      expect(first.code).toBe("chain_budget_exhausted");
+
+      const reloaded = (await getRun(capture.runId, repositoryManager.getExecutionRepository()))!;
+      const second = await maybeChainCloneAfterCapture(reloaded, chainDeps());
+      expect(second.action).toBe("already_decided");
+
+      const cloneRuns = await repositoryManager.getExecutionRepository().listRuns({ workflowId: CLONE_CONDUCTOR_WORKFLOW_ID });
+      expect(cloneRuns).toHaveLength(0);
+    });
+  });
+
   it("does nothing to a capture run that is not yet halted (still parked mid-flight)", async () => {
     const capture = await buildCaptureRun({ status: "running" });
     const outcome = await maybeChainCloneAfterCapture(capture, chainDeps());

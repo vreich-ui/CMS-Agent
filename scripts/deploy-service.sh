@@ -56,6 +56,15 @@ MIN_INSTANCES="1"
 MAX_INSTANCES="4"
 PORT="8080"
 
+# The commit the deployed IMAGE was built from (KNOWN_ISSUES K-O2). Read off the image tag itself
+# rather than re-derived from `git rev-parse` in this checkout: both callers already tag the image
+# with the commit (cloudbuild.deploy.yaml's ${SHORT_SHA}, deploy-mcp.sh's IMAGE_TAG, which defaults
+# to the current commit but can be overridden to redeploy an older already-built image with
+# SKIP_BUILD=1) — using the tag stays truthful for that hand-deploy-of-an-older-image case, where
+# this checkout's HEAD would be the wrong answer. Falls back to "unknown" if IMAGE carries no tag.
+GIT_SHA="${IMAGE##*:}"
+[ "${GIT_SHA}" = "${IMAGE}" ] && GIT_SHA="unknown"
+
 # ── environment ─────────────────────────────────────────────────────────────
 # Every key a deploy is allowed to set. A key NOT listed here is never touched by a deploy, which is
 # the guarantee the publish-enabled flags depend on.
@@ -68,6 +77,10 @@ ENV_PAIRS=(
   "PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp"
   "PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp"
   "FERNWELL_MCP_ENDPOINT=https://kugel-fernwell.netlify.app/mcp"
+  # WHICH BUILD IS ANSWERING (KNOWN_ISSUES K-O2). Read by repository_get_health's planeBuildIdentity;
+  # both were null before this because nothing ever set them.
+  "SERVICE_GIT_SHA=${GIT_SHA}"
+  "SERVICE_DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   # Live on the service since before this file existed and named by NEITHER deploy artifact — a
   # fourth tenant configured entirely by hand. Merge-style flags are the only reason it survived
   # every deploy; a first deploy of a fresh service would simply not have had it, and one --set-*

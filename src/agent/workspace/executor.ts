@@ -854,20 +854,79 @@ export type RunStallInfo = {
 // later. Deferring that dispatch to the next tick costs the tick interval and nothing else.
 export const DISPATCH_DEADLINE_MARGIN_MS = 15_000;
 
+// D9 — WHICH DISPATCHES ACTUALLY TAKE THE DETERMINISTIC-STAGE CLAIM, named once.
+//
+// The condition lived only at the stamping site (the T14.4 block further down) and every other reader
+// of "how long will this dispatch claim" restated it — plannedNodeTimeoutMs restated it WIDER, as
+// `declaresDeterministicRoute`, which is every node carrying any DETERMINISTIC_ROUTE_METADATA_KEYS
+// flag. The DTC tail (placement_resolver, contract_intelligence, publish_payload,
+// publication_controller, publish_executor, learning_recorder, release_executor) carries those flags
+// and completes INLINE, above the claim block, with no claim stamped at all — so pricing it at the
+// 300s stage floor described a claim it never takes, and any driver refusing a dispatch on that price
+// would have refused the second node of every publishing run. One predicate, used by the stamping
+// site and by every driver that prices a dispatch before starting it.
+export const takesDeterministicStageClaim = (node: WorkspaceNode): boolean =>
+  readCaptureStage(node) !== undefined || readCloneStage(node) !== undefined || readArtifactMaterializer(node) || readVisualStandardMaterializer(node);
+
+// D9 — A STAGE CLAIM THE DRIVER NEVER HOLDS TO COMPLETION. `maxPollDispatches` is a node's own
+// declaration that its route does ONE bounded adopt/create/poll step per dispatch and then RETURNS,
+// re-queued, until the poll is terminal (artifactMaterialization.ts; the node is re-driven up to that
+// many times). For such a route the stamped stage window is a stall floor spread across many short
+// dispatches, not one long one — the driver is never the thing sitting inside it — so a per-request
+// driver can own it exactly as it owns a model claim. Read from the DECLARATION, not from
+// readMaxPollDispatches, whose default applies to every node and would make this vacuous.
+export const declaresBoundedPollDispatches = (node: WorkspaceNode): boolean => {
+  const declared = node.metadata?.maxPollDispatches;
+  return typeof declared === "number" && Number.isFinite(declared) && declared > 0;
+};
+
 // The timeout the NEXT dispatch of this run will claim — the serial node's own, or the widest in the
 // concurrent batch, resolved exactly as the dispatch path resolves it (nodeTimeoutMs, with the
-// deterministic-stage floor). Exported for the continuation tick's deadline check (T1.2), which must
+// deterministic-stage floor for the stages that actually claim it). Exported for the continuation
+// tick's deadline check (T1.2) and for the in-request drivers' claim ceiling (D9), both of which must
 // know how long a dispatch could take BEFORE it starts one. Pure read: nothing is claimed or saved.
-const plannedNodeTimeoutMs = (node: WorkspaceNode): number => (declaresDeterministicRoute(node) ? deterministicStageTimeoutMs(node) : nodeTimeoutMs(node));
+const plannedNodeTimeoutMs = (node: WorkspaceNode): number => (takesDeterministicStageClaim(node) ? deterministicStageTimeoutMs(node) : nodeTimeoutMs(node));
 
-export async function nextDispatchTimeoutMs(run: WorkflowExecutionRecord, workspaceRepository?: WorkspaceRepository): Promise<number | undefined> {
+// D9 — the same resolution as nextDispatchTimeoutMs, with the node the window belongs to. A driver
+// that refuses a dispatch has to NAME what it refused; returning only a number forced the caller to
+// either guess ("the next node") or re-resolve the graph itself. `willSkipBeforeDispatch` marks a head
+// the executor would skip rather than dispatch — it claims nothing, so a claim ceiling must not stop
+// on it.
+//
+// `claimKind` is the fact a NUMBER CANNOT CARRY, and leaving it out is what made the first cut of the
+// D9 guard refuse article_body: that node is an ordinary model dispatch whose own modelConfig.timeout
+// is 300000 — numerically identical to a capture stage's claim, structurally nothing like it.
+//   - "node_timeout": a MODEL dispatch. OpenAINodeRunner races the provider call against exactly this
+//     timeout, so the window is a BOUND: the node ends at it, the driver gets control back, and the
+//     result (or the timeout) is persisted. A driver can own this claim because something ends it.
+//   - "deterministic_stage": a capture/clone stage or the visual-standard materializer. Nothing races
+//     these — the executor awaits the route bare — so the stamped window is a stall-detection FLOOR
+//     over work that runs as long as it runs (capture_emit_live grew to 330-350 sequential round trips
+//     on zilberman). Nothing ends this claim on time, which is why an in-request driver must not take
+//     it on. A stage route that DECLARES maxPollDispatches (artifact_materializer) is excluded: it
+//     returns after one bounded step per dispatch, so its window is never held by one driver.
+export type DispatchClaimKind = "node_timeout" | "deterministic_stage";
+export type NextDispatchPlan = { nodeId: string; nodeIds: string[]; plannedTimeoutMs: number; claimKind: DispatchClaimKind; willSkipBeforeDispatch: boolean };
+
+export async function nextDispatchPlan(run: WorkflowExecutionRecord, workspaceRepository?: WorkspaceRepository): Promise<NextDispatchPlan | undefined> {
   if (HALTED_EXECUTION_STATUSES.has(run.status)) return undefined;
   const nodes = await resolveConductorNodes(workspaceRepository, run.workflowId);
   const nextNode = findNextRunnableNode(run, nodes);
   if (!nextNode) return undefined;
   const batch = selectConcurrentBatch(run, nodes, nextNode, undefined);
   const dispatched = batch.length > 1 ? batch : [nextNode];
-  return Math.max(...dispatched.map(plannedNodeTimeoutMs));
+  const widest = dispatched.reduce((widestSoFar, node) => (plannedNodeTimeoutMs(node) > plannedNodeTimeoutMs(widestSoFar) ? node : widestSoFar));
+  return {
+    nodeId: widest.id,
+    nodeIds: dispatched.map((node) => node.id),
+    plannedTimeoutMs: plannedNodeTimeoutMs(widest),
+    claimKind: takesDeterministicStageClaim(widest) && !declaresBoundedPollDispatches(widest) ? "deterministic_stage" : "node_timeout",
+    willSkipBeforeDispatch: dispatched.every((node) => wouldSkipBeforeDispatch(run, node))
+  };
+}
+
+export async function nextDispatchTimeoutMs(run: WorkflowExecutionRecord, workspaceRepository?: WorkspaceRepository): Promise<number | undefined> {
+  return (await nextDispatchPlan(run, workspaceRepository))?.plannedTimeoutMs;
 }
 
 // W0 T0.4 — measured per-node p95 durations (nodeTimings.aggregateNodeTimingsByNode), supplied by the
@@ -2834,7 +2893,7 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
   // state.status/startedAt are already "running" by this point, which is what assessRunStall matches
   // on together with the dispatch stamp. Every terminal path out of both branches deletes it again
   // (the capture "pending" re-queue already did), so no branch can leave a lease-shaped ghost behind.
-  if (claim && (readCaptureStage(nextNode) !== undefined || readCloneStage(nextNode) !== undefined || readArtifactMaterializer(nextNode) || readVisualStandardMaterializer(nextNode))) {
+  if (claim && takesDeterministicStageClaim(nextNode)) {
     stampDispatch(state, startedAt, deterministicStageTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
     run = await store.saveRun(run);
     state = stateById(run).get(nextNode.id) as NodeExecutionState;
