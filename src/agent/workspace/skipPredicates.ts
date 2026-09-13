@@ -35,7 +35,7 @@
 // EXPLICIT declaration on the run (a field someone set) or a STRUCTURAL fact of an upstream artifact
 // (a client object that contains no media reference at all). A run whose input declares nothing gets
 // the full pipeline, exactly as it does today.
-import { readDeclaredContentClass } from "./publicationController.js";
+import { readContentHalt, readDeclaredContentClass } from "./publicationController.js";
 import { isAuthoritativeEconomicStop, type EconomicDecision } from "./economicDecision.js";
 import { gatedMetadata } from "./nodeGatingSeed.js";
 
@@ -112,10 +112,28 @@ export type SkipPredicate =
   // (operator, 2026-09-08) expectedCommission is 0 on every money run, so a naive `verdict === "block"`
   // predicate would stop EVERY money-class run the moment it deployed. The asymmetry is the argument:
   // a wrong stop costs a silently unwritten article, a wrong run costs a few dollars.
-  | { when: "ev_floor_blocked"; reason?: string };
+  | { when: "ev_floor_blocked"; reason?: string }
+  // B4 (2026-09-13) — CONDITIONAL ENGAGEMENT, off F8. On proof run run_1789303857536_obd2fd
+  // draft_writer returned draftStatus:"blocked" with four blockers, and the conductor then dispatched
+  // four reviewers, review_aggregator, contract_intelligence and artifact_plan anyway — roughly $0.8
+  // spent reviewing, aggregating and planning artifacts for a draft that does not exist. Nothing
+  // downstream of a blocked draft has an input; every one of those nodes was reviewing a shell.
+  //
+  // Fires ONLY on the writer's own POSITIVE declaration, read from `draft_writer`'s stage output BY
+  // NAME (never "any carrier with a blockers array" — trust_factual's own blockers must not skip the
+  // aggregator that is supposed to read them). draftStatus "blocked", or a non-empty blockers array:
+  // the writer's schema requires blockers on a blocked draft, so either alone is the writer saying it
+  // produced no usable copy. An absent, unreadable or mock draft_writer output RUNS the node (rule 3).
+  | { when: "draft_blocked"; reason?: string }
+  // B4 — the same rule one stage earlier. research declaring evidenceStatus:"unavailable" means the
+  // evidence this piece needs cannot be obtained AT ALL, and its schema requires a blocker alongside
+  // it. Writing, reviewing and planning artifacts for a piece with no obtainable evidence produces a
+  // draft nobody can publish, at full price. "partial" and "not_needed" are working answers and never
+  // fire this; absent/unreadable research RUNS the node (rule 3).
+  | { when: "research_unavailable"; reason?: string };
 
 export type SkipPredicateKind = SkipPredicate["when"];
-export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks", "clone_no_actionable_mismatches", "clone_demand_driven_entry", "clone_no_pdf_template_entries", "ev_floor_blocked"];
+export const SKIP_PREDICATE_KINDS: readonly SkipPredicateKind[] = ["content_class_in", "no_media_slots", "no_external_claims", "review_tier_excludes", "capture_rights_allow_extracted_copy", "capture_no_declined_blocks", "clone_no_actionable_mismatches", "clone_demand_driven_entry", "clone_no_pdf_template_entries", "ev_floor_blocked", "draft_blocked", "research_unavailable"];
 
 // The predicate whose firing is a RUN HALT, not a node skip. Exported so executor.ts names the same
 // constant this file defines rather than a string literal that could drift from it.
@@ -514,6 +532,38 @@ function evaluateEvFloorBlocked(predicate: Extract<SkipPredicate, { when: "ev_fl
 }
 
 // ---------------------------------------------------------------------------------------------
+// Predicates 11 + 12 — conditional engagement (B4, 2026-09-13).
+//
+// Both read ONE named upstream stage output rather than "any carrier", because the fact they need is
+// authored by exactly one node and a same-shaped field elsewhere would be a different claim. Both
+// require a POSITIVE declaration and resolve every other state toward running (rule 3), and neither
+// ever fires on a mock placeholder.
+//
+// WHY THESE ARE PLAIN SKIPS AND NOT A RUN HALT (unlike ev_floor_blocked). publication_controller must
+// still run: a blocked draft has to reach a recorded, classified decision with the writer's own
+// blockers carried into it, or the run ends looking like an engine failure instead of like content
+// that could not honestly be written. "Satisfied with absent" is exactly the right downstream
+// semantics here — the controller collects blockers from every completed upstream output, and the
+// skipped nodes contribute nothing rather than contributing a fiction.
+// Both read the SAME reading publicationController.buildContentHaltDecision explains the run with
+// (readContentHalt) — one definition of "this run has nothing to work on", so a node can never be
+// skipped for a halt the controller then fails to mention, or vice versa. The import runs one way:
+// this module already depends on publicationController, never the reverse.
+const haltVerdict = (predicate: SkipPredicate, context: SkipEvaluationContext, cause: "draft_blocked" | "research_unavailable", sourceNodeId: string, running: string): SkipVerdict => {
+  const halt = readContentHalt(context.stageOutputs ?? {});
+  const declared = (context.stageOutputs ?? {})[sourceNodeId];
+  const basis = [`${sourceNodeId}: ${declared === undefined ? "absent" : isPlaceholder(declared) ? "mock placeholder (dryRun) — not evidence" : "present"}`, `contentHalt: ${halt ? `${halt.cause} (${halt.nodeId})` : "none"}`];
+  if (halt?.cause !== cause) return { skip: false, predicate, reason: `${context.nodeId} runs: ${running}`, basis, warnings: [] };
+  return { skip: true, predicate, reason: predicate.reason ?? `${context.nodeId} skipped: ${halt.detail}${halt.blockers.length ? ` Blockers: ${halt.blockers.join("; ")}.` : ""} Nothing this node could produce would be publishable, and publication_controller records the halt with these blockers.`, basis, warnings: [] };
+};
+
+const evaluateDraftBlocked = (predicate: Extract<SkipPredicate, { when: "draft_blocked" }>, context: SkipEvaluationContext): SkipVerdict =>
+  haltVerdict(predicate, context, "draft_blocked", "draft_writer", "draft_writer has not declared the draft blocked, so a draft exists to work on (an absent, unreadable or mock output is never evidence of absence).");
+
+const evaluateResearchUnavailable = (predicate: Extract<SkipPredicate, { when: "research_unavailable" }>, context: SkipEvaluationContext): SkipVerdict =>
+  haltVerdict(predicate, context, "research_unavailable", "research", 'research has not declared evidenceStatus "unavailable" — including on a run where research was itself skipped, which is a decision that it was not needed, never that evidence could not be found.');
+
+// ---------------------------------------------------------------------------------------------
 // Metadata parsing. `skipWhen` accepts a single predicate or an array of them; an array means OR
 // (the first predicate that fires skips the node), which is the only composition rule worth having
 // while predicates are this few — AND would let two half-true conditions add up to a skip nobody
@@ -549,6 +599,8 @@ const evaluatePredicate = (predicate: SkipPredicate, context: SkipEvaluationCont
     case "clone_demand_driven_entry": return evaluateCloneDemandDrivenEntry(predicate, context);
     case "clone_no_pdf_template_entries": return evaluateCloneNoPdfTemplateEntries(predicate, context);
     case "ev_floor_blocked": return evaluateEvFloorBlocked(predicate, context);
+    case "draft_blocked": return evaluateDraftBlocked(predicate, context);
+    case "research_unavailable": return evaluateResearchUnavailable(predicate, context);
     default: {
       // Unreachable through readSkipPredicates; kept because an unrecognized rule must be inert
       // rather than throwing inside a dispatch path.

@@ -9,6 +9,7 @@ import { getBlobJson, getCmsAgentBlobStore } from "../repository/blobs/blobClien
 import type { ExecutionArtifact } from "../workspace/executionTypes.js";
 import type { ToolDefinition } from "./toolTypes.js";
 import { coerceJsonObjectInput } from "./jsonCoercion.js";
+import { DEFAULT_FETCH_MAX_CHARS, MAX_FETCH_MAX_CHARS, readableFetchBody } from "./readableHtml.js";
 import { computeEvFloor, type RunCostBasis } from "../workspace/evFloor.js";
 import { getRunCostEstimate } from "../workspace/costPrefetch.js";
 import { listWorkspaceNodes } from "../workspace/nodes.js";
@@ -63,10 +64,14 @@ const learningObservationInput = z.object({
   observation: z.string().trim().min(1),
   metadata: z.preprocess((value) => typeof value === "string" ? coerceJsonObjectInput(value) : value, anyObj.optional())
 });
+// B3 — maxChars is optional and bounded by the tool, not by the caller's arithmetic: a model that
+// asks for 500 000 gets MAX_FETCH_MAX_CHARS, not a context overflow. Not .strict(): an extra key from
+// a model turn is stripped rather than failing the call, matching learningObservationInput above.
+const webFetchInput = z.object({ url: z.string().url(), maxChars: z.coerce.number().int().positive().optional() });
 const getRunArtifacts = async (rid: string) => [...(await repositoryManager.getArtifactRepository().listArtifacts(rid)), ...(memoryArtifacts.get(rid) ?? [])];
 const saveArtifact = (runId: string, artifact: ExecutionArtifact) => memoryArtifacts.set(runId, [...(memoryArtifacts.get(runId) ?? []), artifact]);
 
-async function safeFetch(urlText: string, timeoutMs: number) {
+async function safeFetch(urlText: string, timeoutMs: number, maxChars: number = DEFAULT_FETCH_MAX_CHARS) {
   const url = new URL(urlText);
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("url_protocol_not_allowed");
   if (["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(url.hostname) || /(^10\.)|(^192\.168\.)|(^172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname)) throw new Error("private_url_blocked");
@@ -81,8 +86,12 @@ async function safeFetch(urlText: string, timeoutMs: number) {
     const type = res.headers.get("content-type") ?? "";
     if (!/text|json|html|xml/.test(type)) throw new Error("content_type_not_allowed");
     const max = Number(process.env.WEB_RESPONSE_SIZE_LIMIT_BYTES ?? 250000);
-    const text = (await res.text()).slice(0, max);
-    return { status: res.status, contentType: type, url: res.url, text, truncated: text.length >= max };
+    const raw = (await res.text()).slice(0, max);
+    // B3 — what the model reads is the page's main text, not 250 000 characters of script and nav.
+    // Provenance (status, contentType, the RESOLVED url after redirects) stays on the record exactly
+    // as before; `sourceTruncated` keeps the old wire-level truncation flag distinguishable from
+    // `truncated`, which is now about the maxChars ceiling on the extracted text.
+    return { status: res.status, contentType: type, url: res.url, sourceTruncated: raw.length >= max, ...readableFetchBody(raw, type, maxChars) };
   } catch (e) { if (e instanceof Error && e.name === "AbortError") throw new Error("tool_timeout"); throw e; } finally { clearTimeout(timer); }
 }
 
@@ -167,7 +176,12 @@ export function createToolRegistry(): ToolDefinition[] {
     // tight for a workspace write reached at the end of a model turn; still well under the node's own
     // dispatch timeout (learning_recorder's modelConfig.timeout is 300000ms, nodes.ts).
     makeTool({ toolId:"learning.record_observation", name:"learning.record_observation", description:"Record observation. Stamped with the recording run/node's id and the run's CMS-Agent projectId. Extra fields (e.g. an echoed nodeId/runId/projectId) are ignored, not rejected — provenance always comes from the execution context.", inputSchema:learningObservationInput, outputSchema:schema, riskLevel:"write", sideEffect:"workspace_write", requiresApproval:false, timeoutMs:8000, category:"learning", enabled:true, metadata:{}, handler: async (i,c) => { const d=learningObservationInput.parse(i); return ok({ observation: await ws.recordObservation(d.observation,d.metadata,{ runId:c.runId, nodeId:c.nodeId, projectId:c.projectId }) }); } }),
-    makeTool({ toolId:"web.fetch", name:"web.fetch", description:"Fetch text from a validated public URL.", inputSchema:z.object({ url:z.string().url() }).strict(), outputSchema:schema, riskLevel:"read", sideEffect:"external_read", requiresApproval:false, timeoutMs:8000, category:"web", enabled:true, metadata:{ providerEnvVar:"WEB_PROVIDER" }, handler: async (i) => ok({ response: await safeFetch(z.object({url:z.string().url()}).parse(i).url, 8000) }) }),
+    // B3 — the response carries the page's MAIN TEXT (scripts, nav, header/footer, forms and asides
+    // removed), capped at maxChars, plus title/canonicalUrl/publishedAt when the page declares them.
+    // JSON and plain text are passed through untouched — those are already the payload. `extraction`
+    // says which happened, and `rawChars` says how much was left out, so a model can tell "this page
+    // is short" from "this page was trimmed".
+    makeTool({ toolId:"web.fetch", name:"web.fetch", description:`Fetch a validated public URL and return its READABLE main text: scripts, styles, nav, header/footer, forms and asides removed, capped at maxChars (default ${DEFAULT_FETCH_MAX_CHARS}, ceiling ${MAX_FETCH_MAX_CHARS}). Also returns title, canonicalUrl and publishedAt when the page declares them, plus extraction ("readable" or "raw") and rawChars (the pre-extraction size). JSON/plain-text responses are returned as fetched. Raise maxChars only when a page was truncated and the missing part matters.`, inputSchema:webFetchInput, outputSchema:schema, riskLevel:"read", sideEffect:"external_read", requiresApproval:false, timeoutMs:8000, category:"web", enabled:true, metadata:{ providerEnvVar:"WEB_PROVIDER" }, handler: async (i) => { const d = webFetchInput.parse(i); return ok({ response: await safeFetch(d.url, 8000, d.maxChars ?? DEFAULT_FETCH_MAX_CHARS) }); } }),
     makeTool({ toolId:"web.search", name:"web.search", description:"Provider-backed web search.", inputSchema:z.object({ query:z.string().min(1) }).strict(), outputSchema:schema, riskLevel:"read", sideEffect:"external_read", requiresApproval:false, timeoutMs:8000, category:"web", enabled:true, metadata:{}, handler: async (i) => ok({ provider: process.env.WEB_PROVIDER ?? "disabled", results: [], query: z.object({query:z.string()}).parse(i).query }) }),
     ...["file.list","file.get_metadata","file.read_text","file.save_text","file.delete"].map((name) => makeTool({ toolId:name, name, description:"Workspace-managed file operation backed by artifacts.", inputSchema:z.object({ path:safeKey.optional(), text:z.string().optional() }).strict(), outputSchema:schema, riskLevel:name.includes("save")||name.includes("delete")?"write":"read", sideEffect:name.includes("save")||name.includes("delete")?"workspace_write":"none", requiresApproval:name.includes("save")||name.includes("delete"), timeoutMs:2000, category:"files", enabled:true, metadata:{}, handler: async (i,c) => { const d=z.object({path:safeKey.optional(),text:z.string().optional()}).parse(i); if (d.path) assertPrefix(`agent-tools/files/${d.path}`); const arts=await getRunArtifacts(c.runId); if (name==="file.list") return ok({ files: arts.filter(a=>a.type==="file.text").map(a=>({ path:a.id, createdAt:a.createdAt })) }); if (name==="file.save_text") { const a={id:d.path!,nodeId:c.nodeId,type:"file.text",value:d.text??"",createdAt:new Date().toISOString()}; saveArtifact(c.runId,a); return ok({ saved:true, file:a }); } const found=arts.find(a=>a.id===d.path); if (name==="file.delete") return ok({ deleted:Boolean(found) }); return ok(name==="file.get_metadata" ? { metadata: found ? { path:found.id, type:found.type, createdAt:found.createdAt } : null } : { text: typeof found?.value === "string" ? found.value : null }); } })),
     ...["artifact.list","artifact.get","artifact.save_json","artifact.save_text"].map((name) => makeTool({ toolId:name, name, description:"Run artifact operation.", inputSchema:z.object({ artifactId:z.string().optional(), value:z.unknown().optional(), text:z.string().optional(), type:z.string().optional() }).strict(), outputSchema:schema, riskLevel:name.includes("save")?"write":"read", sideEffect:name.includes("save")?"workspace_write":"none", requiresApproval:name.includes("save"), timeoutMs:2000, category:"artifacts", enabled:true, metadata:{}, handler: async (i,c) => { const d=z.object({artifactId:z.string().optional(),value:z.unknown().optional(),text:z.string().optional(),type:z.string().optional()}).parse(i); const arts=await getRunArtifacts(c.runId); if (name==="artifact.list") return ok({ artifacts: arts }); if (name==="artifact.get") return ok({ artifact: arts.find(a=>a.id===d.artifactId) ?? null }); const a={ id:d.artifactId ?? artifactId(), nodeId:c.nodeId, type:d.type ?? (name.endsWith("text")?"text":"json"), value:name.endsWith("text")?d.text:d.value, createdAt:new Date().toISOString() }; saveArtifact(c.runId,a); return ok({ artifact:a }); } })),

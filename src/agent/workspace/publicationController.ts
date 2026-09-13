@@ -341,6 +341,93 @@ export function buildPublicationDecision(params: {
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// B4 (2026-09-13) — THE CONTENT HALT, read in one place.
+//
+// Two upstream declarations mean the same thing: this run has no publishable content and no further
+// stage can change that. research declaring evidenceStatus "unavailable" (the evidence cannot be
+// obtained at all), and draft_writer declaring draftStatus "blocked" or carrying blockers (no usable
+// copy was written). Both are POSITIVE statements by the node that owns the fact, both are required
+// by that node's own schema to arrive with a blocker beside them.
+//
+// This lives HERE rather than in skipPredicates.ts because both callers need the identical reading
+// and the import can only run one way: skipPredicates already imports this module (for
+// readDeclaredContentClass), so this module must never import skipPredicates. One definition, read by
+// the predicates that skip the doomed stages and by the controller that has to explain the outcome.
+export type ContentHaltCause = "draft_blocked" | "research_unavailable";
+export type ContentHalt = { cause: ContentHaltCause; nodeId: string; detail: string; blockers: string[] };
+
+const haltBlockers = (output: Record<string, unknown>): string[] => (Array.isArray(output.blockers) ? output.blockers : []).filter(nonEmptyString).map((entry) => entry.trim());
+// A mock placeholder is never evidence that something real is absent (the same rule skipPredicates
+// applies to every carrier it reads).
+const haltCandidate = (value: unknown): Record<string, unknown> | undefined => (isObject(value) && value.dryRun !== true ? value : undefined);
+const declaredStatus = (output: Record<string, unknown>, key: string): string | undefined => (nonEmptyString(output[key]) ? (output[key] as string).trim().toLowerCase() : undefined);
+
+/**
+ * The halt this run is under, or undefined. Read in stage order — research first, because a run whose
+ * evidence was unobtainable and whose draft then blocked is describing ONE cause, and the earlier one
+ * is the actionable one.
+ */
+export function readContentHalt(stageOutputs: Record<string, unknown> | undefined): ContentHalt | undefined {
+  const research = haltCandidate(stageOutputs?.research);
+  if (research && declaredStatus(research, "evidenceStatus") === "unavailable") {
+    return { cause: "research_unavailable", nodeId: "research", detail: 'research reported evidenceStatus "unavailable": the evidence this piece needs could not be obtained.', blockers: haltBlockers(research) };
+  }
+  const draft = haltCandidate(stageOutputs?.draft_writer);
+  if (draft) {
+    const status = declaredStatus(draft, "draftStatus");
+    const blockers = haltBlockers(draft);
+    // "blocked" is the writer saying so. Blockers WITHOUT a status is the same statement from a
+    // writer whose status field did not survive (the handoff contract's own worry: "a refusal written
+    // only in summary, notes, or an unrecognized status field does not reach the publication
+    // controller"). But "ready" WITH blockers is a CONTRADICTION — the writer's schema forbids that
+    // pairing — and a contradiction is uncertainty, which resolves toward running (skipPredicates
+    // rule 3). Those blockers still reach this controller through collectSourcedBlockers and still
+    // block the publish; they just do not silently cancel the rest of the pipeline.
+    if (status === "blocked" || (status === undefined && blockers.length > 0)) {
+      return { cause: "draft_blocked", nodeId: "draft_writer", detail: `draft_writer reported the draft ${status === "blocked" ? "blocked" : "carrying unresolved blockers and no status"}: no usable reader-visible copy was produced.`, blockers };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The decision for a run that was halted upstream. Built WITHOUT the readiness checklist on purpose:
+ * there is no article body to run a checklist against, and there was never going to be one — saying
+ * "media_artifacts_verified: fail" about a piece nobody wrote would be a checklist reporting the
+ * wrong thing. What the operator needs is the writer's own reasons and the node to go back to.
+ *
+ * Always "blocked", never "no_go" ("the project's policy said no") and never anything a gate reads as
+ * permission: this path can only ever refuse.
+ */
+export function buildContentHaltDecision(params: { halt: ContentHalt; clientProjectId: string; contentClass: string; upstreamBlockers: SourcedBlocker[] }): PublicationDecisionOutput {
+  const { halt, clientProjectId, contentClass } = params;
+  const { blocking, waived, advisory } = partitionBlockers(params.upstreamBlockers, contentClass, []);
+  const carried = blocking.map(describeBlocker);
+  // The halting node's own reasons come first even if blocker classification demoted or deduplicated
+  // them: this decision exists to state WHY nothing was written.
+  const blockers = [`${halt.cause}: ${halt.detail}`, ...halt.blockers.map((entry) => `${halt.nodeId}: ${entry}`).filter((line) => !carried.includes(line)), ...carried];
+  return {
+    artifact: PUBLICATION_DECISION_ARTIFACT,
+    summary: `Deterministic publication decision for ${clientProjectId}: blocked — the run was halted at ${halt.nodeId} (${halt.cause}) and no article body was built. ${blockers.length} blocker(s) carried, content class ${contentClass}. No model call.`,
+    decision: "blocked",
+    state: "blocked_for_publish_execution",
+    blockers,
+    waivedBlockers: waived,
+    advisories: advisory,
+    contentClass,
+    checklist: [{ key: "content_produced", label: "A publishable draft was produced", status: "fail", detail: halt.detail }],
+    nextAction: `No publish is possible for ${clientProjectId} on this run: ${halt.detail} Revise the brief (or supply the evidence) and retry from ${halt.nodeId}; every stage after it was deliberately skipped, so nothing downstream needs undoing.`,
+    notes: [
+      `Decision computed deterministically by the conductor (publicationController.ts) from an upstream content halt. No readiness checklist was run: there is no article body to check, by design. No model call.`,
+      `Halt cause: ${halt.cause}, declared by ${halt.nodeId}.`,
+      ...(halt.blockers.length ? [`${halt.nodeId} blockers: ${halt.blockers.join(" | ")}`] : [`${halt.nodeId} declared the halt without blocker text.`]),
+      ...(carried.length ? [`Other upstream INTEGRITY blockers carried into this decision: ${carried.join(" | ")}`] : []),
+      ...(advisory.length ? [`Advisory (editorial, non-gating): ${advisory.map(describeBlocker).join(" | ")}`] : [])
+    ]
+  };
+}
+
 export type PublicationControllerSources = {
   projectId: string;
   clientProjectId: string;
@@ -385,6 +472,26 @@ async function readHardBlockerSources(projectId: string, deps: PublicationContro
 // deterministic decision would have to be invented, so the caller's single decision stays "use it, or
 // fall through to the model path".
 export async function runDeterministicPublicationController(sources: PublicationControllerSources, deps: PublicationControllerDeps = {}): Promise<PublicationControllerResult> {
+  const stageOutputMap = Object.fromEntries(sources.stageOutputs.map((entry) => [entry.nodeId, entry.output]));
+  // B4 — the halt branch, BEFORE the readiness policy. A run whose draft was blocked (or whose
+  // evidence was unobtainable) has no article_body, because article_body was deliberately skipped;
+  // handing that absence to a readiness policy produces either an unavailable verdict — which drops
+  // the whole decision onto the model path, paying a model to restate a refusal the engine already
+  // knows — or a checklist about media in a piece nobody wrote. Decided here instead, at $0, with the
+  // writer's own reasons carried. This can only ever emit "blocked", so it opens no gate.
+  const halt = readContentHalt(stageOutputMap);
+  if (halt && sources.articleBody === undefined) {
+    return {
+      ok: true,
+      decision: buildContentHaltDecision({
+        halt,
+        clientProjectId: sources.clientProjectId,
+        contentClass: readContentClass(...sources.contentClassCarriers),
+        upstreamBlockers: collectSourcedBlockers(sources.stageOutputs)
+      })
+    };
+  }
+
   // The readiness function resolves the body from a runId when none is supplied; the conductor hands
   // it the in-memory article_body stage output instead, so the decision is computed from what THIS
   // dispatch is holding and no repository read can hand back a staler record.
@@ -392,7 +499,7 @@ export async function runDeterministicPublicationController(sources: Publication
     projectId: sources.projectId,
     articleBody: sources.articleBody,
     // S3 item 7: the readiness content checks read brief_architect.mediaSlots and upstream blockers.
-    stageOutputs: Object.fromEntries(sources.stageOutputs.map((entry) => [entry.nodeId, entry.output]))
+    stageOutputs: stageOutputMap
   });
   if (!evaluated.available || !evaluated.readiness) {
     return {
