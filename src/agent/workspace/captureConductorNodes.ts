@@ -248,10 +248,10 @@ export const captureConductorNodes = [
     id: "capture_score",
     name: "Capture Fidelity Scorer",
     kind: "scoring",
-    description: "Deterministic governed-rubric fidelity scoring (vendored score.mjs): mapped-block coverage against the policy rubric, theme completeness, gap enumeration, and visual evidence that explains but never authorizes.",
-    prompt: `Objective: score the refined mapping + theme against the target project's coverage rubric (policy override or the ratified default) and consolidate the residual gap report.\nOutput required: capture_fidelity.v1 envelope {artifact, summary, rubric, report, policy}.\n${DETERMINISTIC_PROMPT_FOOTER}`,
+    description: "Deterministic governed-rubric fidelity scoring (vendored score.mjs): mapped-block coverage against the policy rubric, theme completeness, gap enumeration, and visual evidence that explains but never authorizes. The visual half is rendered and diffed by the platform repo's capture-preview CI job (W2.1/G6) and collected across advances; when it cannot be, the stage still scores and says so.",
+    prompt: `Objective: score the refined mapping + theme against the target project's coverage rubric (policy override or the ratified default) and consolidate the residual gap report.\nOutput required: capture_fidelity.v1 envelope {artifact, summary, rubric, report, visualEvidence, policy}.\n${DETERMINISTIC_PROMPT_FOOTER}`,
     inputSchema: openInput,
-    outputSchema: envelopeSchema("capture_fidelity.v1", { rubric: { type: "object" }, report: { type: "object" }, policy: { type: "object" } }),
+    outputSchema: envelopeSchema("capture_fidelity.v1", { rubric: { type: "object" }, report: { type: "object" }, visualEvidence: { type: "object" }, capturePreview: { type: "object" }, policy: { type: "object" } }),
     allowedTools: ["capture.score", "stage.get_output", "stage.list_outputs"],
     assignedSkills: [],
     requiredInputs: ["capture_crawl", "capture_map_refine", "capture_theme"],
@@ -269,7 +269,7 @@ export const captureConductorNodes = [
     name: "Gap Adjudicator (AI judgment 3 of 3)",
     kind: "judgment",
     description: "Turns the fidelity report's residual gaps into adjudicated W10 evidence-feed entries plus the run report's human summary. Judgment only — it changes no artifact and can reach no external system.",
-    prompt: `Objective: adjudicate EACH residual gap in capture_score's gap report: classify it (capability_backlog | source_quality | policy_boundary | needs_human_review), recommend the single most useful next action, and write a short human summary of the whole run for the operator reading the report.\nInputs expected: capture_score's envelope (rubric + report.gapReport).\nOutput required: gap_adjudication.v1 {artifact, summary, adjudications: [{gapId, disposition, recommendation}], humanSummary}. Adjudicate only gaps that exist in the report; never invent gapIds.\nBlocker criteria: no fidelity report in your input.\n${AI_SAFETY_FOOTER}`,
+    prompt: `Objective: adjudicate EACH residual gap in capture_score's gap report: classify it (capability_backlog | source_quality | policy_boundary | needs_human_review), recommend the single most useful next action, and write a short human summary of the whole run for the operator reading the report.\nInputs expected: capture_score's envelope (rubric + report.gapReport + visualEvidence).\nVisual evidence: the envelope's visualEvidence block states whether the run's screenshot evidence is complete. When visualEvidence.evidenceComplete is false, say so in the human summary in the report's OWN words \u2014 quote visualEvidence.warning and name visualEvidence.dominantReason \u2014 and never soften it into 'the visual comparison could not be completed': the evidence is missing, which is a defect the run must carry, not a transient tooling failure. A missing comparison lowers no bar and passes no verdict; do not let it change your reading of the rubric.\nOutput required: gap_adjudication.v1 {artifact, summary, adjudications: [{gapId, disposition, recommendation}], humanSummary}. Adjudicate only gaps that exist in the report; never invent gapIds.\nBlocker criteria: no fidelity report in your input.\n${AI_SAFETY_FOOTER}`,
     inputSchema: openInput,
     outputSchema: envelopeSchema("gap_adjudication.v1", {
       adjudications: {

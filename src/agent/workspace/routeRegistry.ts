@@ -300,7 +300,12 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
         { verb: "object_checkin", risk: "write", description: "Release the reuse lock." },
         { verb: "create_artifact_from_url", risk: "write", description: "Ingest one source asset into the target's artifact store." }
       ] },
-      { id: "score", description: "Score the emission. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      // W2.1/G6-T2 — still no TENANT verb (hence []), but no longer purely local: the stage now
+      // dispatches the platform repo's capture-preview workflow and polls it across advances, the
+      // same pending-and-re-queue shape `crawl` uses for a pdf-tool job. The outbound calls are
+      // GitHub's own API with cms-agent's CAPTURE_PREVIEW_GITHUB_TOKEN — not the project MCP — so
+      // they are outside this manifest's vocabulary, which names tenant verbs only.
+      { id: "score", description: "Score the emission. Local rubric + gap report; the visual half is dispatched to the platform capture-preview CI job and collected across advances.", timeout: "deterministic_stage", requiredTools: [] },
       { id: "report", description: "Summarize the run. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
   },

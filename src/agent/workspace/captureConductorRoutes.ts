@@ -51,10 +51,18 @@ import {
 // multi-object emission report). release_executor needs no capture-specific case at all: it is already
 // object-agnostic (reads only publish_executor's own `publishCommitted` flag), so the exact same
 // canonical release_executor dispatch (executor.ts, releaseExecution.ts) runs unchanged for capture.
+import {
+  advanceCapturePreview,
+  capturePreviewConfig,
+  previewSiteDirFor,
+  readCapturePreviewState,
+  CAPTURE_SCORE_PREVIEW_STAGE_KEY,
+  type CapturePreviewState
+} from "./capturePreviewDispatch.js";
 import { isProjectPublishEnabled, type CallToolFn } from "./publisher.js";
 import { resolvePublishAuthority } from "./publishDecision.js";
 import { buildObjectPublishPlan, executeObjectPublish, type ObjectPublishPlan, type ObjectPublishSourceReport } from "./objectPublishExecution.js";
-import { tenantCallToolFor } from "../tools/tenantInvoke.js";
+import { tenantCallToolFor, type TenantCallContext } from "../tools/tenantInvoke.js";
 
 export const CAPTURE_STAGES = ["crawl", "map", "map_refine", "theme", "emit_dry", "emit_live", "score", "publish_payload", "publication_controller", "publish_executor", "report"] as const;
 export type CaptureStage = typeof CAPTURE_STAGES[number];
@@ -81,7 +89,7 @@ export const readCaptureStage = (node: Pick<WorkspaceNode, "metadata">): Capture
 
 export type CaptureStageOutcome =
   | { kind: "completed"; output: Record<string, unknown> }
-  | { kind: "pending"; jobStateKey: string; jobState: CaptureCrawlJobState | CaptureEmitLiveLedger; warning: string }
+  | { kind: "pending"; jobStateKey: string; jobState: CaptureCrawlJobState | CaptureEmitLiveLedger | CapturePreviewState; warning: string }
   | { kind: "refused"; code: string; message: string };
 
 const refused = (code: string, message: string): CaptureStageOutcome => ({ kind: "refused", code, message });
@@ -165,6 +173,76 @@ const readEmitLiveLedger = (run: WorkflowExecutionRecord): CaptureEmitLiveLedger
   if (done === 0) return undefined;
   return { media, done, total: typeof value.total === "number" ? value.total : done };
 };
+
+// W2.1/G6-T2 — the score stage's preview leg, kept out of the switch so the stage itself stays
+// readable. Returns either "wait" (the CI run is not finished) or "score now", the latter carrying
+// the CI report when there is one and a NAMED account of why there is not when there is not.
+type CapturePreviewEvidence =
+  | { kind: "pending"; state: CapturePreviewState; warning: string }
+  | { kind: "ready"; report?: Record<string, unknown>; provenance?: Record<string, unknown>; account: Record<string, unknown> };
+
+const previewUnavailable = (reason: string): CapturePreviewEvidence => ({
+  kind: "ready",
+  account: { attempted: reason !== "capture_preview_not_configured", evidence: "unavailable", reason }
+});
+
+async function resolveCapturePreviewEvidence(input: {
+  run: WorkflowExecutionRecord;
+  node: WorkspaceNode;
+  targetProjectId: string;
+  crawl: Record<string, unknown>;
+  refined: Record<string, unknown>;
+  theme: Record<string, unknown>;
+  tenantContext: TenantCallContext;
+}): Promise<CapturePreviewEvidence> {
+  const config = capturePreviewConfig();
+  // Not wired to a platform CI (a local run, a fresh environment). A legitimate state, reported as
+  // such — this is the ONE branch that does not claim an attempt was made.
+  if (!config) return previewUnavailable("capture_preview_not_configured");
+
+  const state = readCapturePreviewState(input.run);
+  if (state?.status === "unavailable") return previewUnavailable(state.reason ?? "capture_preview_unavailable");
+
+  const emission = stageOutput(input.run, "capture_emit_live");
+  const plan = emission && isRecord(emission.plan) ? emission.plan : undefined;
+  // The preview renders the EMITTED drafts. Without the emission plan there is nothing to render,
+  // and re-deriving one here would preview something the run never emitted.
+  if (!plan) return previewUnavailable("capture_preview_no_emission_plan");
+
+  let siteDir: string | undefined;
+  try {
+    const { config: projectConfig } = await resolveCaptureAuthority(input.targetProjectId, { tenantContext: input.tenantContext });
+    siteDir = previewSiteDirFor(projectConfig.objectDialect?.siteObjectId);
+  } catch (error) {
+    return previewUnavailable(`capture_preview_site_unresolved: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!siteDir) return previewUnavailable("capture_preview_site_directory_not_derivable");
+
+  const outcome = await advanceCapturePreview({
+    runId: input.run.runId,
+    nodeId: input.node.id,
+    targetProjectId: input.targetProjectId,
+    siteDir,
+    captureJobId: readCrawlJobState(input.run)?.jobId,
+    config,
+    ...(state ? { state } : {}),
+    documents: { snapshot: input.crawl.snapshot, mapping: input.refined.mapping, plan, theme: input.theme.theme }
+  });
+  if (outcome.kind === "pending") return { kind: "pending", state: outcome.state, warning: outcome.note };
+  if (outcome.kind === "unavailable") return previewUnavailable(outcome.reason);
+  return {
+    kind: "ready",
+    report: outcome.report,
+    provenance: { workflowRunId: outcome.state.workflowRunId, reportBlobSha: outcome.state.reportBlobSha, correlationId: outcome.state.correlationId },
+    account: {
+      attempted: true,
+      evidence: "collected",
+      workflowRunId: outcome.state.workflowRunId,
+      reportBlobSha: outcome.state.reportBlobSha,
+      correlationId: outcome.state.correlationId
+    }
+  };
+}
 
 export async function runCaptureStage(input: { run: WorkflowExecutionRecord; node: WorkspaceNode; stage: CaptureStage; onPhase?: PhaseClaim }): Promise<CaptureStageOutcome> {
   const { run, stage } = input;
@@ -269,8 +347,40 @@ export async function runCaptureStage(input: { run: WorkflowExecutionRecord; nod
         if (isOutcome(refined)) return refined;
         const theme = envelopeOf(run, "capture_theme", CAPTURE_ARTIFACTS.theme);
         if (isOutcome(theme)) return theme;
-        const envelope = await captureScoreStep({ targetProjectId, snapshot: crawl.snapshot, mapping: refined.mapping, theme: theme.theme }, { tenantContext });
-        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+        // W2.1/G6-T2 — the draft-preview leg. Every pair used to read `unavailable` because this
+        // process holds NEITHER side of the diff: no Chromium and no Astro to render an emitted
+        // draft, and the source screenshots live in pdf-tool's own store. The rendering and the
+        // pixel diff happen on the platform repo's CI (capturePreviewDispatch.ts's header says
+        // why); this stage dispatches that job and waits across advances exactly as capture_crawl
+        // waits on a pdf-tool job — the SAME pending shape, persisted under its own stage key and
+        // advanced by the continuation tick / conductor job, never by spinning inside one claim.
+        //
+        // Every way this can fail resolves to a NAMED reason and a normal score with
+        // `visualEvidence.evidenceComplete: false` (W2.1/G6-T3). A capture run is never blocked
+        // because a preview job could not be started, and never silently claims the evidence is
+        // fine either.
+        const preview = await resolveCapturePreviewEvidence({ run, node: input.node, targetProjectId, crawl, refined, theme, tenantContext });
+        if (preview.kind === "pending") {
+          return { kind: "pending", jobStateKey: CAPTURE_SCORE_PREVIEW_STAGE_KEY, jobState: preview.state, warning: preview.warning };
+        }
+        const envelope = await captureScoreStep(
+          {
+            targetProjectId,
+            snapshot: crawl.snapshot,
+            mapping: refined.mapping,
+            theme: theme.theme,
+            ...(preview.report ? { externalVisualReport: preview.report, externalVisualProvenance: preview.provenance } : {})
+          },
+          { tenantContext }
+        );
+        return {
+          kind: "completed",
+          output: {
+            ...(envelope as unknown as Record<string, unknown>),
+            // The preview leg's own account of itself, next to the score it produced (or did not).
+            capturePreview: preview.account
+          }
+        };
       }
       // T15.7 (ADR-2026-08-25-publish-autonomy §6.2, §9) — capture_conductor's segment of the SHARED
       // publishing tail. These three stages ARE publish_payload / publication_controller /
