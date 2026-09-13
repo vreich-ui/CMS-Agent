@@ -68,6 +68,24 @@ export type NodeGatingSeedEntry = {
 // is the class the standing waiver names.
 const EV_EXEMPT_CONTENT_CLASSES = ["own_property", "docs", "doc", "documentation", "runbook", "reference", "internal_docs", "changelog", "release_notes"];
 
+// B4 (2026-09-13) — THE CONTENT HALT. Two predicates, declared together on every node whose input is
+// the draft (or the evidence behind it), because they are the same decision seen one stage apart:
+// there is nothing to work on. Evidence: proof run run_1789303857536_obd2fd, where draft_writer
+// returned draftStatus:"blocked" with four blockers and the conductor then paid four reviewers, the
+// aggregator, contract_intelligence and artifact_plan to work on a draft that did not exist (~$0.8).
+//
+// TWO NODES ARE DELIBERATELY NOT GATED BY IT:
+//   - publication_controller MUST run. It is what turns "the writer refused" into a recorded,
+//     classified decision carrying the writer's own blockers. Skipping it would end the run silently.
+//   - contract_intelligence is NOT gated, even though the proof run paid for it downstream of the
+//     blocked draft. It reads the tenant's publishing contract and carries the site prefetch every
+//     later node indexes off its output (artifactMaterialization.ts reads pdfTemplates and image
+//     policy contexts straight off stageOutputs.contract_intelligence); it also runs on the
+//     deterministic route on the tenants that declare it, so its cost is not the model cost the other
+//     nodes carry. Gating a contract read on a content outcome buys little and couples two unrelated
+//     things.
+const CONTENT_HALT_PREDICATES: SkipPredicate[] = [{ when: "draft_blocked" }, { when: "research_unavailable" }];
+
 export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
   // Live evidence (run_1786468126136_ev9goe): zero web calls, output said browsing was not needed,
   // $0.06 to conclude there was nothing to conclude.
@@ -114,7 +132,7 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
   // This node's own output states its zero-media rule as an if-statement. The rule is now evaluated
   // BEFORE the dispatch instead of by it.
   artifact_plan: {
-    skipWhen: [{ when: "no_media_slots" }],
+    skipWhen: [{ when: "no_media_slots" }, ...CONTENT_HALT_PREDICATES],
     rationale: "artifact_plan is dispatched only when there is an artifact to plan: an explicit media declaration, or a client object that actually carries a media reference. An unscannable body or a mock placeholder is never evidence of absence."
   },
   // W8 — the materializer carries the SAME predicate, for the same reason and off the same signal. It is
@@ -122,15 +140,30 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
   // find an empty spec and complete with an empty plan, and a `publishRequestId` mint path that keys on
   // artifact_plan skipping. Both nodes skipping together keeps the zero-media run's shape as it was.
   artifact_materializer: {
-    skipWhen: [{ when: "no_media_slots" }],
+    skipWhen: [{ when: "no_media_slots" }, ...CONTENT_HALT_PREDICATES],
     rationale: "artifact_materializer executes artifact_plan's spec; when there is no media declared there is no spec, and the node it would execute for was itself skipped."
   },
   // REVIEW QUARTET TIERING — operator policy, Wolf 2026-08-12. The tier table lives in
   // skipPredicates.ts; these three entries only ask whether the node is in the selected tier.
-  // trust_factual deliberately has NO entry: it is the one reviewer every tier runs.
-  human_texture: { skipWhen: [{ when: "review_tier_excludes" }], rationale: "Runs for standard editorial and money class; docs/runbook class runs trust_factual only." },
-  emotional_resonance: { skipWhen: [{ when: "review_tier_excludes" }], rationale: "Runs for MONEY class only: the dial that matters least when nothing is being sold." },
-  reader_simulation: { skipWhen: [{ when: "review_tier_excludes" }], rationale: "Runs for standard editorial and money class; docs/runbook class runs trust_factual only." },
+  // trust_factual has no review-tier predicate: it is the one reviewer every tier runs. (B4 gave it a
+  // content-halt entry below — a different question, which no content class can answer.)
+  human_texture: { skipWhen: [{ when: "review_tier_excludes" }, ...CONTENT_HALT_PREDICATES], rationale: "Runs for standard editorial and money class; docs/runbook class runs trust_factual only. B4: never for a blocked draft." },
+  emotional_resonance: { skipWhen: [{ when: "review_tier_excludes" }, ...CONTENT_HALT_PREDICATES], rationale: "Runs for MONEY class only: the dial that matters least when nothing is being sold. B4: never for a blocked draft." },
+  reader_simulation: { skipWhen: [{ when: "review_tier_excludes" }, ...CONTENT_HALT_PREDICATES], rationale: "Runs for standard editorial and money class; docs/runbook class runs trust_factual only. B4: never for a blocked draft." },
+  // B4 — trust_factual has no review-tier entry (every tier runs it) but it is not exempt from the
+  // content halt: checking the claims of a draft that does not exist is the same waste as the other
+  // three, and its own "blocked" verdict would then be carried into the decision as a SECOND blocker
+  // for the same cause.
+  trust_factual: { skipWhen: [...CONTENT_HALT_PREDICATES], rationale: "The one reviewer every tier runs — but not for a draft the writer reported blocked, or a piece whose evidence research reported unobtainable." },
+  // B4 — the aggregator's whole job is to consolidate reviewer output. With every reviewer skipped it
+  // would aggregate nothing, at model prices, and then have to be told not to invent the reviews it
+  // never received (its prompt already carries that instruction because of the skippedDependencies
+  // ledger — this stops the situation arising at all).
+  review_aggregator: { skipWhen: [...CONTENT_HALT_PREDICATES], rationale: "Aggregates reviews; when the draft is blocked there are no reviews and nothing to consolidate." },
+  // B4 — the two builder nodes. article_body converts a draft into a client object and publish_payload
+  // packages that object; with no draft, both build a shell whose only destination is a refusal.
+  article_body: { skipWhen: [...CONTENT_HALT_PREDICATES], rationale: "Builds the client object FROM the draft; a blocked draft has nothing to convert." },
+  publish_payload: { skipWhen: [...CONTENT_HALT_PREDICATES], rationale: "Packages the built body for publication; with no body there is no payload." },
   // W6.3's topology half. The client ceiling used to reach the run only at contract_intelligence,
   // which runs AFTER this node — so article_brief.v1's required `resolved` vector was authored with no
   // ceiling in existence anywhere in the run, shipped unclamped, and the aggression_ceiling blocker
@@ -153,7 +186,16 @@ export const NODE_GATING_SEED: Record<string, NodeGatingSeedEntry> = {
     }],
     rationale: "The first paid stage after monetization_strategy is the single run-level economic halt point; advisory evidence proceeds."
   },
+  // B4 — everything downstream of an "evidence unobtainable" research result. draft_writer and the
+  // three strategy stages between research and the brief are all reasoning ABOUT the evidence that
+  // does not exist; the brief is written FROM it. draft_blocked is not declared on these four: they
+  // all run BEFORE draft_writer, so it could never fire for them.
+  objection_mapping: { skipWhen: [{ when: "research_unavailable" }], rationale: "Maps objections against the evidence research gathered; there is none to map." },
+  narrative_movement: { skipWhen: [{ when: "research_unavailable" }], rationale: "Shapes the movement of a piece whose evidence cannot be obtained." },
+  angle_strategy: { skipWhen: [{ when: "research_unavailable" }], rationale: "Chooses an angle for a piece whose evidence cannot be obtained." },
+  draft_writer: { skipWhen: [{ when: "research_unavailable" }], rationale: "B4: research declaring evidenceStatus \"unavailable\" means the writer would produce a source-awaiting shell and block itself — at full drafting price. Skipping it reaches the same recorded outcome for nothing." },
   brief_architect: {
+    skipWhen: [{ when: "research_unavailable" }],
     contractPrefetch: true,
     voicePrefetch: true,
     // W4 (2026-09-09, Wolf): alongside the voice, and for the mirror-image reason. The voice sets the

@@ -52,7 +52,9 @@ describe("predicate parsing — the store says WHICH rule, never what a rule mea
   });
 
   it("returns undefined for a node with no skip policy at all, so 'no policy' is distinguishable from 'policy said run'", () => {
-    expect(evaluateNodeSkip({ id: "draft_writer", metadata: { approvalRequired: false } }, {})).toBeUndefined();
+    // placement_resolver, not draft_writer: B4 gave every node downstream of research a content-halt
+    // policy, so the "no policy at all" example has to be a node upstream of the whole content path.
+    expect(evaluateNodeSkip({ id: "placement_resolver", metadata: { approvalRequired: false } }, {})).toBeUndefined();
     expect(evaluateNodeSkip({ id: "x", metadata: { skipWhen: [{ when: "nope" }] } }, {})?.skip).toBe(false);
   });
 });
@@ -313,9 +315,13 @@ describe("review quartet tiering — operator policy (Wolf, 2026-08-12), three t
     });
   }
 
-  it("trust_factual carries no skip predicate at all: the one reviewer that can never be tiered out", () => {
-    expect(NODE_GATING_SEED.trust_factual).toBeUndefined();
-    expect(gatedMetadata({ id: "trust_factual", metadata: { approvalRequired: false } })?.skipWhen).toBeUndefined();
+  it("trust_factual can never be tiered out — the one reviewer every tier runs", () => {
+    // B4 gave it a CONTENT-HALT policy (there is no point checking the claims of a draft that was
+    // never written), so the invariant is no longer "no predicate at all". It is the narrower and
+    // more accurate one: no review-tier predicate, so no content class can drop it.
+    const declared = (gatedMetadata({ id: "trust_factual", metadata: { approvalRequired: false } })?.skipWhen ?? []) as Array<{ when: string }>;
+    expect(declared.map((entry) => entry.when).sort()).toEqual(["draft_blocked", "research_unavailable"]);
+    expect(declared.some((entry) => entry.when === "review_tier_excludes")).toBe(false);
     expect(REVIEW_TIER_MEMBERS.docs).toEqual(["trust_factual"]);
   });
 
@@ -333,7 +339,15 @@ describe("the gating seed carries the policy, and the store outranks it", () => 
     // run must skip BOTH, so the run's shape (and publishRequestId's mint-at-skip path) is unchanged.
     // W6b — reader_insight carries `ev_floor_blocked`, the one predicate whose firing is a run HALT.
     // It is the first paid node serialized after monetization_strategy and remains the single halt.
-    expect(gated).toEqual(["artifact_materializer", "artifact_plan", "emotional_resonance", "human_texture", "monetization_strategy", "reader_insight", "reader_simulation", "research"]);
+    // B4 — the content halt (draft_blocked / research_unavailable) is declared on every stage whose
+    // input is the draft or the evidence behind it. publication_controller is deliberately NOT among
+    // them (it is what records the halt) and neither is contract_intelligence (a tenant contract read,
+    // not a content stage) — see the note above CONTENT_HALT_PREDICATES.
+    expect(gated).toEqual([
+      "angle_strategy", "article_body", "artifact_materializer", "artifact_plan", "brief_architect", "draft_writer",
+      "emotional_resonance", "human_texture", "monetization_strategy", "narrative_movement", "objection_mapping",
+      "publish_payload", "reader_insight", "reader_simulation", "research", "review_aggregator", "trust_factual"
+    ]);
     // Every seeded node is a real conductor node — a typo in an id would seed a policy onto nothing.
     const ids = new Set(listWorkspaceNodes().map((node) => node.id));
     for (const seededId of Object.keys(NODE_GATING_SEED)) expect(ids.has(seededId), `${seededId} is not a conductor node`).toBe(true);
