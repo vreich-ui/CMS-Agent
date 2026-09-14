@@ -213,6 +213,38 @@ describe("resolveSourceImageStep — never guesses: ambiguous or absent is a nam
     if (result.ok) return;
     expect(result.code).toBe("image_revision_source_ref_missing");
   });
+
+  // A10-D2 — an unconfigured catalogue must read as a MISSING CAPABILITY, never as "searched and
+  // found nothing" (image_revision_source_tag_not_found, above). Both refusals below would, before
+  // this fix, have returned the identical "not found" code/text as the ambiguity-free "no such tag"
+  // case even though NO lookup was ever attempted — an operator reading either could not tell "wire
+  // the catalogue" apart from "you named the wrong tag".
+  it("refuses with a DISTINCT code and message when the asset catalogue itself is not configured — never the same 'not found' text a genuine search miss returns", async () => {
+    let tagCalled = false;
+    const catalog: AssetCatalogSource = {
+      configured: false,
+      resolveByTag: async () => { tagCalled = true; return []; },
+      resolveByChecksum: async () => undefined,
+      resolveByCaptureRequestId: async () => undefined
+    };
+    const result = await resolveSourceImageStep({ tenantId: "zilberman", ref: { tag: "zilberman-hero" } }, { assetCatalog: catalog });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("image_revision_asset_catalog_not_configured");
+    expect(result.code).not.toBe("image_revision_source_tag_not_found");
+    expect(result.reason).not.toBe("No asset with tag \"zilberman-hero\" found for tenant \"zilberman\".");
+    expect(tagCalled).toBe(false); // no lookup was even attempted — this is a capability gap, not a miss
+  });
+
+  it("still resolves normally when configured is omitted (treated as configured, same as an explicit true) — this is opt-in, not a new default refusal", async () => {
+    const catalog: AssetCatalogSource = {
+      resolveByTag: async () => [asset()],
+      resolveByChecksum: async () => undefined,
+      resolveByCaptureRequestId: async () => undefined
+    };
+    const result = await resolveSourceImageStep({ tenantId: "zilberman", ref: { tag: "zilberman-hero" } }, { assetCatalog: catalog });
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("fetchTargetTemplateVersionStep — 'pdf' only today; 'web' is a named capability gap, never a silent mis-handling", () => {
@@ -356,5 +388,40 @@ describe("buildImageTemplateRevisionReportStep — partial/allFailed computed FR
     expect(report.items).toHaveLength(1);
     expect(report.items[0].outcome).toBe("target_fetch_failed");
     expect(report.allFailed).toBe(true);
+  });
+
+  // A10-D4 — `previewed` and `not_approved` are NEITHER success nor failure: nothing was actually
+  // applied. Before this fix both sat in SUCCESS_OUTCOMES, so this exact scenario (three items
+  // previewed, none approved, nothing minted/published/verified) reported "3 item(s) succeeded, 0
+  // failed" — a silent no-op dressed as full success, and allFailed/partial were computed from that
+  // same false success count.
+  it("reports 0 succeeded, 0 failed when every item is only 'previewed' (nothing approved/applied yet) — never counted as success", () => {
+    const applied = undefined;
+    const compiled = { artifact: "image_revision_compile_preview.v1" as const, summary: "fixture", items: [entry("newsletter", "previewed"), entry("flyer", "previewed")] };
+    const report = buildImageTemplateRevisionReportStep({ intake: intakeWith(["newsletter", "flyer"]), compiled, applied });
+    expect(report.items.every((i) => i.outcome === "previewed")).toBe(true);
+    expect(report.summary).toContain("0 item(s) succeeded");
+    expect(report.summary).toContain("2 pending");
+    // Neither a clean success (partial:false/allFailed:false is reserved for every item SUCCEEDING)
+    // nor a clean failure — a decision is still pending.
+    expect(report.allFailed).toBe(false);
+    expect(report.partial).toBe(true);
+  });
+
+  it("reports 'not_approved' the same way — pending, never success and never failure", () => {
+    const applied = { artifact: "image_revision_apply.v1" as const, summary: "fixture", items: [entry("newsletter", "not_approved")] };
+    const report = buildImageTemplateRevisionReportStep({ intake: intakeWith(["newsletter"]), applied });
+    expect(report.summary).toContain("0 item(s) succeeded");
+    expect(report.summary).toContain("1 pending");
+    expect(report.allFailed).toBe(false);
+    expect(report.partial).toBe(true);
+  });
+
+  it("a genuine concurrent-modification refusal (A10-D3's outcome) counts as a FAILURE, distinctly from the pending bucket", () => {
+    const applied = { artifact: "image_revision_apply.v1" as const, summary: "fixture", items: [entry("newsletter", "concurrent_modification")] };
+    const report = buildImageTemplateRevisionReportStep({ intake: intakeWith(["newsletter"]), applied });
+    expect(report.summary).toContain("0 item(s) succeeded, 1 failed, 0 pending");
+    expect(report.allFailed).toBe(true);
+    expect(report.partial).toBe(false);
   });
 });

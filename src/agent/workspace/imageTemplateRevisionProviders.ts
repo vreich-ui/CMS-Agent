@@ -24,7 +24,15 @@ export type ImageTemplateRevisionProviders = {
   verifyImagePresence?: VerifyImagePresenceFn;
 };
 
+// A10-D2 — `configured: false` is the load-bearing field here: resolveSourceImageStep
+// (imageTemplateRevisionEngine.ts) checks it BEFORE calling any resolve* method below, so a run with
+// no asset catalogue wired is told "no asset catalogue is configured" (a capability gap), never "no
+// asset tagged X found" (a search that came back empty, identical prose to a genuine miss). The
+// resolve* methods below still return their old, empty answers as a defensive fallback in case some
+// future caller reads them without checking `configured` first — but they are never the FIRST thing
+// consulted in production's default (unconfigured) state.
 const NOT_CONFIGURED_ASSET_CATALOG: AssetCatalogSource = {
+  configured: false,
   resolveByTag: async () => [],
   resolveByChecksum: async () => undefined,
   resolveByCaptureRequestId: async () => undefined

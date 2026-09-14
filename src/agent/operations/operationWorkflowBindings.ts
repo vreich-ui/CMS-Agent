@@ -116,9 +116,13 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     // (this module's header) as a flat field-rename table only, never structural nesting, so
     // expressing "wrap these three fields into a brief object" here would be exactly the kind of
     // guess this table exists to avoid. The node's own inputSchema is the permissive openInput
-    // shape (no declared `required`), so this empty mapping still trivially satisfies
-    // resolveBindingInputContract/checkBindingInputContract — a REAL executor (a later task, same
-    // posture as visual_identity_review_change today) is what would actually construct the brief.
+    // shape (no declared `required`) — A10-D1: an empty mapping into a fully open schema used to
+    // trivially (and wrongly) satisfy resolveBindingInputContract/checkBindingInputContract, since
+    // neither half of the check had anything to evaluate; bindingInputContract.ts's checkEntryNode
+    // now treats "open schema + zero guaranteed fields" as itself unsatisfied (nothing was checked
+    // AND nothing was guaranteed), so resolveBindingInputContract correctly reports this binding
+    // UNSATISFIED until a real executor (a later task, same posture as visual_identity_review_change
+    // today) either constructs the brief or the entry node's schema is taught to name it.
     inputMapping: {}
   },
   {
@@ -137,9 +141,15 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     // initialInput.imageTemplateRevisionBrief {tenantId, sourceAsset, templateRefs, placement,
     // approve} (imageTemplateRevisionEngine.ts's imageRevisionIntakeStep) — inputMapping is a flat
     // field-rename table only, never structural nesting. The entry node's own inputSchema is the
-    // permissive openInput shape (no declared `required`), so this empty mapping still trivially
-    // satisfies checkBindingInputContract — a real executor constructing the brief is future work,
-    // same posture as pdf_template_family's binding today.
+    // permissive openInput shape (no declared `required`), so — A10-D1 — this empty mapping used to
+    // be read as "trivially satisfies checkBindingInputContract"; it was actually a VACUOUS pass:
+    // neither half of the check had anything to evaluate. bindingInputContract.ts's checkEntryNode
+    // now treats "open schema + zero guaranteed fields" as itself unsatisfied, so
+    // resolveBindingInputContract correctly reports this binding UNSATISFIED until a real executor
+    // constructs the brief or the entry node's schema is taught to name it — same posture as
+    // pdf_template_family's binding above. (cloneConductorRoutes.ts's own "image_revision_intake"
+    // case also refuses outright, by name, if a run ever reaches dispatch without a brief anyway —
+    // belt and suspenders against this exact class of defect.)
     inputMapping: {}
   }
 ];

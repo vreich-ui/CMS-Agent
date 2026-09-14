@@ -115,32 +115,44 @@ describe("operationWorkflowBindings", () => {
       expect(status.contract!.guaranteedTargetFields).toEqual(["apply", "projectId"]);
     });
 
-    // A7 — the OPPOSITE case from visual_identity_review_change's, deliberately: pdf_template_family's
-    // binding is genuinely SATISFIED, not merely bound. pdf_template_studio's entry node
-    // (pdf_template_intake) uses the permissive openInput schema (no declared `required` array), so
-    // the empty inputMapping trivially covers everything it requires — the binding is complete today,
-    // even though a real executor (constructing the actual pdfTemplateFamilyBrief) is future work.
-    it("the pdf_template_family binding is detected as SATISFIED — its entry node's permissive schema has no required field the empty inputMapping could fail to cover", () => {
+    // A10-D1 (was: "the OPPOSITE case from visual_identity_review_change's... genuinely SATISFIED").
+    // It was not — it was a VACUOUS pass: pdf_template_studio's entry node (pdf_template_intake)
+    // uses the permissive openInput schema (no declared `required` array) because it reads a NESTED
+    // initialInput.pdfTemplateFamilyBrief its schema never names, and the empty inputMapping
+    // guarantees the node NOTHING under any name — there was no structural evidence of delivery to
+    // check at all, in either direction, and this test used to read that absence of a check as a
+    // pass. bindingInputContract.ts's checkEntryNode now treats "open schema + zero guaranteed
+    // fields" as itself unsatisfied (see its own comment), so this binding correctly reports
+    // unsatisfied until a real executor supplies the brief or the entry node's schema is taught to
+    // require it.
+    it("the pdf_template_family binding is detected as UNSATISFIED — its entry node's permissive schema gives the empty inputMapping nothing to prove", () => {
       const status = resolveBindingInputContract(getOperationWorkflowBinding("pdf_template_family")!);
       expect(status.resolved).toBe(true);
       expect(status.contract).not.toBeNull();
-      expect(status.contract!.satisfied).toBe(true);
+      expect(status.contract!.satisfied).toBe(false);
       const entryNodeCheck = status.contract!.entryNodeChecks.find((check) => check.nodeId === "pdf_template_intake");
       expect(entryNodeCheck).toBeDefined();
       expect(entryNodeCheck!.unsatisfiedRequired).toEqual([]);
+      expect(entryNodeCheck!.unsupportedConstructs).toEqual(["open_schema_no_guaranteed_input"]);
+      expect(entryNodeCheck!.satisfied).toBe(false);
     });
 
-    // A9 — same shape as pdf_template_family's precedent immediately above: image_revision_intake
-    // (image_template_revision_studio's entry node) also uses the permissive openInput schema, so
-    // the empty inputMapping trivially satisfies it.
-    it("the image_template_revision binding is detected as SATISFIED — its entry node's permissive schema has no required field the empty inputMapping could fail to cover", () => {
+    // A10-D1 (was: "A9 — same shape as pdf_template_family's precedent immediately above... the
+    // empty inputMapping trivially satisfies it."). Same vacuous pass, same fix: image_revision_intake
+    // (image_template_revision_studio's entry node) uses the permissive openInput schema for the
+    // identical reason pdf_template_intake does — it reads a NESTED
+    // initialInput.imageTemplateRevisionBrief its schema never names — so checkEntryNode's
+    // open_schema_no_guaranteed_input check now catches this binding too.
+    it("the image_template_revision binding is detected as UNSATISFIED — its entry node's permissive schema gives the empty inputMapping nothing to prove", () => {
       const status = resolveBindingInputContract(getOperationWorkflowBinding("image_template_revision")!);
       expect(status.resolved).toBe(true);
       expect(status.contract).not.toBeNull();
-      expect(status.contract!.satisfied).toBe(true);
+      expect(status.contract!.satisfied).toBe(false);
       const entryNodeCheck = status.contract!.entryNodeChecks.find((check) => check.nodeId === "image_revision_intake");
       expect(entryNodeCheck).toBeDefined();
       expect(entryNodeCheck!.unsatisfiedRequired).toEqual([]);
+      expect(entryNodeCheck!.unsupportedConstructs).toEqual(["open_schema_no_guaranteed_input"]);
+      expect(entryNodeCheck!.satisfied).toBe(false);
     });
 
     it("listBindingInputContractStatuses() reports one resolved status per registered binding, in operationId order", () => {

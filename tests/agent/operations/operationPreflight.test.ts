@@ -321,23 +321,45 @@ describe("preflightOperation", () => {
 
       // A4: site_inventory is deliberately EXCLUDED here — it is no longer unbound (it has a
       // registered executor), so it no longer carries a "workflow_binding" not_supported gap; see
-      // the dedicated site_inventory tests above for its own (different) current behavior. A7:
-      // pdf_template_family is ALSO excluded here now — it is bound to pdf_template_studio (see
-      // operationWorkflowBindings.ts), and unlike visual_identity_review_change its binding's
-      // contract IS satisfied (pdf_template_studio's entry node uses the permissive openInput
-      // schema, with no required fields the empty inputMapping could fail to cover), so it carries
-      // no workflow_binding gap at all — see operationWorkflowBindings.test.ts's own R1c coverage.
-      // A9: image_template_revision is ALSO excluded here now, for the identical reason as
-      // pdf_template_family — it is bound to image_template_revision_studio and that binding's
-      // contract is satisfied (image_revision_intake's own permissive openInput schema), so it
-      // carries no workflow_binding gap either; it keeps a DIFFERENT gap (image_template_write,
-      // not_supported) asserted in the dedicated test above, which this exclusion does not touch.
+      // the dedicated site_inventory tests above for its own (different) current behavior. A7's
+      // pdf_template_family and A9's image_template_revision are ALSO excluded here now — both are
+      // BOUND (to pdf_template_studio / image_template_revision_studio respectively), but A10-D1
+      // means neither binding actually satisfies its entry node's input contract any more (see the
+      // dedicated assertions right below this loop): an empty inputMapping guarantees a fully
+      // permissive openInput schema NOTHING under any name, which bindingInputContract.ts's
+      // checkEntryNode now correctly reports as unsatisfied rather than a vacuous pass — so both
+      // behave like visual_identity_review_change above, not like the genuinely still-unbound ids
+      // this loop covers.
       const unboundIds = ["document_render", "asset_lookup_adopt"];
       for (const operationId of unboundIds) {
         const result = preflightOperation({ operationId, tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
         expect(result.executable).toBe(false);
         expect(result.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
       }
+
+      // A10-D1 — pdf_template_family is BOUND (operationWorkflowBindings.ts, A7) but, exactly like
+      // visual_identity_review_change above, its binding cannot satisfy its entry node's input
+      // contract: the empty inputMapping guarantees pdf_template_intake's fully permissive openInput
+      // schema nothing under any name, which bindingInputContract.ts's checkEntryNode now correctly
+      // reports as unsatisfied rather than a vacuous pass (see operationWorkflowBindings.test.ts's
+      // own R1c coverage). So it behaves the SAME as the still-unbound operations here: not
+      // executable, carrying the workflow_binding gap.
+      const pdfFamily = preflightOperation({ operationId: "pdf_template_family", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+      expect(pdfFamily.executable).toBe(false);
+      expect(pdfFamily.binding).toBeNull();
+      expect(pdfFamily.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
+
+      // A10-D1 — image_template_revision (A9) carries the IDENTICAL empty-inputMapping /
+      // permissive-openInput shape as pdf_template_family above, so it is unsatisfied for the same
+      // reason. It ALSO still carries its own, separate image_template_write capability gap (R1,
+      // asserted in the dedicated test above) — that gap is untouched by this fix and coexists with
+      // the new workflow_binding gap; R1's capability derivation and R1c's contract-soundness check
+      // are orthogonal axes, exactly as the comment on `bound` above states for
+      // visual_identity_review_change.
+      const imageRevision = preflightOperation({ operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+      expect(imageRevision.executable).toBe(false);
+      expect(imageRevision.binding).toBeNull();
+      expect(imageRevision.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
     });
   });
 });

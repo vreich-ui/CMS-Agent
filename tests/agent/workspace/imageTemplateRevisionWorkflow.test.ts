@@ -99,14 +99,19 @@ describe("image_template_revision_studio — routes and gates", () => {
   });
 });
 
-describe("image_template_revision (A2 catalog operation) is bound to image_template_revision_studio, its input contract satisfied", () => {
-  it("resolves via getOperationWorkflowBinding and reports a satisfied R1c contract", () => {
+describe("image_template_revision (A2 catalog operation) is bound to image_template_revision_studio, its input contract NOT satisfied (A10-D1)", () => {
+  it("resolves via getOperationWorkflowBinding, but R1c now correctly reports the contract unsatisfied — the entry node's permissive openInput schema gives the empty inputMapping nothing to prove", () => {
     const binding = getOperationWorkflowBinding("image_template_revision");
     expect(binding).not.toBeNull();
     expect(binding?.workflowId).toBe(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID);
     expect(binding?.workflowId).not.toBe("image_template_revision"); // never the operation id itself
     const status = resolveBindingInputContract(binding!);
-    expect(status.contract?.satisfied).toBe(true);
+    // A10-D1 — this used to read true: a vacuous pass, not a genuine satisfaction (see
+    // operationWorkflowBindings.test.ts's own R1c coverage for the full reasoning). The binding still
+    // resolves and still exists (operationWorkflowBindings.ts is unchanged); only the SOUNDNESS
+    // verdict changed. A real executor or a schema that names imageTemplateRevisionBrief is what
+    // would make this true again for a genuine reason.
+    expect(status.contract?.satisfied).toBe(false);
   });
 });
 
@@ -378,5 +383,84 @@ describe("the Zilberman scenario: place a tagged image top-right on every page o
     expect(applyOutcome.kind).toBe("refused");
     expect(createCalls).toBe(0); // nothing was minted — no production publication happened
     expect(publishCalls).toBe(0);
+  });
+
+  // A10-D1 (image half) — operationWorkflowBindings.ts's image_template_revision binding carries a
+  // deliberately-empty inputMapping (see that file's own comment, and bindingInputContract.ts's new
+  // open_schema_no_guaranteed_input check), so a run dispatched WITHOUT the caller itself having
+  // constructed an imageTemplateRevisionBrief must refuse at image_revision_intake — never fall
+  // through to imageRevisionIntakeStep's own "no brief" branch, which silently returns `items: []`
+  // and let every later stage complete on an empty intake (the terminal report used to read "0 of 0"
+  // succeeded, partial:false, allFailed:false: a silent no-op dressed as full success).
+  it("A10-D1 — image_revision_intake REFUSES when initialInput carries no imageTemplateRevisionBrief, rather than completing an empty intake", async () => {
+    await seedLibrary();
+    const run = {
+      projectId: TARGET,
+      workflowId: IMAGE_TEMPLATE_REVISION_WORKFLOW_ID,
+      initialInput: { targetProjectId: TARGET }, // no imageTemplateRevisionBrief — e.g. the operation's own flat fields only
+      publishingPolicySnapshot: { autonomyMode: "autonomous" as const, publishEnabled: true, publishableTypes: resolvePublishableTypeCharter(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID).publishableTypes },
+      stageOutputs: {}
+    } as unknown as WorkflowExecutionRecord;
+    const outcome = await runCloneStage({ run, node: nodesById.get("image_revision_intake")!, stage: "image_revision_intake" });
+    expect(outcome.kind).toBe("refused");
+    if (outcome.kind !== "refused") return;
+    expect(outcome.code).toBe("image_template_revision_brief_missing");
+  });
+
+  it("A10-D1 — image_revision_intake still completes normally when a real imageTemplateRevisionBrief IS present (the refusal above is narrowly targeted, not a new blanket block)", async () => {
+    await seedLibrary();
+    const run = baseRun();
+    const outcome = await runCloneStage({ run, node: nodesById.get("image_revision_intake")!, stage: "image_revision_intake" });
+    expect(outcome.kind).toBe("completed");
+  });
+
+  // A10-D3 — optimistic concurrency: a colleague (or another run) publishes a new library version of
+  // one target template AFTER intake read it but BEFORE this run's apply stage executes. Before this
+  // fix, apply always recompiled from intake's own (now-stale) `current.recipe` and minted the next
+  // version from it unconditionally — the colleague's v2 edit was silently overwritten/orphaned and
+  // the item was reported "verified". Now: refused, named, per-item — the other, unaffected items
+  // still proceed and are still verified.
+  it("A10-D3 — apply refuses a single item, named, when its target library version moved between intake and apply; unaffected items still proceed to verified", async () => {
+    await seedLibrary();
+    installFetchDouble();
+    const run = baseRun();
+
+    const intakeOutcome = await runCloneStage({ run, node: nodesById.get("image_revision_intake")!, stage: "image_revision_intake" });
+    if (intakeOutcome.kind !== "completed") throw new Error("fixture setup failed");
+    run.stageOutputs.image_revision_intake = intakeOutcome.output;
+
+    const previewOutcome = await runCloneStage({ run, node: nodesById.get("image_revision_compile_preview")!, stage: "image_revision_compile_preview" });
+    if (previewOutcome.kind !== "completed") throw new Error("fixture setup failed");
+    run.stageOutputs.image_revision_compile_preview = previewOutcome.output;
+
+    // Simulate a concurrent, out-of-band edit: someone else publishes v2 of "newsletter" directly to
+    // the SAME library store this run will re-read at apply time — before this run's own apply call.
+    const concurrentStore = new TemplateLibraryStore();
+    await concurrentStore.publish({
+      templateId: `${TARGET}::pdf_template::newsletter`,
+      objectType: "pdf_template",
+      name: "Zilberman Newsletter (concurrent edit)",
+      // Content must genuinely differ from seedLibrary's original (an extra field on page 1) — the
+      // library's own publish() treats an identical-content deposit as a no-op ("unchanged", same
+      // version), which would defeat this fixture's purpose of actually minting a real v2.
+      recipe: { schemas: [[...pdfmePage(20), { name: "concurrent_addition", type: "text", position: { x: 5, y: 5 } }], pdfmePage(30), pdfmePage(500)] },
+      sourceProjectId: TARGET,
+      provenance: { sourceUrl: "https://zilberman.example/templates/newsletter", driven: "demand" }
+    });
+
+    const applyOutcome = await runCloneStage({ run, node: nodesById.get("image_revision_apply")!, stage: "image_revision_apply" });
+    expect(applyOutcome.kind).toBe("completed");
+    if (applyOutcome.kind !== "completed") return;
+    const applyItems = applyOutcome.output.items as Array<{ templateRef: { templateId: string }; outcome: string; detail?: string }>;
+    const newsletterItem = applyItems.find((i) => i.templateRef.templateId.endsWith("newsletter"))!;
+    expect(newsletterItem.outcome).toBe("concurrent_modification");
+    expect(newsletterItem.detail).toMatch(/moved from v1.*v2/);
+    // The colleague's v2 edit is untouched — never overwritten by a mint from the stale v1 recipe.
+    const latestAfter = await concurrentStore.getLatest(`${TARGET}::pdf_template::newsletter`);
+    expect(latestAfter?.version).toBe(2);
+    expect(latestAfter?.name).toBe("Zilberman Newsletter (concurrent edit)");
+    // The OTHER items, whose targets did NOT move, still proceed normally.
+    expect(applyItems.filter((i) => i.outcome === "verified")).toHaveLength(2); // flyer, order-form
+    expect(createCalls).toBe(2); // newsletter was never (re-)minted
   });
 });

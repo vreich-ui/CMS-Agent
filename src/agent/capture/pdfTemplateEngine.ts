@@ -55,6 +55,16 @@ import { canonicalStringify } from "../library/templateLibraryRecord.js";
 
 export const PDF_TEMPLATE_ARTIFACTS = {
   intake: "pdf_template_intake.v1",
+  // A10-D5 — deliberately DISTINCT from `intake`, above. pdfTemplateFamilyEngine.ts's
+  // PDF_FAMILY_ARTIFACTS.plan used to alias `intake` directly ("artifact-compatible... so
+  // pdfTemplateFamilyMintStep/pdfTemplatePublishStep accept it without shape translation") — which
+  // meant cloneConductorRoutes.ts's envelopeOf(run, "pdf_template_intake", <expected artifact>)
+  // could not tell clone_conductor's own pdf_intake envelope apart from pdf_template_studio's
+  // pdf_family_plan envelope by artifact id alone, since both node ids AND both artifact strings
+  // collided. This id stays shape-compatible (accepted below, in pdfTemplateMintStep, alongside
+  // `intake`) while being a distinct STRING, so the artifact-shape check in envelopeOf is no longer
+  // a no-op between the two workflows even if a future regression reintroduces a routing collision.
+  familyIntake: "pdf_template_family_intake.v1",
   mint: "pdf_template_mint.v1",
   publish: "pdf_template_publish.v1"
 } as const;
@@ -220,9 +230,16 @@ export async function pdfTemplateMintStep(
   deps: CloneDeps & { sleepImpl?: (ms: number) => Promise<void> } = {}
 ): Promise<PdfTemplateMintEnvelope> {
   const { projectId } = await resolveCloneAuthority(input.targetProjectId, deps);
-  const intake = isRecord(input.intake) && input.intake.artifact === PDF_TEMPLATE_ARTIFACTS.intake ? (input.intake as unknown as PdfTemplateIntakeEnvelope) : undefined;
+  // A10-D5 — accepts EITHER the base branch's own intake artifact OR the family studio's
+  // (pdf_template_studio's pdf_family_plan stage, whose envelope carries `entries` in the same
+  // shape this function reads below — see PDF_TEMPLATE_ARTIFACTS.familyIntake's own comment).
+  const intakeArtifact = isRecord(input.intake) ? input.intake.artifact : undefined;
+  const intake =
+    intakeArtifact === PDF_TEMPLATE_ARTIFACTS.intake || intakeArtifact === PDF_TEMPLATE_ARTIFACTS.familyIntake
+      ? (input.intake as unknown as PdfTemplateIntakeEnvelope)
+      : undefined;
   if (!intake) {
-    throw new CloneRefusal("pdf_template_upstream_artifact_invalid", `Expected pdf_template_intake's stage output to be a ${PDF_TEMPLATE_ARTIFACTS.intake} envelope; found ${isRecord(input.intake) ? `artifact "${String(input.intake.artifact)}"` : "nothing"}.`);
+    throw new CloneRefusal("pdf_template_upstream_artifact_invalid", `Expected pdf_template_intake's stage output to be a ${PDF_TEMPLATE_ARTIFACTS.intake} or ${PDF_TEMPLATE_ARTIFACTS.familyIntake} envelope; found ${isRecord(input.intake) ? `artifact "${String(input.intake.artifact)}"` : "nothing"}.`);
   }
   const siteId = intake.siteId;
   const entriesById = new Map(intake.entries.map((entry) => [entry.requestedId, entry]));
@@ -291,7 +308,23 @@ export async function pdfTemplateMintStep(
       continue;
     }
 
-    let validated = !rendererRequiresValidation(renderer);
+    // A10 (medium, D6) — `validated` means "a PASSED validate_pdf_template report is on file",
+    // never merely "this renderer's own publish path doesn't require one". It used to start `true`
+    // for pdfme (`!rendererRequiresValidation(renderer)`, i.e. true exactly when validation is NOT
+    // required) — a false record: nothing here ever validated a pdfme design, and every pdfme
+    // revision published carrying validated:true with no validate_pdf_template call on file.
+    // Investigated before changing this: pdfme is exempted from the create -> validate -> poll
+    // sequence for a REAL reason, not an oversight — see rendererRequiresValidation's own comment
+    // ("pdfme creates then publishes immediately, warn-only on lint issues" — create_pdf_template's
+    // own bridge contract; every other renderer's publish_pdf_template itself refuses with
+    // TEMPLATE_VALIDATION_REQUIRED without one). So the fix is to stop CLAIMING validated:true, not
+    // to invent a validation call pdf-tool has no endpoint for on this renderer: `validated` now
+    // starts false for every renderer and is set true ONLY where a PASSED report is actually
+    // fetched, below. pdfTemplatePublishStep's own gate is updated alongside this to key off
+    // rendererRequiresValidation(entry.renderer) directly rather than off this flag, so pdfme's
+    // publish path — which pdf-tool itself never required validation for — is unaffected: it still
+    // mints and publishes exactly as before, only without the false claim on the record.
+    let validated = false;
     if (rendererRequiresValidation(renderer)) {
       try {
         const started = await callProjectTool(projectId, "validate_pdf_template", { siteId, templateId, version, data: sampleData }, deps);
@@ -364,7 +397,15 @@ export async function pdfTemplatePublishStep(input: { targetProjectId: string; m
 
   if (siteId) {
     for (const entry of mint.applied) {
-      if (!entry.validated) {
+      // A10 (medium, D6) — gate on whether the RENDERER requires a validation report, not on the
+      // `validated` flag alone: pdfme's own create_pdf_template/publish_pdf_template contract never
+      // requires one ("creates then publishes immediately, warn-only on lint issues" —
+      // rendererRequiresValidation's own comment), so `validated` is now honestly `false` for every
+      // pdfme entry (mint no longer claims a validation that never ran) — that must never block its
+      // publish, which pdf-tool itself never gated on validation for. Every other renderer keeps the
+      // exact behavior this gate always had: `validated` is only ever true there when a PASSED
+      // report was actually fetched, and false otherwise means refuse, precisely as before.
+      if (rendererRequiresValidation(entry.renderer) && !entry.validated) {
         failed.push({ requestedId: entry.requestedId, name: entry.name, templateId: entry.templateId, version: entry.version, reason: "not validated at mint (renderer requires a PASSED validation report on file); pdf-tool's own publish_pdf_template would refuse this with TEMPLATE_VALIDATION_REQUIRED." });
         continue;
       }

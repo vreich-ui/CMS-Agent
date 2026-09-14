@@ -56,11 +56,15 @@ const isRenderer = (value: unknown): value is PdfRenderer => typeof value === "s
 const slugify = (value: string): string => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "x";
 
 export const PDF_FAMILY_ARTIFACTS = {
-  // The plan envelope is deliberately artifact-compatible with the base branch's own
+  // The plan envelope is deliberately SHAPE-compatible with the base branch's own
   // pdf_template_intake.v1 (PDF_TEMPLATE_ARTIFACTS.intake) — see this module's header point 1 — so
   // pdfTemplateFamilyMintStep and pdfTemplatePublishStep (reused, unmodified) accept it without any
-  // shape translation.
-  plan: PDF_TEMPLATE_ARTIFACTS.intake,
+  // shape translation. It is, as of A10-D5, a DISTINCT artifact STRING from PDF_TEMPLATE_ARTIFACTS.
+  // intake (PDF_TEMPLATE_ARTIFACTS.familyIntake) — reusing the exact same string used to mean the
+  // two shapes could never be told apart by cloneConductorRoutes.ts's envelopeOf artifact check
+  // (both stages, until A10-D5, also shared clone_conductor's own node ids — see
+  // pdfTemplateStudioNodes.ts's header) — pdfTemplateMintStep accepts both.
+  plan: PDF_TEMPLATE_ARTIFACTS.familyIntake,
   libraryDeposit: "pdf_template_family_library_deposit.v1",
   report: "pdf_template_family_report.v1"
 } as const;

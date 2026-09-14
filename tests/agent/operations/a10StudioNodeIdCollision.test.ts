@@ -22,11 +22,19 @@ import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/execu
 // NO clone counterpart (pdf_template_library_deposit, pdf_template_family_report) come back with
 // A7's own "2026-09-14".
 //
-// No existing A7 test catches this, because every one of them drives runCloneStage with the
+// No existing A7 test caught this, because every one of them drove runCloneStage with the
 // CANONICAL node object rather than the one resolveConductorNodes hands the executor.
 //
-// This test CHARACTERIZES the defect. Invert it when the ids are separated (or metadata ownership is
-// pinned canonical for route keys) — do not delete it.
+// FIXED (A10-D5): overlayStoreNode (executor.ts) now pins every route-selecting metadata key
+// (WORKFLOW_STAGE_ROUTE_METADATA_KEYS: captureStageDeterministic, cloneStageDeterministic) to the
+// CANONICAL node's value, discarding any stored value for those keys specifically — a stored row can
+// still win on every other field (name/description/prompt/schema/tools/...), but never on which
+// stage a node dispatches to. The four collided ids remain shared with clone_conductor (id
+// distinctness was the OTHER option the review offered; this fix took the "pin canonical" option
+// instead — see executor.ts's own comment on overlayStoreNode for why), but a stored/shared row for
+// one of them can no longer redirect pdf_template_studio's dispatch onto clone_conductor's handlers.
+// Inverted below — do not delete these tests; they are the regression guard against this exact class
+// of defect recurring for any future node-id reuse.
 // =================================================================================================
 describe("A10-D5 — the deployed pdf_template_studio dispatches clone_conductor's stages, not its own", () => {
   beforeEach(async () => {
@@ -43,29 +51,34 @@ describe("A10-D5 — the deployed pdf_template_studio dispatches clone_conductor
     expect(studioIds.filter((id) => !seededIds.has(id))).toEqual(["pdf_template_library_deposit", "pdf_template_family_report"]);
   });
 
-  it("resolveConductorNodes hands the executor clone_conductor's route keys for those four nodes", async () => {
+  it("FIXED — resolveConductorNodes now hands the executor pdf_template_studio's OWN route keys for those four nodes, never clone_conductor's", async () => {
     const canonical = new Map(listPdfTemplateStudioNodes().map((node) => [node.id, node]));
     const resolved = new Map((await resolveConductorNodes(repositoryManager.getWorkspaceRepository(), PDF_TEMPLATE_STUDIO_WORKFLOW_ID)).map((node) => [node.id, node]));
 
-    // What A7's code says, versus what a run actually gets.
+    // What A7's code says now MATCHES what a run actually gets — resolved agrees with canonical for
+    // every one of the four collided-id nodes, not just the two that never had a store row.
     expect(canonical.get("pdf_template_intake")?.metadata?.cloneStageDeterministic).toBe("pdf_family_plan");
-    expect(resolved.get("pdf_template_intake")?.metadata?.cloneStageDeterministic).toBe("pdf_intake");
+    expect(resolved.get("pdf_template_intake")?.metadata?.cloneStageDeterministic).toBe("pdf_family_plan");
     expect(canonical.get("pdf_template_mint")?.metadata?.cloneStageDeterministic).toBe("pdf_mint_validated");
-    expect(resolved.get("pdf_template_mint")?.metadata?.cloneStageDeterministic).toBe("pdf_mint");
+    expect(resolved.get("pdf_template_mint")?.metadata?.cloneStageDeterministic).toBe("pdf_mint_validated");
     expect(canonical.get("pdf_template_publish")?.metadata?.cloneStageDeterministic).toBe("pdf_publish_only");
-    expect(resolved.get("pdf_template_publish")?.metadata?.cloneStageDeterministic).toBe("pdf_publish");
+    expect(resolved.get("pdf_template_publish")?.metadata?.cloneStageDeterministic).toBe("pdf_publish_only");
 
-    // A7's own two new nodes are unaffected — no store row, so canonical shows through.
+    // A7's own two new nodes were always unaffected — no store row, so canonical shows through
+    // either way — kept here so this test still names the full five-node picture.
     expect(resolved.get("pdf_template_library_deposit")?.metadata?.cloneStageDeterministic).toBe("pdf_library_deposit");
     expect(resolved.get("pdf_template_family_report")?.metadata?.cloneStageDeterministic).toBe("pdf_family_report");
   });
 
-  it("the consequence: the editor's family brief is silently discarded and the plan comes back empty", async () => {
+  it("FIXED — the consequence resolved: the editor's family brief reaches the REAL family-plan step and is honored, never silently discarded", async () => {
     const resolved = new Map((await resolveConductorNodes(repositoryManager.getWorkspaceRepository(), PDF_TEMPLATE_STUDIO_WORKFLOW_ID)).map((node) => [node.id, node]));
     const run = {
       projectId: "a10-studio-collision",
       workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
-      initialInput: { targetProjectId: "a10-studio-collision", pdfTemplateFamilyBrief: { siteId: "a10-studio-collision", familyId: "nonprofit-core", useCase: "nonprofit" } },
+      // useCase "nonprofit_standard" is the one seeded profile (templateFamilyProfiles.ts), so this
+      // brief — if actually read — expands to real variants, not just an accepted-but-unknown-useCase
+      // shell. That is the strongest possible proof the brief reaches the real step.
+      initialInput: { targetProjectId: "a10-studio-collision", pdfTemplateFamilyBrief: { siteId: "a10-studio-collision", familyId: "nonprofit-core", useCase: "nonprofit_standard" } },
       stageOutputs: {}
     } as unknown as WorkflowExecutionRecord;
 
@@ -75,25 +88,26 @@ describe("A10-D5 — the deployed pdf_template_studio dispatches clone_conductor
     if (intake.kind !== "completed") return;
     run.stageOutputs.pdf_template_intake = intake.output;
 
-    // A7 REUSES clone's own artifact id for the family plan (PDF_FAMILY_ARTIFACTS.plan ===
-    // "pdf_template_intake.v1"), so envelopeOf's artifact check — the ONE guard against building on a
-    // wrong upstream envelope — cannot tell the two apart. The clone-shaped envelope carries none of
-    // the family fields.
+    // The SAME artifact id clone's own "intake" stage uses for its own envelope no longer applies
+    // here — pdfTemplateFamilyEngine.ts now stamps its own, distinct id (A10-D5's second half), so
+    // this assertion is itself part of the fix's own proof, not just a leftover.
     expect(intake.output.artifact).toBe(PDF_FAMILY_ARTIFACTS.plan);
-    expect(intake.output).not.toHaveProperty("familyId");
-    expect(intake.output).not.toHaveProperty("entryVariants");
-    // Clone's intake reads initialInput.pdfTemplateBrief, which this family run never sets, so the
-    // brief the editor supplied is discarded without a word.
-    expect(intake.output.entries).toEqual([]);
-    expect(String(intake.output.summary)).not.toContain("nonprofit-core");
-
+    // The family fields the editor's brief supplied are genuinely present — reached the real step.
+    expect(intake.output).toHaveProperty("familyId", "nonprofit-core");
+    expect(intake.output).toHaveProperty("useCase", "nonprofit_standard");
+    const entries = intake.output.entries as unknown[];
+    expect(entries.length).toBeGreaterThan(0); // real variants planned, not an empty shell
+    expect(String(intake.output.summary)).toContain("nonprofit-core");
   });
 
-  it("the overlay rule that causes it: a stored metadata key wins over the canonical one", () => {
+  it("FIXED — the overlay rule: a stored route-metadata key no longer wins over the canonical one", () => {
     const merged = __test__.overlayStoreNode(
       { id: "n", metadata: { cloneStageDeterministic: "pdf_family_plan", skipWhen: [] } } as never,
       { id: "n", metadata: { cloneStageDeterministic: "pdf_intake" } } as never
     );
-    expect(merged.metadata?.cloneStageDeterministic).toBe("pdf_intake");
+    // Canonical wins for the route key specifically — even though this stored row otherwise carries
+    // real content (skipWhen is canonical's own field here, absent from stored, so it still survives
+    // the merge; only cloneStageDeterministic is pinned).
+    expect(merged.metadata?.cloneStageDeterministic).toBe("pdf_family_plan");
   });
 });

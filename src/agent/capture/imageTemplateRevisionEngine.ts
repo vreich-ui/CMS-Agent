@@ -227,6 +227,14 @@ export type AssetCatalogSource = {
   resolveByTag: (tenantId: string, tag: string) => Promise<ResolvedSourceAsset[]>;
   resolveByChecksum: (tenantId: string, checksum: string) => Promise<ResolvedSourceAsset | undefined>;
   resolveByCaptureRequestId: (tenantId: string, captureRequestId: string) => Promise<ResolvedSourceAsset | undefined>;
+  // A10-D2 — true (or omitted) for a genuinely wired catalogue; explicitly `false` ONLY for
+  // imageTemplateRevisionProviders.ts's own NOT_CONFIGURED_ASSET_CATALOG stand-in, handed to a run
+  // with no asset catalogue wired at all. resolveSourceImageStep (below) reads this BEFORE calling
+  // any resolve* method, so "nobody has wired an asset catalogue yet" is its own, distinct blocker —
+  // never "no asset happens to match this tag/checksum", which an operator would misread as "the
+  // editor named the wrong asset" rather than "this deployment cannot look assets up at all" (A5's
+  // acceptance: unavailable must not read as "none found").
+  configured?: boolean;
 };
 
 export type ResolveSourceImageResult = { ok: true; asset: ResolvedSourceAsset } | { ok: false; code: string; reason: string };
@@ -235,6 +243,17 @@ export async function resolveSourceImageStep(input: { tenantId: string; ref: Sou
   const { tenantId, ref } = input;
   if (!nonEmptyString(ref.tag) && !nonEmptyString(ref.checksum) && !nonEmptyString(ref.captureRequestId)) {
     return { ok: false, code: "image_revision_source_ref_missing", reason: "sourceAsset must supply at least one of tag, checksum, or captureRequestId to resolve a trusted image." };
+  }
+  // A10-D2 — checked BEFORE any resolve* call, and named distinctly from every "not found" refusal
+  // below: an unconfigured catalogue is a capability gap ("nothing to search"), not a lookup miss
+  // ("searched, found nothing"). The two must never share a code or read the same in operator-facing
+  // prose — see this type's own `configured` comment.
+  if (deps.assetCatalog.configured === false) {
+    return {
+      ok: false,
+      code: "image_revision_asset_catalog_not_configured",
+      reason: `No asset catalogue is configured for tenant "${tenantId}"; source-image lookup (by tag, checksum, or capture request) is unavailable in this deployment — this is a missing capability, not a search that came back empty. Wire A5's asset_lookup_adopt provider (imageTemplateRevisionProviders.ts's setImageTemplateRevisionProviders) before naming image_revision assets by tag.`
+    };
   }
   if (nonEmptyString(ref.checksum)) {
     const found = await deps.assetCatalog.resolveByChecksum(tenantId, ref.checksum);
@@ -341,10 +360,27 @@ export type ImageRevisionItemOutcome =
   | "mint_rejected"
   | "publish_failed"
   | "verify_failed"
+  // A10-D3 — the target moved (a colleague published a new library version) between intake and
+  // apply; refused as a per-item failure rather than minted from a recipe this run knows is stale.
+  // See runImageRevisionApplyBatch's own comment on the check that produces this outcome.
+  | "concurrent_modification"
   | "verified";
 
-const FAILURE_OUTCOMES: ReadonlySet<ImageRevisionItemOutcome> = new Set(["source_resolve_failed", "target_fetch_failed", "compile_failed", "preview_failed", "mint_rejected", "publish_failed", "verify_failed"]);
-const SUCCESS_OUTCOMES: ReadonlySet<ImageRevisionItemOutcome> = new Set(["previewed", "not_approved", "verified"]);
+// A10-D4 — the only OUTCOME that means "this item's edit is actually live and confirmed present" is
+// `verified`. `previewed` and `not_approved` mean, respectively, "nothing was applied yet, pending a
+// decision" and "nothing was applied, explicitly not authorized" — NEITHER is evidence the edit
+// happened, and both used to be counted here, so a run that previewed three templates and had none
+// approved reported "3 item(s) succeeded, 0 failed" (buildImageTemplateRevisionReportStep, below),
+// contradicting A9's own acceptance criterion and A10's honest-partial requirement. See that
+// function's own `pending` bucket for how these two outcomes are now reported: neither a success nor
+// a failure, named on their own so the report is never ambiguous about what actually happened.
+const FAILURE_OUTCOMES: ReadonlySet<ImageRevisionItemOutcome> = new Set(["source_resolve_failed", "target_fetch_failed", "compile_failed", "preview_failed", "mint_rejected", "publish_failed", "verify_failed", "concurrent_modification"]);
+const SUCCESS_OUTCOMES: ReadonlySet<ImageRevisionItemOutcome> = new Set(["verified"]);
+// Neither a success nor a failure — a decision (approve, or a re-run to catch up with a concurrent
+// edit) is still pending. Kept as its own named set (rather than inferred as "everything else") so a
+// FUTURE outcome added to the union above must be deliberately classified into one of the three
+// buckets, never silently fall into "pending" by omission.
+const PENDING_OUTCOMES: ReadonlySet<ImageRevisionItemOutcome> = new Set(["previewed", "not_approved"]);
 
 export type ImageRevisionItemLedgerEntry = {
   templateRef: TargetTemplateRef;
@@ -555,6 +591,10 @@ export async function runImageRevisionApplyBatch(
   const currentByKey = new Map(input.intake.items.map((item) => [refKey(item.templateRef), item]));
   const items: ImageRevisionItemLedgerEntry[] = [];
   const toApply: Array<{ compiled: ImageRevisionItemLedgerEntry; requestedId: string; templateJson: Record<string, unknown>; imageFieldNamePrefix: string; sourceUrl?: string | null }> = [];
+  // A10-D3 — one shared store for the optimistic-concurrency re-read below, so every item's check
+  // goes through the SAME instance `deps.templateLibraryStore` (when a caller injects one, as every
+  // test double does) rather than each item silently constructing its own.
+  const concurrencyStore = deps.templateLibraryStore ?? new TemplateLibraryStore();
 
   for (const entry of input.compiled.items) {
     const digest = contentDigest({ entry, approve: input.approve });
@@ -575,6 +615,27 @@ export async function runImageRevisionApplyBatch(
     if (!requestedId) {
       items.push({ ...entry, outcome: "mint_rejected", detail: `templateId "${entry.templateRef.templateId}" is not shaped as "${input.targetProjectId}::pdf_template::<id>"; cannot derive a revision request for it.`, inputDigest: digest });
       continue;
+    }
+    // A10-D3 — optimistic concurrency: re-read the target's CURRENT version right before compiling
+    // the approved edit, and compare it against `beforeVersion` (the version intake itself read —
+    // compile+preview stamped it onto this same entry, above). Without this check, apply always
+    // recompiled from `item.current.recipe` — intake's own, possibly now-stale, read — and minted
+    // unconditionally: if a colleague published v2 mid-run, apply minted v3 from v1's recipe, v2's
+    // edit vanished from `latest`, and the item was reported `verified`. A moved version is refused
+    // here, NAMED, as a per-item failure — never silently recompiled from a recipe this run already
+    // knows is stale. (This is a per-item, not a whole-batch, refusal: an item whose target has not
+    // moved still proceeds normally, right below.)
+    if (entry.beforeVersion !== undefined) {
+      const latest = await fetchTargetTemplateVersionStep(entry.templateRef, { templateLibraryStore: concurrencyStore });
+      if (latest.ok && latest.template.version !== entry.beforeVersion) {
+        items.push({
+          ...entry,
+          outcome: "concurrent_modification",
+          detail: `"${entry.templateRef.templateId}" moved from v${entry.beforeVersion} (the version read at intake) to v${latest.template.version} before this apply ran; refusing to mint from a stale recipe. Re-run image_revision_intake to pick up the concurrent edit before retrying.`,
+          inputDigest: digest
+        });
+        continue;
+      }
     }
     const item = currentByKey.get(refKey(entry.templateRef));
     const compiledEdit = item?.current
@@ -699,15 +760,43 @@ export function buildImageTemplateRevisionReportStep(input: { intake: ImageRevis
 
   const succeeded = items.filter((entry) => SUCCESS_OUTCOMES.has(entry.outcome)).length;
   const failed = items.filter((entry) => FAILURE_OUTCOMES.has(entry.outcome)).length;
+  // A10-D4 — named separately from both: an item awaiting approval, or awaiting a re-run after a
+  // concurrent edit was detected (D3), is neither a confirmed success nor a failure. Computed as the
+  // remainder against the two named sets (rather than its own filter) so `succeeded + failed +
+  // pending === items.length` always holds by construction, even if a future outcome is added to the
+  // union without being sorted into PENDING_OUTCOMES.
+  const pending = items.length - succeeded - failed;
+  // Sanity check, not a second source of truth: every outcome the union declares must be classified
+  // into exactly one of the three named sets. If a future outcome is added to
+  // ImageRevisionItemOutcome without also sorting it into PENDING_OUTCOMES (or FAILURE_OUTCOMES/
+  // SUCCESS_OUTCOMES), this catches the drift immediately instead of letting `pending` silently
+  // absorb — or omit — the unclassified item.
+  const pendingByDeclaredSet = items.filter((entry) => PENDING_OUTCOMES.has(entry.outcome)).length;
+  if (pendingByDeclaredSet !== pending) {
+    throw new Error(
+      `buildImageTemplateRevisionReportStep: outcome classification is incomplete — ${pending} item(s) fall into neither SUCCESS_OUTCOMES nor FAILURE_OUTCOMES (computed "pending"), but only ${pendingByDeclaredSet} are declared in PENDING_OUTCOMES. A new ImageRevisionItemOutcome value was likely added without updating one of the three sets.`
+    );
+  }
+
+  // allFailed is now STRICT: every named item is a genuine failure, none merely pending. A run that
+  // previewed three templates and had none approved is NOT "all failed" (nothing failed — a decision
+  // is pending) and is certainly not the OLD "0 failed" success reading either; it is partial, named
+  // as such below, with 0 succeeded/0 failed/3 pending making that unambiguous in the summary.
+  const allFailed = items.length > 0 && succeeded === 0 && pending === 0;
+  // partial: this run did not cleanly succeed on every item, and is not a clean total failure either
+  // — covers a genuine success/failure mix AND a run sitting entirely on pending items (previewed but
+  // not approved, or held back by a detected concurrent edit) exactly like this function's own D4
+  // acceptance case, above.
+  const partial = items.length > 0 && succeeded < items.length && !allFailed;
 
   return {
     artifact: IMAGE_REVISION_ARTIFACTS.report,
-    summary: `image_template_revision for tenant "${input.intake.tenantId ?? "(none)"}": ${succeeded} item(s) succeeded, ${failed} failed, of ${items.length} named.`,
+    summary: `image_template_revision for tenant "${input.intake.tenantId ?? "(none)"}": ${succeeded} item(s) succeeded, ${failed} failed, ${pending} pending (previewed/not yet approved, or held back by a concurrent-edit check), of ${items.length} named.`,
     tenantId: input.intake.tenantId,
     sourceAsset: input.intake.sourceAsset,
     items,
     library: input.applied?.library,
-    partial: succeeded > 0 && failed > 0,
-    allFailed: items.length > 0 && succeeded === 0
+    partial,
+    allFailed
   };
 }

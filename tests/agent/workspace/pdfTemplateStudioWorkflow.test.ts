@@ -247,3 +247,110 @@ describe("the studio's two-step publication: template-store publication and libr
     expect(outcome.output.partial).toBe(false);
   });
 });
+
+// ===================================================================================================
+// A10-D1 — a chat-dispatched run (operationWorkflowBindings.ts's deliberately-empty
+// pdf_template_family inputMapping — see that module's own A10-D1 comment) never constructs a nested
+// pdfTemplateFamilyBrief. Before this fix, cloneConductorRoutes.ts's "pdf_family_plan" case fell
+// through to pdfTemplateFamilyPlanStep, which silently returned an EMPTY plan (`entries: []`) rather
+// than refusing — indistinguishable, downstream, from "a brief was supplied and legitimately named
+// zero variants".
+// ===================================================================================================
+describe("A10-D1 — pdf_family_plan refuses (clone_source_missing's own shape) when initialInput carries no pdfTemplateFamilyBrief at all", () => {
+  const nodesById = new Map(listPdfTemplateStudioNodes().map((node) => [node.id, node]));
+
+  it("refuses with a named blocker instead of completing an empty plan", async () => {
+    const run = {
+      projectId: TARGET,
+      workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
+      // Exactly what Platform's chat dispatch sends today: the operation's own flat fields, never a
+      // nested brief — see operationWorkflowBindings.ts's pdf_template_family binding.
+      initialInput: { targetProjectId: TARGET, familyId: "nonprofit-core", useCase: "nonprofit" },
+      stageOutputs: {}
+    } as unknown as WorkflowExecutionRecord;
+
+    const outcome = await runCloneStage({ run, node: nodesById.get("pdf_template_intake")!, stage: "pdf_family_plan" });
+    expect(outcome.kind).toBe("refused");
+    if (outcome.kind !== "refused") return;
+    expect(outcome.code).toBe("pdf_template_family_brief_missing");
+    expect(outcome.message).toContain("pdfTemplateFamilyBrief");
+    // Nothing was silently completed — no stage output to build a false "0 of 0 succeeded" report on.
+    expect(run.stageOutputs.pdf_template_intake).toBeUndefined();
+  });
+
+  it("still completes normally once a real pdfTemplateFamilyBrief is present", async () => {
+    const run = {
+      projectId: TARGET,
+      workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
+      initialInput: { targetProjectId: TARGET, pdfTemplateFamilyBrief: { siteId: TARGET, familyId: "nonprofit-core", useCase: "nonprofit" } },
+      stageOutputs: {}
+    } as unknown as WorkflowExecutionRecord;
+    const outcome = await runCloneStage({ run, node: nodesById.get("pdf_template_intake")!, stage: "pdf_family_plan" });
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    expect(outcome.output.artifact).toBe(PDF_FAMILY_ARTIFACTS.plan);
+  });
+});
+
+// ===================================================================================================
+// A10-D5 — pdf_template_studio reuses four of clone_conductor's own node ids
+// (pdf_template_intake/pdf_template_designer/pdf_template_mint/pdf_template_publish), and those four
+// ids ALSO already exist in the shared workspace store (seeded from clone_conductor's own definition
+// — workspaceStoreNodes.ts does not include pdfTemplateStudioNodes.ts at all). In store mode (the
+// default), resolveConductorNodes used to let the STORED (clone's) metadata.cloneStageDeterministic
+// win over the studio's own canonical value, so a pdf_template_studio run actually dispatched
+// clone_conductor's OWN "pdf_intake"/"pdf_mint"/"pdf_publish" stages. See executor.ts's
+// overlayStoreNode / pinRouteMetadataToCanonical for the fix.
+// ===================================================================================================
+describe("A10-D5 — resolveConductorNodes hands pdf_template_studio its OWN route keys, not clone_conductor's", () => {
+  beforeEach(async () => {
+    resetRepositoryManager();
+    await repositoryManager.getWorkspaceRepository().ensureWorkspaceNodeSeeds();
+  });
+  afterEach(() => resetRepositoryManager());
+
+  it("the four id-colliding nodes resolve to the studio's own stage names in STORE mode (the default), even though the store's only row for each id is clone_conductor's", async () => {
+    const { resolveConductorNodes } = await import("../../../src/agent/workspace/executor.js");
+    const resolved = new Map(
+      (await resolveConductorNodes(repositoryManager.getWorkspaceRepository(), PDF_TEMPLATE_STUDIO_WORKFLOW_ID)).map((node) => [node.id, node])
+    );
+    expect(resolved.get("pdf_template_intake")?.metadata?.cloneStageDeterministic).toBe("pdf_family_plan");
+    expect(resolved.get("pdf_template_mint")?.metadata?.cloneStageDeterministic).toBe("pdf_mint_validated");
+    expect(resolved.get("pdf_template_publish")?.metadata?.cloneStageDeterministic).toBe("pdf_publish_only");
+    // The two studio-only nodes (no store row at all) are unaffected either way.
+    expect(resolved.get("pdf_template_library_deposit")?.metadata?.cloneStageDeterministic).toBe("pdf_library_deposit");
+    expect(resolved.get("pdf_template_family_report")?.metadata?.cloneStageDeterministic).toBe("pdf_family_report");
+  });
+
+  it("the consequence, end to end: a family run's brief actually reaches the plan step through resolveConductorNodes's OWN resolved node, not the canonical literal", async () => {
+    const { resolveConductorNodes } = await import("../../../src/agent/workspace/executor.js");
+    const resolved = new Map(
+      (await resolveConductorNodes(repositoryManager.getWorkspaceRepository(), PDF_TEMPLATE_STUDIO_WORKFLOW_ID)).map((node) => [node.id, node])
+    );
+    const run = {
+      projectId: TARGET,
+      workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
+      initialInput: { targetProjectId: TARGET, pdfTemplateFamilyBrief: { siteId: TARGET, familyId: "nonprofit-core", useCase: "nonprofit" } },
+      stageOutputs: {}
+    } as unknown as WorkflowExecutionRecord;
+    const intakeNode = resolved.get("pdf_template_intake")!;
+    const outcome = await runCloneStage({ run, node: intakeNode, stage: intakeNode.metadata!.cloneStageDeterministic as never });
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    // Clone's own "pdf_intake" stage would have produced an envelope with none of these fields, and
+    // its own PDF_TEMPLATE_ARTIFACTS.intake artifact — now a DISTINCT string from the family plan's
+    // (see pdfTemplateEngine.ts's PDF_TEMPLATE_ARTIFACTS.familyIntake comment, A10-D5).
+    expect(outcome.output.artifact).toBe(PDF_FAMILY_ARTIFACTS.plan);
+    expect(outcome.output).toHaveProperty("familyId", "nonprofit-core");
+    expect(outcome.output).toHaveProperty("entryVariants");
+  });
+
+  it("the overlay rule, unit-level: a route-selecting metadata key is pinned to canonical, never won by a stored row", async () => {
+    const { __test__ } = await import("../../../src/agent/workspace/executor.js");
+    const merged = __test__.overlayStoreNode(
+      { id: "n", metadata: { cloneStageDeterministic: "pdf_family_plan", skipWhen: [] } } as never,
+      { id: "n", metadata: { cloneStageDeterministic: "pdf_intake" } } as never
+    );
+    expect(merged.metadata?.cloneStageDeterministic).toBe("pdf_family_plan");
+  });
+});
