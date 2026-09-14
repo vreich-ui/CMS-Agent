@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanonicalClientManagerAgent } from "../../../src/agent/conversations/agentDefinitions.js";
 import { assembleConversationPrompt, ConversationalRunner, type PublicationIdentity } from "../../../src/agent/conversations/conversationalRunner.js";
-import { ConverseError, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_MESSAGES, parseAgentConverseInput, type AgentConverseInput } from "../../../src/agent/conversations/conversationContract.js";
+import { ConverseError, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_MESSAGES, MAX_UI_CAPABILITY_ACTIONS, parseAgentConverseInput, type AgentConverseInput } from "../../../src/agent/conversations/conversationContract.js";
 import { createConversationProvider, type ConversationProvider } from "../../../src/agent/conversations/conversationProviders.js";
 import { RepositoryManager } from "../../../src/agent/repository/RepositoryManager.js";
 
@@ -122,6 +122,37 @@ describe("ConversationalRunner client_manager.turn.v1", () => {
     expect(() => parseAgentConverseInput({ ...request(), extra: true })).toThrowError(expect.objectContaining({ code: "invalid_turn_request" }));
     expect(() => parseAgentConverseInput(request({ messages: [{ role: "tool", tool_call_id: "missing", content: "no opener" }] }))).toThrowError(expect.objectContaining({ code: "invalid_turn_request" }));
     expect(() => parseAgentConverseInput(request({ actor: { kind: "human", id: "editor@example.com" } }))).toThrowError(expect.objectContaining({ code: "invalid_turn_request" }));
+  });
+
+  // ASV2-W4-CA §7: `context.ui_capabilities` is additive and optional. A turn that omits it is
+  // unchanged (every other test in this file already covers that path — `request()` never sets it);
+  // a well-formed one is accepted; one over either bound (here, actions past MAX_UI_CAPABILITY_ACTIONS)
+  // is rejected the same way every other oversized wire field in this contract is — invalid_turn_request
+  // on the whole request, never a silent drop or truncation at this layer (Platform's own
+  // `checkConverseBounds` is what normally keeps an over-bounds object from being sent at all).
+  it("accepts a well-formed context.ui_capabilities, rejects one over the actions bound, and leaves a turn without it unchanged", () => {
+    const wellFormed = {
+      v: 2 as const,
+      controls: ["radio", "checkbox", "toggle", "actions", "select_object", "confirm"],
+      actions: [
+        { verb: "object_validate", label: "Validate" },
+        { verb: "object_submit_review", label: "Submit for review", params: { note: { type: "string", required: false } } }
+      ]
+    };
+    const accepted = parseAgentConverseInput(request({ context: { ...request().context, ui_capabilities: wellFormed } }));
+    expect(accepted.context.ui_capabilities).toEqual(wellFormed);
+
+    const overBounds = {
+      v: 2 as const,
+      controls: ["actions"],
+      actions: Array.from({ length: MAX_UI_CAPABILITY_ACTIONS + 1 }, (_, index) => ({ verb: `verb_${index}`, label: `Action ${index}` }))
+    };
+    expect(() => parseAgentConverseInput(request({ context: { ...request().context, ui_capabilities: overBounds } })))
+      .toThrowError(expect.objectContaining({ code: "invalid_turn_request" }));
+
+    // A turn that never mentions it at all parses exactly as it always has.
+    const withoutField = parseAgentConverseInput(request());
+    expect(withoutField.context.ui_capabilities).toBeUndefined();
   });
 
   it("returns every typed project, agent, provider, and budget error", async () => {
