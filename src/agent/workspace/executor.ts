@@ -168,6 +168,14 @@ const boundText = (value: string, max: number): string => {
 const boundList = (values: string[] | undefined, maxItems: number, maxChars: number): string[] | undefined =>
   values === undefined ? undefined : values.slice(0, maxItems).map((value) => boundText(value, maxChars));
 
+/** The first 240 characters of a commissioned run's instructions — see its one call site below. */
+const commissionedBriefOf = (run: WorkflowExecutionRecord): string | undefined => {
+  const input = run.initialInput;
+  if (typeof input !== "object" || input === null) return undefined;
+  const instructions = (input as { instructions?: unknown }).instructions;
+  return typeof instructions === "string" && instructions.trim() ? boundText(instructions.trim(), 240) : undefined;
+};
+
 export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   runId: run.runId,
   // The caller's join key. compactRun (workflow.run_all) has always carried it;
@@ -177,6 +185,16 @@ export const summarizeRunForList = (run: WorkflowExecutionRecord) => ({
   // requests it asked for without opening every run individually. Schema-additive
   // and bounded (one short id), so PR #105's compaction contract is untouched.
   ...(run.requestId !== undefined ? { requestId: run.requestId } : {}),
+  // Track C — the origin stamp, on the LIST row and not only the full record. The platform's sweep
+  // adopts commissioned runs off exactly this page; making it open each run to find out who asked
+  // would turn one call per pass into one call per run.
+  ...(run.commissionedBy !== undefined ? { commissionedBy: run.commissionedBy } : {}),
+  ...(run.commissioningRationale !== undefined ? { commissioningRationale: run.commissioningRationale } : {}),
+  // ...and the brief, bounded, for commissioned runs ONLY. A list row never carries initialInput (PR
+  // #105's compaction contract), and rightly so — but a commissioned run's brief is the only thing
+  // that can become the TITLE a human sees in the requests inbox, because nobody wrote one. Gated on
+  // the stamp and cut to 240 chars, so an ordinary page of rows is byte-for-byte what it was.
+  ...(run.commissionedBy !== undefined ? { commissionedBrief: commissionedBriefOf(run) } : {}),
   workflowId: run.workflowId,
   projectId: run.projectId,
   status: run.status,
@@ -240,7 +258,7 @@ const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: Workspa
   metadata: { dryRun: true, source: "workflow.run_next_node", estimateMethod: "deterministic_mock_length" }
 });
 
-export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number; requestId?: string };
+export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number; requestId?: string; commissionedBy?: string; commissioningRationale?: string };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
 
 // Session A (2026-08-03) — cursor pagination + filters on workflow.list_runs. PR #105 made each row
@@ -594,7 +612,12 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
     dryRun: true,
     executionMode: data.executionMode ?? DEFAULT_EXECUTION_MODE,
     ...(entrypoint ? { entrypoint } : {}),
-    ...(data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {})
+    ...(data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {}),
+    // Track C — stamped at birth, never later. A stamp written after the run exists would mean a
+    // window in which a commissioned run is indistinguishable from a human-asked one, which is
+    // exactly the window the platform's adoption sweep reads.
+    ...(data.commissionedBy ? { commissionedBy: data.commissionedBy } : {}),
+    ...(data.commissioningRationale ? { commissioningRationale: data.commissioningRationale } : {})
   } as WorkflowExecutionRecord;
 };
 
@@ -1242,7 +1265,16 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     // retries the ORIGINAL request under the ORIGINAL policy it was created under, so a policy edit
     // made after the run started must not change what the reset run resolves to (a fresh capture
     // here would be exactly the staleness bug §2.5 exists to prevent, one layer later).
-    const rebuilt = buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd }, nodes, runId, existing.requestId);
+    // Track C — `commissionedBy` / `commissioningRationale` are carried through a reset for the same
+    // reason `requestId` is: they are facts about WHO ASKED, and a reset re-runs the work, it does
+    // not change who wanted it. Dropping them was not cosmetic. Every one of the planner's own
+    // brakes filters on that stamp, so an operator resetting a failed commissioned run would have
+    // erased it from the failure streak (the breaker stops tripping), handed back its run slot AND
+    // refunded its cost from the day's budget view (the planner commissions an extra run against
+    // money already spent), and left the platform's adoption sweep unable to see it at all — so the
+    // article would publish with no accountable origin anywhere, which is precisely the state the
+    // stamp exists to make impossible.
+    const rebuilt = buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd, commissionedBy: existing.commissionedBy, commissioningRationale: existing.commissioningRationale }, nodes, runId, existing.requestId);
     return store.resetRun(runId, {
       ...rebuilt,
       ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision, operatorDecisionSource: existing.operatorDecisionSource ?? "explicit" } : {}),

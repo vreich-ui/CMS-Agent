@@ -71,6 +71,16 @@ export type EditorialStrategyBody = {
   funnel_aggression: EditorialStrategyFunnelAggression;
   cadence: string;
   notes?: string;
+  /**
+   * Track C — the autonomous-commissioning block, read by `editorial_planner`.
+   *
+   * `unknown` on purpose. This repo's job here is to PASS THE BLOCK THROUGH from the tenant's object
+   * to the one module that interprets it (`planner/commissioningTypes.ts`, which reads it
+   * defensively field by field). Typing it structurally would put a second, weaker copy of the
+   * platform's contract in the consumer contract above — and the shape check below would then have
+   * an opinion about a block it has no business refusing, on tenants running an older platform.
+   */
+  commissioning?: unknown;
   provenance: StrategyProvenance;
 };
 
