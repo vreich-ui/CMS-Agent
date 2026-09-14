@@ -2,6 +2,8 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 import { runStallFacts, HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type PublishingPolicySnapshot, type RunDriver, type RunStallFacts, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
 import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
 import { RunConcurrencyError, type ExecutionRepository, type RunSummaryRecord } from "../repository/interfaces/ExecutionRepository.js";
+import { saveNodeAdvance } from "./nodeAdvanceSave.js";
+import { beginDispatchHeartbeat, DISPATCH_HEARTBEAT_GRACE_MS, DISPATCH_HEARTBEAT_INTERVAL_MS, endDispatchHeartbeat, isDispatchHeartbeatSilent, resolveDispatchHeartbeatRepository, type DispatchHeartbeat } from "./dispatchHeartbeat.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
@@ -984,9 +986,12 @@ const readEmittedResolvedVector = (output: unknown): AggressionVector | undefine
   return Object.fromEntries(AGGRESSION_DIALS.map((dial) => [dial, record[dial] as number])) as AggressionVector;
 };
 
-const stampDispatch = (state: NodeExecutionState, dispatchedAt: string, timeoutMs: number, driver: RunDriver, projectEndpointConfigured: boolean): void => {
+const stampDispatch = (runId: string, state: NodeExecutionState, dispatchedAt: string, timeoutMs: number, driver: RunDriver, projectEndpointConfigured: boolean): void => {
   state.dispatch = { ...(state.dispatch ?? {}), dispatchedAt, timeoutMs, driver, projectEndpointConfigured };
   state.lastDispatch = { dispatchedAt, driver, projectEndpointConfigured };
+  // D3 — the single place a claim is written is the single place a heartbeat starts. advanceRun's
+  // finally is the single place it stops. Best-effort and never awaited: see dispatchHeartbeat.ts.
+  beginDispatchHeartbeat(runId, state.nodeId, dispatchedAt, driver);
 };
 
 const nodeBudgetUsdOf = (node: WorkspaceNode): number | undefined => {
@@ -1012,6 +1017,10 @@ export type RunStallInfo = {
   dispatchedAt?: string;
   timeoutMs?: number;
   stalledSuspected: boolean;
+  // D3 — set when the verdict was reached on heartbeat silence rather than on the claim window
+  // expiring. The two are different facts about the same claim and an operator needs to tell them
+  // apart: one says the driver is gone, the other only that the node has run out of time.
+  heartbeatSilent?: boolean;
   advice?: string;
   // W0 T0.3 — WHEN A BACKGROUND DRIVER LAST LOOKED AT THIS RUN, and what it decided (run.driverHealth,
   // written by the continuation tick). Without these two fields the stall block could describe the
@@ -1105,7 +1114,20 @@ export async function nextDispatchTimeoutMs(run: WorkflowExecutionRecord, worksp
 // W0 T0.4 — measured per-node p95 durations (nodeTimings.aggregateNodeTimingsByNode), supplied by the
 // caller that already reads them (workflow.get_run / list_runs). Optional: without them assessRunStall
 // behaves exactly as it did, so no existing caller changes meaning.
-export type RunStallTimingContext = { p95DurationMsByNode?: Record<string, number> };
+export type RunStallTimingContext = {
+  p95DurationMsByNode?: Record<string, number>;
+  // D3 — this run's in-flight dispatch heartbeat (dispatchHeartbeat.ts), when the caller has a
+  // driver-health store to read it from. Optional: absent, every verdict is exactly the one it was
+  // before D3 — the claim's own timeout window decides and nothing is reclaimed early.
+  dispatchHeartbeat?: DispatchHeartbeat;
+};
+
+// D3 — best-effort read of the in-flight heartbeat. A store this process cannot reach costs a
+// reclaim its EARLY signal, never its correctness: the timeout rule is still there behind it.
+export async function readDispatchHeartbeat(runId: string): Promise<DispatchHeartbeat | undefined> {
+  try { return await resolveDispatchHeartbeatRepository()?.getDispatchHeartbeat(runId); }
+  catch { return undefined; }
+}
 
 // The multiple of the remaining work's own p95 that counts as "this is not slow, it is not moving".
 // Deliberately generous: three times the p95 sum of everything still to run is a run that, on its
@@ -1134,16 +1156,29 @@ export function assessRunStallFrom(facts: RunStallFacts, at: Date = new Date(), 
   const inFlight = facts.inFlight;
   if (inFlight) {
     const deadline = Date.parse(inFlight.dispatchedAt) + inFlight.timeoutMs + STALL_MARGIN_MS;
-    const stalled = at.getTime() > deadline;
+    // D3 — two independent reasons a claim is reclaimable. The window is a bound on the NODE; the
+    // heartbeat is a signal about the DRIVER, and it is the one with a sense of scale: a driver that
+    // stopped one second after dispatching is provable in ~30s instead of 180-390s.
+    const heartbeatSilent = isDispatchHeartbeatSilent(timing?.dispatchHeartbeat, inFlight.dispatchedAt, at);
+    const windowExpired = at.getTime() > deadline;
+    const stalled = windowExpired || heartbeatSilent;
+    // D2 — THE NOTE MUST NEVER SAY "NOTHING IS IN FLIGHT" WHILE A CLAIM IS STAMPED. It said exactly
+    // that on every one of run_1789303857536_obd2fd's six abandoned nodes, and it was false every
+    // time: the claim was stamped, the node was unreclaimable behind it, and an operator reading
+    // "nothing is in flight" had no reason to look at the claim at all.
+    const claimNote = `A dispatch claim for ${inFlight.nodeId} (dispatched ${inFlight.dispatchedAt}, ${inFlight.timeoutMs}ms window${inFlight.driver ? `, driver ${inFlight.driver}` : ""}) is STILL STAMPED on this run; until it is reclaimed no driver may dispatch this node.`;
     return {
       ...driverHealth,
       inFlightNodeId: inFlight.nodeId,
       dispatchedAt: inFlight.dispatchedAt,
       timeoutMs: inFlight.timeoutMs,
       stalledSuspected: stalled,
+      ...(heartbeatSilent ? { heartbeatSilent: true } : {}),
       advice: stalled
-        ? `Node ${inFlight.nodeId} was dispatched at ${inFlight.dispatchedAt} with a ${inFlight.timeoutMs}ms timeout and never reported back — the driver process died mid-node. Nothing is in flight. Advance the run (workflow.run_until / run_next_node, or the conductor job with --run) to reclaim the stale dispatch and continue.`
-        : `Node ${inFlight.nodeId} is in flight within its timeout window; no action needed yet.`
+        ? `${heartbeatSilent
+            ? `Node ${inFlight.nodeId}'s dispatch heartbeat has been silent for more than ${DISPATCH_HEARTBEAT_GRACE_MS}ms (beat every ${DISPATCH_HEARTBEAT_INTERVAL_MS}ms) — its driver is gone.`
+            : `Node ${inFlight.nodeId} was dispatched at ${inFlight.dispatchedAt} with a ${inFlight.timeoutMs}ms timeout and never reported back — its driver did not complete the node.`} ${claimNote} Advance the run (workflow.run_until / run_next_node, or the conductor job with --run) to reclaim the stale dispatch and continue.`
+        : `Node ${inFlight.nodeId} is in flight within its timeout window and its driver is heartbeating; no action needed yet. ${claimNote}`
     };
   }
   const idleMs = at.getTime() - Date.parse(facts.updatedAt);
@@ -1607,7 +1642,7 @@ async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: Work
     const state = claimStates.get(node.id) as NodeExecutionState;
     state.status = "running";
     state.startedAt = dispatchedAt;
-    stampDispatch(state, dispatchedAt, nodeTimeoutMs(node), driver, projectEndpointConfigured);
+    stampDispatch(run.runId, state, dispatchedAt, nodeTimeoutMs(node), driver, projectEndpointConfigured);
   }
   run.status = "running";
   run.currentNodeId = batch[0].id;
@@ -1669,7 +1704,14 @@ async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: Work
   if (reconciled.budgetBlock) reconciled.budgetBlock = undefined;
   markPendingPublishApproval(reconciled, nodes);
   reconciled.updatedAt = now();
-  const saved = await store.saveRun(reconciled);
+  // D1 — same merge-and-retry the serial path uses: a foreign write landing while four siblings were
+  // in flight must not discard all four and orphan four claims (nodeAdvanceSave.ts).
+  const batchOutcome = await saveNodeAdvance(store, reconciled, batch.map((node) => node.id));
+  if (batchOutcome.abandoned) {
+    if (rejection !== undefined) throw rejection;
+    return batchOutcome.abandoned;
+  }
+  const saved = batchOutcome.saved;
   // Side effects after the durable commit, in canonical order, non-authoritative — same posture and same
   // sequence the serial path uses: usage/stage-output mirror first, then T6's timing ledger, which lands
   // exactly one record per node completion because it reads the terminal state off the SAVED record.
@@ -1715,7 +1757,14 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     const inFlight = run.nodes.find((node) => node.status === "running" && node.dispatch);
     if (inFlight) {
       const deadline = Date.parse(inFlight.dispatch!.dispatchedAt) + inFlight.dispatch!.timeoutMs + STALL_MARGIN_MS;
-      if (Date.now() <= deadline) return run;
+      const windowExpired = Date.now() > deadline;
+      // D3 — HEARTBEAT-BASED RECLAIM. Only consulted while the window still holds, so a store read is
+      // never on the path of a dispatch that is about to be reclaimed anyway. A dispatch that IS
+      // heartbeating is untouched exactly as before: the double-dispatch guard is the same guard.
+      const heartbeatSilent = windowExpired
+        ? false
+        : isDispatchHeartbeatSilent(await readDispatchHeartbeat(runId), inFlight.dispatch!.dispatchedAt, new Date());
+      if (!windowExpired && !heartbeatSilent) return run;
       // W0.3 — RECORD THE RECLAIM BEFORE ERASING THE EVIDENCE OF IT.
       //
       // The seven deletes below are correct — a requeued node must not carry a half-finished
@@ -1750,7 +1799,7 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       delete inFlight.errors;
       delete inFlight.blockage;
       delete inFlight.dispatch;
-      inFlight.warnings = [...(inFlight.warnings ?? []), "stale_dispatch_reclaimed"];
+      inFlight.warnings = [...(inFlight.warnings ?? []), "stale_dispatch_reclaimed", ...(heartbeatSilent ? ["dispatch_heartbeat_silent"] : [])];
       run.updatedAt = now();
       await recordNodeTimingCompletion({
         runId: run.runId,
@@ -1867,7 +1916,13 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
       // R-18: record (or clear) a look-ahead publish-approval hold before the state is committed, so the
       // hold is durable and visible on the very next read rather than only after another advance attempt.
       markPendingPublishApproval(prepared.run, nodes);
-      const saved = await store.saveRun(prepared.run);
+      // D1 — never a bare saveRun for a node that has already RUN. A CAS conflict here used to
+      // restart the advance, which found this driver's own live claim and returned the run untouched:
+      // the finished node's output was discarded and its claim was orphaned until it aged out. See
+      // nodeAdvanceSave.ts for the mechanism and the one condition under which discarding is right.
+      const advanceOutcome = await saveNodeAdvance(store, prepared.run, [nextNode.id]);
+      if (advanceOutcome.abandoned) return advanceOutcome.abandoned;
+      const saved = advanceOutcome.saved;
       // Side effects (usage telemetry, workspace stage-output mirror) run only after the state
       // transition is durably committed, so a discarded attempt on a CAS conflict leaves no phantom
       // usage behind. They are non-authoritative — the run record itself already holds the output —
@@ -1887,6 +1942,11 @@ async function advanceRun(runId: string, store: ExecutionRepository, options: Ru
     } catch (error) {
       if (isConcurrencyConflict(error)) continue;
       throw error;
+    } finally {
+      // D3 — this attempt is over, whatever happened to it. Stopping the heartbeat here (rather than
+      // at each of the dispatch paths' many exits) is what makes "a heartbeat exists and is fresh"
+      // mean "a driver is inside a dispatch right now" and nothing else.
+      endDispatchHeartbeat(runId);
     }
   }
   return (await store.getRun(runId)) ?? latest!;
@@ -2040,7 +2100,7 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
     const timeoutMs = phaseTimeoutMsFor(routeId, phaseId, nextNode);
     if (timeoutMs === undefined) return;
     try {
-      stampDispatch(state, now(), timeoutMs, options.driver ?? "http_run_all", state.dispatch?.projectEndpointConfigured ?? false);
+      stampDispatch(run.runId, state, now(), timeoutMs, options.driver ?? "http_run_all", state.dispatch?.projectEndpointConfigured ?? false);
       // W1.3 — "why is this node's deadline 400s and not 90s" has to be answerable from the run
       // record alone. One warning per distinct phase (not per re-stamp): a ten-slot materializer
       // re-stamps ten times and should say "slot", once, not ten identical lines.
@@ -3126,7 +3186,7 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
   // on together with the dispatch stamp. Every terminal path out of both branches deletes it again
   // (the capture "pending" re-queue already did), so no branch can leave a lease-shaped ghost behind.
   if (claim && takesDeterministicStageClaim(nextNode)) {
-    stampDispatch(state, startedAt, deterministicStageTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
+    stampDispatch(run.runId, state, startedAt, deterministicStageTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
     run = await store.saveRun(run);
     state = stateById(run).get(nextNode.id) as NodeExecutionState;
   }
@@ -3461,7 +3521,7 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
   // observation path (claim=false), which restores run status itself and must not publish interim
   // state. A CAS conflict here propagates to advanceRun's retry loop like any other save conflict.
   if (claim) {
-    stampDispatch(state, startedAt, nodeTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
+    stampDispatch(run.runId, state, startedAt, nodeTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
     run = await store.saveRun(run);
     state = stateById(run).get(nextNode.id) as NodeExecutionState;
   }

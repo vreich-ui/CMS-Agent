@@ -23,6 +23,7 @@
 
 import { assessRunStall, nextDispatchTimeoutMs, runNextNode, DISPATCH_DEADLINE_MARGIN_MS, type RunStallInfo, type RunStallTimingContext } from "./executor.js";
 import { aggregateNodeTimingsByNode } from "./nodeTimings.js";
+import type { DispatchHeartbeat } from "./dispatchHeartbeat.js";
 import type { NodeTimingRepository } from "../repository/interfaces/NodeTimingRepository.js";
 import { isOperatorPublishWithheld } from "./publishDecision.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "./executionTypes.js";
@@ -112,7 +113,9 @@ export const decideRunContinuation = (run: WorkflowExecutionRecord, at: Date = n
     return { ...base, reenter: false, code: "skip_dispatch_in_flight", reason: `Node ${stall.inFlightNodeId} was dispatched at ${stall.dispatchedAt} and is inside its ${stall.timeoutMs}ms claim window — something is genuinely in flight. Re-entering would double-dispatch it.`, stall };
   }
   if (stall?.inFlightNodeId) {
-    return { ...base, reenter: true, code: "reenter_stale_dispatch", reason: `Node ${stall.inFlightNodeId}'s dispatch claim outlived its own timeout — the driver died mid-node. The advance reclaims the stale claim and continues from persisted state.`, stall };
+    return { ...base, reenter: true, code: "reenter_stale_dispatch", reason: stall.heartbeatSilent
+      ? `Node ${stall.inFlightNodeId}'s dispatch heartbeat went silent — its driver is gone, well before the claim's own ${stall.timeoutMs}ms window would have expired. The advance reclaims the claim and continues from persisted state.`
+      : `Node ${stall.inFlightNodeId}'s dispatch claim outlived its own timeout — the driver did not complete the node. The advance reclaims the stale claim and continues from persisted state.`, stall };
   }
   return { ...base, reenter: true, code: "reenter_idle_driver", reason: "Nothing is in flight and the run is not halted: the driver is parked between nodes. Re-entering continues it from persisted state under every gate an external advance applies.", ...(stall ? { stall } : {}) };
 };
@@ -328,7 +331,24 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
     return context;
   };
   for (const run of runs) await timingFor(run);
-  const { reenter, skipped } = selectContinuableRuns(runs, clock(), (run) => timingCache.get(`${run.workflowId}::${run.projectId ?? ""}`));
+  // D3 — the in-flight dispatch heartbeats, read ONCE per scan and only for the runs that actually
+  // carry a live claim (everything else has nothing to be silent about). This is what lets the tick
+  // reclaim a dead dispatch in ~30-45s instead of waiting out the node's own 180-390s window. Wholly
+  // best-effort, exactly like the timing aggregates above: no heartbeat means the verdict is the one
+  // it was before D3.
+  const heartbeatByRun = new Map<string, DispatchHeartbeat>();
+  for (const run of runs) {
+    if (run.status !== "running") continue;
+    if (!run.nodes.some((node) => node.status === "running" && node.dispatch)) continue;
+    const beat = await driverHealthRepository?.getDispatchHeartbeat(run.runId).catch(() => undefined);
+    if (beat) heartbeatByRun.set(run.runId, beat);
+  }
+  const stallContextFor = (run: WorkflowExecutionRecord): RunStallTimingContext => {
+    const timing = timingCache.get(`${run.workflowId}::${run.projectId ?? ""}`) ?? {};
+    const beat = heartbeatByRun.get(run.runId);
+    return beat ? { ...timing, dispatchHeartbeat: beat } : timing;
+  };
+  const { reenter, skipped } = selectContinuableRuns(runs, clock(), stallContextFor);
   const selected = reenter.slice(0, Math.max(1, Math.floor(deps.maxRuns ?? DEFAULT_MAX_RUNS)));
   const driven: ContinuationRunReport[] = [];
   let timedOut = false;
@@ -356,7 +376,7 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
           continue;
         }
       }
-      while (current && decideRunContinuation(current, clock(), timingCache.get(`${current.workflowId}::${current.projectId ?? ""}`)).reenter && report.steps < maxSteps) {
+      while (current && decideRunContinuation(current, clock(), stallContextFor(current)).reenter && report.steps < maxSteps) {
         if (deps.signal?.aborted) { aborted = true; break; }
         if (clock().getTime() > deadline) { timedOut = true; break; }
         // W0 T1.2 — DEADLINE-AWARE DISPATCH. Ask how long the next dispatch could claim (the node's
@@ -432,6 +452,21 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
     try {
       const stored = await deps.executionRepository.getRun(verdict.runId);
       if (!stored) continue;
+      // D1 (2026-09-14) — NEVER WRITE THE RUN RECORD OF A RUN SOMEBODY IS MID-NODE ON.
+      //
+      // This stamp is pure observability (`lastSeenByTickAt`, which changes every tick, so it is
+      // always a full record write). Every save in this repository is a compare-and-swap, so a stamp
+      // landing while another driver holds a live dispatch claim makes THAT driver's completion save
+      // conflict — and before nodeAdvanceSave.ts existed, a conflicting completion threw the finished
+      // node away and orphaned its claim for 180-390s. That is the mechanism behind five of the six
+      // "the driver process died mid-node" nodes in run_1789303857536_obd2fd.
+      //
+      // nodeAdvanceSave.ts makes such a conflict survivable; this makes it not happen. Re-read from
+      // the STORED record rather than trusting the verdict, because the verdict was computed before
+      // the driving loop and another driver may have dispatched since. The run still appears in the
+      // tick ledger below — that store is not the run record and conflicts with nothing.
+      const storedStall = assessRunStall(stored, new Date(observedAt), stallContextFor(stored));
+      if (storedStall?.inFlightNodeId && !storedStall.stalledSuspected) continue;
       const advancedSteps = stepsByRun.get(verdict.runId) ?? 0;
       const applied = applyRunDriverHealth(stored, {
         at: observedAt,

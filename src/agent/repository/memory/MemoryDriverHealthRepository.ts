@@ -1,4 +1,5 @@
 import type { TenantDriverHealth, TickLedgerEntry } from "../../workspace/driverHealth.js";
+import type { DispatchHeartbeat } from "../../workspace/dispatchHeartbeat.js";
 import type { RepositoryBackend } from "../RepositoryManager.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { DriverHealthRepository, TickLedgerFilters } from "../interfaces/DriverHealthRepository.js";
@@ -6,6 +7,7 @@ import type { DriverHealthRepository, TickLedgerFilters } from "../interfaces/Dr
 export class MemoryDriverHealthRepository implements DriverHealthRepository {
   private readonly ticks = new Map<string, TickLedgerEntry>();
   private readonly tenants = new Map<string, TenantDriverHealth>();
+  private readonly heartbeats = new Map<string, DispatchHeartbeat>();
 
   constructor(private readonly backend: RepositoryBackend = "memory") {}
 
@@ -34,6 +36,19 @@ export class MemoryDriverHealthRepository implements DriverHealthRepository {
     return record;
   }
 
+  async recordDispatchHeartbeat(beat: DispatchHeartbeat): Promise<DispatchHeartbeat> {
+    this.heartbeats.set(beat.runId, { ...beat, nodeIds: [...beat.nodeIds] });
+    return beat;
+  }
+
+  async getDispatchHeartbeat(runId: string): Promise<DispatchHeartbeat | undefined> {
+    return this.heartbeats.get(runId);
+  }
+
+  async clearDispatchHeartbeat(runId: string): Promise<void> {
+    this.heartbeats.delete(runId);
+  }
+
   async getTenantHealth(projectId: string): Promise<TenantDriverHealth | undefined> {
     return this.tenants.get(projectId);
   }
@@ -45,6 +60,7 @@ export class MemoryDriverHealthRepository implements DriverHealthRepository {
   clear(): void {
     this.ticks.clear();
     this.tenants.clear();
+    this.heartbeats.clear();
   }
 
   async health(): Promise<RepositoryHealth> {

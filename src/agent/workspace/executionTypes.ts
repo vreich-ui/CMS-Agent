@@ -238,7 +238,9 @@ export type RunStallFacts = {
   updatedAt: string;
   driverHealth?: RunDriverHealth;
   // The first node found "running" with a live dispatch claim.
-  inFlight?: { nodeId: string; dispatchedAt: string; timeoutMs: number };
+  // D2 — `driver` rides along so a stall note can name WHICH driver stamped the claim it is telling
+  // the operator about. Optional: an index entry written before this field existed simply omits it.
+  inFlight?: { nodeId: string; dispatchedAt: string; timeoutMs: number; driver?: RunDriver };
   // Node ids still queued or running — the remaining work the p95 comparison is made against.
   remainingNodeIds: string[];
 };
@@ -261,7 +263,7 @@ export const runStallFacts = (run: WorkflowExecutionRecord): RunStallFacts => {
     startedAt: run.startedAt,
     updatedAt: run.updatedAt,
     ...(run.driverHealth ? { driverHealth: run.driverHealth } : {}),
-    ...(inFlight ? { inFlight: { nodeId: inFlight.nodeId, dispatchedAt: inFlight.dispatch!.dispatchedAt, timeoutMs: inFlight.dispatch!.timeoutMs } } : {}),
+    ...(inFlight ? { inFlight: { nodeId: inFlight.nodeId, dispatchedAt: inFlight.dispatch!.dispatchedAt, timeoutMs: inFlight.dispatch!.timeoutMs, ...(inFlight.dispatch!.driver ? { driver: inFlight.dispatch!.driver } : {}) } } : {}),
     remainingNodeIds: nodes.filter((node) => node.status === "queued" || node.status === "running").map((node) => node.nodeId)
   };
 };

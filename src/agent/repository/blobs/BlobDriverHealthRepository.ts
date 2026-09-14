@@ -1,4 +1,5 @@
 import type { TenantDriverHealth, TickLedgerEntry } from "../../workspace/driverHealth.js";
+import type { DispatchHeartbeat } from "../../workspace/dispatchHeartbeat.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { DriverHealthRepository, TickLedgerFilters } from "../interfaces/DriverHealthRepository.js";
 import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
@@ -10,6 +11,8 @@ import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreCli
 const TICK_PREFIX = "ticks/";
 const tickKey = (tickId: string) => `${TICK_PREFIX}${tickId}.json`;
 const tenantKey = (projectId: string) => `driverHealth/${projectId}.json`;
+// D3 — one document per run, last-write-wins. Never indexed: it is read by runId or not at all.
+const heartbeatKey = (runId: string) => `dispatchHeartbeat/${runId}.json`;
 
 export class BlobDriverHealthRepository implements DriverHealthRepository {
   constructor(private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
@@ -40,6 +43,19 @@ export class BlobDriverHealthRepository implements DriverHealthRepository {
   async recordTenantDispatch(record: TenantDriverHealth): Promise<TenantDriverHealth> {
     await this.store.setJSON(tenantKey(record.projectId), record);
     return record;
+  }
+
+  async recordDispatchHeartbeat(beat: DispatchHeartbeat): Promise<DispatchHeartbeat> {
+    await this.store.setJSON(heartbeatKey(beat.runId), beat);
+    return beat;
+  }
+
+  async getDispatchHeartbeat(runId: string): Promise<DispatchHeartbeat | undefined> {
+    return (await getBlobJson<DispatchHeartbeat>(this.store, heartbeatKey(runId))) ?? undefined;
+  }
+
+  async clearDispatchHeartbeat(runId: string): Promise<void> {
+    await this.store.delete(heartbeatKey(runId));
   }
 
   async getTenantHealth(projectId: string): Promise<TenantDriverHealth | undefined> {
