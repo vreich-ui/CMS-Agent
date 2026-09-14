@@ -156,6 +156,17 @@ describe("describeMutationError", () => {
     expect(describeMutationError("Cannot delete referenced node: alpha").kind).toBe("refused");
     expect(describeMutationError("anything else").kind).toBe("other");
   });
+
+  // T5: a dependency edit on a node the engine defines is refused server-side. The canvas must present
+  // that as the deliberate refusal it is, with the server's own wording (which names nodes.ts and the
+  // redeploy), not as an unexplained failure.
+  it("classifies the canonical-owned-field refusal as refused, verbatim", () => {
+    const message = 'workspace.update_graph: "dependsOn" is a canonical-owned field on node "artifact_plan". overlayStoreNode (src/agent/workspace/executor.ts) pins id/kind/dependsOn/requiredInputs/produces/riskLevel/status to the canonical definition in nodes.ts on every dispatch, so this write would NOT have taken effect.';
+    const result = describeMutationError(message);
+    expect(result.kind).toBe("refused");
+    expect(result.message).toBe(message);
+    expect(describeMutationError("canonical_owned_field_write").kind).toBe("refused");
+  });
 });
 
 describe("graphListEntries", () => {

@@ -60,3 +60,25 @@ export class MissingPatchFieldError extends WorkspaceToolError {
     this.name = "MissingPatchFieldError";
   }
 }
+
+// T5 (docs/plan/two-plane-reconciliation-plan.md §B) — a store write to a field overlayStoreNode pins
+// to canonical. Its own class so the refusal is greppable, so the wire code is stable for callers that
+// want to handle it, and so the message can name the ONE path that actually changes these fields.
+//
+// Why refuse rather than accept-and-ignore: the write succeeds today and then never reaches a run
+// (executor.ts's overlayStoreNode discards it on every dispatch), so the operator believes the graph
+// moved when it did not — and the stale row later blocks a re-seed of nodes.ts. That is how the store
+// came to hold the pre-W8 graph.
+export class CanonicalOwnedFieldWriteError extends WorkspaceToolError {
+  constructor(toolName: string, nodeId: string, fields: string[], pinnedFields: readonly string[]) {
+    super(
+      "canonical_owned_field_write",
+      `${toolName}: ${fields.map((field) => `"${field}"`).join(", ")} ${fields.length === 1 ? "is a canonical-owned field" : "are canonical-owned fields"} on node "${nodeId}". ` +
+        `overlayStoreNode (src/agent/workspace/executor.ts) pins ${pinnedFields.join("/")} to the canonical definition in nodes.ts on every dispatch, so this write would NOT have taken effect — ` +
+        `a store row can never rewire the graph, move a gate or change a risk level. The path that does: edit the canonical definition, run npm run nodes:update, land the PR, then REDEPLOY. ` +
+        `Refusing, so an operator who wrote this does not believe it took effect. A store-authored node canonical does not define is unaffected.`,
+      { tool: toolName, nodeId, fields, pinnedFields: [...pinnedFields] }
+    );
+    this.name = "CanonicalOwnedFieldWriteError";
+  }
+}

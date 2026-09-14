@@ -32,9 +32,40 @@
 //
 // Read-only except for idempotent canonical-agent seeding on legacy workspaces. Never publishes.
 
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { fingerprintTools, readManifest, surfaceHash, type ListedTool } from "./twoPlaneDrift.js";
 
 type JsonRpcResponse<T> = { result?: T; error?: { code: number; message: string } };
+
+// SSE framing: each event's `data:` line carries a complete JSON-RPC message. A Streamable HTTP
+// server may answer either way to the same request, so the framing has to be detected rather than
+// assumed.
+//
+// HOW THIS WAS BROKEN (measured 2026-09-14 against the live service). The detection was
+// `raw.includes("data:")` — a SUBSTRING search over the WHOLE body. A plain-JSON tools/list response
+// carries the prose "...constellation structural data: agent summaries..." inside one tool's
+// description, so the check fired on valid JSON, the code then kept only lines STARTING with `data:`
+// (there are none in a JSON body), and JSON.parse("") threw:
+//
+//   verify            ERROR    tools/list did not return JSON. First 200 chars: {"jsonrpc":"2.0",...
+//
+// The error message printed the valid JSON it had just rejected. `npm run verify:deploy` was
+// unusable, which matters because scripts/deploy-mcp.sh prints "Run it before trusting the deploy".
+//
+// THE FIX, in two layers, ORed so neither can produce a false negative. `text/event-stream` in the
+// content-type is conclusive evidence of SSE; any other content-type is not evidence of the reverse
+// (a proxy can rewrite or drop it), so it never forces a `false`. Failing that, a LINE-ANCHORED test
+// (/^data:/m), which no amount of prose inside a JSON string can trigger: a `data:` that begins a
+// line in a JSON body would have to follow a raw newline, and JSON escapes newlines inside strings.
+// Exported so the framing decision is testable without a live endpoint.
+export const isEventStreamBody = (raw: string, contentType: string | null | undefined): boolean =>
+  (contentType ?? "").toLowerCase().includes("text/event-stream") || /^data:/m.test(raw);
+
+export const unframeJsonRpcBody = (raw: string, contentType?: string | null): string =>
+  isEventStreamBody(raw, contentType)
+    ? raw.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.replace(/^data:\s?/, "")).join("")
+    : raw;
 
 const rpc = async <T,>(url: string, token: string, method: string, params: Record<string, unknown> = {}): Promise<T> => {
   const response = await fetch(url, {
@@ -51,10 +82,7 @@ const rpc = async <T,>(url: string, token: string, method: string, params: Recor
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${method}. A 401 here means the bearer is wrong; a 403 usually means Cloud Run IAM is in front of the service.`);
 
   const raw = await response.text();
-  // SSE framing: each event's `data:` line carries a complete JSON-RPC message.
-  const body = raw.includes("data:")
-    ? raw.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.replace(/^data:\s?/, "")).join("")
-    : raw;
+  const body = unframeJsonRpcBody(raw, response.headers.get("content-type"));
 
   let payload: JsonRpcResponse<T>;
   try {
@@ -181,9 +209,16 @@ const main = async (): Promise<number> => {
   return failures === 0 ? 0 : 1;
 };
 
-main()
-  .then((code) => process.exit(code))
-  .catch((error) => {
-    console.error(`verify            ERROR    ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  });
+// Only run when invoked as the script (npm run verify:deploy), never on import — the framing helpers
+// above are imported by tests/agent/workspace/verifyDeploymentFraming.test.ts. Same guard, same
+// reason, as scripts/reseedStoreFromCanonical.ts's isDirectRun.
+const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isDirectRun) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((error) => {
+      console.error(`verify            ERROR    ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    });
+}
