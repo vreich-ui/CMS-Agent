@@ -28,7 +28,7 @@ const fullyProvisionedDrLurieFacts = (overrides: Partial<TenantCapabilityFacts> 
   registeredToolNames: [
     "object_inventory", "object_get", "object_create",
     "search_artifacts", "search_images",
-    "create_pdf_template", "publish_pdf_template", "render_article_pdf"
+    "create_pdf_template", "publish_pdf_template", "document_render"
   ],
   ...overrides
 });
@@ -116,32 +116,45 @@ describe("preflightOperation", () => {
     expect(gap?.remedy).toContain("A5");
   });
 
-  // R1c: this binding EXISTS (operationWorkflowBindings.ts's table has a row for it) but its mapped
-  // input ({projectId, apply}) cannot satisfy brand_imagery_writer's own required `mode` or its
-  // references/brief anyOf — see bindingInputContract.test.ts and operationWorkflowBindings.test.ts
-  // for the schema-level evidence. A binding existing is therefore NOT sufficient for
-  // executable:true; this test asserts the now-honest refusal, written so it flips back to
-  // executable:true the moment the binding (or the operation's own input contract) is repaired.
-  it("R1c: visual_identity_review_change's binding EXISTS but cannot satisfy its entry node's input contract, so preflight reports executable:false, binding:null, and names the missing fields", () => {
+  // R1c, flipped by the Milestone A remainder (A6): this binding used to EXIST but map only
+  // {projectId, apply}, which could never satisfy brand_imagery_writer's required `mode` or its
+  // references/brief anyOf, and this test pinned the honest executable:false. The binding now
+  // declares visualIdentityBriefBuilder.ts, which constructs projectId/mode/brief/apply from the
+  // operation's own guaranteed fields (tenantId required; focus and autoApply defaulted), so
+  // preflight reports executable:true WITH the builder's declaration on the binding — the same
+  // checked reason image_template_revision reports it (imageTemplateRevisionDispatch.test.ts).
+  it("R1c (repaired): visual_identity_review_change's builder-backed binding satisfies brand_imagery_writer's input contract, so preflight reports executable:true and the binding with its builder", () => {
     const result = preflightOperation({
       operationId: "visual_identity_review_change",
       tenantId: "dr-lurie",
-      input: { tenantId: "dr-lurie" },
-      configuredCapabilities: ["visual_identity_read", "visual_identity_propose"]
+      input: { tenantId: "dr-lurie" }
+    }, capabilitySourceFor(fullyProvisionedDrLurieFacts()));
+    expect(result.capabilityGaps).toEqual([]);
+    expect(result.binding).toMatchObject({
+      operationId: "visual_identity_review_change",
+      workflowId: "visual_identity",
+      inputMapping: {},
+      initialInputBuilder: { builderId: "visual_identity_review_change_brief_builder.v1", providesInitialInputFields: ["projectId", "mode", "brief", "apply"], requiredOperationFields: ["tenantId", "focus", "autoApply"] }
     });
-    expect(result.executable).toBe(false);
-    expect(result.binding).toBeNull();
-    const gap = result.capabilityGaps.find((entry) => entry.capability === "workflow_binding" && entry.reason === "not_supported");
-    expect(gap).toBeDefined();
-    expect(gap?.requiredBy).toBe("visual_identity_review_change");
-    expect(gap?.evidence).toMatchObject({ workflowId: "visual_identity", unsatisfiedEntryNodeIds: ["brand_imagery_writer"] });
-    expect((gap?.evidence as { unmetRequiredFields?: string[] })?.unmetRequiredFields).toContain("mode");
-    expect((gap?.evidence as { unmetAnyOfBranches?: string[][] })?.unmetAnyOfBranches).toEqual(
-      expect.arrayContaining([["references"], ["brief"]])
-    );
-    expect(gap?.remedy).toContain("mode");
-    expect(gap?.remedy).toContain("extending");
-    expect(gap?.remedy).toContain("binding");
+    // The defaults the builder relies on were applied by preflight itself, on the record.
+    expect(result.appliedDefaults).toMatchObject({ focus: "full_review", autoApply: false });
+    expect(result.executable).toBe(true);
+  });
+
+  it("R1c (repaired): pdf_template_family's builder-backed binding satisfies pdf_template_intake's named brief, so preflight reports executable:true", () => {
+    const result = preflightOperation({
+      operationId: "pdf_template_family",
+      tenantId: "dr-lurie",
+      input: { tenantId: "dr-lurie", familyId: "nonprofit-core" }
+    }, capabilitySourceFor(fullyProvisionedDrLurieFacts()));
+    expect(result.capabilityGaps).toEqual([]);
+    expect(result.binding).toMatchObject({
+      operationId: "pdf_template_family",
+      workflowId: "pdf_template_studio",
+      inputMapping: {},
+      initialInputBuilder: { builderId: "pdf_template_family_brief_builder.v1", providesInitialInputFields: ["pdfTemplateFamilyBrief"], requiredOperationFields: ["tenantId", "familyId"] }
+    });
+    expect(result.executable).toBe(true);
   });
 
   it("an unknown operationId reports executable:false and binding:null alongside its unknown_operation blocker", () => {
@@ -326,23 +339,20 @@ describe("preflightOperation", () => {
         capabilitySourceFor(fullyProvisionedDrLurieFacts())
       );
       expect(bound.capabilityGaps.some((gap) => gap.capability === "visual_identity_read" || gap.capability === "visual_identity_propose")).toBe(false);
-      // R1c: the binding exists but cannot satisfy its entry node's input contract (see the dedicated
-      // R1c test above), so executable is honestly false and the workflow_binding gap IS present.
-      expect(bound.executable).toBe(false);
-      expect(bound.binding).toBeNull();
-      expect(bound.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
+      // R1c, repaired (Milestone A remainder): the binding is builder-backed and satisfies its entry
+      // node's input contract (see the dedicated R1c test above), so with the capabilities derived
+      // available there is nothing left to refuse on — executable:true, no workflow_binding gap.
+      expect(bound.executable).toBe(true);
+      expect(bound.binding).not.toBeNull();
+      expect(bound.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
 
       // A4: site_inventory is deliberately EXCLUDED here — it is no longer unbound (it has a
       // registered executor), so it no longer carries a "workflow_binding" not_supported gap; see
       // the dedicated site_inventory tests above for its own (different) current behavior. A7's
-      // pdf_template_family and A9's image_template_revision are ALSO excluded here now — both are
-      // BOUND (to pdf_template_studio / image_template_revision_studio respectively), but A10-D1
-      // means neither binding actually satisfies its entry node's input contract any more (see the
-      // dedicated assertions right below this loop): an empty inputMapping guarantees a fully
-      // permissive openInput schema NOTHING under any name, which bindingInputContract.ts's
-      // checkEntryNode now correctly reports as unsatisfied rather than a vacuous pass — so both
-      // behave like visual_identity_review_change above, not like the genuinely still-unbound ids
-      // this loop covers.
+      // pdf_template_family and A9's image_template_revision are ALSO excluded here — both are
+      // BOUND (to pdf_template_studio / image_template_revision_studio respectively) and, since the
+      // Milestone A remainder, both builder-backed and satisfied, like visual_identity_review_change
+      // above — not like the genuinely still-unbound ids this loop covers.
       const unboundIds = ["document_render", "asset_lookup_adopt"];
       for (const operationId of unboundIds) {
         const result = preflightOperation({ operationId, tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
@@ -350,17 +360,16 @@ describe("preflightOperation", () => {
         expect(result.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
       }
 
-      // A10-D1 — pdf_template_family is BOUND (operationWorkflowBindings.ts, A7) but, exactly like
-      // visual_identity_review_change above, its binding cannot satisfy its entry node's input
-      // contract: the empty inputMapping guarantees pdf_template_intake's fully permissive openInput
-      // schema nothing under any name, which bindingInputContract.ts's checkEntryNode now correctly
-      // reports as unsatisfied rather than a vacuous pass (see operationWorkflowBindings.test.ts's
-      // own R1c coverage). So it behaves the SAME as the still-unbound operations here: not
-      // executable, carrying the workflow_binding gap.
+      // Milestone A remainder — pdf_template_family is BOUND (A7) and now builder-backed
+      // (pdfTemplateFamilyBriefBuilder.ts); its entry node names the brief it requires, so R1c's
+      // contract is satisfied and the workflow_binding gap is GONE, exactly like
+      // image_template_revision right below. Still not executable with NO capabilitySource (nothing
+      // is assumed available), and for the same input_schema reason as any dispatch missing a
+      // required field — here `familyId`.
       const pdfFamily = preflightOperation({ operationId: "pdf_template_family", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
       expect(pdfFamily.executable).toBe(false);
-      expect(pdfFamily.binding).toBeNull();
-      expect(pdfFamily.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
+      expect(pdfFamily.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
+      expect(pdfFamily.blockers.some((blocker) => blocker.code === "input_schema_invalid")).toBe(true);
 
       // A10 — image_template_revision NO LONGER behaves like pdf_template_family here: its binding
       // declares an initial-input builder (verified against the descriptor's own guaranteed fields)

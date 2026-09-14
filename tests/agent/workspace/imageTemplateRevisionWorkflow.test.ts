@@ -248,7 +248,13 @@ describe("the Zilberman scenario: place a tagged image top-right on every page o
         defaultToolPolicy: "allowed"
       })
     );
-    await updateProject(repositoryManager.getProjectRepository(), TARGET, projectUpdateSchema.parse({ autonomyMode: "autonomous" }));
+    await updateProject(repositoryManager.getProjectRepository(), TARGET, projectUpdateSchema.parse({
+      autonomyMode: "autonomous",
+      // Milestone A remainder — pdf-tool calls are scoped by the tenant's Platform site object id
+      // (objectDialect.siteObjectId), resolved by pdfToolSiteScope.ts; a genesis-minted tenant
+      // carries it from birth, so the fixture does too.
+      objectDialect: { siteObjectId: `site_${TARGET}`, taxonomyRegistryObjectId: `tax_${TARGET}`, objectIdSource: "server_minted" }
+    }));
     setImageTemplateRevisionProviders({ assetCatalog, previewTemplateVariant, verifyImagePresence });
   });
   afterEach(() => {

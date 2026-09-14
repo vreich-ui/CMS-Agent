@@ -25,12 +25,26 @@
 //     guaranteed fields and the entry node's own inputSchema — a preflight `executable:true` for a
 //     builder-backed binding is therefore a verified statement about delivery, not a relaxed check.
 import { IMAGE_TEMPLATE_REVISION_WORKFLOW_ID } from "./imageTemplateRevisionWorkflow.js";
+import { VISUAL_IDENTITY_WORKFLOW_ID } from "./visualIdentityWorkflow.js";
+import { PDF_TEMPLATE_STUDIO_WORKFLOW_ID } from "./pdfTemplateStudioWorkflow.js";
 import {
   buildImageTemplateRevisionBrief,
   IMAGE_TEMPLATE_REVISION_BRIEF_BUILDER_ID,
   IMAGE_TEMPLATE_REVISION_BRIEF_KEY,
   IMAGE_TEMPLATE_REVISION_BRIEF_REQUIRED_OPERATION_FIELDS
 } from "../capture/imageTemplateRevisionBriefBuilder.js";
+import {
+  buildVisualIdentityBrief,
+  VISUAL_IDENTITY_BRIEF_BUILDER_ID,
+  VISUAL_IDENTITY_BRIEF_PROVIDED_FIELDS,
+  VISUAL_IDENTITY_BRIEF_REQUIRED_OPERATION_FIELDS
+} from "./visualIdentityBriefBuilder.js";
+import {
+  buildPdfTemplateFamilyBrief,
+  PDF_TEMPLATE_FAMILY_BRIEF_BUILDER_ID,
+  PDF_TEMPLATE_FAMILY_BRIEF_KEY,
+  PDF_TEMPLATE_FAMILY_BRIEF_REQUIRED_OPERATION_FIELDS
+} from "../capture/pdfTemplateFamilyBriefBuilder.js";
 
 export type WorkflowInitialInputBuildResult =
   | { ok: true; initialInput: Record<string, unknown> }
@@ -47,6 +61,10 @@ export type WorkflowInitialInputBuilder = {
   // own required ∪ defaults set (bindingInputContract.ts) — a builder needing a field the operation
   // does not guarantee makes the binding's input contract UNSATISFIED, never a silent runtime hope.
   requiredOperationFields: readonly string[];
+  // The refusal code applyWorkflowInitialInput reports when an input carries BOTH a hand-built
+  // result and a full operation dispatch (see the conflict branch below). Per builder, so the code
+  // names the brief that conflicted rather than one workflow's vocabulary for every workflow.
+  conflictCode: string;
   build: (input: unknown) => WorkflowInitialInputBuildResult;
 };
 
@@ -58,6 +76,7 @@ const BUILDERS: readonly WorkflowInitialInputBuilder[] = [
     workflowId: IMAGE_TEMPLATE_REVISION_WORKFLOW_ID,
     providesInitialInputFields: [IMAGE_TEMPLATE_REVISION_BRIEF_KEY],
     requiredOperationFields: [...IMAGE_TEMPLATE_REVISION_BRIEF_REQUIRED_OPERATION_FIELDS],
+    conflictCode: "image_revision_brief_conflict",
     build: (input) => {
       const built = buildImageTemplateRevisionBrief(input);
       if (!built.ok) return built;
@@ -86,6 +105,51 @@ const BUILDERS: readonly WorkflowInitialInputBuilder[] = [
           [IMAGE_TEMPLATE_REVISION_BRIEF_KEY]: built.brief
         }
       };
+    }
+  },
+  {
+    // A6 — visual_identity_review_change -> visual_identity. The builder writes the writer's and
+    // materializer's own top-level fields (projectId/mode/brief/apply) rather than one nested brief,
+    // because that is what those two nodes read (visualIdentityNodes.ts's inputSchema;
+    // visualStandardMaterialization.ts's readVisualStandardRequest). See the builder's own header
+    // for why every value is the operation's own and not a guess.
+    builderId: VISUAL_IDENTITY_BRIEF_BUILDER_ID,
+    workflowId: VISUAL_IDENTITY_WORKFLOW_ID,
+    providesInitialInputFields: [...VISUAL_IDENTITY_BRIEF_PROVIDED_FIELDS],
+    requiredOperationFields: [...VISUAL_IDENTITY_BRIEF_REQUIRED_OPERATION_FIELDS],
+    conflictCode: "visual_identity_brief_conflict",
+    build: (input) => {
+      const built = buildVisualIdentityBrief(input);
+      if (!built.ok) return built;
+      const source = isRecord(input) ? input : {};
+      // Dispatched fields KEPT beside what was built from them, same posture as A10's builder.
+      return { ok: true, initialInput: { ...source, ...built.brief } };
+    }
+  },
+  {
+    // A7 — pdf_template_family -> pdf_template_studio. Nested brief, like A10's. `siteId` is NOT
+    // written here — it is the tenant's Platform site object id, read off the project record by
+    // cloneConductorRoutes.ts's pdf_template_intake case (resolvePdfToolSiteId), never the tenantId.
+    builderId: PDF_TEMPLATE_FAMILY_BRIEF_BUILDER_ID,
+    workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
+    providesInitialInputFields: [PDF_TEMPLATE_FAMILY_BRIEF_KEY],
+    requiredOperationFields: [...PDF_TEMPLATE_FAMILY_BRIEF_REQUIRED_OPERATION_FIELDS],
+    conflictCode: "pdf_template_family_brief_conflict",
+    build: (input) => {
+      const built = buildPdfTemplateFamilyBrief(input);
+      if (!built.ok) return built;
+      const source = isRecord(input) ? input : {};
+      // Same clone_target_mismatch guard A10's builder holds: state targetProjectId only when the
+      // caller supplied none; refuse a conflicting one rather than redirect the run.
+      const declaredTarget = typeof source.targetProjectId === "string" ? source.targetProjectId.trim() : "";
+      if (declaredTarget && declaredTarget !== built.tenantId) {
+        return {
+          ok: false,
+          code: "pdf_template_family_target_project_mismatch",
+          reason: `This run declares targetProjectId "${declaredTarget}" but the operation is scoped to tenant "${built.tenantId}". A dispatched template family is never designed into another project's bounds; the two must name the same tenant.`
+        };
+      }
+      return { ok: true, initialInput: { ...source, targetProjectId: built.tenantId, [PDF_TEMPLATE_FAMILY_BRIEF_KEY]: built.brief } };
     }
   }
 ];
@@ -130,8 +194,8 @@ export function applyWorkflowInitialInput(workflowId: string | null | undefined,
     if (carriesDispatchFields) {
       return {
         ok: false,
-        code: "image_revision_brief_conflict",
-        reason: `This run carries BOTH a caller-supplied ${builder.providesInitialInputFields.join("/")} and a full set of the operation's own dispatch fields (${builder.requiredOperationFields.join(", ")}). Send one or the other: the dispatch fields alone (the brief is constructed from them, with every per-ref check applied) or the brief alone (an operator surface). Supplying both would let a hand-written brief bypass the checks the construction performs.`,
+        code: builder.conflictCode,
+        reason: `This run carries BOTH a caller-supplied ${builder.providesInitialInputFields.join("/")} and a full set of the operation's own dispatch fields (${builder.requiredOperationFields.join(", ")}). Send one or the other: the dispatch fields alone (the brief is constructed from them, with every check the construction performs applied) or the built fields alone (an operator surface). Supplying both would let a hand-written brief bypass those checks.`,
         builderId: builder.builderId
       };
     }

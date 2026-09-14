@@ -176,7 +176,7 @@ describe("deriveTenantCapabilityAvailability", () => {
     // the exception that contributes none: it contributes create_pdf_template (shared with
     // pdf_template_write, which is why the set is deduplicated).
     expect(CAPABILITY_EVIDENCE_TOOL_NAMES).toEqual(
-      expect.arrayContaining(["object_inventory", "object_get", "object_create", "search_artifacts", "render_article_pdf", "create_pdf_template", "publish_pdf_template", "search_images"])
+      expect.arrayContaining(["object_inventory", "object_get", "object_create", "search_artifacts", "document_render", "create_pdf_template", "publish_pdf_template", "search_images"])
     );
   });
 });

@@ -11,9 +11,13 @@
 // that: it is a single, direct, in-process function this task wires straight to `operation_execute`,
 // with no run record, no node graph, and no dispatch loop — composing siteContext.ts's snapshot
 // machinery (and, for A6-A9, whatever reused pieces THEIR own executors compose) the same way
-// visualIdentityReviewChangeExecutor.ts already does for visual_identity_review_change (still unbound
-// to either registry today — see that operation's own row in
-// operationWorkflowBindings.UNBOUND_OPERATION_IMPLEMENTING_TASK, unchanged by this task). Reusing
+// visualIdentityReviewChangeExecutor.ts composes for visual_identity_review_change. THAT MODULE IS NOT
+// REGISTERED HERE AND NEVER WILL BE: visual_identity_review_change is bound to the `visual_identity`
+// WORKFLOW (operationWorkflowBindings.ts — brief-built since the Milestone A remainder, see
+// visualIdentityBriefBuilder.ts), and the both-bound assertion below would throw at import if it were
+// also listed here. It declares a "write" effect besides, which operation.execute's read-only gate
+// (operationTools.ts) refuses regardless of registry — the same reason no executor is a viable
+// implementation for asset_lookup_adopt or document_render either. Reusing
 // OperationWorkflowBinding's shape for this would mean either inventing a fake workflowId nothing
 // registers (exactly the "second workflow engine" operationWorkflowBindings.ts's own header refuses
 // to build) or overloading one field to mean two different things depending on a reader's guess. A

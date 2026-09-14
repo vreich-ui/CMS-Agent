@@ -56,8 +56,17 @@
 import type { ProjectConnectionConfig, ToolPermission } from "./projectTypes.js";
 
 /** Bump when the profile below changes in a way every minted tenant should inherit.
- *  v2 (W4.3): the pdf-template mint verbs and the agent-artifact job verbs. */
-export const GENESIS_TENANT_DEFINITION_VERSION = 2;
+ *  v2 (W4.3): the pdf-template mint verbs and the agent-artifact job verbs.
+ *  v3 (Milestone A remainder, 2026-09-14): the document-render and template-preview/verify verbs
+ *  Platform #751/#752 shipped — `render_article_pdf`, `document_render`,
+ *  `preview_pdf_template_fixture`, `verify_pdf_content`, `check_image_text`, `analyze_image_layout`.
+ *  Before v3 every genesis-minted tenant (zilberman, genesis-lab-2) refused all six pre-transport
+ *  (defaultToolPolicy "blocked", none named), so capabilityReadiness.ts's `pdf_render` derived
+ *  not_configured for them and imageTemplateRevisionProviders.ts's preview/verify seams could not
+ *  have run even once wired. dr-lurie/platform never noticed: their records are defaultToolPolicy
+ *  "allowed", the exact drift the header above describes. migrateDefaultProjectConfig applies this
+ *  map to a v2 record on every read; `npm run genesis:reconcile -- <projectId> --apply` persists it. */
+export const GENESIS_TENANT_DEFINITION_VERSION = 3;
 
 /**
  * The remote verbs a genesis-minted tenant may speak. Ordered as the live record orders them
@@ -102,7 +111,21 @@ export const GENESIS_TENANT_TOOL_POLICIES: Readonly<Record<string, ToolPermissio
   search_images: "allowed",
   deploy_status: "allowed",
   list_pdf_templates: "allowed",
-  get_image_model_policy: "allowed"
+  get_image_model_policy: "allowed",
+  // v3 — document rendering and template preview/verification (Platform #751/#752). Read-class
+  // except the two renders, which write an artifact under the tenant's own request the same way
+  // create_agent_artifact_job (already "allowed" above) does; neither publishes site content.
+  //   render_article_pdf / document_render — the verb capabilityReadiness.ts's `pdf_render` gates
+  //     (document_render, A8's own operation name) and the article-shaped shortcut Platform prefers.
+  //   preview_pdf_template_fixture — imageTemplateRevisionProviders.ts's previewTemplateVariant seam.
+  //   verify_pdf_content / check_image_text / analyze_image_layout — its verifyImagePresence seam and
+  //     the image/text checks image_template_revision's own completion criterion names.
+  render_article_pdf: "allowed",
+  document_render: "allowed",
+  preview_pdf_template_fixture: "allowed",
+  verify_pdf_content: "allowed",
+  check_image_text: "allowed",
+  analyze_image_layout: "allowed"
 });
 
 /**

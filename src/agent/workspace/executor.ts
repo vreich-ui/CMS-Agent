@@ -67,6 +67,7 @@ import { decideNodeRetry, isAwaitingRetryBackoff, nextRetryAt, scheduleNodeRetry
 import { checkNoProgress, recordTerminalFailure, type AttemptConditions } from "./noProgressFingerprint.js";
 import { loadTenantCapabilityFacts } from "../operations/capabilityFactsLoader.js";
 import { deriveTenantCapabilityAvailability } from "../operations/capabilityReadiness.js";
+import { listRequiredCapabilitiesForWorkflow } from "../operations/operationWorkflowBindings.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
 import { ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS, declaresDeterministicRoute, deterministicStageTimeoutMs, nodeTimeoutMs, phaseTimeoutMsFor, resolveRouteEra, STALL_MARGIN_MS, type PhaseClaim } from "./routeRegistry.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
@@ -3445,12 +3446,25 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
   let attemptConditions: AttemptConditions | undefined;
   if (claim) {
     const capabilityFacts = await loadTenantCapabilityFacts(run.projectId, repositoryManager.getProjectRepository());
+    // Milestone A remainder — SCOPED, not the whole map. noProgressFingerprint.ts hashes whatever is
+    // handed here; handing it every capability's availability meant that changing ONE capability's
+    // derivation (A10 re-derived image_template_write) reset every persisted noProgress ledger
+    // fleet-wide — one free re-dispatch per stuck node on deploy, for runs that capability could
+    // never have blocked. A run of a catalog-bound workflow can only be blocked on the capabilities
+    // its own operation requires, so only those are hashed; a plain workflow run (no bound
+    // operation) keeps the full map, as before, because nothing narrower is known about it.
+    const availability = capabilityFacts ? deriveTenantCapabilityAvailability(capabilityFacts) : undefined;
+    const requiredCapabilities = listRequiredCapabilitiesForWorkflow(run.workflowId);
+    const scopedAvailability =
+      availability && requiredCapabilities
+        ? Object.fromEntries(requiredCapabilities.filter((capability) => capability in availability).map((capability) => [capability, availability[capability]]))
+        : availability;
     attemptConditions = {
       workflowId: run.workflowId,
       nodeId: nextNode.id,
       nodeDefinitionRevision: nextNode.updatedAt,
       input: state.input,
-      capabilityAvailability: capabilityFacts ? deriveTenantCapabilityAvailability(capabilityFacts) : undefined
+      capabilityAvailability: scopedAvailability
     };
     const noProgressCheck = checkNoProgress(state.noProgress, attemptConditions);
     if (noProgressCheck.blocked && !options.retryJustification) {

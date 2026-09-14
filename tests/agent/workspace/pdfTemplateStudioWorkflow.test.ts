@@ -26,6 +26,31 @@ import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/execu
 
 const TARGET = "zilberman-pdf-template-studio";
 
+// Milestone A remainder — the family-plan stage resolves the brief's siteId from the project record
+// (pdfToolSiteScope.ts: objectDialect.siteObjectId, never the tenantId), so every block that drives
+// pdf_family_plan needs the target registered WITH its site object id, as a minted tenant is.
+const registerStudioProject = async () => {
+  process.env.ZILBERMAN_PDF_TEMPLATE_STUDIO_MCP_ENDPOINT = `https://${TARGET}.example/mcp`;
+  await createProject(
+    repositoryManager.getProjectRepository(),
+    projectCreateSchema.parse({
+      projectId: TARGET,
+      name: "PDF template studio fixture",
+      mcpEndpointEnvVar: "ZILBERMAN_PDF_TEMPLATE_STUDIO_MCP_ENDPOINT",
+      authMode: "none",
+      defaultToolPolicy: "allowed"
+    })
+  );
+  await updateProject(
+    repositoryManager.getProjectRepository(),
+    TARGET,
+    projectUpdateSchema.parse({
+      autonomyMode: "autonomous",
+      objectDialect: { siteObjectId: "site_studio", taxonomyRegistryObjectId: "tax_studio", objectIdSource: "server_minted" }
+    })
+  );
+};
+
 describe("pdf_template_studio — registered in the workflow registry", () => {
   it("is registered, distinct from clone_conductor, and never silently falls back to publishing_conductor", () => {
     expect(listRegisteredWorkflowIds()).toContain(PDF_TEMPLATE_STUDIO_WORKFLOW_ID);
@@ -150,18 +175,7 @@ describe("the studio's two-step publication: template-store publication and libr
   beforeEach(async () => {
     resetRepositoryManager();
     resetTemplateLibraryMemoryStore();
-    process.env.ZILBERMAN_PDF_TEMPLATE_STUDIO_MCP_ENDPOINT = `https://${TARGET}.example/mcp`;
-    await createProject(
-      repositoryManager.getProjectRepository(),
-      projectCreateSchema.parse({
-        projectId: TARGET,
-        name: "PDF template studio fixture",
-        mcpEndpointEnvVar: "ZILBERMAN_PDF_TEMPLATE_STUDIO_MCP_ENDPOINT",
-        authMode: "none",
-        defaultToolPolicy: "allowed"
-      })
-    );
-    await updateProject(repositoryManager.getProjectRepository(), TARGET, projectUpdateSchema.parse({ autonomyMode: "autonomous" }));
+    await registerStudioProject();
   });
   afterEach(() => {
     delete process.env.ZILBERMAN_PDF_TEMPLATE_STUDIO_MCP_ENDPOINT;
@@ -258,6 +272,11 @@ describe("the studio's two-step publication: template-store publication and libr
 // ===================================================================================================
 describe("A10-D1 — pdf_family_plan refuses (clone_source_missing's own shape) when initialInput carries no pdfTemplateFamilyBrief at all", () => {
   const nodesById = new Map(listPdfTemplateStudioNodes().map((node) => [node.id, node]));
+  beforeEach(async () => {
+    resetRepositoryManager();
+    await registerStudioProject();
+  });
+  afterEach(() => resetRepositoryManager());
 
   it("refuses with a named blocker instead of completing an empty plan", async () => {
     const run = {
@@ -282,7 +301,7 @@ describe("A10-D1 — pdf_family_plan refuses (clone_source_missing's own shape) 
     const run = {
       projectId: TARGET,
       workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
-      initialInput: { targetProjectId: TARGET, pdfTemplateFamilyBrief: { siteId: TARGET, familyId: "nonprofit-core", useCase: "nonprofit" } },
+      initialInput: { targetProjectId: TARGET, pdfTemplateFamilyBrief: { familyId: "nonprofit-core", useCase: "nonprofit" } },
       stageOutputs: {}
     } as unknown as WorkflowExecutionRecord;
     const outcome = await runCloneStage({ run, node: nodesById.get("pdf_template_intake")!, stage: "pdf_family_plan" });
@@ -306,6 +325,7 @@ describe("A10-D5 — resolveConductorNodes hands pdf_template_studio its OWN rou
   beforeEach(async () => {
     resetRepositoryManager();
     await repositoryManager.getWorkspaceRepository().ensureWorkspaceNodeSeeds();
+    await registerStudioProject();
   });
   afterEach(() => resetRepositoryManager());
 
@@ -330,7 +350,7 @@ describe("A10-D5 — resolveConductorNodes hands pdf_template_studio its OWN rou
     const run = {
       projectId: TARGET,
       workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
-      initialInput: { targetProjectId: TARGET, pdfTemplateFamilyBrief: { siteId: TARGET, familyId: "nonprofit-core", useCase: "nonprofit" } },
+      initialInput: { targetProjectId: TARGET, pdfTemplateFamilyBrief: { familyId: "nonprofit-core", useCase: "nonprofit" } },
       stageOutputs: {}
     } as unknown as WorkflowExecutionRecord;
     const intakeNode = resolved.get("pdf_template_intake")!;

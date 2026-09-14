@@ -110,23 +110,21 @@ function declaredBuilderFor(workflowId: string): BindingInitialInputBuilderContr
 
 const BINDINGS: readonly OperationWorkflowBinding[] = [
   {
+    // A6 — visual_identity_review_change -> visual_identity — BOUND, BRIEF-BUILT. Until the
+    // Milestone A remainder this row carried a field-rename table ({tenantId -> projectId,
+    // autoApply -> apply}) and was KNOWN-INCOMPLETE by resolveBindingInputContract: the entry node
+    // brand_imagery_writer requires `mode` and one of `references`/`brief` (visualIdentityNodes.ts),
+    // which a rename can never supply. visualIdentityBriefBuilder.ts now constructs all four target
+    // fields (projectId, mode, brief, apply) from the operation's own (tenantId, focus, autoApply).
+    //
+    // inputMapping is EMPTY BY CONSTRUCTION, not by omission: Platform applies inputMapping before
+    // workflow_start_dry_run and startDryRun applies the builder after, so a row carrying both would
+    // rename the very fields the builder looks for and skip construction silently.
+    // assertBindingIsSound below refuses such a row at import.
     operationId: "visual_identity_review_change",
     workflowId: VISUAL_IDENTITY_WORKFLOW_ID,
-    inputMapping: {
-      // brand_imagery_writer's own inputSchema names the tenant-scoped site "projectId" ("The
-      // client project whose site this standard belongs to" — visualIdentityNodes.ts); this
-      // catalog's own reference types (operationReferences.ts) and every project record
-      // (projectTypes.ts) use the client project id and its tenant id interchangeably for the same
-      // single-tenant-per-site identity.
-      tenantId: "projectId",
-      // visual_standard_materializer's own input names the identical intent this operation calls
-      // autoApply ("Ask for the standard to be applied to the live site. Default false — creating a
-      // standard and going live are separate acts." — visualIdentityNodes.ts) `apply`, matching this
-      // operation's own doc comment that autoApply only "states intent for the executor that
-      // eventually runs it" (descriptors/visualIdentityReviewChange.ts).
-      autoApply: "apply"
-      // `focus` has no equivalent field on either node today and is deliberately left unmapped.
-    }
+    inputMapping: {},
+    initialInputBuilder: declaredBuilderFor(VISUAL_IDENTITY_WORKFLOW_ID)
   },
   {
     // A7 — pdf_template_family -> pdf_template_studio — BOUND. pdfTemplateStudioWorkflow.ts
@@ -139,22 +137,16 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     // module's header).
     operationId: "pdf_template_family",
     workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
-    // Deliberately EMPTY, not a guess: this operation's flat input fields (tenantId, familyId,
-    // locale — descriptors/pdfTemplateFamily.ts) have no flat equivalent on the entry node
-    // (pdf_template_intake). The entry node reads a NESTED
-    // initialInput.pdfTemplateFamilyBrief {siteId, familyId, useCase, variants, revise, sourceUrl}
-    // (pdfTemplateFamilyEngine.ts's pdfTemplateFamilyPlanStep) — inputMapping is documented
-    // (this module's header) as a flat field-rename table only, never structural nesting, so
-    // expressing "wrap these three fields into a brief object" here would be exactly the kind of
-    // guess this table exists to avoid. The node's own inputSchema is the permissive openInput
-    // shape (no declared `required`) — A10-D1: an empty mapping into a fully open schema used to
-    // trivially (and wrongly) satisfy resolveBindingInputContract/checkBindingInputContract, since
-    // neither half of the check had anything to evaluate; bindingInputContract.ts's checkEntryNode
-    // now treats "open schema + zero guaranteed fields" as itself unsatisfied (nothing was checked
-    // AND nothing was guaranteed), so resolveBindingInputContract correctly reports this binding
-    // UNSATISFIED until a real executor (a later task, same posture as visual_identity_review_change
-    // today) either constructs the brief or the entry node's schema is taught to name it.
-    inputMapping: {}
+    // EMPTY on purpose, same reasoning as image_template_revision's row below: the operation's flat
+    // fields (tenantId, familyId, locale, useCase?, sourceUrl?) are not renamed, they are CONSTRUCTED
+    // INTO the nested initialInput.pdfTemplateFamilyBrief by `initialInputBuilder`
+    // (pdfTemplateFamilyBriefBuilder.ts, applied in startDryRun), and pdf_template_intake's own
+    // inputSchema now NAMES pdfTemplateFamilyBrief as required (pdfTemplateStudioNodes.ts) so the
+    // contract check has a real requirement to evaluate. Before the Milestone A remainder this row
+    // had no builder and the entry node's schema was open — A10-D1's vacuous case — and
+    // resolveBindingInputContract correctly reported it UNSATISFIED.
+    inputMapping: {},
+    initialInputBuilder: declaredBuilderFor(PDF_TEMPLATE_STUDIO_WORKFLOW_ID)
   },
   {
     // A9 — image_template_revision -> image_template_revision_studio — BOUND.
@@ -225,29 +217,52 @@ function assertBindingIsSound(binding: OperationWorkflowBinding): void {
         `operationWorkflowBindings: operation "${binding.operationId}" declares initial-input builder "${binding.initialInputBuilder.builderId}", but workflowInitialInput.ts registers ${registered ? `"${registered.builderId}"` : "no builder"} for workflow "${binding.workflowId}". A binding may only declare the builder its own workflow actually applies.`
       );
     }
+    // A BUILDER AND A RENAME TABLE NEVER COEXIST ON ONE ROW. Platform applies inputMapping BEFORE
+    // workflow_start_dry_run (tools.ts's resolveCatalogOperation) and startDryRun applies the builder
+    // AFTER, on the renamed input; the builder looks for its requiredOperationFields under the
+    // operation's OWN names, so a rename of any of them would make applyWorkflowInitialInput read the
+    // input as "not a dispatch" and pass it through unbuilt — a silent skip, refused three nodes
+    // later by name. A builder-backed binding therefore does the whole translation itself.
+    if (Object.keys(binding.inputMapping).length > 0) {
+      throw new Error(
+        `operationWorkflowBindings: operation "${binding.operationId}" declares BOTH an inputMapping (${Object.keys(binding.inputMapping).join(", ")}) and initial-input builder "${binding.initialInputBuilder.builderId}". Platform applies the rename before the builder runs, which would hide the builder's own required fields from it; move the rename into the builder and leave inputMapping empty.`
+      );
+    }
   }
+}
+
+// The capability ids the operation bound to `workflowId` requires — null when no catalog operation
+// is bound to it (a plain workflow run has no operation, and therefore no requiredCapabilities).
+// Read by executor.ts's no-progress gate to scope the capability-state hash to the capabilities
+// this run can actually be blocked on (noProgressFingerprint.ts), instead of the whole fleet map.
+export function listRequiredCapabilitiesForWorkflow(workflowId: string | null | undefined): string[] | null {
+  if (!workflowId) return null;
+  const binding = [...bindingsByOperationId.values()].find((entry) => entry.workflowId === workflowId);
+  if (!binding) return null;
+  const operation = getOperation(binding.operationId);
+  if (!operation.found) return null;
+  return [...operation.descriptor.requiredCapabilities].sort((left, right) => left.localeCompare(right));
 }
 
 // R1c — THE GAP assertBindingIsSound NEVER CLOSED. assertBindingIsSound (above) only checks that
 // `workflowId` names something workflowRegistry.ts registered; it never checks that this OPERATION'S
 // OWN INPUT, after `inputMapping`'s rename, can satisfy what the target workflow's entry node(s)
 // actually require. A binding can pass assertBindingIsSound at import time and still be a binding to
-// a workflow that will refuse its input at the very first node, every single run — exactly what the
-// real binding below currently is (see the test file for the evidence: visual_identity_review_change
-// maps to {projectId, apply}, but brand_imagery_writer requires `mode` and one of `references`/`brief`
-// — none of which the mapped input ever supplies).
+// a workflow that will refuse its input at the very first node, every single run — exactly what
+// visual_identity_review_change's binding WAS until the Milestone A remainder (it mapped
+// {projectId, apply}, but brand_imagery_writer requires `mode` and one of `references`/`brief`), and
+// what pdf_template_family's and image_template_revision's were until A10/A7 gave them builders.
 //
 // resolveBindingInputContract() is that missing check, made an INSPECTABLE, EXPORTED RESULT rather
 // than a second import-time assertion. It is DELIBERATELY NOT CALLED from the BINDINGS registration
-// loop below, and DELIBERATELY NEVER THROWS: the one real binding today IS incomplete by this check
-// (see above), and this module's own registration loop running at import time must still succeed —
-// throwing here would take the whole service down on every boot, for a gap that operationPreflight.ts
-// (R1c) already reports honestly at request time via `executable:false` and a named capabilityGap.
-// A binding failing this check is a KNOWN-INCOMPLETE BINDING, not a broken one: it still passes
-// assertBindingIsSound (the workflow genuinely exists and is genuinely the right one to eventually
-// bind to), it is simply not yet WIRED to accept this operation's actual input. Closing that gap means
-// either extending the operation's own input contract + inputMapping, or repairing/replacing the
-// target node's inputSchema — not throwing at import, and not silently pretending here that it's fine.
+// loop below, and DELIBERATELY NEVER THROWS: a binding failing it is a KNOWN-INCOMPLETE BINDING, not
+// a broken one — it still passes assertBindingIsSound (the workflow genuinely exists and is genuinely
+// the right one), it is simply not yet WIRED to accept this operation's actual input — and
+// operationPreflight.ts (R1c) reports that honestly at request time via `executable:false` and a
+// named capabilityGap, which is the behavior that matters. Throwing here would take the whole
+// service down on every boot for a gap preflight already refuses by name. All three bindings below
+// are builder-backed and satisfied today (operationWorkflowBindings.test.ts pins that); the next
+// incomplete one — a new binding whose builder does not yet exist — is reported the same way.
 //
 // Call this (or listBindingInputContractStatuses() below) from a test or an operator tool to SEE the
 // gap in code; operationPreflight.ts calls the same underlying checkBindingInputContract() (with the

@@ -174,7 +174,13 @@ beforeEach(async () => {
     repositoryManager.getProjectRepository(),
     projectCreateSchema.parse({ projectId: TARGET, name: "Dispatch integration fixture", mcpEndpointEnvVar: MCP_ENV_VAR, authMode: "none", defaultToolPolicy: "allowed" })
   );
-  await updateProject(repositoryManager.getProjectRepository(), TARGET, projectUpdateSchema.parse({ autonomyMode: "autonomous" }));
+  await updateProject(repositoryManager.getProjectRepository(), TARGET, projectUpdateSchema.parse({
+      autonomyMode: "autonomous",
+      // Milestone A remainder — pdf-tool calls are scoped by the tenant's Platform site object id
+      // (objectDialect.siteObjectId), resolved by pdfToolSiteScope.ts; a genesis-minted tenant
+      // carries it from birth, so the fixture does too.
+      objectDialect: { siteObjectId: `site_${TARGET}`, taxonomyRegistryObjectId: `tax_${TARGET}`, objectIdSource: "server_minted" }
+    }));
   setImageTemplateRevisionProviders({ assetCatalog, previewTemplateVariant, verifyImagePresence });
   installFetchDouble();
 });
@@ -229,11 +235,13 @@ describe("preflight reports image_template_revision executable because the bindi
     expect(createOnly.capabilityGaps.map((gap) => gap.capability)).toEqual(["pdf_template_publish"]);
   });
 
-  it("pdf_template_family is UNCHANGED by this task — still unsatisfied, still not executable, and still has no builder", () => {
-    const result = preflightOperation({ operationId: "pdf_template_family", tenantId: TARGET, input: { tenantId: TARGET } });
-    expect(result.executable).toBe(false);
-    expect(result.binding).toBeNull();
-    expect(getWorkflowInitialInputBuilder(PDF_TEMPLATE_STUDIO_WORKFLOW_ID)).toBeNull();
+  // Milestone A remainder — pdf_template_family got the SAME treatment (pdfTemplateFamilyBriefBuilder.ts);
+  // the dedicated assertions live in operationPreflight.test.ts and pdfTemplateFamilyBriefBuilder.test.ts.
+  it("pdf_template_family now has a registered builder of its own, so the two studios are dispatchable the same way", () => {
+    const result = preflightOperation({ operationId: "pdf_template_family", tenantId: TARGET, input: { tenantId: TARGET, familyId: "nonprofit-core" } }, trustedFacts());
+    expect(result.executable).toBe(true);
+    expect(result.binding?.initialInputBuilder?.builderId).toBe("pdf_template_family_brief_builder.v1");
+    expect(getWorkflowInitialInputBuilder(PDF_TEMPLATE_STUDIO_WORKFLOW_ID)?.builderId).toBe("pdf_template_family_brief_builder.v1");
   });
 });
 

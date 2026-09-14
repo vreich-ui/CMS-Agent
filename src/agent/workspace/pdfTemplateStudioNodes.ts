@@ -58,6 +58,21 @@ const UPDATED_AT = "2026-09-14T00:00:00.000Z";
 
 const openInput = { type: "object", additionalProperties: true } as const;
 
+// The entry node's input contract, in the two shapes it is validated against — identical to
+// imageTemplateRevisionNodes.ts's briefInput and for the same two reasons: `{ [briefKey]: ... }` is
+// the binding-contract view bindingInputContract.ts evaluates (an entry node's required names are
+// modelled as initialInput field names, which is what pdfTemplateFamilyBriefBuilder.ts guarantees),
+// and `{ initialInput: ... }` is the envelope executor.ts actually hands an entry node, where the
+// brief sits one level down. The missing-brief refusal itself lives at the dispatch boundary
+// (cloneConductorRoutes.ts's pdf_template_family_brief_missing), not in this schema.
+const briefInput = (briefKey: string) =>
+  ({
+    type: "object",
+    additionalProperties: true,
+    anyOf: [{ required: [briefKey] }, { required: ["initialInput"] }],
+    properties: { [briefKey]: { type: "object" }, initialInput: { type: "object" } }
+  }) as const;
+
 const envelopeSchema = (artifact: string, extra: Record<string, unknown> = {}, extraRequired: string[] = []) => ({
   type: "object",
   required: ["artifact", "summary", ...extraRequired],
@@ -88,7 +103,7 @@ export const pdfTemplateStudioNodes = [
     description:
       "Expands this run's initialInput.pdfTemplateFamilyBrief against a seeded family profile (templateFamilyProfiles.ts) into concrete variants (newsletter/article/download, ...), and decides — PER VARIANT, before any design turn is spent — whether an unchanged rerun REUSES an already-published template from the cross-tenant TemplateLibraryStore (#207) or needs a fresh design. An explicit revision (brief.revise naming a variant) targets that SAME template id's next version rather than minting a new family. No wire call beyond the library's own read: pure, total, deterministic other than that one bounded lookup per variant.",
     prompt: `Objective: expand initialInput.pdfTemplateFamilyBrief into a validated list of family-variant PDF-template entries, reusing any variant the library already holds unchanged.\n${DETERMINISTIC_PROMPT_FOOTER}`,
-    inputSchema: openInput,
+    inputSchema: briefInput("pdfTemplateFamilyBrief"),
     outputSchema: envelopeSchema(
       PDF_FAMILY_ARTIFACTS.plan,
       {
