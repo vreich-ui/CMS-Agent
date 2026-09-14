@@ -126,7 +126,7 @@ describe("Publishing Conductor dry-run execution", () => {
       validateConfiguration: () => ({ ok: true }),
       run: async () => ({
         ok: true,
-        output: { artifact: "content_source.v1", summary: "Live model output." },
+        output: { artifact: "content_source.v1", summary: "Live model output.", trafficSource: "organic_search", awarenessStage: "problem_aware" },
         model: "gpt-t20-actual"
       })
     });

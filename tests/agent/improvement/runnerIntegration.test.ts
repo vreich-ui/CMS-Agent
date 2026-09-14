@@ -65,7 +65,7 @@ describe("playbook injection (replaces global observations — gap §6)", () => 
   it("injects the node-scoped playbook into the prompt and never the observations key", async () => {
     const improvementRepository = repositoryManager.getImprovementRepository();
     await improvementRepository.savePlaybook(applyPlaybookDelta(undefined, "input_triage", { add: [{ text: "Always restate the envelope id.", kind: "strategy" }] }, new Date().toISOString()));
-    captured.queue.push({ artifact: "content_source.v1", summary: "with playbook" });
+    captured.queue.push({ artifact: "content_source.v1", summary: "with playbook", trafficSource: "organic_search", awarenessStage: "problem_aware" });
 
     const result: any = await executeNode({ nodeId: "input_triage", input: {}, executionMode: "openai" });
     expect(result.execution.status).toBe("completed");
@@ -78,7 +78,7 @@ describe("playbook injection (replaces global observations — gap §6)", () => 
     // Memory repositories are static per backend, so the previous test's playbook survives the
     // manager reset — clear it explicitly to model a node with no lessons.
     await repositoryManager.getImprovementRepository().savePlaybook({ nodeId: "input_triage", items: [], budget: { maxItems: 12, maxChars: 2000 }, version: 1, updatedAt: new Date().toISOString() });
-    captured.queue.push({ artifact: "content_source.v1", summary: "no playbook" });
+    captured.queue.push({ artifact: "content_source.v1", summary: "no playbook", trafficSource: "organic_search", awarenessStage: "problem_aware" });
     const result: any = await executeNode({ nodeId: "input_triage", input: {}, executionMode: "openai" });
     expect(result.execution.status).toBe("completed");
     expect(captured.runPrompts[0]).not.toContain("\"playbook\"");

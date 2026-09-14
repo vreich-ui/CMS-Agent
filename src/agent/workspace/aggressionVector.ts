@@ -150,9 +150,19 @@ const readSignalFrom = (value: unknown, keys: string[]): string | undefined => {
 // carrier in order (an upstream stage output like input_triage's content_source.v1 envelope first,
 // then the run's own initial input), at the top level or nested under `contentSource`. First hit wins
 // per signal. Missing here means the node cannot compute a target and must block — never guess.
+//
+// A DRY-RUN CARRIER IS SKIPPED, for the identical reason readPlacementTarget refuses `dryRun === true`
+// a few lines above: a mock stage output carries schema-shaped PLACEHOLDERS, not facts. input_triage's
+// outputSchema requires trafficSource/awarenessStage (they are the aggression vector's provenance
+// carriers), so MockNodeRunner dutifully fills them with "Dry-run mock value" — and because dependency
+// outputs are read before the run's own initialInput, that placeholder would outrank the real signal
+// the request actually carried, and placement_resolver would compute a target for a traffic source
+// nobody asked for. Skipping the whole carrier (not just the placeholder string) is the right shape:
+// a dry-run envelope has nothing authoritative in it, and the next carrier in line is the real input.
 export function extractPlacementSignals(...carriers: unknown[]): PlacementSignals {
   const signals: PlacementSignals = {};
   for (const carrier of carriers) {
+    if (isPlainObject(carrier) && carrier.dryRun === true) continue;
     for (const value of [carrier, isPlainObject(carrier) ? carrier.contentSource : undefined]) {
       signals.trafficSource ??= readSignalFrom(value, ["trafficSource", "traffic_source"]);
       signals.awarenessStage ??= readSignalFrom(value, ["awarenessStage", "awareness_stage"]);

@@ -183,12 +183,18 @@ describe("P0 §2.1 — the publish_executor node cannot dispatch without an expl
     await setOperatorPublishDecision(runId, "approved", store);
     const result = await runNextNode(runId, { executionRepository: store });
 
-    // Past the guard: the node was DISPATCHED and failed in the runner on the missing API key —
-    // an invalid_node_configuration failure, not a publication_decision block.
+    // Past the guard — which is the whole point of this test — and then refused by the ENGINE publish
+    // sequence for a reason of its own. 2026-09-14: publish_executor's store row has carried
+    // publishExecutorDeterministic: "execute" since the 2026-07-31 go-live, and the two-plane re-seed
+    // brought that into canonical, so the node no longer falls through to a model dispatch. This
+    // harness parks the run with every upstream node marked completed but NO stage outputs, so the
+    // engine has no publish envelope to work from and says so by name rather than inventing one. What
+    // matters here is unchanged and asserted below: the controller-decision guard did NOT refuse.
     const state = result.nodes.find((node) => node.nodeId === "publish_executor")!;
-    expect(state.status).toBe("failed");
-    expect(state.errors?.[0]).toBe("invalid_node_configuration");
+    expect(state.status).toBe("blocked");
+    expect(state.warnings ?? []).toContain("publish_executor_engine_execution_unavailable:publish_envelope_absent");
     expect(state.warnings ?? []).not.toContain("publication_decision_not_affirmative");
+    expect((state.output as { error: { code: string } }).error.code).toBe("publish_executor_engine_execution_unavailable");
   });
 
   it("locates the decision record where downstream nodes consume it (stage output, node output fallback)", async () => {

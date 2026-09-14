@@ -83,7 +83,7 @@ describe("what it refuses to do", () => {
   });
 
   it("touches nothing on a node that carries no resolved vector at all", () => {
-    const output = { artifact: "content_source.v1", summary: "s" };
+    const output = { artifact: "content_source.v1", summary: "s", trafficSource: "organic_search", awarenessStage: "problem_aware" };
     const result = applyResolvedVectorClamp(output, { ceiling, target });
     expect(result.output).toBe(output);
     expect(result.warnings).toEqual([]);
@@ -181,7 +181,7 @@ describe("wired into the conductor: the ceiling exists before the brief is writt
     const spy = vi.spyOn(registry, "getNodeRunner").mockReturnValue({
       supports: () => true,
       validateConfiguration: () => ({ ok: true as const }),
-      run: async () => ({ ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged.", resolved: target, resolvedBasis: "I decided this myself." } })
+      run: async () => ({ ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged.", trafficSource: "organic_search", awarenessStage: "problem_aware", resolved: target, resolvedBasis: "I decided this myself." } })
     } as never);
     try {
       const store = new RepositoryManager().getExecutionRepository();

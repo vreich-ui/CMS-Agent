@@ -154,7 +154,17 @@ describe("the executor enforces the schema (R-16)", () => {
 
       expect(node.status).toBe("failed");
       // The issues are named, so an operator sees which fields were missing rather than "it failed".
-      expect(node.errors).toEqual(["output_schema_violation", "$.artifact is required", "$.summary is required"]);
+      // trafficSource/awarenessStage joined input_triage's required set with the aggression vector (the
+      // store has required them since it shipped; the re-seed brought that schema into canonical), so
+      // the same malformed literal now names four missing fields instead of two. The assertion is that
+      // every missing field is named, not that there are exactly two of them.
+      expect(node.errors).toEqual([
+        "output_schema_violation",
+        "$.artifact is required",
+        "$.summary is required",
+        "$.trafficSource is required",
+        "$.awarenessStage is required"
+      ]);
       expect(advanced.status).toBe("failed");
       // Failing closed is the point: a malformed value must not reach a downstream node or the ledger.
       expect("input_triage" in advanced.stageOutputs).toBe(false);

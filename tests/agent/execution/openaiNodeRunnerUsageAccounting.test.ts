@@ -23,7 +23,7 @@ import { RepositoryManager } from "../../../src/agent/repository/RepositoryManag
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { MODEL_PRICING_CATALOG_ASOF, MODEL_PRICING_CATALOG_VERSION } from "../../../src/agent/observability/modelUsage.js";
 
-const validOutput = { artifact: "content_source.v1", summary: "Live OpenAI summary." };
+const validOutput = { artifact: "content_source.v1", summary: "Live OpenAI summary.", trafficSource: "organic_search", awarenessStage: "problem_aware" };
 
 describe("R-9: requestId is a per-run join key", () => {
   it("buildInitialRun mints a requestId, and resetRun preserves the SAME one across a rebuild", () => {

@@ -13,7 +13,12 @@ import { READ_TOOL_ALLOWLIST } from "../../../src/agent/projects/projectMcpAdapt
 // W8 — artifact_plan left this set when it became a tool-less planning turn (allowedTools: []).
 // artifact_materializer is the node that now reaches the client, and it holds both grants.
 const CONTENT_BUILDING_NODES = ["contract_intelligence", "article_body", "artifact_materializer", "publish_payload"];
-const WRITE_ONLY_PUBLISH_NODES = ["publication_controller", "publish_executor"];
+// publish_executor left this list on 2026-09-14: the live store has granted it project.call_read_tool
+// for some time (allowedTools is store-owned, so the grant has been in force on every live dispatch),
+// and Wolf confirmed it as intended when the two-plane re-seed surfaced it. This list asserts the
+// SCOPE of the read/write split feature — "unchanged by this feature" — not a safety invariant; the
+// write variant is still what the publish charter gates, and publication_controller is unchanged.
+const WRITE_ONLY_PUBLISH_NODES = ["publication_controller"];
 // Disallowed-but-otherwise-unremarkable operation names, chosen so the ONLY reason each is refused
 // is the fixed allowlist itself — none of these also trip dr-lurie's executable policy (that gets its
 // own test below, since a save_json_blob_* name is caught by BOTH gates and would blur which one

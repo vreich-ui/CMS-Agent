@@ -132,7 +132,7 @@ describe("applyRunContextEnvelope — the engine echoes what the model used to r
 
   it("never writes a field the node's own schema does not declare", () => {
     const inputTriage = getWorkspaceNode("input_triage")!;
-    const result = applyRunContextEnvelope({ artifact: "content_source.v1", summary: "s" }, context, inputTriage.outputSchema);
+    const result = applyRunContextEnvelope({ artifact: "content_source.v1", summary: "s", trafficSource: "organic_search", awarenessStage: "problem_aware" }, context, inputTriage.outputSchema);
     expect(result.output).not.toHaveProperty("clientObjectType");
     expect(result.filled).toEqual([]);
   });
@@ -163,7 +163,7 @@ describe("wired into a real run: every node is handed the run context", () => {
       validateConfiguration: () => ({ ok: true as const }),
       run: async ({ input }: { input: unknown }) => {
         seen.push(input);
-        return { ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged." } };
+        return { ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged.", trafficSource: "organic_search", awarenessStage: "problem_aware" } };
       }
     } as never);
     try {
@@ -194,7 +194,7 @@ describe("wired into a real run: the operator publish decision reaches every nod
       validateConfiguration: () => ({ ok: true as const }),
       run: async ({ input }: { input: unknown }) => {
         seen.push(input);
-        return { ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged." } };
+        return { ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged.", trafficSource: "organic_search", awarenessStage: "problem_aware" } };
       }
     } as never);
     try {

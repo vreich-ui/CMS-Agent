@@ -4,7 +4,7 @@ const captures = vi.hoisted(() => ({ config: undefined as any, calls: 0 }));
 vi.mock("@openai/agents", () => ({
   OpenAIProvider: class { async getModel() { return { async getResponse() { return { usage: {}, output: [] }; }, async *getStreamedResponse() {} }; } },
   Agent: class { constructor(config: unknown) { captures.config = config; } },
-  run: async () => { captures.calls++; return { finalOutput: { artifact: "content_source.v1", summary: "CMS-Agent offline fixture." }, rawResponses: [], lastResponseId: "offline" }; },
+  run: async () => { captures.calls++; return { finalOutput: { artifact: "content_source.v1", summary: "CMS-Agent offline fixture.", trafficSource: "organic_search", awarenessStage: "problem_aware" }, rawResponses: [], lastResponseId: "offline" }; },
   tool: (definition: unknown) => definition,
   OpenAIChatCompletionsModel: class {}
 }));
@@ -58,7 +58,7 @@ describe("CMS-Agent resolved skill instructions", () => {
     let body: any; const node = base();
     const runner = new AnthropicNodeRunner((async (_url: unknown, init: any) => {
       body = JSON.parse(init.body);
-      return new Response(JSON.stringify({ id: "offline", stop_reason: "tool_use", content: [{ type: "tool_use", name: "emit_output", input: { artifact: "content_source.v1", summary: "Fixture." } }], usage: { input_tokens: 10, output_tokens: 5 } }), { status: 200 });
+      return new Response(JSON.stringify({ id: "offline", stop_reason: "tool_use", content: [{ type: "tool_use", name: "emit_output", input: { artifact: "content_source.v1", summary: "Fixture.", trafficSource: "organic_search", awarenessStage: "problem_aware" } }], usage: { input_tokens: 10, output_tokens: 5 } }), { status: 200 });
     }) as typeof fetch);
     expect((await runner.run({ node, input: {} }, context())).ok).toBe(true);
     expect(body.system).toContain((await resolveNodeInstructions(node)).prompt);

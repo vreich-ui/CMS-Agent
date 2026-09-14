@@ -38,7 +38,7 @@ describe("§2.22 audit scenario (a): a run must stop BEFORE overshoot, not disco
       // Late-stage entrypoint: review_aggregator and its ancestors (including contract_intelligence's
       // own dependency, brief_architect) are seeded completed, so contract_intelligence is the very
       // next runnable node — exactly the node the audit's run stalled in front of.
-      entrypoint: { nodeId: "review_aggregator", output: { artifact: "review_aggregation.v1", summary: "Test review aggregation for §2.22 audit replay." } }
+      entrypoint: { nodeId: "review_aggregator", output: { artifact: "review_aggregation.v1", summary: "Test review aggregation for §2.22 audit replay.", blockers: [], advisories: [], reviewStatus: "ready", revisions: [], unresolvedConflicts: [], buildInstructions: [] } }
     }, store);
 
     // Simulate a run that has already spent $4.80 of real (actual) model cost on earlier nodes —
