@@ -379,6 +379,27 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
       // #207) — never merged into one node's output the way "pdf_publish" above does for
       // clone_conductor's own branch. See pdfTemplateFamilyEngine.ts's header for the full argument.
       case "pdf_family_plan": {
+        // A10-D1 — REFUSE, in the same shape "intake"'s own clone_source_missing refusal above
+        // uses, rather than falling through to pdfTemplateFamilyPlanStep and letting it complete an
+        // EMPTY envelope. Platform's chat dispatch (operationWorkflowBindings.ts's deliberately-empty
+        // inputMapping for pdf_template_family) sends this operation's own flat fields
+        // (familyId/useCase/...), never a nested `pdfTemplateFamilyBrief` — so a chat-dispatched run
+        // reached this case with initialInput carrying no brief at all, and
+        // pdfTemplateFamilyPlanStep's own "no brief" branch silently returned `entries: []`,
+        // `rejectedEntries: []`, summary "No pdfTemplateFamilyBrief...". Nothing downstream
+        // distinguished that from "a brief was supplied and named zero variants": every later stage
+        // completed on the empty plan, and the terminal report read "0 of 0" with partial:false,
+        // allFailed:false — a silent no-op dressed as full success. pdfTemplateFamilyPlanStep's OWN
+        // "no brief -> empty envelope" behavior is left unchanged (see its own tests, which drive it
+        // directly) — this refusal sits at the DISPATCH boundary, the same place clone's own
+        // clone_source_missing refusal sits for "intake", above.
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.pdfTemplateFamilyBrief)) {
+          return refused(
+            "pdf_template_family_brief_missing",
+            "The run's initialInput carries no pdfTemplateFamilyBrief; pdf_template_intake (the family plan) needs one to design, reuse, or revise any variant. A binding that dispatches this workflow without constructing a pdfTemplateFamilyBrief cannot run it — see operationWorkflowBindings.ts's pdf_template_family entry."
+          );
+        }
         const envelope = await pdfTemplateFamilyPlanStep({ initialInput: run.initialInput, targetProjectId }, {});
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }

@@ -137,14 +137,24 @@ describe("pdfTemplateMintStep — design -> validate -> publish discipline, reje
       throw new Error(`Unexpected pdf-tool verb: ${name}`);
     }) as unknown as typeof fetch;
 
-  it("mints a pdfme template with no validation call at all (create-then-publish, warn-only)", async () => {
+  // A10 (medium, D6) — was: "...validated).toBe(true)". `validated:true` for a renderer this stage
+  // never actually validated (zero validate_pdf_template/get_pdf_template_validation calls — see the
+  // assertion just below) was a false record on the mint envelope, silently carried onto every
+  // published pdfme revision. pdfme's OWN exemption from the create -> validate -> poll sequence is
+  // real (create_pdf_template's bridge contract: "creates then publishes immediately, warn-only on
+  // lint issues" — pdfTemplateEngine.ts's rendererRequiresValidation comment) and stays unchanged
+  // here — this only stops CLAIMING a validation that never ran. publish_pdf_template's own gate
+  // (pdfTemplatePublishStep) now keys off rendererRequiresValidation(entry.renderer), not off this
+  // flag, so pdfme still mints and (in the sibling publish test, below) still publishes exactly as
+  // before, with an honest validated:false on file for it.
+  it("mints a pdfme template with no validation call at all (create-then-publish, warn-only) — and does not claim it was validated", async () => {
     const calls: { verb: string; args: Record<string, unknown> }[] = [];
     stubFetch(calls);
     await createTargetProject();
     const design = { designs: [{ requestedId: "pdf-simple-form", templateJson: { schemas: [{ title: { type: "text" } }] } }] };
     const result = await pdfTemplateMintStep({ targetProjectId: TARGET, intake: intake(), design }, { sleepImpl: async () => {} });
     expect(result.applied).toHaveLength(1);
-    expect(result.applied[0].validated).toBe(true);
+    expect(result.applied[0].validated).toBe(false);
     expect(result.rejected).toEqual([]);
     expect(calls.map((c) => c.verb)).toEqual(["create_pdf_template"]); // no validate/poll for pdfme
   });

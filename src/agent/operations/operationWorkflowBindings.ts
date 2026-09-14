@@ -116,9 +116,13 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     // (this module's header) as a flat field-rename table only, never structural nesting, so
     // expressing "wrap these three fields into a brief object" here would be exactly the kind of
     // guess this table exists to avoid. The node's own inputSchema is the permissive openInput
-    // shape (no declared `required`), so this empty mapping still trivially satisfies
-    // resolveBindingInputContract/checkBindingInputContract — a REAL executor (a later task, same
-    // posture as visual_identity_review_change today) is what would actually construct the brief.
+    // shape (no declared `required`) — A10-D1: an empty mapping into a fully open schema used to
+    // trivially (and wrongly) satisfy resolveBindingInputContract/checkBindingInputContract, since
+    // neither half of the check had anything to evaluate; bindingInputContract.ts's checkEntryNode
+    // now treats "open schema + zero guaranteed fields" as itself unsatisfied (nothing was checked
+    // AND nothing was guaranteed), so resolveBindingInputContract correctly reports this binding
+    // UNSATISFIED until a real executor (a later task, same posture as visual_identity_review_change
+    // today) either constructs the brief or the entry node's schema is taught to name it.
     inputMapping: {}
   },
   {

@@ -400,6 +400,39 @@ const nodeSource = (): "static" | "store" => (process.env.WORKSPACE_NODES_SOURCE
 // stays pinned to the canonical Publishing Conductor definition. A store edit can therefore change how
 // a node runs but never rewire the graph or downgrade a publish-risk gate, so promotions apply while
 // the topology stays provably identical to static.
+// A10-D5 — route-selecting metadata keys are pinned to CANONICAL, never let a stored row win, for
+// the identical reason riskLevel/dependsOn/produces already are (see this function's header comment,
+// above): overlayStoreNode merges by NODE ID, and two different workflows can legitimately declare
+// two different node OBJECTS under the same id (pdf_template_studio's pdfTemplateStudioNodes.ts
+// reuses clone_conductor's own "pdf_template_intake"/"pdf_template_mint"/"pdf_template_publish"/
+// "pdf_template_designer" ids on purpose — see pdfTemplateStudioNodes.ts's header). The STORE seeds
+// from workspaceStoreNodes.ts's union, which does not include pdfTemplateStudioNodes.ts at all (see
+// that module's header for why), so the store's row for e.g. "pdf_template_intake" is clone's own
+// definition — the ONLY one ever written there. Before this fix, resolving pdf_template_studio's
+// canonical node (cloneStageDeterministic: "pdf_family_plan") merged clone's STORED row on top
+// (cloneStageDeterministic: "pdf_intake") and the stored key won by the general merge rule below,
+// so a pdf_template_studio run dispatched clone_conductor's OWN "pdf_intake"/"pdf_mint"/"pdf_publish"
+// cloneConductorRoutes.ts cases — reading initialInput.pdfTemplateBrief instead of
+// initialInput.pdfTemplateFamilyBrief, silently discarding the family run's actual brief. Pinning
+// this key to canonical (reusing WORKFLOW_STAGE_ROUTE_METADATA_KEYS, defined below by the T1 fix for
+// the SAME "a stored row can carry a route key that does not belong to the resolving workflow" shape,
+// applied there to captureStageDeterministic/cloneStageDeterministic colliding with a DTC flag rather
+// than with another workflow's own route value) makes a route key behave exactly like riskLevel: a
+// store edit can change how a node's OWN declared stage runs (schema, prompt, tools, other metadata),
+// but never which engine stage a shared-id node dispatches to. See
+// pdfTemplateStudioNodeIdCollision.test.ts.
+const pinRouteMetadataToCanonical = (merged: Record<string, unknown> | undefined, canonicalMetadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
+  if (!merged) return merged;
+  for (const key of WORKFLOW_STAGE_ROUTE_METADATA_KEYS) {
+    if (canonicalMetadata && Object.prototype.hasOwnProperty.call(canonicalMetadata, key)) {
+      merged[key] = canonicalMetadata[key];
+    } else {
+      delete merged[key];
+    }
+  }
+  return merged;
+};
+
 const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): WorkspaceNode => ({
   ...canonical,
   name: stored.name ?? canonical.name,
@@ -414,8 +447,12 @@ const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): Work
   executionConfig: stored.executionConfig ?? canonical.executionConfig,
   // MERGE, not replace: a store row that sets one metadata key (approvalRequired: false) must not
   // erase the canonical keys it did not mention (voicePrefetch, contractPrefetch, skipWhen). A stored
-  // key still wins where both declare it.
-  metadata: canonical.metadata === undefined && stored.metadata === undefined ? undefined : { ...(canonical.metadata ?? {}), ...(stored.metadata ?? {}) },
+  // key still wins where both declare it — EXCEPT the route-selecting keys pinned to canonical just
+  // above (A10-D5).
+  metadata: pinRouteMetadataToCanonical(
+    canonical.metadata === undefined && stored.metadata === undefined ? undefined : { ...(canonical.metadata ?? {}), ...(stored.metadata ?? {}) },
+    canonical.metadata
+  ),
   updatedAt: stored.updatedAt ?? canonical.updatedAt
 });
 

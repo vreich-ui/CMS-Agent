@@ -140,6 +140,26 @@ function checkEntryNode(node: WorkspaceNode, guaranteedTargetFields: ReadonlySet
   const requiredFields = isStringArray(schema.required) ? schema.required : [];
   const unsatisfiedRequired = requiredFields.filter((field) => !guaranteedTargetFields.has(field));
 
+  // A10-D1 — a node with a fully permissive (`openInput`-shaped) schema declares NO top-level
+  // `required` and NO `anyOf`, so the two checks above find nothing to be unsatisfied — this module
+  // used to report such a node `satisfied: true` even when the binding's inputMapping is EMPTY and
+  // therefore guarantees the node NOTHING under any name. That was a vacuous pass, not a checked one:
+  // this codebase's `openInput` entry nodes (pdf_template_intake, image_revision_intake) are
+  // deliberately schema-permissive because they read a single NESTED brief object
+  // (initialInput.pdfTemplateFamilyBrief / initialInput.imageTemplateRevisionBrief) that their JSON
+  // Schema does not name at all — so "no required fields listed" here does NOT mean "this node needs
+  // nothing", it means this checker has no structural signal to evaluate. Per this module's own
+  // header rule ("never report satisfiable on a construct this function did not actually check"), the
+  // combination of an open schema and zero guaranteed fields is exactly that: nothing was checked,
+  // and nothing was guaranteed to arrive either, so it must read as unsatisfied rather than as a free
+  // pass. A node with SOME guaranteed field is unaffected (there is at least evidence of delivery,
+  // even against a schema that requires nothing of it), and a node with any declared `required`/
+  // `anyOf` is unaffected (those branches above already evaluate it on the merits).
+  const isOpenSchema = requiredFields.length === 0 && schema.anyOf === undefined;
+  if (isOpenSchema && guaranteedTargetFields.size === 0) {
+    unsupportedConstructs.push("open_schema_no_guaranteed_input");
+  }
+
   let anyOfBranches: string[][] | null = null;
   let satisfiedAnyOfBranchIndex: number | null = null;
   if (schema.anyOf !== undefined) {
