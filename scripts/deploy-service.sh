@@ -73,6 +73,16 @@ ENV_PAIRS=(
   "MCP_STATE_STORE=blobs"
   "GCS_BUCKET=${GCS_BUCKET}"
   "CMS_AGENT_PUBLIC_MCP_ENDPOINT=${PUBLIC_MCP_ENDPOINT}"
+  # KNOWN_ISSUES C-13. Without these, site_credentials_apply refuses every call with
+  # site_credential_reconciler_project_missing / _region_missing (siteCredentialTools.ts
+  # resolveReconcilerJobConfig) — confirmed live. Deliberately DERIVED from this same deploy's own
+  # PROJECT/REGION rather than hardcoded: the reconciler Cloud Run Job lives in the same
+  # project/region as this service today (both scripts/deploy-site-credential-reconciler.sh and
+  # scripts/deploy-site-credential-reconciler-schedule.sh take PROJECT/REGION as the job's own
+  # location, and nothing in this codebase runs the two services in different projects). If that
+  # ever stops being true, this line needs its own variable, not a hardcoded string either way.
+  "SITE_CREDENTIAL_RECONCILER_GCP_PROJECT=${PROJECT}"
+  "SITE_CREDENTIAL_RECONCILER_REGION=${REGION}"
   "DR_LURIE_MCP_ENDPOINT=https://drluriescience.netlify.app/mcp"
   "PDF_TOOL_MCP_ENDPOINT=https://pdf-x.netlify.app/mcp"
   "PLATFORM_MCP_ENDPOINT=https://kugel-platform.netlify.app/mcp"

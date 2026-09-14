@@ -155,9 +155,20 @@ async function runReconcilerJob(
   }
   if (!response.ok) {
     if (response.status === 403) {
+      // NOT run.jobs.run / roles/run.invoker. This call always sends overrides.containerOverrides
+      // (the --apply args above), and running a job WITH OVERRIDES requires the DISTINCT permission
+      // run.jobs.runWithOverrides, which roles/run.invoker does not carry. Confirmed live
+      // 2026-09-14: the Cloud Scheduler job hit this exact 403 on every fire since deployment, and
+      // granting roles/run.invoker alone did not clear it — the next forced run still 403'd. That
+      // insufficiency is the confirmed fact; WHICH role does carry run.jobs.runWithOverrides was not
+      // independently confirmed the same way (see the reliable-route guidance below). A bare,
+      // override-free run (a different call than this one) only needs run.jobs.run, which
+      // roles/run.invoker does carry; do not "fix" this message back to naming it. See the identical
+      // guidance in scripts/deploy-site-credential-reconciler-schedule.sh's footer, which checks this
+      // exact permission before letting a schedule deploy silently.
       throw new SiteCredentialOpsRefusal(
         "cloud_run_run_forbidden",
-        `Cloud Run refused to run job "${config.job}" (HTTP 403) — most likely this plane's service account is missing the run.jobs.run IAM permission on that job (grant it via roles/run.invoker or roles/run.developer), then retry.`
+        `Cloud Run refused to run job "${config.job}" WITH OVERRIDES (HTTP 403) — this call always carries containerOverrides.args (how --apply is injected), which needs the run.jobs.runWithOverrides IAM permission. roles/run.invoker does NOT include it and will still 403 even after granting it (confirmed live 2026-09-14). The reliable fix is a role that names run.jobs.runWithOverrides explicitly (a custom role, or check with Cloud Run Admin API v2's testIamPermissions method) — roles/run.developer is documented by Google as carrying it too, but that has not been independently confirmed here the way run.invoker's insufficiency has. Grant one to this plane's service account on job "${config.job}", then retry.`
       );
     }
     throw new SiteCredentialOpsRefusal("cloud_run_run_failed", `Cloud Run Jobs API refused the run request for "${config.job}": HTTP ${response.status}${await safeErrorDetail(response)}`);
@@ -208,6 +219,14 @@ async function getExecutionStatus(executionName: string, accessToken: string, fe
   }
   if (!response.ok) {
     if (response.status === 403) {
+      // Deliberately UNCHANGED by the runWithOverrides fix above. This is a plain GET on an
+      // execution resource — no containerOverrides, no --apply injection — so it is not the call the
+      // 2026-09-14 incident hit. WHICH permission a status GET actually requires is UNVERIFIED
+      // either way: it was neither confirmed sufficient nor confirmed insufficient here, unlike the
+      // runWithOverrides case above where roles/run.invoker's insufficiency was proven live (granted,
+      // still 403'd). Do not read this message's current wording as a checked-and-correct claim, and
+      // do not fold it into the runWithOverrides guidance without first confirming live which
+      // permission a status GET actually requires.
       throw new SiteCredentialOpsRefusal(
         "cloud_run_status_forbidden",
         `Cloud Run refused to read execution "${executionName}" (HTTP 403) — this plane's service account needs the run.jobs.run IAM permission (roles/run.invoker or roles/run.developer) on the job that owns this execution.`

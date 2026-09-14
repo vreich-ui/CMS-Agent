@@ -153,6 +153,36 @@ const rpc = async (name: string, args: Record<string, unknown>, options: { token
 }
 
 // ---------------------------------------------------------------------------------------------
+// C-13 — site_credentials_apply refuses with site_credential_reconciler_project_missing /
+// _region_missing unless SITE_CREDENTIAL_RECONCILER_GCP_PROJECT/_REGION were set by hand, because no
+// deploy artifact named them. Static, like C-12: read the one artifact that actually sets
+// cms-agent-mcp's environment (scripts/deploy-service.sh, the shared shape both cloudbuild.deploy.yaml
+// and scripts/deploy-mcp.sh call — see C-12) and confirm both keys are present AND derived from that
+// script's own PROJECT/REGION variables rather than a hardcoded literal, which is the failure mode a
+// bare "the key is mentioned somewhere" check would miss (e.g. a stray comment, or a hardcoded value
+// that silently diverges from wherever the reconciler job actually runs).
+{
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+  const deployService = readFileSync(path.join(root, "scripts/deploy-service.sh"), "utf8");
+  // ENV_PAIRS is a bash array of "KEY=value" string literals; find each target key's own entry line
+  // and check its right-hand side references ${PROJECT} / ${REGION} rather than a literal.
+  const entryFor = (key: string): string | undefined => {
+    const match = new RegExp(`^\\s*"${key}=([^"]*)"`, "m").exec(deployService);
+    return match?.[1];
+  };
+  const projectValue = entryFor("SITE_CREDENTIAL_RECONCILER_GCP_PROJECT");
+  const regionValue = entryFor("SITE_CREDENTIAL_RECONCILER_REGION");
+  const projectDerived = projectValue === "${PROJECT}";
+  const regionDerived = regionValue === "${REGION}";
+  // Also confirm the script sets these with the merge-style flag, not a --set-* replace (AGENTS.md
+  // invariant 8) — the same ENV_ARG feeds --update-env-vars a few lines down for every key here.
+  const usesMergeFlag = /--update-env-vars/.test(deployService) && !/--set-env-vars\s/.test(deployService.split("\n").filter((line) => !line.trimStart().startsWith("#")).join("\n"));
+  const fixed = projectDerived && regionDerived && usesMergeFlag;
+  record("C-13", "cms-agent-mcp is deployed with no SITE_CREDENTIAL_RECONCILER_GCP_PROJECT/_REGION, so site_credentials_apply always refuses", !fixed,
+    `scripts/deploy-service.sh ENV_PAIRS: SITE_CREDENTIAL_RECONCILER_GCP_PROJECT=${projectValue === undefined ? "ABSENT" : JSON.stringify(projectValue)}, SITE_CREDENTIAL_RECONCILER_REGION=${regionValue === undefined ? "ABSENT" : JSON.stringify(regionValue)}; derived-from-PROJECT/REGION: ${projectDerived && regionDerived}; merge-style flag only: ${usesMergeFlag}`);
+}
+
+// ---------------------------------------------------------------------------------------------
 // C-3 — runContinuationTickJob accepts a signal it never forwards; an already-aborted signal still
 // runs a full tick.
 {
