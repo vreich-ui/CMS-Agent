@@ -207,8 +207,18 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // The registry still cannot hold a secret: the token lives behind a NAME, nothing else.
     expect(JSON.stringify(config)).not.toContain("tenant-token");
     const policy = resolveProjectCapturePolicy(config);
-    expect(policy.allowedCrawlOrigins).toEqual(["https://www.zilbermanfilmfoundation.com"]);
+    // The SOURCE origin is what genesis seeded (seededGenesisCapturePolicy). The second entry is
+    // W21 self-capture: the resolver layers the NEW tenant's own origin onto every project, so a
+    // minted tenant can read back what it publishes without an operator ever granting it. It is
+    // additive and derived (from the mcpEndpoint asserted above) — never a widening of the crawl
+    // scope this duplication was authorized for.
+    expect(policy.allowedCrawlOrigins).toEqual([
+      "https://www.zilbermanfilmfoundation.com",
+      "https://zilbermanfilmfoundation.netlify.app"
+    ]);
     expect(policy.maxPages).toBe(20);
+    // Self-capture does NOT presume rights: retention is policy-wide, so raising it for the tenant's
+    // own pages would raise it for the source origin too. Still an explicit human project.update.
     expect(policy.rights).toEqual({ content: "prohibited", media: "prohibited" });
     expect(policy.respectRobots).toBe(true);
     expect(policy.sameOriginOnly).toBe(true);
@@ -401,8 +411,14 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
 
     const config = (await repositoryManager.getProjectRepository().get("zilberman"))!;
     const policy = resolveProjectCapturePolicy(config);
-    // Derived from the SOURCE, not from the site name or any static project definition.
-    expect(policy.allowedCrawlOrigins).toEqual(["https://an-example-prospect-site.test"]);
+    // Derived from the SOURCE, not from any static project definition — the acceptance test of
+    // T15.13, unchanged: an origin naming no project anywhere still becomes the crawl scope.
+    // Beside it, W21 self-capture adds the minted tenant's OWN origin, derived from the Netlify site
+    // name this call did pass. Source authority and self authority are separate and both present.
+    expect(policy.allowedCrawlOrigins).toEqual([
+      "https://an-example-prospect-site.test",
+      "https://zilbermanfilmfoundation.netlify.app"
+    ]);
     expect(policy.maxPages).toBe(20);
     expect(policy.sameOriginOnly).toBe(true);
     expect(policy.respectRobots).toBe(true);

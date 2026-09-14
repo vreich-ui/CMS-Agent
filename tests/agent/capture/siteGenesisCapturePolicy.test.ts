@@ -67,7 +67,11 @@ describe("T15.13 — the deny-all floor is untouched by URL-derived policy", () 
     expect(DEFAULT_PROJECT_CAPTURE_POLICY.allowedPathPrefixes).toEqual([]);
   });
 
-  it("resolveProjectCapturePolicy denies capture for a project with no stored capturePolicy — deriving a policy from a URL is not something this resolver does, by construction (it takes no URL at all)", () => {
+  // W21 note: the resolver DOES now layer the project's own origin onto this floor (self-capture).
+  // What it still refuses to do — and what this test pins — is derive THIRD-PARTY authority. A
+  // record naming no site of its own resolves to deny-all, exactly as before; a source URL never
+  // becomes crawl scope by passing through here, only by being stored on the record.
+  it("resolveProjectCapturePolicy denies capture for a project with no stored capturePolicy AND no site of its own — a source URL never becomes authority by passing through this resolver", () => {
     const resolved = resolveProjectCapturePolicy({ capturePolicy: undefined });
     expect(resolved).toEqual(DEFAULT_PROJECT_CAPTURE_POLICY);
     expect(resolved.maxPages).toBe(0);
