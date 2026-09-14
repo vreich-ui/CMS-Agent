@@ -51,7 +51,18 @@ RUNTIME_SA="${RUNTIME_SA:-cms-agent-run@cms-agent-503015.iam.gserviceaccount.com
 
 # ── shape ───────────────────────────────────────────────────────────────────
 CPU="1"
-MEMORY="1Gi"
+# 2Gi, raised from 1Gi (Wolf, 2026-09-14). The service was sitting ON its ceiling, not near it:
+# 39 "Memory limit of 1024 MiB exceeded" events in the seven days to Sep 14, on Sep 9/10/11/13/14.
+# Every overage but one was small — 1025, 1027, 1032, 1033, 1034, 1036, 1048, 1061 MiB, with a
+# single 1151 — which is the signature of a container that fits until one request lands badly,
+# not of a leak. Each one aborts the container ("Uncaught signal: 6") and the requests in flight
+# return 503 after 40-55 seconds; the Sep 14 11:02 burst took out a dozen calls across the
+# workbench and the MCP connector at once.
+#
+# 2Gi clears every observed peak with room to spare. The other lever, if this recurs, is
+# --concurrency (currently the platform default of 80 on a single vCPU): fewer requests sharing
+# one container is the fix for a memory ceiling that a bigger container only postpones.
+MEMORY="2Gi"
 MIN_INSTANCES="1"
 MAX_INSTANCES="4"
 PORT="8080"

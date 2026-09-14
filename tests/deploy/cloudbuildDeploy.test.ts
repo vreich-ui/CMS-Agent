@@ -8,6 +8,12 @@ import { describe, expect, it } from "vitest";
 // the repository pinned them. This fails the build the moment an edit drops either flag, rather than
 // shipping the crash loop again.
 //
+// IT HAPPENED AGAIN AT 1Gi (2026-09-14). Same shape, one notch up: 39 "Memory limit of 1024 MiB
+// exceeded" events in seven days, each aborting the container ("Uncaught signal: 6") and returning
+// 503 to whatever was in flight. The pin is now 2Gi, and the guard below refuses BOTH prior values
+// rather than only the first — the failure mode this file exists for is a silent walk DOWNWARD, and
+// 1Gi is now one of the floors worth refusing.
+//
 // The pins MOVED (C-12). They used to be inline in cloudbuild.deploy.yaml's deploy step, where this
 // file asserted them — while scripts/deploy-mcp.sh, which this file did NOT check, carried
 // `--memory 512Mi --min-instances 0`. The guard was real and half-blind: the exact crash loop it
@@ -37,9 +43,10 @@ const deployStep = (() => {
 })();
 
 describe("scripts/deploy-service.sh — cms-agent-mcp resource pins", () => {
-  it("pins 1Gi, never back to the 512Mi that crash-looped", () => {
-    expect(deployService).toMatch(/MEMORY="1Gi"/);
+  it("pins 2Gi, never back to the 1Gi or 512Mi that each crash-looped in turn", () => {
+    expect(deployService).toMatch(/MEMORY="2Gi"/);
     expect(deployServiceCode).not.toMatch(/512Mi/);
+    expect(deployServiceCode).not.toMatch(/MEMORY="1Gi"/);
   });
 
   it("pins min-instances 1, never back to 0", () => {
