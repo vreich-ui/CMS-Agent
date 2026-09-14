@@ -53,6 +53,7 @@ import { buildObjectPublishPlan, executeObjectPublish, type ObjectPublishPlan } 
 // side effect — see clientMemoryStore.ts's own header for why its return value must never be folded
 // into this stage's own output.
 import { TemplateLibraryStore } from "../library/templateLibraryStore.js";
+import { resolvePdfToolSiteId } from "../capture/pdfToolSiteScope.js";
 import { ClientMemoryStore } from "../memory/clientMemoryStore.js";
 import type { TemplateArtifactValue } from "../memory/memoryEnvelope.js";
 // T15.34 (#210; ADR-2026-08-25-structure-studio §7) — the pdf-template branch's own deterministic
@@ -400,7 +401,19 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
             "The run's initialInput carries no pdfTemplateFamilyBrief; pdf_template_intake (the family plan) needs one to design, reuse, or revise any variant. A binding that dispatches this workflow without constructing a pdfTemplateFamilyBrief cannot run it — see operationWorkflowBindings.ts's pdf_template_family entry."
           );
         }
-        const envelope = await pdfTemplateFamilyPlanStep({ initialInput: run.initialInput, targetProjectId }, {});
+        // Milestone A remainder — the brief's `siteId` is the tenant's Platform site object id
+        // (objectDialect.siteObjectId), NOT the tenantId, and a chat-dispatched brief
+        // (pdfTemplateFamilyBriefBuilder.ts) deliberately does not carry one: it is resolved from
+        // the project record HERE and injected, or the run is refused by name. A caller-supplied
+        // siteId is checked against the record's, never silently replaced (pdfToolSiteScope.ts).
+        const familyBrief = initial.pdfTemplateFamilyBrief as Record<string, unknown>;
+        const { config: familyConfig } = await resolveCloneAuthority(targetProjectId);
+        const familyScope = resolvePdfToolSiteId(familyConfig, familyBrief.siteId);
+        if (!familyScope.ok) return refused(familyScope.code, familyScope.reason);
+        const envelope = await pdfTemplateFamilyPlanStep(
+          { initialInput: { ...initial, pdfTemplateFamilyBrief: { ...familyBrief, siteId: familyScope.siteId } }, targetProjectId },
+          {}
+        );
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "pdf_mint_validated": {
@@ -515,6 +528,10 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         const compiled = envelopeOf(run, "image_revision_compile_preview", IMAGE_REVISION_ARTIFACTS.compilePreview);
         if (isOutcome(compiled)) return compiled;
         const { config } = await resolveCloneAuthority(targetProjectId);
+        // Milestone A remainder — pdf-tool mint calls are scoped by the tenant's Platform site object
+        // id, not its tenantId (pdfToolSiteScope.ts); resolved from the record, refused by name if absent.
+        const applyScope = resolvePdfToolSiteId(config);
+        if (!applyScope.ok) return refused(applyScope.code, applyScope.reason);
         if (!isProjectPublishEnabled(config)) {
           return refused(
             "image_revision_publish_disabled",
@@ -532,6 +549,7 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         const envelope = await runImageRevisionApplyBatch(
           {
             targetProjectId,
+            siteId: applyScope.siteId,
             intake: intake as unknown as ImageRevisionIntakeEnvelope,
             compiled: compiled as unknown as ImageRevisionCompilePreviewEnvelope,
             approve: brief?.approve

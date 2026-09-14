@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createProject, projectCreateSchema, projectUpdateSchema, updateProject } from "../../../src/agent/projects/projectAdmin.js";
 import { __test__, resolveConductorNodes } from "../../../src/agent/workspace/executor.js";
 import { runCloneStage } from "../../../src/agent/workspace/cloneConductorRoutes.js";
 import { PDF_TEMPLATE_STUDIO_WORKFLOW_ID } from "../../../src/agent/workspace/pdfTemplateStudioWorkflow.js";
@@ -40,6 +41,22 @@ describe("A10-D5 — the deployed pdf_template_studio dispatches clone_conductor
   beforeEach(async () => {
     resetRepositoryManager();
     await repositoryManager.getWorkspaceRepository().ensureWorkspaceNodeSeeds();
+    // Milestone A remainder — the family-plan stage now resolves the brief's siteId from the
+    // project record (pdfToolSiteScope.ts) instead of trusting the brief, so the target project must
+    // exist and carry its site object id, exactly as a genesis-minted tenant does.
+    process.env.A10_STUDIO_COLLISION_MCP_ENDPOINT = "https://a10-studio-collision.example/mcp";
+    await createProject(
+      repositoryManager.getProjectRepository(),
+      projectCreateSchema.parse({ projectId: "a10-studio-collision", name: "A10 studio collision fixture", mcpEndpointEnvVar: "A10_STUDIO_COLLISION_MCP_ENDPOINT", authMode: "none", defaultToolPolicy: "allowed" })
+    );
+    await updateProject(
+      repositoryManager.getProjectRepository(),
+      "a10-studio-collision",
+      projectUpdateSchema.parse({ objectDialect: { siteObjectId: "site_a10studiocollision", taxonomyRegistryObjectId: "tax_a10studiocollision", objectIdSource: "server_minted" } })
+    );
+  });
+  afterEach(() => {
+    delete process.env.A10_STUDIO_COLLISION_MCP_ENDPOINT;
   });
 
   it("A7's studio nodes are not seeded into the shared store at all — but four of their ids already are, by clone_conductor", () => {
@@ -78,7 +95,9 @@ describe("A10-D5 — the deployed pdf_template_studio dispatches clone_conductor
       // useCase "nonprofit_standard" is the one seeded profile (templateFamilyProfiles.ts), so this
       // brief — if actually read — expands to real variants, not just an accepted-but-unknown-useCase
       // shell. That is the strongest possible proof the brief reaches the real step.
-      initialInput: { targetProjectId: "a10-studio-collision", pdfTemplateFamilyBrief: { siteId: "a10-studio-collision", familyId: "nonprofit-core", useCase: "nonprofit_standard" } },
+      // No siteId on the brief ON PURPOSE: a chat-dispatched brief never carries one; the stage
+      // resolves it from the record and the assertion below proves the injection.
+      initialInput: { targetProjectId: "a10-studio-collision", pdfTemplateFamilyBrief: { familyId: "nonprofit-core", useCase: "nonprofit_standard" } },
       stageOutputs: {}
     } as unknown as WorkflowExecutionRecord;
 
@@ -95,6 +114,8 @@ describe("A10-D5 — the deployed pdf_template_studio dispatches clone_conductor
     // The family fields the editor's brief supplied are genuinely present — reached the real step.
     expect(intake.output).toHaveProperty("familyId", "nonprofit-core");
     expect(intake.output).toHaveProperty("useCase", "nonprofit_standard");
+    // The site scope came from the record (objectDialect.siteObjectId), never from the tenantId.
+    expect(intake.output).toHaveProperty("siteId", "site_a10studiocollision");
     const entries = intake.output.entries as unknown[];
     expect(entries.length).toBeGreaterThan(0); // real variants planned, not an empty shell
     expect(String(intake.output.summary)).toContain("nonprofit-core");

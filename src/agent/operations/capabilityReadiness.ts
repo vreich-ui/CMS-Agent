@@ -86,17 +86,22 @@ type CapabilityRequirement =
 //     declared effect searches for candidate images.
 //   create_pdf_template / publish_pdf_template — GENESIS_TENANT_TOOL_POLICIES names both "allowed";
 //     pdf_template_family's own two declared effects (design, then publish) are exactly these verbs.
-//   render_article_pdf — NOT present in GENESIS_TENANT_TOOL_POLICIES or any project definition in
-//     this codebase today. document_render's own descriptor requires it, and no tenant — genesis-born
-//     or hand-defined — has ever been granted it, so this capability reports not_configured for every
-//     tenant until an operator adds the grant (matching document_render's own status: task A8,
-//     unimplemented).
+//   document_render — GENESIS_TENANT_TOOL_POLICIES v3 names it "allowed" (genesisTenantProfile.ts);
+//     it is Platform's owner-based render verb (packages/core/server/lib/mcp-tool-definitions.ts:
+//     `document_render`, shipped in Platform #752) whose input — an owned document named by its
+//     object, rendered through the site's own template — is the shape document_render's OWN
+//     descriptor declares (`documentRef {objectType, objectId}`, descriptors/documentRender.ts).
+//     WAS `render_article_pdf` under a comment claiming no tenant had ever been granted it; that was
+//     already false for every defaultToolPolicy "allowed" record (dr-lurie, platform), and
+//     `render_article_pdf` is the article-only shortcut, not the generic contract. Still A8: the
+//     verb is gated here, and nothing implements the operation yet (operationWorkflowBindings.ts's
+//     UNBOUND_OPERATION_IMPLEMENTING_TASK) — preflight reports that gap by name, separately.
 const REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   site_inventory_read: { kind: "tool", toolName: "object_inventory" },
   visual_identity_read: { kind: "tool_and_dialect", toolName: "object_get" },
   visual_identity_propose: { kind: "tool_and_dialect", toolName: "object_create" },
   asset_search: { kind: "tool", toolName: "search_artifacts" },
-  pdf_render: { kind: "tool", toolName: "render_article_pdf" },
+  pdf_render: { kind: "tool", toolName: "document_render" },
   pdf_template_write: { kind: "tool", toolName: "create_pdf_template" },
   pdf_template_publish: { kind: "tool", toolName: "publish_pdf_template" },
   image_search: { kind: "tool", toolName: "search_images" },

@@ -600,7 +600,10 @@ export type ImageRevisionApplyEnvelope = {
 };
 
 export async function runImageRevisionApplyBatch(
-  input: { targetProjectId: string; intake: ImageRevisionIntakeEnvelope; compiled: ImageRevisionCompilePreviewEnvelope; approve?: boolean | string[] },
+  // `siteId` is the tenant's Platform site object id (objectDialect.siteObjectId — resolved by the
+  // caller through pdfToolSiteScope.ts), NOT the tenantId: pdf-tool refuses any other value with
+  // artifact_site_mismatch. This stage used to pass `intake.tenantId` here, which is never right.
+  input: { targetProjectId: string; siteId: string; intake: ImageRevisionIntakeEnvelope; compiled: ImageRevisionCompilePreviewEnvelope; approve?: boolean | string[] },
   deps: CloneDeps & { verifyImagePresence?: VerifyImagePresenceFn; templateLibraryStore?: TemplateLibraryStore },
   priorItems: ImageRevisionItemLedgerEntry[] = []
 ): Promise<ImageRevisionApplyEnvelope> {
@@ -675,7 +678,7 @@ export async function runImageRevisionApplyBatch(
     return { artifact: IMAGE_REVISION_ARTIFACTS.apply, summary: `image_template_revision apply: 0 item(s) to mint (0 approved-and-previewed).`, items };
   }
 
-  const siteId = input.intake.tenantId;
+  const siteId = input.siteId;
   const intakeEnvelope: PdfTemplateIntakeEnvelope = {
     artifact: PDF_TEMPLATE_ARTIFACTS.intake,
     summary: `Synthetic intake for image_template_revision's approved updates.`,

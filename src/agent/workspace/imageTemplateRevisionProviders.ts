@@ -3,10 +3,18 @@
 //   - assetCatalog: resolving a tagged/checksummed/capture-request-provenanced source image. A5
 //     (asset_lookup_adopt) has no registered executor yet (operationWorkflowBindings.ts's own
 //     UNBOUND_OPERATION_IMPLEMENTING_TASK still names it) — this module does not invent one.
-//   - previewTemplateVariant / verifyImagePresence: production wires these to Platform's A8
-//     template-preview / document-content-check path over the trusted bridge
-//     (packages/core/lib/pdf/template-preview.ts, document-render.ts — PR #752). Neither is
-//     implemented here.
+//   - previewTemplateVariant / verifyImagePresence: NOT WIRED IN PRODUCTION TODAY. Nothing outside
+//     tests calls setImageTemplateRevisionProviders (grep it), so a live run always sees the
+//     defaults below. The Platform verbs they should map to DO exist on every tenant server
+//     (packages/core/server/lib/mcp-tool-definitions.ts, PR #752): `preview_pdf_template_fixture`
+//     (render a fixture against a template_json — called once per before/after templateJson) for
+//     previewTemplateVariant, and `verify_pdf_content` (inspect a rendered artifact for unresolved
+//     images) for verifyImagePresence; both are "allowed" in GENESIS_TENANT_TOOL_POLICIES since v3.
+//     The wiring is its own task: it assembles per-run providers from callProjectTool
+//     (cloneEngine.ts) for the run's targetProjectId in cloneConductorRoutes.ts's image_revision_*
+//     cases, and verifyImagePresence needs a rendered preview artifact to inspect, so it composes
+//     with the preview seam rather than standing alone. Until then a live run reports
+//     preview_failed / verify_failed per item, by name — never a fabricated result.
 //
 // A LIVE run with no override gets NOT_CONFIGURED_ASSET_CATALOG and undefined preview/verify
 // functions below — imageTemplateRevisionEngine.ts's own steps read that absence as a NAMED,

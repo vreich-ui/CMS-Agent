@@ -16,7 +16,14 @@ export const pdfTemplateFamilyOperationV1: OperationDescriptor = {
     properties: {
       tenantId: { type: "string", minLength: 1 },
       familyId: { type: "string", minLength: 1, description: "Stable id for the template family being designed or revised." },
-      locale: { type: "string", minLength: 1, default: "en-US" }
+      locale: { type: "string", minLength: 1, default: "en-US" },
+      // Milestone A remainder — the two brief fields a chat dispatch could not previously supply at
+      // all (additionalProperties:false). Both optional; pdfTemplateFamilyBriefBuilder.ts passes
+      // them into the brief verbatim and omits them when absent (see that module's header for what
+      // an absent sourceUrl means: pdf-tool publication completes, the library export is refused by
+      // name — ADR §4.1).
+      useCase: { type: "string", minLength: 1, description: "Seeded family profile to expand (templateFamilyProfiles.ts); omit for the default profile. An unknown profile is refused by the plan step, by name." },
+      sourceUrl: { type: "string", minLength: 1, description: "The stateable source of this family, recorded as its provenance for the cross-tenant template library. Omit when there is none: the family still publishes to pdf-tool; only the library export is refused." }
     }
   },
   defaults: { locale: "en-US" },
