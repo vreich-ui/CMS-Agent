@@ -51,7 +51,9 @@ const WORKFLOW_GATE_SEGMENT: Record<string, string> = {
   visual_identity: "visual_identity",
   // A7 — already short and already stable, same posture as visual_identity's own explicit entry
   // above.
-  pdf_template_studio: "pdf_template_studio"
+  pdf_template_studio: "pdf_template_studio",
+  // A9 — same posture again: already short and already stable.
+  image_template_revision_studio: "image_template_revision_studio"
 };
 
 const gate = (workflowId: string, nodeId: string, description: string): PublishGateDefinition => ({
@@ -93,7 +95,12 @@ const GATE_REGISTRY: readonly PublishGateDefinition[] = [
   // never also mean "hold clone_conductor's". pdf_template_library_deposit (STEP B) is deliberately
   // NOT a gate: it is riskLevel "write", not "publish"/"admin" — it never calls publish_pdf_template
   // itself and carries no operator-veto point of its own.
-  gate("pdf_template_studio", "pdf_template_publish", "publish_pdf_template (STEP A only) for the family variants pdf_template_mint validated. Not a CMS release, and not the library export (STEP B, pdf_template_library_deposit) — see that node's own header.")
+  gate("pdf_template_studio", "pdf_template_publish", "publish_pdf_template (STEP A only) for the family variants pdf_template_mint validated. Not a CMS release, and not the library export (STEP B, pdf_template_library_deposit) — see that node's own header."),
+  // A9 — the image-on-every-page batch operation's own apply step: mints the next immutable library
+  // version and publishes it to pdf-tool's own template store for every previewed-and-approved item.
+  // Same posture as the two pdf_template_publish gates above — riskLevel "publish" without composing
+  // the shared tail, not a CMS release.
+  gate("image_template_revision_studio", "image_revision_apply", "The approved per-version template updates image_revision_compile_preview previewed — mint + publish_pdf_template + library deposit for each approved item. Not a CMS release.")
 ];
 
 const byWorkflowAndNode = new Map(GATE_REGISTRY.map((definition) => [`${definition.workflowId} ${definition.nodeId}`, definition]));

@@ -17,6 +17,8 @@ import "./visualIdentityWorkflow.js";
 // exist: this module's whole purpose is single-node resolution WITHOUT the executor, so it needs its
 // own side-effect import of every registered workflow, including this one.
 import "./pdfTemplateStudioWorkflow.js";
+// A9 (Stage A task list) — image_template_revision_studio, for the identical reason.
+import "./imageTemplateRevisionWorkflow.js";
 
 // T12.15 — single-node resolution for EXECUTION, as opposed to resolveConductorNodes (executor.ts),
 // which resolves a whole run's node array.

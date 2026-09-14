@@ -366,6 +366,15 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
       ] },
       { id: "pdf_library_deposit", description: "STEP B of the studio's two-step publication, and its own separate node: deposits each published template into the cross-tenant TemplateLibraryStore (#207) — an internal, blob-backed store, not a project MCP verb; no tenant call.", timeout: "deterministic_stage", requiredTools: [] },
       { id: "pdf_family_report", description: "Assemble the family's terminal per-variant ledger (reused/published/contract_rejected/mint_rejected/publish_failed/library_export_refused/family_plan_rejected) and the two-step publication summary. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      // A9 (Stage A task list) — the image-on-every-page batch operation's own four phases. See
+      // imageTemplateRevisionEngine.ts / imageTemplateRevisionNodes.ts for what each stage does.
+      { id: "image_revision_intake", description: "Resolve the source image once, then fetch every target template's current version from the cross-tenant TemplateLibraryStore (an internal, blob-backed store, not a project MCP verb) and an injectable asset-catalog provider; no pdf-tool call.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "image_revision_compile_preview", description: "Compile the recurring-header image edit (local computation) and render a before/after preview via an injectable provider; no pdf-tool call from this stage itself.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "image_revision_apply", description: "For previewed-and-approved items: mint + validate + publish the next template version exactly as pdf_mint_validated/pdf_publish_only do, then verify image presence via an injectable provider.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "create_pdf_template", risk: "write", description: "Mint the next version's draft in pdf-tool's template store." },
+        { verb: "publish_pdf_template", risk: "publish", description: "Goes live in pdf-tool's template store. Gated by the executor's generic publish-risk gate on the node's own riskLevel, and by the project's publishEnabled kill switch." }
+      ] },
+      { id: "image_revision_report", description: "Assemble the terminal per-item ledger (one outcome per templateRef, partial/allFailed computed from it). Local computation.", timeout: "deterministic_stage", requiredTools: [] },
       { id: "report", description: "Summarize the clone. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
   },

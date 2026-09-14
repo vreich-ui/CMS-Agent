@@ -6,12 +6,13 @@ import { __test__, publishingConductorWorkflowId } from "../../../src/agent/work
 import { mockOutputForNode } from "../../../src/agent/execution/runners/MockNodeRunner.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
 
-// §2.23 — minimal multi-workflow plumbing at the seam that matters. The registry carries FIVE shipped
+// §2.23 — minimal multi-workflow plumbing at the seam that matters. The registry carries SIX shipped
 // entries: publishing_conductor (the canonical array), capture_conductor (since T12.9, registered by
 // captureConductorWorkflow.ts), clone_conductor (since T13.1, registered by cloneConductorWorkflow.ts),
-// visual_identity (C5, registered by visualIdentityWorkflow.ts) and pdf_template_studio (A7, registered
-// by pdfTemplateStudioWorkflow.ts) — all side-effect-imported by executor.ts, which this file imports,
-// so all five registrations are present here exactly as on every run-driving plane. A genuinely ABSENT
+// visual_identity (C5, registered by visualIdentityWorkflow.ts), pdf_template_studio (A7, registered
+// by pdfTemplateStudioWorkflow.ts) and image_template_revision_studio (A9, registered by
+// imageTemplateRevisionWorkflow.ts) — all side-effect-imported by executor.ts, which this file imports,
+// so all six registrations are present here exactly as on every run-driving plane. A genuinely ABSENT
 // workflowId (no second argument / `undefined`) still falls back to the publishing_conductor canonical
 // set, byte-identical to every run before the registry existed; R1b (2026-09) closed the DIFFERENT
 // case this file used to also call "unknown workflowId" — an EXPLICIT, non-empty id nobody
@@ -20,7 +21,7 @@ import { validateOutput } from "../../../src/agent/execution/outputValidator.js"
 
 describe("§2.23 workflow registry", () => {
   it("ships publishing_conductor, capture_conductor, clone_conductor, visual_identity and pdf_template_studio as the registered workflows, resolving the canonical arrays", () => {
-    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio"]);
+    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio"]);
     expect(getWorkflowDefinition(publishingConductorWorkflowId)?.canonicalNodes()).toEqual(listWorkspaceNodes());
     expect(getWorkflowDefinition("capture_conductor")?.canonicalNodes().map((node) => node.id)).toContain("capture_crawl");
     expect(getWorkflowDefinition("clone_conductor")?.canonicalNodes().map((node) => node.id)).toContain("clone_intake");
@@ -36,6 +37,15 @@ describe("§2.23 workflow registry", () => {
       "pdf_template_publish",
       "pdf_template_library_deposit",
       "pdf_template_family_report"
+    ]);
+    // A9 — the standalone image-on-every-page batch operation's workflow: four nodes, also no
+    // composed tail (its apply stage reuses pdf-tool's own template store, never a CMS
+    // object_publish/release_to_production node).
+    expect(getWorkflowDefinition("image_template_revision_studio")?.canonicalNodes().map((node) => node.id)).toEqual([
+      "image_revision_intake",
+      "image_revision_compile_preview",
+      "image_revision_apply",
+      "image_revision_report"
     ]);
     expect(getWorkflowDefinition("money_page")).toBeUndefined();
   });
