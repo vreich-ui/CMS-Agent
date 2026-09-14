@@ -185,6 +185,41 @@ export const buildManifest = (tools: ToolFingerprint[]): Manifest => ({
 // Exported so scripts/verifyDeployment.ts can compare the LIVE revision's served surface against the
 // same committed manifest this detector locks — "merged" and "deployed" are different facts, and
 // nothing checked the second one until a stale revision served pre-R-3 code for hours.
+export type ManifestLockResult = {
+  /** The checked-in tool array vs the live surface. */
+  surfaceDrift: SurfaceDiff;
+  /** The checked-in deprecated-alias map vs the code's. */
+  aliasDrift: boolean;
+  /**
+   * The manifest's OWN digest does not describe the surface it ships with.
+   *
+   * This is the case the lock was blind to until 2026-09-14, and it is not hypothetical: PR #336
+   * hit a merge conflict on `surfaceHash` alone. Both sides were real digests — of two surfaces
+   * that no longer existed — and the resolution kept one by hand while the `tools` array below it
+   * merged to a third thing. `diffSurfaces` compared the arrays, found them identical to the live
+   * surface, and printed `manifest lock ok` next to a digest nobody had recomputed. The drift job
+   * went green, main went red on `npm test`, and the only thing that caught it was the vitest
+   * assertion that recomputes the hash.
+   *
+   * A lock that prints a value it never verifies is not a lock. Recomputing costs nothing.
+   */
+  digestDrift: boolean;
+  clean: boolean;
+};
+
+/**
+ * The whole manifest-lock decision, as a pure function over (checked-in manifest, live surface) —
+ * extracted from main() so the semantics can be tested directly rather than only observed through
+ * the script's exit code.
+ */
+export function checkManifestLock(manifest: Manifest, liveTools: ToolFingerprint[]): ManifestLockResult {
+  const surfaceDrift = diffSurfaces(manifest.tools, liveTools);
+  const aliasDrift = stableStringify(manifest.aliases ?? {}) !== stableStringify(DEPRECATED_TOOL_ALIASES);
+  const live = buildManifest(liveTools);
+  const digestDrift = manifest.surfaceHash !== live.surfaceHash || manifest.toolCount !== live.toolCount;
+  return { surfaceDrift, aliasDrift, digestDrift, clean: isClean(surfaceDrift) && !aliasDrift && !digestDrift };
+}
+
 export const readManifest = async (): Promise<Manifest | null> => {
   try {
     return JSON.parse(await readFile(MANIFEST_PATH, "utf8")) as Manifest;
@@ -285,15 +320,23 @@ async function main(argv: string[]): Promise<number> {
     failed = true;
     console.error("manifest lock     MISSING  docs/mcp-tool-manifest.json does not exist — run `npm run drift:update`");
   } else {
-    const manifestDiff = diffSurfaces(manifest.tools, netlify.tools);
-    const aliasDrift = stableStringify(manifest.aliases ?? {}) !== stableStringify(DEPRECATED_TOOL_ALIASES);
-    if (isClean(manifestDiff) && !aliasDrift) {
+    const lock = checkManifestLock(manifest, netlify.tools);
+    if (lock.clean) {
+      // Printed only once the digest has actually been recomputed and matched — see
+      // ManifestLockResult.digestDrift for the merge that got past the old, unverified print.
       console.log(`manifest lock     ok   surfaceHash ${manifest.surfaceHash.slice(0, 12)}…`);
     } else {
       failed = true;
       console.error("manifest lock     DRIFT  manifest (first) vs live surface (second)");
-      if (!isClean(manifestDiff)) printDiff("the served tool surface no longer matches the checked-in manifest:", manifestDiff);
-      if (aliasDrift) {
+      if (!isClean(lock.surfaceDrift)) printDiff("the served tool surface no longer matches the checked-in manifest:", lock.surfaceDrift);
+      if (lock.digestDrift) {
+        const live = buildManifest(netlify.tools);
+        console.error("\n    ~ the manifest's own digest does not describe the surface it ships with");
+        console.error("      (a hand-resolved merge conflict on these fields looks exactly like this):");
+        console.error(`        manifest: surfaceHash ${manifest.surfaceHash.slice(0, 12)}…  toolCount ${manifest.toolCount}`);
+        console.error(`        live:     surfaceHash ${live.surfaceHash.slice(0, 12)}…  toolCount ${live.toolCount}`);
+      }
+      if (lock.aliasDrift) {
         console.error("\n    ~ deprecated tool aliases changed:");
         console.error(`        manifest: ${stableStringify(manifest.aliases ?? {})}`);
         console.error(`        live:     ${stableStringify(DEPRECATED_TOOL_ALIASES)}`);

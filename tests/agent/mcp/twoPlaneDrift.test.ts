@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildManifest,
   checkAliasParity,
+  checkManifestLock,
   diffSurfaces,
   fingerprintTools,
   isClean,
@@ -32,6 +33,45 @@ afterEach(() => {
 });
 
 const tool = (name: string, description = "d", inputSchemaHash = "h"): ToolFingerprint => ({ name, description, inputSchemaHash });
+
+describe("two-plane drift detector — the manifest lock verifies its own digest", () => {
+  // The case that reached main on 2026-09-14. PR #336 conflicted on `surfaceHash` ALONE: both
+  // sides were real digests of surfaces that no longer existed, the resolution kept one by hand,
+  // and the `tools` array below it merged to a third thing. The lock compared only the arrays,
+  // found them identical to the live surface, and printed "manifest lock ok" beside a digest
+  // nobody had recomputed. The CI drift job went green; `npm test` went red on main.
+  const live = [tool("a_tool"), tool("b_tool")];
+
+  it("passes a manifest that genuinely describes the live surface", () => {
+    const lock = checkManifestLock(buildManifest(live), live);
+    expect(lock).toMatchObject({ aliasDrift: false, digestDrift: false, clean: true });
+    expect(isClean(lock.surfaceDrift)).toBe(true);
+  });
+
+  it("REPRODUCES #336: tools identical, digest stale — DRIFT, not ok", () => {
+    const stale: Manifest = { ...buildManifest(live), surfaceHash: surfaceHash([tool("a_tool")]) };
+    const lock = checkManifestLock(stale, live);
+    // The array check — the only one the old lock made — still sees nothing wrong.
+    expect(isClean(lock.surfaceDrift)).toBe(true);
+    // ...and the lock refuses anyway.
+    expect(lock.digestDrift).toBe(true);
+    expect(lock.clean).toBe(false);
+  });
+
+  it("catches a toolCount that disagrees with the surface it ships with", () => {
+    const miscounted: Manifest = { ...buildManifest(live), toolCount: live.length + 1 };
+    const lock = checkManifestLock(miscounted, live);
+    expect(isClean(lock.surfaceDrift)).toBe(true);
+    expect(lock.digestDrift).toBe(true);
+    expect(lock.clean).toBe(false);
+  });
+
+  it("still catches a surface that really did move", () => {
+    const lock = checkManifestLock(buildManifest(live), [...live, tool("c_tool")]);
+    expect(isClean(lock.surfaceDrift)).toBe(false);
+    expect(lock.clean).toBe(false);
+  });
+});
 
 describe("two-plane drift detector — comparison logic", () => {
   it("fingerprints tools by name, description, and schema shape, sorted by name", () => {
