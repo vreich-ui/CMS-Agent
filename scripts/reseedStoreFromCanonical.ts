@@ -6,12 +6,19 @@
  * WHY THIS DIRECTION EXISTS (mirror image of scripts/seedNodesFromWorkspace.ts)
  *
  * `resolveConductorNodes` (executor.ts ~L245-291) resolves each conductor node by overlaying the
- * canonical definition with its stored counterpart: `overlayStoreNode` PINS id, dependsOn, produces,
- * riskLevel, position and status to canonical — a store edit can never rewire the graph or downgrade
- * a publish-risk gate — but it lets the store's name, description, prompt, schema, inputSchema,
- * outputSchema, allowedTools, assignedSkills, modelConfig, executionConfig and metadata OVERRIDE
- * canonical outright. allowedTools and metadata are replaced WHOLESALE, not merged: a stale store row
- * silently wins over a just-committed canonical fix in exactly those two fields.
+ * canonical definition with its stored counterpart: `overlayStoreNode` PINS id, kind, dependsOn,
+ * requiredInputs, produces, riskLevel, position and status to canonical (CANONICAL_OWNED_FIELDS) — a
+ * store edit can never rewire the graph or downgrade a publish-risk gate — but it lets the store's
+ * name, description, prompt, schema, inputSchema, outputSchema, allowedTools, assignedSkills,
+ * modelConfig, executionConfig and metadata OVERRIDE canonical. allowedTools is replaced WHOLESALE;
+ * metadata is MERGED per key, with the store winning key by key (executor.ts:364-367). Either way a
+ * stale store row silently wins over a just-committed canonical fix for any key it declares.
+ *
+ * The merge does NOT soften K-A9, and this is the correction's own footnote because it is the thing a
+ * reader will get wrong next: a canonical->store WRITE still deletes store-only metadata keys. The
+ * merge happens at dispatch, between whatever the two rows hold at that moment; once a write has
+ * overwritten the store row there is nothing left for it to preserve. That is exactly why
+ * publish_executor.metadata stays off RESEED_ALLOWLIST.
  *
  * That is precisely the failure this script removes. Four waves changed canonical prompts, an output
  * schema and a tool grant; every one of those changes is invisible to a live run until the matching
@@ -33,8 +40,9 @@
  * that single flag is --set-publish-executor-mode, a merge-only operation (see below) that touches
  * publishExecutorDeterministic alone and leaves every sibling metadata key byte-for-byte intact.
  *
- * WHAT THIS SCRIPT WILL NEVER TOUCH. id, dependsOn, produces, riskLevel, position and status are
- * TOPOLOGY — pinned by overlayStoreNode as described above — so a store write to any of them can
+ * WHAT THIS SCRIPT WILL NEVER TOUCH. id, kind, dependsOn, requiredInputs, produces, riskLevel,
+ * position and status are TOPOLOGY — pinned by overlayStoreNode as described above, and read from its
+ * own CANONICAL_OWNED_FIELDS export so the two can never disagree — so a store write to any of them can
  * never rewire a run; it reaches a run only through a re-seed of nodes.ts (npm run nodes:update)
  * followed by a REDEPLOY. Requesting one of these fields is refused loudly, both here and at the
  * refusal site itself, because an operator who wrote dependsOn into the store and believes it took
@@ -78,11 +86,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkspaceNode } from "../src/agent/workspace/nodeTypes.js";
 import type { WorkspaceMutationMeta } from "../src/agent/mcp/workspace/store.js";
+import { CANONICAL_OWNED_FIELDS } from "../src/agent/workspace/executor.js";
 
 // Fields overlayStoreNode PINS to canonical. Requesting a write to any of these is refused, loudly,
 // naming the redeploy requirement — never silently dropped, so an operator cannot mistake "refused"
 // for "applied".
-export const TOPOLOGY_FIELDS = ["id", "dependsOn", "produces", "riskLevel", "position", "status"] as const;
+//
+// Read from executor.ts rather than restated here, so this list can never disagree with the function
+// it describes. The hand-kept copy it replaces omitted `kind` and `requiredInputs`, which
+// overlayStoreNode pins just as hard as the other six — a write to either was refused only by the
+// unallowlisted-pair rule, with a message that said nothing about the redeploy.
+export const TOPOLOGY_FIELDS = CANONICAL_OWNED_FIELDS;
 
 // Fields overlayStoreNode lets the store override wholesale. Only fields in this set are ever
 // candidates for RESEED_ALLOWLIST entries below.
@@ -272,7 +286,7 @@ export function planReseed(options: {
       refusals.push({
         nodeId,
         field,
-        reason: `"${field}" is a TOPOLOGY field. overlayStoreNode (src/agent/workspace/executor.ts) pins id/dependsOn/produces/riskLevel/position/status to the canonical definition in nodes.ts on every run, so a store write here can never rewire the graph or move a gate — it reaches a run only through a re-seed of nodes.ts (npm run nodes:update) followed by a REDEPLOY. Refusing, so an operator who wrote this does not believe it took effect.`
+        reason: `"${field}" is a TOPOLOGY field. overlayStoreNode (src/agent/workspace/executor.ts) pins ${TOPOLOGY_FIELDS.join("/")} to the canonical definition in nodes.ts on every run, so a store write here can never rewire the graph or move a gate — it reaches a run only through a re-seed of nodes.ts (npm run nodes:update) followed by a REDEPLOY. Refusing, so an operator who wrote this does not believe it took effect.`
       });
       continue;
     }

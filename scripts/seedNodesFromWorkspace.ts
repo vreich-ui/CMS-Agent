@@ -32,6 +32,7 @@
  *   npm run nodes:update                    # rewrite nodes.ts from the live workspace
  *   tsx scripts/seedNodesFromWorkspace.ts --from snapshot.json --write
  *   npm run nodes:update -- --allow-prompt-shrink   # confirm a deliberate prompt cut (see MAX_PROMPT_SHRINK)
+ *   npm run nodes:update -- --adopt-store-topology  # a DELIBERATE topology change (see pinCanonicalOwnedFields)
  *
  * `--from` accepts a workspace.get_nodes / workspace.export_workspace payload: `{ok,data:{nodes}}`,
  * `{nodes}`, or a bare array — no credentials needed, which makes it the route for anyone holding an
@@ -50,10 +51,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { captureConductorNodes } from "../src/agent/workspace/captureConductorNodes.js";
 import { cloneConductorNodes } from "../src/agent/workspace/cloneConductorNodes.js";
+import { visualIdentityNodes } from "../src/agent/workspace/visualIdentityNodes.js";
+import { CANONICAL_OWNED_FIELDS } from "../src/agent/workspace/executor.js";
 import { getWorkspaceNode, listWorkspaceNodes, validateWorkspaceGraph } from "../src/agent/workspace/nodes.js";
 import { publishingTailConformanceIssues } from "../src/agent/workspace/publishingTail.js";
 import { recipeAuthorityConformanceIssues } from "../src/agent/workspace/publishableTypeCharter.js";
 import { seededSkillDefinitions } from "../src/agent/skills/seededSkills.js";
+import { standardsPackSkillDefinition } from "../src/agent/skills/standardsPack.js";
 import type { SkillDefinition } from "../src/agent/skills/skillTypes.js";
 import type { WorkspaceNode } from "../src/agent/workspace/nodeTypes.js";
 import { openAiIncompatibleRootKeywords } from "../src/agent/execution/openaiResponseSchema.js";
@@ -106,8 +110,8 @@ const die = (message: string, detail: string[] = []): never => {
 // back as a publishing_conductor node: it runs every guard over them and renders them into
 // publishingConductorNodes.
 //
-// Since #195 that is wrong in both directions, and the live store now returns 49 rows where this
-// script assumes publishing_conductor's own 25:
+// Since #195 that is wrong in both directions, and the live store now returns every workflow's rows
+// (51 as of 2026-09-14) where this script assumes publishing_conductor's own 25:
 //
 //   1. `npm run nodes:check` refuses on 24 rows for a missing `schema` — a field REQUIRED_FIELDS
 //      still demands but which nodeTypes.ts marks @deprecated and optional, which capture/clone
@@ -127,7 +131,16 @@ const die = (message: string, detail: string[] = []): never => {
 // list would silently swallow exactly that. And the excluded set is read from the capture/clone node
 // modules themselves rather than a second hand-kept list here, so a capture/clone node added later is
 // excluded automatically instead of drifting back in the day someone forgets this file exists.
-const OTHER_WORKFLOW_NODE_IDS = new Set([...captureConductorNodes, ...cloneConductorNodes].map((node) => node.id));
+// C5 added visual_identity as the FOURTH workflow and workspaceStoreNodes.ts unions its two nodes
+// (brand_imagery_writer, visual_standard_materializer) into the SAME store document, so a whole-store
+// read hands them to this generator too — recurring the #195 shape for a third node set, and measured
+// as two `missing schema` refusals against the live store. They are NOT orphans: both are live, both
+// are dispatched (node_execute from the chat path, and a visual_identity run at site genesis), and
+// they belong exactly where they are. Excluded here for the same two reasons capture/clone are, and
+// read from the node module itself so a future visual_identity node is excluded automatically.
+const OTHER_WORKFLOW_NODE_IDS = new Set(
+  [...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes].map((node) => node.id)
+);
 
 export const scopeToPublishingConductor = (source: WorkspaceNode[]): { scoped: WorkspaceNode[]; excluded: string[] } => {
   // The RAW capture/clone arrays declare no shared-tail node — they only depend on tail ids
@@ -147,6 +160,50 @@ export const scopeToPublishingConductor = (source: WorkspaceNode[]): { scoped: W
     scoped: source.filter((node) => !OTHER_WORKFLOW_NODE_IDS.has(node.id)),
     excluded: source.filter((node) => OTHER_WORKFLOW_NODE_IDS.has(node.id)).map((node) => node.id)
   };
+};
+
+const ADOPT_TOPOLOGY_FLAG = "--adopt-store-topology";
+
+// SOURCE NORMALISATION — the step that makes every guard below TRUE instead of narrowing it.
+//
+// overlayStoreNode (executor.ts) pins CANONICAL_OWNED_FIELDS to the canonical definition on every
+// dispatch, so a store row's copy of id/kind/dependsOn/requiredInputs/produces/riskLevel/position/
+// status can NEVER reach a run. Copying those values into nodes.ts is therefore not a re-seed at all:
+// it transcribes a value the runtime already ignores, and then asks the tail-conformance check to
+// ratify it. It was the sole cause of 11 of the 14 refusals measured against the live store on
+// 2026-09-13 — every one of them a `tail:` line about topology the store cannot deliver.
+//
+// So the source is corrected here, before any guard or the renderer sees it, and `refuseUnsafe` runs
+// completely UNCHANGED over the result. The tail check, the risk ladder, the project.call_tool guard,
+// validateWorkspaceGraph and the recipe-authority check all still run; they pass because the array is
+// now right, not because they were switched off. (A flag that scoped the tail check to "the fields
+// being written" would have left the generator emitting the store's stale topology into nodes.ts with
+// the check silenced — a silently forked tail, which is exactly what publishingTail.ts exists to
+// prevent.)
+//
+// A node the store adds that canonical does not have keeps its own topology: there is nothing to pin
+// from, and adding a node through the store is a supported act this script reports as `nodes added`.
+//
+// --adopt-store-topology turns this off for a DELIBERATE topology change. It is not a way past a
+// refusal: with the store's topology adopted, refuseUnsafe's tail conformance check demands
+// publishingTail.ts move in the same commit, which is precisely the review a topology change needs.
+export const pinCanonicalOwnedFields = (source: WorkspaceNode[]): { pinned: WorkspaceNode[]; changed: string[] } => {
+  const canonicalById = new Map(listWorkspaceNodes().map((node) => [node.id, node]));
+  const changed: string[] = [];
+  const pinned = source.map((node) => {
+    const canonical = canonicalById.get(node.id);
+    if (!canonical) return node;
+    const next = { ...node } as unknown as Record<string, unknown>;
+    for (const field of CANONICAL_OWNED_FIELDS) {
+      const storeValue = (node as unknown as Record<string, unknown>)[field];
+      const canonicalValue = (canonical as unknown as Record<string, unknown>)[field];
+      if (JSON.stringify(storeValue) === JSON.stringify(canonicalValue)) continue;
+      changed.push(`${node.id}.${field} ${JSON.stringify(storeValue)} -> ${JSON.stringify(canonicalValue)}`);
+      next[field] = JSON.parse(JSON.stringify(canonicalValue));
+    }
+    return next as unknown as WorkspaceNode;
+  });
+  return { pinned, changed };
 };
 
 // S3: `--from-canonical` feeds the generator the COMPILED canonical set (nodes.ts as built), so the
@@ -419,10 +476,30 @@ const render = (nodes: WorkspaceNode[], original: string): string => {
   return `${original.slice(0, open)}${OPEN_MARKER}\n${body}\n${original.slice(close)}`;
 };
 
+// T3 / T15.33 (#209) — seededSkills.ts references standardsPackSkillDefinition BY IDENTIFIER rather
+// than carrying a copy of its JSON, for the same reason nodes.ts references the shared enum property
+// objects by identifier: STANDARDS_PACK_VERSION has to stay the single source of truth for both the
+// seeded definition and templateProvenance.ts's pin, and an inlined copy is a second one waiting to
+// drift. The generator emitted pure JSON, so byte-equality with the checked-in file was UNREACHABLE
+// and `npm run nodes:check:offline` exited 1 on a clean checkout — a gate that cannot go green is a
+// gate nobody adds, and this seam then drifts unwatched. Same mechanism as substituteSharedProperties
+// above: substitute the identifier wherever a skill deep-equals the constant, and emit its import.
+//
+// Key order is not significant to the comparison (the live store's JSON and the TS literal need not
+// agree on it), so the deep-equal below normalises it rather than using raw JSON.stringify.
+const canonicalJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, entry) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(Object.keys(entry as Record<string, unknown>).sort().map((key) => [key, (entry as Record<string, unknown>)[key]]))
+      : entry);
+const STANDARDS_PACK_JSON = canonicalJson(standardsPackSkillDefinition);
+
 const renderSkills = (skills: SkillDefinition[]): string => {
   const body = [...skills]
     .sort((a, b) => a.skillId.localeCompare(b.skillId))
-    .map((skill) => JSON.stringify(skill, null, 2).split("\n").map((line) => `  ${line}`).join("\n"))
+    .map((skill) => canonicalJson(skill) === STANDARDS_PACK_JSON
+      ? "  standardsPackSkillDefinition"
+      : JSON.stringify(skill, null, 2).split("\n").map((line) => `  ${line}`).join("\n"))
     .join(",\n");
   return `// GENERATED by scripts/seedNodesFromWorkspace.ts — do not edit by hand.
 //
@@ -433,6 +510,16 @@ const renderSkills = (skills: SkillDefinition[]): string => {
 //
 // Re-seed with:  npm run nodes:update
 // Check drift:   npm run nodes:check
+//
+// T15.33 (#209; ADR-2026-08-25-structure-studio §6.2) — standardsPackSkillDefinition appears below as a
+// BARE IDENTIFIER, not as inlined JSON. It is authored once in its own module (standardsPack.ts) so that
+// STANDARDS_PACK_VERSION stays the single source of truth for both this seeded definition and
+// templateProvenance.ts's pin — they cannot silently drift apart. The generator substitutes the identifier
+// for any skill that deep-equals the constant (renderSkills, scripts/seedNodesFromWorkspace.ts), so a
+// re-seed from a live workspace that HAS run skill_create/skill_assign for it round-trips this file
+// byte-for-byte instead of replacing the pin with a copy. A live definition that has genuinely diverged
+// from the constant is inlined instead, which is the signal that standardsPack.ts needs a deliberate bump.
+import { standardsPackSkillDefinition } from "./standardsPack.js";
 import type { SkillDefinition } from "./skillTypes.js";
 
 export const seededSkillDefinitions: SkillDefinition[] = [
@@ -469,15 +556,29 @@ const main = async () => {
   // #195 scoping — see scopeToPublishingConductor. The live store holds all three workflows' nodes;
   // this script seeds publishing_conductor's canonical array only.
   const { scoped, excluded } = scopeToPublishingConductor(source);
-  if (excluded.length) say(`scoped            ${excluded.length} capture/clone node(s) excluded — this script seeds publishing_conductor only: ${excluded.join(", ")}`);
+  if (excluded.length) say(`scoped            ${excluded.length} non-publishing node(s) excluded — this script seeds publishing_conductor only: ${excluded.join(", ")}`);
 
-  const ordered = topologicallyOrdered(scoped);
+  // See pinCanonicalOwnedFields. Reported per field, never silenced: an operator must be able to see
+  // exactly which store values were discarded and why.
+  const adoptStoreTopology = args.includes(ADOPT_TOPOLOGY_FLAG);
+  const { pinned, changed } = adoptStoreTopology ? { pinned: scoped, changed: [] as string[] } : pinCanonicalOwnedFields(scoped);
+  if (adoptStoreTopology) {
+    say(`pinning           DISABLED via ${ADOPT_TOPOLOGY_FLAG} — the store's own ${CANONICAL_OWNED_FIELDS.join("/")} are adopted; refuseUnsafe's tail check now demands publishingTail.ts move in the same change`);
+  } else {
+    say(`pinned            ${changed.length ? `${changed.length} canonical-owned field(s) taken from canonical (the store copy is never dispatched — overlayStoreNode pins them)` : "none — source and canonical agree on every canonical-owned field"}`);
+    for (const change of changed) say(`                  ${change}`);
+  }
+
+  const ordered = topologicallyOrdered(pinned);
   refuseUnsafe(ordered, allowShrink);
   if (allowShrink) say(`prompt guard      DISABLED via ${ALLOW_SHRINK_FLAG} — prompt shrink and canonicalRule removal were explicitly permitted for this run`);
 
   // Skills travel with the nodes that reference them, or the graph points at things that do not exist.
   const skills = ((from || fromCanonical) && !skillsFrom) ? seededSkillDefinitions : (await readSkillSource(skillsFrom)) ?? seededSkillDefinitions;
-  say(`skills            ${skills.length} from ${skillsFrom ?? (from ? "the current seeded set (no --skills given)" : "the live workspace store")}`);
+  // The source named here must be the source actually used. `--from-canonical` with no `--skills` uses
+  // seededSkillDefinitions exactly as `--from` does, but this line used to claim "the live workspace
+  // store" for it — the one run that never touches the store.
+  say(`skills            ${skills.length} from ${skillsFrom ?? ((from || fromCanonical) ? "the current seeded set (no --skills given)" : "the live workspace store")}`);
   const integrity = skillIntegrityProblems(ordered, skills);
   if (integrity.length) die(`Refusing to re-seed — ${integrity.length} node/skill reference problem(s):`, [...new Set(integrity)]);
 
@@ -526,6 +627,10 @@ const main = async () => {
   if (skillsDrifted) { await writeFile(SKILLS_PATH, renderedSkills, "utf8"); say(`seededSkills.ts   written  ${skills.length} skills`); }
   else say("seededSkills.ts   up to date");
 };
+
+// Exported for tests/agent/workspace/seedNodesSkillsRoundTrip.test.ts: renderSkills is the half of the
+// generator `npm run nodes:check:offline` proves, so it is asserted directly as well as through the CLI.
+export const __test__ = { renderSkills };
 
 // Only self-execute when run directly (`tsx scripts/seedNodesFromWorkspace.ts`), so the pure scoping
 // logic above stays importable from tests without reading the live store or calling process.exit —

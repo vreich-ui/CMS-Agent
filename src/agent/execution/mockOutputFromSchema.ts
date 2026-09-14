@@ -115,6 +115,32 @@ export function mockValueFromSchema(schema: unknown, hints: MockHints = {}): unk
   // This is the gap that shipped in the first version of this file: `article_body`'s legacy monolith
   // declares `public: { anyOf: [{required:["eyebrow"]}, {required:["title"]}, …] }`, and without this
   // the generator emitted `public: {}` — which fails, loudly but uselessly.
+  // if / then / else — a CONDITIONAL applies one of two branches depending on whether the value being
+  // generated satisfies `if`. Which branch that is cannot be known before the value exists, so this
+  // takes the same posture as anyOf/oneOf directly below: generate a candidate per branch and let the
+  // REAL validator pick, against the full schema.
+  //
+  // The gap this closes: `monetization_strategy.evFloor` is `{ if: clusterRole === "supporting_asset",
+  // then: supportingFor is a non-empty string, else: supportingFor is null }`. `supportingFor`'s base
+  // type is ["string","null"], so the generator picked "string", while the generated `clusterRole`
+  // came from its enum as "money_page" — selecting the `else` branch, which demands null. Every mock
+  // run of that node failed its own output schema with `$.evFloor.supportingFor must be null`, and
+  // because the executor leaves a schema-violating node `failed`, a dry run stalled there permanently.
+  // Note this is a LIVE defect, not one this file introduced: the conditional lives on the node's
+  // stored schema, so store-sourced mock runs have been failing on it independently of canonical.
+  if ("if" in schema && ("then" in schema || "else" in schema)) {
+    // The three keys are OMITTED, not set to undefined: the re-entry guard above is `"if" in schema`,
+    // and a spread that assigns undefined keeps the key present — which recurses forever.
+    const { if: _if, then: _then, else: _else, ...base } = schema;
+    const branches = [schema.then, schema.else].filter((branch) => branch !== undefined);
+    const candidates = branches.map((branch) => mockValueFromSchema(mergeSchema(base, branch), hints));
+    // The unconditional base is a candidate too: a conditional whose branches are both absent-ish, or
+    // whose constraints the base already satisfies, must not be made worse by this.
+    candidates.push(mockValueFromSchema(base, hints));
+    const satisfying = candidates.find((candidate) => validateOutput(candidate, schema).ok);
+    return satisfying ?? candidates[0];
+  }
+
   for (const combinator of ["anyOf", "oneOf"] as const) {
     const branches = schema[combinator];
     if (!Array.isArray(branches) || branches.length === 0) continue;

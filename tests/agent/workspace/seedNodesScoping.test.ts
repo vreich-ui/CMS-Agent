@@ -10,20 +10,28 @@
 // @deprecated `schema` alias, taking the LIVE drift gate offline while `nodes:check:offline` stayed
 // green, and (b) would have folded 24 foreign nodes into publishingConductorNodes on the next write.
 //
-// These tests run against the REAL node sets (not synthetic fixtures) so they fail the day a capture or
-// clone node is added without the exclusion following it.
+// C5 then added visual_identity as a fourth workflow whose two nodes join the SAME store document
+// (workspaceStoreNodes.ts), recurring the identical shape — two more `missing schema` refusals against
+// the live store — so the union below covers all three foreign sets.
+//
+// These tests run against the REAL node sets (not synthetic fixtures) so they fail the day a capture,
+// clone or visual_identity node is added without the exclusion following it.
 import { describe, expect, it } from "vitest";
 import { REQUIRED_FIELDS, scopeToPublishingConductor } from "../../../scripts/seedNodesFromWorkspace.js";
 import { captureConductorNodes } from "../../../src/agent/workspace/captureConductorNodes.js";
 import { cloneConductorNodes } from "../../../src/agent/workspace/cloneConductorNodes.js";
+import { visualIdentityNodes } from "../../../src/agent/workspace/visualIdentityNodes.js";
 import { listWorkspaceNodes } from "../../../src/agent/workspace/nodes.js";
 import type { WorkspaceNode } from "../../../src/agent/workspace/nodeTypes.js";
 
 // The store document's own composition, in the order workspaceStoreNodes.ts unions it: publishing's
-// canonical set, then capture's raw upstream, then clone's. Deliberately built the same way the store
-// is rather than read from a fixture, so this cannot drift from what the generator actually receives.
+// canonical set, then capture's raw upstream, then clone's, then (C5) visual_identity's pair.
+// Deliberately built the same way the store is rather than read from a fixture, so this cannot drift
+// from what the generator actually receives.
 const storeShapedUnion = (): WorkspaceNode[] =>
-  JSON.parse(JSON.stringify([...listWorkspaceNodes(), ...captureConductorNodes, ...cloneConductorNodes])) as WorkspaceNode[];
+  JSON.parse(
+    JSON.stringify([...listWorkspaceNodes(), ...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes])
+  ) as WorkspaceNode[];
 
 const missingRequiredFields = (node: WorkspaceNode): string[] =>
   REQUIRED_FIELDS.filter((field) => (node as unknown as Record<string, unknown>)[field] === undefined);
@@ -34,7 +42,7 @@ describe("scopeToPublishingConductor", () => {
     const { scoped, excluded } = scopeToPublishingConductor(storeShapedUnion());
 
     expect(scoped.map((node) => node.id)).toEqual(publishingIds);
-    expect(excluded.sort()).toEqual([...captureConductorNodes, ...cloneConductorNodes].map((node) => node.id).sort());
+    expect(excluded.sort()).toEqual([...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes].map((node) => node.id).sort());
   });
 
   it("is a no-op on a source that is already publishing_conductor only", () => {
@@ -74,7 +82,7 @@ describe("scopeToPublishingConductor", () => {
     // scopeToPublishingConductor die()s on a collision rather than deleting a publishing node from
     // nodes.ts. This asserts the precondition that makes exclusion safe, so the day someone reuses a
     // tail id in a raw capture/clone array the test says so instead of the generator exiting mid-run.
-    const foreignIds = new Set([...captureConductorNodes, ...cloneConductorNodes].map((node) => node.id));
+    const foreignIds = new Set([...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes].map((node) => node.id));
     expect(listWorkspaceNodes().filter((node) => foreignIds.has(node.id)).map((node) => node.id)).toEqual([]);
   });
 });

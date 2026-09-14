@@ -8,14 +8,14 @@
 // Re-seed with:  npm run nodes:update
 // Check drift:   npm run nodes:check
 //
-// T15.33 (#209; ADR-2026-08-25-structure-studio §6.2) — standardsPackSkillDefinition is a DELIBERATE
-// manual addition, ahead of any live workspace to seed it from (there is none in this environment).
-// It is authored once in its own module (standardsPack.ts, the "readable way to author a NEW skill
-// before it exists anywhere" this file's own header describes) precisely so STANDARDS_PACK_VERSION
-// stays the single source of truth for both this seeded definition and templateProvenance.ts's pin —
-// they cannot silently drift apart. A future `npm run nodes:update` against a live workspace that has
-// run `skill_create`/`skill_assign` for it will fold it back into the generated block above it
-// unchanged in substance.
+// T15.33 (#209; ADR-2026-08-25-structure-studio §6.2) — standardsPackSkillDefinition appears below as a
+// BARE IDENTIFIER, not as inlined JSON. It is authored once in its own module (standardsPack.ts) so that
+// STANDARDS_PACK_VERSION stays the single source of truth for both this seeded definition and
+// templateProvenance.ts's pin — they cannot silently drift apart. The generator substitutes the identifier
+// for any skill that deep-equals the constant (renderSkills, scripts/seedNodesFromWorkspace.ts), so a
+// re-seed from a live workspace that HAS run skill_create/skill_assign for it round-trips this file
+// byte-for-byte instead of replacing the pin with a copy. A live definition that has genuinely diverged
+// from the constant is inlined instead, which is the signal that standardsPack.ts needs a deliberate bump.
 import { standardsPackSkillDefinition } from "./standardsPack.js";
 import type { SkillDefinition } from "./skillTypes.js";
 
@@ -331,10 +331,10 @@ export const seededSkillDefinitions: SkillDefinition[] = [
   {
     "skillId": "editorial_craft",
     "name": "Editorial craft",
-    "description": "Client-neutral editorial craft for evidence-aware, reader-first, conversion-aware content: calm authority, practical specificity, low-pressure next steps, no hype. Voice and brand direction come from the target client's own record, never from this skill.",
+    "description": "Client-neutral editorial craft for evidence-aware, reader-first, conversion-aware content: calm authority, practical specificity, no hype. Governs REGISTER and reader safety only — the run's resolved aggression vector sets intensity and magnetic_marketing sets structure and the ask. Voice and brand direction come from the target client's own record, never from this skill.",
     "version": "1.0.0",
     "status": "active",
-    "instructions": "Write for a smart reader who wants calm authority, not a lecture. The register is precise, warm, practical, and commercially aware. Favor concrete decisions, tradeoffs, and reassurance. Do not overclaim outcomes, imply professional advice (medical, legal, financial), or turn uncertainty into certainty. Connect education to reader action: related reading, newsletter signup, a routine decision, product/resource consideration, or another low-pressure next step. Avoid hype, fear tactics, fake urgency, invented sources, and generic filler language. This skill is client-neutral craft: the target client's voice, styling, audience, domain caution, and commercial direction come from the client's own record and the run's inputs — clientProjectId in the node input names the client. Never assume a client, and never import one client's conventions into another client's content; treat a missing client identity as a blocker rather than guessing. Reader-visible copy must never expose internal strategy labels, prompts, scoring, private notes, or workflow language.",
+    "instructions": "Write for a smart reader who wants calm authority, not a lecture. The register is precise, warm, practical, and commercially aware. Favor concrete decisions, tradeoffs, and reassurance. Do not overclaim outcomes, imply professional advice (medical, legal, financial), or turn uncertainty into certainty. Avoid hype, fear tactics, fake urgency, invented sources, and generic filler language.\n\nWHAT THIS SKILL GOVERNS, AND WHAT IT DOES NOT. This skill governs REGISTER and READER SAFETY: how the prose sounds, how claims are qualified, what may not be said. It does NOT govern how hard the piece sells. The run's resolved aggression vector (claim_strength, urgency, emotional_agitation, cta_density) decides the intensity of the ask, and the magnetic_marketing skill decides its structure and placement. Craft never overrides a dial in either direction — it does not soften a piece the vector authorized, and it does not licence a piece past one. Where the two meet, this skill's job is to make the authorized intensity read as calm authority rather than as pressure. A high-cta_density piece written well still sounds like this skill; it simply asks more often and more plainly.\n\nEDUCATION CONNECTS TO ACTION. Every piece routes the reader to a concrete next step — related reading, a signup, a routine decision, a product or resource, whatever the run's offer decision named. Whether that step appears once or throughout, and how directly it is put, follows the vector; that it appears at all is not optional. Never manufacture urgency, scarcity, agitation, or certainty the evidence does not support in order to reach a dial: a ceiling is a limit, never a quota.\n\nCLIENT NEUTRALITY. The target client's voice, styling, audience, domain caution, and commercial direction come from the client's own record and the run's inputs — clientProjectId in the node input names the client. Never assume a client, and never import one client's conventions into another client's content; treat a missing client identity as a blocker rather than guessing. Voice and direct response are married, not opposed: voice chooses the words, the vector chooses the pressure.\n\nReader-visible copy must never expose internal strategy labels, prompts, scoring, private notes, or workflow language.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
@@ -360,14 +360,21 @@ export const seededSkillDefinitions: SkillDefinition[] = [
       {
         "name": "voice pass",
         "input": {
-          "brief": "Explain the basics of a technical topic for the client's readers"
+          "brief": "Explain the basics of a technical topic for the client's readers",
+          "resolved": {
+            "claim_strength": 0.5,
+            "urgency": 0.3,
+            "emotional_agitation": 0.4,
+            "cta_density": 0.4
+          }
         },
         "output": {
+          "result": "Use calm practical language, explain tradeoffs, and route the reader to the next step the run's offer decision named — once, plainly, at the intensity cta_density 0.4 allows.",
           "editorial_notes": [
             "Avoid fear-based claims.",
-            "Use everyday decisions the reader actually faces."
-          ],
-          "result": "Use calm practical language, explain tradeoffs, and route the reader to a simple low-pressure next step."
+            "Use everyday decisions the reader actually faces.",
+            "Register stays calm; the vector, not the register, decides how directly the step is put."
+          ]
         }
       }
     ],
@@ -376,7 +383,8 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     ],
     "completionCriteria": [
       "Copy is reader-safe, evidence-aware, specific, and aligned to the target client's declared direction.",
-      "Commercial next steps are present only when useful and low-pressure."
+      "A concrete next step is present, and its frequency and directness match the run's resolved aggression vector rather than a default softness.",
+      "No dial was exceeded, and no pressure was manufactured to reach one."
     ],
     "blockerCriteria": [
       "The requested claim would require professional advice or unsupported certainty.",
@@ -396,10 +404,11 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "riskLevel": "read",
     "metadata": {
       "clientAgnostic": true,
-      "supersedes": "dr_lurie_dtc_science_editorial (renamed 2026-07-31, node-system overhaul: the id itself was the last branded trace; instructions client-neutral since its v14). The branded Dr. Lurie voice text (its v2) is preserved verbatim in src/agent/projects/drLurie/editorialVoice.ts as the vox_drlurie_default seed."
+      "supersedes": "dr_lurie_dtc_science_editorial (renamed 2026-07-31, node-system overhaul: the id itself was the last branded trace; instructions client-neutral since its v14). The branded Dr. Lurie voice text (its v2) is preserved verbatim in src/agent/projects/drLurie/editorialVoice.ts as the vox_drlurie_default seed.",
+      "scopeNote": "2026-09-07: the 'useful first, commercially aware second' subordination and the blanket 'low-pressure' framing were removed. This skill now governs register and reader safety only; intensity belongs to the resolved aggression vector and structure to magnetic_marketing, which shares nodes with it."
     },
     "createdAt": "2026-07-31T09:32:24.171Z",
-    "updatedAt": "2026-07-31T09:32:37.416Z"
+    "updatedAt": "2026-09-07T07:56:52.967Z"
   },
   {
     "skillId": "editorial_review",
@@ -631,6 +640,97 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "updatedAt": "2026-01-01T00:00:00.000Z"
   },
   {
+    "skillId": "magnetic_marketing",
+    "name": "Magnetic Marketing copy",
+    "description": "Client-neutral direct-response discipline for content that must sell down a funnel: message-to-market match, mechanism before promise, proof before ask, one named next step. Aggression scales with funnel stage and is bounded by the run's resolved vector; voice and offer come from the client's own record.",
+    "version": "1.0.0",
+    "status": "active",
+    "instructions": "This property is a direct-response property. Every piece is written to move ONE reader ONE step down a funnel, and a piece that informs beautifully while asking for nothing has failed. Education is the vehicle; the step is the destination.\n\nMESSAGE TO MARKET MATCH. Write to one person in one situation, not to a segment. Before anything else, be able to say who they are, what they were doing five minutes before they arrived, and what they are afraid is true. Copy that could address two different readers addresses neither.\n\nMECHANISM BEFORE PROMISE. A promise without a stated reason it works is a claim, and claims are discounted on sight. Name the specific mechanism — why the problem persists, why the usual answers miss it, what actually changes things — and let the promise follow from it. The mechanism is what earns belief; the promise is what belief is spent on.\n\nPROOF BEFORE ASK. Evidence, demonstration, comparison, or a real case comes before the next step, never after it. An ask that arrives before the reader believes anything is a bounce.\n\nTHE ENEMY. Direct response needs something to push off: a belief, a habit, a shortcut, a conventional answer that is quietly costing the reader. Name it and argue with it. Never make the enemy a person, a protected group, or a named competitor — make it an idea.\n\nONE NEXT STEP, NAMED. Every piece ends with exactly one action, stated concretely — what to do, where, and what the reader gets for doing it. Not 'learn more'. Not two competing asks. Place it where the reader is most persuaded, which is usually right after the resolution, not wherever the prose runs out.\n\nSPECIFICITY BEATS ADJECTIVES. A number, a name, a date, a real detail. Cut every intensifier that is doing the work a fact should do.\n\nAGGRESSION SCALES WITH FUNNEL STAGE. Top-of-funnel content earns trust first and asks lightly; content closer to the sale may ask plainly and close. The run's resolved aggression vector (claim_strength, urgency, emotional_agitation, cta_density) is the CEILING on all four, never a quota — never manufacture pressure, agitation, or certainty to reach a number, and never exceed a dial to make a piece feel stronger. When no resolved vector is present, write conservatively and say so.\n\nURGENCY AND SCARCITY ARE IMPLIED, NEVER LITERAL. Real consequences of delay, real limits that actually exist, hinted rather than announced, and used sparingly. Fabricated countdowns, invented shortages, and manufactured fear are forbidden outright — they are not aggressive copy, they are a liability.\n\nWHAT THIS SKILL DOES NOT SUPPLY. Voice, lexicon, cadence, domain caution and the offer itself all come from the target client's own record and from the run's inputs; clientProjectId names the client. Never assume a client, never carry one client's conventions into another's content, and treat a missing client identity as a blocker. Voice and direct response are married, not opposed: voice governs the language, this skill governs the structure and the ask.\n\nNEVER VISIBLE TO THE READER. Strategy labels, dial names, beat names, offer ids, scoring, and workflow vocabulary stay in private fields. The reader sees an article, not the machine that aimed it.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "brief": {
+          "type": "string"
+        },
+        "draft": {
+          "type": "string"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "resolved": {
+          "type": "object"
+        },
+        "clientProjectId": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object"
+    },
+    "allowedTools": [],
+    "requiredArtifacts": [],
+    "producedArtifacts": [],
+    "examples": [
+      {
+        "name": "arc with a named step",
+        "input": {
+          "brief": "Explain why a common routine fails for the client's readers",
+          "resolved": {
+            "claim_strength": 0.5,
+            "urgency": 0.3,
+            "emotional_agitation": 0.4,
+            "cta_density": 0.4
+          }
+        },
+        "output": {
+          "result": "Open on the reader's own failed routine in their words; name the mechanism that makes it fail; prove it with the comparison; resolve; then one ask.",
+          "next_step": "Single offer placed immediately after the resolution, once, with what the reader gets for taking it.",
+          "notes": [
+            "Enemy is the routine's conventional advice, not a competitor.",
+            "Urgency stays implied at 0.3 — no deadline language."
+          ]
+        }
+      }
+    ],
+    "preconditions": [
+      "A content brief, arc, angle or draft exists.",
+      "The target client is identified in the node's input."
+    ],
+    "completionCriteria": [
+      "The piece addresses one named reader in one situation.",
+      "A mechanism is stated before the promise and proof before the ask.",
+      "Exactly one next step is named, concretely, with a stated placement.",
+      "Intensity sits at or below every dial of the run's resolved aggression vector.",
+      "No reader-visible string exposes strategy labels or workflow vocabulary."
+    ],
+    "blockerCriteria": [
+      "The target client, audience, or offer is too unclear to choose a next step.",
+      "The only angle available would require a claim the evidence does not support.",
+      "The requested copy would need manufactured urgency, scarcity, or fear."
+    ],
+    "memoryPolicy": {
+      "namespaces": [
+        "magnetic_marketing"
+      ],
+      "read": true,
+      "write": false
+    },
+    "toolPolicy": {
+      "requestedTools": [],
+      "mutatingToolsRequireApproval": true
+    },
+    "riskLevel": "read",
+    "metadata": {
+      "clientAgnostic": true,
+      "basis": "Dan Kennedy / Magnetic Marketing direct-response discipline, adapted to the workspace's aggression-vector model. Pairs with editorial_craft, which governs register and reader safety."
+    },
+    "createdAt": "2026-09-07T07:50:36.000Z",
+    "updatedAt": "2026-09-07T07:50:36.000Z"
+  },
+  {
     "skillId": "publication_readiness",
     "name": "Publication readiness",
     "description": "Assess whether content is ready for dry-run handoff or publishing approval.",
@@ -839,6 +939,7 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "createdAt": "2026-01-01T00:00:00.000Z",
     "updatedAt": "2026-07-26T13:08:17.891Z"
   },
+  standardsPackSkillDefinition,
   {
     "skillId": "web_research",
     "name": "Web research",
@@ -907,6 +1008,5 @@ export const seededSkillDefinitions: SkillDefinition[] = [
     "metadata": {},
     "createdAt": "2026-01-01T00:00:00.000Z",
     "updatedAt": "2026-07-26T13:08:13.314Z"
-  },
-  standardsPackSkillDefinition
+  }
 ];
