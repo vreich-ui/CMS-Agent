@@ -121,20 +121,35 @@ const newSiteSchema = z.object({
   )
 }).strict();
 
+// G1 (2026-09-14) — MINT-ONLY GENESIS.
+//
+// `sourceUrl` was structurally required, so "birth a tenant" and "copy a site into it" were one
+// indivisible act: every mint named a site to crawl and burned a capture_conductor run whether or
+// not anyone wanted a duplicate. A tenant that is going to publish its OWN content has no source at
+// all, and inventing one (its own origin, a blank page) would seed a real capture policy and a real
+// crawl for a result nobody reads.
+//
+// The tool NAME does not change. site.duplicate with `newSite` and no `sourceUrl` mints and stops;
+// with a `sourceUrl` it behaves exactly as before, including the T15.9 clone chain. `targetProjectId`
+// still requires one — duplicating INTO an existing project with nothing to duplicate is not a
+// coherent call, and refusing it here beats starting a capture run with no source.
 const duplicateInput = z.object({
-  sourceUrl: z.string().url(),
+  sourceUrl: z.string().url().optional(),
   targetProjectId: z.string().min(1).optional(),
   newSite: newSiteSchema.optional(),
   budgetUsd: z.number().nonnegative().optional(),
   executionMode: z.enum(["mock", "openai"]).default(DEFAULT_EXECUTION_MODE)
 }).strict().refine((value) => (value.targetProjectId === undefined) !== (value.newSite === undefined), {
   message: "supply exactly one of `targetProjectId` (duplicate into an existing registered project) or `newSite` (genesis: provision a new landing tenant first)"
+}).refine((value) => value.newSite !== undefined || value.sourceUrl !== undefined, {
+  message: "`sourceUrl` is required with `targetProjectId`: there is nothing to duplicate into an existing project without one. (It is optional only with `newSite`, which then mints the tenant and starts no run.)",
+  path: ["sourceUrl"]
 });
 
 const duplicateStatusInput = z.object({ runId: z.string().min(1) }).strict();
 
 const duplicateJsonSchema = objectSchema({
-  sourceUrl: { type: "string", format: "uri", description: "HTTPS source to duplicate. Must fall inside the target project's capturePolicy (allowed origins/path prefixes); an out-of-policy source is refused before any run is created." },
+  sourceUrl: { type: "string", format: "uri", description: "HTTPS source to duplicate. Must fall inside the target project's capturePolicy (allowed origins/path prefixes); an out-of-policy source is refused before any run is created. REQUIRED with targetProjectId. OPTIONAL with newSite: omit it to MINT ONLY — genesis provisions the tenant and returns {projectId, mcpEndpoint, humanChecklist} with no runId, no capture run and a deny-all capture policy (name an origin later with project.update if the tenant is ever to be crawled into)." },
   targetProjectId: { type: "string", minLength: 1, description: "Existing registered project to land the duplication in. Verified reachable (MCP initialize) and capture-authorized (registry capturePolicy; the deny-all default refuses). Mutually exclusive with newSite." },
   newSite: objectSchema({
     name: { type: "string", minLength: 2, description: "Lowercase kebab-case slug for the new tenant (repo tree sites/<name>/, registry projectId, <NAME>_MCP_* env var names)." },
@@ -155,8 +170,8 @@ const duplicateJsonSchema = objectSchema({
     )
   }, ["name"]),
   budgetUsd: { type: "number", minimum: 0, description: `Optional per-run cost ceiling in USD (workflow.start_dry_run semantics); defaults to $${DEFAULT_SITE_DUPLICATE_BUDGET_USD} to ensure every autonomous duplication runs under an explicit ceiling. Refused as budget_exceeded when below the workflow's entry-node reservation — such a run could never dispatch its first node.` },
-  executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: "Passed through to the run. \"mock\" is the cheap CI/test mode; deterministic capture stages run real engine code either way." }
-}, ["sourceUrl"]);
+  executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: "Passed through to the run. \"mock\" is the cheap CI/test mode; deterministic capture stages run real engine code either way. Ignored on the mint-only path, which starts no run." }
+}, []);
 
 const duplicateStatusJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
 
@@ -233,7 +248,7 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
   return [
     tool({
       name: "site.duplicate",
-      description: "ONE CALL: duplicate a source site into a landing tenant with the capture_conductor workflow (crawl → map → theme → emit never-released drafts → score → report). With targetProjectId: verifies the existing project is reachable and capture-authorized (registry capturePolicy — the deny-all default refuses). With newSite: runs genesis first: create-site scaffold via the platform seam; Netlify site, build hook and deterministic env under NETLIFY_API_TOKEN; project.create with the tenant MCP endpoint derived from the site; and the Platform-site → Client Manager credential minted internally, persisted only as a digest/policy, installed as secret/function-only Netlify env, verified, and discarded without a human ever handling its value. Remaining account-authority steps are surfaced in the human checklist, never silently skipped. Starts the run AND kicks the long-run plane in the same call. Returns {runId, statusTool, humanChecklist}. Publish/release stay unreachable from every capture node; no secret VALUE ever transits this tool.",
+      description: "MINT a tenant, and OPTIONALLY duplicate a source site into it. With newSite and NO sourceUrl: genesis only — the tenant is provisioned and registered, no run is created, and the result is {projectId, mcpEndpoint, humanChecklist}. With a sourceUrl it also duplicates that site into a landing tenant with the capture_conductor workflow (crawl → map → theme → emit never-released drafts → score → report). With targetProjectId: verifies the existing project is reachable and capture-authorized (registry capturePolicy — the deny-all default refuses). With newSite: runs genesis first: create-site scaffold via the platform seam; Netlify site, build hook and deterministic env under NETLIFY_API_TOKEN; project.create with the tenant MCP endpoint derived from the site; and the Platform-site → Client Manager credential minted internally, persisted only as a digest/policy, installed as secret/function-only Netlify env, verified, and discarded without a human ever handling its value. Remaining account-authority steps are surfaced in the human checklist, never silently skipped. On the duplicating path it starts the run AND kicks the long-run plane in the same call, returning {runId, statusTool, humanChecklist}. Publish/release stay unreachable from every capture node; no secret VALUE ever transits this tool.",
       zodSchema: duplicateInput,
       inputSchema: duplicateJsonSchema,
       execute: async (input) => {
@@ -261,22 +276,55 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
                   return value === undefined ? [] : [[field, value] as const];
                 })
               ),
-              sourceUrl: data.sourceUrl
+              ...(data.sourceUrl !== undefined ? { sourceUrl: data.sourceUrl } : {})
             },
             { projectRepository }
           );
           targetProjectId = genesis.projectId;
           humanChecklist = genesis.humanChecklist;
+
+          // G1 — MINT ONLY. No source was named, so there is nothing to capture: return the tenant
+          // and stop. Deliberately BEFORE the capture-authority check, the budget floor and
+          // startDryRun — a mint-only call must create no run at all, so `site.duplicate_status` has
+          // nothing to observe and the T15.9 clone chain (which is keyed on a capture_conductor run
+          // carrying the site_duplicate:request marker) can never fire for it.
+          //
+          // The shape is deliberately NOT the run shape with nulls in it: no `runId`, no `statusTool`
+          // — a caller that reads `runId` off this and polls would poll forever. What it gets is the
+          // three facts a mint produces (`projectId`, `mcpEndpoint`, `humanChecklist`) plus the
+          // genesis ledger, which is the same audit record the run-carrying path persists.
+          if (data.sourceUrl === undefined) {
+            return ok({
+              mode: "mint_only" as const,
+              projectId: genesis.projectId,
+              mcpEndpoint: genesis.mcpEndpoint,
+              humanChecklist,
+              note: "Genesis only: the tenant is registered and provisioned, and NO run was started (no sourceUrl was supplied). Its capturePolicy is deny-all — name an allowed origin with project.update before any later site.duplicate into it. To publish, start a run against this projectId with workflow.start_dry_run.",
+              genesis: {
+                projectId: genesis.projectId,
+                netlifyMode: genesis.netlifyMode,
+                netlifySiteName: genesis.netlifySiteName,
+                ...(genesis.netlifySiteId ? { netlifySiteId: genesis.netlifySiteId } : {}),
+                envVarNames: genesis.envVarNames,
+                objectDialect: genesis.objectDialect,
+                ledger: genesis.ledger
+              }
+            });
+          }
         } else {
           targetProjectId = data.targetProjectId!;
           await verifyTargetReachable(targetProjectId);
         }
 
+        // Past this point a source is guaranteed: the mint-only path returned above, and
+        // `targetProjectId` without a `sourceUrl` is refused by the schema.
+        const sourceUrl = data.sourceUrl!;
+
         // 2. Capture authority + source bounds — refused BEFORE any run exists. resolveCaptureAuthority
         // re-reads the registry policy server-side (deny-all default refuses; a caller cannot widen a
         // bound), exactly as every capture stage will again at execution time.
         const { policy } = await resolveCaptureAuthority(targetProjectId, { projectRepository });
-        assertSourceWithinPolicy(data.sourceUrl, policy);
+        assertSourceWithinPolicy(sourceUrl, policy);
 
         // 3. Budget floor: a ceiling below the entry node's reservation blocks before ANY dispatch.
         // T15.17: default to $5.00 so every autonomous duplication runs under an explicit ceiling.
@@ -288,7 +336,7 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
 
         // 4. Start — the same startDryRun workflow.start_dry_run drives, with the capture input shape.
         const started = await startDryRun(
-          { projectId: targetProjectId, workflowId: CAPTURE_CONDUCTOR_WORKFLOW_ID, executionMode: data.executionMode, input: { sourceUrl: data.sourceUrl, targetProjectId }, budgetUsd },
+          { projectId: targetProjectId, workflowId: CAPTURE_CONDUCTOR_WORKFLOW_ID, executionMode: data.executionMode, input: { sourceUrl, targetProjectId }, budgetUsd },
           executionRepository
         );
 
@@ -297,7 +345,7 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
         const record: DuplicationRequestRecord = {
           artifact: "site_duplication.v1",
           requestedAt,
-          sourceUrl: data.sourceUrl,
+          sourceUrl,
           targetProjectId,
           statusTool: "site.duplicate_status",
           humanChecklist,

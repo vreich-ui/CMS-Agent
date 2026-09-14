@@ -17,6 +17,8 @@
     "nodes:check:offline": "tsx scripts/seedNodesFromWorkspace.ts --from-canonical",
     "contract:check": "tsx scripts/contractCheck.ts",
     "env:audit": "tsx scripts/netlify-env-audit.ts",
+    "genesis:parity-check": "tsx scripts/genesisParityCheck.ts",
+    "genesis:reconcile": "tsx scripts/genesisReconcile.ts",
     "store:check": "tsx scripts/reseedStoreFromCanonical.ts",
     "store:update": "tsx scripts/reseedStoreFromCanonical.ts --write",
     "nodes:apply": "tsx scripts/applyNodeOps.ts",

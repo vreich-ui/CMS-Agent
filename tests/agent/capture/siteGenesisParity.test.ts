@@ -76,8 +76,14 @@ describe("G6 — a minted tenant is born with a provisional voice, and no pointe
     // It says what it is. A fallback that reads as an authored house style is the failure mode.
     expect(record.editorialVoiceFallback?.name).toContain("provisional");
 
-    // NO pointer: a decided voice is a written object, and no writer node has run.
-    expect(record.objectDialect?.voiceObjectId).toBeUndefined();
+    // G2 (2026-09-14): the pointer IS written now, and it points at the object the platform scaffold
+    // seeds with this same body (genesis passes the derived voice to create-site's --editorial-voice
+    // when the caller supplied none). Before this, one tenant had two voices — the derived one on the
+    // record and an un-filled skeleton in the store — and every reader that resolved the OBJECT got
+    // the worse of the two. The record fallback stays exactly where it was, as the safety net for a
+    // tenant whose store cannot be reached.
+    expect(record.objectDialect?.voiceObjectId).toBe("voice_acme");
+    expect(record.objectDialect?.strategyObjectId).toBe("strat_acme");
   });
 
   it("writes no voice at all when genesis was told nothing about the tenant", async () => {

@@ -159,14 +159,23 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     // G1/G4 added three: MCP_HTTP_AUTH_TOKEN is the tenant's inbound bearer, which genesis now
     // MINTS rather than leaving a human to read out of a console; ARTIFACT_URL_INGEST_ALLOWED_HOSTS
     // and PDF_TOOL_STORAGE_SITE_ID are values genesis can derive from the site it just created.
+    // G3 (2026-09-14) added the tenant's own per-site object-store family — PUBLISH_SECRET,
+    // ARTIFACT_UPLOAD_TOKEN_SECRET, TRACKING_SALT, NETLIFY_SITE_ID — minted here and written
+    // onlyIfAbsent, so the delegated create-site --provision-only path keeps owning the values
+    // wherever it ran and a checkout-less deployment no longer births a tenant whose object store
+    // has no credential at all.
     expect(envSets.map((action) => (action as { data?: { key?: string } }).data?.key).sort()).toEqual([
+      "ARTIFACT_UPLOAD_TOKEN_SECRET",
       "ARTIFACT_URL_INGEST_ALLOWED_HOSTS",
       "CMS_AGENT_MCP_ENDPOINT",
       "CMS_AGENT_MCP_TOKEN",
       "MCP_HTTP_AUTH_TOKEN",
       "NETLIFY_BUILD_HOOK_URL",
+      "NETLIFY_SITE_ID",
       "PDF_TOOL_STORAGE_SITE_ID",
-      "TRACKING_PROJECT_ID"
+      "PUBLISH_SECRET",
+      "TRACKING_PROJECT_ID",
+      "TRACKING_SALT"
     ]);
     expect(byStep.get("tracking_fleet_env:requires_human")).toBeDefined();
     // C-11: the sink pair is INHERITED from the account, so it is never "missing" on this
@@ -334,14 +343,22 @@ describe("site.duplicate — newSite genesis (dry-run Netlify API mode)", () => 
     );
     expect([...envSets.keys()].sort()).toEqual([
       // G1/G4 — see the note on the same assertion in the first test.
+      "ARTIFACT_UPLOAD_TOKEN_SECRET",
       "ARTIFACT_URL_INGEST_ALLOWED_HOSTS",
       "CMS_AGENT_MCP_ENDPOINT",
       "CMS_AGENT_MCP_TOKEN",
       "MCP_HTTP_AUTH_TOKEN",
       "NETLIFY_AUTH_TOKEN",
       "NETLIFY_BUILD_HOOK_URL",
+      "NETLIFY_SITE_ID",
       "PDF_TOOL_STORAGE_SITE_ID",
-      "TRACKING_PROJECT_ID"
+      // G3 (2026-09-14) — the tenant's own object-store gate. Its absence is what made every
+      // object verb on genesis-lab-2 answer "Server-side object storage credentials are not
+      // configured."; it is written onlyIfAbsent, so the provisioning path still owns the value
+      // wherever that path ran.
+      "PUBLISH_SECRET",
+      "TRACKING_PROJECT_ID",
+      "TRACKING_SALT"
     ]);
     // C-11: TRACKING_SINK_URL/TOKEN are deliberately NOT here. They are account-level; a site-level
     // copy would override the account value and drift, which is how drluriescience came to hold a

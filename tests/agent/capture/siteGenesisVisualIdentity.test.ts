@@ -144,7 +144,11 @@ describe("C3 — a new site is born with a house standard and a default PDF temp
   });
 
   it("derives the house id and the brief, and reads platform's derived floor without asserting one", () => {
-    expect(houseVisualStandardId("dr-lurie")).toBe("vis_drlurie");
+    // G2 (2026-09-14): the id follows the platform scaffold's derivation (hyphens -> underscores),
+    // which is what actually mints the object — see visualStandardIdConvention.test.ts's header.
+    expect(houseVisualStandardId("dr-lurie")).toBe("vis_dr_lurie");
+    expect(houseVisualStandardId("drlurie")).toBe("vis_drlurie");
+    expect(houseVisualStandardId("genesis-lab-3")).toBe("vis_genesis_lab_3");
     expect(genesisHouseBrief({ niche: "Film", audience: "archivists" })).toBe("Film, written for archivists.");
     expect(genesisHouseBrief({ niche: "Film" })).toBe("Film.");
     expect(genesisHouseBrief({})).toBeUndefined();

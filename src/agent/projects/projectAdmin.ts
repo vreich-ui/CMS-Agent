@@ -261,6 +261,24 @@ export type ProjectCreateInput = Omit<z.infer<typeof projectCreateSchema>, "capt
   // asserting a fact about a sink this workspace has not provisioned. project.update can still set it
   // (a partition is non-secret addressing), which is the backfill path for pre-genesis tenants.
   tracking?: ProjectTrackingBinding;
+  // G2 (2026-09-14) — the object dialect a genesis-minted tenant is born with. Deliberately absent
+  // from `projectCreateSchema`, exactly like `clientSiteBinding` and `tracking` above: a dialect
+  // names WHERE a tenant's governed objects live, and the only caller that can know that truthfully
+  // is the code that just invoked the platform scaffold which minted them. An MCP `project.create`
+  // declaring its own dialect would be asserting a fact about a site this workspace never
+  // provisioned. `project.update` still accepts a dialect patch (the backfill path for a tenant that
+  // predates this), and the SAME completeness rule applies here: the three required fields or
+  // nothing — enforced in `createProject`, not only at a boundary.
+  objectDialect?: ProjectObjectDialect;
+  // G5 (2026-09-14) — the publishing autonomy a minted tenant is born with. Trusted in-process for a
+  // different reason from the fields above: this one is AUTHORITY. `projectUpdateSchema` exposes
+  // `autonomyMode` as the single deliberate crack in "publishingPolicy is server-controlled"
+  // (T15.5/ADR-2026-08-25-publish-autonomy §2.2); putting it on the CREATE schema would let any MCP
+  // caller register a project that publishes without an operator, which is a different and much
+  // larger door. Genesis may set it because genesis is the fleet's own birth path and the fleet's
+  // standing decision (Wolf, 2026-09-07, applied to dr-lurie by hand) is that tenants are
+  // autonomous; a tenant minted operator-gated is a tenant silently a policy behind on day one.
+  autonomyMode?: ProjectPublishingPolicy["autonomyMode"];
 };
 export type ProjectUpdateInput = z.infer<typeof projectUpdateSchema>;
 
@@ -313,6 +331,22 @@ const requireTokenSourceForBearer = (authMode: string, tokenEnvVar: string | und
 // paid for. A project with NO dialect at all is untouched by that rule as long as the patch supplies
 // the triple — and needs no patch merely to be addressable, because the governed singletons resolve by
 // convention (projectTypes.conventionalStrategyObjectId).
+/**
+ * The three fields a dialect is useless without, checked in ONE place so `project.create` (G2) and
+ * `project.update` cannot disagree about what "complete" means. A partial dialect is refused here
+ * rather than at publish time, where the only available answer would be a guess at an address.
+ */
+export function requireCompleteObjectDialect(projectId: string, dialect: ProjectObjectDialect): ProjectObjectDialect {
+  const missing = (["siteObjectId", "taxonomyRegistryObjectId", "objectIdSource"] as const).filter((field) => !dialect[field]);
+  if (missing.length) {
+    throw new ProjectAdminError(
+      "object_dialect_incomplete",
+      `The objectDialect for "${projectId}" would be missing ${missing.join(", ")}. A dialect names WHERE this tenant's objects live, and a publish hook refuses a run rather than guess at a missing field — so a partial dialect is rejected here instead of at publish time. Supply the missing field(s), or omit the dialect entirely. Note that the governed singletons (voice_<slug>, strat_<slug>) resolve by convention with no dialect at all, so a pointer is an override, never a prerequisite.`
+    );
+  }
+  return dialect;
+}
+
 function mergeObjectDialect(
   projectId: string,
   existing: ProjectObjectDialect | undefined,
@@ -378,8 +412,15 @@ export async function createProject(repository: ProjectRepository, input: Projec
     ...(input.editorialVoiceFallback ? { editorialVoiceFallback: structuredClone(input.editorialVoiceFallback) } : {}),
     ...(input.tracking ? { tracking: { ...input.tracking } } : {}),
     contentContract: { ...input.contentContract },
+    ...(input.objectDialect ? { objectDialect: requireCompleteObjectDialect(input.projectId, input.objectDialect) } : {}),
     capturePolicy: cloneCapturePolicy(input.capturePolicy ?? DEFAULT_PROJECT_CAPTURE_POLICY),
-    publishingPolicy: { ...DEFAULT_PUBLISHING_POLICY },
+    publishingPolicy: {
+      ...DEFAULT_PUBLISHING_POLICY,
+      // G5 — absent leaves the record exactly as it was before this field existed, and
+      // `capturePublishingPolicySnapshot` resolves an absent mode to "operator-gated". Only a
+      // trusted in-process caller can reach this; see ProjectCreateInput.autonomyMode.
+      ...(input.autonomyMode !== undefined ? { autonomyMode: input.autonomyMode } : {})
+    },
     status: input.status
   };
   return toProjectSummary(await repository.save(config));

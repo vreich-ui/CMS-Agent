@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { sanitizeIdSegment, siteSlugFromObjectId, visualStandardIdFor } from "../../../src/agent/workspace/visualStandardIds.js";
 import { visualStandardIdFor as materializerIdFor } from "../../../src/agent/workspace/visualStandardMaterialization.js";
 import { houseVisualStandardId } from "../../../src/agent/capture/siteGenesis.js";
+import { platformClientId } from "../../../src/agent/projects/platformScaffoldIds.js";
 
 // FIX (chat-recovery) — THE ANTI-DRIFT WALL FOR `vis_<site>` / `vis_<site>_<slug>`.
 //
@@ -15,8 +16,17 @@ import { houseVisualStandardId } from "../../../src/agent/capture/siteGenesis.js
 //   capture/siteGenesis.ts      — the BIRTH path, which derives the same house id from a PROJECT slug
 //                                 rather than a site object id, and therefore has its own literal.
 //                                 That is the one real drift risk here, and the table below is what
-//                                 pins it: genesis's site slug is the project slug with its hyphens
-//                                 removed, so `site_<that>` must feed the shared rule to the same id.
+//                                 pins it.
+//
+// G2 CORRECTION (2026-09-14). This file used to assert that "genesis's site slug is the project slug
+// with its hyphens REMOVED" — `dr-lurie` -> `site_drlurie` -> `vis_drlurie`. That is not what the
+// platform scaffold does, and the scaffold is the code that actually mints the object. `create-site.mjs`
+// `idsFor` snake-cases (`clientSlug.replace(/-/g, "_")`), and the committed proof is in the platform
+// repo: `sites/genesis-lab-2/config/site-identity.ts` declares `siteId: "site_genesis_lab_2"`. The
+// removal rule agreed with it for every hyphen-free slug — which was every tenant in the fleet — and
+// disagreed for the first hyphenated one, sending the birth path to `vis_genesislab2` against a site
+// that had `vis_genesis_lab_2`. The table below now uses the scaffold's derivation, which is also
+// exactly what `sanitizeIdSegment` (the shared rule in this repo) already did.
 describe("the vis_<site> id convention, asserted across every place that derives one", () => {
   it("names the house singleton from the site object id, never from the site OBJECT id verbatim", () => {
     expect(visualStandardIdFor({ siteObjectId: "site_drlurie", mode: "house" })).toBe("vis_drlurie");
@@ -51,10 +61,13 @@ describe("the vis_<site> id convention, asserted across every place that derives
   // genesis's site slug is the project slug with hyphens removed, and `site_<that>` through the shared
   // rule must produce exactly what genesis produces.
   it("agrees with the genesis birth-path derivation for every project-slug shape it accepts", () => {
-    for (const slug of ["dr-lurie", "drlurie", "fernwell", "a-b-c", "zilberman-ff"]) {
-      const genesisSiteObjectId = `site_${slug.replace(/-/g, "")}`;
+    for (const slug of ["dr-lurie", "drlurie", "fernwell", "a-b-c", "zilberman-ff", "genesis-lab-3"]) {
+      // The scaffold's own derivation — hyphens to underscores — is what names the site object, so
+      // it is what the shared rule must be fed.
+      const genesisSiteObjectId = `site_${platformClientId(slug)}`;
       expect(houseVisualStandardId(slug)).toBe(visualStandardIdFor({ siteObjectId: genesisSiteObjectId, mode: "house" }));
     }
-    expect(houseVisualStandardId("dr-lurie")).toBe("vis_drlurie");
+    expect(houseVisualStandardId("genesis-lab-2")).toBe("vis_genesis_lab_2");
+    expect(houseVisualStandardId("drlurie")).toBe("vis_drlurie");
   });
 });
