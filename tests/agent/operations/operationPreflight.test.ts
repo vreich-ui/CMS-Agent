@@ -271,7 +271,11 @@ describe("preflightOperation", () => {
       expect(result.capabilityGaps.some((gap) => gap.capability === "site_inventory_read")).toBe(true);
     });
 
-    it("each capabilityGap reason (not_configured, not_supported, unavailable) is produced from a real fact, with evidence", () => {
+    // A10 — retitled: not_supported is no longer produced by any CAPABILITY derivation (nothing in
+    // REQUIREMENTS claims `kind:"unsupported"` any more), so this test covers the two reasons
+    // capability derivation still produces. not_supported itself is still produced, and still
+    // asserted, by the R1c binding-contract gap in the block below.
+    it("each capability-derived gap reason (not_configured, unavailable) is produced from a real fact, with evidence", () => {
       const notConfigured = preflightOperation(
         { operationId: "asset_lookup_adopt", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", query: "hero image" } },
         capabilitySourceFor(fullyProvisionedDrLurieFacts({ registeredToolNames: [] }))
@@ -358,19 +362,28 @@ describe("preflightOperation", () => {
       expect(pdfFamily.binding).toBeNull();
       expect(pdfFamily.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
 
-      // A10 — image_template_revision NO LONGER behaves like pdf_template_family here, and this is
-      // the assertion that says so: its binding declares an initial-input builder (verified against
-      // the descriptor's own guaranteed fields) and its entry node names the brief it requires, so
-      // R1c's contract is satisfied and the workflow_binding gap is gone. `executable` is true on
-      // the WORKFLOW branch exactly as visual_identity_review_change's own test documents — that
-      // branch is deliberately capability-INDEPENDENT (see operationPreflight.ts's own comment on
-      // the executor branch, which is the only one gated on capability readiness), so this holds
-      // with no capabilitySource supplied at all. The separate capability axis is asserted in the
-      // R1 test above; Platform refuses on a capability gap of its own accord.
-      const imageRevision = preflightOperation({ operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+      // A10 — image_template_revision NO LONGER behaves like pdf_template_family here: its binding
+      // declares an initial-input builder (verified against the descriptor's own guaranteed fields)
+      // and its entry node names the brief it requires, so R1c's contract is satisfied and the
+      // workflow_binding gap is GONE. It is still not executable with no capabilitySource, and for a
+      // different, honest reason — the workflow branch is now gated on capability readiness too, so
+      // "nothing trusted was supplied about this tenant" keeps it false, exactly as it does for
+      // site_inventory's executor branch.
+      const imageRevisionNoFacts = preflightOperation({ operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+      expect(imageRevisionNoFacts.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
+      expect(imageRevisionNoFacts.capabilityGaps.every((gap) => gap.reason === "not_configured")).toBe(true);
+      expect(imageRevisionNoFacts.executable).toBe(false);
+
+      // With the tenant's own trusted facts, the same call is executable — and THAT is the green
+      // this task earned: a registered workflow, an input contract that genuinely reaches its entry
+      // node, and the capabilities the operation declares derived available.
+      const imageRevision = preflightOperation(
+        { operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } },
+        capabilitySourceFor(fullyProvisionedDrLurieFacts())
+      );
+      expect(imageRevision.capabilityGaps).toEqual([]);
       expect(imageRevision.executable).toBe(true);
       expect(imageRevision.binding?.workflowId).toBe("image_template_revision_studio");
-      expect(imageRevision.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
     });
   });
 });

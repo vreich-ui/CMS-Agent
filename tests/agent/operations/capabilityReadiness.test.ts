@@ -154,9 +154,11 @@ describe("deriveTenantCapabilityAvailability", () => {
 
   it("reason unavailable fires for every capability when the project is disabled, naming the real projectStatus fact", () => {
     const result = deriveTenantCapabilityAvailability(baseFacts({ projectStatus: "disabled" }));
+    // A10 — image_template_write no longer skipped: it derives from tenant state like every other
+    // capability now, so a disabled project must report `unavailable` for it too. That skip was the
+    // one assertion that would have caught it mis-deriving on a disabled tenant.
     for (const id of listCapabilityIds()) {
-      if (id === "image_template_write") continue; // categorical, not tenant-state-derived
-      expect(result[id]).toMatchObject({ available: false, reason: "unavailable" });
+      expect(result[id], `capability ${id}`).toMatchObject({ available: false, reason: "unavailable" });
       expect(result[id].evidence).toMatchObject({ projectStatus: "disabled" });
     }
   });
@@ -170,8 +172,9 @@ describe("deriveTenantCapabilityAvailability", () => {
   it("CAPABILITY_EVIDENCE_TOOL_NAMES is the exact, deduplicated, sorted set of tool names the derivation consults", () => {
     expect(CAPABILITY_EVIDENCE_TOOL_NAMES).toEqual([...CAPABILITY_EVIDENCE_TOOL_NAMES].sort());
     expect(new Set(CAPABILITY_EVIDENCE_TOOL_NAMES).size).toBe(CAPABILITY_EVIDENCE_TOOL_NAMES.length);
-    // Every tool-backed capability's evidence tool name is in the set; image_template_write (the one
-    // "unsupported" capability) contributes none.
+    // Every capability's evidence tool name is in the set. A10 — image_template_write is no longer
+    // the exception that contributes none: it contributes create_pdf_template (shared with
+    // pdf_template_write, which is why the set is deduplicated).
     expect(CAPABILITY_EVIDENCE_TOOL_NAMES).toEqual(
       expect.arrayContaining(["object_inventory", "object_get", "object_create", "search_artifacts", "render_article_pdf", "create_pdf_template", "publish_pdf_template", "search_images"])
     );

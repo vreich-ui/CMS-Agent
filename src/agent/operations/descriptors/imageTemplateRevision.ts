@@ -50,8 +50,21 @@ export const imageTemplateRevisionOperationV1: OperationDescriptor = {
       // A10 — ADDED, optional. The engine's own ImagePlacementSpec, defaulted by
       // DEFAULT_IMAGE_PLACEMENT when absent (top-right, reserved header band, aspect ratio
       // preserved). Omitting it is the normal case; naming it is how an editor asks for different
-      // physical dimensions or margins.
-      placement: { type: "object", additionalProperties: true },
+      // physical dimensions or margins. Every field is NAMED here, with additionalProperties:false:
+      // the engine spreads this object over its defaults, so an unrecognised key (widthMm for
+      // widthPt) would otherwise be accepted end to end and silently rendered at the default size.
+      // The brief builder refuses the same shapes for callers that bypass this schema.
+      placement: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          position: { type: "string", enum: ["top-right"] },
+          widthPt: { type: "number", exclusiveMinimum: 0 },
+          heightPt: { type: "number", exclusiveMinimum: 0 },
+          marginPt: { type: "number", exclusiveMinimum: 0 },
+          headerReservePt: { type: "number", exclusiveMinimum: 0 }
+        }
+      },
       // A10 — ADDED, optional, and deliberately NOT defaulted to true. Absent approve leaves every
       // previewed item at "not_approved" in the apply stage's ledger — which the terminal report
       // counts as a NON-success (#337/D4). `true` approves every previewed item; an array approves
@@ -86,7 +99,12 @@ export const imageTemplateRevisionOperationV1: OperationDescriptor = {
     }
   },
   defaults: { batchSize: 10 },
-  requiredCapabilities: ["image_search", "image_template_write"],
+  // A10 — pdf_template_publish ADDED. The apply stage does not only write: runImageRevisionApplyBatch
+  // reuses pdfTemplateEngine.ts's mint AND publish stages, whose verbs are create_pdf_template and
+  // publish_pdf_template — which is why pdf_template_family, doing the same two things, has always
+  // required both. Without it, a tenant granted create but not publish cleared preflight and then
+  // failed at apply, after paying for intake and preview.
+  requiredCapabilities: ["image_search", "image_template_write", "pdf_template_publish"],
   effects: [
     { kind: "revise_image_template_batch", targetType: "web_template_image_slot", riskLevel: "write", description: "Revises images and their placements within a batch of web page templates." }
   ],

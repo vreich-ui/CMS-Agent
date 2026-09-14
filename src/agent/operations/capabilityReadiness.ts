@@ -60,7 +60,13 @@ export type CapabilityAvailability =
 // How one capability's availability is decided. "tool": needs one named tool allowed. "tool_and_dialect":
 // needs that tool allowed AND an object dialect configured (the capability reads/writes a governed
 // object). "unsupported": no tenant, however configured, can satisfy this today — nothing in the
-// codebase implements a verb for it (see capabilityVocabulary.ts's own note on image_template_write).
+// codebase implements a verb for it.
+//
+// A10 — NO capability claims `unsupported` any more: image_template_write was the last one, and its
+// claim was stale (see its own entry below). The kind is KEPT, deliberately, because it is the
+// honest derivation for a capability some descriptor requires and nothing implements — the
+// alternative is naming a tool nobody calls, which reads as available. capabilityReadiness.test.ts
+// asserts that no capability claims it today, so claiming it again is a visible choice.
 type CapabilityRequirement =
   | { kind: "tool"; toolName: string }
   | { kind: "tool_and_dialect"; toolName: string }

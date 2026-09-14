@@ -62,16 +62,26 @@ const BUILDERS: readonly WorkflowInitialInputBuilder[] = [
       const built = buildImageTemplateRevisionBrief(input);
       if (!built.ok) return built;
       const source = isRecord(input) ? input : {};
+      // cloneConductorRoutes.ts's resolveRunProjectId REFUSES a run whose declared targetProjectId
+      // differs from the run's own projectId (clone_target_mismatch). OVERWRITING a caller-supplied
+      // one would silently redirect exactly the request that guard exists to refuse, so a
+      // conflicting value is refused here instead — and the value is only STATED when the caller
+      // supplied none, which is what gives that existing guard the dispatched tenant to compare
+      // against rather than nothing.
+      const declaredTarget = typeof source.targetProjectId === "string" ? source.targetProjectId.trim() : "";
+      if (declaredTarget && declaredTarget !== built.brief.tenantId) {
+        return {
+          ok: false,
+          code: "image_revision_target_project_mismatch",
+          reason: `This run declares targetProjectId "${declaredTarget}" but the operation is scoped to tenant "${built.brief.tenantId}". A dispatched revision is never redirected to another project's bounds; the two must name the same tenant.`
+        };
+      }
       return {
         ok: true,
         initialInput: {
-          // The operation's own dispatched fields are KEPT, not replaced: the run record should show
-          // what was actually asked for alongside what was built from it.
+          // The operation's own dispatched fields are KEPT, not replaced: the run record shows what
+          // was actually asked for alongside what was built from it.
           ...source,
-          // cloneConductorRoutes.ts's resolveRunFacts reads this and REFUSES a run whose declared
-          // target differs from the run's own projectId (clone_target_mismatch) — stating it here
-          // from the brief's own tenant makes that existing guard check the dispatched tenant
-          // against the run's project instead of having nothing to compare.
           targetProjectId: built.brief.tenantId,
           [IMAGE_TEMPLATE_REVISION_BRIEF_KEY]: built.brief
         }
@@ -110,7 +120,23 @@ export function applyWorkflowInitialInput(workflowId: string | null | undefined,
   if (!builder) return { ok: true, input, builderId: null, applied: false };
   if (!isRecord(input)) return { ok: true, input, builderId: builder.builderId, applied: false };
   const alreadyBuilt = builder.providesInitialInputFields.every((field) => input[field] !== undefined);
-  if (alreadyBuilt) return { ok: true, input, builderId: builder.builderId, applied: false };
+  const carriesDispatchFields = builder.requiredOperationFields.every((field) => input[field] !== undefined);
+  if (alreadyBuilt) {
+    // BOTH a hand-written brief AND a full operation dispatch. Passing through here would make every
+    // refusal this builder performs (cross-tenant templateRef, unreadable version pin, batch bound,
+    // duplicate refs) optional: a caller could simply attach its own brief alongside the fields and
+    // have the checked construction skipped. Which of the two the caller meant is genuinely
+    // ambiguous, so this refuses rather than picking one.
+    if (carriesDispatchFields) {
+      return {
+        ok: false,
+        code: "image_revision_brief_conflict",
+        reason: `This run carries BOTH a caller-supplied ${builder.providesInitialInputFields.join("/")} and a full set of the operation's own dispatch fields (${builder.requiredOperationFields.join(", ")}). Send one or the other: the dispatch fields alone (the brief is constructed from them, with every per-ref check applied) or the brief alone (an operator surface). Supplying both would let a hand-written brief bypass the checks the construction performs.`,
+        builderId: builder.builderId
+      };
+    }
+    return { ok: true, input, builderId: builder.builderId, applied: false };
+  }
   // NOT AN OPERATION DISPATCH AT ALL -> pass through, unchanged and unrefused. A builder builds; it
   // is not a second gate on who may start a run of this workflow. An input carrying none (or only
   // some) of the operation fields the builder requires is not a malformed dispatch to name a
@@ -125,8 +151,7 @@ export function applyWorkflowInitialInput(workflowId: string | null | undefined,
   // problem with it gets a named refusal here rather than a generic "no brief" three steps later.
   // (The operation's own inputSchema is still the authority on whether those fields are required at
   // all — preflightOperation refuses a request missing one before dispatch ever happens.)
-  const looksLikeDispatch = builder.requiredOperationFields.every((field) => input[field] !== undefined);
-  if (!looksLikeDispatch) return { ok: true, input, builderId: builder.builderId, applied: false };
+  if (!carriesDispatchFields) return { ok: true, input, builderId: builder.builderId, applied: false };
   const built = builder.build(input);
   if (!built.ok) return { ok: false, code: built.code, reason: built.reason, builderId: builder.builderId };
   return { ok: true, input: built.initialInput, builderId: builder.builderId, applied: true };

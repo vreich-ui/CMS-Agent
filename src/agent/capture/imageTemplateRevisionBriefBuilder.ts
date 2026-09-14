@@ -26,15 +26,28 @@
 //     silently accepted. Platform forces the operation's top-level `tenantId` to the caller's own
 //     project (tools.ts's resolveCatalogOperation, applied last) but it does NOT reach inside
 //     `templateRefs[]`, whose items carry their own required `tenantId` in this operation's schema —
-//     a model-authored ref could therefore name another tenant's template. Every lookup downstream
-//     is per-ref tenant-scoped, so this is the one place that can refuse it before a run exists.
+//     a model-authored ref could therefore name another tenant's template. This is not the only
+//     refusal on that path (operationPreflight.ts's own typed-reference validation reports
+//     `reference_tenant_mismatch` for the same input, before dispatch), and it matters BECAUSE the
+//     lookup downstream is NOT tenant-scoped: fetchTargetTemplateVersionStep reads
+//     TemplateLibraryStore by `templateId` alone and never uses `ref.tenantId`, so a ref that got
+//     through would read another project's template recipe into this run. The write half is
+//     separately contained (deriveRequestedIdFromTemplateId rejects a templateId not prefixed with
+//     the run's own project), but the READ is not, which is why this refuses rather than relies on
+//     the engine noticing.
 //   * a `version` that is not a positive integer is refused, never coerced to "latest". The
 //     descriptor declared it as a STRING while FetchedTemplateVersion/TargetTemplateRef have always
 //     been numeric (imageTemplateRevisionEngine.ts) — a numeric string is normalized here, anything
 //     else refuses rather than silently dropping the pin and revising whatever is newest.
 //   * more templateRefs than `batchSize` is refused, never truncated: the engine has no paging, so
 //     truncation would drop named templates from a run whose terminal report claims to name every
-//     templateRef it attempted.
+//     templateRef it attempted. A `batchSize` that is present but not a positive integer is refused
+//     too, rather than quietly leaving the bound unenforced.
+//   * a DUPLICATE templateRef (same surface+tenant+templateId) is refused. The engine keys its
+//     per-item ledger by that triple and apply's own per-template maps by the derived requestedId,
+//     so two identical refs both read back the SAME published record and BOTH land as "verified" —
+//     a terminal report claiming two successes for one mint, which is the very class of
+//     false-complete reading #337/D4 exists to prevent.
 import type { ImagePlacementSpec, ImageTemplateRevisionBrief, SourceAssetRef, TargetTemplateRef } from "./imageTemplateRevisionEngine.js";
 
 export const IMAGE_TEMPLATE_REVISION_BRIEF_BUILDER_ID = "image_template_revision_brief_builder.v1";
@@ -118,15 +131,26 @@ export function buildImageTemplateRevisionBrief(input: unknown): ImageTemplateRe
     return refuse("image_revision_brief_template_refs_missing", "image_template_revision was dispatched with no templateRefs; there is nothing to revise. Name every template the image should be placed on.");
   }
 
-  const batchSize = typeof source.batchSize === "number" && Number.isInteger(source.batchSize) ? source.batchSize : undefined;
+  // A batchSize that is PRESENT but not a positive integer is refused, not ignored: ignoring it
+  // leaves the bound below unenforced, which is neither the refusal nor the truncation this module
+  // promises. (The operation's own schema already types it `integer`; this covers the operator
+  // surface, where workflow_start_dry_run is called directly.)
+  let batchSize: number | undefined;
+  if (source.batchSize !== undefined && source.batchSize !== null) {
+    if (typeof source.batchSize !== "number" || !Number.isInteger(source.batchSize) || source.batchSize < 1) {
+      return refuse("image_revision_batch_size_invalid", `batchSize is "${String(source.batchSize)}"; it must be a positive integer (the maximum number of templates one run may revise).`);
+    }
+    batchSize = source.batchSize;
+  }
   if (batchSize !== undefined && rawRefs.length > batchSize) {
     return refuse(
       "image_revision_batch_size_exceeded",
-      `image_template_revision was dispatched with ${rawRefs.length} templateRefs but a batchSize of ${batchSize}. This run is refused rather than truncated: the terminal report names every templateRef the run attempted, so silently dropping ${rawRefs.length - batchSize} of them would produce a report that reads complete while templates the editor named were never touched. Raise batchSize or split the request.`
+      `image_template_revision was dispatched with ${rawRefs.length} templateRefs but a batchSize of ${batchSize}${batchSize === 10 ? " (the operation's own default — name a larger batchSize explicitly to raise it)" : ""}. This run is refused rather than truncated: the terminal report names every templateRef the run attempted, so silently dropping ${rawRefs.length - batchSize} of them would produce a report that reads complete while templates the editor named were never touched. Raise batchSize or split the request.`
     );
   }
 
   const templateRefs: TargetTemplateRef[] = [];
+  const seenRefKeys = new Set<string>();
   for (const [index, raw] of rawRefs.entries()) {
     if (!isRecord(raw)) return refuse("image_revision_template_ref_invalid", `templateRefs[${index}] is not an object; each ref must name surface, templateId and tenantId.`);
     const surface = nonEmptyString(raw.surface) ? raw.surface.trim() : "";
@@ -139,7 +163,7 @@ export function buildImageTemplateRevisionBrief(input: unknown): ImageTemplateRe
     if (refTenantId !== tenantId) {
       return refuse(
         "image_revision_template_ref_tenant_mismatch",
-        `templateRefs[${index}].tenantId ("${refTenantId}") is not this operation's own tenant ("${tenantId}"). A dispatched operation is scoped to one tenant and its per-ref lookups are tenant-scoped; revising another tenant's template through this request is refused here, before a run exists, rather than attempted per item.`
+        `templateRefs[${index}].tenantId ("${refTenantId}") is not this operation's own tenant ("${tenantId}"). A dispatched operation is scoped to one tenant, and the template library it reads is cross-tenant and keyed by templateId alone — so a ref naming another tenant is refused here, before a run exists, rather than read into this run's record per item.`
       );
     }
     const version = readVersion(raw.version);
@@ -149,10 +173,51 @@ export function buildImageTemplateRevisionBrief(input: unknown): ImageTemplateRe
         `templateRefs[${index}].version is "${String(raw.version)}"; a target version must be a positive integer (the template library's own version numbering). Omit it to revise the template's current version — an unreadable pin is never silently dropped in favour of "latest".`
       );
     }
+    // The same triple the engine's own per-item ledger is keyed by (refKey,
+    // imageTemplateRevisionEngine.ts). A duplicate is refused, never de-duplicated silently: the
+    // editor named a template twice and the honest answer is to say so, not to guess which one to
+    // drop — and letting both through makes one mint report as two successes.
+    const refKey = `${surface}:${refTenantId}:${templateId}`;
+    if (seenRefKeys.has(refKey)) {
+      return refuse(
+        "image_revision_template_ref_duplicate",
+        `templateRefs[${index}] repeats "${templateId}" (surface "${surface}"), which an earlier entry already names. Each template may appear once: two entries for the same template would both read back the same published version and both be reported as a success, so one revision would read as two.`
+      );
+    }
+    seenRefKeys.add(refKey);
     templateRefs.push({ surface: surface as "web" | "pdf", templateId, tenantId: refTenantId, ...(version !== undefined ? { version } : {}) });
   }
 
-  const placement = isRecord(source.placement) ? (source.placement as ImagePlacementSpec) : undefined;
+  // PLACEMENT IS VALIDATED, NOT PASSED THROUGH. computeTopRightImageBox spreads the brief's
+  // placement over DEFAULT_IMAGE_PLACEMENT, so an unrecognised key — `widthMm` for `widthPt`, a
+  // plausible unit slip — would be silently ignored and the image rendered at the default size:
+  // the editor's stated dimension dropped with no refusal anywhere. Only ImagePlacementSpec's own
+  // five keys are accepted, each at its own type; anything else refuses by name. (Out-of-range
+  // numbers are still the engine's own per-item image_revision_geometry_invalid, which reports
+  // against the actual page size this builder cannot see.)
+  const PLACEMENT_NUMERIC_KEYS = ["widthPt", "heightPt", "marginPt", "headerReservePt"] as const;
+  let placement: ImagePlacementSpec | undefined;
+  if (source.placement !== undefined && source.placement !== null) {
+    if (!isRecord(source.placement)) return refuse("image_revision_placement_invalid", `placement must be an object naming any of position, ${PLACEMENT_NUMERIC_KEYS.join(", ")}.`);
+    const candidate: ImagePlacementSpec = {};
+    for (const [key, value] of Object.entries(source.placement)) {
+      if (key === "position") {
+        if (value !== "top-right") {
+          return refuse("image_revision_placement_invalid", `placement.position is "${String(value)}"; the only placement this engine implements today is "top-right" (a recurring header band on every page). Any other position is a named gap, not a value to approximate.`);
+        }
+        candidate.position = "top-right";
+        continue;
+      }
+      if (!(PLACEMENT_NUMERIC_KEYS as readonly string[]).includes(key)) {
+        return refuse("image_revision_placement_invalid", `placement.${key} is not a placement field. Accepted: position, ${PLACEMENT_NUMERIC_KEYS.join(", ")} — all dimensions in POINTS. An unrecognised key is refused rather than ignored, because ignoring it would render at the default size while the request said otherwise.`);
+      }
+      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        return refuse("image_revision_placement_invalid", `placement.${key} is "${String(value)}"; every placement dimension must be a positive number of points.`);
+      }
+      candidate[key as (typeof PLACEMENT_NUMERIC_KEYS)[number]] = value;
+    }
+    placement = candidate;
+  }
   const approve = readApprove(source.approve);
   if (approve === null) {
     return refuse("image_revision_approve_invalid", "approve must be true/false or an array of templateId strings naming exactly which previewed items may be applied.");

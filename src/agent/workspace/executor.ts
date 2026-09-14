@@ -36,7 +36,7 @@ import { buildLearningObservations } from "./learningRecord.js";
 import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
 import { articleBodyFingerprint, enforcePublishExecutionEvidence, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority, PUBLICATION_CONTROLLER_NODE_ID } from "./publishDecision.js";
 import { lookupWorkflow } from "./workflowRegistry.js";
-import { applyWorkflowInitialInput } from "./workflowInitialInput.js";
+import { applyWorkflowInitialInput, getWorkflowInitialInputBuilder } from "./workflowInitialInput.js";
 import { resolvePublishableTypeCharter } from "./publishableTypeCharter.js";
 // T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
 // that drives runs, since they all import this module. See captureConductorWorkflow.ts.
@@ -1201,7 +1201,11 @@ export async function startDryRun(data: StartDryRunInput, store: ExecutionReposi
   //
   // Placed here rather than in the MCP tool so every plane is gated by one check — the same reasoning
   // that put preflightDriverAuth in the executor instead of in each driver's entry.
-  const subject = checkEditorialSubject(started);
+  // A10 — the subject gate is told which initialInput keys THIS workflow's own builder constructs,
+  // so a structured brief counts as a declared subject only for the workflow whose entry node
+  // actually reads it. Empty for every workflow with no builder, which is every workflow but one:
+  // attaching a brief key to a publishing_conductor run does not buy past this gate.
+  const subject = checkEditorialSubject({ ...started, structuredBriefKeys: getWorkflowInitialInputBuilder(started.workflowId)?.providesInitialInputFields ?? [] });
   if (!subject.ok) throw new WorkspaceToolError(subject.code, subject.message, subject.details);
   // S1 — a caller-supplied requestId (validated by the tool layer against the project's pattern)
   // becomes the run's requestId; absent, the auto-minted join key is used as before.

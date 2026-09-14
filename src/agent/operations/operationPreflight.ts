@@ -272,6 +272,14 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
   // counts as executable only when it ALSO clears this check, computed fresh every call from the
   // descriptor and the target workflow's live canonical node array (never cached, never assumed from
   // the binding merely existing).
+  // A10 — CAPABILITY READINESS, read HERE: after the requiredCapabilities loop above (the only code
+  // that derives capability gaps) and BEFORE either binding block, so both branches can gate on the
+  // same fact. It was previously computed further down, between the two blocks, which was equivalent
+  // then (the workflow block only pushes a gap when its own contract is unsatisfied, in which case
+  // that branch is false anyway) and is equivalent now — moved only so the workflow branch can read
+  // it too, without reading its own gap back as an input.
+  const capabilityReadinessPassed = capabilityGaps.length === 0;
+
   const binding = getOperationWorkflowBinding(descriptor.operationId);
   let inputContractSatisfied = false;
   if (binding) {
@@ -330,7 +338,16 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
       }
     }
   }
-  const workflowExecutable = binding !== null && inputContractSatisfied;
+  // A10 — GATED ON CAPABILITY READINESS TOO, matching the executor branch below. It previously was
+  // not, and that asymmetry only ever went unnoticed because no workflow-bound operation could
+  // clear its input contract at all. The moment one could, the asymmetry had teeth: Platform's own
+  // resolveCatalogOperation refuses on `executable === false` or a "not_supported" gap, and a
+  // *not_configured* gap is surfaced but never refused — so a tenant whose project tool policy
+  // grants none of an operation's required verbs would have cleared preflight, minted a request and
+  // a run record, and died at the first tenant call. Both branches now mean the same thing by
+  // `executable`: a registered implementation, an input contract that genuinely reaches it, AND the
+  // capabilities the operation itself declares derived available from the tenant's own record.
+  const workflowExecutable = binding !== null && inputContractSatisfied && capabilityReadinessPassed;
 
   // EXECUTOR EXECUTABILITY (A4). Sibling of the workflow check above, for an operation implemented
   // by a registered EXECUTOR (operationExecutorBindings.ts) instead of a workflow — site_inventory is
@@ -338,6 +355,10 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
   // R1c's workflow check (no entry-node graph, no field-rename table — see that module's own header):
   // it asks only whether every field the executor's OWN declared inputSchema requires is already
   // guaranteed present on this operation's own merged input, under the identical name.
+  //
+  // A10 — "UNLIKE THE WORKFLOW BRANCH ABOVE" below is now historical: both branches gate on
+  // `capabilityReadinessPassed` (see the workflow branch's own A10 comment for why the asymmetry had
+  // to go). The rest of this comment stands as written.
   //
   // UNLIKE THE WORKFLOW BRANCH ABOVE, this is ALSO gated on capability readiness
   // (`capabilityReadinessPassed`, read from `capabilityGaps` as it stands right here — after the
@@ -351,7 +372,6 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
   // "the input contract could work in principle". The workflow branch does not carry the same
   // requirement (visual_identity_review_change's own test pins its current, capability-independent
   // behavior) and is left exactly as it was.
-  const capabilityReadinessPassed = capabilityGaps.length === 0;
   const executorBinding = getOperationExecutorBinding(descriptor.operationId);
   let executorInputContractSatisfied = false;
   if (executorBinding) {

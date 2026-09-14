@@ -6,6 +6,7 @@ import { preflightOperation } from "../../../src/agent/operations/operationPrefl
 import { buildImageTemplateRevisionBrief } from "../../../src/agent/capture/imageTemplateRevisionBriefBuilder.js";
 import { applyWorkflowInitialInput, getWorkflowInitialInputBuilder } from "../../../src/agent/workspace/workflowInitialInput.js";
 import { startDryRun } from "../../../src/agent/workspace/executor.js";
+import { checkEditorialSubject } from "../../../src/agent/workspace/editorialSubject.js";
 import { runCloneStage } from "../../../src/agent/workspace/cloneConductorRoutes.js";
 import { listImageTemplateRevisionNodes } from "../../../src/agent/workspace/imageTemplateRevisionNodes.js";
 import { IMAGE_TEMPLATE_REVISION_WORKFLOW_ID } from "../../../src/agent/workspace/imageTemplateRevisionWorkflow.js";
@@ -186,9 +187,18 @@ afterEach(() => {
   resetTemplateLibraryMemoryStore();
 });
 
+// The tenant's own trusted capability facts, as operation_preflight's real caller derives them from
+// the project record (loadTenantCapabilityFacts). Both of this operation's write verbs are granted
+// here, plus search_images: `executable` is gated on capability readiness, so a preflight with no
+// facts is honestly false and says so (asserted below).
+const trustedFacts = (registeredToolNames = ["search_images", "create_pdf_template", "publish_pdf_template"]) => ({
+  capabilitySource: (tenantId: string) =>
+    tenantId === TARGET ? { tenantId: TARGET, projectStatus: "active" as const, objectDialectConfigured: true, registeredToolNames } : undefined
+});
+
 describe("preflight reports image_template_revision executable because the binding genuinely guarantees the entry node its input", () => {
   it("executable:true with the binding's workflowId and a declared, verified initial-input builder — no relaxed check anywhere", () => {
-    const result = preflightOperation({ operationId: "image_template_revision", tenantId: TARGET, input: { tenantId: TARGET, ...chatInput() } });
+    const result = preflightOperation({ operationId: "image_template_revision", tenantId: TARGET, input: { tenantId: TARGET, ...chatInput() } }, trustedFacts());
     expect(result.missingRequired).toEqual([]);
     expect(result.blockers.filter((blocker) => blocker.blocking)).toEqual([]);
     expect(result.executable).toBe(true);
@@ -199,9 +209,24 @@ describe("preflight reports image_template_revision executable because the bindi
   });
 
   it("the operation's own schema still refuses a request that names no source image — the field the builder needs is REQUIRED, not hoped for", () => {
-    const result = preflightOperation({ operationId: "image_template_revision", tenantId: TARGET, input: { tenantId: TARGET, templateRefs: chatInput().templateRefs } });
+    const result = preflightOperation({ operationId: "image_template_revision", tenantId: TARGET, input: { tenantId: TARGET, templateRefs: chatInput().templateRefs } }, trustedFacts());
     expect(result.missingRequired).toContain("sourceAsset");
     expect(result.blockers.some((blocker) => blocker.code === "input_schema_invalid" && blocker.blocking)).toBe(true);
+  });
+
+  it("a tenant granted neither write verb is NOT executable — the workflow branch is gated on capability readiness, so an under-provisioned tenant never mints a run to die at the first tenant call", () => {
+    const noGrants = preflightOperation({ operationId: "image_template_revision", tenantId: TARGET, input: { tenantId: TARGET, ...chatInput() } }, trustedFacts([]));
+    expect(noGrants.executable).toBe(false);
+    expect(noGrants.capabilityGaps.map((gap) => gap.capability).sort()).toEqual(["image_search", "image_template_write", "pdf_template_publish"]);
+    expect(noGrants.capabilityGaps.every((gap) => gap.reason === "not_configured")).toBe(true);
+    // A tenant granted the WRITE verb but not the PUBLISH verb is also refused: the apply stage
+    // performs both, so clearing preflight on create alone would fail after paying for preview.
+    const createOnly = preflightOperation(
+      { operationId: "image_template_revision", tenantId: TARGET, input: { tenantId: TARGET, ...chatInput() } },
+      trustedFacts(["search_images", "create_pdf_template"])
+    );
+    expect(createOnly.executable).toBe(false);
+    expect(createOnly.capabilityGaps.map((gap) => gap.capability)).toEqual(["pdf_template_publish"]);
   });
 
   it("pdf_template_family is UNCHANGED by this task — still unsatisfied, still not executable, and still has no builder", () => {
@@ -385,6 +410,43 @@ describe("the builder refuses before a run exists, by name, rather than emitting
     const error = await failedDispatch(chatInput({ sourceAsset: {} }));
     expect(error?.code).toBe("image_revision_source_ref_missing");
   });
+
+  it("a DUPLICATE templateRef is refused — two entries for one template would both read back the same published version and both report as a success", async () => {
+    const duplicate = { surface: "pdf", templateId: templateId("newsletter"), tenantId: TARGET };
+    const error = await failedDispatch(chatInput({ templateRefs: [duplicate, { ...duplicate }] }));
+    expect(error?.code).toBe("image_revision_template_ref_duplicate");
+  });
+
+  it("a batchSize that is present but not a positive integer is refused, rather than silently leaving the batch bound unenforced", async () => {
+    expect((await failedDispatch(chatInput({ batchSize: 2.5 })))?.code).toBe("image_revision_batch_size_invalid");
+    expect((await failedDispatch(chatInput({ batchSize: "2" })))?.code).toBe("image_revision_batch_size_invalid");
+    expect((await failedDispatch(chatInput({ batchSize: 0 })))?.code).toBe("image_revision_batch_size_invalid");
+  });
+
+  it("an unrecognised or non-positive placement field is refused — an ignored `widthMm` would render at the default size while the request said otherwise", async () => {
+    expect((await failedDispatch(chatInput({ placement: { widthMm: 200 } })))?.code).toBe("image_revision_placement_invalid");
+    expect((await failedDispatch(chatInput({ placement: { widthPt: 0 } })))?.code).toBe("image_revision_placement_invalid");
+    expect((await failedDispatch(chatInput({ placement: { position: "bottom-left" } })))?.code).toBe("image_revision_placement_invalid");
+    // A placement naming only real fields, in points, is carried through verbatim.
+    const run = await dispatch(chatInput({ placement: { widthPt: 200, marginPt: 12 } }));
+    expect((run.initialInput as { imageTemplateRevisionBrief: { placement?: unknown } }).imageTemplateRevisionBrief.placement).toEqual({ widthPt: 200, marginPt: 12 });
+  });
+
+  it("a caller-declared targetProjectId that differs from the dispatched tenant is REFUSED, never silently normalised to the tenant", async () => {
+    const error = await failedDispatch({ ...chatInput(), targetProjectId: "some-other-project" });
+    expect(error?.code).toBe("image_revision_target_project_mismatch");
+    // The matching case is accepted and left as it was.
+    const run = await dispatch({ ...chatInput(), targetProjectId: TARGET });
+    expect((run.initialInput as Record<string, unknown>).targetProjectId).toBe(TARGET);
+  });
+
+  it("a run carrying BOTH a hand-written brief and a full dispatch is refused — otherwise attaching a brief would make every check above optional", async () => {
+    const error = await failedDispatch({
+      ...chatInput(),
+      imageTemplateRevisionBrief: { tenantId: "some-other-tenant", sourceAsset: { tag: "x" }, templateRefs: [{ surface: "pdf", templateId: "other::pdf_template::x", tenantId: "some-other-tenant" }] }
+    });
+    expect(error?.code).toBe("image_revision_brief_conflict");
+  });
 });
 
 describe("the builder is narrow: idempotent, workflow-scoped, and pure", () => {
@@ -419,6 +481,55 @@ describe("the builder is narrow: idempotent, workflow-scoped, and pure", () => {
     expect(publishing).toMatchObject({ ok: true, applied: false, builderId: null });
     const bare = applyWorkflowInitialInput(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID, "a bare string subject");
     expect(bare).toMatchObject({ ok: true, applied: false });
+  });
+
+  it("even a HAND-BUILT brief cannot read another project's template: the engine's own fetch refuses a templateId outside the ref's tenant, by name, per item", async () => {
+    await seedLibrary();
+    // The operator surface the brief-conflict refusal above deliberately still allows: a brief with
+    // no dispatch fields alongside it. The cross-tenant ref inside it is refused by the ENGINE, not
+    // only by the builder — the template library is cross-tenant and keyed by templateId alone.
+    const run = await startDryRun({
+      projectId: TARGET,
+      workflowId: IMAGE_TEMPLATE_REVISION_WORKFLOW_ID,
+      executionMode: "mock",
+      input: {
+        targetProjectId: TARGET,
+        imageTemplateRevisionBrief: {
+          tenantId: TARGET,
+          sourceAsset: { tag: "zilberman-hero" },
+          templateRefs: [
+            { surface: "pdf", templateId: templateId("newsletter"), tenantId: TARGET },
+            { surface: "pdf", templateId: "some-other-project::pdf_template::secret", tenantId: TARGET }
+          ]
+        }
+      }
+    });
+    const outcome = await stage(run, "image_revision_intake");
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    const items = outcome.output.items as Array<{ templateRef: { templateId: string }; current?: unknown; error?: { code: string } }>;
+    expect(items.find((item) => item.templateRef.templateId.endsWith("newsletter"))?.current).toBeDefined();
+    const foreign = items.find((item) => item.templateRef.templateId.startsWith("some-other-project"))!;
+    expect(foreign.current).toBeUndefined(); // no recipe was read back
+    expect(foreign.error?.code).toBe("image_revision_template_not_in_tenant");
+  });
+
+  it("the subject gate's structured-brief allowance is scoped to the workflow whose builder constructs it — a brief key buys nothing on publishing_conductor", () => {
+    const taxonomyOnly = { category: "skincare", tags: ["a", "b"] };
+    // The W10 refusal, unchanged: taxonomy alone is not a subject.
+    expect(checkEditorialSubject({ input: taxonomyOnly, executionMode: "openai" }).ok).toBe(false);
+    // Attaching a brief key does NOT buy past it for a workflow that has no builder for that key —
+    // which is what a module-level list of key names would have allowed (17 paid nodes on nothing).
+    expect(checkEditorialSubject({ input: { ...taxonomyOnly, imageTemplateRevisionBrief: { anything: 1 } }, executionMode: "openai" }).ok).toBe(false);
+    // Only the workflow whose own builder constructs that key accepts it as the declared subject.
+    const keys = getWorkflowInitialInputBuilder(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID)!.providesInitialInputFields;
+    expect(checkEditorialSubject({ input: { imageTemplateRevisionBrief: { tenantId: TARGET } }, executionMode: "openai", structuredBriefKeys: keys }).ok).toBe(true);
+  });
+
+  it("a LIVE publishing_conductor run with a brief key attached is still refused at startDryRun, by the same code path this task touched", async () => {
+    await expect(
+      startDryRun({ projectId: TARGET, input: { category: "skincare", tags: ["a"], imageTemplateRevisionBrief: { anything: 1 } } })
+    ).rejects.toMatchObject({ code: "editorial_subject_missing" });
   });
 
   it("buildImageTemplateRevisionBrief normalizes a numeric-string version and defaults a ref's tenant to the operation's own, without inventing anything else", () => {

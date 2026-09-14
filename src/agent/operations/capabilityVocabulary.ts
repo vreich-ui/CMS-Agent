@@ -93,7 +93,7 @@ const CAPABILITY_VOCABULARY: readonly CapabilityVocabularyEntry[] = [
   {
     id: "image_template_write",
     description: "Revise images and their placements within a batch of page templates (pdf targets today; a \"web\" target is a named per-item gap the run itself reports).",
-    evidence: "The project's own tool policy resolves \"create_pdf_template\" to \"allowed\" for this tenant, and the project is active — the write verb image_revision_apply reuses (runImageRevisionApplyBatch -> pdfTemplateEngine.ts's own mint stage). A10 replaced this entry's former \"no tenant can ever satisfy this\" claim, which was stale once A9 shipped and refused every chat-dispatched run. See capabilityReadiness.ts."
+    evidence: "The project's own tool policy resolves \"create_pdf_template\" to \"allowed\" for this tenant, and the project is active — that is the write verb image_revision_apply performs, through pdfTemplateEngine.ts's own mint stage."
   }
 ] as const;
 

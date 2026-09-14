@@ -303,6 +303,23 @@ export async function fetchTargetTemplateVersionStep(ref: TargetTemplateRef, dep
       reason: `Surface "${ref.surface}" is not yet implemented by image_template_revision; only "pdf" targets are supported today (A9). This is a named capability gap, not a silent skip.`
     };
   }
+  // A10 — TENANT-SCOPE THE READ. TemplateLibraryStore is the CROSS-TENANT library (#207) and is
+  // keyed by templateId alone, so until this check existed `ref.tenantId` was carried through every
+  // layer and never actually used for anything: a ref naming another project's templateId read that
+  // project's full recipe into this run's intake envelope. The WRITE half was already contained
+  // (deriveRequestedIdFromTemplateId, below, rejects a templateId not prefixed with the run's own
+  // project, so a foreign template could never be re-minted), which is exactly the prefix rule
+  // applied here to the read as well — same rule, same derivation function, both directions. The
+  // brief builder refuses a cross-tenant ref before a run exists (imageTemplateRevisionBriefBuilder.ts);
+  // this is the engine's own guard for every other caller, including a hand-built brief on the
+  // operator surface.
+  if (!deriveRequestedIdFromTemplateId(ref.templateId, ref.tenantId)) {
+    return {
+      ok: false,
+      code: "image_revision_template_not_in_tenant",
+      reason: `Template "${ref.templateId}" is not one of tenant "${ref.tenantId}"'s own templates (a library templateId is "<sourceProjectId>::pdf_template::<id>"). The template library is cross-tenant and keyed by templateId alone, so this read is refused by name rather than returning another project's template recipe.`
+    };
+  }
   const record = ref.version ? await deps.templateLibraryStore.getVersion(ref.templateId, ref.version) : await deps.templateLibraryStore.getLatest(ref.templateId);
   if (!record) {
     return { ok: false, code: "image_revision_template_not_found", reason: `No ${ref.version ? `version ${ref.version} of ` : ""}template "${ref.templateId}" found in the template library for tenant "${ref.tenantId}".` };
