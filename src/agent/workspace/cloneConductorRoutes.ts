@@ -84,6 +84,27 @@ import {
   type PdfTemplateFamilyPlanEnvelope,
   type PdfTemplateFamilyMintEnvelope
 } from "../capture/pdfTemplateFamilyEngine.js";
+// A9 (Stage A task list) — the image-on-every-page batch operation's own four stages, dispatched by
+// "image_revision_intake"/"image_revision_compile_preview"/"image_revision_apply"/
+// "image_revision_report" below. "apply" composes pdfTemplateEngine.ts's OWN mint/publish/library-
+// deposit stages (imported above, reused unchanged) — a SEPARATE, additive set of CLONE_STAGES
+// entries and switch cases, never touching "pdf_intake"/"pdf_mint"/"pdf_publish" or the A7 family
+// stages at all. See imageTemplateRevisionEngine.ts's own header for the full design rationale, and
+// imageTemplateRevisionProviders.ts for the injectable asset-catalog/preview/verify adapters this
+// stage composes.
+import {
+  imageRevisionIntakeStep,
+  runImageRevisionCompilePreviewBatch,
+  runImageRevisionApplyBatch,
+  buildImageTemplateRevisionReportStep,
+  IMAGE_REVISION_ARTIFACTS,
+  type ImageRevisionIntakeEnvelope,
+  type ImageRevisionCompilePreviewEnvelope,
+  type ImageRevisionApplyEnvelope,
+  type ImageTemplateRevisionBrief,
+  type ImageRevisionItemLedgerEntry
+} from "../capture/imageTemplateRevisionEngine.js";
+import { resolveImageTemplateRevisionProviders } from "./imageTemplateRevisionProviders.js";
 import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 
 export const CLONE_STAGES = [
@@ -102,7 +123,11 @@ export const CLONE_STAGES = [
   "pdf_mint_validated",
   "pdf_publish_only",
   "pdf_library_deposit",
-  "pdf_family_report"
+  "pdf_family_report",
+  "image_revision_intake",
+  "image_revision_compile_preview",
+  "image_revision_apply",
+  "image_revision_report"
 ] as const;
 export type CloneStage = typeof CLONE_STAGES[number];
 
@@ -417,6 +442,75 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
           mint: mint as unknown as PdfTemplateFamilyMintEnvelope | undefined,
           publish: publish as unknown as PdfTemplatePublishEnvelope | undefined,
           library
+        });
+        return { kind: "completed", output: report as unknown as Record<string, unknown> };
+      }
+      // A9 — the image-on-every-page batch operation's own four stages. Additive: composes
+      // pdfTemplateEngine.ts's own mint/publish/library-deposit stages (imported above, unchanged)
+      // for "apply", and the injectable providers (imageTemplateRevisionProviders.ts) for asset
+      // resolution and before/after preview/verify. See imageTemplateRevisionEngine.ts's own header.
+      case "image_revision_intake": {
+        const providers = resolveImageTemplateRevisionProviders();
+        const envelope = await imageRevisionIntakeStep({ initialInput: run.initialInput }, { assetCatalog: providers.assetCatalog });
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "image_revision_compile_preview": {
+        const intake = envelopeOf(run, "image_revision_intake", IMAGE_REVISION_ARTIFACTS.intake);
+        if (isOutcome(intake)) return intake;
+        const providers = resolveImageTemplateRevisionProviders();
+        const priorRaw = stageOutput(run, "image_revision_compile_preview");
+        const priorItems =
+          priorRaw && priorRaw.artifact === IMAGE_REVISION_ARTIFACTS.compilePreview && Array.isArray(priorRaw.items)
+            ? (priorRaw.items as unknown as ImageRevisionItemLedgerEntry[])
+            : [];
+        const envelope = await runImageRevisionCompilePreviewBatch(
+          intake as unknown as ImageRevisionIntakeEnvelope,
+          { previewTemplateVariant: providers.previewTemplateVariant },
+          priorItems
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "image_revision_apply": {
+        const intake = envelopeOf(run, "image_revision_intake", IMAGE_REVISION_ARTIFACTS.intake);
+        if (isOutcome(intake)) return intake;
+        const compiled = envelopeOf(run, "image_revision_compile_preview", IMAGE_REVISION_ARTIFACTS.compilePreview);
+        if (isOutcome(compiled)) return compiled;
+        const { config } = await resolveCloneAuthority(targetProjectId);
+        if (!isProjectPublishEnabled(config)) {
+          return refused(
+            "image_revision_publish_disabled",
+            `Project "${targetProjectId}" is not publish-enabled (publishingPolicy.publishEnabled, or its per-project *_PUBLISH_ENABLED env override, is off); nothing was applied for it. This is the SAME kill-switch read the PDF branches use, applied here as a standalone step.`
+          );
+        }
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        const brief = isRecord(initial.imageTemplateRevisionBrief) ? (initial.imageTemplateRevisionBrief as ImageTemplateRevisionBrief) : undefined;
+        const providers = resolveImageTemplateRevisionProviders();
+        const priorRaw = stageOutput(run, "image_revision_apply");
+        const priorItems =
+          priorRaw && priorRaw.artifact === IMAGE_REVISION_ARTIFACTS.apply && Array.isArray(priorRaw.items)
+            ? (priorRaw.items as unknown as ImageRevisionItemLedgerEntry[])
+            : [];
+        const envelope = await runImageRevisionApplyBatch(
+          {
+            targetProjectId,
+            intake: intake as unknown as ImageRevisionIntakeEnvelope,
+            compiled: compiled as unknown as ImageRevisionCompilePreviewEnvelope,
+            approve: brief?.approve
+          },
+          { tenantContext, verifyImagePresence: providers.verifyImagePresence },
+          priorItems
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "image_revision_report": {
+        const intake = envelopeOf(run, "image_revision_intake", IMAGE_REVISION_ARTIFACTS.intake);
+        if (isOutcome(intake)) return intake;
+        const compiled = stageOutput(run, "image_revision_compile_preview");
+        const applied = stageOutput(run, "image_revision_apply");
+        const report = buildImageTemplateRevisionReportStep({
+          intake: intake as unknown as ImageRevisionIntakeEnvelope,
+          compiled: compiled?.artifact === IMAGE_REVISION_ARTIFACTS.compilePreview ? (compiled as unknown as ImageRevisionCompilePreviewEnvelope) : undefined,
+          applied: applied?.artifact === IMAGE_REVISION_ARTIFACTS.apply ? (applied as unknown as ImageRevisionApplyEnvelope) : undefined
         });
         return { kind: "completed", output: report as unknown as Record<string, unknown> };
       }

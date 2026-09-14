@@ -37,10 +37,22 @@ describe("operationWorkflowBindings", () => {
   });
 
   it("getOperationWorkflowBinding returns null (never a guess, never a throw) for every operation with no genuine implementing workflow today", () => {
-    const unboundOperationIds = ["site_inventory", "document_render", "asset_lookup_adopt", "image_template_revision"];
+    const unboundOperationIds = ["site_inventory", "document_render", "asset_lookup_adopt"];
     for (const operationId of unboundOperationIds) {
       expect(getOperationWorkflowBinding(operationId)).toBeNull();
     }
+  });
+
+  // A9 — image_template_revision is now BOUND to image_template_revision_studio (see
+  // operationWorkflowBindings.ts's own header). Moved OUT of the unbound set above, mirroring A7's
+  // own pdf_template_family precedent immediately below.
+  it("binds image_template_revision to the image_template_revision_studio workflow, with a deliberately empty inputMapping", () => {
+    const binding = getOperationWorkflowBinding("image_template_revision");
+    expect(binding).toEqual({
+      operationId: "image_template_revision",
+      workflowId: "image_template_revision_studio",
+      inputMapping: {}
+    });
   });
 
   // A7 — pdf_template_family is now BOUND to pdf_template_studio (see operationWorkflowBindings.ts's
@@ -114,6 +126,19 @@ describe("operationWorkflowBindings", () => {
       expect(status.contract).not.toBeNull();
       expect(status.contract!.satisfied).toBe(true);
       const entryNodeCheck = status.contract!.entryNodeChecks.find((check) => check.nodeId === "pdf_template_intake");
+      expect(entryNodeCheck).toBeDefined();
+      expect(entryNodeCheck!.unsatisfiedRequired).toEqual([]);
+    });
+
+    // A9 — same shape as pdf_template_family's precedent immediately above: image_revision_intake
+    // (image_template_revision_studio's entry node) also uses the permissive openInput schema, so
+    // the empty inputMapping trivially satisfies it.
+    it("the image_template_revision binding is detected as SATISFIED — its entry node's permissive schema has no required field the empty inputMapping could fail to cover", () => {
+      const status = resolveBindingInputContract(getOperationWorkflowBinding("image_template_revision")!);
+      expect(status.resolved).toBe(true);
+      expect(status.contract).not.toBeNull();
+      expect(status.contract!.satisfied).toBe(true);
+      const entryNodeCheck = status.contract!.entryNodeChecks.find((check) => check.nodeId === "image_revision_intake");
       expect(entryNodeCheck).toBeDefined();
       expect(entryNodeCheck!.unsatisfiedRequired).toEqual([]);
     });
