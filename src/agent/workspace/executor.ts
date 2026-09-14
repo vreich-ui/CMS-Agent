@@ -420,7 +420,7 @@ const nodeSource = (): "static" | "store" => (process.env.WORKSPACE_NODES_SOURCE
 // than with another workflow's own route value) makes a route key behave exactly like riskLevel: a
 // store edit can change how a node's OWN declared stage runs (schema, prompt, tools, other metadata),
 // but never which engine stage a shared-id node dispatches to. See
-// pdfTemplateStudioNodeIdCollision.test.ts.
+// tests/agent/operations/a10StudioNodeIdCollision.test.ts.
 const pinRouteMetadataToCanonical = (merged: Record<string, unknown> | undefined, canonicalMetadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
   if (!merged) return merged;
   for (const key of WORKFLOW_STAGE_ROUTE_METADATA_KEYS) {
