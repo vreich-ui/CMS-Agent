@@ -13,6 +13,10 @@ import "./captureConductorWorkflow.js";
 // fixed: publishing (workflowRegistry.ts's own), capture, clone, visual_identity.
 import "./cloneConductorWorkflow.js";
 import "./visualIdentityWorkflow.js";
+// A7 (Stage A task list) — pdf_template_studio, for the identical reason the three imports above
+// exist: this module's whole purpose is single-node resolution WITHOUT the executor, so it needs its
+// own side-effect import of every registered workflow, including this one.
+import "./pdfTemplateStudioWorkflow.js";
 
 // T12.15 — single-node resolution for EXECUTION, as opposed to resolveConductorNodes (executor.ts),
 // which resolves a whole run's node array.

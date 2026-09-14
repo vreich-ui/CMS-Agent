@@ -43,7 +43,7 @@ describe("R1b — unregistered explicit workflowId is refused, not silently subs
       details: expect.objectContaining({ requestedWorkflowId: "money_page_v2", registeredWorkflowIds: listRegisteredWorkflowIds() })
     });
     // The registered ids named in the refusal are real, current ones — not a stale/guessed list.
-    expect(listRegisteredWorkflowIds()).toEqual(["publishing_conductor", "capture_conductor", "clone_conductor", "visual_identity"]);
+    expect(listRegisteredWorkflowIds()).toEqual(["publishing_conductor", "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio"]);
 
     // THE PART THAT MATTERS: no run record exists to clean up, retry, or accidentally resume.
     const { runs } = await store().listRunsPage({});

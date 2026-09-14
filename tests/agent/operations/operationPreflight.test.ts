@@ -317,8 +317,13 @@ describe("preflightOperation", () => {
 
       // A4: site_inventory is deliberately EXCLUDED here — it is no longer unbound (it has a
       // registered executor), so it no longer carries a "workflow_binding" not_supported gap; see
-      // the dedicated site_inventory tests above for its own (different) current behavior.
-      const unboundIds = ["pdf_template_family", "document_render", "asset_lookup_adopt", "image_template_revision"];
+      // the dedicated site_inventory tests above for its own (different) current behavior. A7:
+      // pdf_template_family is ALSO excluded here now — it is bound to pdf_template_studio (see
+      // operationWorkflowBindings.ts), and unlike visual_identity_review_change its binding's
+      // contract IS satisfied (pdf_template_studio's entry node uses the permissive openInput
+      // schema, with no required fields the empty inputMapping could fail to cover), so it carries
+      // no workflow_binding gap at all — see operationWorkflowBindings.test.ts's own R1c coverage.
+      const unboundIds = ["document_render", "asset_lookup_adopt", "image_template_revision"];
       for (const operationId of unboundIds) {
         const result = preflightOperation({ operationId, tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
         expect(result.executable).toBe(false);

@@ -15,8 +15,9 @@
 //
 // EVIDENCE — read from workflowRegistry.ts and every register*Workflow call, not assumed:
 // registered today are publishing_conductor (workflowRegistry.ts), capture_conductor
-// (captureConductorWorkflow.ts), clone_conductor (cloneConductorWorkflow.ts), and visual_identity
-// (visualIdentityWorkflow.ts). Of the six catalog operations:
+// (captureConductorWorkflow.ts), clone_conductor (cloneConductorWorkflow.ts), visual_identity
+// (visualIdentityWorkflow.ts), and pdf_template_studio (pdfTemplateStudioWorkflow.ts). Of the six
+// catalog operations:
 //
 //   visual_identity_review_change -> visual_identity — BOUND. visualIdentityWorkflow.ts registers
 //     exactly the two nodes (visualIdentityNodes.ts) this operation's own declared `effects`
@@ -25,18 +26,23 @@
 //     (files the proposal as a draft `visual_standard` object; applies only behind its own gate).
 //     The two share this operation's exact requiredCapabilities vocabulary
 //     (visual_identity_read/visual_identity_propose) and the workflow's own header comment states
-//     the identical contract this descriptor states. This is the one operation with a real,
-//     wired-into-the-executor implementation today.
+//     the identical contract this descriptor states.
 //
-//   asset_lookup_adopt (A5), pdf_template_family (A7), document_render (A8), image_template_revision
-//   (A9) — UNBOUND to any WORKFLOW. Each descriptor file (src/agent/operations/descriptors/*.ts)
-//   says "CONTRACT ONLY, no implementation here". Concretely: capture_conductor performs a site
-//   CRAWL and emission (captureConductorNodes.ts), which is not a read of the CURRENT inventory no
-//   matter how related the vocabulary sounds. No registered workflow's node array performs a
-//   search_assets/adopt_asset, designs or publishes a PDF template family, renders an existing
-//   document to PDF, or revises a batch of web template images. An honest unbound here is what lets
-//   preflightOperation() report executable:false with a named remedy instead of a run that fails at
-//   workflow_start_dry_run with no explanation.
+//   pdf_template_family -> pdf_template_studio — BOUND (A7). pdfTemplateStudioWorkflow.ts registers
+//     the six-node graph (pdfTemplateStudioNodes.ts) this operation's own declared `effects`
+//     describe: design_pdf_template_family (pdf_template_intake/pdf_template_designer/
+//     pdf_template_mint) and publish_pdf_template_family (pdf_template_publish +
+//     pdf_template_library_deposit, the studio's own two-step publication). See the binding entry
+//     below for why its inputMapping is deliberately empty.
+//
+//   asset_lookup_adopt (A5), document_render (A8), image_template_revision (A9) — UNBOUND to any
+//   WORKFLOW. Each descriptor file (src/agent/operations/descriptors/*.ts) says "CONTRACT ONLY, no
+//   implementation here". Concretely: capture_conductor performs a site CRAWL and emission
+//   (captureConductorNodes.ts), which is not a read of the CURRENT inventory no matter how related
+//   the vocabulary sounds. No registered workflow's node array performs a search_assets/adopt_asset,
+//   renders an existing document to PDF, or revises a batch of web template images. An honest
+//   unbound here is what lets preflightOperation() report executable:false with a named remedy
+//   instead of a run that fails at workflow_start_dry_run with no explanation.
 //
 //   site_inventory (A4) — NOT in this module's table, and deliberately NOT in
 //   UNBOUND_OPERATION_IMPLEMENTING_TASK below either: A4 shipped it as a registered EXECUTOR
@@ -50,6 +56,7 @@
 // discipline registerOperation() already enforces for the operation catalog itself.
 import { listRegisteredWorkflowIds, getWorkflowDefinition } from "../workspace/workflowRegistry.js";
 import { VISUAL_IDENTITY_WORKFLOW_ID } from "../workspace/visualIdentityWorkflow.js";
+import { PDF_TEMPLATE_STUDIO_WORKFLOW_ID } from "../workspace/pdfTemplateStudioWorkflow.js";
 import { getOperation } from "./operationCatalog.js";
 import type { OperationId } from "./operationTypes.js";
 import { checkBindingInputContract, type BindingInputContractResult, type OperationInputContractSource } from "./bindingInputContract.js";
@@ -83,6 +90,30 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
       autoApply: "apply"
       // `focus` has no equivalent field on either node today and is deliberately left unmapped.
     }
+  },
+  {
+    // A7 — pdf_template_family -> pdf_template_studio — BOUND. pdfTemplateStudioWorkflow.ts
+    // registers exactly the graph this operation's own declared `effects` describe:
+    // design_pdf_template_family (pdf_template_intake/pdf_template_designer/pdf_template_mint,
+    // riskLevel up to "write") and publish_pdf_template_family (pdf_template_publish +
+    // pdf_template_library_deposit, riskLevel "publish"). This is the operation name bound to the
+    // WORKFLOW id "pdf_template_studio" — never the operation's own id "pdf_template_family" passed
+    // as a workflowId, which is exactly the confusion this binding table exists to prevent (see this
+    // module's header).
+    operationId: "pdf_template_family",
+    workflowId: PDF_TEMPLATE_STUDIO_WORKFLOW_ID,
+    // Deliberately EMPTY, not a guess: this operation's flat input fields (tenantId, familyId,
+    // locale — descriptors/pdfTemplateFamily.ts) have no flat equivalent on the entry node
+    // (pdf_template_intake). The entry node reads a NESTED
+    // initialInput.pdfTemplateFamilyBrief {siteId, familyId, useCase, variants, revise, sourceUrl}
+    // (pdfTemplateFamilyEngine.ts's pdfTemplateFamilyPlanStep) — inputMapping is documented
+    // (this module's header) as a flat field-rename table only, never structural nesting, so
+    // expressing "wrap these three fields into a brief object" here would be exactly the kind of
+    // guess this table exists to avoid. The node's own inputSchema is the permissive openInput
+    // shape (no declared `required`), so this empty mapping still trivially satisfies
+    // resolveBindingInputContract/checkBindingInputContract — a REAL executor (a later task, same
+    // posture as visual_identity_review_change today) is what would actually construct the brief.
+    inputMapping: {}
   }
 ];
 
@@ -95,7 +126,6 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
 // also removed from here — site_inventory (A4) is the one example; see this module's header.
 export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {
   asset_lookup_adopt: "A5",
-  pdf_template_family: "A7",
   document_render: "A8",
   image_template_revision: "A9"
 };

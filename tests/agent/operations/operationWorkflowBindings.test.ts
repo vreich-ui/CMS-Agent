@@ -37,10 +37,22 @@ describe("operationWorkflowBindings", () => {
   });
 
   it("getOperationWorkflowBinding returns null (never a guess, never a throw) for every operation with no genuine implementing workflow today", () => {
-    const unboundOperationIds = ["site_inventory", "pdf_template_family", "document_render", "asset_lookup_adopt", "image_template_revision"];
+    const unboundOperationIds = ["site_inventory", "document_render", "asset_lookup_adopt", "image_template_revision"];
     for (const operationId of unboundOperationIds) {
       expect(getOperationWorkflowBinding(operationId)).toBeNull();
     }
+  });
+
+  // A7 — pdf_template_family is now BOUND to pdf_template_studio (see operationWorkflowBindings.ts's
+  // own header). This is the counterpart of the test above, not a duplicate of it: this operation
+  // moved OUT of the unbound set.
+  it("binds pdf_template_family to the pdf_template_studio workflow, with a deliberately empty inputMapping", () => {
+    const binding = getOperationWorkflowBinding("pdf_template_family");
+    expect(binding).toEqual({
+      operationId: "pdf_template_family",
+      workflowId: "pdf_template_studio",
+      inputMapping: {}
+    });
   });
 
   it("getOperationWorkflowBinding returns null for an operation id nobody registered at all", () => {
@@ -89,6 +101,21 @@ describe("operationWorkflowBindings", () => {
       expect(entryNodeCheck!.satisfiedAnyOfBranchIndex).toBeNull();
       expect(entryNodeCheck!.unsupportedConstructs).toEqual([]);
       expect(status.contract!.guaranteedTargetFields).toEqual(["apply", "projectId"]);
+    });
+
+    // A7 — the OPPOSITE case from visual_identity_review_change's, deliberately: pdf_template_family's
+    // binding is genuinely SATISFIED, not merely bound. pdf_template_studio's entry node
+    // (pdf_template_intake) uses the permissive openInput schema (no declared `required` array), so
+    // the empty inputMapping trivially covers everything it requires — the binding is complete today,
+    // even though a real executor (constructing the actual pdfTemplateFamilyBrief) is future work.
+    it("the pdf_template_family binding is detected as SATISFIED — its entry node's permissive schema has no required field the empty inputMapping could fail to cover", () => {
+      const status = resolveBindingInputContract(getOperationWorkflowBinding("pdf_template_family")!);
+      expect(status.resolved).toBe(true);
+      expect(status.contract).not.toBeNull();
+      expect(status.contract!.satisfied).toBe(true);
+      const entryNodeCheck = status.contract!.entryNodeChecks.find((check) => check.nodeId === "pdf_template_intake");
+      expect(entryNodeCheck).toBeDefined();
+      expect(entryNodeCheck!.unsatisfiedRequired).toEqual([]);
     });
 
     it("listBindingInputContractStatuses() reports one resolved status per registered binding, in operationId order", () => {

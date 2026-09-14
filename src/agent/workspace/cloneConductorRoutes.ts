@@ -60,10 +60,50 @@ import type { TemplateArtifactValue } from "../memory/memoryEnvelope.js";
 // are — SEPARATE functions, SEPARATE artifacts, NEVER routed through cloneMintStep/publish_executor/
 // the shared publishing tail. See pdfTemplateEngine.ts's own header for the full discipline/transport
 // argument.
-import { pdfTemplateIntakeStep, pdfTemplateMintStep, pdfTemplatePublishStep, depositPublishedPdfTemplatesStep, PDF_TEMPLATE_ARTIFACTS } from "../capture/pdfTemplateEngine.js";
+import {
+  pdfTemplateIntakeStep,
+  pdfTemplateMintStep,
+  pdfTemplatePublishStep,
+  depositPublishedPdfTemplatesStep,
+  PDF_TEMPLATE_ARTIFACTS,
+  type PdfTemplatePublishEnvelope
+} from "../capture/pdfTemplateEngine.js";
+// A7 (Stage A task list) — the PDF template STUDIO's own stages, dispatched by
+// "pdf_family_plan"/"pdf_mint_validated"/"pdf_publish_only"/"pdf_library_deposit"/"pdf_family_report"
+// below. These compose the pdf-template branch's UNCHANGED, imported stages above (pdfTemplateEngine.ts
+// is never modified by this task) with pdfTemplateFamilyEngine.ts's family expansion/reuse, contract
+// validation and two-step report — a SEPARATE, additive set of CLONE_STAGES entries and switch cases,
+// never touching "pdf_intake"/"pdf_mint"/"pdf_publish" (clone_conductor's own PDF branch) at all. See
+// pdfTemplateStudioNodes.ts / pdfTemplateStudioWorkflow.ts for the graph and registration this
+// dispatches for, and pdfTemplateFamilyEngine.ts's own header for the full design rationale.
+import {
+  pdfTemplateFamilyPlanStep,
+  pdfTemplateFamilyMintStep,
+  buildPdfTemplateFamilyReportStep,
+  PDF_FAMILY_ARTIFACTS,
+  type PdfTemplateFamilyPlanEnvelope,
+  type PdfTemplateFamilyMintEnvelope
+} from "../capture/pdfTemplateFamilyEngine.js";
 import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 
-export const CLONE_STAGES = ["intake", "mint", "theme_bind", "restamp", "publish_payload", "publication_controller", "publish_executor", "report", "pdf_intake", "pdf_mint", "pdf_publish"] as const;
+export const CLONE_STAGES = [
+  "intake",
+  "mint",
+  "theme_bind",
+  "restamp",
+  "publish_payload",
+  "publication_controller",
+  "publish_executor",
+  "report",
+  "pdf_intake",
+  "pdf_mint",
+  "pdf_publish",
+  "pdf_family_plan",
+  "pdf_mint_validated",
+  "pdf_publish_only",
+  "pdf_library_deposit",
+  "pdf_family_report"
+] as const;
 export type CloneStage = typeof CLONE_STAGES[number];
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -304,6 +344,81 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
           ...(library ? { library } : {})
         };
         return { kind: "completed", output: output as unknown as Record<string, unknown> };
+      }
+      // A7 — the PDF template STUDIO's own five stages. Additive: reuses pdf_template_designer
+      // (imported from cloneConductorNodes.ts, byte-identical, no re-implementation) and the THREE
+      // functions imported above from pdfTemplateEngine.ts completely unchanged, composing them with
+      // pdfTemplateFamilyEngine.ts's family expansion/reuse and contract validation. Publication is
+      // split into TWO separate stages/nodes on purpose — "pdf_publish_only" (pdf-tool's own
+      // publish_pdf_template store) and "pdf_library_deposit" (the cross-tenant TemplateLibraryStore,
+      // #207) — never merged into one node's output the way "pdf_publish" above does for
+      // clone_conductor's own branch. See pdfTemplateFamilyEngine.ts's header for the full argument.
+      case "pdf_family_plan": {
+        const envelope = await pdfTemplateFamilyPlanStep({ initialInput: run.initialInput, targetProjectId }, {});
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "pdf_mint_validated": {
+        const plan = envelopeOf(run, "pdf_template_intake", PDF_FAMILY_ARTIFACTS.plan);
+        if (isOutcome(plan)) return plan;
+        const design = stageOutput(run, "pdf_template_designer");
+        const envelope = await pdfTemplateFamilyMintStep({ targetProjectId, intake: plan, design }, { tenantContext });
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "pdf_publish_only": {
+        const mint = envelopeOf(run, "pdf_template_mint", PDF_TEMPLATE_ARTIFACTS.mint);
+        if (isOutcome(mint)) return mint;
+        const { config } = await resolveCloneAuthority(targetProjectId);
+        if (!isProjectPublishEnabled(config)) {
+          return refused(
+            "pdf_template_family_publish_disabled",
+            `Project "${targetProjectId}" is not publish-enabled (publishingPolicy.publishEnabled, or its per-project *_PUBLISH_ENABLED env override, is off); nothing was published to pdf-tool for it. This is the SAME kill-switch read the base PDF branch's "pdf_publish" case uses, applied here as a standalone step.`
+          );
+        }
+        const envelope = await pdfTemplatePublishStep({ targetProjectId, mint }, { tenantContext });
+        const authority = resolvePublishAuthority(run);
+        const output = {
+          ...envelope,
+          approvalMatched: authority.authorized,
+          publishAuthority: {
+            mode: run.publishingPolicySnapshot?.autonomyMode ?? "operator-gated",
+            source: authority.authorized ? authority.source : null,
+            operatorDecision: run.operatorPublishDecision ?? null
+          }
+        };
+        return { kind: "completed", output: output as unknown as Record<string, unknown> };
+      }
+      // STEP B (separate from "pdf_publish_only" above) — the cross-tenant library deposit. Reads
+      // BOTH pdf_template_mint (for the minted template bodies) and pdf_template_publish (for which
+      // requestedIds actually went live) — never merged into the publish stage's own output.
+      case "pdf_library_deposit": {
+        const mint = envelopeOf(run, "pdf_template_mint", PDF_TEMPLATE_ARTIFACTS.mint);
+        if (isOutcome(mint)) return mint;
+        const publish = envelopeOf(run, "pdf_template_publish", PDF_TEMPLATE_ARTIFACTS.publish);
+        if (isOutcome(publish)) return publish;
+        const published = (publish as unknown as PdfTemplatePublishEnvelope).published;
+        if (published.length === 0) {
+          return { kind: "completed", output: { artifact: PDF_FAMILY_ARTIFACTS.libraryDeposit, attempted: false, deposited: [], unchanged: [], refused: [] } };
+        }
+        const library = await depositPublishedPdfTemplatesStep({ sourceProjectId: targetProjectId, mint, published }, { tenantContext });
+        return { kind: "completed", output: { artifact: PDF_FAMILY_ARTIFACTS.libraryDeposit, attempted: true, ...library } as unknown as Record<string, unknown> };
+      }
+      // TERMINAL — see pdfTemplateFamilyEngine.ts's buildPdfTemplateFamilyReportStep for the full
+      // per-variant ledger discipline this assembles from the four upstream stage outputs, purely by
+      // reading them back (no re-judgment).
+      case "pdf_family_report": {
+        const plan = envelopeOf(run, "pdf_template_intake", PDF_FAMILY_ARTIFACTS.plan);
+        if (isOutcome(plan)) return plan;
+        const mint = stageOutput(run, "pdf_template_mint");
+        const publish = stageOutput(run, "pdf_template_publish");
+        const libraryOutput = stageOutput(run, "pdf_template_library_deposit");
+        const library = libraryOutput && libraryOutput.attempted === true ? (libraryOutput as unknown as LibraryDepositLedger) : undefined;
+        const report = buildPdfTemplateFamilyReportStep({
+          plan: plan as unknown as PdfTemplateFamilyPlanEnvelope,
+          mint: mint as unknown as PdfTemplateFamilyMintEnvelope | undefined,
+          publish: publish as unknown as PdfTemplatePublishEnvelope | undefined,
+          library
+        });
+        return { kind: "completed", output: report as unknown as Record<string, unknown> };
       }
       // T15.10 (ADR-2026-08-25-publish-autonomy §6.2, §9) — clone_conductor's segment of the SHARED
       // publishing tail. These three stages ARE publish_payload / publication_controller /

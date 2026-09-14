@@ -6,26 +6,37 @@ import { __test__, publishingConductorWorkflowId } from "../../../src/agent/work
 import { mockOutputForNode } from "../../../src/agent/execution/runners/MockNodeRunner.js";
 import { validateOutput } from "../../../src/agent/execution/outputValidator.js";
 
-// §2.23 — minimal multi-workflow plumbing at the seam that matters. The registry carries FOUR shipped
+// §2.23 — minimal multi-workflow plumbing at the seam that matters. The registry carries FIVE shipped
 // entries: publishing_conductor (the canonical array), capture_conductor (since T12.9, registered by
-// captureConductorWorkflow.ts), clone_conductor (since T13.1, registered by cloneConductorWorkflow.ts)
-// and visual_identity (C5, registered by visualIdentityWorkflow.ts) — all side-effect-imported by
-// executor.ts, which this file imports, so all four registrations are present here exactly as on
-// every run-driving plane. A genuinely ABSENT workflowId (no second argument / `undefined`) still
-// falls back to the publishing_conductor canonical set, byte-identical to every run before the
-// registry existed; R1b (2026-09) closed the DIFFERENT case this file used to also call "unknown
-// workflowId" — an EXPLICIT, non-empty id nobody registered — which no longer falls back to anything:
-// see "refuses an unregistered EXPLICIT workflowId" below.
+// captureConductorWorkflow.ts), clone_conductor (since T13.1, registered by cloneConductorWorkflow.ts),
+// visual_identity (C5, registered by visualIdentityWorkflow.ts) and pdf_template_studio (A7, registered
+// by pdfTemplateStudioWorkflow.ts) — all side-effect-imported by executor.ts, which this file imports,
+// so all five registrations are present here exactly as on every run-driving plane. A genuinely ABSENT
+// workflowId (no second argument / `undefined`) still falls back to the publishing_conductor canonical
+// set, byte-identical to every run before the registry existed; R1b (2026-09) closed the DIFFERENT
+// case this file used to also call "unknown workflowId" — an EXPLICIT, non-empty id nobody
+// registered — which no longer falls back to anything: see "refuses an unregistered EXPLICIT
+// workflowId" below.
 
 describe("§2.23 workflow registry", () => {
-  it("ships publishing_conductor, capture_conductor, clone_conductor and visual_identity as the registered workflows, resolving the canonical arrays", () => {
-    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity"]);
+  it("ships publishing_conductor, capture_conductor, clone_conductor, visual_identity and pdf_template_studio as the registered workflows, resolving the canonical arrays", () => {
+    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio"]);
     expect(getWorkflowDefinition(publishingConductorWorkflowId)?.canonicalNodes()).toEqual(listWorkspaceNodes());
     expect(getWorkflowDefinition("capture_conductor")?.canonicalNodes().map((node) => node.id)).toContain("capture_crawl");
     expect(getWorkflowDefinition("clone_conductor")?.canonicalNodes().map((node) => node.id)).toContain("clone_intake");
     // C5's pair — two nodes, no composed tail: visual_identity publishes nothing (visual_standard is
     // not a publishable type), so it is the first registered workflow that carries no tail node at all.
     expect(getWorkflowDefinition("visual_identity")?.canonicalNodes().map((node) => node.id)).toEqual(["brand_imagery_writer", "visual_standard_materializer"]);
+    // A7 — the standalone PDF template studio: six nodes, also no composed tail (a pdf_template is
+    // not a CMS-publishable type; see pdfTemplateStudioNodes.ts's own header).
+    expect(getWorkflowDefinition("pdf_template_studio")?.canonicalNodes().map((node) => node.id)).toEqual([
+      "pdf_template_intake",
+      "pdf_template_designer",
+      "pdf_template_mint",
+      "pdf_template_publish",
+      "pdf_template_library_deposit",
+      "pdf_template_family_report"
+    ]);
     expect(getWorkflowDefinition("money_page")).toBeUndefined();
   });
 
