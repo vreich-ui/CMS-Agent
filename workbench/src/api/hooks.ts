@@ -4,7 +4,7 @@
 // successful mutation should refresh. Phase 2 (WP-21+) consumes the run
 // control mutation hooks directly.
 
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import { getSession, type SessionInfo } from './client';
 import * as verbs from './verbs';
 import type {
@@ -86,18 +86,66 @@ export function useWorkflowGraph(workflowId: string | null | undefined, options?
   });
 }
 
-export interface RunFilters {
-  workflowId?: string;
-  projectId?: string;
-  status?: RunStatus;
-  limit?: number;
-}
+/** The client-side filter set, minus `cursor` — paging is useRunsPages()'s job below. */
+export type RunFilters = Omit<verbs.RunListArgs, 'cursor'>;
 
+/**
+ * One page of runs, newest first. W1 — `verbs.workflowListRuns` defaults
+ * `limit` to 20 and makes exactly one call, so every panel that only ever
+ * shows a handful of rows should say so: `useRuns({ workflowId, limit: 5 })`
+ * asks the server for five rows instead of taking twenty and slicing.
+ */
 export function useRuns(filters: RunFilters = {}, options?: Options<Run[]>) {
   return useQuery({
     queryKey: ['runs', filters],
     queryFn: () => verbs.workflowListRuns(filters),
     ...options,
+  });
+}
+
+/**
+ * One page of runs PLUS the server's `matchedCount` — the count of every row matching
+ * the filters, not just the rows this window returned.
+ *
+ * W1 — this is the honest source for any "N runs" figure. Counting rows in a page was
+ * exactly the defect on the Workflows deck: the card said "48 runs · 11 needing
+ * attention" while the Runs screen, reading a different (failed) query, said "0". A
+ * count and a sample are two different questions; `matchedCount` answers the first
+ * without paying for the second.
+ */
+export function useRunsPage(filters: RunFilters = {}, options?: Options<verbs.RunPage>) {
+  return useQuery({
+    queryKey: ['runsPage', filters],
+    queryFn: () => verbs.workflowListRunsPage(filters),
+    // REVIEW FIX — a filter change mints a new key; without this the screen falls back to its
+    // loading branch, which on the Runs screen unmounts the filter controls themselves for the
+    // length of the round trip (8-16s on this plane). Keep showing the previous answer, dimmed
+    // by the caller, rather than blanking the controls an operator is mid-way through using.
+    placeholderData: keepPreviousData,
+    ...options,
+  });
+}
+
+/**
+ * The Runs screen's paging read. W1 traded the old "merge every project's
+ * entire run list client-side" for one windowed call — which would otherwise
+ * mean the Runs page silently showing 20 of 115 runs. `workflow_list_runs`
+ * already returns `page.nextCursor`/`page.hasMore`, so the fleet is still
+ * fully reachable, one page at a time, on the operator's explicit "load more"
+ * rather than as a 16-second tax on first paint.
+ *
+ * `matchedCount` comes back on every page, so the header can name the real
+ * fleet size ("115 runs") while only 20 rows have actually been fetched.
+ */
+export function useRunsPages(filters: RunFilters = {}) {
+  return useInfiniteQuery({
+    queryKey: ['runsPages', filters],
+    queryFn: ({ pageParam }) => verbs.workflowListRunsPage({ ...filters, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor,
+    // See useRunsPage — the same reasoning, and the app-wide default does not reach an infinite
+    // query's placeholder in a way this screen can rely on.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -229,8 +277,28 @@ export function useSession(options?: Options<SessionInfo>) {
 // (any list/filter combination) plus the specific ['run', id] the mutation
 // touched, so both the runs table and a bound-run dock stay in sync.
 
-function invalidateRun(qc: ReturnType<typeof useQueryClient>, runId: string | undefined) {
+/**
+ * Every query key that reflects a run's state. Exported because three surfaces outside this file
+ * invalidate run state directly (the override modal, the optimistic run-control helper, the
+ * this-run tab) and each of them was targeting ['runs'] alone.
+ */
+export function invalidateRunLists(qc: ReturnType<typeof useQueryClient>): void {
   qc.invalidateQueries({ queryKey: ['runs'] });
+  // REVIEW FIX — TanStack matches a query key prefix ELEMENT BY ELEMENT, so ['runs'] matches
+  // neither ['runsPage', …] nor ['runsPages', …]. W1 introduced both and nothing invalidated
+  // them: under the app-wide 5-minute staleTime with no focus refetch, an operator who paused a
+  // run in the Dock then switched to Runs saw it still reading "running" — and every workflow
+  // card's "N runs · N needing attention" stayed put — for five minutes.
+  qc.invalidateQueries({ queryKey: ['runsPage'] });
+  qc.invalidateQueries({ queryKey: ['runsPages'] });
+  // The attention strip reads the same underlying state (blocked runs, pending approvals) and,
+  // since W2 gave it a 5-minute staleTime, no longer refetches on remount either. Approving a
+  // gate and still being told the run is waiting for approval is the same defect one surface over.
+  qc.invalidateQueries({ queryKey: ['attention-strip'] });
+}
+
+function invalidateRun(qc: ReturnType<typeof useQueryClient>, runId: string | undefined) {
+  invalidateRunLists(qc);
   if (runId) {
     qc.invalidateQueries({ queryKey: ['run', runId] });
     // The cost ledger (useRunCost, P2-03) is its own lazy query, keyed

@@ -91,6 +91,7 @@ function HistoryRow({
 
 export function HistoryTab({
   runs,
+  matchedCount,
   workflows,
   workflowById,
   projectOptions,
@@ -100,7 +101,10 @@ export function HistoryTab({
   setFilters,
   onOpen,
 }: {
+  /** REVIEW FIX — already filtered BY THE SERVER (see Runs/index.tsx). */
   runs: Run[];
+  /** Every run matching the active filters, not just the loaded window. */
+  matchedCount: number;
   workflows: Workflow[];
   workflowById: Record<string, Workflow>;
   projectOptions: Array<{ id: string; name: string }>;
@@ -110,6 +114,8 @@ export function HistoryTab({
   setFilters: (updater: (f: RunFilters) => RunFilters) => void;
   onOpen: (run: Run) => void;
 }) {
+  // The server applies these filters now; re-applying them here only matters while a stale page
+  // is still on screen during a filter change (the rows are dimmed then — see Runs/index.tsx).
   const filtered = runs.filter(
     (r) =>
       (!filters.wf || r.wf === filters.wf) &&
@@ -118,6 +124,7 @@ export function HistoryTab({
   );
   const blocked = filtered.filter((r) => r.status === 'blocked').length;
   const failed = filtered.filter((r) => r.status === 'failed').length;
+  const windowed = matchedCount > filtered.length;
 
   return (
     <>
@@ -189,9 +196,13 @@ export function HistoryTab({
         </table>
       </div>
       <Note>
-        {runs.length} runs · {filtered.length} shown
+        {/* REVIEW FIX — this said "20 runs · 20 shown" three elements under a header reading
+            "showing 20 of 115": two answers to "how many runs are there" on one screen, which is
+            the disagreement this whole branch exists to remove. It now reports the server's
+            matched count, and says plainly that the gate/failure tallies cover what is loaded. */}
+        {matchedCount} runs · {filtered.length} shown
         {filtered.length > 0
-          ? ` — ${blocked} blocked at a gate, ${failed} failed; any row opens that run in the workbench with its stopped node selected`
+          ? ` — ${blocked} blocked at a gate, ${failed} failed${windowed ? ' among the runs loaded so far' : ''}; any row opens that run in the workbench with its stopped node selected`
           : ' — no runs match these filters'}
       </Note>
     </>

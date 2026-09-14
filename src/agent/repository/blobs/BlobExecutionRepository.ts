@@ -1,6 +1,6 @@
 import type { ExecutionStatus, WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
-import { RunConcurrencyError, windowRunRows, type ExecutionRepository, type ListRunsFilters, type ListRunsPageResult } from "../interfaces/ExecutionRepository.js";
+import { RunConcurrencyError, runSummaryOf, windowRunRows, type ExecutionRepository, type ListRunSummariesPageResult, type ListRunsFilters, type ListRunsPageResult, type RunSummaryRecord } from "../interfaces/ExecutionRepository.js";
 import { getBlobJson, getBlobJsonWithEtag, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -20,35 +20,57 @@ const revOf = (run: WorkflowExecutionRecord | null | undefined): number => run?.
 // entry) and is self-healing in both directions:
 //   - absent entirely (pre-W1.5 data): the first read that needs it rebuilds every project's index
 //     from one full scan and stamps a meta blob, so no migration step ever has to be run;
-//   - names a run whose blob is gone: the listing drops the ghost row and prunes it from the index
-//     rather than failing;
+//   - names a run whose blob is gone: a listing that opens run records (listRunsPage, and the
+//     repair path of a summary listing) drops the ghost row and prunes it from the index rather
+//     than failing. A `detail: "summary"` listing of CURRENT entries opens no records at all, so
+//     it cannot detect a ghost and will keep returning that row until something reads the blob.
+//     Nothing in this service deletes a run blob, so a ghost only arises from external deletion
+//     or a partial write; the alternative — a GET per row to prove existence — would give back
+//     the entire cost this row projection exists to remove;
 //   - misses a run (a lost CAS race): the run's next status save re-upserts it.
-type RunIndexEntry = {
-  runId: string;
-  projectId: string;
-  workflowId: string;
-  status: ExecutionStatus;
-  startedAt: string;
-  updatedAt: string;
-  requestId?: string;
-};
+//
+// W4 — the index entry IS the list row now. It used to hold only what the window filters and
+// sorts on, so a listing still had to open every run blob it returned just to build a row.
+// Measured live (2026-09-14): ~28KB per row, ~8s for twenty rows scoped to one project, 16s
+// unscoped — for a row whose visible content is a dozen scalars. Carrying the row projection
+// (RunSummaryRecord) in the entry makes `detail: "summary"` cost zero blob reads.
+//
+// The entry is a superset of RunSummaryRecord plus the `v` schema stamp. `v` is what makes the
+// extension self-healing: an index written before W4 has no `v`, ensureIndex sees the meta
+// blob's version is behind and rebuilds, and any straggler entry that slips through (a lost CAS
+// race mid-deploy) is detected per-row and filled from its own blob rather than reported with
+// missing counts.
+type RunIndexEntry = RunSummaryRecord & { v?: number };
 type RunIndexBlob = { runs: RunIndexEntry[] };
-type RunIndexMeta = { backfilledAt: string };
+type RunIndexMeta = { backfilledAt: string; v?: number };
+
+// Bumped whenever the entry projection gains or changes a field — v3 adds approvalsRequired,
+// budgetBlock, operatorPublishDecision and operatorDecisionSource, restored to the row after
+// review. isStaleEntry is the only thing that repairs an entry to the current projection and it
+// keys on this number, so forgetting the bump means any store already holding v2 entries serves
+// `approvalsRequired: undefined` for those runs forever — indistinguishable from a run with no
+// pending gate, which is precisely the silent wire break restoring the field was meant to close.
+// Bumping is cheap now: a version gap heals lazily, per page, instead of scanning the fleet.
+const RUN_INDEX_VERSION = 3;
 
 const RUN_INDEX_PREFIX = "run-index/";
 // "!" sorts before any encodeURIComponent output, and encodeURIComponent never emits it, so the meta
 // blob can share the prefix (one `list` covers both) without ever colliding with a project id.
 const RUN_INDEX_META_KEY = `${RUN_INDEX_PREFIX}!meta.json`;
 const runIndexKey = (projectId: string) => `${RUN_INDEX_PREFIX}${encodeURIComponent(projectId)}.json`;
-const indexEntryOf = (run: WorkflowExecutionRecord): RunIndexEntry => ({
-  runId: run.runId,
-  projectId: run.projectId,
-  workflowId: run.workflowId,
-  status: run.status,
-  startedAt: run.startedAt,
-  updatedAt: run.updatedAt,
-  ...(run.requestId !== undefined ? { requestId: run.requestId } : {})
-});
+// One reading, shared with every other backend (runSummaryOf) — so "the index agrees with the
+// record" is a property of one function, not of two copies that drift.
+const indexEntryOf = (run: WorkflowExecutionRecord): RunIndexEntry => ({ ...runSummaryOf(run), v: RUN_INDEX_VERSION });
+
+/** The sort key of the last WINDOWED row — the paging anchor, which survives a dropped row. */
+const lastKeyOf = (window: Array<{ startedAt: string; runId: string }>) =>
+  window.length ? { lastKey: { startedAt: window[window.length - 1].startedAt, runId: window[window.length - 1].runId } } : {};
+
+/** The row, without the index's own bookkeeping stamp. */
+const stripEntry = ({ v: _v, ...row }: RunIndexEntry): RunSummaryRecord => row;
+
+/** An entry written by an older deployment, before the row projection was indexed. */
+const isStaleEntry = (entry: RunIndexEntry): boolean => (entry.v ?? 0) < RUN_INDEX_VERSION;
 
 // W1.2 (documented residual from W1.4/#232) — retained under W1.5 for the callers that genuinely
 // need every full run record (constellation tools, node-scoped fallback listings): those still fetch
@@ -96,6 +118,16 @@ export class BlobExecutionRepository implements ExecutionRepository {
     if (!this.indexReady) {
       const ready = (async () => {
         const meta = await getBlobJson<RunIndexMeta>(this.store, RUN_INDEX_META_KEY);
+        // Absent meta (a store predating W1.5) still means one full scan: there is no index to
+        // read at all, so there is nothing cheaper to do.
+        //
+        // REVIEW FIX — a meta merely BEHIND the current entry version does NOT trigger that scan.
+        // It used to, and that was the W3 defect reintroduced at deploy time: production's meta
+        // has no `v`, so every cold instance would have run fetchAllRuns() — store.list("runs/")
+        // plus a GET of all 115 blobs, one of them 1.19MB — inline, on its first request, and
+        // again on every autoscale, in front of the very endpoint this change exists to make
+        // fast. A version gap is instead healed lazily and per page: a listing repairs the stale
+        // entries in ITS OWN window (bounded by the page limit) and writes them back once.
         if (!meta) await this.backfillIndex();
         this.indexConfirmed = true;
       })();
@@ -114,7 +146,7 @@ export class BlobExecutionRepository implements ExecutionRepository {
       byProject.set(run.projectId, entries);
     }
     await Promise.all([...byProject.entries()].map(([projectId, entries]) => this.store.setJSON(runIndexKey(projectId), { runs: entries } satisfies RunIndexBlob)));
-    await this.store.setJSON(RUN_INDEX_META_KEY, { backfilledAt: new Date().toISOString() } satisfies RunIndexMeta);
+    await this.store.setJSON(RUN_INDEX_META_KEY, { backfilledAt: new Date().toISOString(), v: RUN_INDEX_VERSION } satisfies RunIndexMeta);
   }
 
   private async readProjectIndex(projectId: string): Promise<RunIndexEntry[]> {
@@ -136,19 +168,37 @@ export class BlobExecutionRepository implements ExecutionRepository {
   // silently drop each other's entries. After the retries are exhausted the merged view from the
   // last read is written unconditionally: losing that (rare) race costs at worst one CONCURRENT
   // entry, which that run's next status save re-upserts — strictly better than dropping THIS entry.
-  private async upsertIndexEntry(run: WorkflowExecutionRecord): Promise<void> {
-    const key = runIndexKey(run.projectId);
-    const entry = indexEntryOf(run);
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const current = await getBlobJsonWithEtag<RunIndexBlob>(this.store, key);
-      const runs = (current.data?.runs ?? []).filter((existing) => existing.runId !== entry.runId);
-      runs.push(entry);
-      const conditional = attempt < 4;
-      const options: Parameters<BlobStoreClient["setJSON"]>[2] =
-        !conditional ? undefined : current.etag ? { onlyIfMatch: current.etag } : current.data ? undefined : { onlyIfNew: true };
-      const write = await this.store.setJSON(key, { runs } satisfies RunIndexBlob, options);
-      if (!write || (write as { modified?: boolean }).modified !== false) return;
+  private upsertIndexEntry(run: WorkflowExecutionRecord): Promise<void> {
+    return this.upsertIndexEntries([run]);
+  }
+
+  // REVIEW FIX — entries are merged into ONE write per project rather than one CAS loop per run.
+  // The lazy repair path can have a whole page of stale entries to fix at once; firing `limit`
+  // concurrent read-modify-write loops at a single index blob means most of them lose their CAS,
+  // and the loop's final unconditional write then replays a stale snapshot over whatever landed
+  // in between — which could drop entries a concurrent saveRun had just added. One merged write
+  // is both correct and O(1) in the number of repairs.
+  private async upsertIndexEntries(records: WorkflowExecutionRecord[]): Promise<void> {
+    const byProject = new Map<string, RunIndexEntry[]>();
+    for (const record of records) {
+      const entries = byProject.get(record.projectId) ?? [];
+      entries.push(indexEntryOf(record));
+      byProject.set(record.projectId, entries);
     }
+    await Promise.all([...byProject.entries()].map(async ([projectId, entries]) => {
+      const key = runIndexKey(projectId);
+      const ids = new Set(entries.map((entry) => entry.runId));
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const current = await getBlobJsonWithEtag<RunIndexBlob>(this.store, key);
+        const runs = (current.data?.runs ?? []).filter((existing) => !ids.has(existing.runId));
+        runs.push(...entries);
+        const conditional = attempt < 4;
+        const options: Parameters<BlobStoreClient["setJSON"]>[2] =
+          !conditional ? undefined : current.etag ? { onlyIfMatch: current.etag } : current.data ? undefined : { onlyIfNew: true };
+        const write = await this.store.setJSON(key, { runs } satisfies RunIndexBlob, options);
+        if (!write || (write as { modified?: boolean }).modified !== false) return;
+      }
+    }));
   }
 
   // Consistency guard: entries whose run blob has vanished are pruned (best-effort, one CAS attempt
@@ -216,12 +266,54 @@ export class BlobExecutionRepository implements ExecutionRepository {
     const ghosts = window.filter((_, i) => fetched[i] === null);
     if (ghosts.length) await this.pruneIndexEntries(ghosts);
     const runs = fetched.filter((run): run is WorkflowExecutionRecord => run !== null).map((run) => clone(run));
-    return { runs, matchedCount: matchedCount - ghosts.length, hasMore };
+    return { runs, matchedCount: matchedCount - ghosts.length, hasMore, ...lastKeyOf(window) };
+  }
+
+  /**
+   * W4 — the whole point of the extended index: a page of list ROWS with no run blob opened.
+   *
+   * Two honest fallbacks, both bounded by the page size rather than by the fleet:
+   *   - a live full-fleet cache is already holding every record, so answer from it;
+   *   - an individual entry written by an older deployment cannot answer the row, so THAT run's
+   *     blob is read and its entry repaired. Reporting a row with missing counts would be worse
+   *     than the read: a zero that means "not indexed" is indistinguishable from a zero that
+   *     means "no failures".
+   */
+  async listRunSummariesPage(filters: ListRunsFilters = {}): Promise<ListRunSummariesPageResult> {
+    const cached = this.fullFleetCache;
+    if (cached && cached.expiresAt > Date.now()) {
+      const { window, matchedCount, hasMore } = windowRunRows(await cached.runs, filters);
+      return { rows: window.map((run) => runSummaryOf(run)), matchedCount, hasMore, ...lastKeyOf(window) };
+    }
+
+    await this.ensureIndex();
+    const entries = filters.projectId ? await this.readProjectIndex(filters.projectId) : await this.readAllIndexEntries();
+    const { window, matchedCount, hasMore } = windowRunRows(entries, filters);
+
+    const stale = window.filter(isStaleEntry);
+    const repaired = new Map<string, RunSummaryRecord>();
+    if (stale.length) {
+      const records = await Promise.all(stale.map((entry) => getBlobJson<WorkflowExecutionRecord>(this.store, runKey(entry.runId))));
+      const found: WorkflowExecutionRecord[] = [];
+      const ghosts: RunIndexEntry[] = [];
+      records.forEach((record, i) => {
+        if (record) { found.push(record); repaired.set(record.runId, runSummaryOf(record)); }
+        else ghosts.push(stale[i]);
+      });
+      // One merged write per project, so the next listing of this page costs nothing.
+      if (found.length) await this.upsertIndexEntries(found).catch(() => undefined);
+      if (ghosts.length) await this.pruneIndexEntries(ghosts);
+    }
+
+    const rows = window
+      .filter((entry) => !isStaleEntry(entry) || repaired.has(entry.runId))
+      .map((entry) => repaired.get(entry.runId) ?? stripEntry(entry));
+    return { rows, matchedCount: matchedCount - (window.length - rows.length), hasMore, ...lastKeyOf(window) };
   }
 
   private pageFromRecords(records: WorkflowExecutionRecord[], filters: ListRunsFilters): ListRunsPageResult {
     const { window, matchedCount, hasMore } = windowRunRows(records, filters);
-    return { runs: window.map((run) => clone(run)), matchedCount, hasMore };
+    return { runs: window.map((run) => clone(run)), matchedCount, hasMore, ...lastKeyOf(window) };
   }
 
   // Compare-and-swap persist. Read the current record with its ETag, reject when the stored revision

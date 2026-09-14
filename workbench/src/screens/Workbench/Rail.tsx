@@ -17,6 +17,7 @@ import { useNodes, useRubrics, useRun, useRuns, useWorkflows } from '../../api/h
 import { changesListEvents, nodeListOutputs } from '../../api/verbs';
 import { Dot } from '../../components/primitives';
 import { Skeleton } from '../../components/Skeleton';
+import { QueryError } from '../../components/QueryError';
 import { QuickLookPopover } from '../../components/quicklook/QuickLookPopover';
 import { useNodeQuickLook } from '../../components/quicklook/useNodeQuickLook';
 import { useStore } from '../../store';
@@ -174,7 +175,12 @@ export function Rail() {
 
   const workflowsQ = useWorkflows();
   const nodesQ = useNodes(wf);
-  const wfRunsQ = useRuns({ workflowId: wf });
+  // W1 — this panel renders a handful of "recent runs · this workflow" rows; ask the
+  // server for exactly that rather than taking the default 20-row page and slicing.
+  // W4 — `detail: 'full'` because the rail's per-node failure chip (nodeErrorFrequency) reads
+  // each run's node states, which a summary row does not carry. Five scoped rows is a cheap
+  // exception to the default, not a return to fetching node arrays for the fleet.
+  const wfRunsQ = useRuns({ workflowId: wf, limit: 5, detail: 'full' });
   const boundRunQ = useRun(runId);
   const rubricsQ = useRubrics();
 
@@ -349,9 +355,17 @@ export function Rail() {
       </div>
 
       {isError ? (
-        <p style={{ color: 'var(--bad)', fontSize: 12.5, padding: '0 6px' }}>
-          {workflowsQ.error?.message ?? nodesQ.error?.message ?? 'Failed to load the node rail.'}
-        </p>
+        // W2 — the rail named the failure but offered no way out of it, so a transient
+        // 502 meant reloading the page. Retry refetches BOTH queries: either one can be
+        // the failed half, and the operator should not have to know which.
+        <QueryError
+          message={workflowsQ.error?.message ?? nodesQ.error?.message ?? 'Failed to load the node rail.'}
+          onRetry={() => {
+            void workflowsQ.refetch();
+            void nodesQ.refetch();
+          }}
+          inline
+        />
       ) : isLoading ? (
         <div style={{ padding: '0 6px' }}>
           <Skeleton lines={6} />

@@ -20,7 +20,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRetryNode } from '../../../api/hooks';
+import { useRetryNode, invalidateRunLists } from '../../../api/hooks';
 import * as verbs from '../../../api/verbs';
 import { ActionCancelledError } from '../../../api/confirmAction';
 import { IS_READ_ONLY } from '../../../api/client';
@@ -282,7 +282,7 @@ export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; 
       qc.invalidateQueries({ queryKey: ['nodeOutputs', nodeId, run.id] });
       qc.invalidateQueries({ queryKey: ['stageOutputs', nodeId] });
       qc.invalidateQueries({ queryKey: ['runCost', run.id] });
-      qc.invalidateQueries({ queryKey: ['runs'] });
+      invalidateRunLists(qc);
     }
   }, [status, nodeId, run.id, qc]);
 

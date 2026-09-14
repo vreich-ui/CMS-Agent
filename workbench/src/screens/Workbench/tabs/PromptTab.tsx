@@ -132,7 +132,17 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
           stored prompt <span className="pin live">live — applies next run</span>
           {dirty && <span className="pin" style={{ marginLeft: 6, background: 'var(--acc-soft)', color: 'var(--acc)' }}>unsaved draft</span>}
           {promptQ.isLoading && ' · checking divergence…'}
-          {promptQ.isError && ' · divergence unknown'}
+          {/* W2 — "checking divergence…" used to hang there forever when the query never
+              settled, and even once it failed it read as a dead label. It now resolves
+              either way, and the failed state is actionable in place. */}
+          {promptQ.isError && (
+            <>
+              {' · divergence unknown · '}
+              <button type="button" className="linkbtn" onClick={() => void promptQ.refetch()}>
+                retry
+              </button>
+            </>
+          )}
           {promptQ.data?.diverged && ' · state: diverged from canonical'}
         </>
       }

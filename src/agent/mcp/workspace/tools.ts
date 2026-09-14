@@ -15,7 +15,7 @@ import { createImprovementTools } from "./improvementTools.js";
 import { createAgentTools } from "./agentTools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { collectRunBlockages, type Blockage } from "../../execution/blockage.js";
-import { DEFAULT_EXECUTION_MODE, DISPATCH_DEADLINE_MARGIN_MS, type DispatchClaimKind, MAX_LIST_RUNS_LIMIT, assessRunStall, type RunStallTimingContext, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, nextDispatchPlan, resetRun, retryNode, resolveConductorNodes, runModeSummary, runNextNode, setNodeBudgetOverride, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
+import { DEFAULT_EXECUTION_MODE, DISPATCH_DEADLINE_MARGIN_MS, type DispatchClaimKind, MAX_LIST_RUNS_LIMIT, assessRunStall, assessRunStallFrom, type RunStallTimingContext, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, listRunSummariesPage, nextDispatchPlan, resetRun, retryNode, resolveConductorNodes, runModeSummary, runNextNode, setNodeBudgetOverride, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
 import { DETERMINISTIC_STAGE_MIN_TIMEOUT_MS, STALL_MARGIN_MS } from "../../workspace/routeRegistry.js";
 import { listRegisteredWorkflowIds } from "../../workspace/workflowRegistry.js";
 import { resolvePublishAuthority } from "../../workspace/publishDecision.js";
@@ -438,11 +438,12 @@ const setNodeBudgetOverrideInput = z.object({ runId: z.string().min(1), nodeId: 
 const listRunsInput = z.object({
   projectId: z.string().min(1).optional(),
   workflowId: z.string().min(1).optional(),
-  status: z.enum(executionStatuses).optional(),
+  status: z.union([z.enum(executionStatuses), z.array(z.enum(executionStatuses)).min(1)]).optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   limit: z.number().int().min(1).max(MAX_LIST_RUNS_LIMIT).optional(),
-  cursor: z.string().min(1).optional()
+  cursor: z.string().min(1).optional(),
+  detail: z.enum(["summary", "full"]).optional()
 }).strict();
 const runContextInput = z.object({ runId: z.string().min(1), projectId: z.string().min(1) }).strict();
 const readinessInputSchema = z.object({
@@ -586,11 +587,12 @@ const publishReadinessJsonSchema = objectSchema({ projectId: { type: "string", m
 const listRunsJsonSchema = objectSchema({
   projectId: { type: "string", minLength: 1 },
   workflowId: { type: "string", minLength: 1 },
-  status: { type: "string", enum: [...executionStatuses], description: "Only runs with exactly this status." },
+  status: { anyOf: [{ type: "string", enum: [...executionStatuses] }, { type: "array", minItems: 1, items: { type: "string", enum: [...executionStatuses] } }], description: "Only runs with exactly this status — or, given an array, any of these. `page.matchedCount` then counts every run in that set, so \"how many runs need attention\" is one limit:1 call rather than one per status." },
   from: { type: "string", format: "date-time", description: "Only runs with startedAt >= this ISO timestamp." },
   to: { type: "string", format: "date-time", description: "Only runs with startedAt <= this ISO timestamp." },
   limit: { type: "integer", minimum: 1, maximum: 100, description: "Page size; default 20, max 100." },
-  cursor: { type: "string", minLength: 1, description: "Opaque nextCursor from the previous page; omit for the first page." }
+  cursor: { type: "string", minLength: 1, description: "Opaque nextCursor from the previous page; omit for the first page." },
+  detail: { type: "string", enum: ["summary", "full"], default: "summary", description: "\"summary\" (DEFAULT) returns compact rows read straight from the run index — no run record is opened, so a page costs the same whether it holds 1 row or 100. Carries per-node COUNTS (nodeCount/completedCount/failedCount) rather than a nodes[] array, and errorCount rather than the run-level errors[] strings; every other field of the \"full\" row — including approvalsRequired, budgetBlock and operatorPublishDecision — is present unchanged. \"full\" returns the previous shape, including nodes[] with each node's status, timings, bounded errors/warnings and attempt history — one run-record read per row, so ask for it only when you need per-node detail for a whole page (for ONE run, workflow.get_run is the cheaper read)." }
 });
 const usageFiltersJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" }, status: { type: "string", enum: ["estimated", "actual"], description: "Only records of this kind: \"actual\" = measured model usage (the population budgets meter), \"estimated\" = mock/dry-run deterministic estimates (never accrue against budgetUsd)." } });
 const usageRecordJsonSchema = objectSchema({ usageId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, agentId: { type: "string", minLength: 1 }, model: { type: "string", minLength: 1 }, provider: { type: "string", minLength: 1 }, inputTokens: { type: "integer", minimum: 0 }, outputTokens: { type: "integer", minimum: 0 }, totalTokens: { type: "integer", minimum: 0 }, reasoningTokens: { type: "integer", minimum: 0 }, cachedInputTokens: { type: "integer", minimum: 0 }, costUsdEstimate: { type: "number", minimum: 0 }, currency: { const: "USD" }, status: { type: "string", enum: ["estimated", "actual"] }, recordedAt: { type: "string", format: "date-time" }, metadata: { type: "object" } }, ["model", "provider", "inputTokens", "outputTokens", "status"]);
@@ -1085,7 +1087,53 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // the compactRun view run_all has always returned; `detail:"full"` is the old behaviour, unchanged,
     // for when the node payloads are what you actually came for.
     tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state. detail:\"compact\" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,blockages,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch,blockage}]}. `blockages` is every recorded pending wall on the run in blockage.v1 form: budget, publication approval, tenant-policy hold, configuration/scope, authentication, validation/limit, or an explicitly unknown legacy cause. Each carries the remedies actually supported for that cause; status=blocked alone never fabricates an approval. The array is always present and empty on a healthy run. detail:\"full\" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status \"running\" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.", zodSchema: getRunInput, inputSchema: getRunJsonSchema, execute: async (input) => { const data = getRunInput.parse(input); const run = await getRun(data.runId, executionRepository); const timing = run ? await runStallTiming(run.workflowId, run.projectId) : undefined; return ok({ run: run ? (data.detail === "full" ? run : compactRun(run)) : null, detail: data.detail, mode: run ? runModeSummary(run) : null, stall: run ? assessRunStall(run, new Date(), timing) ?? null : null }); } }),
-    tool({ name: "workflow.list_runs", description: "List compact dry-run workflow summaries, newest first, paged (default 20 rows, max 100; `page.nextCursor` fetches the next page) with optional status and startedAt time-range filters. Node inputs/outputs, stage outputs, and artifact values are intentionally omitted; call workflow.get_run for one selected run. Each row carries the caller-supplied `requestId` it was started with (when it has one), so a page of runs can be joined back to the requests that asked for them, plus a `mode` block naming what produced it and a `stall` block on status \"running\" rows naming whether the driver is alive.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => { const { runs, page } = await listRunsPage(listRunsInput.parse(input), executionRepository); const timingByWorkflow = new Map<string, RunStallTimingContext>(); for (const key of new Set(runs.map((run) => `${run.workflowId}::${run.projectId ?? ""}`))) { const [workflowId, projectId] = key.split("::"); timingByWorkflow.set(key, await runStallTiming(workflowId, projectId || undefined)); } const at = new Date(); return ok({ runs: runs.map((run) => { const stall = assessRunStall(run, at, timingByWorkflow.get(`${run.workflowId}::${run.projectId ?? ""}`)); return { ...summarizeRunForList(run), mode: runModeSummary(run), ...(stall ? { stall } : {}) }; }), page }); } }),
+    tool({ name: "workflow.list_runs", description: "List compact dry-run workflow summaries, newest first, paged (default 20 rows, max 100; `page.nextCursor` fetches the next page) with optional status (one value, or an array to match any of several) and startedAt time-range filters. `detail` chooses the row shape: \"summary\" (DEFAULT) is read straight from the run index and opens no run records at all — a row carries the run's identity, status, currentNodeId, timings, per-node COUNTS (nodeCount/completedCount/failedCount/errorCount/artifactCount/approvalsRequiredCount), the `approvalsRequired` entries themselves, and `budgetBlock`/`operatorPublishDecision`/`operatorDecisionSource`. The only thing \"summary\" omits that \"full\" carries is `nodes[]` and the run-level `errors[]` strings (counted instead); \"full\" adds the nodes[] array (per-node status, timings, bounded errors/warnings, recent attempts) at the cost of one run-record read per row. Node inputs/outputs, stage outputs and artifact values are omitted from both; call workflow.get_run for one selected run. Every row carries the caller-supplied `requestId` it was started with (when it has one), so a page of runs can be joined back to the requests that asked for them, plus a `mode` block naming what produced it and, on status \"running\" rows, a `stall` block naming whether the driver is alive. `page.matchedCount` counts every run matching the filters, not the rows returned, so a windowed page still knows the true fleet size.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => {
+      const args = listRunsInput.parse(input);
+      // W4 — the default is the cheap read. A list row used to cost a blob GET and still carry
+      // nodes[] for a caller that was scanning identities and statuses: ~28KB per row, ~8s for
+      // twenty rows scoped to one project and 16s unscoped, measured live 2026-09-14. The
+      // per-node detail is still one argument away, and for a single run workflow.get_run was
+      // always the right read.
+      const detail = args.detail ?? "summary";
+      // Per-workflow p95 timings, fetched once per distinct (workflow, project) on the page
+      // rather than per row — the same amortisation both detail modes have always had.
+      const timingFor = async (keys: Set<string>) => {
+        const timingByWorkflow = new Map<string, RunStallTimingContext>();
+        for (const key of keys) {
+          const [workflowId, projectId] = key.split("::");
+          timingByWorkflow.set(key, await runStallTiming(workflowId, projectId || undefined));
+        }
+        return timingByWorkflow;
+      };
+      const at = new Date();
+
+      if (detail === "summary") {
+        const { rows, page } = await listRunSummariesPage(args, executionRepository);
+        const timingByWorkflow = await timingFor(new Set(rows.map((row) => `${row.workflowId}::${row.projectId ?? ""}`)));
+        return ok({
+          runs: rows.map(({ stallFacts, ...row }) => {
+            // A summary row assesses stall from the SAME projection a full record would
+            // (runStallFacts), so the two detail modes can never disagree about whether a run
+            // is stuck — only about how much per-node detail they show.
+            const stall = stallFacts ? assessRunStallFrom(stallFacts, at, timingByWorkflow.get(`${row.workflowId}::${row.projectId ?? ""}`)) : undefined;
+            return { ...row, mode: runModeSummary(row), ...(stall ? { stall } : {}) };
+          }),
+          page,
+          detail
+        });
+      }
+
+      const { runs, page } = await listRunsPage(args, executionRepository);
+      const timingByWorkflow = await timingFor(new Set(runs.map((run) => `${run.workflowId}::${run.projectId ?? ""}`)));
+      return ok({
+        runs: runs.map((run) => {
+          const stall = assessRunStall(run, at, timingByWorkflow.get(`${run.workflowId}::${run.projectId ?? ""}`));
+          return { ...summarizeRunForList(run), mode: runModeSummary(run), ...(stall ? { stall } : {}) };
+        }),
+        page,
+        detail
+      });
+    } }),
     tool({ name: "workflow.run_next_node", description: `Run exactly one dependency-ready Publishing Conductor node, stopping before publish-risk nodes unless approved is true. REFUSES to dispatch a node whose planned dispatch claim exceeds ${RUN_DRIVER_DISPATCH_CLAIM_CEILING_MS}ms — the ceiling an in-request driver may own — returning the persisted run plus {driverRefusal:{code:"dispatch_claim_exceeds_driver_ceiling",nodeId,plannedClaimMs,ceilingMs},driverNote}. That is a normal outcome, not an error, and retrying returns it again: such a node is advanced by the scheduled continuation tick or the Cloud Run conductor job, which hold a task window rather than a request.`, zodSchema: runNextNodeInput, inputSchema: runNextNodeJsonSchema, execute: async (input) => {
       const data = runNextNodeInput.parse(input);
       const current = await getRun(data.runId, executionRepository);

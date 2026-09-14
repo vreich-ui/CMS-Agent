@@ -82,7 +82,8 @@ function DriveEmptyState({ wf }: { wf: string }) {
   const openStartModal = useStore((s) => s.openStartModal);
   const bindRunForDrive = useStore((s) => s.bindRunForDrive);
   const workflowsQ = useWorkflows();
-  const wfRunsQ = useRuns({ workflowId: wf });
+  // W1 — the bind-run picker lists recent runs for this workflow; five rows is enough.
+  const wfRunsQ = useRuns({ workflowId: wf, limit: 5 });
   const workflow = workflowsQ.data?.find((w) => w.id === wf);
   const recent = (wfRunsQ.data ?? []).slice(0, 6);
 

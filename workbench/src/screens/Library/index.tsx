@@ -13,18 +13,20 @@
 // capture_conductor's 16 vs. 11). New CSS for the strip/chip lives in
 // styles/base.css's appended `/* U1 */` block.
 
-import { useMemo } from 'react';
-import { useRuns, useWorkflowGraph, useWorkflows } from '../../api/hooks';
+import { useRunsPage, useWorkflowGraph, useWorkflows } from '../../api/hooks';
 import { AttentionStrip } from '../../components/AttentionStrip';
 import { Ic } from '../../components/Icons';
 import { Btn, Lbl } from '../../components/primitives';
 import { useStore } from '../../store';
-import type { Run, RunStatus, Workflow } from '../../types';
+import type { RunStatus, Workflow } from '../../types';
 import { useResumeContext } from './resume';
 
 // Statuses that count as "needing attention" — mirrors mockup's
 // ['running','paused','blocked'].includes(r.status).
-const ATTENTION_STATUSES: ReadonlySet<RunStatus> = new Set(['running', 'paused', 'blocked']);
+// Sent to the server as a multi-status filter (W1) — `page.matchedCount` over this set
+// is the card's "needing attention" figure, counted across the whole fleet rather than
+// across whichever rows a page happened to return.
+const ATTENTION_STATUSES: RunStatus[] = ['running', 'paused', 'blocked'];
 
 /** Mirrors the mockup's orderedNodes(wf): phases flattened in display order. */
 function orderedNodeIds(wf: Workflow): string[] {
@@ -62,7 +64,7 @@ function ErrorCard({ label, message }: { label: string; message: string }) {
   );
 }
 
-function WorkflowCard({ wf, runs }: { wf: Workflow; runs: Run[] }) {
+function WorkflowCard({ wf }: { wf: Workflow }) {
   const setWf = useStore((s) => s.setWf);
   const setNode = useStore((s) => s.setNode);
   const setScreen = useStore((s) => s.setScreen);
@@ -91,11 +93,22 @@ function WorkflowCard({ wf, runs }: { wf: Workflow; runs: Run[] }) {
   const nodeCount = liveNodeIds?.length;
   const nodeCountGap = nodeCount === 0 && catalogNodeIds.length > 0;
 
-  const active = runs.filter((r) => ATTENTION_STATUSES.has(r.status)).length;
-  // runs arrive newest-first per workflow (mockStore.getRuns preserves fixture
-  // order, which is newest-first — see fixtures/README.md), so runs[0] is the
-  // most recent run, mirroring the mockup's `rs[0]`.
-  const last = runs[0];
+  // W1 — the card asks two SCOPED, windowed questions instead of slicing one
+  // unscoped merge of every project's entire run list:
+  //   1. "the newest few runs for this workflow, and how many there are in total"
+  //   2. "how many of them need a human"
+  // Both counts come from `page.matchedCount`, which the server computes over the
+  // whole matched set regardless of `limit`. Counting rows in a page is what made
+  // this card and the Runs screen disagree ("48 runs" vs "0 runs") in the first
+  // place, and it would be silently wrong again the moment a page is windowed.
+  const recentQ = useRunsPage({ workflowId: wf.id, limit: 1 });
+  const attentionQ = useRunsPage({ workflowId: wf.id, status: ATTENTION_STATUSES, limit: 1 });
+
+  const runCount = recentQ.data?.matchedCount;
+  const active = attentionQ.data?.matchedCount;
+  // The newest run for this workflow — the server orders newest-first, so it is row 0
+  // of a one-row page.
+  const last = recentQ.data?.runs[0];
 
   function openWorkbench() {
     const firstNode = (liveNodeIds && liveNodeIds.length > 0 ? liveNodeIds : catalogNodeIds)[0];
@@ -123,9 +136,19 @@ function WorkflowCard({ wf, runs }: { wf: Workflow; runs: Run[] }) {
         >
           {nodeCount != null ? `${nodeCount} nodes` : graphQ.isError ? 'nodes: unavailable' : '… nodes'}
         </span>
-        <span>{runs.length} runs</span>
-        <span>{active} needing attention</span>
+        <span>{runCount != null ? `${runCount} runs` : recentQ.isError ? 'runs: unavailable' : '… runs'}</span>
         <span>
+          {active != null
+            ? `${active} needing attention`
+            : attentionQ.isError
+              ? 'attention: unavailable'
+              : '… needing attention'}
+        </span>
+        <span>
+          {/* REVIEW FIX — "no runs yet" is a claim about the workflow, and it was being made
+              while this card's own query was still in flight (every Library paint) and again,
+              permanently, whenever that query failed. The two counts above already distinguish
+              loading / error / value; this has to as well. */}
           {last ? (
             <>
               last:{' '}
@@ -134,8 +157,12 @@ function WorkflowCard({ wf, runs }: { wf: Workflow; runs: Run[] }) {
               </span>{' '}
               · {last.started}
             </>
-          ) : (
+          ) : recentQ.isError ? (
+            'last run: unavailable'
+          ) : recentQ.data ? (
             'no runs yet'
+          ) : (
+            '… last run'
           )}
         </span>
       </div>
@@ -213,20 +240,14 @@ function PlannedCard() {
 
 export function Library() {
   const workflowsQ = useWorkflows();
-  const runsQ = useRuns({});
 
-  const runsByWf = useMemo(() => {
-    const map = new Map<string, Run[]>();
-    for (const run of runsQ.data ?? []) {
-      const list = map.get(run.wf);
-      if (list) list.push(run);
-      else map.set(run.wf, [run]);
-    }
-    return map;
-  }, [runsQ.data]);
-
-  const isLoading = workflowsQ.isLoading || runsQ.isLoading;
-  const isError = workflowsQ.isError || runsQ.isError;
+  // W1 — the screen-wide `useRuns({})` that used to feed every card is gone. It was an
+  // unscoped, unwindowed merge of every project's run list (7 projects x ~8 s, measured
+  // live) whose only purpose was to be sliced per workflow. Each card now asks its own
+  // two scoped, windowed questions, which also means a slow or failed run query degrades
+  // one card's stats line instead of blanking the whole deck.
+  const isLoading = workflowsQ.isLoading;
+  const isError = workflowsQ.isError;
 
   return (
     <main className="pagewrap">
@@ -242,7 +263,7 @@ export function Library() {
       {isError ? (
         <ErrorCard
           label="workflows"
-          message={workflowsQ.error?.message ?? runsQ.error?.message ?? 'Failed to load workflows.'}
+          message={workflowsQ.error?.message ?? 'Failed to load workflows.'}
         />
       ) : isLoading ? (
         <div className="cards">
@@ -253,7 +274,7 @@ export function Library() {
       ) : (
         <div className="cards">
           {(workflowsQ.data ?? []).map((wf) => (
-            <WorkflowCard key={wf.id} wf={wf} runs={runsByWf.get(wf.id) ?? []} />
+            <WorkflowCard key={wf.id} wf={wf} />
           ))}
           <PlannedCard />
         </div>

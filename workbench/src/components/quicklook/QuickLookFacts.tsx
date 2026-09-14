@@ -14,6 +14,7 @@
 
 import { useMemo } from 'react';
 import { useNode, useRuns } from '../../api/hooks';
+import { QueryError } from '../QueryError';
 import { Skeleton } from '../Skeleton';
 import type { Risk, Run } from '../../types';
 import { formatDurationMs } from '../../screens/Workbench/helpers';
@@ -36,7 +37,11 @@ const RISK_TITLE: Record<Risk, string> = { read: 'read-only', write: 'writes', p
 
 export function QuickLookFacts({ nodeId, workflowId }: { nodeId: string; workflowId?: string }) {
   const nodeQ = useNode(nodeId);
-  const runsQ = useRuns(workflowId ? { workflowId } : {}, { enabled: Boolean(workflowId) });
+  // W4 — the "last run" line reports what the most recent run recorded FOR THIS NODE, which
+  // needs node states: `detail: 'full'`, over the newest few runs rather than a full page.
+  const runsQ = useRuns(workflowId ? { workflowId, limit: 8, detail: 'full' as const } : {}, {
+    enabled: Boolean(workflowId),
+  });
 
   const last = useMemo(() => {
     if (!runsQ.data) return null;
@@ -46,6 +51,12 @@ export function QuickLookFacts({ nodeId, workflowId }: { nodeId: string; workflo
   if (nodeQ.isLoading) {
     // U7 — shared skeleton treatment instead of a bare "loading…" line.
     return <Skeleton lines={4} />;
+  }
+  // W2 — a FAILED read used to fall through to "could not be resolved", which claims the
+  // workspace has no such node. It says nothing of the kind: the call failed. Those are
+  // different facts and only one of them is retryable.
+  if (nodeQ.isError) {
+    return <QueryError message={nodeQ.error?.message} onRetry={() => void nodeQ.refetch()} inline />;
   }
   if (!nodeQ.data) {
     return (

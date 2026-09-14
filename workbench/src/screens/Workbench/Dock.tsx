@@ -60,7 +60,8 @@ export function Dock() {
   const openStartModal = useStore((s) => s.openStartModal);
 
   const workflowsQ = useWorkflows();
-  const wfRunsQ = useRuns({ workflowId: wf });
+  // W1 — recent runs for this workflow only; five rows is what the dock shows.
+  const wfRunsQ = useRuns({ workflowId: wf, limit: 5 });
   const boundRunQ = useRun(runId);
   // P2-03 split the cost ledger out of workflowGetRun into its own lazy
   // query (see verbs.workflowGetRun's doc comment) — `boundRunQ.data.cost`/

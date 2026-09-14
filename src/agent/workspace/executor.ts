@@ -1,7 +1,7 @@
 import type { WorkspaceNode } from "./nodeTypes.js";
-import { HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type PublishingPolicySnapshot, type RunDriver, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
+import { runStallFacts, HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type PublishingPolicySnapshot, type RunDriver, type RunStallFacts, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
 import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
-import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
+import { RunConcurrencyError, type ExecutionRepository, type RunSummaryRecord } from "../repository/interfaces/ExecutionRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
@@ -248,8 +248,8 @@ export type ListRunsInput = { projectId?: string; workflowId?: string };
 // simple full-list contract (constellation tools and internal callers still need every run); the page
 // window is applied here, on the newest-first ordering, so both repositories page identically.
 export type ListRunsPageInput = ListRunsInput & {
-  // Filter to runs with exactly this status ("failed", "running", ...).
-  status?: ExecutionStatus;
+  // Filter to runs with exactly this status ("failed", "running", ...), or to any of several.
+  status?: ExecutionStatus | ExecutionStatus[];
   // Time-range filter on startedAt (ISO 8601, inclusive both ends).
   from?: string;
   to?: string;
@@ -275,8 +275,12 @@ export class InvalidListRunsCursorError extends Error {
 }
 
 type RunCursor = { startedAt: string; runId: string };
-// The cursor encodes the SORT KEY of the last row served, not an index — deleting or adding runs
-// between pages can never skip or repeat a row relative to that key.
+// The cursor encodes the SORT KEY of the last row WINDOWED, not an index — deleting or adding runs
+// between pages can never skip or repeat a row relative to that key. One caveat, and it is real:
+// workflow.reset_run rebuilds the record with a FRESH startedAt, so a reset moves that run to the
+// head of the newest-first ordering. A run reset while a later page is being fetched therefore
+// jumps ahead of the cursor and is not returned again by the remaining pages — a client that
+// resets a run should refetch the listing rather than continue paging past it.
 const encodeRunCursor = (run: Pick<WorkflowExecutionRecord, "startedAt" | "runId">): string =>
   Buffer.from(JSON.stringify({ startedAt: run.startedAt, runId: run.runId }), "utf8").toString("base64url");
 const decodeRunCursor = (cursor: string): RunCursor => {
@@ -294,10 +298,49 @@ const decodeRunCursor = (cursor: string): RunCursor => {
 // and fetch only the ≤limit run blobs the page will return, instead of fetching the entire fleet
 // and windowing here. Cursor ENCODING stays here: the opaque token is a tool-schema concern, and the
 // repository only ever sees its decoded sort key.
+export type ListRunSummariesPage = {
+  rows: RunSummaryRecord[];
+  page: { limit: number; matchedCount: number; hasMore: boolean; nextCursor?: string };
+};
+
+/**
+ * W4 — the same window as listRunsPage, answered in ROWS.
+ *
+ * Identical limit/cursor handling, so a caller can move between detail modes without the
+ * paging changing meaning: the cursor encodes the last row's (startedAt, runId) sort key
+ * either way, and a summary page's nextCursor is a valid cursor for a full page and back.
+ */
+export async function listRunSummariesPage(filters: ListRunsPageInput = {}, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<ListRunSummariesPage> {
+  const limit = Math.max(1, Math.min(MAX_LIST_RUNS_LIMIT, Math.floor(filters.limit ?? DEFAULT_LIST_RUNS_LIMIT)));
+  const after = filters.cursor ? decodeRunCursor(filters.cursor) : undefined;
+  const { rows, matchedCount, hasMore, lastKey } = await store.listRunSummariesPage({
+    projectId: filters.projectId,
+    workflowId: filters.workflowId,
+    status: filters.status,
+    from: filters.from,
+    to: filters.to,
+    after,
+    limit
+  });
+  return {
+    rows,
+    // REVIEW FIX — the cursor is minted from the last row the repository WINDOWED, which it
+    // returns as `lastKey`, not from the last row it managed to return. Those differ when a row
+    // is dropped (a ghost entry, a record that vanished between the index read and the fetch),
+    // and `hasMore: true` with no cursor is a dead end: the caller is told more rows exist and
+    // handed no way to ask for them, so the UI's "load more" disappears and the rest of the
+    // fleet becomes unreachable without a reload.
+    // The `??` fallback mirrors listRunsPage's below: `lastKey` is optional on the repository
+    // contract, and a backend that omits it must not silently reintroduce the hasMore-with-no-
+    // cursor dead end on what is now the DEFAULT detail mode.
+    page: { limit, matchedCount, hasMore, ...(hasMore && (lastKey ?? rows[rows.length - 1]) ? { nextCursor: encodeRunCursor((lastKey ?? rows[rows.length - 1])!) } : {}) }
+  };
+}
+
 export async function listRunsPage(filters: ListRunsPageInput = {}, store: ExecutionRepository = repositoryManager.getExecutionRepository()): Promise<ListRunsPage> {
   const limit = Math.max(1, Math.min(MAX_LIST_RUNS_LIMIT, Math.floor(filters.limit ?? DEFAULT_LIST_RUNS_LIMIT)));
   const after = filters.cursor ? decodeRunCursor(filters.cursor) : undefined;
-  const { runs, matchedCount, hasMore } = await store.listRunsPage({
+  const { runs, matchedCount, hasMore, lastKey } = await store.listRunsPage({
     projectId: filters.projectId,
     workflowId: filters.workflowId,
     status: filters.status,
@@ -308,7 +351,9 @@ export async function listRunsPage(filters: ListRunsPageInput = {}, store: Execu
   });
   return {
     runs,
-    page: { limit, matchedCount, hasMore, ...(hasMore && runs.length ? { nextCursor: encodeRunCursor(runs[runs.length - 1]) } : {}) }
+    // Same reasoning as listRunSummariesPage above: the cursor comes from the windowed key, so a
+    // page whose rows were all dropped as ghosts still hands back a way to continue.
+    page: { limit, matchedCount, hasMore, ...(hasMore && (lastKey ?? runs[runs.length - 1]) ? { nextCursor: encodeRunCursor((lastKey ?? runs[runs.length - 1])!) } : {}) }
   };
 }
 
@@ -882,6 +927,11 @@ const nodeBudgetUsdOf = (node: WorkspaceNode): number | undefined => {
 //      killed after a node's save but before the next dispatch.
 // Both are resumable: the next advance (workflow.run_next_node / run_until / run_all, or the
 // conductor job with --run) reclaims a stale dispatch and continues from persisted state.
+// W4 — re-exported so every stall caller keeps one import site; the reading itself lives in
+// executionTypes.ts so the repository layer can persist the same projection without importing the
+// executor (which imports the repository layer).
+export { runStallFacts } from "./executionTypes.js";
+
 export type RunStallInfo = {
   inFlightNodeId?: string;
   dispatchedAt?: string;
@@ -987,51 +1037,55 @@ export type RunStallTimingContext = { p95DurationMsByNode?: Record<string, numbe
 // own measured history, should have finished twice over.
 export const OVERDUE_RUN_P95_MULTIPLE = 3;
 
-const remainingP95TotalMs = (run: WorkflowExecutionRecord, timing: RunStallTimingContext | undefined): number | undefined => {
+const remainingP95TotalMs = (remainingNodeIds: string[], timing: RunStallTimingContext | undefined): number | undefined => {
   const aggregates = timing?.p95DurationMsByNode;
   if (!aggregates) return undefined;
-  const remaining = run.nodes.filter((node) => node.status === "queued" || node.status === "running");
-  if (!remaining.length) return undefined;
-  const known = remaining.map((node) => aggregates[node.nodeId]).filter((value): value is number => typeof value === "number" && value > 0);
+  if (!remainingNodeIds.length) return undefined;
+  const known = remainingNodeIds.map((nodeId) => aggregates[nodeId]).filter((value): value is number => typeof value === "number" && value > 0);
   return known.length ? known.reduce((sum, value) => sum + value, 0) : undefined;
 };
 
+/** Convenience over assessRunStallFrom for callers holding a whole record. */
 export function assessRunStall(run: WorkflowExecutionRecord, at: Date = new Date(), timing?: RunStallTimingContext): RunStallInfo | undefined {
-  if (run.status !== "running") return undefined;
+  return assessRunStallFrom(runStallFacts(run), at, timing);
+}
+
+export function assessRunStallFrom(facts: RunStallFacts, at: Date = new Date(), timing?: RunStallTimingContext): RunStallInfo | undefined {
+  if (facts.status !== "running") return undefined;
   const driverHealth = {
-    ...(run.driverHealth?.lastSeenByTickAt ? { lastSeenByTickAt: run.driverHealth.lastSeenByTickAt } : {}),
-    ...(run.driverHealth?.lastRefusal ? { lastRefusal: run.driverHealth.lastRefusal } : {})
+    ...(facts.driverHealth?.lastSeenByTickAt ? { lastSeenByTickAt: facts.driverHealth.lastSeenByTickAt } : {}),
+    ...(facts.driverHealth?.lastRefusal ? { lastRefusal: facts.driverHealth.lastRefusal } : {})
   };
-  const inFlight = run.nodes.find((node) => node.status === "running" && node.dispatch);
+  const inFlight = facts.inFlight;
   if (inFlight) {
-    const deadline = Date.parse(inFlight.dispatch!.dispatchedAt) + inFlight.dispatch!.timeoutMs + STALL_MARGIN_MS;
+    const deadline = Date.parse(inFlight.dispatchedAt) + inFlight.timeoutMs + STALL_MARGIN_MS;
     const stalled = at.getTime() > deadline;
     return {
       ...driverHealth,
       inFlightNodeId: inFlight.nodeId,
-      dispatchedAt: inFlight.dispatch!.dispatchedAt,
-      timeoutMs: inFlight.dispatch!.timeoutMs,
+      dispatchedAt: inFlight.dispatchedAt,
+      timeoutMs: inFlight.timeoutMs,
       stalledSuspected: stalled,
       advice: stalled
-        ? `Node ${inFlight.nodeId} was dispatched at ${inFlight.dispatch!.dispatchedAt} with a ${inFlight.dispatch!.timeoutMs}ms timeout and never reported back — the driver process died mid-node. Nothing is in flight. Advance the run (workflow.run_until / run_next_node, or the conductor job with --run) to reclaim the stale dispatch and continue.`
+        ? `Node ${inFlight.nodeId} was dispatched at ${inFlight.dispatchedAt} with a ${inFlight.timeoutMs}ms timeout and never reported back — the driver process died mid-node. Nothing is in flight. Advance the run (workflow.run_until / run_next_node, or the conductor job with --run) to reclaim the stale dispatch and continue.`
         : `Node ${inFlight.nodeId} is in flight within its timeout window; no action needed yet.`
     };
   }
-  const idleMs = at.getTime() - Date.parse(run.updatedAt);
+  const idleMs = at.getTime() - Date.parse(facts.updatedAt);
   const stalled = idleMs > STALL_MARGIN_MS;
   // W0 T0.4 — THE OVERDUE FLAG. `updatedAt` only tells you when the record was last touched, so a run
   // whose driver walked away 40 minutes ago reads as healthy for the first 90 seconds and then as
   // "died between nodes" forever, with no sense of scale. This adds the one comparison that has a
   // scale: the run has been open for more than OVERDUE_RUN_P95_MULTIPLE times the measured p95 of the
   // work it still has left. Only reported when the caller supplied timing aggregates.
-  const remainingP95Ms = remainingP95TotalMs(run, timing);
-  const openMs = at.getTime() - Date.parse(run.startedAt);
+  const remainingP95Ms = remainingP95TotalMs(facts.remainingNodeIds, timing);
+  const openMs = at.getTime() - Date.parse(facts.startedAt);
   const overdue = remainingP95Ms !== undefined && openMs > OVERDUE_RUN_P95_MULTIPLE * remainingP95Ms;
   if (overdue) {
     return {
       ...driverHealth,
       stalledSuspected: true,
-      advice: `overdue: no driver progress — the run has been open ${Math.round(openMs / 1000)}s with nothing in flight, against a measured p95 of ${Math.round(remainingP95Ms! / 1000)}s for the ${run.nodes.filter((node) => node.status === "queued" || node.status === "running").length} node(s) it still has to run. Advance it (workflow.run_until / run_next_node) or check whether any driver is scanning this tenant (project.get driverHealth).`
+      advice: `overdue: no driver progress — the run has been open ${Math.round(openMs / 1000)}s with nothing in flight, against a measured p95 of ${Math.round(remainingP95Ms! / 1000)}s for the ${facts.remainingNodeIds.length} node(s) it still has to run. Advance it (workflow.run_until / run_next_node) or check whether any driver is scanning this tenant (project.get driverHealth).`
     };
   }
   return {

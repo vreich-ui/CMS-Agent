@@ -681,38 +681,56 @@ export const nodeListExecutions = (args: { nodeId: string; runId?: string }) =>
  * "nothing spent yet" default) until that run is opened — see
  * workflowGetRun() below, the one place cost IS composed in.
  *
- * W1.2 (corroborated in PR #232's "documented residual") — `workflow_list_runs`
- * with no `projectId` pays a full-fleet fetch server-side: BlobExecutionRepository.listRuns
- * fetches every run blob across every project before any filter is applied, which is what made
- * the Runs page, Drive's bind-run panel, and the recent-runs panels fail outright ("Failed to
- * fetch") while a projectId-scoped call returns fast. An explicit `projectId` still goes straight
- * through; an unscoped call fans out one scoped call per project this workspace has configured and
- * merges the results, so this client never makes the unscoped call at all.
+ * W1 (2026-09-14) — ONE call, always. This used to fan out one
+ * projectId-scoped call per configured project and merge the results, on the
+ * strength of a W1.2-era doc comment that the server has since outgrown:
+ * `BlobExecutionRepository.listRunsPage` takes the full-fleet path only when
+ * BOTH `limit` and `projectId` are absent. Given a `limit` it windows over the
+ * per-project run INDEX — whose entries already carry
+ * projectId/workflowId/status/startedAt — and fetches only the blobs for the
+ * page it is about to return. So an unscoped windowed call is cheap, and the
+ * fan-out was paying seven 8-second calls (measured live, 2026-09-14) to dodge
+ * a cost that had already been fixed underneath it — and, batched into one
+ * POST, gating every other panel on the screen behind the slowest of them.
+ *
+ * Which is why `limit` DEFAULTS rather than staying optional: an unscoped call
+ * with no limit is the one shape that still pays the full-fleet fetch, and no
+ * caller in this client wants it.
  */
-const rawWorkflowListRuns = (args?: { workflowId?: string; projectId?: string; status?: RunStatus; limit?: number }) =>
-  callVerb<{ runs: adapters.RawRun[]; page?: unknown }>('workflow_list_runs', args);
+export const DEFAULT_RUNS_LIMIT = 20;
 
-export const workflowListRuns = async (args?: {
+export interface RunListArgs {
   workflowId?: string;
   projectId?: string;
-  status?: RunStatus;
+  /** One status, or several — the server matches any of an array and counts them all in `page.matchedCount`. */
+  status?: RunStatus | RunStatus[];
   limit?: number;
-}): Promise<Run[]> => {
-  if (args?.projectId) {
-    const raw = await rawWorkflowListRuns(args);
-    return raw.runs.map((r) => adapters.toRun(r));
-  }
-  const projects = await projectList();
-  const perProject = await Promise.all(projects.map((project) => rawWorkflowListRuns({ ...args, projectId: project.id })));
-  // Sort the RAW rows on their ISO `startedAt` before adapting — toRun()'s `started` is a display
-  // string ("30 Jul"), not chronologically comparable (lexicographic order puts "30 Jul" ahead of
-  // "25 Aug"); sorting post-adaptation silently scrambled the merged list into date-string order.
-  const merged = perProject
-    .flatMap((page) => page.runs)
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-  const limited = args?.limit ? merged.slice(0, args.limit) : merged;
-  return limited.map((r) => adapters.toRun(r));
-};
+  /** Opaque `page.nextCursor` from a previous page, passed back verbatim. */
+  cursor?: string;
+  /**
+   * W4 — row shape. "summary" (the server's default, and this client's) is read straight from
+   * the run index: identity, status, currentNodeId, timings and per-node COUNTS, with no run
+   * record opened. "full" adds the `nodes[]` array at the cost of one record read per row, so
+   * ask for it only on a surface that genuinely shows per-node detail for a whole LIST — the
+   * rail's per-node failure chip, the quick-look's "last run" line. For ONE run,
+   * workflow_get_run was always the cheaper read.
+   */
+  detail?: 'summary' | 'full';
+}
+
+/** Runs plus the page metadata — see adapters.toRunPage(), which does the reading. */
+export type RunPage = adapters.RunPageView;
+
+export const workflowListRunsPage = async (args: RunListArgs = {}): Promise<RunPage> =>
+  adapters.toRunPage(
+    await callVerb<{ runs: adapters.RawRun[]; page?: adapters.RawRunPage }>('workflow_list_runs', {
+      limit: DEFAULT_RUNS_LIMIT,
+      ...args,
+    }),
+  );
+
+export const workflowListRuns = async (args: RunListArgs = {}): Promise<Run[]> =>
+  (await workflowListRunsPage(args)).runs;
 
 /**
  * `workflow_get_run` wraps `{ run, mode, stall }` — `mode`/`stall` are
@@ -1353,6 +1371,18 @@ export const feedbackRecord = (args: {
  * verb with a per-workflow breakdown. `byWorkflow` always covers every
  * known workflow regardless of `args.workflowId`, matching UsageTab.tsx's
  * one unfiltered caller.
+ *
+ * W1 — each run count is ONE unscoped `limit:1` call again, not one per
+ * configured project. Under the old fan-out this composition cost
+ * 1 + workflows x (1 + projects) calls — 1 + 3 x 8 = 25 against the live
+ * workspace — for three integers. The count comes from `page.matchedCount`,
+ * which the server computes over the whole matched set regardless of `limit`,
+ * so a `limit:1` window is all it ever needed. This is also why the projectList()
+ * read that fed the fan-out is gone: nothing here is per-project any more.
+ *
+ * This composition stays OFF the first paint by construction — UsageTab is
+ * mounted only when Registry's `usage` tab is selected (Registry/index.tsx's
+ * switch), so nothing above fires until an operator asks for the Usage tab.
  */
 export const usageGetSummary = async (args?: { workflowId?: string }): Promise<UsageSummary> => {
   const overall = await callVerb<adapters.RawUsageSummary>(
@@ -1360,22 +1390,16 @@ export const usageGetSummary = async (args?: { workflowId?: string }): Promise<U
     args?.workflowId ? { workflowId: args.workflowId } : {},
   );
   const workflowIds = Object.keys(WORKFLOWS);
-  const projects = await projectList();
   const perWorkflow = await Promise.all(
     workflowIds.map(async (workflowId) => {
-      const [summary, runCountsByProject] = await Promise.all([
+      const [summary, countPage] = await Promise.all([
         callVerb<adapters.RawUsageSummary>('usage_get_summary', { workflowId }),
-        // See workflowListRuns()'s doc comment: an unscoped workflow_list_runs pays a full-fleet
-        // fetch server-side, so this count is summed from one projectId-scoped call per configured
-        // project rather than the one unscoped call this used to make.
-        Promise.all(
-          projects.map((project) =>
-            callVerb<{ page?: { matchedCount?: number } }>('workflow_list_runs', { workflowId, projectId: project.id, limit: 1 }),
-          ),
-        ),
+        // `page.matchedCount` counts every row matching the filters, not the rows this
+        // window returned — so one `limit:1` call answers "how many runs has this
+        // workflow had" for the whole fleet.
+        callVerb<{ page?: { matchedCount?: number } }>('workflow_list_runs', { workflowId, limit: 1 }),
       ]);
-      const runCount = runCountsByProject.reduce((sum, page) => sum + (page.page?.matchedCount ?? 0), 0);
-      return { workflowId, summary, runCount };
+      return { workflowId, summary, runCount: countPage.page?.matchedCount ?? 0 };
     }),
   );
   return adapters.toUsageSummary(overall, perWorkflow);
