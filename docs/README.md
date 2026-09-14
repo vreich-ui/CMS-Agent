@@ -39,9 +39,10 @@ Verdicts from the 2026-09-05 documentation audit: **CURRENT** (still authoritati
 | `improvement/STRATEGY.md` | HISTORICAL (July 2026 research) | Implemented subset described in AGENT_ARCHITECTURE.md §7–8 |
 | `projects/dr-lurie-integration-notes.md` | HISTORICAL | Fully superseded by PUBLISHING_ARCHITECTURE.md §5 and the policy doc |
 | `projects/dr-lurie-agent-publishing-policy.md` | CURRENT (tenant-side contract) | §8.2 (`approved:true` as authority) is stale — see PUBLISHING_ARCHITECTURE.md §2.1 |
-| `plan/ADR-2026-08-25-publish-autonomy.md`, `plan/ADR-2026-08-25-structure-studio.md` | CURRENT (ADRs) | |
+| `plan/ADR-2026-08-25-publish-autonomy.md`, `plan/ADR-2026-08-25-structure-studio.md`, `plan/ADR-2026-09-13-node-definition-field-ownership.md` | CURRENT (ADRs) | |
 | `plan/CAPTURE-CLONE-SPEC.md` | CURRENT with two stale rows | four workflows, not three; `publish.mjs` was deleted (T15.7) |
 | `plan/W8-ARTIFACT-MATERIALIZER-SPEC.md` | CURRENT | |
+| `plan/two-plane-reconciliation-plan.md` | CURRENT (pending decisions, not executed) | implementation plan for `ADR-2026-09-13-node-definition-field-ownership.md`; Part 1 (T1–T4) unblocks `nodes:check`/`store:check` |
 | `plan/PUBLISH-SMOKE.md` | RUNBOOK | approval is `workflow_set_operator_publish_decision`; release evidence comes from `release_executor` |
 | `plan/RETIREMENT.md`, `plan/TRACK-A-RUNBOOK.md` | CURRENT (pending decisions, not executed) | |
 | `plan/HANDOFF.md` | HISTORICAL (2026-08-12) | Gates G1–G6 and standing habits remain good practice |
