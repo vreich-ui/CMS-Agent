@@ -3,7 +3,7 @@ import { assessRunStall, DISPATCH_DEADLINE_MARGIN_MS, OVERDUE_RUN_P95_MULTIPLE }
 import { runContinuationTick, TASK_TIMEOUT_MS } from "../../../src/agent/workspace/runContinuation.js";
 import { MemoryDriverHealthRepository } from "../../../src/agent/repository/memory/MemoryDriverHealthRepository.js";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
-import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
+import { runSummaryOf, type ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
 // W0 T0.4 + T1.2 acceptance.
@@ -79,6 +79,7 @@ describe("W0 T0.4 — overdue-run flag", () => {
 const fakeStore = (records: WorkflowExecutionRecord[]): ExecutionRepository => ({
   listRuns: async () => records,
   listRunsPage: async () => ({ runs: records, matchedCount: records.length, hasMore: false }),
+  listRunSummariesPage: async () => ({ rows: records.map((record) => runSummaryOf(record)), matchedCount: records.length, hasMore: false }),
   getRun: async (runId: string) => records.find((record) => record.runId === runId),
   createRun: async (record) => record,
   saveRun: async (record) => { const index = records.findIndex((candidate) => candidate.runId === record.runId); records[index] = record; return record; },

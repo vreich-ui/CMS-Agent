@@ -137,9 +137,15 @@ export interface Run {
   dry: boolean;
   err: number;
   done: number;
+  /** W4 — how many nodes the run has. A `detail: "summary"` row states it
+   *  directly; a full row or record implies it from `nodes`. This is the
+   *  denominator of "x/y nodes", which used to require the whole array. */
+  total: number;
   stall?: boolean;
   /** P2-05 — per-node timings/status off the run record. Empty on a list
-   * row that carried none; never fabricated. */
+   * row that carried none (every `detail: "summary"` row); never fabricated.
+   * A surface that genuinely needs per-node detail across a LIST asks for
+   * `detail: "full"` — see api/verbs.ts RunListArgs. */
   nodes: RunNode[];
   // --- Additive (workbench-verb-fixes). requestId is the caller-supplied
   // id a run was started with — live-carried, no prior fixture equivalent.

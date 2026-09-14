@@ -60,6 +60,19 @@
   .screen{display:none;} .screen.on{display:block;}
   .btn{border:1px solid var(--line2); background:var(--panel2); border-radius:7px; padding:6px 13px; color:var(--ink); font-weight:500; font-size:12.5px;}
   .btn:hover{border-color:var(--acc-dim); color:var(--acc);}
+  /* W1 — the Runs screen's "load more" row: one windowed page at a time, the rest of the fleet on request. */
+  .loadmore{display:flex; justify-content:center; padding:14px 0 4px;}
+  /* W2 — the error sibling every skeleton in this app now has. Deliberately quiet
+     chrome: this replaces a panel's content, so it should read as "this panel failed",
+     not as an alarm competing with the attention strip. */
+  .qerr{display:flex; flex-direction:column; gap:8px; align-items:flex-start;}
+  .qerr--inline{gap:6px; padding:2px 6px;}
+  .qerr .qerr-msg{margin:0; color:var(--bad); font-size:12.5px; line-height:1.45;}
+  .qerr .qerr-retry{align-self:flex-start;}
+  /* W2 — a retry that lives inside a line of label text (PromptTab's divergence chip),
+     where a full .btn would break the line's rhythm. */
+  .linkbtn{background:none; border:0; padding:0; font:inherit; color:var(--acc); text-decoration:underline; cursor:pointer;}
+  .linkbtn:hover{color:var(--acc-ink);}
   /* design-review fix (§7.8 hard fail): amber is reserved for attention/
      gate states (see .gate/.chip.blocked/.risk.publish/.dot.blocked) —
      ordinary primary actions (Save, Start run, Promote, Sign in, ...) get

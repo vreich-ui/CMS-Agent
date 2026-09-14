@@ -3,7 +3,9 @@
   "capturedAt": "2026-08-26T12:23:14Z",
   "calls": [
     {
-      "args": {},
+      "args": {
+        "detail": "full"
+      },
       "ok": true,
       "shape": {
         "ok": "boolean",
@@ -86,7 +88,7 @@
                   "durationMs": 711,
                   "errors": [
                     "driver_auth_failed:DR_LURIE_MCP_TOKEN",
-                    "Project \"dr-lurie\" rejected this driver's credential with HTTP 401 on an authenticated registry_get read, so no node was dispatched and nothing was spent. The credential this driver presented came fro\u2026"
+                    "Project \"dr-lurie\" rejected this driver's credential with HTTP 401 on an authenticated registry_get read, so no node was dispatched and nothing was spent. The credential this driver presented came fro…"
                   ]
                 },
                 {
@@ -113,7 +115,7 @@
                 "live": true,
                 "declared": true,
                 "nodeSource": "store",
-                "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in \u2026"
+                "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in …"
               }
             },
             {
@@ -175,7 +177,7 @@
                 "live": true,
                 "declared": true,
                 "nodeSource": "store",
-                "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in \u2026"
+                "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in …"
               }
             }
           ],
@@ -187,7 +189,135 @@
           }
         }
       },
-      "notes": "[no-args (default limit 20)] matchedCount 69, hasMore true, nextCursor present. NOTE: calling with an explicit limit:5 argument triggered a proxy transport error twice in this session ('Anthropic Proxy: Invalid content from server') while omitting limit worked; not conclusively attributable to the limit arg itself vs transient proxy flakiness, but worth re-testing."
+      "notes": "[detail:\"full\" — CAPTURED LIVE 2026-08-26 as the then-default, no-args shape] matchedCount 69, hasMore true, nextCursor present. W4 made \"summary\" the default, so this exact envelope is what `detail:\"full\"` returns now; the rows themselves are unchanged. NOTE: calling with an explicit limit:5 argument triggered a proxy transport error twice in that session ('Anthropic Proxy: Invalid content from server') while omitting limit worked; not conclusively attributable to the limit arg itself vs transient proxy flakiness, but worth re-testing."
+    },
+    {
+      "args": {},
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "detail": "string",
+          "runs": [
+            {
+              "runId": "string",
+              "requestId": "string",
+              "workflowId": "string",
+              "projectId": "string",
+              "status": "string",
+              "currentNodeId": "string",
+              "startedAt": "string",
+              "updatedAt": "string",
+              "nodeCount": "number",
+              "completedCount": "number",
+              "failedCount": "number",
+              "errorCount": "number",
+              "artifactCount": "number",
+              "approvalsRequiredCount": "number",
+              "approvalsRequired": [],
+              "dryRun": "boolean",
+              "executionMode": "string",
+              "rev": "number",
+              "operatorPublishDecision": "string",
+              "operatorDecisionSource": "string",
+              "mode": {
+                "executionMode": "string",
+                "live": "boolean",
+                "declared": "boolean",
+                "nodeSource": "string",
+                "notice": "string"
+              }
+            }
+          ],
+          "page": {
+            "limit": "number",
+            "matchedCount": "number",
+            "hasMore": "boolean",
+            "nextCursor": "string"
+          }
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "detail": "summary",
+          "runs": [
+            {
+              "runId": "run_1787690045355_411vjm",
+              "requestId": "req_article_testlorem_20240711_01",
+              "workflowId": "publishing_conductor",
+              "projectId": "dr-lurie",
+              "status": "failed",
+              "currentNodeId": "input_triage",
+              "startedAt": "2026-08-25T20:34:05.355Z",
+              "updatedAt": "2026-08-25T20:34:37.816Z",
+              "nodeCount": 23,
+              "completedCount": 0,
+              "failedCount": 1,
+              "errorCount": 1,
+              "artifactCount": 0,
+              "approvalsRequiredCount": 0,
+              "approvalsRequired": [],
+              "dryRun": true,
+              "executionMode": "openai",
+              "rev": 1,
+              "operatorPublishDecision": "approved",
+              "operatorDecisionSource": "project_policy_default",
+              "mode": {
+                "executionMode": "openai",
+                "live": true,
+                "declared": true,
+                "nodeSource": "store",
+                "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in …"
+              }
+            },
+            {
+              "runId": "run_1787678554270_stw73q",
+              "requestId": "req_probe_t11_mechanics_20260825_01",
+              "workflowId": "publishing_conductor",
+              "projectId": "dr-lurie",
+              "status": "cancelled",
+              "currentNodeId": "publication_controller",
+              "startedAt": "2026-08-25T17:22:34.271Z",
+              "updatedAt": "2026-08-25T17:23:36.781Z",
+              "nodeCount": 23,
+              "completedCount": 2,
+              "failedCount": 0,
+              "errorCount": 0,
+              "artifactCount": 4,
+              "approvalsRequiredCount": 1,
+              "approvalsRequired": [
+                {
+                  "nodeId": "publication_controller",
+                  "type": "approval_required",
+                  "reason": "Publish-risk node publication_controller requires explicit approval; dry-run blocked before publishing.",
+                  "requestedAt": "2026-08-25T17:23:11.516Z"
+                }
+              ],
+              "dryRun": true,
+              "executionMode": "openai",
+              "rev": 7,
+              "budgetUsd": 2,
+              "operatorPublishDecision": "approved",
+              "operatorDecisionSource": "project_policy_default",
+              "mode": {
+                "executionMode": "openai",
+                "live": true,
+                "declared": true,
+                "nodeSource": "store",
+                "notice": "LIVE MODEL RUN: node outputs came from the configured model provider. Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in …"
+              }
+            }
+          ],
+          "page": {
+            "limit": 20,
+            "matchedCount": 69,
+            "hasMore": true,
+            "nextCursor": "eyJzdGFydGVkQXQiOiIyMDI2LTA4LTIzVDA4OjA5OjA3LjExMVoiLCJydW5JZCI6InJ1bl8xNzg3NDcyNTQ3MTExX3Z6b3Z6NCJ9"
+          }
+        }
+      },
+      "notes": "[no-args — the W4 DEFAULT shape, detail:\"summary\"] NOT a live capture. Derived from the detail:\"full\" capture above by applying the same projection the server applies (runSummaryOf in src/agent/repository/interfaces/ExecutionRepository.ts), so it states the contract AS IMPLEMENTED and is pending a live re-capture. Rows come from the run index and open no run records: nodes[] and the run-level errors[] strings are replaced by nodeCount/completedCount/failedCount/errorCount/artifactCount/approvalsRequiredCount; every other field of the detail:\"full\" row — approvalsRequired, budgetBlock, operatorPublishDecision, operatorDecisionSource — is present unchanged. `nodeCount` is the captured row's own value (23/24); completedCount/failedCount here are counted over that capture's TRUNCATED nodes[] and are therefore illustrative of the shape, not of those runs' real totals — a live row counts every node. There is deliberately no cost field: a run record carries no spend figure at all, and workflow_get_run_cost's ledger remains the only source. page.matchedCount still counts every matching run, not the rows returned."
     }
   ]
 }

@@ -461,68 +461,52 @@ interface CloudRunJsonRpcResponse<T> {
   error?: { message: string; data?: unknown };
 }
 
-// --- P2-03: tick-level JSON-RPC batching ---------------------------------------
-// The Cloud Run MCP endpoint accepts a JSON-RPC *array* and answers with an
-// array of responses correlated by `id`. Nothing in this client used that:
-// every hook issued its own POST, so a workbench mount cost ~5 round trips
-// and Registry -> Usage cost 7, six of them gated behind the first.
+// --- W0: one POST per verb -------------------------------------------------------
+// This transport used to collect every verb called in the same event-loop tick and
+// send them as ONE JSON-RPC batch POST (P2-03, "tick-level JSON-RPC batching").
+// Measured live on 2026-09-14 from the operator's browser, that trade was inverted:
+// a batch costs the SLOWEST verb in it, for every verb in it, and one dropped
+// connection rejects all of them together. A Workbench mount batched
+// `workspace_get_nodes` (2.2 s) with an unscoped `workflow_list_runs` (16 s) and
+// `constellation_get_attention` (which drops the connection somewhere between 13 s
+// and 56 s), so the whole screen waited on the worst call in the tick and then lost
+// the lot — nodes and prompt included, which had been ready for fourteen seconds.
 //
-// This batcher collects every verb call made in the same event-loop turn —
-// which, in practice, is exactly the set of queries React mounts together —
-// and sends them as one request. Nothing above this line changes: callers
-// still `await callVerb(...)` one at a time and each gets its own resolved
-// value or its own error. A failure inside the batch fails only the call it
-// belongs to; only a transport-level failure fails them all, which is the
-// truth of what happened.
+// So: one POST per verb. Extra round trips are cheap against a warm keep-alive
+// connection; head-of-line blocking between unrelated panels is not. Each call now
+// succeeds, fails, times out and retries entirely on its own.
 //
-// Batch size is capped so one very wide screen can't build a single
-// enormous request; the overflow simply forms the next batch.
-const BATCH_MAX = 20;
+// Nothing on the wire had to change: this already sent a single request object
+// (not an array) whenever a "batch" happened to hold one call, and `unwrapRpc`
+// still tolerates a one-element array answer.
 
-interface PendingCall {
-  id: number;
-  verb: string;
-  args?: object;
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-}
+/**
+ * Per-call ceiling. Nothing on this plane may hang forever. Before this, a verb
+ * whose connection was dropped mid-flight simply never settled, and every
+ * `isLoading` bound to it stayed a skeleton for the life of the page — that is
+ * exactly the "Attention / Recent runs / Learning activity skeletons forever"
+ * symptom, and no amount of error-card work upstream can fix a promise that never
+ * rejects. 25 s sits above the slowest verb ever measured healthy here (16 s,
+ * unscoped `workflow_list_runs`) and well below a human's patience for a dead panel.
+ */
+export const CALL_TIMEOUT_MS = 25_000;
 
-let batchSeq = 0;
-let pending: PendingCall[] = [];
-let flushScheduled = false;
+// Both are module state rather than constants only so the test seam at the bottom of
+// this section can point a test at a same-origin stub and shorten the clock; nothing
+// in the app ever reassigns them.
+let cloudRunEndpoint: string = CLOUD_RUN_MCP_URL;
+let cloudRunTimeoutMs: number = CALL_TIMEOUT_MS;
 
-function scheduleFlush(): void {
-  if (flushScheduled) return;
-  flushScheduled = true;
-  // A macrotask, not a microtask: React runs a commit's effects inside one
-  // task, so this is the window in which a screen's queries all start.
-  setTimeout(() => {
-    flushScheduled = false;
-    const batch = pending;
-    pending = [];
-    if (batch.length > 0) void sendBatch(batch);
-  }, 0);
-}
+// JSON-RPC ids stay unique per page so a response is always attributable, even
+// though each POST now carries exactly one request.
+let rpcSeq = 0;
 
-function callVerbCloudRun<T>(verb: string, args?: object): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    pending.push({ id: ++batchSeq, verb, args, resolve: resolve as (v: unknown) => void, reject });
-    if (pending.length >= BATCH_MAX) {
-      const batch = pending;
-      pending = [];
-      void sendBatch(batch);
-      return;
-    }
-    scheduleFlush();
-  });
-}
-
-function rpcRequest(call: PendingCall) {
+function rpcRequest(id: number, verb: string, args?: object) {
   return {
     jsonrpc: '2.0' as const,
-    id: call.id,
+    id,
     method: 'tools/call' as const,
-    params: { name: call.verb, arguments: call.args ?? {} },
+    params: { name: verb, arguments: args ?? {} },
   };
 }
 
@@ -545,91 +529,98 @@ function unwrapRpc<T>(payload: CloudRunJsonRpcResponse<T> | undefined, verb: str
   return structured.data as T;
 }
 
-async function sendBatch(batch: PendingCall[]): Promise<void> {
+async function callVerbCloudRun<T>(verb: string, args?: object): Promise<T> {
   const token = getCloudRunToken();
   if (!token) {
-    const err = new AuthError(batch[0].verb, 'Enter an MCP bearer token before calling workspace tools.');
-    for (const c of batch) c.reject(err);
-    return;
+    throw new AuthError(verb, 'Enter an MCP bearer token before calling workspace tools.');
   }
 
-  const single = batch.length === 1;
-  const body = single ? rpcRequest(batch[0]) : batch.map(rpcRequest);
+  const controller = new AbortController();
+  // The abort covers the response BODY as well as the connection — a server that
+  // answers headers promptly and then stops writing is the same dead panel to a
+  // reader as one that never answers at all.
+  const timer = setTimeout(() => controller.abort(), cloudRunTimeoutMs);
+  const timedOut = () => new NetworkError(verb, `timed out after ${Math.round(cloudRunTimeoutMs / 1000)}s`);
 
-  let res: Response;
   try {
-    res = await fetch(CLOUD_RUN_MCP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? redactSecretText(err.message) : 'The network request failed.';
-    for (const c of batch) c.reject(new NetworkError(c.verb, message));
-    return;
-  }
-
-  // Always read the raw body as text first (never `res.json()` directly) so a
-  // non-2xx or non-JSON response — the 502 case this transport replaces — still
-  // has real text to report instead of silently discarding it on a parse failure.
-  const bodyText = await res.text().catch(() => '');
-
-  if (res.status === 401) {
-    for (const c of batch) {
-      c.reject(new AuthError(c.verb, `The Cloud Run MCP endpoint rejected the bearer token (HTTP 401): ${snippet(bodyText)}`));
-    }
-    return;
-  }
-  if (res.status === 403) {
-    // P2-04 — NOT an AuthError. See PermissionError's doc comment.
-    for (const c of batch) {
-      c.reject(new PermissionError(c.verb, `The workspace refused this call (HTTP 403): ${snippet(bodyText)}`));
-    }
-    return;
-  }
-  if (!res.ok) {
-    for (const c of batch) {
-      c.reject(new NetworkError(c.verb, `Cloud Run MCP request failed with HTTP ${res.status}: ${snippet(bodyText)}`));
-    }
-    return;
-  }
-
-  let parsed: unknown = null;
-  try {
-    parsed = bodyText ? JSON.parse(bodyText) : null;
-  } catch {
-    parsed = null;
-  }
-  if (!parsed) {
-    for (const c of batch) {
-      c.reject(new NetworkError(c.verb, `Cloud Run MCP response was not valid JSON (HTTP ${res.status}): ${snippet(bodyText)}`));
-    }
-    return;
-  }
-
-  // Correlate by `id`. A server that answers an array request with a single
-  // object (or vice versa) is handled rather than trusted.
-  const list: CloudRunJsonRpcResponse<unknown>[] = Array.isArray(parsed)
-    ? (parsed as CloudRunJsonRpcResponse<unknown>[])
-    : [parsed as CloudRunJsonRpcResponse<unknown>];
-  const byId = new Map<number, CloudRunJsonRpcResponse<unknown>>();
-  for (const entry of list) {
-    const id = (entry as { id?: unknown }).id;
-    if (typeof id === 'number') byId.set(id, entry);
-  }
-
-  batch.forEach((call, index) => {
-    // Fall back to positional matching only when the server sent no usable
-    // ids at all — correct for the single-call case and for a well-ordered
-    // array, and never silently mismatched when ids are present.
-    const payload = byId.get(call.id) ?? (byId.size === 0 ? list[index] : undefined);
+    let res: Response;
     try {
-      call.resolve(unwrapRpc(payload, call.verb));
+      res = await fetch(cloudRunEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(rpcRequest(++rpcSeq, verb, args)),
+        signal: controller.signal,
+      });
     } catch (err) {
-      call.reject(err);
+      // An abort is OUR ceiling, not the network's failure. Reporting it as a generic
+      // "network request failed" sends an operator looking at their wifi instead of at
+      // a verb that is genuinely too slow.
+      if (controller.signal.aborted) throw timedOut();
+      const message = err instanceof Error ? redactSecretText(err.message) : 'The network request failed.';
+      throw new NetworkError(verb, message);
     }
-  });
+
+    // Always read the raw body as text first (never `res.json()` directly) so a
+    // non-2xx or non-JSON response — the 502 case this transport replaces — still
+    // has real text to report instead of silently discarding it on a parse failure.
+    let bodyText = '';
+    try {
+      bodyText = await res.text();
+    } catch (err) {
+      // REVIEW FIX — a body read that fails for any reason OTHER than our own abort used to be
+      // swallowed, leaving bodyText empty; execution then fell through to the JSON branch and the
+      // operator was told "the response was not valid JSON (HTTP 200):" with nothing after the
+      // colon. The commonest cause is the documented Cloud Run symptom — the connection reset
+      // mid-body — so the message pointed away from the actual failure. Report what happened.
+      if (controller.signal.aborted) throw timedOut();
+      const message = err instanceof Error ? redactSecretText(err.message) : 'The response body could not be read.';
+      throw new NetworkError(verb, `Cloud Run MCP response body was cut off (HTTP ${res.status}): ${message}`);
+    }
+
+    if (res.status === 401) {
+      throw new AuthError(verb, `The Cloud Run MCP endpoint rejected the bearer token (HTTP 401): ${snippet(bodyText)}`);
+    }
+    if (res.status === 403) {
+      // P2-04 — NOT an AuthError. See PermissionError's doc comment.
+      throw new PermissionError(verb, `The workspace refused this call (HTTP 403): ${snippet(bodyText)}`);
+    }
+    if (!res.ok) {
+      throw new NetworkError(verb, `Cloud Run MCP request failed with HTTP ${res.status}: ${snippet(bodyText)}`);
+    }
+
+    let parsed: unknown = null;
+    try {
+      parsed = bodyText ? JSON.parse(bodyText) : null;
+    } catch {
+      parsed = null;
+    }
+    if (!parsed) {
+      throw new NetworkError(verb, `Cloud Run MCP response was not valid JSON (HTTP ${res.status}): ${snippet(bodyText)}`);
+    }
+
+    // A server that answers a single request with a one-element array is handled
+    // rather than trusted — the same tolerance the batch path had, kept.
+    const payload = (Array.isArray(parsed) ? parsed[0] : parsed) as CloudRunJsonRpcResponse<T> | undefined;
+    return unwrapRpc<T>(payload, verb);
+  } finally {
+    clearTimeout(timer);
+  }
 }
+
+/**
+ * Test-only seam, mirroring LoginGate.tsx's `__test_setUnauthenticated`/`__test_reset`
+ * exports. The Cloud Run transport is selected by a build-time env flag, so a test
+ * against the fixture-mode dev server cannot reach this path through `callVerb` at
+ * all; `call` is the only way to exercise it. `setEndpoint` points it at a
+ * same-origin stub (no cross-origin preflight to fake), and `setTimeoutMs` shortens
+ * the 25 s clock so the timeout can be proven in milliseconds rather than waited out.
+ */
+export const __test_cloudRun = {
+  call: <T,>(verb: string, args?: object): Promise<T> => callVerbCloudRun<T>(verb, args),
+  setEndpoint: (url: string): void => { cloudRunEndpoint = url; },
+  setTimeoutMs: (ms: number): void => { cloudRunTimeoutMs = ms; },
+  reset: (): void => { cloudRunEndpoint = CLOUD_RUN_MCP_URL; cloudRunTimeoutMs = CALL_TIMEOUT_MS; },
+};
 
 function getSessionCloudRun(): SessionInfo {
   return { authenticated: Boolean(getCloudRunToken()), readOnly: IS_READ_ONLY };

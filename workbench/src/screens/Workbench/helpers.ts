@@ -4,6 +4,7 @@
 // the mockup does.
 
 import type { QueryClient } from '@tanstack/react-query';
+import { invalidateRunLists } from '../../api/hooks';
 import type { Run, RunStatus, Workflow } from '../../types';
 
 /** Every node id in a workflow, phase-grouped then flattened — the rail's display order. */
@@ -195,7 +196,7 @@ export async function optimisticRunControl<T>(
   try {
     const result = await mutate();
     qc.invalidateQueries({ queryKey: ['run', runId] });
-    qc.invalidateQueries({ queryKey: ['runs'] });
+    invalidateRunLists(qc);
     return result;
   } catch (err) {
     if (prev) qc.setQueryData(key, prev);

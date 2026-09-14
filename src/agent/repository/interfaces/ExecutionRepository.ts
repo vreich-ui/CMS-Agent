@@ -1,4 +1,4 @@
-import type { ExecutionStatus, WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
+import { runStallFacts, type ExecutionStatus, type RunStallFacts, type WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
 import type { RepositoryHealth } from "../RepositoryHealth.js";
 
 // Thrown by saveRun when the stored run has advanced past the revision the caller loaded, i.e. a
@@ -25,8 +25,11 @@ export const compareRunsNewestFirst = (a: RunSortKey, b: RunSortKey): number =>
 export type ListRunsFilters = {
   projectId?: string;
   workflowId?: string;
-  // Only runs with exactly this status.
-  status?: ExecutionStatus;
+  // Only runs with exactly this status — or, given several, any of them. The array form
+  // exists because "how many runs need a human right now" is one question, not three: the
+  // Workbench's workflow cards would otherwise have to make one limit:1 counting call per
+  // attention status per workflow just to read `matchedCount` off each.
+  status?: ExecutionStatus | ExecutionStatus[];
   // Time-range filter on startedAt (ISO 8601, inclusive both ends).
   from?: string;
   to?: string;
@@ -39,12 +42,19 @@ export type ListRunsFilters = {
 
 export type ListRunsPageResult = {
   runs: WorkflowExecutionRecord[];
+  // The sort key of the last row the WINDOW covered, which is not always the last row returned:
+  // a ghost entry is dropped after windowing. Paging is anchored on this so a page that returns
+  // fewer rows than it matched still hands back a usable cursor.
+  lastKey?: RunSortKey;
   // Count of ALL rows matching the filters (ignoring `after`/`limit`), so pagination metadata does
   // not need a second query.
   matchedCount: number;
   // Whether matched rows exist after the returned window.
   hasMore: boolean;
 };
+
+const statusMatches = (status: ExecutionStatus, filter: ListRunsFilters["status"]): boolean =>
+  filter === undefined || (Array.isArray(filter) ? filter.includes(status) : status === filter);
 
 // Shared windowing used by every repository (and the blob repository's index path): filter, sort
 // newest-first, then apply the `after` anchor and `limit`. Working over any row shape that carries
@@ -57,7 +67,7 @@ export const windowRunRows = <T extends RunSortKey & { projectId: string; workfl
   const matched = rows
     .filter((row) => !filters.projectId || row.projectId === filters.projectId)
     .filter((row) => !filters.workflowId || row.workflowId === filters.workflowId)
-    .filter((row) => !filters.status || row.status === filters.status)
+    .filter((row) => statusMatches(row.status, filters.status))
     .filter((row) => !filters.from || row.startedAt >= filters.from)
     .filter((row) => !filters.to || row.startedAt <= filters.to)
     .sort(compareRunsNewestFirst);
@@ -65,6 +75,122 @@ export const windowRunRows = <T extends RunSortKey & { projectId: string; workfl
   const windowStart = afterIndex === -1 ? matched.length : afterIndex;
   const window = filters.limit === undefined ? matched.slice(windowStart) : matched.slice(windowStart, windowStart + Math.max(0, Math.floor(filters.limit)));
   return { window, matchedCount: matched.length, hasMore: windowStart + window.length < matched.length };
+};
+
+// W4 — A RUN LIST ROW, without the run.
+//
+// A list row used to be built by opening the run record and stripping it down
+// (summarizeRunForList): every row cost a blob GET, and still carried `nodes[]` — one entry
+// per node, with statuses, timings, errors, warnings and bounded attempt history. Measured
+// live on 2026-09-14 that was ~28KB per row and ~8s for twenty of them scoped to one project,
+// 16s unscoped; the Runs page's first paint was dominated by data no row in a list ever
+// displays.
+//
+// Everything an operator actually reads off a row — what it is, where it stopped, how far it
+// got, whether it is stuck — is a handful of scalars. Persisted alongside the run index
+// (which a listing already reads to decide WHICH runs to return), a page of rows costs no
+// blob reads at all.
+//
+// Deliberately NOT here: cost. A WorkflowExecutionRecord carries no spend figure — only
+// workflow.get_run_cost's ledger does — so there is nothing truthful to index, and a list
+// row's cost stays unknown until the run is opened, exactly as it was before.
+export type RunSummaryRecord = {
+  runId: string;
+  projectId: string;
+  workflowId: string;
+  status: ExecutionStatus;
+  startedAt: string;
+  updatedAt: string;
+  requestId?: string;
+  completedAt?: string;
+  currentNodeId?: string;
+  nodeCount: number;
+  completedCount: number;
+  failedCount: number;
+  /** Run-level errors, counted. The strings themselves are a detail read. */
+  errorCount: number;
+  artifactCount: number;
+  approvalsRequiredCount: number;
+  // REVIEW FIX (round 2) — the ARRAY, not only its count. The old default row carried it, and
+  // for a publishing platform it is the highest-value field on a listing: "which node is this run
+  // waiting on" is the question an operator opens the list to answer. A consumer doing
+  // `runs.flatMap(r => r.approvalsRequired.map(a => a.nodeId))` would have thrown on undefined,
+  // and one doing `r.approvalsRequired?.length` would have reported zero pending approvals for
+  // the whole fleet. It is bounded to one entry per pending gate — the same size class as the
+  // scalars beside it, and nothing like the nodes[] array this projection exists to drop.
+  approvalsRequired: WorkflowExecutionRecord["approvalsRequired"];
+  dryRun: boolean;
+  executionMode?: "mock" | "openai";
+  rev?: number;
+  budgetUsd?: number;
+  // Review fix — these three were on the old default row (summarizeRunForList) and dropping them
+  // from the new default would silently break every external reader of a LISTING: a consumer
+  // testing `operatorPublishDecision === "approved"` would see undefined on every run and
+  // conclude nothing was ever approved, without an error anywhere. They are single scalars, so
+  // carrying them costs the index nothing.
+  budgetBlock?: WorkflowExecutionRecord["budgetBlock"];
+  operatorPublishDecision?: WorkflowExecutionRecord["operatorPublishDecision"];
+  operatorDecisionSource?: string;
+  /** Only on a "running" row — the projection assessRunStallFrom needs. */
+  stallFacts?: RunStallFacts;
+};
+
+// Bound by CODE POINT, not UTF-16 unit — same discipline as executor.ts's boundText: slicing
+// between the halves of a surrogate pair emits a lone surrogate, which is not valid UTF-8 and is
+// the prime suspect behind the live "Anthropic Proxy: Invalid content from server" failures.
+const APPROVAL_REASON_MAX = 500;
+
+/** The one reading of a full record into a row, shared by every backend. */
+export const runSummaryOf = (run: WorkflowExecutionRecord): RunSummaryRecord => {
+  const nodes = run.nodes ?? [];
+  return {
+  runId: run.runId,
+  projectId: run.projectId,
+  workflowId: run.workflowId,
+  status: run.status,
+  startedAt: run.startedAt,
+  updatedAt: run.updatedAt,
+  ...(run.requestId !== undefined ? { requestId: run.requestId } : {}),
+  ...(run.completedAt ? { completedAt: run.completedAt } : {}),
+  ...(run.currentNodeId ? { currentNodeId: run.currentNodeId } : {}),
+  // Defensive on every array, as buildAttentionItems already is and for the same reason: the
+  // record type declares these present, but that is a compile-time guarantee about records
+  // written by THIS code. A blob persisted before a field existed, or partially written, must
+  // degrade to a zero count rather than throw and take the whole listing down with it.
+  nodeCount: nodes.length,
+  completedCount: nodes.filter((node) => node.status === "completed").length,
+  failedCount: nodes.filter((node) => node.status === "failed").length,
+  errorCount: (run.errors ?? []).length,
+  artifactCount: (run.artifacts ?? []).length,
+  approvalsRequiredCount: (run.approvalsRequired ?? []).length,
+  // Bounded for the same reason summarizeRunForList bounds `errors`: `reason` is free text, and
+  // an unscoped listing reads every project's index blob in full, so an unbounded string per
+  // pending gate is the one field in this projection that could grow without a ceiling.
+  approvalsRequired: (run.approvalsRequired ?? []).map((approval) =>
+    approval.reason !== undefined && approval.reason.length > APPROVAL_REASON_MAX
+      ? { ...approval, reason: `${[...approval.reason].slice(0, APPROVAL_REASON_MAX).join("")}…` }
+      : approval
+  ),
+  dryRun: run.dryRun,
+  ...(run.executionMode !== undefined ? { executionMode: run.executionMode } : {}),
+  ...(run.rev !== undefined ? { rev: run.rev } : {}),
+  ...(run.budgetUsd !== undefined ? { budgetUsd: run.budgetUsd } : {}),
+  ...(run.budgetBlock ? { budgetBlock: run.budgetBlock } : {}),
+  ...(run.operatorPublishDecision
+    ? { operatorPublishDecision: run.operatorPublishDecision, operatorDecisionSource: run.operatorDecisionSource ?? "explicit" }
+    : {}),
+  // Stall is only ever assessed on a running run, so only a running row has to carry the
+  // facts for it. Everything else would be dead weight on every row in the fleet.
+  ...(run.status === "running" ? { stallFacts: runStallFacts(run) } : {})
+  };
+};
+
+export type ListRunSummariesPageResult = {
+  rows: RunSummaryRecord[];
+  matchedCount: number;
+  hasMore: boolean;
+  /** See ListRunsPageResult.lastKey. */
+  lastKey?: RunSortKey;
 };
 
 export interface ExecutionRepository {
@@ -76,6 +202,10 @@ export interface ExecutionRepository {
   // Same filters, plus pagination metadata. workflow.list_runs delegates here so backends can apply
   // the window BEFORE fetching run payloads.
   listRunsPage(filters?: ListRunsFilters): Promise<ListRunsPageResult>;
+  // W4 — the same window as listRunsPage, answered in ROWS instead of records. A backend that
+  // keeps a row projection alongside its index (BlobExecutionRepository) answers this without
+  // opening a single run blob; one that holds records in memory simply projects them.
+  listRunSummariesPage(filters?: ListRunsFilters): Promise<ListRunSummariesPageResult>;
   // Compare-and-swap persist. The run carries the `rev` it was loaded with; the write is committed
   // only if the stored record still has that `rev` (incrementing it on success) and otherwise
   // rejects with RunConcurrencyError. Node statuses, artifacts, stageOutputs and currentNodeId are

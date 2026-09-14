@@ -30,6 +30,10 @@ function str(args: Args, key: string): string {
   const v = args[key];
   return typeof v === 'string' ? v : '';
 }
+// Opaque page token minted by this fixture's workflow_list_runs. Live encodes
+// (startedAt, runId); the client never looks inside either, so an offset is enough here.
+const MOCK_RUN_CURSOR = 'mock-run-cursor:';
+
 function optStr(args: Args, key: string): string | undefined {
   const v = args[key];
   return typeof v === 'string' ? v : undefined;
@@ -218,26 +222,63 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   },
 
   // -- workflow / run reads --
-  // W1.2 — live pays a full-fleet blob fetch for every call with no `projectId` (every run blob
-  // across every project, filtered only afterward), which is what made the Runs page, Drive's
-  // bind-run panel, and the recent-runs panels fail outright ("Failed to fetch"). Fixture mode has
-  // no such cost to reproduce, so this throws instead: the one signal that would otherwise be
-  // invisible here is verbs.ts regressing to an unscoped call. workflowListRuns() (and
-  // usageGetSummary()'s per-workflow run count) always fan out one call per configured project.
+  // W1 — this guard is INVERTED from its W1.2 form. It used to throw on a call with no
+  // `projectId`, because an unscoped call then meant a full-fleet blob fetch server-side.
+  // That is no longer true: BlobExecutionRepository.listRunsPage takes the full-fleet path
+  // only when BOTH `limit` and `projectId` are absent, and windows over the run index
+  // otherwise. The shape that costs money now is the UNWINDOWED one, so that is what this
+  // refuses — the one regression that would otherwise be invisible in fixture mode.
   workflow_list_runs: (a) => {
-    const projectId = optStr(a, 'projectId');
-    if (!projectId) {
+    const limit = optNum(a, 'limit');
+    if (limit === undefined) {
       throw new Error(
-        '[api mock] workflow_list_runs called with no projectId — this client must always scope this call per project (see verbs.ts workflowListRuns()); an unscoped call is what made the Runs page, Drive bind-run panel, and recent-runs panels fail live.',
+        '[api mock] workflow_list_runs called with no limit — an unwindowed call is the one shape that still pays a full-fleet blob fetch server-side (BlobExecutionRepository.listRunsPage). Go through verbs.ts workflowListRunsPage(), which always sends a limit.',
       );
     }
-    const runs = mockStore.getRuns({
-      workflowId: optStr(a, 'workflowId'),
-      projectId,
-      status: optStr(a, 'status'),
-      limit: optNum(a, 'limit'),
-    });
-    return { runs, page: { limit: optNum(a, 'limit') ?? runs.length, matchedCount: runs.length, hasMore: false } };
+    // `status` is one value or an array (live accepts both) — normalised to a set here.
+    const rawStatus = a.status;
+    const statuses = Array.isArray(rawStatus)
+      ? (rawStatus as string[])
+      : typeof rawStatus === 'string'
+        ? [rawStatus]
+        : undefined;
+    const matched = mockStore
+      .getRuns({ workflowId: optStr(a, 'workflowId'), projectId: optStr(a, 'projectId') })
+      .filter((run) => !statuses || statuses.includes(run.status));
+    // Cursor paging, mirroring live's contract rather than its encoding: the client only
+    // ever passes `page.nextCursor` back verbatim, so the token's shape is ours to choose.
+    const cursor = optStr(a, 'cursor');
+    const offset = cursor?.startsWith(MOCK_RUN_CURSOR) ? Number(cursor.slice(MOCK_RUN_CURSOR.length)) : 0;
+    const page = matched.slice(offset, offset + limit);
+    // W4 — the fixture must answer the SAME two shapes live does, or fixture mode stops being
+    // evidence about the client. "summary" (the default) replaces nodes[]/errors[] with counts;
+    // "full" returns the captured row untouched.
+    const detail = optStr(a, 'detail') === 'full' ? 'full' : 'summary';
+    const runs =
+      detail === 'full'
+        ? page
+        : page.map(({ nodes, errors, ...row }) => ({
+            ...row,
+            nodeCount: nodes?.length ?? 0,
+            completedCount: (nodes ?? []).filter((n) => n.status === 'completed').length,
+            failedCount: (nodes ?? []).filter((n) => n.status === 'failed').length,
+            errorCount: errors?.length ?? 0,
+            artifactCount: (row as { artifactCount?: number }).artifactCount ?? 0,
+          }));
+    const nextOffset = offset + runs.length;
+    const hasMore = nextOffset < matched.length;
+    return {
+      detail,
+      runs,
+      page: {
+        limit,
+        // Counts every matching row, not the windowed ones — the same thing live's
+        // `matchedCount` means, and what the Runs header reports as the fleet size.
+        matchedCount: matched.length,
+        hasMore,
+        ...(hasMore ? { nextCursor: `${MOCK_RUN_CURSOR}${nextOffset}` } : {}),
+      },
+    };
   },
   // Live wraps `{ run, mode, stall }` — mode/stall are siblings of `run`,
   // not nested inside it (verbs.ts's workflowGetRun folds them back on
@@ -647,8 +688,29 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   }),
 };
 
+/**
+ * W2 test seam — make any verb reject, from a test, without a network transport.
+ *
+ * Fixture mode has no way for a verb to fail, which is precisely why every
+ * `isLoading` skeleton in this app went so long without an `isError` sibling: the
+ * failure path was unreachable in the only mode the suite runs in. AttentionStrip
+ * already carried a bespoke one-verb version of this (`__ATTN_FORCE_FAILURE__`);
+ * this is the general form, so any panel's error rendering can be exercised.
+ *
+ * A `window` global rather than an exported setter, for the same reason that one is:
+ * a test must be able to arm it in `addInitScript`, BEFORE the app's first render and
+ * therefore before the module could have been imported.
+ */
+type ForcedFailures = Record<string, string>;
+const forcedFailure = (verb: string): string | undefined =>
+  typeof window === 'undefined'
+    ? undefined
+    : (window as unknown as { __MOCK_FAIL_VERBS__?: ForcedFailures }).__MOCK_FAIL_VERBS__?.[verb];
+
 export async function runMockVerb<T>(verb: string, args: Args): Promise<T> {
   await delay(MOCK_DELAY_MS);
+  const forced = forcedFailure(verb);
+  if (forced) throw new Error(forced);
   const handler = MOCK_HANDLERS[verb];
   if (!handler) {
     // eslint-disable-next-line no-console

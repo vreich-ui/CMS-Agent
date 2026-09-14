@@ -225,6 +225,47 @@ export type RunDriverHealth = {
   silentSince?: string;
 };
 
+// W4 — the MINIMUM a stall assessment actually needs, lifted out of the full run record.
+//
+// assessRunStall reads exactly six things: the run's status, when it started, when it was last
+// touched, its driver-health block, the one node in flight (if any) with its dispatch claim, and
+// which nodes are still to run (for the p95 overdue comparison). Naming that set is what lets a
+// compact list row — built from the run index, with no run blob opened — report the SAME stall
+// verdict as a full record, rather than a weaker guess or nothing at all.
+export type RunStallFacts = {
+  status: ExecutionStatus;
+  startedAt: string;
+  updatedAt: string;
+  driverHealth?: RunDriverHealth;
+  // The first node found "running" with a live dispatch claim.
+  inFlight?: { nodeId: string; dispatchedAt: string; timeoutMs: number };
+  // Node ids still queued or running — the remaining work the p95 comparison is made against.
+  remainingNodeIds: string[];
+};
+
+/**
+ * W4 — the projection assessRunStallFrom needs, taken from a full run record.
+ *
+ * This is the only place that knows how to read those six facts off a WorkflowExecutionRecord,
+ * so the run index can persist the same projection (BlobExecutionRepository.indexEntryOf) and a
+ * summary row can be assessed identically to a full one. If the two ever disagree, they disagree
+ * here, once, rather than in two hand-written copies of the same reading.
+ */
+export const runStallFacts = (run: WorkflowExecutionRecord): RunStallFacts => {
+  // Defensive on `nodes` for the same reason runSummaryOf is: a record written before a field
+  // existed must degrade, never throw.
+  const nodes = run.nodes ?? [];
+  const inFlight = nodes.find((node) => node.status === "running" && node.dispatch);
+  return {
+    status: run.status,
+    startedAt: run.startedAt,
+    updatedAt: run.updatedAt,
+    ...(run.driverHealth ? { driverHealth: run.driverHealth } : {}),
+    ...(inFlight ? { inFlight: { nodeId: inFlight.nodeId, dispatchedAt: inFlight.dispatch!.dispatchedAt, timeoutMs: inFlight.dispatch!.timeoutMs } } : {}),
+    remainingNodeIds: nodes.filter((node) => node.status === "queued" || node.status === "running").map((node) => node.nodeId)
+  };
+};
+
 export type WorkflowExecutionRecord = {
   runId: string;
   workflowId: string;

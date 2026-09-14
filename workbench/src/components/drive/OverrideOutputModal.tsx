@@ -38,6 +38,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as verbs from '../../api/verbs';
 import { ActionCancelledError } from '../../api/confirmAction';
+import { invalidateRunLists } from '../../api/hooks';
 import { IS_READ_ONLY } from '../../api/client';
 import { setNextConfirmTrigger } from '../ConfirmDialog';
 import { Btn } from '../primitives';
@@ -184,7 +185,7 @@ export function OverrideOutputModal({ params, onClose }: { params: Record<string
       qc.invalidateQueries({ queryKey: ['nodeOutputs', nodeId, runId] });
       qc.invalidateQueries({ queryKey: ['stageOutput', runId, nodeId] });
       qc.invalidateQueries({ queryKey: ['run', runId] });
-      qc.invalidateQueries({ queryKey: ['runs'] });
+      invalidateRunLists(qc);
       toast('Output overridden', `stage_save_output → ${nodeId} in …${runId.slice(-10)}`);
       onClose();
     } catch (err) {

@@ -141,8 +141,28 @@ function AttentionSkeletonRow() {
 }
 
 export function AttentionStrip() {
-  const attnQ = useQuery({ queryKey: ['attention-strip'], queryFn: fetchAttention, staleTime: 0 });
-  const runsQ = useRuns({});
+  // W2 — two deliberate departures from the app-wide query policy (App.tsx):
+  //
+  //   staleTime — this used to be 0, so every mount of Workbench / Library / Learning
+  //   refired constellation_get_attention, the single most expensive verb on the plane
+  //   (it dropped the connection outright at 13-56s before W3 windowed it). Attention
+  //   is not a live ticker; five minutes is fresh enough for "what needs a human", and
+  //   a screen switch now reads cache like every other query here.
+  //
+  //   retry: 0 — the global policy's `retry: 1 + retryDelay 1000` is right for a cheap
+  //   verb, but on one that can take 25s to fail it means the operator waits out TWO
+  //   timeouts before the error card appears. One honest failure, shown immediately,
+  //   with a Retry button they can press themselves.
+  const attnQ = useQuery({
+    queryKey: ['attention-strip'],
+    queryFn: fetchAttention,
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
+  // Only used to resolve an attention item's runId -> its workflow for the jump target.
+  // Attention items are about non-terminal and recently-failed runs, so a newest-50
+  // window covers them; an item whose run falls outside it still jumps by nodeId.
+  const runsQ = useRuns({ limit: 50 });
   const workflowsQ = useWorkflows();
 
   const bindRun = useStore((s) => s.bindRun);

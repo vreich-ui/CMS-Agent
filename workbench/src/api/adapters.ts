@@ -200,6 +200,13 @@ export interface RawRun {
   mode?: { executionMode?: string };
   /** Only ever populated on a `status: "running"` row. */
   stall?: unknown;
+  // W4 summary-row counts. Present on `detail: "summary"` rows (the default), absent on a
+  // `detail: "full"` row and on workflow_get_run's record, which carry nodes[]/errors[] instead.
+  nodeCount?: number;
+  completedCount?: number;
+  failedCount?: number;
+  errorCount?: number;
+  artifactCount?: number;
 }
 
 /** Cost/budget come from a separate verb (`workflow_get_run_cost`) — the
@@ -233,24 +240,32 @@ function deriveCurrentNodeId(nodes: RawRunNode[]): string | null {
  */
 export function toRun(raw: RawRun, cost?: RawRunCostLedger): Run {
   const exec: Run['exec'] = (raw.mode?.executionMode ?? raw.executionMode) === 'mock' ? 'mock' : 'openai';
+  // W4 — a `detail: "summary"` row carries COUNTS and no nodes[]; a `detail: "full"` row (and
+  // workflow_get_run's record) carries the array. Prefer the counts when the row states them and
+  // derive from the array otherwise, so one adapter reads both shapes without either surface
+  // having to know which it was handed.
+  const nodes = raw.nodes ?? [];
   return {
     id: raw.runId,
     wf: raw.workflowId,
     proj: raw.projectId,
     status: raw.status as RunStatus, // live values match RunStatus's members exactly (verified)
-    cur: raw.currentNodeId ?? deriveCurrentNodeId(raw.nodes),
+    cur: raw.currentNodeId ?? deriveCurrentNodeId(nodes),
     started: shortDate(raw.startedAt),
     dur: durationText(raw.startedAt, raw.completedAt ?? raw.updatedAt ?? null),
     cost: cost?.totalCostUsdEstimate ?? 0,
     budget: cost?.budget?.budgetUsd ?? raw.budgetUsd ?? null,
     exec,
     dry: raw.dryRun,
-    err: raw.errors.length,
-    done: raw.nodes.filter((n) => n.status === 'completed').length,
+    err: raw.errorCount ?? raw.errors?.length ?? 0,
+    done: raw.completedCount ?? nodes.filter((n) => n.status === 'completed').length,
+    // How many nodes the run HAS, which a summary row states and a full row implies. Surfaces
+    // that show "x/y nodes" need the denominator even when the array is absent.
+    total: raw.nodeCount ?? nodes.length,
     stall: raw.stall != null ? true : undefined,
     // P2-05 — carried through verbatim. `durationMs` is only ever a number
     // the workspace measured; a node that has not run yet simply has none.
-    nodes: (raw.nodes ?? []).map((n) => ({
+    nodes: nodes.map((n) => ({
       nodeId: n.nodeId,
       status: n.status,
       startedAt: n.startedAt ?? null,
@@ -260,6 +275,41 @@ export function toRun(raw: RawRun, cost?: RawRunCostLedger): Run {
       produces: Array.isArray(n.produces) ? n.produces : undefined,
     })),
     requestId: raw.requestId,
+  };
+}
+
+/** Live's `page` block on a run listing (`workflow_list_runs`). */
+export interface RawRunPage {
+  limit?: number;
+  matchedCount?: number;
+  hasMore?: boolean;
+  nextCursor?: string;
+}
+
+export interface RunPageView {
+  runs: Run[];
+  nextCursor?: string;
+  matchedCount: number;
+  hasMore: boolean;
+}
+
+/**
+ * One `workflow_list_runs` envelope -> the client's page view.
+ *
+ * `matchedCount` is deliberately NOT `runs.length`: the server counts every row matching
+ * the filters, ignoring the window, which is the only honest source for a "115 runs"
+ * figure once the client stopped fetching the whole fleet (W1). A cursor is carried only
+ * alongside the server's own `hasMore`, so a stale token can never be presented as more
+ * pages that do not exist.
+ */
+export function toRunPage(raw: { runs: RawRun[]; page?: RawRunPage }): RunPageView {
+  const runs = (raw.runs ?? []).map((r) => toRun(r));
+  const hasMore = raw.page?.hasMore ?? false;
+  return {
+    runs,
+    hasMore,
+    ...(hasMore && raw.page?.nextCursor ? { nextCursor: raw.page.nextCursor } : {}),
+    matchedCount: raw.page?.matchedCount ?? runs.length,
   };
 }
 

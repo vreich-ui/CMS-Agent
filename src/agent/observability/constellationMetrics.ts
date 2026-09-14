@@ -17,12 +17,41 @@ export type ConstellationInputs = {
   runs: WorkflowExecutionRecord[];
   usageRecords: ModelUsageRecord[];
   toolExecutions: ToolExecutionRecord[];
+  // W3 — `runs` above is a WINDOW (the newest N matching the filters), not the fleet. This
+  // says so, so that nothing downstream mistakes "runs in the window" for "runs, ever".
+  // Optional, and absent means `runs` IS everything — which is what every existing caller
+  // and test that builds these inputs by hand actually has.
+  runWindow?: RunWindow;
   // R-10 inputs. Optional so every existing caller and test keeps working: when a field is absent
   // the corresponding check is skipped rather than reporting a false clean. get_attention supplies
   // all three.
   skillPolicies?: NodeSkillPolicySnapshot[];
   projects?: ProjectConnectionSnapshot[];
   toolRiskLevels?: Record<string, WorkspaceRiskLevel>;
+};
+
+/** What the run window covered — see ConstellationInputs.runWindow. */
+export type RunWindow = {
+  /** The cap that was asked for. */
+  limit: number;
+  /** How many run records were actually read (<= limit). */
+  examined: number;
+  /** How many runs matched the filters in total, counted WITHOUT reading their records. */
+  matchedCount: number;
+  /** True when matches exist outside the window. */
+  hasMore: boolean;
+  /**
+   * REVIEW FIX — the second, status-scoped read get_attention makes on top of the recency
+   * window. Present only on get_attention; see gatherAttentionRuns for why it has to exist.
+   */
+  /** Unique run records across BOTH of get_attention's reads. Present only there. */
+  merged?: number;
+  attention?: {
+    statuses: string[];
+    examined: number;
+    matchedCount: number;
+    hasMore: boolean;
+  };
 };
 
 // Just enough of skill.resolve_for_node to judge conflicts and denied requests, kept structural so
@@ -199,6 +228,13 @@ export function buildConstellationSummary(inputs: ConstellationInputs, generated
   }
   const runsByStatus: ConstellationSummary["runs"]["byStatus"] = {};
   for (const run of inputs.runs) runsByStatus[run.status] = (runsByStatus[run.status] ?? 0) + 1;
+  // W3 — `total` is the only run figure here that is a LIFETIME count, and it is the one
+  // figure the window can still answer honestly: listRunsPage counts every matching run
+  // off the run index without reading a single record. `byStatus`, by contrast, is over
+  // the examined window and says so in the caveats below — a windowed breakdown reported
+  // as a fleet-wide one would be worse than no breakdown at all.
+  const runWindow = inputs.runWindow;
+  const runsTotal = runWindow ? runWindow.matchedCount : inputs.runs.length;
   const usage = emptyUsage();
   let unattributedRecordCount = 0;
   let unknownModels = new Set<string>();
@@ -211,6 +247,11 @@ export function buildConstellationSummary(inputs: ConstellationInputs, generated
     "Costs are placeholder estimates from a local pricing catalog; not billing-grade.",
     "Tool error counts reflect only the current process; tool executions are not persisted."
   ];
+  if (runWindow?.hasMore) {
+    caveats.push(
+      `Run-derived figures read the newest ${runWindow.examined} of ${runWindow.matchedCount} matching runs. "runs.total" is the full matched count; "runs.byStatus", per-agent execution metrics and attention items cover the examined window only. Narrow with projectId/from/to, or read older runs through workflow.list_runs / workflow.get_run.`
+    );
+  }
   if (unknownModels.size) caveats.push(`Unknown models priced at fallback rates: ${[...unknownModels].sort().join(", ")}.`);
   return {
     agents: { total: inputs.nodes.length, byStatus, byRisk },
@@ -219,7 +260,11 @@ export function buildConstellationSummary(inputs: ConstellationInputs, generated
       derivedExecutionEdges: deriveExecutionEdges(inputs.nodes).length,
       disabled: inputs.relationships.filter((relationship) => !relationship.enabled).length
     },
-    runs: { total: inputs.runs.length, byStatus: runsByStatus },
+    runs: {
+      total: runsTotal,
+      byStatus: runsByStatus,
+      ...(runWindow ? { examined: runWindow.examined, windowed: runWindow.hasMore } : {})
+    },
     usage: { ...finishUsage(usage), unattributedRecordCount },
     generatedAt,
     caveats

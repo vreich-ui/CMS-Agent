@@ -25,7 +25,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { handler } from "../../../netlify/functions/mcp.mjs";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { listNodeExecutions, listNodeOutputs } from "../../../src/agent/workspace/nodeRuntime.js";
-import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
+import { runSummaryOf, type ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
 const call = async (name: string, args: Record<string, unknown> = {}) => {
@@ -120,6 +120,7 @@ describe("node.list_executions / node.list_outputs use targeted getRun when runI
     async getRun(runId) { this.getRunCalls.push(runId); return runs.find((run) => run.runId === runId); },
     async listRuns() { this.listRunsCalls += 1; return runs; },
     async listRunsPage() { this.listRunsCalls += 1; return { runs, matchedCount: runs.length, hasMore: false }; },
+    async listRunSummariesPage() { this.listRunsCalls += 1; return { rows: runs.map((run) => runSummaryOf(run)), matchedCount: runs.length, hasMore: false }; },
     async saveRun(run) { return run; },
     async resetRun(_runId, run) { return run; },
     async health() { return { ok: true, backend: "spy", version: "spy.v1" } as any; }

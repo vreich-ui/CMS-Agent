@@ -10,7 +10,7 @@ import {
   selectContinuableRuns
 } from "../../../src/agent/workspace/runContinuation.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
-import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
+import { runSummaryOf, type ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 
 // T5 — the continuation tick's whole judgement is this selector, so it is tested as what it is: a
 // pure function of the persisted record plus a clock. No repository, no schedule, no network.
@@ -117,6 +117,7 @@ describe("T5 continuation selector — which runs a scheduled tick re-enters", (
 const fakeStore = (records: WorkflowExecutionRecord[]): ExecutionRepository => ({
   listRuns: async () => records,
   listRunsPage: async () => ({ runs: records, matchedCount: records.length, hasMore: false }),
+  listRunSummariesPage: async () => ({ rows: records.map((record) => runSummaryOf(record)), matchedCount: records.length, hasMore: false }),
   getRun: async (runId: string) => records.find((record) => record.runId === runId),
   createRun: async (record) => record,
   saveRun: async (record) => record,

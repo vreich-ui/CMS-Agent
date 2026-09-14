@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runSummaryOf } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import { BlobExecutionRepository } from "../../../src/agent/repository/blobs/BlobExecutionRepository.js";
 import { MemoryExecutionRepository } from "../../../src/agent/repository/memory/MemoryExecutionRepository.js";
 import type { BlobStoreClient } from "../../../src/agent/repository/blobs/blobClient.js";
@@ -23,15 +24,12 @@ const run = (overrides: Partial<WorkflowExecutionRecord> = {}): WorkflowExecutio
     ...overrides
   }) as unknown as WorkflowExecutionRecord;
 
-// The compact per-project index entry shape the repository maintains under run-index/<projectId>.json.
-const entryOf = (r: WorkflowExecutionRecord) => ({
-  runId: r.runId,
-  projectId: r.projectId,
-  workflowId: r.workflowId,
-  status: r.status,
-  startedAt: r.startedAt,
-  updatedAt: r.updatedAt
-});
+// The per-project index entry the repository maintains under run-index/<projectId>.json.
+// W4 — the entry is now the full list-row projection (runSummaryOf) plus a schema stamp, so a
+// `detail: "summary"` listing can be answered without opening a single run blob. Built here from
+// the same function the repository uses, rather than re-typed: a second hand-written copy of the
+// projection is exactly the drift this shape has to be proof against.
+const entryOf = (r: WorkflowExecutionRecord) => ({ ...runSummaryOf(r), v: 3 });
 const indexKeyFor = (projectId: string) => `run-index/${encodeURIComponent(projectId)}.json`;
 const META_KEY = "run-index/!meta.json";
 
@@ -55,7 +53,9 @@ const fakeStore = (seed: WorkflowExecutionRecord[], options: { seedIndex?: boole
     const byProject = new Map<string, WorkflowExecutionRecord[]>();
     for (const r of seed) byProject.set(r.projectId, [...(byProject.get(r.projectId) ?? []), r]);
     for (const [projectId, runs] of byProject) data.set(indexKeyFor(projectId), { runs: runs.map(entryOf) });
-    data.set(META_KEY, { backfilledAt: "2026-08-29T00:00:00.000Z" });
+    // W4 — the meta stamp carries the entry-schema version; a store seeded without it is a
+    // store the repository must (correctly) rebuild, which is its own test below.
+    data.set(META_KEY, { backfilledAt: "2026-08-29T00:00:00.000Z", v: 3 });
   }
   let listCalls = 0;
   let runBlobGets = 0;

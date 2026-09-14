@@ -4,7 +4,7 @@ import { repositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { runContinuationTick } from "../../../src/agent/workspace/runContinuation.js";
 import { __resetDriverEnvLogForTests, capturePreviewEnvLine, logProjectEnvNamesOnce, preflightDriverEnv } from "../../../src/agent/workspace/driverEnvPreflight.js";
 import { getRun, runNextNode, startDryRun } from "../../../src/agent/workspace/executor.js";
-import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
+import { runSummaryOf, type ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
 // S1 (chat-path). Two facts a diagnosis needs and the record never carried:
@@ -16,6 +16,7 @@ import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/execu
 const fakeStore = (records: WorkflowExecutionRecord[]): ExecutionRepository => ({
   listRuns: async () => records,
   listRunsPage: async () => ({ runs: records, matchedCount: records.length, hasMore: false }),
+  listRunSummariesPage: async () => ({ rows: records.map((record) => runSummaryOf(record)), matchedCount: records.length, hasMore: false }),
   getRun: async (runId: string) => records.find((record) => record.runId === runId),
   createRun: async (record) => record,
   saveRun: async (record) => { const index = records.findIndex((candidate) => candidate.runId === record.runId); records[index] = record; return record; },

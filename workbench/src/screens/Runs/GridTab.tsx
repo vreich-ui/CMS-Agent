@@ -12,7 +12,6 @@ import type { RunFilters } from './index';
 import { nodeRunStatus, orderedNodes, runTimestamp, shortId } from './helpers';
 
 const GRID_CAP = 9;
-const DEFAULT_WORKFLOW = 'publishing_conductor';
 
 /** U5 — one grid row (a node across the recent runs). Its own component so
  * the quick-look hover trigger (one per node) can be a single hook instance
@@ -57,22 +56,28 @@ function GridRow({
 
 export function GridTab({
   runs,
+  matchedCount,
+  workflowId,
   workflows,
   workflowById,
-  filters,
   setFilters,
   onOpen,
 }: {
+  /** REVIEW FIX — already scoped to `workflowId` BY THE SERVER (see Runs/index.tsx). */
   runs: Run[];
+  /** Every run this workflow has, not just the loaded window — what the footer must report. */
+  matchedCount: number;
+  workflowId: string;
   workflows: Workflow[];
   workflowById: Record<string, Workflow>;
-  filters: RunFilters;
   setFilters: (updater: (f: RunFilters) => RunFilters) => void;
   onOpen: (run: Run) => void;
 }) {
-  const wfId = filters.wf || DEFAULT_WORKFLOW;
+  const wfId = workflowId;
   const wf = workflowById[wfId];
   const order = wf ? orderedNodes(wf) : [];
+  // Belt-and-braces: the server already scoped this, so the filter is a no-op unless a stale
+  // page is still on screen during a scope change.
   const wfRuns = runs.filter((r) => r.wf === wfId);
   const recent = [...wfRuns].sort((a, b) => runTimestamp(b) - runTimestamp(a)).slice(0, GRID_CAP).reverse();
 
@@ -84,6 +89,9 @@ export function GridTab({
           onChange={(e) => setFilters((f) => ({ ...f, wf: e.target.value }))}
           aria-label="grid workflow"
         >
+          {/* A value with no matching option makes the control display the wrong workflow while
+              the query asks about this one. If the scope is not in the list, name it explicitly. */}
+          {workflows.some((w) => w.id === wfId) ? null : <option value={wfId}>{wfId}</option>}
           {workflows.map((w) => (
             <option key={w.id} value={w.id}>
               {w.name}
@@ -115,7 +123,7 @@ export function GridTab({
         </div>
       )}
       <Note>
-        Showing {recent.length} of {wfRuns.length} runs. Each column is one run, each row one node — scan across a
+        Showing {recent.length} of {matchedCount} runs. Each column is one run, each row one node — scan across a
         row to spot when a node started failing. Regression-gate verdicts from Learning → Evaluate will mark these
         columns once available.
       </Note>

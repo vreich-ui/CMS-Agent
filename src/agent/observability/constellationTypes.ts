@@ -48,7 +48,16 @@ export type RelationshipMetrics = {
 export type ConstellationSummary = {
   agents: { total: number; byStatus: Record<string, number>; byRisk: Record<string, number> };
   relationships: { stored: number; derivedExecutionEdges: number; disabled: number };
-  runs: { total: number; byStatus: Partial<Record<ExecutionStatus, number>> };
+  runs: {
+    // Every run matching the filters — counted off the run index, never by reading records.
+    total: number;
+    // W3: over the EXAMINED window (see `examined`), not over `total`.
+    byStatus: Partial<Record<ExecutionStatus, number>>;
+    // How many run records were actually read. Absent when the caller supplied every run.
+    examined?: number;
+    // True when matches exist outside the examined window — i.e. byStatus is a sample.
+    windowed?: boolean;
+  };
   usage: UsageByStatus & { unattributedRecordCount: number };
   generatedAt: string;
   caveats: string[];

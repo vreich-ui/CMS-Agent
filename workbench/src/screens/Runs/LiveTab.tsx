@@ -8,8 +8,6 @@ import { Ic } from '../../components/Icons';
 import type { Run, Workflow } from '../../types';
 import { blockedSummary, orderedNodes, shortId } from './helpers';
 
-const LIVE_STATUSES = new Set(['running', 'paused', 'blocked']);
-
 function LiveCard({ run, wf, onOpen }: { run: Run; wf: Workflow | undefined; onOpen: () => void }) {
   const total = wf ? orderedNodes(wf).length : run.done;
   return (
@@ -60,18 +58,25 @@ function LiveCard({ run, wf, onOpen }: { run: Run; wf: Workflow | undefined; onO
 
 export function LiveTab({
   runs,
+  matchedCount,
   workflowById,
   onOpen,
   onGoHistory,
 }: {
+  /** REVIEW FIX — already scoped to the live statuses BY THE SERVER (see Runs/index.tsx). This
+   *  used to be the screen's generic newest-20 page, filtered here: a blocked run older than the
+   *  window simply vanished, and the empty state below then announced that the pipeline was
+   *  caught up. An all-clear is the one claim this tab must never make on partial data. */
   runs: Run[];
+  /** Every live run the server matched, which is what this tab's count must report. */
+  matchedCount: number;
   workflowById: Record<string, Workflow>;
   onOpen: (run: Run) => void;
   onGoHistory: () => void;
 }) {
-  const live = runs.filter((r) => LIVE_STATUSES.has(r.status));
+  const live = runs;
 
-  if (live.length === 0) {
+  if (matchedCount === 0) {
     return (
       <Card label="live runs">
         <p style={{ margin: '0 0 10px', color: 'var(--muted)' }}>
@@ -84,6 +89,14 @@ export function LiveTab({
 
   return (
     <>
+      {/* REVIEW FIX (round 2) — the tab is capped at 100 rows; say so rather than truncating
+          silently. The empty claim above is now honest, and so is the full one. */}
+      {matchedCount > live.length ? (
+        <Note>
+          Showing {live.length} of {matchedCount} live runs — narrow by workflow or project in History to see the
+          rest.
+        </Note>
+      ) : null}
       <div className="livecards">
         {live.map((run) => (
           <LiveCard key={run.id} run={run} wf={workflowById[run.wf]} onOpen={() => onOpen(run)} />
@@ -93,7 +106,3 @@ export function LiveTab({
     </>
   );
 }
-
-// Re-exported so a future tab (or a test) can reuse the same "what counts as
-// live" definition without duplicating the status set.
-export { LIVE_STATUSES };

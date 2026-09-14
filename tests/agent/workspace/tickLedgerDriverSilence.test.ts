@@ -5,7 +5,7 @@ import { MemoryDriverHealthRepository } from "../../../src/agent/repository/memo
 import { SILENT_TICK_THRESHOLD, TICK_LEDGER_RETENTION_MS } from "../../../src/agent/workspace/driverHealth.js";
 import { repositoryManager, resetRepositoryManager } from "../../../src/agent/runtime/repositories.js";
 import { createWorkspaceTools } from "../../../src/agent/mcp/workspace/tools.js";
-import type { ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
+import { runSummaryOf, type ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
 // W0 T0.2/T0.3 acceptance. The 2026-09-04 incident, in one sentence: a run sat "running" with
@@ -16,6 +16,7 @@ import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/execu
 const fakeStore = (records: WorkflowExecutionRecord[]): ExecutionRepository => ({
   listRuns: async () => records,
   listRunsPage: async () => ({ runs: records, matchedCount: records.length, hasMore: false }),
+  listRunSummariesPage: async () => ({ rows: records.map((record) => runSummaryOf(record)), matchedCount: records.length, hasMore: false }),
   getRun: async (runId: string) => records.find((record) => record.runId === runId),
   createRun: async (record) => record,
   saveRun: async (record) => { const index = records.findIndex((candidate) => candidate.runId === record.runId); records[index] = record; return record; },
