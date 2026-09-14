@@ -77,8 +77,33 @@ export type EntryNodeRequirementCheck = {
   satisfied: boolean;
 };
 
+// A10 — THE STRUCTURAL HALF inputMapping cannot express. A binding may declare an INITIAL-INPUT
+// BUILDER (workflowInitialInput.ts) that constructs a nested object on the run's initialInput from
+// the operation's own flat fields — the only way an entry node reading a single nested brief
+// (image_revision_intake's imageTemplateRevisionBrief) can ever be satisfied, since inputMapping is
+// a flat field-RENAME table by design. This is the declaration side of that builder, and it is
+// CHECKED here, not trusted: every field in `requiredOperationFields` must ALREADY be guaranteed by
+// the operation's own schema (required, or defaulted) — exactly the same standard a renamed field is
+// held to. A builder needing a field the operation does not guarantee contributes NOTHING to the
+// guaranteed set and makes the contract unsatisfied, because such a builder can refuse at run time
+// for an input the operation's schema happily accepts. Declared as a plain data shape (never the
+// live `build` function) so this module stays pure and independently testable.
+export type BindingInitialInputBuilderContract = {
+  builderId: string;
+  providesInitialInputFields: readonly string[];
+  requiredOperationFields: readonly string[];
+};
+
 export type BindingInputContractResult = {
   workflowId: string;
+  // null when the binding declares no initial-input builder.
+  builderId: string | null;
+  // The builder's own `requiredOperationFields` that the operation's schema does NOT guarantee.
+  // Non-empty means the builder's contribution is withheld entirely (see the type above).
+  unsatisfiedBuilderOperationFields: string[];
+  // The target fields credited to the builder — its declared `providesInitialInputFields`, or []
+  // when there is no builder or its own required operation fields are not all guaranteed.
+  builderProvidedTargetFields: string[];
   // The TARGET field names the mapped operation input is guaranteed to carry into the entry node(s),
   // sorted for deterministic snapshotting.
   guaranteedTargetFields: string[];
@@ -87,7 +112,8 @@ export type BindingInputContractResult = {
   // paper over: no entry node means nothing was actually checked, so `satisfied` is false, never
   // vacuously true.
   entryNodeChecks: EntryNodeRequirementCheck[];
-  // true iff entryNodeChecks is non-empty and every entry in it is satisfied.
+  // true iff entryNodeChecks is non-empty, every entry in it is satisfied, and (when a builder is
+  // declared) every operation field that builder requires is guaranteed.
   satisfied: boolean;
 };
 
@@ -209,12 +235,28 @@ export function checkBindingInputContract(
   workflowId: string,
   inputMapping: Readonly<Record<string, string>>,
   source: OperationInputContractSource,
-  canonicalNodes: readonly WorkspaceNode[]
+  canonicalNodes: readonly WorkspaceNode[],
+  // A10 — the binding's declared initial-input builder, when it has one. Optional so every existing
+  // caller and every binding without a builder is unchanged.
+  builder?: BindingInitialInputBuilderContract
 ): BindingInputContractResult {
-  const guaranteedTargetFields = resolveGuaranteedTargetFields(source, inputMapping);
+  const guaranteedSourceFields = new Set<string>([...source.requiredFields, ...source.defaultedFields]);
+  // The builder's own precondition, checked to the SAME standard as a renamed field (see
+  // BindingInitialInputBuilderContract): guaranteed by the operation's schema, or not credited.
+  const unsatisfiedBuilderOperationFields = builder ? builder.requiredOperationFields.filter((field) => !guaranteedSourceFields.has(field)).slice().sort() : [];
+  const builderProvidedTargetFields = builder && unsatisfiedBuilderOperationFields.length === 0 ? [...new Set(builder.providesInitialInputFields)].sort() : [];
+  const guaranteedTargetFields = [...new Set([...resolveGuaranteedTargetFields(source, inputMapping), ...builderProvidedTargetFields])].sort();
   const guaranteedSet = new Set(guaranteedTargetFields);
   const entryNodes = resolveWorkflowEntryNodes(canonicalNodes);
   const entryNodeChecks = entryNodes.map((node) => checkEntryNode(node, guaranteedSet));
-  const satisfied = entryNodeChecks.length > 0 && entryNodeChecks.every((check) => check.satisfied);
-  return { workflowId, guaranteedTargetFields, entryNodeChecks, satisfied };
+  const satisfied = entryNodeChecks.length > 0 && entryNodeChecks.every((check) => check.satisfied) && unsatisfiedBuilderOperationFields.length === 0;
+  return {
+    workflowId,
+    builderId: builder?.builderId ?? null,
+    unsatisfiedBuilderOperationFields,
+    builderProvidedTargetFields,
+    guaranteedTargetFields,
+    entryNodeChecks,
+    satisfied
+  };
 }

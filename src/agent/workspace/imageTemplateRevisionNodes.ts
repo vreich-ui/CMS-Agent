@@ -30,6 +30,32 @@ import { IMAGE_REVISION_ARTIFACTS } from "../capture/imageTemplateRevisionEngine
 const UPDATED_AT = "2026-09-14T00:00:00.000Z";
 const openInput = { type: "object", additionalProperties: true } as const;
 
+// A10 — an entry node that reads ONE named nested object off the run's initialInput says so in its
+// own schema, instead of declaring the fully permissive openInput shape and leaving
+// bindingInputContract.ts's checkEntryNode with nothing to evaluate (the A10-D1 vacuous pass).
+//
+// TWO BRANCHES BECAUSE TWO SHAPES GENUINELY REACH THIS NODE, and an `anyOf` of exactly-`required`
+// branches is the one multi-branch form bindingInputContract.ts's checkEntryNode evaluates (the
+// same form brand_imagery_writer already uses):
+//   * `{ [briefKey]: ... }` — the binding-contract view. R1c models an entry node's declared
+//     required names as INITIALINPUT field names (that module's own header), which is what the
+//     binding's initial-input builder guarantees and what makes the contract check real here.
+//   * `{ initialInput: ... }` — the envelope the conductor actually hands an entry node
+//     (executor.ts builds `{ initialInput, dependencies, clientProjectId }`), where the brief sits
+//     one level down. Without this branch, node.execute / node.prepare_execution — which validate
+//     `data.input` against this very schema and THROW input_validation_failed — would reject the
+//     real dispatch shape for a node that handles it perfectly well.
+// Neither branch weakens the missing-brief refusal: that lives at the dispatch boundary
+// (cloneConductorRoutes.ts's image_template_revision_brief_missing), which reads the run's own
+// initialInput and refuses by name regardless of what this schema admits.
+const briefInput = (briefKey: string) =>
+  ({
+    type: "object",
+    additionalProperties: true,
+    anyOf: [{ required: [briefKey] }, { required: ["initialInput"] }],
+    properties: { [briefKey]: { type: "object" }, initialInput: { type: "object" } }
+  }) as const;
+
 const envelopeSchema = (artifact: string, extra: Record<string, unknown> = {}, extraRequired: string[] = []) => ({
   type: "object",
   required: ["artifact", "summary", ...extraRequired],
@@ -52,7 +78,16 @@ export const imageTemplateRevisionNodes = [
     description:
       "Resolves the tagged/checksummed/capture-request-provenanced source image exactly once against the tenant's asset catalog, then fetches every named template's CURRENT version from the cross-tenant TemplateLibraryStore (#207) — read-only, no mutation. A capture request id is used strictly as provenance to resolve an asset, never mapped to an article or any content_item. Multiple/zero tag matches are a named blocker, never a silent pick.",
     prompt: `Objective: resolve initialInput.imageTemplateRevisionBrief's source image and fetch every named target template's current version.\n${DETERMINISTIC_PROMPT_FOOTER}`,
-    inputSchema: openInput,
+    // A10 — NOT `openInput`, unlike this graph's three downstream nodes. This node reads ONE thing
+    // (imageTemplateRevisionBrief) and refuses without it (cloneConductorRoutes.ts's
+    // image_template_revision_brief_missing), so its schema now SAYS so. That is what makes
+    // bindingInputContract.ts's check a real check for this binding rather than an open schema
+    // passing for lack of anything to evaluate: the node states its requirement, the binding's
+    // declared initial-input builder is verified to supply exactly that field, and preflight's
+    // `executable:true` follows from those two facts meeting — never from a relaxed check. See
+    // briefInput above for why it has two branches, and `additionalProperties: true` still admits
+    // every other key each shape carries alongside them.
+    inputSchema: briefInput("imageTemplateRevisionBrief"),
     outputSchema: envelopeSchema(
       IMAGE_REVISION_ARTIFACTS.intake,
       {

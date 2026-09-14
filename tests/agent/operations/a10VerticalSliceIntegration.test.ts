@@ -232,17 +232,18 @@ afterEach(() => {
 // own "no brief -> empty envelope" step function and letting every later stage complete on it.
 // =================================================================================================
 describe("A10-D1 — the input a signed-in Platform chat dispatches never reaches the workflow's brief", () => {
-  it("FIXED — image_template_revision: R1c now reports the binding contract UNSATISFIED — the entry node can never receive a brief through this binding", () => {
+  // A10 (this task) — the binding is now SATISFIED, and Platform's own dispatch input is STILL flat:
+  // the brief is constructed on the CMS-Agent side, inside startDryRun, by the binding's declared
+  // initial-input builder. That split is the fix — nothing about Platform's algorithm changed, so
+  // this mirror of it is unchanged too. See imageTemplateRevisionDispatch.test.ts for the run that
+  // drives this exact payload through startDryRun and into image_revision_intake.
+  it("FIXED (A10) — image_template_revision: the binding contract is satisfied, while Platform's dispatch input stays flat and the brief is built CMS-Agent-side", () => {
     const binding = getOperationWorkflowBinding("image_template_revision")!;
-    expect(binding.inputMapping).toEqual({});
-    // No more green light: an empty inputMapping against a fully-open entry-node schema is no longer
-    // read as "nothing required, therefore satisfied" — see bindingInputContract.ts's
-    // open_schema_no_guaranteed_input check.
-    expect(resolveBindingInputContract(binding).contract?.satisfied).toBe(false);
-    // The flat keys Platform would still construct from this binding's (now provably unsound)
-    // inputMapping — `imageTemplateRevisionBrief` is still not among them; preflight now refuses to
-    // dispatch this operation at all (operationPreflight.test.ts's own R1c coverage), so this input
-    // shape is never actually sent in production any more.
+    expect(binding.inputMapping).toEqual({}); // still nothing renamed — the builder constructs, it does not rename
+    expect(binding.initialInputBuilder?.providesInitialInputFields).toEqual(["imageTemplateRevisionBrief"]);
+    expect(resolveBindingInputContract(binding).contract?.satisfied).toBe(true);
+    // Platform still sends the operation's own flat fields; `imageTemplateRevisionBrief` is NOT among
+    // them and is not meant to be — it is built at run creation from exactly these fields.
     const { workflowId, input } = platformDispatchInput("image_template_revision", { templateRefs: [templateRef("newsletter")] }, TARGET);
     expect(workflowId).toBe(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID);
     expect(Object.keys(input)).not.toContain("imageTemplateRevisionBrief");

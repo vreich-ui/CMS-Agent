@@ -36,7 +36,14 @@
 // Structurally the slice of StartDryRunInput this gate reads. Declared locally rather than imported
 // from executor.ts: that module imports this one, and a type-only edge back would be a cycle the
 // bundler tolerates but the reader should not have to.
-export type SubjectGateInput = { input?: unknown; executionMode?: string; entrypoint?: unknown };
+export type SubjectGateInput = {
+  input?: unknown;
+  executionMode?: string;
+  entrypoint?: unknown;
+  // A10 — the initialInput keys THIS run's own workflow constructs, passed in by startDryRun. See
+  // StructuredBriefKeys below for why this is a caller-supplied parameter rather than a list here.
+  structuredBriefKeys?: readonly string[];
+};
 
 /** Every field a caller may legitimately use to say what the piece is about. Order is not
  *  significant — the first non-empty one wins only for the human-readable echo in the refusal. */
@@ -59,6 +66,29 @@ export const EDITORIAL_SUBJECT_KEYS = [
  *  or a source URL to work from has named its subject as surely as one handed a title. */
 export const EDITORIAL_CONTENT_KEYS = ["body", "draft", "articleBody", "content", "sourceUrl", "contentSource"] as const;
 
+/** A10 — STRUCTURED BRIEF ENVELOPES. Populated, one of these says what a run is about at least as
+ *  precisely as a topic line does — the same reasoning this module already applies to a nested
+ *  `brief`/`input` object and to a typed `artifact` envelope, which it accepts structurally rather
+ *  than by rendering them as prose.
+ *
+ *  WHY THIS MATTERS HERE. This gate is applied to EVERY live run in startDryRun, not just editorial
+ *  ones. A chat-dispatched image_template_revision run carries
+ *  {tenantId, templateRefs, sourceAsset, batchSize, imageTemplateRevisionBrief} — no topic, no
+ *  title, no body, and none of the keys above — so it was refused with editorial_subject_missing
+ *  before the workflow it names could run even one node. That refusal read as "this run does not say
+ *  what the piece is about" for a run that says exactly what it is about, in the system's own
+ *  vocabulary: a named tenant, a named source image, and a named list of templates.
+ *
+ *  PASSED IN BY THE CALLER, NEVER A MODULE-LEVEL LIST OF KEY NAMES. A list here would apply to every
+ *  workflow: `{category, tags, pdfTemplateBrief: {anything}}` would then satisfy this gate for a
+ *  LIVE publishing_conductor run — taxonomy only, exactly run_1788207377621_behzkh, the seventeen
+ *  paid nodes on nothing this gate exists to prevent — because one unrelated key was attached.
+ *  Instead startDryRun passes the initialInput keys the NAMED workflow's own registered builder
+ *  constructs (workflowInitialInput.ts's providesInitialInputFields), so a brief key only ever
+ *  counts as a subject for the one workflow whose entry node actually reads it, and a workflow with
+ *  no builder is gated exactly as it was before this change. */
+export type StructuredBriefKeys = readonly string[];
+
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const nonEmptyString = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
@@ -77,7 +107,7 @@ const carriesSomething = (value: unknown): boolean => {
  * A bare non-empty string input IS the subject — that is the oldest calling convention in this
  * codebase (`input: "CA3 regression"`) and it must keep working.
  */
-export const readEditorialSubject = (initialInput: unknown): string | undefined => {
+export const readEditorialSubject = (initialInput: unknown, structuredBriefKeys: StructuredBriefKeys = []): string | undefined => {
   if (nonEmptyString(initialInput)) return initialInput.trim();
   if (!isRecord(initialInput)) return undefined;
   // A TYPED ARTIFACT ENVELOPE is a declaration in its own right, and a richer one than a topic line:
@@ -86,6 +116,14 @@ export const readEditorialSubject = (initialInput: unknown): string | undefined 
   // than by enumerating envelope-specific fields keeps this gate from having to know every artifact
   // shape, now or later.
   if (nonEmptyString(initialInput.artifact)) return `<${initialInput.artifact.trim()}>`;
+  // A10 — a populated structured brief envelope this RUN'S OWN WORKFLOW constructs, checked for the
+  // same reason the typed `artifact` envelope above is: it is a declaration in the system's own
+  // vocabulary, and there is nothing to render as a line of text. Empty for every workflow with no
+  // registered initial-input builder, which is every workflow this change does not touch — see the
+  // StructuredBriefKeys doc comment for why this is a parameter and not a list in this module.
+  for (const key of structuredBriefKeys) {
+    if (carriesSomething(initialInput[key])) return `<${key}>`;
+  }
   for (const key of EDITORIAL_SUBJECT_KEYS) {
     const value = initialInput[key];
     if (nonEmptyString(value)) return value.trim();
@@ -99,7 +137,8 @@ export const readEditorialSubject = (initialInput: unknown): string | undefined 
   return undefined;
 };
 
-export const declaresEditorialSubject = (initialInput: unknown): boolean => readEditorialSubject(initialInput) !== undefined;
+export const declaresEditorialSubject = (initialInput: unknown, structuredBriefKeys: StructuredBriefKeys = []): boolean =>
+  readEditorialSubject(initialInput, structuredBriefKeys) !== undefined;
 
 export type SubjectGateVerdict = { ok: true } | { ok: false; code: string; message: string; details: Record<string, unknown> };
 
@@ -116,16 +155,18 @@ export const EDITORIAL_SUBJECT_MISSING = "editorial_subject_missing";
 export function checkEditorialSubject(data: SubjectGateInput): SubjectGateVerdict {
   if (data.executionMode === "mock") return { ok: true };
   if (data.entrypoint) return { ok: true };
-  if (declaresEditorialSubject(data.input)) return { ok: true };
+  const structuredBriefKeys = data.structuredBriefKeys ?? [];
+  if (declaresEditorialSubject(data.input, structuredBriefKeys)) return { ok: true };
   const supplied = isRecord(data.input) ? Object.keys(data.input).sort() : typeof data.input;
   return {
     ok: false,
     code: EDITORIAL_SUBJECT_MISSING,
     message:
       "This run does not say what the piece is about, so it was not started and nothing was spent. Supply a subject in the run input — any of " +
-      `${EDITORIAL_SUBJECT_KEYS.slice(0, 6).join(", ")} — or the content itself (${EDITORIAL_CONTENT_KEYS.slice(0, 3).join(", ")}). ` +
+      `${EDITORIAL_SUBJECT_KEYS.slice(0, 6).join(", ")} — or the content itself (${EDITORIAL_CONTENT_KEYS.slice(0, 3).join(", ")})` +
+      `${structuredBriefKeys.length ? `, or this workflow's own ${structuredBriefKeys.join("/")}` : ""}. ` +
       "Taxonomy alone (a category and tags) is not a subject: it says where a piece would file, not what it would say. " +
       "If you are an agent holding a conversation with the requester, ask for the topic and angle and start the run once you have them.",
-    details: { suppliedKeys: supplied, accepted: { subject: [...EDITORIAL_SUBJECT_KEYS], content: [...EDITORIAL_CONTENT_KEYS] } }
+    details: { suppliedKeys: supplied, accepted: { subject: [...EDITORIAL_SUBJECT_KEYS], content: [...EDITORIAL_CONTENT_KEYS], structuredBrief: [...structuredBriefKeys] } }
   };
 }

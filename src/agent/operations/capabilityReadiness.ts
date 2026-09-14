@@ -60,7 +60,13 @@ export type CapabilityAvailability =
 // How one capability's availability is decided. "tool": needs one named tool allowed. "tool_and_dialect":
 // needs that tool allowed AND an object dialect configured (the capability reads/writes a governed
 // object). "unsupported": no tenant, however configured, can satisfy this today — nothing in the
-// codebase implements a verb for it (see capabilityVocabulary.ts's own note on image_template_write).
+// codebase implements a verb for it.
+//
+// A10 — NO capability claims `unsupported` any more: image_template_write was the last one, and its
+// claim was stale (see its own entry below). The kind is KEPT, deliberately, because it is the
+// honest derivation for a capability some descriptor requires and nothing implements — the
+// alternative is naming a tool nobody calls, which reads as available. capabilityReadiness.test.ts
+// asserts that no capability claims it today, so claiming it again is a visible choice.
 type CapabilityRequirement =
   | { kind: "tool"; toolName: string }
   | { kind: "tool_and_dialect"; toolName: string }
@@ -94,10 +100,24 @@ const REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   pdf_template_write: { kind: "tool", toolName: "create_pdf_template" },
   pdf_template_publish: { kind: "tool", toolName: "publish_pdf_template" },
   image_search: { kind: "tool", toolName: "search_images" },
-  image_template_write: {
-    kind: "unsupported",
-    note: "No registered tenant dialect or hook in this codebase names a verb that revises images and their placements within a web page template (image_template_revision, A9, is unimplemented). This is a systemic gap, not a per-tenant configuration one."
-  }
+  // A10 — WAS `{ kind: "unsupported" }`, on the stated grounds that "image_template_revision, A9, is
+  // unimplemented". A9 SHIPPED: the operation is bound to image_template_revision_studio and its
+  // apply stage (cloneConductorRoutes.ts's "image_revision_apply" -> runImageRevisionApplyBatch)
+  // performs the revision by reusing pdfTemplateEngine.ts's OWN mint/publish stages — whose real
+  // verbs are create_pdf_template and publish_pdf_template, both named "allowed" in
+  // GENESIS_TENANT_TOOL_POLICIES (genesisTenantProfile.ts), exactly like pdf_template_write below.
+  // Leaving this "unsupported" was no longer an honest systemic gap but a stale one, and it was
+  // load-bearing: an "unsupported" gap is reason "not_supported", which Platform's own
+  // resolveCatalogOperation treats as a hard refusal (`notSupportedGaps.length > 0` =>
+  // operation_not_ready) for EVERY tenant, however provisioned — so this single stale line refused
+  // every chat-dispatched image_template_revision request no matter what else was wired.
+  // create_pdf_template (the WRITE verb) is what this capability gates; the publish half is gated
+  // separately by the run's own publish-risk gate on image_revision_apply plus the project's
+  // publishEnabled kill switch (cloneConductorRoutes.ts's image_revision_publish_disabled), not by a
+  // preflight capability. The engine's "web" surface remains a named PER-ITEM capability gap
+  // reported by the run itself (image_revision_surface_unsupported), which is a property of the
+  // request's targets, not of the tenant's configuration.
+  image_template_write: { kind: "tool", toolName: "create_pdf_template" }
 };
 
 // VALIDATED AT IMPORT TIME, same discipline operationWorkflowBindings.ts's assertBindingIsSound()

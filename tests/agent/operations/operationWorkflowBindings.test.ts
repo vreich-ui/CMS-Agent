@@ -46,13 +46,34 @@ describe("operationWorkflowBindings", () => {
   // A9 — image_template_revision is now BOUND to image_template_revision_studio (see
   // operationWorkflowBindings.ts's own header). Moved OUT of the unbound set above, mirroring A7's
   // own pdf_template_family precedent immediately below.
-  it("binds image_template_revision to the image_template_revision_studio workflow, with a deliberately empty inputMapping", () => {
+  // A10 — inputMapping is still EMPTY (nothing is renamed) and the binding now ALSO declares the
+  // initial-input BUILDER that constructs the nested brief inputMapping structurally cannot express.
+  it("binds image_template_revision to the image_template_revision_studio workflow, with an empty inputMapping and a declared initial-input builder", () => {
     const binding = getOperationWorkflowBinding("image_template_revision");
     expect(binding).toEqual({
       operationId: "image_template_revision",
       workflowId: "image_template_revision_studio",
-      inputMapping: {}
+      inputMapping: {},
+      initialInputBuilder: {
+        builderId: "image_template_revision_brief_builder.v1",
+        providesInitialInputFields: ["imageTemplateRevisionBrief"],
+        requiredOperationFields: ["tenantId", "templateRefs", "sourceAsset"]
+      }
     });
+  });
+
+  // The public shape is DATA ONLY — a caller asking "is this bound" never receives a callable it
+  // could invoke out of band, the same posture operationExecutorBindings.ts takes with its `run`.
+  it("a declared initial-input builder is exposed as plain data, never as the live build function", () => {
+    const binding = getOperationWorkflowBinding("image_template_revision")!;
+    expect(Object.keys(binding.initialInputBuilder!).sort()).toEqual(["builderId", "providesInitialInputFields", "requiredOperationFields"]);
+    expect("build" in binding.initialInputBuilder!).toBe(false);
+  });
+
+  it("a caller cannot mutate the module's own table through a returned binding's builder declaration", () => {
+    const binding = getOperationWorkflowBinding("image_template_revision")!;
+    (binding.initialInputBuilder!.requiredOperationFields as string[]).push("tampered");
+    expect(getOperationWorkflowBinding("image_template_revision")!.initialInputBuilder!.requiredOperationFields).toEqual(["tenantId", "templateRefs", "sourceAsset"]);
   });
 
   // A7 — pdf_template_family is now BOUND to pdf_template_studio (see operationWorkflowBindings.ts's
@@ -137,22 +158,32 @@ describe("operationWorkflowBindings", () => {
       expect(entryNodeCheck!.satisfied).toBe(false);
     });
 
-    // A10-D1 (was: "A9 — same shape as pdf_template_family's precedent immediately above... the
-    // empty inputMapping trivially satisfies it."). Same vacuous pass, same fix: image_revision_intake
-    // (image_template_revision_studio's entry node) uses the permissive openInput schema for the
-    // identical reason pdf_template_intake does — it reads a NESTED
-    // initialInput.imageTemplateRevisionBrief its schema never names — so checkEntryNode's
-    // open_schema_no_guaranteed_input check now catches this binding too.
-    it("the image_template_revision binding is detected as UNSATISFIED — its entry node's permissive schema gives the empty inputMapping nothing to prove", () => {
+    // A10 — SATISFIED, and for a CHECKED reason, which is the whole point of the flip. The two
+    // halves of the vacuous pass this test used to pin are both gone: image_revision_intake's own
+    // inputSchema now NAMES `imageTemplateRevisionBrief` in a top-level `required` (so the checker
+    // evaluates a real requirement instead of an open schema), and the binding declares an
+    // initial-input builder whose `providesInitialInputFields` is exactly that field — credited only
+    // because every one of its own `requiredOperationFields` is guaranteed by this operation's own
+    // inputSchema/defaults (asserted below). Neither check was relaxed: open_schema_no_guaranteed_input
+    // still fires for pdf_template_family immediately above, whose entry node is still open and
+    // whose binding still has no builder.
+    it("the image_template_revision binding is SATISFIED — its entry node names the brief it requires, and the binding's declared builder is verified to supply exactly that", () => {
       const status = resolveBindingInputContract(getOperationWorkflowBinding("image_template_revision")!);
       expect(status.resolved).toBe(true);
       expect(status.contract).not.toBeNull();
-      expect(status.contract!.satisfied).toBe(false);
+      expect(status.contract!.satisfied).toBe(true);
+      // The builder's own precondition was checked, not assumed: nothing it needs is unguaranteed.
+      expect(status.contract!.builderId).toBe("image_template_revision_brief_builder.v1");
+      expect(status.contract!.unsatisfiedBuilderOperationFields).toEqual([]);
+      expect(status.contract!.builderProvidedTargetFields).toEqual(["imageTemplateRevisionBrief"]);
+      // Nothing is credited to inputMapping (still empty): the brief is the ONLY guaranteed field.
+      expect(status.contract!.guaranteedTargetFields).toEqual(["imageTemplateRevisionBrief"]);
       const entryNodeCheck = status.contract!.entryNodeChecks.find((check) => check.nodeId === "image_revision_intake");
       expect(entryNodeCheck).toBeDefined();
       expect(entryNodeCheck!.unsatisfiedRequired).toEqual([]);
-      expect(entryNodeCheck!.unsupportedConstructs).toEqual(["open_schema_no_guaranteed_input"]);
-      expect(entryNodeCheck!.satisfied).toBe(false);
+      // A REAL requirement was evaluated — not an open schema waved through.
+      expect(entryNodeCheck!.unsupportedConstructs).toEqual([]);
+      expect(entryNodeCheck!.satisfied).toBe(true);
     });
 
     it("listBindingInputContractStatuses() reports one resolved status per registered binding, in operationId order", () => {

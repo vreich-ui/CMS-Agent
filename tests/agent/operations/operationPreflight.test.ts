@@ -271,7 +271,11 @@ describe("preflightOperation", () => {
       expect(result.capabilityGaps.some((gap) => gap.capability === "site_inventory_read")).toBe(true);
     });
 
-    it("each capabilityGap reason (not_configured, not_supported, unavailable) is produced from a real fact, with evidence", () => {
+    // A10 — retitled: not_supported is no longer produced by any CAPABILITY derivation (nothing in
+    // REQUIREMENTS claims `kind:"unsupported"` any more), so this test covers the two reasons
+    // capability derivation still produces. not_supported itself is still produced, and still
+    // asserted, by the R1c binding-contract gap in the block below.
+    it("each capability-derived gap reason (not_configured, unavailable) is produced from a real fact, with evidence", () => {
       const notConfigured = preflightOperation(
         { operationId: "asset_lookup_adopt", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", query: "hero image" } },
         capabilitySourceFor(fullyProvisionedDrLurieFacts({ registeredToolNames: [] }))
@@ -280,17 +284,26 @@ describe("preflightOperation", () => {
       expect(notConfiguredGap?.reason).toBe("not_configured");
       expect(notConfiguredGap?.evidence).toMatchObject({ requiredToolName: "search_artifacts" });
 
-      // A9: image_template_revision is now bound (see operationWorkflowBindings.ts), so its
-      // workflow_binding gap is gone — but image_template_write itself is still not a capability
-      // any registeredToolNames fixture in this file grants, so this specific gap persists
-      // independent of binding status; see the dedicated A9 test file for the bound/executable case.
-      const notSupported = preflightOperation(
-        { operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", templateRefs: [{ surface: "web", templateId: "tpl_1", tenantId: "dr-lurie" }] } },
+      // A10 — this used to assert a "not_supported" image_template_write gap for a FULLY
+      // PROVISIONED tenant, on the grounds that no tenant configuration could ever close it. A9
+      // shipped the implementation and A10 made the capability tool-backed (create_pdf_template,
+      // the write verb image_revision_apply actually performs), so a fully-provisioned tenant now
+      // derives it AVAILABLE and carries no gap at all. The "not_supported" reason itself is still
+      // produced, and still asserted — by the R1c workflow_binding gap in the block below, for a
+      // binding that genuinely cannot deliver its entry node's input. A tenant MISSING the grant
+      // reports not_configured, which is the honest reading: a configuration gap, not a systemic one.
+      const provisioned = preflightOperation(
+        { operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", sourceAsset: { tag: "hero" }, templateRefs: [{ surface: "web", templateId: "tpl_1", tenantId: "dr-lurie" }] } },
         capabilitySourceFor(fullyProvisionedDrLurieFacts())
       );
-      const notSupportedGap = notSupported.capabilityGaps.find((entry) => entry.capability === "image_template_write");
-      expect(notSupportedGap?.reason).toBe("not_supported");
-      expect(notSupportedGap?.evidence).toBeDefined();
+      expect(provisioned.capabilityGaps.some((entry) => entry.capability === "image_template_write")).toBe(false);
+      const withoutGrant = preflightOperation(
+        { operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", sourceAsset: { tag: "hero" }, templateRefs: [{ surface: "web", templateId: "tpl_1", tenantId: "dr-lurie" }] } },
+        capabilitySourceFor(fullyProvisionedDrLurieFacts({ registeredToolNames: ["search_images"] }))
+      );
+      const withoutGrantGap = withoutGrant.capabilityGaps.find((entry) => entry.capability === "image_template_write");
+      expect(withoutGrantGap?.reason).toBe("not_configured");
+      expect(withoutGrantGap?.evidence).toMatchObject({ requiredToolName: "create_pdf_template" });
 
       const unavailable = preflightOperation(
         { operationId: "site_inventory", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } },
@@ -349,17 +362,28 @@ describe("preflightOperation", () => {
       expect(pdfFamily.binding).toBeNull();
       expect(pdfFamily.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
 
-      // A10-D1 — image_template_revision (A9) carries the IDENTICAL empty-inputMapping /
-      // permissive-openInput shape as pdf_template_family above, so it is unsatisfied for the same
-      // reason. It ALSO still carries its own, separate image_template_write capability gap (R1,
-      // asserted in the dedicated test above) — that gap is untouched by this fix and coexists with
-      // the new workflow_binding gap; R1's capability derivation and R1c's contract-soundness check
-      // are orthogonal axes, exactly as the comment on `bound` above states for
-      // visual_identity_review_change.
-      const imageRevision = preflightOperation({ operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
-      expect(imageRevision.executable).toBe(false);
-      expect(imageRevision.binding).toBeNull();
-      expect(imageRevision.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
+      // A10 — image_template_revision NO LONGER behaves like pdf_template_family here: its binding
+      // declares an initial-input builder (verified against the descriptor's own guaranteed fields)
+      // and its entry node names the brief it requires, so R1c's contract is satisfied and the
+      // workflow_binding gap is GONE. It is still not executable with no capabilitySource, and for a
+      // different, honest reason — the workflow branch is now gated on capability readiness too, so
+      // "nothing trusted was supplied about this tenant" keeps it false, exactly as it does for
+      // site_inventory's executor branch.
+      const imageRevisionNoFacts = preflightOperation({ operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+      expect(imageRevisionNoFacts.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
+      expect(imageRevisionNoFacts.capabilityGaps.every((gap) => gap.reason === "not_configured")).toBe(true);
+      expect(imageRevisionNoFacts.executable).toBe(false);
+
+      // With the tenant's own trusted facts, the same call is executable — and THAT is the green
+      // this task earned: a registered workflow, an input contract that genuinely reaches its entry
+      // node, and the capabilities the operation declares derived available.
+      const imageRevision = preflightOperation(
+        { operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } },
+        capabilitySourceFor(fullyProvisionedDrLurieFacts())
+      );
+      expect(imageRevision.capabilityGaps).toEqual([]);
+      expect(imageRevision.executable).toBe(true);
+      expect(imageRevision.binding?.workflowId).toBe("image_template_revision_studio");
     });
   });
 });
