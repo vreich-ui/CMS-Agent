@@ -315,6 +315,19 @@ export type WorkflowExecutionRecord = {
   // platform/workspace join key, and stamping it on a live client object would be worse than not
   // publishing. The single authoring path is writer (2) above, at one predicate, on one node.
   publishRequestId?: string;
+  // Track C (2026-09-14) — WHO ASKED, when nobody did.
+  //
+  // Every run before autonomous commissioning had a human behind it: a chat turn, an operator, a
+  // test. `editorial_planner` starts runs from a schedule, so the record has to say so — otherwise a
+  // site's run list is a set of articles with no accountable origin, and the first question anybody
+  // asks ("why did it publish that?") has no answer on the record that answers every other question.
+  //
+  // Stamped ONCE, by the planner, at start. Absent on every run a human started, which is what makes
+  // presence meaningful: a consumer reads absence as "a person asked for this", and the platform's
+  // sweep only adopts a run into its request inbox when this field is set.
+  commissionedBy?: string;
+  /** One sentence, authored by the planner, saying why THIS piece rather than the others it considered. */
+  commissioningRationale?: string;
   status: ExecutionStatus;
   currentNodeId?: string;
   startedAt: string;

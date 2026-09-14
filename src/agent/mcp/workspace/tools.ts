@@ -46,6 +46,7 @@ import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
 import { createSiteCredentialTools } from "./siteCredentialTools.js";
 import { createVisualIdentityTools } from "./visualIdentityTools.js";
 import { createOperationTools } from "./operationTools.js";
+import { createPlannerTools } from "./plannerTools.js";
 import { FORBIDDEN_PROJECT_VERBS } from "../../tools/forbiddenProjectVerbs.js";
 import { dispatchToolContext } from "../../execution/dispatchAuthorization.js";
 
@@ -1388,6 +1389,9 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // read (project record, to derive capability facts), one best-effort durable-ledger write inside
     // preflight (a genuine capability gap), and one plain read tool over that ledger
     // (operation.list_capability_gaps) — see operationTools.ts for all three.
-    ...createOperationTools()
+    ...createOperationTools(),
+    // Track C — autonomous commissioning. Its own module for the reason every sibling surface has
+    // one: the verbs share one subject (a tenant's commissioning policy) and nothing else here does.
+    ...createPlannerTools()
   ];
 }

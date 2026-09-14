@@ -46,6 +46,11 @@
 # Optional:
 #   SERVICE=<name>             default cms-agent-mcp
 #   EXECUTOR_JOBS_FILE=<path>  default deploy/executor-jobs.txt — THE list; see that file.
+#   PIN_ONLY="<names>"         optional SELECTION of listed planes to update this run. It never
+#                              shortens the list: both reconciliation directions still run against
+#                              the full file, so ABSENT and UNLISTED planes are still reported and
+#                              still fail. Set by scripts/jobs-repin.sh; leave unset on the release
+#                              path, which must pin everything.
 #
 # Changes ONLY the image. Never env vars, secrets, args, service account, CPU/memory or schedule:
 # `gcloud run jobs update --image` is a merge-style update and nothing else is passed. Since T12.20
@@ -221,6 +226,14 @@ MISSING=""
 CHANGED=""
 
 for JOB in $JOBS; do
+  # PIN_ONLY (Track C, 2026-09-14) — a SELECTION, never a shorter list. scripts/jobs-repin.sh sets
+  # it to repin one plane, or everything but continuation-tick, WITHOUT narrowing
+  # EXECUTOR_JOBS_FILE: the both-directions reconciliation above still ran against the full list, so
+  # an ABSENT or UNLISTED plane is still found and still fails. All this skips is the update itself.
+  if [ -n "${PIN_ONLY:-}" ] && ! listed "$JOB" " $(echo ${PIN_ONLY}) "; then
+    say "SKIPPED  $JOB — not in PIN_ONLY for this run; its image is unchanged."
+    continue
+  fi
   if ! listed "$JOB" "$PRESENT"; then
     # PIN mode moves on: a job that does not exist cannot run stale code, and the service is
     # deployed and healthy regardless.

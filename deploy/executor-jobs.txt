@@ -57,3 +57,17 @@ strategy-learning
 # them silently narrows the weekly fan-out to one tenant, and nothing in the run output would say
 # the other three were never reviewed.
 strategy-review
+
+# THE ONLY PLANE IN THIS LIST THAT SPENDS MONEY AND PUBLISHES (Track C, Wolf 2026-09-14). Daily at
+# 06:00 UTC, after tracking-ingest (03:00), strategy-learning (04:00) and strategy-review (Mon
+# 05:00), it commissions articles for every active tenant whose OWN editorial_strategy carries
+# commissioning.enabled — reading that opt-in, and every ceiling, from the tenant's governed object
+# on every run. No env var on the job can opt a tenant in.
+#
+# A stale image here does not degrade quietly, it commissions yesterday's policy: older caps, an
+# older dedupe rule and an older halt threshold, against today's site and today's budget. So unlike
+# every other plane, this one REFUSES to run when its SERVICE_GIT_SHA differs from the sha
+# cms-agent-mcp reports (src/agent/planner/imageGuard.ts) — a forgotten repin shows up as a failed
+# execution rather than as a day of spending on an old build. Repin it like everything else; the
+# refusal is a backstop for the repin, not a replacement for it.
+editorial-planner
