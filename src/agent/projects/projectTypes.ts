@@ -227,8 +227,9 @@ export type ProjectCapturePolicy = {
   };
 };
 
-// Deliberate fail-closed fallback for legacy persisted records and new registrations. No capture is
-// permitted until a project explicitly declares its source scope.
+// Deliberate fail-closed fallback for legacy persisted records and new registrations. No THIRD-PARTY
+// capture is permitted until a project explicitly declares its source scope. (Since W21 the resolver
+// below layers the project's OWN origin on top of this floor — see resolveProjectCapturePolicy.)
 export const DEFAULT_PROJECT_CAPTURE_POLICY: ProjectCapturePolicy = {
   maxPages: 0,
   allowedCrawlOrigins: [],
@@ -243,8 +244,59 @@ export const DEFAULT_PROJECT_CAPTURE_POLICY: ProjectCapturePolicy = {
   fidelity: { mode: "source_faithful", sourceDesignTreatment: "source_content_and_design" }
 };
 
-export function resolveProjectCapturePolicy(config: Pick<ProjectConnectionConfig, "capturePolicy">): ProjectCapturePolicy {
-  return structuredClone(config.capturePolicy ?? DEFAULT_PROJECT_CAPTURE_POLICY);
+// W21 (Wolf, 2026-09-14) — SELF-CAPTURE IS UNIVERSAL. Third-party capture stays opt-in.
+//
+// The deny-all floor above answers one question honestly: "may this project crawl SOMEBODY ELSE'S
+// site?" — no, until an operator says so. It was also, silently, the answer to a second question
+// nobody meant to ask: "may this tenant read back its OWN published pages?" That one carries no
+// rights dimension, no injection surface that is not already the tenant's own, and no operator
+// decision worth making. An agent-first CMS whose agents cannot see what they published is simply
+// harder to operate, and the gap showed up as a live defect: site_platform could not capture
+// itself, while carrying authority over a third-party origin it had copied from a clone job.
+//
+// So self-capture is seeded HERE, on the shared resolver every plane already calls, from fields
+// the record already carries. Identical for every tenant by construction — no per-project record,
+// no migration, and nothing for a new tenant's genesis to remember.
+//
+// The floor is layered, never lowered. This grants authority over exactly one origin — the
+// project's own — and touches nothing else: a stored policy's third-party origins pass through
+// untouched, `rights` is NOT raised (it is per-policy, not per-origin, so raising it would widen
+// retention authority over any third-party origin present), and a project with no stored policy
+// still cannot crawl anybody but itself.
+export const SELF_CAPTURE_MAX_PAGES = 20;
+
+// The tenant's own HTTPS origin, from the record as it already stands. Pure: no I/O, no clock, and
+// no network — the same config always derives the same origin. `mcpEndpoint` is the tenant's own
+// MCP URL (https://<site>/mcp), so its origin IS the site; clientSiteBinding's Netlify site name is
+// the fallback for a record that resolves its endpoint from an env var instead.
+export function selfCaptureOrigin(
+  config: Pick<ProjectConnectionConfig, "mcpEndpoint" | "clientSiteBinding">
+): string | undefined {
+  const originOf = (raw: string | undefined): string | undefined => {
+    if (!raw) return undefined;
+    try {
+      const url = new URL(raw);
+      return url.protocol === "https:" ? url.origin : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const binding = config.clientSiteBinding?.netlifySiteName;
+  return originOf(config.mcpEndpoint) ?? originOf(binding ? `https://${binding}.netlify.app` : undefined);
+}
+
+export function resolveProjectCapturePolicy(
+  config: Pick<ProjectConnectionConfig, "capturePolicy" | "mcpEndpoint" | "clientSiteBinding">
+): ProjectCapturePolicy {
+  const policy = structuredClone(config.capturePolicy ?? DEFAULT_PROJECT_CAPTURE_POLICY);
+  const own = selfCaptureOrigin(config);
+  if (!own || policy.allowedCrawlOrigins.includes(own)) return policy;
+
+  policy.allowedCrawlOrigins = [...policy.allowedCrawlOrigins, own];
+  if (!policy.allowedPathPrefixes.includes("/")) policy.allowedPathPrefixes = [...policy.allowedPathPrefixes, "/"];
+  // A FLOOR, never a ceiling: a project that already authorized more pages keeps its own number.
+  policy.maxPages = Math.max(policy.maxPages, SELF_CAPTURE_MAX_PAGES);
+  return policy;
 }
 
 export type ProjectConnectionConfig = {
@@ -305,7 +357,8 @@ export type ProjectConnectionConfig = {
   toolPolicies?: Record<string, ToolPermission>;
   contentContract: ProjectContentContract;
   // Optional only to represent legacy persisted records. Callers must use
-  // resolveProjectCapturePolicy(), which denies all capture when it is absent.
+  // resolveProjectCapturePolicy(), which denies all THIRD-PARTY capture when it is absent (the
+  // project's own origin is layered on there regardless — W21 self-capture).
   capturePolicy?: ProjectCapturePolicy;
   // Per-site parameters of the object-native publish dialect. Absent for clients that do not publish
   // through the object substrate — a publish hook that needs one and finds none must refuse rather

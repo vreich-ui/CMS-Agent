@@ -114,9 +114,16 @@ describe("site.duplicate — mint only (newSite with no sourceUrl)", () => {
   it("seeds a DENY-ALL capture policy, because no source was ever named", async () => {
     await mint();
     const record = (await repositoryManager.getProjectRepository().get("genesis-lab-3"))!;
-    // Fail-closed: a tenant minted with no source cannot be crawled into until an operator names an
-    // origin. Inventing one (its own origin, a wildcard) would hand a newborn tenant an authority
-    // nobody asked for.
+    // Fail-closed: a tenant minted with no source cannot be crawled into until an operator names
+    // an origin. Inventing one — a wildcard, or a third-party origin nobody supplied — would hand
+    // a newborn tenant an authority nobody asked for.
+    //
+    // W21 narrows what this claims, without weakening it. What is asserted here is the STORED
+    // record, and it stays empty: genesis writes no crawl origin when it was given no source.
+    // resolveProjectCapturePolicy separately layers the tenant's OWN origin onto every project
+    // (selfCapture.test.ts), so a minted tenant can read back the pages it publishes. That is not
+    // authority over anybody else's site, and it is the only origin the resolver ever adds — a
+    // record with no source still cannot crawl a third party.
     expect(record.capturePolicy?.allowedCrawlOrigins).toEqual([]);
   });
 

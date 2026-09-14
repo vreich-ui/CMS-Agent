@@ -616,6 +616,40 @@ const projectDefinitionJsonSchema = objectSchema({
   defaultToolPolicy: { type: "string", enum: ["allowed", "needs_approval", "blocked"], description: "Fallback permission for any tool not named in allowedTools/toolPolicies. Absent = blocked (deny-all)." },
   toolPolicies: { type: "object", additionalProperties: { type: "string", enum: ["allowed", "needs_approval", "blocked"] }, description: "Per-tool permission overrides (highest precedence): allowed | needs_approval | blocked." },
   contentContract: { type: "object", additionalProperties: false, properties: { contentContract: { type: "string" } } },
+  // W21 (Wolf, 2026-09-14) — the capture bounds, finally reachable over the wire.
+  //
+  // projectAdmin.ts has validated and merged this field on BOTH create and update since capture
+  // shipped; only this JSON schema omitted it, and objectSchema sets additionalProperties:false, so
+  // every attempt to set a tenant's crawl scope through MCP was rejected at the wire and the policy
+  // could be changed only by editing a project definition and redeploying. That is why three
+  // projects still carry a crawl origin copied from one 2026-08 clone job.
+  //
+  // Exposing it widens nothing on its own: capture bounds are enforced on three sides (this
+  // registry, the tenant's Platform bridge, pdf-tool's worker), each of which may only narrow what
+  // it is handed — maxPages is clamped to the plane's hard ceiling of 50, sameOriginOnly /
+  // respectRobots / authenticatedAccess:"prohibited" are refused rather than relayed if weakened,
+  // and the tenant's own `siteCapture` guardrail can narrow further still. What it buys is that
+  // scoping a crawl to the job that needs it is now a call, so the conservative choice stops being
+  // the expensive one.
+  capturePolicy: {
+    type: "object",
+    additionalProperties: false,
+    description: "Per-project crawl bounds (ProjectCapturePolicy), replaced whole. The project's OWN origin is seeded automatically by the resolver and need not be listed; name an origin here only to authorize crawling SOMEBODY ELSE'S site, and pair it with the rights you have actually cleared for that origin. maxPages 0 with an empty allowedCrawlOrigins is the deny-all floor for third parties.",
+    properties: {
+      maxPages: { type: "integer", minimum: 0, description: "Per-project page ceiling for one crawl. Clamped to the capture plane's hard maximum of 50 on both the bridge and pdf-tool's worker." },
+      allowedCrawlOrigins: { type: "array", maxItems: 32, items: { type: "string", format: "uri" }, description: "HTTPS origins, no path/query/fragment. THIRD-PARTY origins only need listing; the project's own origin is layered on by resolveProjectCapturePolicy." },
+      allowedPathPrefixes: { type: "array", maxItems: 128, items: { type: "string" }, description: "Absolute path prefixes without query or fragment, e.g. \"/\"." },
+      sameOriginOnly: { type: "boolean", description: "Must be true — the capture plane refuses anything else." },
+      respectRobots: { type: "boolean", description: "Must be true — the capture plane refuses anything else." },
+      concurrency: { type: "integer", minimum: 1, maximum: 32 },
+      delayMs: { type: "integer", minimum: 0, maximum: 86400000 },
+      authenticatedAccess: { const: "prohibited", description: "The only accepted value; the plane never crawls behind a login." },
+      rights: { type: "object", additionalProperties: false, properties: { content: { type: "string", enum: ["prohibited", "retain_allowed_origin_content"] }, media: { type: "string", enum: ["prohibited", "retain_referenced_allowed_origin_media"] } }, required: ["content", "media"], description: "What may be RETAINED from the allowed origins. Policy-wide, not per-origin: raising it raises it for every origin listed, so add a third-party origin and its rights in the same considered call." },
+      designReferences: { type: "array", maxItems: 32, items: { type: "object", additionalProperties: false, properties: { origin: { type: "string", format: "uri" }, purpose: { const: "design_inspiration_only" }, crawlAllowed: { const: false }, contentReuse: { const: "prohibited" }, mediaReuse: { const: "prohibited" } }, required: ["origin", "purpose", "crawlAllowed", "contentReuse", "mediaReuse"] }, description: "Origins looked at for design inspiration but never crawled or reused." },
+      fidelity: { type: "object", additionalProperties: false, properties: { mode: { type: "string", enum: ["source_faithful", "design_inspired"] }, sourceDesignTreatment: { type: "string", enum: ["source_content_and_design", "source_content_with_design_inspiration_only"] }, coverageRubricOverride: { type: "object", additionalProperties: false, properties: { minimumMappedBlockCoverage: { type: "number", minimum: 0, maximum: 1 }, requireCompleteTokens: { type: "boolean" }, requireEnumeratedGaps: { type: "boolean" } }, required: ["minimumMappedBlockCoverage", "requireCompleteTokens", "requireEnumeratedGaps"] } }, required: ["mode", "sourceDesignTreatment"] }
+    },
+    required: ["maxPages", "allowedCrawlOrigins", "allowedPathPrefixes", "sameOriginOnly", "respectRobots", "concurrency", "delayMs", "authenticatedAccess", "rights", "designReferences", "fidelity"]
+  },
   status: { type: "string", enum: ["active", "disabled"], default: "active" }
 }, ["projectId", "name", "mcpEndpointEnvVar"]);
 const projectCreateJsonSchema = objectSchema({ project: projectDefinitionJsonSchema, ...metaJson }, ["project"]);
