@@ -97,6 +97,14 @@ describe("scripts/deploy-service.sh — cms-agent-mcp resource pins", () => {
     expect(deployService).toMatch(/SERVICE_DEPLOYED_AT=\$\(date -u \+%Y-%m-%dT%H:%M:%SZ\)/);
   });
 
+  it("sets SITE_CREDENTIAL_RECONCILER_GCP_PROJECT/_REGION derived from this deploy's own PROJECT/REGION (KNOWN_ISSUES C-13)", () => {
+    // Not just "the key appears somewhere" — the value must be this script's own ${PROJECT}/${REGION}
+    // variable, not a hardcoded literal that could silently diverge from where the reconciler job
+    // actually runs. scripts/repro/knownIssues.ts's C-13 check makes the same assertion at runtime.
+    expect(deployService).toMatch(/"SITE_CREDENTIAL_RECONCILER_GCP_PROJECT=\$\{PROJECT\}"/);
+    expect(deployService).toMatch(/"SITE_CREDENTIAL_RECONCILER_REGION=\$\{REGION\}"/);
+  });
+
   it("builds the origin list with the ^|^ delimiter rather than by hand", () => {
     // The live value was found spliced into nonsense on 2026-09-07 precisely because a comma list of
     // URLs was assembled by hand. Every origin contains "://", so ":" cannot be the delimiter.

@@ -133,11 +133,21 @@ describe("site_credentials_apply", () => {
     expect(SITE_CREDENTIAL_RECONCILER_APPLY_ARGS).toEqual(["--import", "tsx", "src/agent/entrypoints/reconcileSiteCredentialsMain.ts", "--apply"]);
   });
 
-  it("turns a 403 from Cloud Run into guidance naming the run.jobs.run IAM permission", async () => {
+  it("turns a 403 from Cloud Run into guidance naming run.jobs.runWithOverrides, not the insufficient run.invoker/run.jobs.run", async () => {
+    // Ground truth (2026-09-14 live incident): granting roles/run.invoker alone still 403s, because
+    // this call always carries containerOverrides (how --apply is injected) and that needs the
+    // DISTINCT permission run.jobs.runWithOverrides, which roles/run.invoker does not include.
     const fetchImpl = cloudRunFetch({ run: async () => jsonResponse(403, { error: { code: 403, message: "Permission denied" } }) });
     const tools = createSiteCredentialTools({ projectRepository: projectRepository([]), env: baseEnv(), fetchImpl });
     const apply = tools.find((tool) => tool.name === "site_credentials_apply")!;
-    await expect(apply.execute({})).rejects.toMatchObject({ code: "cloud_run_run_forbidden", message: expect.stringContaining("run.jobs.run") });
+    await expect(apply.execute({})).rejects.toMatchObject({
+      code: "cloud_run_run_forbidden",
+      message: expect.stringContaining("run.jobs.runWithOverrides")
+    });
+    // The insufficient permission must be named as insufficient, not offered as a fix.
+    await expect(apply.execute({})).rejects.toMatchObject({
+      message: expect.stringMatching(/roles\/run\.invoker does NOT include it/)
+    });
   });
 
   it("refuses with a catalogued code when the GCP project env var is missing", async () => {
