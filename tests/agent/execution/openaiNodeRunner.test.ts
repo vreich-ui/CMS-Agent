@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Mock the OpenAI Agents SDK so the runner exercises real output/usage handling without a network
 // call. run() returns a schema-valid finalOutput plus token usage; Agent/tool are inert.
 const runMock = vi.fn(async () => ({
-  finalOutput: { artifact: "content_source.v1", summary: "Live OpenAI summary." },
+  finalOutput: { artifact: "content_source.v1", summary: "Live OpenAI summary.", trafficSource: "organic_search", awarenessStage: "problem_aware" },
   rawResponses: [{ usage: { inputTokens: 120, outputTokens: 40 } }],
   lastResponseId: "resp_test_1"
 }));
@@ -32,7 +32,7 @@ describe("OpenAINodeRunner output/usage handling (openai mode)", () => {
     // "unrecognized key: actual" and marking the successful node failed. It now completes.
     expect(result.execution.status).toBe("completed");
     const output = result.execution.nodes[0].output;
-    expect(output).toEqual({ artifact: "content_source.v1", summary: "Live OpenAI summary." });
+    expect(output).toEqual({ artifact: "content_source.v1", summary: "Live OpenAI summary.", trafficSource: "organic_search", awarenessStage: "problem_aware" });
     // The model output has no stray top-level `actual` key.
     expect(output).not.toHaveProperty("actual");
     expect(runMock).toHaveBeenCalledTimes(1);

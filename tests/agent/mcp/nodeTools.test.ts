@@ -27,15 +27,15 @@ describe("node.* MCP tools", () => {
 
   it("validates input and output schemas", async () => {
     expect((await data("node.validate_input", { nodeId: "input_triage", value: {} })).validation.valid).toBe(true);
-    expect((await data("node.validate_output", { nodeId: "input_triage", value: { artifact: "content_source.v1", summary: "ok" } })).validation.valid).toBe(true);
+    expect((await data("node.validate_output", { nodeId: "input_triage", value: { artifact: "content_source.v1", summary: "ok", trafficSource: "organic_search", awarenessStage: "problem_aware" } })).validation.valid).toBe(true);
     expect((await data("node.validate_output", { nodeId: "input_triage", value: { artifact: "wrong" } })).validation.valid).toBe(false);
   });
 
   it("prepares missing dependency and ready states without model calls", async () => {
     expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {} })).preparation.readinessStatus).toBe("missing_inputs");
     // §2.16: topic_opportunity now also depends on placement_resolver (the computed aggression target).
-    expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {}, dependencyOutputs: { input_triage: { artifact: "content_source.v1", summary: "ok" } } })).preparation.readinessStatus).toBe("missing_inputs");
-    expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {}, dependencyOutputs: { input_triage: { artifact: "content_source.v1", summary: "ok" }, placement_resolver: { artifact: "placement_resolution.v1", summary: "ok" } } })).preparation.readinessStatus).toBe("ready");
+    expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {}, dependencyOutputs: { input_triage: { artifact: "content_source.v1", summary: "ok", trafficSource: "organic_search", awarenessStage: "problem_aware" } } })).preparation.readinessStatus).toBe("missing_inputs");
+    expect((await data("node.prepare_execution", { nodeId: "topic_opportunity", input: {}, dependencyOutputs: { input_triage: { artifact: "content_source.v1", summary: "ok", trafficSource: "organic_search", awarenessStage: "problem_aware" }, placement_resolver: { artifact: "placement_resolution.v1", summary: "ok" } } })).preparation.readinessStatus).toBe("ready");
   });
 
   it("executes one node independently and retrieves outputs/history", async () => {

@@ -24,7 +24,7 @@ const runWith = async (emitted: Record<string, unknown>, stage: Record<string, u
   const spy = vi.spyOn(registry, "getNodeRunner").mockReturnValue({
     supports: () => true,
     validateConfiguration: () => ({ ok: true as const }),
-    run: async () => ({ ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged.", ...emitted } })
+    run: async () => ({ ok: true as const, output: { artifact: "content_source.v1", summary: "Triaged.", trafficSource: "organic_search", awarenessStage: "problem_aware", ...emitted } })
   } as never);
   try {
     const store = new RepositoryManager().getExecutionRepository();

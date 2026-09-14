@@ -189,7 +189,7 @@ describe("wired into a real run: replaces the model call entirely (Session D end
       projectId: "platform",
       input: "Session D e2e",
       budgetUsd: 100,
-      entrypoint: { nodeId: "review_aggregator", output: { artifact: "review_aggregation.v1", summary: "Test review aggregation for Session D." } }
+      entrypoint: { nodeId: "review_aggregator", output: { artifact: "review_aggregation.v1", summary: "Test review aggregation for Session D.", blockers: [], advisories: [], reviewStatus: "ready", revisions: [], unresolvedConflicts: [], buildInstructions: [] } }
     }, store);
 
     const run = await drive(started.runId, store, "contract_intelligence");

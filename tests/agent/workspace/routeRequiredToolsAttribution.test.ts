@@ -59,7 +59,12 @@ describe("W3.2.0 — no route stage is left unattributed", () => {
     // changed what is KNOWN about four stages, not what any node is or does.
     const summary = summarizeCapabilityAudit([...seen.values()]);
     expect(summary.nodeCount).toBe(51);
-    expect(summary.deterministicNodes).toBe(23);
+    // 23 -> 25 (2026-09-14, two-plane reconciliation): publication_controller carries
+    // publicationControllerDeterministic and publish_executor carries publishExecutorDeterministic —
+    // both store-owned, both live since the 2026-07-31 go-live, so both have governed every live
+    // dispatch since. Canonical simply had not recorded it. No tool grant changed and no publish
+    // authority widened; the direction is a model turn OFF the publish step.
+    expect(summary.deterministicNodes).toBe(25);
   });
 });
 

@@ -134,10 +134,18 @@ describe("W3.1 — the audit over the live graph", () => {
     const summary = summarizeCapabilityAudit([...seen.values()]);
 
     expect(summary.nodeCount).toBe(51);
-    expect(summary.deterministicNodes).toBe(23);
-    expect(summary.modelNodes).toBe(28);
-    // 22 of the 23 carry grants; visual_standard_materializer is the one that declares none.
-    expect(summary.nodesWithDeadGrants).toBe(22);
+    // 23 -> 25 (2026-09-14, two-plane reconciliation): publication_controller carries
+    // publicationControllerDeterministic and publish_executor carries publishExecutorDeterministic —
+    // both store-owned, both live since the 2026-07-31 go-live, so both have governed every live
+    // dispatch since. Canonical simply had not recorded it. No tool grant changed and no publish
+    // authority widened; the direction is a model turn OFF the publish step.
+    expect(summary.deterministicNodes).toBe(25);
+    expect(summary.modelNodes).toBe(26);
+    // 24 of the 25 carry grants; visual_standard_materializer is the one that declares none.
+    // 22 -> 24 follows from the two above: both newly-recorded deterministic nodes hold grants, and a
+    // deterministic node never opens a model turn to spend them. They were equally dead on every live
+    // dispatch since 2026-07-31; the audit was reading canonical, which had not been told.
+    expect(summary.nodesWithDeadGrants).toBe(24);
     expect(summary.deadGrantCount).toBeGreaterThan(60);
     // Every node that reaches a publish- or admin-risk tenant verb from engine code, by name.
     // W3.2.0 added pdf_template_publish: publish_pdf_template was attributed to the clone route's

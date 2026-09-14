@@ -39,7 +39,7 @@ import { OpenAINodeRunner } from "../../../src/agent/execution/runners/OpenAINod
 import type { WorkspaceNode } from "../../../src/agent/workspace/nodeTypes.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
-const validOutput = { artifact: "content_source.v1", summary: "Live OpenAI summary." };
+const validOutput = { artifact: "content_source.v1", summary: "Live OpenAI summary.", trafficSource: "organic_search", awarenessStage: "problem_aware" };
 // Generous headroom so these tests exercise ONLY the truncation-retry logic, never the (unrelated)
 // per-node budget guard input_triage's canonical modelConfig also carries.
 const BASE_MODEL_CONFIG = { retryCount: 0, budgetUsd: 1000 };

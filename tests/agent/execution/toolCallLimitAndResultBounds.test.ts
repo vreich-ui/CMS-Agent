@@ -24,7 +24,7 @@ const { runMock, toolCallOutcomes } = vi.hoisted(() => {
         try { await sdkTool.execute({ id: "research" }); outcomes.push({ ok: true }); }
         catch (error) { outcomes.push({ ok: false, message: (error as Error).message }); }
       }
-      return { finalOutput: { artifact: "research_brief.v1", summary: "done" }, rawResponses: [{ usage: { inputTokens: 10, outputTokens: 5 } }], lastResponseId: "resp_1" };
+      return { finalOutput: { artifact: "research_brief.v1", summary: "done", blockers: [], advisories: [], evidenceStatus: "not_needed", sources: [], findings: [] }, rawResponses: [{ usage: { inputTokens: 10, outputTokens: 5 } }], lastResponseId: "resp_1" };
     })
   };
 });
