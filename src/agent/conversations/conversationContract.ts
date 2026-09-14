@@ -97,6 +97,37 @@ export const conversationToolSchema = z.object({
   input_schema: z.record(z.string(), z.unknown())
 }).strict();
 
+// ASV2-W4-CA §7: at most 24 actions per turn (Platform's own `checkConverseBounds` drops an
+// over-bounds object before it leaves Platform, so this ceiling should never be hit in practice —
+// it exists here as the same defense-in-depth every other wire bound in this file gets, not as the
+// primary guard). A request over this bound fails the whole `context` object, the same "reject
+// rather than silently truncate" behaviour every other bound in this schema already has.
+export const MAX_UI_CAPABILITY_ACTIONS = 24;
+const MAX_UI_CAPABILITY_CONTROLS = 32;
+
+const uiCapabilityActionParamSchema = z.object({
+  type: z.string().min(1).max(32),
+  required: z.boolean().optional()
+}).strict();
+
+const uiCapabilityActionSchema = z.object({
+  // The id of a verb already registered in Platform's `quick-actions.ts` — CMS-Agent does not (and
+  // must not) maintain its own copy of that registry; it only carries the shape through.
+  verb: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  label: z.string().min(1).max(120),
+  params: z.record(z.string(), uiCapabilityActionParamSchema).optional()
+}).strict();
+
+// ASV2-W4-CA §7, additive: what the calling client can render this turn — the kinds of `controls`
+// blocks its build understands, and the focused object's rights-filtered quick actions. Sent next
+// to `approval_note`. CMS-Agent treats this as opaque capability data for the prompt to consult; it
+// never authorizes a call on its own (the offered-verb rule is enforced client-side, per §6.4).
+const uiCapabilitiesSchema = z.object({
+  v: z.literal(2),
+  controls: z.array(z.string().min(1).max(32)).max(MAX_UI_CAPABILITY_CONTROLS),
+  actions: z.array(uiCapabilityActionSchema).max(MAX_UI_CAPABILITY_ACTIONS)
+}).strict();
+
 export const conversationContextSchema = z.object({
   site_id: z.string().min(1).max(128),
   object_type: z.string().min(1).max(128).optional(),
@@ -107,7 +138,11 @@ export const conversationContextSchema = z.object({
   // The prompt's editor-facing-language default is relaxed for that run only. Absent means false.
   // This is a caller assertion for tone, never an authorization signal.
   diagnostics_requested: z.boolean().optional(),
-  approval_note: z.string().min(1).max(1_000).optional()
+  approval_note: z.string().min(1).max(1_000).optional(),
+  // ASV2-W4-CA §7, additive: absent means "no manifest reached the client for this turn" — the
+  // prompt (and, client-side, `allowedAction`) treats that the same as an empty one, never as
+  // permission to offer anything. See uiCapabilitiesSchema above for shape and bounds.
+  ui_capabilities: uiCapabilitiesSchema.optional()
 }).strict().refine((context) => Boolean(context.object_type) === Boolean(context.object_id), {
   message: "object_type and object_id must be supplied together"
 });
@@ -182,7 +217,7 @@ export const agentConverseJsonSchema = {
     conversation_id: { type: "string", minLength: 1, maxLength: 256 },
     turn_id: { type: "string", minLength: 1, maxLength: 256 },
     actor: { type: "object", additionalProperties: false, required: ["kind", "id"], properties: { kind: { type: "string", const: "human" }, id: { type: "string", minLength: 1, maxLength: 256 } } },
-    context: { type: "object", additionalProperties: false, required: ["site_id"], properties: { site_id: { type: "string", minLength: 1, maxLength: 128 }, object_type: { type: "string", minLength: 1, maxLength: 128 }, object_id: { type: "string", minLength: 1, maxLength: 256 }, focus: { type: "string", minLength: 1, maxLength: 500 }, learning_mode: { type: "boolean" }, diagnostics_requested: { type: "boolean" }, approval_note: { type: "string", minLength: 1, maxLength: 1000 } } },
+    context: { type: "object", additionalProperties: false, required: ["site_id"], properties: { site_id: { type: "string", minLength: 1, maxLength: 128 }, object_type: { type: "string", minLength: 1, maxLength: 128 }, object_id: { type: "string", minLength: 1, maxLength: 256 }, focus: { type: "string", minLength: 1, maxLength: 500 }, learning_mode: { type: "boolean" }, diagnostics_requested: { type: "boolean" }, approval_note: { type: "string", minLength: 1, maxLength: 1000 }, ui_capabilities: { type: "object", additionalProperties: false, required: ["v", "controls", "actions"], properties: { v: { type: "integer", const: 2 }, controls: { type: "array", maxItems: 32, items: { type: "string", minLength: 1, maxLength: 32 } }, actions: { type: "array", maxItems: MAX_UI_CAPABILITY_ACTIONS, items: { type: "object", additionalProperties: false, required: ["verb", "label"], properties: { verb: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" }, label: { type: "string", minLength: 1, maxLength: 120 }, params: { type: "object" } } } } } } } },
     messages: { type: "array", minItems: 1, maxItems: MAX_TRANSCRIPT_MESSAGES, items: { oneOf: [
       { type: "object", additionalProperties: false, required: ["role", "text"], properties: { role: { type: "string", const: "user" }, text: { type: "string" } } },
       { type: "object", additionalProperties: false, required: ["role"], properties: { role: { type: "string", const: "assistant" }, text: { type: "string" }, tool_calls: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "name", "args"], properties: { id: { type: "string" }, name: { type: "string" }, args: { type: "object" } } } } } },

@@ -42,7 +42,15 @@ The entire request and every named nested object are strict: unknown properties 
     "object_id": "page_home",         // optional, paired with object_type
     "focus": "Homepage → Hero",       // optional, 1..500 chars
     "learning_mode": false,            // optional
-    "approval_note": "Propose only."  // optional, 1..1000 chars
+    "approval_note": "Propose only.", // optional, 1..1000 chars
+    "diagnostics_requested": false,   // optional
+    "ui_capabilities": {               // optional, additive (ASV2-W4-CA)
+      "v": 2,                          // literal
+      "controls": ["radio", "actions"], // control kinds this turn's client can render, each 1..32 chars, <=32 entries
+      "actions": [                     // <=24 entries; each {verb, label, params?}; verb matches ^[A-Za-z0-9_-]{1,64}$
+        { "verb": "object_validate", "label": "Validate" }
+      ]
+    }
   },
   "messages": [],                      // 1..200 ChatMsg values; see below
   "tools": [],                         // 0..99 WireTool values; see below
@@ -54,6 +62,8 @@ The entire request and every named nested object are strict: unknown properties 
 ```
 
 `object_type` and `object_id` must appear together. Effective `max_tokens` and `timeout_ms` are the lower of the request constraint and the stored agent definition constraint.
+
+`context.ui_capabilities` (ASV2-W4-CA, additive) carries what the calling client can render this turn — the `controls` block kinds its build understands and the focused object's rights-filtered quick actions, each with its verb and parameter shape. CMS-Agent validates its shape and bounds (`MAX_UI_CAPABILITY_ACTIONS = 24` actions; `conversationContextSchema` in `src/agent/conversations/conversationContract.ts` is the source of truth) but never interprets it as authorization — it is opaque capability data the `client_manager` prompt consults to decide whether to offer a `controls` block and which verbs it may name. Absent means no manifest reached the client this turn; the wire format for `controls` blocks and this field's own bounds are frozen in `docs/cms-architecture/chat-controls-protocol.md` §6-§7 (platform repo).
 
 ### `messages`: Platform provider-neutral `ChatMsg`
 
