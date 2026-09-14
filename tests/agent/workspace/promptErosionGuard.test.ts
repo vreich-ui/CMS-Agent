@@ -73,9 +73,16 @@ describe("re-seed prompt erosion guard", () => {
     expect(result.err).toMatch(/would drop 1 canonicalRule/);
   }, 60_000);
 
-  // Gate regression is reported, never blocked: adopting live is the script's purpose. The point is
-  // that an eleven-day silent divergence becomes a line in the run output.
-  it("reports a status divergence instead of hiding it", async () => {
+  // Gate regression is reported, never blocked. The point of this test has always been that an
+  // eleven-day silent divergence becomes a line in the run output — and it still is. What changed with
+  // T2 is WHICH line and what it means.
+  //
+  // `status` is a canonical-owned field: overlayStoreNode pins it on every dispatch, so the store's
+  // copy has never reached a run and the old NOTE's promise that "the re-seed adopts live" was itself
+  // describing the bug. pinCanonicalOwnedFields now normalises it out of the source before any guard
+  // sees it, and reports the discarded value on its own `pinned` line — louder than the NOTE, and
+  // true. Nothing became invisible; the same divergence is stated with the right mechanism attached.
+  it("reports a status divergence as a pin instead of silently adopting it", async () => {
     const snapshot = await snapshotWith((nodes) => {
       const node = nodes.find((candidate: any) => candidate.id === "publish_executor");
       node.status = node.status === "draft" ? "active" : "draft";
@@ -83,7 +90,42 @@ describe("re-seed prompt erosion guard", () => {
     const result = await seed(snapshot);
     // Direction-agnostic on purpose: the canonical status is itself a thing that changes, and a test
     // that pins it is how the 2026-07-31 go-live stayed invisible in code for eleven days.
-    expect(result.out).toMatch(/divergence\s+publish_executor: status (draft -> active|active -> draft)/);
+    expect(result.out).toMatch(/pinned\s+1 canonical-owned field/);
+    expect(result.out).toMatch(/publish_executor\.status ("draft" -> "active"|"active" -> "draft")/);
     expect(result.err).not.toMatch(/Refusing to re-seed/); // a divergence is reported, never a refusal
+  }, 60_000);
+
+  // The NOTE branch in promptAndGateProblems is NOT dead after T2 — `activationRequired` lives in
+  // metadata, which the store owns and pinning never touches. Asserted here so the day someone widens
+  // CANONICAL_OWNED_FIELDS far enough to swallow it, this says so.
+  it("still reports an activationRequired divergence as a NOTE, and adopts live", async () => {
+    const snapshot = await snapshotWith((nodes) => {
+      const node = nodes.find((candidate: any) => candidate.id === "publish_executor");
+      node.metadata = { ...(node.metadata ?? {}), activationRequired: !(node.metadata?.activationRequired ?? false) };
+    });
+    const result = await seed(snapshot);
+    expect(result.out).toMatch(/divergence\s+publish_executor: activationRequired (false -> true|true -> false)/);
+    expect(result.err).not.toMatch(/Refusing to re-seed/);
+  }, 60_000);
+
+  // --adopt-store-topology is the deliberate-topology-change escape hatch, and it must NOT be usable
+  // as a way past a refusal: with the store's topology adopted, the tail conformance check is what the
+  // operator then has to answer to.
+  it("--adopt-store-topology stops pinning and hands the tail check the store's own topology", async () => {
+    const snapshot = await snapshotWith((nodes) => {
+      const node = nodes.find((candidate: any) => candidate.id === "publish_payload");
+      node.dependsOn = ["article_body"];
+      node.requiredInputs = ["article_body"];
+    });
+
+    const pinned = await seed(snapshot);
+    expect(pinned.out).toMatch(/pinned\s+2 canonical-owned field/);
+    expect(pinned.err).not.toMatch(/tail:/);
+
+    const adopted = await seed(snapshot, ["--adopt-store-topology"]);
+    expect(adopted.out).toMatch(/pinning\s+DISABLED/);
+    expect(adopted.code).toBe(1);
+    expect(adopted.err).toMatch(/tail: Tail edge drift on publish_payload/);
+    expect(adopted.err).toMatch(/publishingTail\.ts/);
   }, 60_000);
 });

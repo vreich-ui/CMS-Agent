@@ -433,6 +433,20 @@ const pinRouteMetadataToCanonical = (merged: Record<string, unknown> | undefined
   return merged;
 };
 
+// The exact complement of the fields overlayStoreNode overrides below — i.e. the fields a dispatch
+// ALWAYS takes from the canonical definition, no matter what the store row says. Exported so the two
+// scripts that reason about this boundary read it from here instead of each keeping its own list that
+// can silently disagree with the function:
+//
+//   * scripts/seedNodesFromWorkspace.ts pins exactly these from canonical when re-seeding, because a
+//     store row's copy of them can never reach a run — copying it into nodes.ts transcribes a value
+//     the runtime already ignores.
+//   * scripts/reseedStoreFromCanonical.ts refuses a write to any of them, for the same reason in the
+//     other direction (TOPOLOGY_FIELDS).
+//
+// Adding a field to overlayStoreNode's override list means REMOVING it here, in the same change.
+export const CANONICAL_OWNED_FIELDS = ["id", "kind", "dependsOn", "requiredInputs", "produces", "riskLevel", "position", "status"] as const;
+
 const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): WorkspaceNode => ({
   ...canonical,
   name: stored.name ?? canonical.name,
