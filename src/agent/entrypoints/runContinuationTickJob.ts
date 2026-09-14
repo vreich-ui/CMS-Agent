@@ -42,6 +42,10 @@ export const summarizeTick = (result: ContinuationTickResult): string => JSON.st
   ...(result.tickId ? { tickId: result.tickId } : {}),
   enabled: result.enabled,
   scanned: result.scanned,
+  // Which scan produced `scanned`: "indexed" reads only continuable runs, "full" the whole fleet
+  // (once an hour, by design — see FULL_SCAN_MINUTE_WINDOW). Without this the two are
+  // indistinguishable in the log, and "why did scanned jump to 2,000" has no answer.
+  ...(result.scanMode ? { scanMode: result.scanMode } : {}),
   driven: result.driven.map((report) => ({ runId: report.runId, code: report.code, statusBefore: report.statusBefore, statusAfter: report.statusAfter, steps: report.steps, ...(report.chain ? { chain: report.chain } : {}) })),
   timedOut: result.timedOut,
   ...(result.driverSilent ? { driverSilent: true } : {}),
