@@ -9,7 +9,8 @@ import {
   RESEED_ALLOWLIST,
   TOPOLOGY_FIELDS,
   planPublishExecutorMode,
-  planReseed
+  planReseed,
+  type ReseedAllowlistEntry
 } from "../../../scripts/reseedStoreFromCanonical.js";
 import type { WorkspaceNode } from "../../../src/agent/workspace/nodeTypes.js";
 
@@ -83,22 +84,70 @@ const mutateField = (node: WorkspaceNode, field: string): WorkspaceNode => {
   }
 };
 
+// THE TEN PAIRS RESEED_ALLOWLIST CARRIED UNTIL T7 (2026-09-14), kept here as a fixture.
+//
+// The real allowlist is now empty — every pair it held was verified `up to date` against the live
+// store and retired, so leaving them in place could only arm a future `store:update` to push a stale
+// canonical over a corrected store row. Emptying it must NOT cost the planner its test coverage: the
+// machinery (drift detection, note propagation, every refusal) still has to work the next time a pair
+// is added deliberately. planReseed's `allowlist` injection point exists for exactly this — see its
+// own comment — so these tests drive the mechanism through this fixture instead of the live constant.
+const RETIRED_ALLOWLIST: ReseedAllowlistEntry[] = [
+  { nodeId: "topic_opportunity", field: "allowedTools", note: "Wave 1 T3 — drop the stray workspace.get_node grant" },
+  { nodeId: "brief_architect", field: "outputSchema", note: "Wave 3 T8 — the required mediaSlots[]" },
+  { nodeId: "brief_architect", field: "prompt", note: "Wave 3 T8 — the required mediaSlots[]" },
+  { nodeId: "artifact_plan", field: "prompt", note: "Wave 3 T8 — materialize slots via create_agent_artifact_job" },
+  { nodeId: "article_body", field: "prompt", note: "Wave 3 T8 — bind verified refs into body.image; W10.1 — blockers[] is a closed structural list" },
+  { nodeId: "artifact_plan", field: "outputSchema", note: "W8 — emits materialization_spec.v1; the old schema rejects it" },
+  { nodeId: "artifact_plan", field: "schema", note: "W8 — the legacy alias must not disagree with outputSchema" },
+  { nodeId: "artifact_plan", field: "allowedTools", note: "W8 — plans only; allowedTools is empty by design (capability loss, deliberate)" },
+  { nodeId: "artifact_plan", field: "assignedSkills", note: "W8 — the contract skill requests a tool this node now denies (capability loss, deliberate)" },
+  { nodeId: "artifact_plan", field: "modelConfig", note: "W8 — maxTurns 1, toolCallLimit 0, budget $0.50" }
+];
+
+describe("RESEED_ALLOWLIST — retired (T7)", () => {
+  // The whole point of T7. An entry is a standing authorization to push CANONICAL over the STORE for
+  // that field; the store owns every field on this list. A settled entry left behind is what arms the
+  // next `store:update` to overwrite a corrected store row with a stale canonical one (C-19's
+  // direction). Empty is the finished state.
+  it("is empty, so a default --write has nothing to push", () => {
+    expect(RESEED_ALLOWLIST).toEqual([]);
+    const plan = planReseed({ canonical: baseCanonical(), store: baseStore() });
+    expect(plan.writes).toEqual([]);
+    expect(plan.refusals).toEqual([]);
+    expect(plan.upToDate).toEqual([]);
+  });
+
+  it("refuses every retired pair by name if one is requested without being re-added", () => {
+    for (const entry of RETIRED_ALLOWLIST) {
+      const store = baseStore().map((node) => (node.id === entry.nodeId ? mutateField(node, entry.field) : node));
+      const plan = planReseed({ canonical: baseCanonical(), store, requests: [{ nodeId: entry.nodeId, field: entry.field }] });
+      expect(plan.writes).toEqual([]);
+      expect(plan.refusals[0].reason).toMatch(/not in RESEED_ALLOWLIST/);
+    }
+  });
+
+  it("keeps publish_executor.metadata off the list, as it always was", () => {
+    expect(RESEED_ALLOWLIST.some((entry) => entry.nodeId === "publish_executor" && entry.field === "metadata")).toBe(false);
+  });
+});
+
 describe("planReseed — a matching store", () => {
   // main() maps an empty plan (no writes, no refusals) to exit 0; this test proves the plan itself
   // is empty, which is the part that logic bug could get wrong.
   it("produces an empty plan when the store already matches canonical for every allowlisted pair", () => {
-    const plan = planReseed({ canonical: baseCanonical(), store: baseStore() });
+    const plan = planReseed({ canonical: baseCanonical(), store: baseStore(), allowlist: RETIRED_ALLOWLIST });
     expect(plan.writes).toEqual([]);
     expect(plan.refusals).toEqual([]);
-    expect(plan.upToDate).toHaveLength(RESEED_ALLOWLIST.length);
+    expect(plan.upToDate).toHaveLength(RETIRED_ALLOWLIST.length);
   });
 });
 
 describe("planReseed — drift detection", () => {
-  it.each(RESEED_ALLOWLIST)("plans exactly one write for $nodeId.$field when only that field drifts", (entry) => {
+  it.each(RETIRED_ALLOWLIST)("plans exactly one write for $nodeId.$field when only that field drifts", (entry) => {
     const canonical = baseCanonical();
     const store = baseStore().map((node) => (node.id === entry.nodeId ? mutateField(node, entry.field) : node));
-    const plan = planReseed({ canonical, store });
+    const plan = planReseed({ canonical, store, allowlist: RETIRED_ALLOWLIST });
 
     expect(plan.refusals).toEqual([]);
     expect(plan.writes).toHaveLength(1);
@@ -121,7 +170,7 @@ describe("planReseed — drift detection", () => {
 describe("planReseed — refusals", () => {
   it("refuses when the node does not exist in canonical", () => {
     const canonical = baseCanonical().filter((node) => node.id !== "topic_opportunity");
-    const plan = planReseed({ canonical, store: baseStore(), requests: [{ nodeId: "topic_opportunity", field: "allowedTools" }] });
+    const plan = planReseed({ canonical, store: baseStore(), allowlist: RETIRED_ALLOWLIST, requests: [{ nodeId: "topic_opportunity", field: "allowedTools" }] });
     expect(plan.writes).toEqual([]);
     expect(plan.refusals).toHaveLength(1);
     expect(plan.refusals[0].reason).toMatch(/does not exist in canonical/);
@@ -129,7 +178,7 @@ describe("planReseed — refusals", () => {
 
   it("refuses when the node does not exist in the live store", () => {
     const store = baseStore().filter((node) => node.id !== "topic_opportunity");
-    const plan = planReseed({ canonical: baseCanonical(), store, requests: [{ nodeId: "topic_opportunity", field: "allowedTools" }] });
+    const plan = planReseed({ canonical: baseCanonical(), store, allowlist: RETIRED_ALLOWLIST, requests: [{ nodeId: "topic_opportunity", field: "allowedTools" }] });
     expect(plan.writes).toEqual([]);
     expect(plan.refusals).toHaveLength(1);
     expect(plan.refusals[0].reason).toMatch(/does not exist in the live store/);
@@ -138,7 +187,7 @@ describe("planReseed — refusals", () => {
   it("refuses a prompt shrink past the ceiling", () => {
     const canonical = baseCanonical().map((node) => (node.id === "artifact_plan" ? { ...node, prompt: "x".repeat(300) } : node));
     const store = baseStore().map((node) => (node.id === "artifact_plan" ? { ...node, prompt: "x".repeat(1000) } : node));
-    const plan = planReseed({ canonical, store, requests: [{ nodeId: "artifact_plan", field: "prompt" }] });
+    const plan = planReseed({ canonical, store, allowlist: RETIRED_ALLOWLIST, requests: [{ nodeId: "artifact_plan", field: "prompt" }] });
     expect(plan.writes).toEqual([]);
     expect(plan.refusals).toHaveLength(1);
     expect(plan.refusals[0].reason).toMatch(/prompt would shrink 1000 -> 300 chars/);
@@ -148,7 +197,7 @@ describe("planReseed — refusals", () => {
   it("clears the prompt-shrink refusal with --allow-prompt-shrink and plans the write", () => {
     const canonical = baseCanonical().map((node) => (node.id === "artifact_plan" ? { ...node, prompt: "x".repeat(300) } : node));
     const store = baseStore().map((node) => (node.id === "artifact_plan" ? { ...node, prompt: "x".repeat(1000) } : node));
-    const plan = planReseed({ canonical, store, requests: [{ nodeId: "artifact_plan", field: "prompt" }], allowPromptShrink: true });
+    const plan = planReseed({ canonical, store, allowlist: RETIRED_ALLOWLIST, requests: [{ nodeId: "artifact_plan", field: "prompt" }], allowPromptShrink: true });
     expect(plan.refusals).toEqual([]);
     expect(plan.writes).toHaveLength(1);
     expect(plan.writes[0].afterLength).toBe(300);
@@ -218,7 +267,7 @@ describe("planReseed — generalized capability-loss refusal (metadata/allowedTo
   it("refuses an allowedTools write that would remove a tool present in the store, naming it (not just project.call_tool)", () => {
     const canonical = baseCanonical().map((node) => (node.id === "topic_opportunity" ? { ...node, allowedTools: ["stage.get_output"] } : node));
     const store = baseStore().map((node) => (node.id === "topic_opportunity" ? { ...node, allowedTools: ["stage.get_output", "stage.list_outputs"] } : node));
-    const plan = planReseed({ canonical, store, requests: [{ nodeId: "topic_opportunity", field: "allowedTools" }] });
+    const plan = planReseed({ canonical, store, allowlist: RETIRED_ALLOWLIST, requests: [{ nodeId: "topic_opportunity", field: "allowedTools" }] });
     expect(plan.writes).toEqual([]);
     expect(plan.refusals).toHaveLength(1);
     expect(plan.refusals[0].reason).toMatch(/would REMOVE 1 entry/);

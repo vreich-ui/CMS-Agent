@@ -8163,7 +8163,7 @@ Wrong-path notice: content is normally driven from the site admin chat; direct u
 | [`workspace_reorder_nodes`](#workspace_reorder_nodes) | mutate-workspace | workspace/current.json, changes/, revisions/ | - | caution |  |
 | [`workspace_update_graph`](#workspace_update_graph) | mutate-workspace | workspace/current.json, changes/, revisions/ | - | operator |  |
 | [`workspace_update_node`](#workspace_update_node) | mutate-workspace | workspace/current.json, changes/, revisions/ | - | caution | Store-mode overlay: prompt/schema/tools/model/metadata changes reach the NEXT run of every workflow sharing the node id. |
-| [`workspace_update_node_dependencies`](#workspace_update_node_dependencies) | mutate-workspace | workspace/current.json, changes/, revisions/ | - | caution | Topology is PINNED to canonical at run time (overlayStoreNode); a store dependsOn edit does not change what runs. |
+| [`workspace_update_node_dependencies`](#workspace_update_node_dependencies) | mutate-workspace | workspace/current.json, changes/, revisions/ | - | caution | Topology is PINNED to canonical at run time (overlayStoreNode); a store dependsOn edit does not change what runs, so this is REFUSED on a node canonical defines (T5). Store-authored nodes only. |
 | [`workspace_update_node_input_schema`](#workspace_update_node_input_schema) | mutate-workspace | workspace/current.json, changes/, revisions/ | - | caution |  |
 | [`workspace_update_node_metadata`](#workspace_update_node_metadata) | mutate-workspace | workspace/current.json, changes/, revisions/ | - | operator | Metadata carries the *Deterministic route flags (incl. publishExecutorDeterministic). This tool replaces the row's metadata field; the run-time overlay merges it per key with canonical. |
 | [`workspace_update_node_model_config`](#workspace_update_node_model_config) | mutate-workspace | workspace/current.json, changes/, revisions/ | - | caution |  |
@@ -8325,7 +8325,7 @@ Clone a workspace node.
 
 Internal name: `workspace.create_node` · Effect: **mutate-workspace** · Autonomy: **caution**
 
-Create a workspace node.
+Create a workspace node. An id canonical defines is refused — that row is code-owned and is re-seeded automatically.
 
 <details><summary>Input schema</summary>
 
@@ -8921,7 +8921,7 @@ Reorder nodes without changing dependencies.
 
 Internal name: `workspace.update_graph` · Effect: **mutate-workspace** · Autonomy: **operator**
 
-Atomically update workflow graph.
+Atomically update workflow graph. A dependsOn edit on a node canonical defines is refused — overlayStoreNode pins it to nodes.ts; positions, creates and deletes are unaffected.
 
 <details><summary>Input schema</summary>
 
@@ -9041,7 +9041,7 @@ Atomically update workflow graph.
 
 Internal name: `workspace.update_node` · Effect: **mutate-workspace** · Autonomy: **caution**
 
-Patch a workspace node.
+Patch a workspace node. Store-owned fields only: a patch touching a canonical-owned field (id, kind, dependsOn, requiredInputs, produces, riskLevel, status) on a node canonical defines is refused — those reach a run only via nodes.ts + redeploy.
 
 > Store-mode overlay: prompt/schema/tools/model/metadata changes reach the NEXT run of every workflow sharing the node id.
 
@@ -9163,9 +9163,9 @@ Patch a workspace node.
 
 Internal name: `workspace.update_node_dependencies` · Effect: **mutate-workspace** · Autonomy: **caution**
 
-Update node dependsOn.
+Update node dependsOn. Refused on a node canonical defines: overlayStoreNode pins dependsOn to nodes.ts, so the write cannot rewire the graph.
 
-> Topology is PINNED to canonical at run time (overlayStoreNode); a store dependsOn edit does not change what runs.
+> Topology is PINNED to canonical at run time (overlayStoreNode); a store dependsOn edit does not change what runs, so this is REFUSED on a node canonical defines (T5). Store-authored nodes only.
 
 <details><summary>Input schema</summary>
 

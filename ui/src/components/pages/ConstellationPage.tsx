@@ -63,7 +63,7 @@ export function ConstellationPage({ legacy, mode, onNavigate, selectedProjectId,
       <div className="panel-heading">
         <div>
           <h2>Constellation</h2>
-          <p className="muted">The shared agent constellation: positions and dependencies are workspace truth, edited here and versioned in the change history.</p>
+          <p className="muted">The shared agent constellation: positions are workspace truth, edited here and versioned in the change history. Dependencies are code truth for the nodes the engine defines — the store's copy never reaches a run, so a dependency edit on one of those is refused here and belongs in <code>nodes.ts</code> plus a redeploy. Nodes added in this workspace keep their own.</p>
         </div>
         <div className="mode-strip" role="group" aria-label="Constellation modes">
           <button type="button" aria-pressed="true" onClick={() => onNavigate({ page: "constellation" })}>Design</button>

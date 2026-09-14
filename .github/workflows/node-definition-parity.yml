@@ -1,0 +1,110 @@
+# Node definition parity — canonical (this repo) vs the live workspace store (GCS).
+#
+# WHY THIS IS SCHEDULED AND NOT A REQUIRED CHECK. Its verdict is caused by the STORE, which moves
+# independently of any diff: a prompt promoted through the admin chat turns this red on a branch whose
+# author changed nothing and can fix nothing from that branch. Fork PRs receive no secrets, so as a
+# required check it would be permanently red or permanently skipped on external contributions. A gate
+# nobody can action gets disabled. Scheduled + workflow_dispatch keeps it informative and keeps it
+# alive. The BLOCKING half of this seam is `npm run nodes:check:offline`, in ci.yml's `drift` job:
+# credential-free, caused by the diff, and therefore a real gate.
+#
+# WHAT IT READS. `workspace/current.json` (and whatever bootstrapWorkspaceStore resolves) out of
+# gs://cms-agent-503015-cms-agent-state. Read-only: neither script writes without `--write`, which is
+# never passed here.
+#
+# IAM. Exactly one grant beyond what already exists: roles/storage.objectViewer on that bucket, to the
+# service account behind GCP_SERVICE_ACCOUNT_KEY — the same secret cloud-run-plane.yml already uses.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# RED-GATE RUNBOOK — read this before doing anything.
+#
+# `nodes:check` is red. The live store has content nodes.ts does not. This is normal after a prompt
+# promotion and is NOT an incident — live runs are correct either way, because the store wins at
+# dispatch (overlayStoreNode, src/agent/workspace/executor.ts).
+#   1. Read the output. `drift`/`DRIFTED` lines are ordinary lag. `refuse` lines need a decision.
+#   2. Ordinary lag: `WORKSPACE_STORE=gcs GCS_BUCKET=cms-agent-503015-cms-agent-state npm run
+#      nodes:update`, commit src/agent/workspace/nodes.ts AND src/agent/skills/seededSkills.ts, open a
+#      PR. NO DEPLOY IS NEEDED for the change to be live — it already is. The commit is bookkeeping.
+#   3. `would drop N canonicalRule(s)`: the store row lost a rule canonical carries. DO NOT pass
+#      --allow-prompt-shrink. Decide whether the rule is retired. If it is not, put it back in the
+#      store (workspace_update_node_metadata, union of both lists) and re-run. Only pass the flag once
+#      a human has said the rule is genuinely dead.
+#   4. `prompt would shrink … past the 40% ceiling`: same posture. Diff the two prompts first.
+#   5. `assigned skill "<id>" is not in the seeded skill set`: the live registry has a skill code does
+#      not. Re-seed BOTH halves together — `npm run nodes:update` reads skills from the same store.
+#      From an MCP snapshot you must also pass `--skills`.
+#   6. `tail:` lines: the store holds topology that cannot reach a run. After the T2 pinning and T5's
+#      write guard (src/agent/mcp/workspace/canonicalNodeFieldGuard.ts) this should be impossible; if
+#      it appears, the write guard has a hole — file it, do not pass --adopt-store-topology.
+#
+# `store:check` is red. Read docs/KNOWN_ISSUES.md C-19 FIRST. `store:update --allow-prompt-shrink`
+# would delete the `style.visualStandardId` hook from brief_architect and artifact_plan and the check
+# would go green — the capability loss looks like tidiness. The correct direction for that drift is
+# `nodes:update`.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+name: Node definition parity
+
+on:
+  # 24 minutes after cloud-run-plane's 07:17, so the two never contend for the same service account.
+  schedule:
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: node-definition-parity
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NODE_VERSION: "22"
+  WORKSPACE_STORE: gcs
+  GCS_BUCKET: cms-agent-503015-cms-agent-state
+
+jobs:
+  parity:
+    name: canonical vs live store
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Guard — required configuration is present
+        env:
+          KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          # Presence only — never the value. Without this the auth step fails with a generic
+          # credential error and the run reads as a parity failure rather than a missing secret.
+          if [ -z "${KEY}" ]; then
+            echo "::error::secret GCP_SERVICE_ACCOUNT_KEY is not set"
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      # store -> canonical. Does the checked-in nodes.ts/seededSkills.ts still reproduce the live
+      # store? Read-only; `--write` is never passed.
+      - name: canonical vs live store (store -> canonical)
+        run: npm run nodes:check
+
+      # canonical -> store. Would the reviewed RESEED_ALLOWLIST pairs still be a no-op against the
+      # live store? `if: always()` so a red first step never hides the second one's verdict — they
+      # fail for different reasons and the pair is what tells you which direction drifted.
+      # This step prints the backend and bucket it read on its `store` line
+      # (scripts/reseedStoreFromCanonical.ts) — naming the backend on every run is the guard against
+      # the 2026-08-14 false green, where a run that read nothing reported no drift.
+      - name: live store vs canonical (canonical -> store)
+        if: always()
+        run: npm run store:check

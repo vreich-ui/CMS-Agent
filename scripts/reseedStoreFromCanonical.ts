@@ -29,15 +29,23 @@
  * surrounding prompt/schema fixes for that same incident DO reach a run through exactly the field
  * writes below.
  *
- * METADATA IS THE ONE FIELD THIS SCRIPT DOES NOT BLIND-COPY. `grep -oE '"[a-zA-Z]*Deterministic":
- * [a-z"]+' src/agent/workspace/nodes.ts` shows canonical currently sets contractIntelligenceDeterministic,
- * placementResolverDeterministic and publishPayloadDeterministic — but NOT publishExecutorDeterministic
- * or publicationControllerDeterministic. Those two flags exist only in the LIVE STORE's metadata today.
- * Because overlayStoreNode replaces metadata WHOLESALE, a canonical->store copy of publish_executor's
- * metadata would silently DISABLE whichever deterministic route the store currently has switched on —
- * a capability loss dressed as a re-seed, the exact failure class this script's refusals exist to
- * prevent. So publish_executor.metadata is NOT in RESEED_ALLOWLIST; the one supported way to change
- * that single flag is --set-publish-executor-mode, a merge-only operation (see below) that touches
+ * METADATA IS THE ONE FIELD THIS SCRIPT DOES NOT BLIND-COPY, AND THE REASON CHANGED IN #342 — read
+ * this before reasoning from an older copy of this paragraph. Canonical used to set neither
+ * publishExecutorDeterministic nor publicationControllerDeterministic, so the hazard was that a
+ * canonical->store metadata copy would DISABLE a deterministic route that existed only in the store.
+ * Since #342 canonical records both (`grep -oE '"[a-zA-Z]*Deterministic": [a-z"]+'
+ * src/agent/workspace/nodes.ts` now lists publishExecutorDeterministic: "execute" and
+ * publicationControllerDeterministic alongside artifactMaterializer/contractIntelligence/
+ * learningRecorder/placementResolver/publishPayload/releaseExecutor), so that particular loss is gone.
+ *
+ * The EXCLUSION STANDS, on the surviving half of the hazard (K-A9). A canonical->store metadata write
+ * is WHOLESALE: it deletes every store-only sibling key — approvalRequired, activationRequired,
+ * canonicalRules, goLive and anything a future operator adds through workspace.update_node_metadata —
+ * because the per-key merge happens at DISPATCH, between whatever the two rows hold then, and after a
+ * wholesale write there is nothing left to merge. Recording the flags in canonical (#342) is NOT the
+ * same as making canonical AUTHORITATIVE for them; ADR §7.1 records that decision as still unmade. So
+ * publish_executor.metadata stays off RESEED_ALLOWLIST, and the one supported way to change that single
+ * flag remains --set-publish-executor-mode, a merge-only operation (see below) that touches
  * publishExecutorDeterministic alone and leaves every sibling metadata key byte-for-byte intact.
  *
  * WHAT THIS SCRIPT WILL NEVER TOUCH. id, kind, dependsOn, requiredInputs, produces, riskLevel,
@@ -105,51 +113,49 @@ export type ReseedField = typeof STORE_OWNED_FIELDS[number];
 
 export type ReseedAllowlistEntry = { nodeId: string; field: ReseedField; note: string };
 
-// THE allowlist. Exactly these five (nodeId, field) pairs — hardcoded, reviewed, one comment each
-// naming the wave that needs it. This script pushes nothing else, ever; widening scope means adding
-// a line here deliberately, not passing a flag.
+// THE allowlist. A hardcoded, reviewed set of (nodeId, field) pairs — this script pushes nothing
+// else, ever; widening scope means adding a line here deliberately, not passing a flag.
+//
+// IT IS EMPTY, AND THAT IS THE FINISHED STATE, NOT AN OVERSIGHT (T7, 2026-09-14).
+//
+// Every pair it used to carry had ONE job: get a canonical change that shipped with a redeploy into
+// the store row that actually serves it. All ten were confirmed landed on 2026-09-14 by a credentialed
+// run against the live store — `allowlist 10 pairs`, ten `up to date` lines, zero drift, zero refuse,
+// against bucket cms-agent-503015-cms-agent-state at workspaceVersion 1212. Retired here, with each
+// wave kept below as a dated historical note so a future reader can see what this mechanism was for.
+//
+// WHY RETIRING THEM IS THE POINT AND NOT MERELY TIDY. An entry is a standing authorization to push
+// CANONICAL over the STORE for that field. The store is the source of truth for every field on this
+// list; canonical is a copy that goes stale the moment a prompt is promoted through the admin chat.
+// A settled entry left in place therefore arms the next `store:update` to overwrite a corrected store
+// row with a stale canonical one — the exact direction docs/KNOWN_ISSUES.md C-19 warns about, and the
+// reason the correct remedy for ordinary lag is `nodes:update`, never `store:update`.
+//
+// Retired 2026-09-14 (Part 1, PRs #339 and #342, reconciled canonical to the store; all ten verified
+// `up to date` afterwards):
+//   Wave 1 T3 — topic_opportunity.allowedTools: drop the stray workspace.get_node grant.
+//   Wave 3 T8 — brief_architect.outputSchema, brief_architect.prompt: the required mediaSlots[].
+//   Wave 3 T8 — artifact_plan.prompt: materialize slots via create_agent_artifact_job.
+//   Wave 3 T8 — article_body.prompt: bind verified refs into body.image. Also carried W10.1
+//               (2026-09-01, run_1788208708424_a4xtn2): blockers[] became a CLOSED structural list.
+//   W8 (2026-08-31) — artifact_plan.{outputSchema, schema, allowedTools, assignedSkills, modelConfig}:
+//               artifact_plan stopped materializing and became one tool-less planning turn. Two of
+//               these were deliberate capability losses (allowedTools dropped project.call_tool;
+//               assignedSkills dropped contract_intelligence, whose skill requests that same tool).
+//
+// Adding a pair back is a deliberate act with the same bar as the originals: a canonical change that
+// has shipped, a named wave, and a reviewed reason the store must be pushed rather than re-read.
 export const RESEED_ALLOWLIST: ReseedAllowlistEntry[] = [
-  // Wave 1 T3 — drop the stray workspace.get_node grant.
-  { nodeId: "topic_opportunity", field: "allowedTools", note: "Wave 1 T3 — drop the stray workspace.get_node grant" },
-  // Wave 3 T8 — the required mediaSlots[].
-  { nodeId: "brief_architect", field: "outputSchema", note: "Wave 3 T8 — the required mediaSlots[]" },
-  // Wave 3 T8 — the required mediaSlots[] (prompt half of the same change).
-  { nodeId: "brief_architect", field: "prompt", note: "Wave 3 T8 — the required mediaSlots[]" },
-  // Wave 3 T8 — materialize slots via create_agent_artifact_job.
-  { nodeId: "artifact_plan", field: "prompt", note: "Wave 3 T8 — materialize slots via create_agent_artifact_job" },
-  // Wave 3 T8 — bind verified refs into body.image. ALSO carries W10.1 (2026-09-01,
-  // run_1788208708424_a4xtn2): the Blocker criteria paragraph is now a CLOSED list, and names the four
-  // things that are never blockers of this node. The live store row was written directly on 2026-09-01
-  // to unblock that run; this entry is how canonical takes ownership of it back — `npm run store:update
-  // -- --node article_body` after the redeploy makes store and canonical agree again, and
-  // `npm run store:check -- --node article_body` proves it byte-for-byte.
-  { nodeId: "article_body", field: "prompt", note: "Wave 3 T8 — bind verified refs into body.image; W10.1 — blockers[] is a closed structural list" },
-  // W8 (2026-08-31) — artifact_plan stops materializing and becomes ONE tool-less planning turn.
-  //
-  // Topology travelled with the redeploy (overlayStoreNode pins it), so artifact_materializer is live
-  // the moment the code is. These five fields did NOT: overlayStoreNode lets the store's copy override
-  // canonical outright, and the store still holds the gpt-5.5 tool-loop row. Without these writes a
-  // live run dispatches artifact_plan with the OLD prompt, the OLD project.call_tool grant and the OLD
-  // 8-call/$2 budget, validates its output against the OLD artifact_plan.v1 schema — which the new
-  // materialization_spec.v1 fails — and the whole point of W8 is bought and not delivered. The
-  // outputSchema entry is the one that turns a wasted run into a failed node, so it is not optional.
-  //
-  // Two of these are CAPABILITY LOSSES by this script's own definition and will refuse without
-  // --allow-capability-loss: allowedTools drops project.call_tool (deliberate — a planner that can call
-  // the bridge is the tool loop W8 removed) and assignedSkills drops contract_intelligence (its skill
-  // requests project.call_tool, which this node now denies). Say it out loud, as the flag intends.
-  { nodeId: "artifact_plan", field: "outputSchema", note: "W8 — emits materialization_spec.v1; the old schema rejects it" },
-  { nodeId: "artifact_plan", field: "schema", note: "W8 — the legacy alias must not disagree with outputSchema" },
-  { nodeId: "artifact_plan", field: "allowedTools", note: "W8 — plans only; allowedTools is empty by design (capability loss, deliberate)" },
-  { nodeId: "artifact_plan", field: "assignedSkills", note: "W8 — the contract skill requests a tool this node now denies (capability loss, deliberate)" },
-  { nodeId: "artifact_plan", field: "modelConfig", note: "W8 — maxTurns 1, toolCallLimit 0, budget $0.50" }
-  // NOT HERE: publish_executor.metadata (Wave 2a T4's publishExecutorDeterministic flag). `grep -oE
-  // '"[a-zA-Z]*Deterministic": [a-z"]+' src/agent/workspace/nodes.ts` shows canonical never set that
-  // flag (or publicationControllerDeterministic) — only contractIntelligenceDeterministic,
-  // placementResolverDeterministic and publishPayloadDeterministic exist there. The flag lives ONLY
-  // in the live store's metadata today, so a blind canonical->store copy would DISABLE it — a
-  // capability loss dressed as a re-seed. Use --set-publish-executor-mode instead (see below), which
-  // merges just that one key and leaves every other store metadata key untouched.
+  // NOT HERE: publish_executor.metadata (Wave 2a T4's publishExecutorDeterministic flag). This is an
+  // ABSENCE NOTE, not a retired entry — it documents a live hazard and outlives T7's retirement of the
+  // ten settled pairs above. Since #342 canonical DOES record publishExecutorDeterministic: "execute"
+  // and publicationControllerDeterministic, so the original reason (a copy would disable a flag only
+  // the store had) is spent; the surviving reason is K-A9 and it is enough on its own. A metadata
+  // write here is WHOLESALE and would delete every store-only sibling key (approvalRequired,
+  // activationRequired, canonicalRules, goLive, …) — the per-key merge happens at dispatch, and after
+  // a wholesale write there is nothing left to merge. Recording the flags in canonical is not the same
+  // as making canonical authoritative for them (ADR §7.1, still unmade). Use
+  // --set-publish-executor-mode instead: merge-only, one key, every sibling untouched.
 ];
 
 // Same ceiling seedNodesFromWorkspace.ts uses, in the direction this script travels: a re-seed may
@@ -423,7 +429,12 @@ const main = async () => {
     process.exit(1);
   }
   if (nodeId && !RESEED_ALLOWLIST.some((entry) => entry.nodeId === nodeId)) {
-    warn(`✗ "${nodeId}" has no entries in RESEED_ALLOWLIST. Valid ids: ${[...new Set(RESEED_ALLOWLIST.map((entry) => entry.nodeId))].join(", ")}.`);
+    if (RESEED_ALLOWLIST.length === 0) {
+      warn(`✗ RESEED_ALLOWLIST is empty (T7, 2026-09-14 — every pair it carried is settled), so --node ${nodeId} selects nothing.`);
+      warn("  Ordinary canonical/store lag travels the OTHER way: npm run nodes:update. Add a pair here only for a shipped canonical change that the store must be pushed to adopt.");
+    } else {
+      warn(`✗ "${nodeId}" has no entries in RESEED_ALLOWLIST. Valid ids: ${[...new Set(RESEED_ALLOWLIST.map((entry) => entry.nodeId))].join(", ")}.`);
+    }
     process.exit(1);
   }
 
@@ -502,7 +513,19 @@ const main = async () => {
   }
 
   if (!write) {
-    if (combinedWrites.length === 0) { say("store matches the requested target for every pair/operation."); say(REDEPLOY_NOTE); return; }
+    if (combinedWrites.length === 0) {
+      // An empty allowlist with no --set-publish-executor-mode compared NOTHING. Saying "store
+      // matches" here would be the 2026-08-14 false green in a new costume: a reassuring line from a
+      // run that checked nothing. Say what actually happened instead.
+      if (plan.upToDate.length === 0 && modeResult === undefined) {
+        say("nothing to compare: RESEED_ALLOWLIST is empty (T7, 2026-09-14 — every pair it carried is settled).");
+        say("This is the expected steady state. Canonical/store lag is read with `npm run nodes:check`, and corrected with `npm run nodes:update` — not with this script.");
+      } else {
+        say("store matches the requested target for every pair/operation.");
+      }
+      say(REDEPLOY_NOTE);
+      return;
+    }
     warn(`✗ store DRIFTED for ${combinedWrites.length} pair(s)/operation(s). Re-seed with:`);
     // One `--` separator only: npm passes everything after the first one straight through, so a
     // second `--` would be handed to the script as a literal argument.
@@ -530,7 +553,16 @@ const main = async () => {
       process.exit(1);
     }
   }
-  say(combinedWrites.length ? `${combinedWrites.length} pair(s)/operation(s) written.` : "nothing to write; store already matched the requested target.");
+  // Same false-green guard as the check path above: with an empty RESEED_ALLOWLIST and no
+  // --set-publish-executor-mode this run COMPARED NOTHING, and "store already matched" would be a
+  // reassuring sentence from a run that looked at nothing.
+  say(
+    combinedWrites.length
+      ? `${combinedWrites.length} pair(s)/operation(s) written.`
+      : plan.upToDate.length === 0 && modeResult === undefined
+        ? "nothing to write and nothing to compare: RESEED_ALLOWLIST is empty (T7, 2026-09-14 — every pair it carried is settled). Canonical/store lag travels the other way: npm run nodes:check, then npm run nodes:update."
+        : "nothing to write; store already matched the requested target."
+  );
   say(REDEPLOY_NOTE);
 };
 

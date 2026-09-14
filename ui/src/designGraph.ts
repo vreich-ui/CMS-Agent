@@ -164,7 +164,17 @@ export type MutationErrorKind = "workspace_version_conflict" | "revision_conflic
 export function describeMutationError(message: string): { kind: MutationErrorKind; message: string } {
   if (message.includes("workspace_version_conflict")) return { kind: "workspace_version_conflict", message };
   if (message.includes("revision_conflict")) return { kind: "revision_conflict", message };
-  if (message.includes("Missing required canonical node") || message.includes("Cannot delete referenced node")) {
+  // "canonical_owned_field_write" is T5's refusal (src/agent/mcp/workspace/canonicalNodeFieldGuard.ts):
+  // dependencies on a node the engine defines are pinned to code, so the canvas cannot move them. It is
+  // a deliberate refusal like the two above, not a transport failure — classifying it as "other" would
+  // present a designed answer as a malfunction. The server's message already names the real path
+  // (nodes.ts + redeploy), so it is passed through verbatim, same honesty contract as every branch here.
+  if (
+    message.includes("Missing required canonical node") ||
+    message.includes("Cannot delete referenced node") ||
+    message.includes("canonical_owned_field_write") ||
+    message.includes("canonical-owned field")
+  ) {
     return { kind: "refused", message };
   }
   return { kind: "other", message };
