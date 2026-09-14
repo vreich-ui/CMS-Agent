@@ -471,6 +471,24 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
       // for "apply", and the injectable providers (imageTemplateRevisionProviders.ts) for asset
       // resolution and before/after preview/verify. See imageTemplateRevisionEngine.ts's own header.
       case "image_revision_intake": {
+        // A10-D1 — REFUSE, in the same shape "intake"'s own clone_source_missing refusal (above)
+        // uses, rather than falling through to imageRevisionIntakeStep and letting it complete an
+        // EMPTY envelope. operationWorkflowBindings.ts's image_template_revision binding carries a
+        // deliberately-empty inputMapping, so a chat-dispatched run sends this operation's own flat
+        // fields (tenantId/templateRefs/...) and never constructs a nested imageTemplateRevisionBrief
+        // — imageRevisionIntakeStep's own "no brief" branch silently returned `items: []`, and every
+        // later stage completed on the empty intake: the terminal report read "0 of 0" with
+        // partial:false, allFailed:false, a silent no-op dressed as full success.
+        // imageRevisionIntakeStep's OWN "no brief -> empty envelope" behavior is left unchanged (see
+        // its own tests, which drive it directly) — this refusal sits at the DISPATCH boundary, the
+        // same place clone's own clone_source_missing refusal sits for "intake", above.
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.imageTemplateRevisionBrief)) {
+          return refused(
+            "image_template_revision_brief_missing",
+            "The run's initialInput carries no imageTemplateRevisionBrief; image_revision_intake needs one to resolve a source asset or fetch any target template. A binding that dispatches this workflow without constructing an imageTemplateRevisionBrief cannot run it — see operationWorkflowBindings.ts's image_template_revision entry."
+          );
+        }
         const providers = resolveImageTemplateRevisionProviders();
         const envelope = await imageRevisionIntakeStep({ initialInput: run.initialInput }, { assetCatalog: providers.assetCatalog });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
