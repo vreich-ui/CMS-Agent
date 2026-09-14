@@ -35,14 +35,19 @@
 //     pdf_template_library_deposit, the studio's own two-step publication). See the binding entry
 //     below for why its inputMapping is deliberately empty.
 //
-//   asset_lookup_adopt (A5), document_render (A8), image_template_revision (A9) — UNBOUND to any
-//   WORKFLOW. Each descriptor file (src/agent/operations/descriptors/*.ts) says "CONTRACT ONLY, no
-//   implementation here". Concretely: capture_conductor performs a site CRAWL and emission
-//   (captureConductorNodes.ts), which is not a read of the CURRENT inventory no matter how related
-//   the vocabulary sounds. No registered workflow's node array performs a search_assets/adopt_asset,
-//   renders an existing document to PDF, or revises a batch of web template images. An honest
-//   unbound here is what lets preflightOperation() report executable:false with a named remedy
-//   instead of a run that fails at workflow_start_dry_run with no explanation.
+//   asset_lookup_adopt (A5), document_render (A8) — UNBOUND to any WORKFLOW. Each descriptor file
+//   (src/agent/operations/descriptors/*.ts) says "CONTRACT ONLY, no implementation here".
+//   Concretely: capture_conductor performs a site CRAWL and emission (captureConductorNodes.ts),
+//   which is not a read of the CURRENT inventory no matter how related the vocabulary sounds. No
+//   registered workflow's node array performs a search_assets/adopt_asset or renders an existing
+//   document to PDF. An honest unbound here is what lets preflightOperation() report
+//   executable:false with a named remedy instead of a run that fails at workflow_start_dry_run with
+//   no explanation.
+//
+//   image_template_revision -> image_template_revision_studio — BOUND (A9). Its own binding entry,
+//   below, still names an EMPTY inputMapping (a real executor constructing the brief is future
+//   work) — the identical, deliberate posture pdf_template_family's own binding already holds
+//   itself to; see that binding's own comment.
 //
 //   site_inventory (A4) — NOT in this module's table, and deliberately NOT in
 //   UNBOUND_OPERATION_IMPLEMENTING_TASK below either: A4 shipped it as a registered EXECUTOR
@@ -57,6 +62,7 @@
 import { listRegisteredWorkflowIds, getWorkflowDefinition } from "../workspace/workflowRegistry.js";
 import { VISUAL_IDENTITY_WORKFLOW_ID } from "../workspace/visualIdentityWorkflow.js";
 import { PDF_TEMPLATE_STUDIO_WORKFLOW_ID } from "../workspace/pdfTemplateStudioWorkflow.js";
+import { IMAGE_TEMPLATE_REVISION_WORKFLOW_ID } from "../workspace/imageTemplateRevisionWorkflow.js";
 import { getOperation } from "./operationCatalog.js";
 import type { OperationId } from "./operationTypes.js";
 import { checkBindingInputContract, type BindingInputContractResult, type OperationInputContractSource } from "./bindingInputContract.js";
@@ -114,6 +120,27 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     // resolveBindingInputContract/checkBindingInputContract — a REAL executor (a later task, same
     // posture as visual_identity_review_change today) is what would actually construct the brief.
     inputMapping: {}
+  },
+  {
+    // A9 — image_template_revision -> image_template_revision_studio — BOUND.
+    // imageTemplateRevisionWorkflow.ts registers exactly the four-node graph
+    // (imageTemplateRevisionNodes.ts) this operation's own declared `effects` describe:
+    // revise_image_template_batch (image_revision_intake/image_revision_compile_preview,
+    // riskLevel up to "read", plus image_revision_apply at riskLevel "publish"). This is the
+    // operation name bound to the WORKFLOW id "image_template_revision_studio" — never the
+    // operation's own id "image_template_revision" passed as a workflowId.
+    operationId: "image_template_revision",
+    workflowId: IMAGE_TEMPLATE_REVISION_WORKFLOW_ID,
+    // Deliberately EMPTY, same posture as pdf_template_family's own binding above: this operation's
+    // flat input fields (tenantId, templateRefs, batchSize — descriptors/imageTemplateRevision.ts)
+    // have no flat equivalent on the entry node (image_revision_intake), which reads a NESTED
+    // initialInput.imageTemplateRevisionBrief {tenantId, sourceAsset, templateRefs, placement,
+    // approve} (imageTemplateRevisionEngine.ts's imageRevisionIntakeStep) — inputMapping is a flat
+    // field-rename table only, never structural nesting. The entry node's own inputSchema is the
+    // permissive openInput shape (no declared `required`), so this empty mapping still trivially
+    // satisfies checkBindingInputContract — a real executor constructing the brief is future work,
+    // same posture as pdf_template_family's binding today.
+    inputMapping: {}
   }
 ];
 
@@ -126,8 +153,7 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
 // also removed from here — site_inventory (A4) is the one example; see this module's header.
 export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {
   asset_lookup_adopt: "A5",
-  document_render: "A8",
-  image_template_revision: "A9"
+  document_render: "A8"
 };
 
 function assertBindingIsSound(binding: OperationWorkflowBinding): void {

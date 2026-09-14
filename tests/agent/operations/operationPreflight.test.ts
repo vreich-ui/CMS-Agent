@@ -280,6 +280,10 @@ describe("preflightOperation", () => {
       expect(notConfiguredGap?.reason).toBe("not_configured");
       expect(notConfiguredGap?.evidence).toMatchObject({ requiredToolName: "search_artifacts" });
 
+      // A9: image_template_revision is now bound (see operationWorkflowBindings.ts), so its
+      // workflow_binding gap is gone — but image_template_write itself is still not a capability
+      // any registeredToolNames fixture in this file grants, so this specific gap persists
+      // independent of binding status; see the dedicated A9 test file for the bound/executable case.
       const notSupported = preflightOperation(
         { operationId: "image_template_revision", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", templateRefs: [{ surface: "web", templateId: "tpl_1", tenantId: "dr-lurie" }] } },
         capabilitySourceFor(fullyProvisionedDrLurieFacts())
@@ -323,7 +327,12 @@ describe("preflightOperation", () => {
       // contract IS satisfied (pdf_template_studio's entry node uses the permissive openInput
       // schema, with no required fields the empty inputMapping could fail to cover), so it carries
       // no workflow_binding gap at all — see operationWorkflowBindings.test.ts's own R1c coverage.
-      const unboundIds = ["document_render", "asset_lookup_adopt", "image_template_revision"];
+      // A9: image_template_revision is ALSO excluded here now, for the identical reason as
+      // pdf_template_family — it is bound to image_template_revision_studio and that binding's
+      // contract is satisfied (image_revision_intake's own permissive openInput schema), so it
+      // carries no workflow_binding gap either; it keeps a DIFFERENT gap (image_template_write,
+      // not_supported) asserted in the dedicated test above, which this exclusion does not touch.
+      const unboundIds = ["document_render", "asset_lookup_adopt"];
       for (const operationId of unboundIds) {
         const result = preflightOperation({ operationId, tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
         expect(result.executable).toBe(false);

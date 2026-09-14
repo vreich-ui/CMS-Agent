@@ -1,5 +1,10 @@
-// image_template_revision — CONTRACT ONLY, no implementation here. Covers revising images and
-// their placements within a batch of web page templates. Implementing task: A9.
+// image_template_revision — the A2 catalog contract for the image-on-every-page batch operation.
+// Implemented by A9: bound to the image_template_revision_studio workflow
+// (imageTemplateRevisionWorkflow.ts / imageTemplateRevisionEngine.ts) via
+// operationWorkflowBindings.ts. Today's engine supports templateRefs with surface "pdf" (the
+// Zilberman acceptance scenario — three multi-page PDF templates); a "web" surface ref is a named
+// capability gap (image_revision_surface_unsupported), not silently mishandled — see
+// imageTemplateRevisionEngine.ts's fetchTargetTemplateVersionStep.
 import type { OperationDescriptor } from "../operationTypes.js";
 
 export const imageTemplateRevisionOperationV1: OperationDescriptor = {
