@@ -223,63 +223,62 @@ afterEach(() => {
 // of the boundary ever constructs. The run does not fail: every stage "completes" on an empty
 // envelope and the terminal report names ZERO items with partial=false and allFailed=false.
 //
-// These tests CHARACTERIZE that behaviour. When the missing executor lands, they must be inverted
-// (assert real items), not deleted.
+// These tests CHARACTERIZED that behaviour and are now INVERTED (A10-D1 fixed on both halves):
+// bindingInputContract.ts's checkEntryNode no longer reports an open-schema entry node as vacuously
+// satisfied when its binding guarantees zero input fields (so R1c now reports both bindings
+// UNSATISFIED), AND — belt and suspenders, for any future binding that manages to reach dispatch
+// anyway — cloneConductorRoutes.ts's own "image_revision_intake" / "pdf_family_plan" cases now REFUSE
+// outright, by name, when initialInput carries no brief, rather than falling through to the engine's
+// own "no brief -> empty envelope" step function and letting every later stage complete on it.
 // =================================================================================================
 describe("A10-D1 — the input a signed-in Platform chat dispatches never reaches the workflow's brief", () => {
-  it("image_template_revision: R1c reports the binding contract SATISFIED even though the entry node can never receive a brief", () => {
+  it("FIXED — image_template_revision: R1c now reports the binding contract UNSATISFIED — the entry node can never receive a brief through this binding", () => {
     const binding = getOperationWorkflowBinding("image_template_revision")!;
     expect(binding.inputMapping).toEqual({});
-    // The green light Platform reads.
-    expect(resolveBindingInputContract(binding).contract?.satisfied).toBe(true);
-    // ...and the flat keys it therefore dispatches. `imageTemplateRevisionBrief` is not among them.
+    // No more green light: an empty inputMapping against a fully-open entry-node schema is no longer
+    // read as "nothing required, therefore satisfied" — see bindingInputContract.ts's
+    // open_schema_no_guaranteed_input check.
+    expect(resolveBindingInputContract(binding).contract?.satisfied).toBe(false);
+    // The flat keys Platform would still construct from this binding's (now provably unsound)
+    // inputMapping — `imageTemplateRevisionBrief` is still not among them; preflight now refuses to
+    // dispatch this operation at all (operationPreflight.test.ts's own R1c coverage), so this input
+    // shape is never actually sent in production any more.
     const { workflowId, input } = platformDispatchInput("image_template_revision", { templateRefs: [templateRef("newsletter")] }, TARGET);
     expect(workflowId).toBe(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID);
     expect(Object.keys(input)).not.toContain("imageTemplateRevisionBrief");
     expect(input.tenantId).toBe(TARGET);
   });
 
-  it("image_template_revision: the chat-dispatched run completes all four stages and reports ZERO items — a silent no-op, not a refusal", async () => {
+  it("FIXED — image_template_revision: a run dispatched without a brief now REFUSES immediately at intake, never completes a silent no-op", async () => {
     await seedLibrary();
     const { workflowId, input } = platformDispatchInput("image_template_revision", { templateRefs: [templateRef("newsletter"), templateRef("flyer")] }, TARGET);
     const run = runWith({ ...input, targetProjectId: TARGET }, workflowId);
 
-    const { report } = await runImagePipeline(run);
-    expect(report.kind).toBe("completed"); // never blocked, never refused
-    if (report.kind !== "completed") return;
-
-    expect(report.output.artifact).toBe(IMAGE_REVISION_ARTIFACTS.report);
-    expect(report.output.items).toEqual([]); // the two templateRefs the editor named are simply gone
-    // THE DISHONEST BIT: neither flag marks this as a non-result.
-    expect(report.output.partial).toBe(false);
-    expect(report.output.allFailed).toBe(false);
-    expect(String(report.output.summary)).toContain("0 item(s) succeeded, 0 failed, of 0 named");
+    const outcome = await stage(run, "image_revision_intake", "image_revision_intake");
+    expect(outcome.kind).toBe("refused"); // never "completed" on an empty envelope any more
+    if (outcome.kind !== "refused") return;
+    expect(outcome.code).toBe("image_template_revision_brief_missing");
 
     // Nothing was attempted anywhere: no preview, no pdf-tool call, no library write.
     expect(previewCalls).toEqual([]);
     expect(wire).toEqual([]);
     const store = new TemplateLibraryStore();
     expect((await store.getLatest(`${TARGET}::pdf_template::newsletter`))?.version).toBe(1);
-
-    // The only trace of the failure is prose on the intake envelope — no code, no blocker, nothing a
-    // projection or a caller can branch on.
-    const intake = run.stageOutputs.image_revision_intake as Record<string, unknown>;
-    expect(String(intake.summary)).toContain("No imageTemplateRevisionBrief");
-    expect(intake.sourceAssetError).toBeNull();
+    // Nothing is stashed as a completed stage output either — a later stage cannot accidentally
+    // build on a refused stage's "output" because there isn't one.
+    expect(run.stageOutputs.image_revision_intake).toBeUndefined();
   });
 
-  it("pdf_template_family (A7): the same hole — the chat-dispatched run's intake yields an empty family, not a refusal", async () => {
+  it("FIXED — pdf_template_family (A7): the same hole, closed — the chat-dispatched run's intake now REFUSES, never yields a silently-empty family", async () => {
     const { workflowId, input } = platformDispatchInput("pdf_template_family", { familyId: "nonprofit-core" }, TARGET);
     expect(workflowId).toBe(PDF_TEMPLATE_STUDIO_WORKFLOW_ID);
     expect(Object.keys(input)).not.toContain("pdfTemplateFamilyBrief");
 
     const run = runWith({ ...input, targetProjectId: TARGET }, workflowId);
     const intake = await stage(run, "pdf_template_intake", "pdf_family_plan");
-    expect(intake.kind).toBe("completed");
-    if (intake.kind !== "completed") return;
-    expect(intake.output.artifact).toBe(PDF_FAMILY_ARTIFACTS.plan);
-    expect(intake.output.entries).toEqual([]);
-    expect(String(intake.output.summary)).toContain("No pdfTemplateFamilyBrief");
+    expect(intake.kind).toBe("refused");
+    if (intake.kind !== "refused") return;
+    expect(intake.code).toBe("pdf_template_family_brief_missing");
   });
 });
 
@@ -328,21 +327,24 @@ describe("fault: unavailable renderer", () => {
 });
 
 // =================================================================================================
-// 3. FAULT: the asset catalogue is not configured at all (the production default).
-//    A5's acceptance: "forbidden/unavailable is not 'none found'". It currently IS.
+// 3. FIXED: the asset catalogue is not configured at all (the production default).
+//    A5's acceptance: "forbidden/unavailable is not 'none found'". It now genuinely is not.
 // =================================================================================================
 describe("A10-D2 — an unconfigured asset catalogue is reported as 'no such asset'", () => {
-  it("the default provider's empty answer is indistinguishable from a genuinely absent tag", async () => {
+  it("FIXED — the default provider's answer is now DISTINCT, in both code and prose, from a genuinely absent tag", async () => {
     await seedLibrary();
     resetImageTemplateRevisionProviders(); // exactly what a live run with no wiring gets
     const run = briefRun();
     await stage(run, "image_revision_intake", "image_revision_intake");
     const intake = run.stageOutputs.image_revision_intake as Record<string, unknown>;
     const error = intake.sourceAssetError as { code: string; reason: string };
-    // "not configured" is reported with the SAME code and the SAME prose as a real miss.
-    expect(error.code).toBe("image_revision_source_tag_not_found");
-    expect(error.reason).toContain('No asset tagged "a10-hero"');
-    expect(error.reason).not.toMatch(/configur/i);
+    // "not configured" now carries its OWN code and prose — never the "not found" text a genuine
+    // search miss returns (AssetCatalogSource's `configured` flag; resolveSourceImageStep checks it
+    // BEFORE any resolve* call).
+    expect(error.code).toBe("image_revision_asset_catalog_not_configured");
+    expect(error.code).not.toBe("image_revision_source_tag_not_found");
+    expect(error.reason).toMatch(/configur/i);
+    expect(error.reason).not.toContain('No asset tagged "a10-hero"');
 
     const { report } = await runImagePipeline(run);
     if (report.kind !== "completed") throw new Error("expected a completed report");
@@ -352,11 +354,12 @@ describe("A10-D2 — an unconfigured asset catalogue is reported as 'no such ass
 });
 
 // =================================================================================================
-// 4. FAULT: a stale revision. A third party publishes a new library version between intake and
-//    apply. Nothing re-reads it; the revision is minted from the version intake captured.
+// 4. FIXED: a stale revision. A third party publishes a new library version between intake and
+//    apply. Apply now re-reads it and refuses the item, named, rather than minting from the version
+//    intake captured.
 // =================================================================================================
 describe("A10-D3 — a concurrent library version is silently overwritten by the apply stage", () => {
-  it("apply mints from the recipe intake read, discarding the version published in between", async () => {
+  it("FIXED — apply now refuses the item, named, rather than minting from the stale recipe intake read and discarding the concurrent edit", async () => {
     const store = await seedLibrary();
     const run = briefRun({ templateRefs: [templateRef("newsletter")] });
     await stage(run, "image_revision_intake", "image_revision_intake");
@@ -374,16 +377,19 @@ describe("A10-D3 — a concurrent library version is silently overwritten by the
     expect((await store.getLatest(`${TARGET}::pdf_template::newsletter`))?.version).toBe(2);
 
     const applied = await stage(run, "image_revision_apply", "image_revision_apply");
-    expect(applied.kind).toBe("completed");
+    expect(applied.kind).toBe("completed"); // the RUN still completes — the refusal is per-item
     if (applied.kind !== "completed") return;
-    const items = applied.output.items as Array<{ outcome: string; afterVersion?: number }>;
-    // No staleness is detected: the item is reported VERIFIED.
-    expect(items[0].outcome).toBe("verified");
+    const items = applied.output.items as Array<{ outcome: string; detail?: string }>;
+    // The moved version IS detected now, and refused — named, per item.
+    expect(items[0].outcome).toBe("concurrent_modification");
+    expect(items[0].detail).toMatch(/moved from v1.*v2/);
 
     const latest = await store.getLatest(`${TARGET}::pdf_template::newsletter`);
-    expect(latest?.version).toBe(3);
-    // THE LOST UPDATE: v3 was built on v1's recipe, so the concurrent edit is gone from latest.
-    expect(Object.keys(latest!.recipe)).not.toContain("concurrentEdit");
+    // NO LOST UPDATE: nothing was minted from the stale v1 recipe, so v2 — and the colleague's
+    // concurrent edit inside it — is exactly as they left it.
+    expect(latest?.version).toBe(2);
+    expect(Object.keys(latest!.recipe)).toContain("concurrentEdit");
+    expect(wire.filter((call) => call.verb === "create_pdf_template")).toHaveLength(0);
   });
 });
 
@@ -478,7 +484,7 @@ describe("fault: permission hold", () => {
     expect(wire).toEqual([]);
   });
 
-  it("A10-D4: an unapproved item is counted as a SUCCESS by the terminal report — 'nothing was applied' reads as '3 succeeded, 0 failed'", async () => {
+  it("FIXED — A10-D4: an unapproved item is now counted as PENDING, never a success — 'nothing was applied' reads honestly", async () => {
     await seedLibrary();
     const run = briefRun({ approve: false }); // previewed, authorised for nothing
     const { report } = await runImagePipeline(run);
@@ -489,11 +495,12 @@ describe("fault: permission hold", () => {
     expect(items.every((item) => item.outcome === "not_approved")).toBe(true);
     expect(wire).toEqual([]); // genuinely nothing happened
 
-    // THE DEFECT: `not_approved` (and `previewed`) are in SUCCESS_OUTCOMES, so the ledger the
-    // projection reads says the opposite of what happened.
-    expect(String(report.output.summary)).toContain("3 item(s) succeeded, 0 failed, of 3 named");
-    expect(report.output.partial).toBe(false);
-    expect(report.output.allFailed).toBe(false);
+    // FIXED: `not_approved` (and `previewed`) are no longer in SUCCESS_OUTCOMES — they sit in their
+    // own PENDING_OUTCOMES bucket, so the ledger the projection reads now says exactly what happened:
+    // nothing succeeded, nothing failed, a decision is still pending.
+    expect(String(report.output.summary)).toContain("0 item(s) succeeded, 0 failed, 3 pending");
+    expect(report.output.partial).toBe(true); // NOT a clean success — a decision is still pending
+    expect(report.output.allFailed).toBe(false); // and NOT a clean failure either — nothing failed
   });
 });
 

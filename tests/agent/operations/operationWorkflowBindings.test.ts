@@ -137,17 +137,22 @@ describe("operationWorkflowBindings", () => {
       expect(entryNodeCheck!.satisfied).toBe(false);
     });
 
-    // A9 — same shape as pdf_template_family's precedent immediately above: image_revision_intake
-    // (image_template_revision_studio's entry node) also uses the permissive openInput schema, so
-    // the empty inputMapping trivially satisfies it.
-    it("the image_template_revision binding is detected as SATISFIED — its entry node's permissive schema has no required field the empty inputMapping could fail to cover", () => {
+    // A10-D1 (was: "A9 — same shape as pdf_template_family's precedent immediately above... the
+    // empty inputMapping trivially satisfies it."). Same vacuous pass, same fix: image_revision_intake
+    // (image_template_revision_studio's entry node) uses the permissive openInput schema for the
+    // identical reason pdf_template_intake does — it reads a NESTED
+    // initialInput.imageTemplateRevisionBrief its schema never names — so checkEntryNode's
+    // open_schema_no_guaranteed_input check now catches this binding too.
+    it("the image_template_revision binding is detected as UNSATISFIED — its entry node's permissive schema gives the empty inputMapping nothing to prove", () => {
       const status = resolveBindingInputContract(getOperationWorkflowBinding("image_template_revision")!);
       expect(status.resolved).toBe(true);
       expect(status.contract).not.toBeNull();
-      expect(status.contract!.satisfied).toBe(true);
+      expect(status.contract!.satisfied).toBe(false);
       const entryNodeCheck = status.contract!.entryNodeChecks.find((check) => check.nodeId === "image_revision_intake");
       expect(entryNodeCheck).toBeDefined();
       expect(entryNodeCheck!.unsatisfiedRequired).toEqual([]);
+      expect(entryNodeCheck!.unsupportedConstructs).toEqual(["open_schema_no_guaranteed_input"]);
+      expect(entryNodeCheck!.satisfied).toBe(false);
     });
 
     it("listBindingInputContractStatuses() reports one resolved status per registered binding, in operationId order", () => {

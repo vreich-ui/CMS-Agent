@@ -141,9 +141,15 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     // initialInput.imageTemplateRevisionBrief {tenantId, sourceAsset, templateRefs, placement,
     // approve} (imageTemplateRevisionEngine.ts's imageRevisionIntakeStep) — inputMapping is a flat
     // field-rename table only, never structural nesting. The entry node's own inputSchema is the
-    // permissive openInput shape (no declared `required`), so this empty mapping still trivially
-    // satisfies checkBindingInputContract — a real executor constructing the brief is future work,
-    // same posture as pdf_template_family's binding today.
+    // permissive openInput shape (no declared `required`), so — A10-D1 — this empty mapping used to
+    // be read as "trivially satisfies checkBindingInputContract"; it was actually a VACUOUS pass:
+    // neither half of the check had anything to evaluate. bindingInputContract.ts's checkEntryNode
+    // now treats "open schema + zero guaranteed fields" as itself unsatisfied, so
+    // resolveBindingInputContract correctly reports this binding UNSATISFIED until a real executor
+    // constructs the brief or the entry node's schema is taught to name it — same posture as
+    // pdf_template_family's binding above. (cloneConductorRoutes.ts's own "image_revision_intake"
+    // case also refuses outright, by name, if a run ever reaches dispatch without a brief anyway —
+    // belt and suspenders against this exact class of defect.)
     inputMapping: {}
   }
 ];

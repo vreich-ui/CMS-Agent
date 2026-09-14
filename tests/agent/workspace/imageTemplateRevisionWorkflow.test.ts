@@ -99,14 +99,19 @@ describe("image_template_revision_studio — routes and gates", () => {
   });
 });
 
-describe("image_template_revision (A2 catalog operation) is bound to image_template_revision_studio, its input contract satisfied", () => {
-  it("resolves via getOperationWorkflowBinding and reports a satisfied R1c contract", () => {
+describe("image_template_revision (A2 catalog operation) is bound to image_template_revision_studio, its input contract NOT satisfied (A10-D1)", () => {
+  it("resolves via getOperationWorkflowBinding, but R1c now correctly reports the contract unsatisfied — the entry node's permissive openInput schema gives the empty inputMapping nothing to prove", () => {
     const binding = getOperationWorkflowBinding("image_template_revision");
     expect(binding).not.toBeNull();
     expect(binding?.workflowId).toBe(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID);
     expect(binding?.workflowId).not.toBe("image_template_revision"); // never the operation id itself
     const status = resolveBindingInputContract(binding!);
-    expect(status.contract?.satisfied).toBe(true);
+    // A10-D1 — this used to read true: a vacuous pass, not a genuine satisfaction (see
+    // operationWorkflowBindings.test.ts's own R1c coverage for the full reasoning). The binding still
+    // resolves and still exists (operationWorkflowBindings.ts is unchanged); only the SOUNDNESS
+    // verdict changed. A real executor or a schema that names imageTemplateRevisionBrief is what
+    // would make this true again for a genuine reason.
+    expect(status.contract?.satisfied).toBe(false);
   });
 });
 
