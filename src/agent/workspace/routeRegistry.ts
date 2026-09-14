@@ -351,6 +351,21 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
       { id: "pdf_publish", description: "Publish the PDF template.", timeout: "deterministic_stage", requiredTools: [
         { verb: "publish_pdf_template", risk: "publish", description: "Goes live in pdf-tool's template store. Gated by the executor's generic publish-risk gate on the node's own riskLevel, and by the project's publishEnabled kill switch." }
       ] },
+      // A7 (Stage A task list) — the PDF template STUDIO's own five phases, additive to the four
+      // pdf-tool phases above (pdf_intake/pdf_mint/pdf_publish/report), which clone_conductor's own
+      // PDF branch keeps using unchanged. See pdfTemplateFamilyEngine.ts / pdfTemplateStudioNodes.ts
+      // for what each stage does.
+      { id: "pdf_family_plan", description: "Expand a family brief into variants and decide reuse/revision per variant. Reads the cross-tenant TemplateLibraryStore (an internal, blob-backed store, not a project MCP verb) and the run's own initialInput; no tenant call.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "pdf_mint_validated", description: "Contract-validate pdf_template_designer's proposed renderer payloads locally, then create+validate the survivors exactly as pdf_mint above.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "create_pdf_template", risk: "write", description: "Mint the draft template in pdf-tool's template store." },
+        { verb: "validate_pdf_template", risk: "write", description: "Start a validation run against the brief's worst-case sample data (every renderer except pdfme)." },
+        { verb: "get_pdf_template_validation", risk: "read", description: "Bounded deterministic poll of that validation report." }
+      ] },
+      { id: "pdf_publish_only", description: "STEP A of the studio's two-step publication: publish_pdf_template only, never the library deposit.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "publish_pdf_template", risk: "publish", description: "Goes live in pdf-tool's template store. Gated by the executor's generic publish-risk gate on the node's own riskLevel, and by the project's publishEnabled kill switch." }
+      ] },
+      { id: "pdf_library_deposit", description: "STEP B of the studio's two-step publication, and its own separate node: deposits each published template into the cross-tenant TemplateLibraryStore (#207) — an internal, blob-backed store, not a project MCP verb; no tenant call.", timeout: "deterministic_stage", requiredTools: [] },
+      { id: "pdf_family_report", description: "Assemble the family's terminal per-variant ledger (reused/published/contract_rejected/mint_rejected/publish_failed/library_export_refused/family_plan_rejected) and the two-step publication summary. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
       { id: "report", description: "Summarize the clone. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
   },

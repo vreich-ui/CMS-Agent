@@ -43,6 +43,9 @@ import "./captureConductorWorkflow.js";
 import "./cloneConductorWorkflow.js";
 // C5 — same side-effect registration for visual_identity (BRIEF §3.5's two-node pair).
 import "./visualIdentityWorkflow.js";
+// A7 (Stage A task list) — same side-effect registration for pdf_template_studio (this task's own
+// standalone PDF template studio). See pdfTemplateStudioWorkflow.ts's own header.
+import "./pdfTemplateStudioWorkflow.js";
 import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
 import { readVisualStandardMaterializer, runVisualStandardMaterialization } from "./visualStandardMaterialization.js";

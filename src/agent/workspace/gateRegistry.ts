@@ -48,7 +48,10 @@ const WORKFLOW_GATE_SEGMENT: Record<string, string> = {
   // C5: already short and already stable, so the segment IS the workflow id — declared explicitly
   // rather than left to the `?? workflowId` fallback below, because an operator reading this table
   // should be able to see every gate prefix that exists without knowing which ones are defaults.
-  visual_identity: "visual_identity"
+  visual_identity: "visual_identity",
+  // A7 — already short and already stable, same posture as visual_identity's own explicit entry
+  // above.
+  pdf_template_studio: "pdf_template_studio"
 };
 
 const gate = (workflowId: string, nodeId: string, description: string): PublishGateDefinition => ({
@@ -81,7 +84,16 @@ const GATE_REGISTRY: readonly PublishGateDefinition[] = [
   // an approval reason. Like the pdf-template branch above it is a gate WITHOUT composing the shared
   // tail: this workflow publishes nothing (visual_standard is deliberately not a publishable type),
   // and the site write it can make travels through the privileged apply verb, not through a publisher.
-  gate("visual_identity", "visual_standard_materializer", "site_apply_brand_imagery for the visual standard a writer run proposed — the site's applied brandImagery. Creating the standard itself is not gated; putting it on the live site is.")
+  gate("visual_identity", "visual_standard_materializer", "site_apply_brand_imagery for the visual standard a writer run proposed — the site's applied brandImagery. Creating the standard itself is not gated; putting it on the live site is."),
+  // A7 (Stage A task list) — the standalone PDF template studio's own STEP A (see
+  // pdfTemplateStudioNodes.ts's header). Same posture as clone_conductor's pdf_template_publish gate
+  // above — riskLevel "publish" without composing the shared tail — declared here as a SEPARATE
+  // (workflowId, nodeId) pair even though the node id string is identical, because gate addressing is
+  // per-workflow (this table's own header, consequence 1): "hold pdf_template_studio's publish" must
+  // never also mean "hold clone_conductor's". pdf_template_library_deposit (STEP B) is deliberately
+  // NOT a gate: it is riskLevel "write", not "publish"/"admin" — it never calls publish_pdf_template
+  // itself and carries no operator-veto point of its own.
+  gate("pdf_template_studio", "pdf_template_publish", "publish_pdf_template (STEP A only) for the family variants pdf_template_mint validated. Not a CMS release, and not the library export (STEP B, pdf_template_library_deposit) — see that node's own header.")
 ];
 
 const byWorkflowAndNode = new Map(GATE_REGISTRY.map((definition) => [`${definition.workflowId} ${definition.nodeId}`, definition]));
