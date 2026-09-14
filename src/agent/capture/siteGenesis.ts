@@ -75,7 +75,10 @@ import { TRACKING_SINK_TOKEN_ENV, TRACKING_SINK_URL_ENV } from "../improvement/t
 import { createSecretVersion } from "../projects/secretManager.js";
 import { genesisTenantProfile } from "../projects/genesisTenantProfile.js";
 import { genesisEditorialVoiceFallback } from "../projects/genesisEditorialVoice.js";
+import { platformScaffoldObjectIds } from "../projects/platformScaffoldIds.js";
+import type { ProjectObjectDialect } from "../projects/projectTypes.js";
 import {
+  GENESIS_ARTIFACT_INPUT_FIELDS,
   activeGenesisPolicy,
   genesisArtifactCliArgs,
   genesisArtifactRefusalMessage,
@@ -152,6 +155,12 @@ const genesisSecretProject = (env: NodeJS.ProcessEnv): string | undefined =>
 /** The secret id a tenant's inbound bearer lives under. Matches the convention already in production
  *  (zilberman: projects/cms-agent-503015/secrets/zilberman-mcp-token/versions/latest). */
 export const tenantTokenSecretId = (slug: string): string => `${slug}-mcp-token`;
+// G2 — the two dialect values that are FLEET FACTS rather than per-tenant ones, named here so the
+// parity check and the birth path read the same constants. The pattern is dr-lurie's and platform's,
+// verbatim (`req_<flow>_<topic>_<yyyymmdd>_<nn>`); the object type is the governed article type every
+// scaffolded tenant serves.
+export const GENESIS_REQUEST_ID_PATTERN = "^req_[a-z0-9_]+_\\d{8}_\\d{2}$";
+export const GENESIS_DEFAULT_OBJECT_TYPE = "content_item";
 export const CMS_AGENT_PUBLIC_MCP_ENDPOINT_ENV = "CMS_AGENT_PUBLIC_MCP_ENDPOINT";
 export const CREATE_SITE_CLI_RELATIVE_PATH = "packages/core/cli/create-site.mjs";
 // The EXACT CMS-Agent tool surface a tenant's admin chat needs, and nothing more — this list IS
@@ -346,6 +355,9 @@ export type SiteGenesisResult = {
   humanChecklist: GenesisHumanChecklistItem[];
   // C3: what birth did (or precisely planned) about the site's look and its default PDF template.
   visualIdentity: GenesisVisualIdentityPlan;
+  // G2: the dialect written onto the record at birth, returned so a caller (and site.duplicate's own
+  // result) can show the addresses without a second registry read.
+  objectDialect: ProjectObjectDialect;
 };
 
 const now = () => new Date().toISOString();
@@ -382,9 +394,15 @@ export const deriveTenantMcpEndpoint = (netlifySiteName: string, reportedSiteUrl
 //   - rights ALL "prohibited" — extracted copy is regenerated (copy_regenerator) and media is never
 //     imported. Duplication must not presume content/media rights the operator has not asserted;
 //     raising rights is an explicit human project.update, surfaced on the checklist.
-export const seededGenesisCapturePolicy = (sourceOrigin: string): ProjectCapturePolicy => ({
+// G1 (2026-09-14): `sourceOrigin` is now OPTIONAL, because a mint-only genesis has no source at all.
+// An omitted origin yields an EMPTY allowlist, which is the deny-all default every capture stage
+// already re-checks server-side (resolveCaptureAuthority) — so a tenant minted without a source
+// cannot be crawled into until an operator names an origin through project.update. Fail-closed is
+// the only safe reading of "no source was ever supplied"; inventing `["*"]` or the tenant's own
+// origin would hand a brand-new tenant a crawl authority nobody asked for.
+export const seededGenesisCapturePolicy = (sourceOrigin?: string): ProjectCapturePolicy => ({
   maxPages: 20,
-  allowedCrawlOrigins: [sourceOrigin],
+  allowedCrawlOrigins: sourceOrigin ? [sourceOrigin] : [],
   allowedPathPrefixes: ["/"],
   sameOriginOnly: true,
   respectRobots: true,
@@ -444,6 +462,21 @@ export const resolveGenesisNetlifyMode = (env: NodeJS.ProcessEnv = process.env):
  * without confirming the account-level variable actually exists — inheriting a value that is not
  * there installs nothing at all.
  */
+// G3 — THE TENANT'S OWN PER-SITE VALUES, the subset of platform's ENV_CHECKLIST that is safe to mint
+// without a human because it is either random (a per-site secret with no meaning outside this site)
+// or already known to this run (the Netlify site id). Kept in the same order and under the same names
+// as `packages/core/cli/create-site.mjs`'s `ENV_CHECKLIST` rows marked `generate:`, so the two
+// provisioning paths install the identical set. `MCP_HTTP_AUTH_TOKEN` is deliberately NOT here: the
+// tenant-bearer custody block below owns it, because that one value must also be written to Secret
+// Manager and named on the project record, and two writers of one bearer is the outage this file's
+// own history is full of.
+export const GENESIS_OBJECT_STORE_ENV_VARS: ReadonlyArray<{ key: string; isSecret: boolean; bytes?: number; derive?: "netlify_site_id"; why: string }> = [
+  { key: "PUBLISH_SECRET", isSecret: true, bytes: 32, why: "the object store's own gate — invokeObjectStore refuses every object verb without it" },
+  { key: "ARTIFACT_UPLOAD_TOKEN_SECRET", isSecret: true, bytes: 32, why: "signs artifact-upload intents" },
+  { key: "TRACKING_SALT", isSecret: true, bytes: 32, why: "per-site tracking hash salt" },
+  { key: "NETLIFY_SITE_ID", isSecret: false, derive: "netlify_site_id", why: "blob runtime detection keys on it; without it the functions run on the file-backed test store" }
+];
+
 export const GENESIS_FLEET_ENV_VARS: ReadonlyArray<{ key: string; isSecret: boolean; inherited: boolean; why: string }> = [
   // The sink URL is not a bearer on its own, but the platform scaffold already inherits it as a
   // secret-flagged variable (create-site.mjs's `inheritedEnvKey` block). The flag is retained here so
@@ -952,7 +985,13 @@ export const DEFAULT_ARTICLE_PDF_TEMPLATE_ID = "article_brochure_v1";
 export const PUBLISH_ARTICLE_TEMPLATE_SCRIPT = "scripts/publish-article-template.mjs";
 
 /** R2: the house standard is a singleton named after its site, mirroring `voice_<site>`. */
-export const houseVisualStandardId = (slug: string): string => `vis_${slug.replace(/-/g, "")}`;
+// G2 (2026-09-14) — DERIVED FROM THE SCAFFOLD, not from a third spelling of the rule. This used to
+// strip hyphens (`vis_genesislab2`) while the platform scaffold that actually mints the standard
+// snake-cases them (`vis_genesis_lab_2`, `visual-standard-genesis.mjs` `visualStandardIdFor`), and
+// while workspace/visualStandardIds.ts — the module whose whole job is to be the one place that
+// knows this — snake-cases them too. Three spellings that agreed for every hyphen-free slug in the
+// fleet and disagreed for the first hyphenated one. See projects/platformScaffoldIds.ts.
+export const houseVisualStandardId = (slug: string): string => platformScaffoldObjectIds(slug).visualStandardId;
 
 /** The writer's brief for mode:'house' — the tenant's niche and audience, and nothing invented. */
 export const genesisHouseBrief = (input: { niche?: string; audience?: string }): string | undefined => {
@@ -1021,6 +1060,9 @@ export function buildGenesisHumanChecklist(input: {
   deployBound?: boolean;
   // G4 — the site env vars genesis derived and set itself.
   derivedEnvVars?: string[];
+  // G3 — the tenant's own object-store variables genesis could NOT install (by name). Empty (the
+  // normal case) removes the item entirely rather than leaving a step that is already done.
+  objectStoreEnvFailed?: string[];
   netlifySiteId?: string;
 }): GenesisHumanChecklistItem[] {
   const { slug, netlifySiteName, envPrefix } = input;
@@ -1057,6 +1099,17 @@ export function buildGenesisHumanChecklist(input: {
       title: "Execute the Netlify provisioning LIVE (this run recorded it in dry-run mode only)",
       detail: `Runbook §2: "node packages/core/cli/create-site.mjs --name ${slug} --netlify-token $NETLIFY_API_TOKEN" (add --provision-only if sites/${slug}/ already exists, and --netlify-site-name ${netlifySiteName} for the serving name). This creates/resolves the Netlify site, probes the blob stores (write→read→delete), and auto-mints + pushes PUBLISH_SECRET, MCP_HTTP_AUTH_TOKEN, ARTIFACT_UPLOAD_TOKEN_SECRET, TRACKING_SALT, NETLIFY_SITE_ID, PDF_TOOL_BASE_URL, PDF_TOOL_AGENT_RUN_TOKEN — values never printed. Or set ${SITE_GENESIS_NETLIFY_MODE_ENV}=live on this deployment and re-run site.duplicate.`,
       source: "site-provisioning-runbook.md §2"
+    });
+  }
+  // G3 — named only when a write genuinely failed. PUBLISH_SECRET is called out by name and by
+  // consequence because its absence does not look like a missing variable from the outside: it looks
+  // like a tenant whose every object read fails for an unexplained reason.
+  if ((input.objectStoreEnvFailed ?? []).length > 0) {
+    items.push({
+      id: "tenant_object_store_env",
+      title: "Set the tenant's own object-store variables that genesis could not write",
+      detail: `Genesis mints these per-site values itself and writes them only where absent, but ${(input.objectStoreEnvFailed ?? []).join(", ")} could not be written to ${netlifySiteName}. Set ${(input.objectStoreEnvFailed ?? []).length === 1 ? "it" : "them"} in the Netlify console for this site (Site configuration → Environment variables; secret, production context, functions scope) — or re-run site.duplicate, which will fill only what is still missing. PUBLISH_SECRET in particular is the object store's own gate: without it this tenant's /mcp answers every object_get/object_list/object_create with "Server-side object storage credentials are not configured.", which reads like a broken tenant rather than a missing variable.`,
+      source: "site-provisioning-runbook.md §2 / packages/core/server/lib/mcp-tool-handlers.ts invokeObjectStore"
     });
   }
   items.push(
@@ -1230,7 +1283,11 @@ export type SiteGenesisInput = {
   // The <name> in <name>.netlify.app when it must differ from the repo slug (e.g. R-C4's
   // zilberman tree serving at zilbermanfilmfoundation.netlify.app). Defaults to the slug.
   netlifySiteName?: string;
-  sourceUrl: string;
+  // G1 (2026-09-14) — OPTIONAL. Genesis mints a tenant; duplicating a source site into it is a
+  // SECOND act that happens to share one MCP call today. Supplying it seeds the capture policy's
+  // allowed origin and lets site.duplicate start a capture run; omitting it is the mint-only path
+  // (no run, no capturePolicy origin, deny-all until an operator names one).
+  sourceUrl?: string;
   // OPTIONAL endpoint override for the tenant being minted — for a client that will serve its /mcp
   // from a custom domain from day one. Omit it (the normal path): genesis DERIVES the endpoint from
   // the Netlify site it just created, so nobody passes or sets anything. Validated credential-free
@@ -1378,7 +1435,21 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
 
   const netlifySiteName = (input.netlifySiteName ?? slug).trim();
   const envPrefix = envPrefixForSlug(slug);
-  const sourceOrigin = new URL(input.sourceUrl).origin;
+  // G6 tier 1, hoisted for G4: the provisional voice derived from the niche and audience this mint
+  // was given. Two consumers now — the project record's `editorialVoiceFallback` (unchanged) and the
+  // scaffold's own `--editorial-voice` baseline (new, below). Undefined when genesis was given
+  // neither fact, in which case nothing is supplied to either and the tenant is honestly voice-less.
+  const genesisVoice = genesisEditorialVoiceFallback({ slug, ...(input.niche ? { niche: input.niche } : {}), ...(input.audience ? { audience: input.audience } : {}) });
+  // G1 — undefined on the mint-only path. Validated here rather than trusted: a malformed source
+  // must refuse before the first Netlify call, exactly as it did when the field was required.
+  let sourceOrigin: string | undefined;
+  if (input.sourceUrl !== undefined) {
+    try {
+      sourceOrigin = new URL(input.sourceUrl).origin;
+    } catch {
+      throw new SiteGenesisRefusal("genesis_source_invalid", `newSite was given a sourceUrl that is not a valid absolute URL: "${input.sourceUrl}".`);
+    }
+  }
 
   // The standing genesis prerequisite (T11.7 / runbook §2): a NETLIFY_API_TOKEN with site-create
   // rights, configured by NAME in this deployment. Missing is a catalogued refusal even in dry-run
@@ -1407,6 +1478,28 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   // scope is how a checklist stops being read. Empty until the check actually runs, so a genesis that
   // never reached the check errs toward "still a human step" rather than toward silence.
   const inheritedFleetPresent: string[] = [];
+  // G3 — what the object-store block below actually managed to install, and what it could not. Read
+  // by the human checklist so "set PUBLISH_SECRET" appears only when it is genuinely still a step.
+  const objectStoreEnvInstalled: string[] = [];
+  const objectStoreEnvFailed: string[] = [];
+
+  // G4 (2026-09-14) — WHAT THE SCAFFOLD IS ASKED TO SEED.
+  //
+  // The caller's own baselines, verbatim, PLUS the provisional voice genesis derived from the niche
+  // and audience it was given — but only when the caller supplied no `editorialVoice` of its own.
+  // Without this, a minted tenant's `voice_<client>` object was the un-filled skeleton
+  // (`provenance.set_by: "genesis_default"`, ONBOARDING markers throughout) while the SAME derived
+  // body sat on the project record as `editorialVoiceFallback`: one tenant, two voices, and the
+  // better of the two unreachable to anything that reads the object.
+  //
+  // THE POLICY GATE IS NOT WEAKENED BY THIS. `missingGenesisArtifacts` runs at the very top of this
+  // function against the CALLER's input, before this layer exists, so a fleet policy that requires
+  // `editorial_voice` still refuses a mint that omits it. This only decides what an already-permitted
+  // mint seeds.
+  const scaffoldArtifactInput: Record<string, unknown> = {
+    ...(genesisVoice ? { [GENESIS_ARTIFACT_INPUT_FIELDS.editorial_voice]: genesisVoice } : {}),
+    ...(input as unknown as Record<string, unknown>)
+  };
 
   // 1. Scaffold (filesystem, via the platform seam) — when a checkout is mounted.
   let scaffoldExecuted = false;
@@ -1424,7 +1517,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
         "--name",
         slug,
         ...(input.netlifySiteName ? ["--netlify-site-name", netlifySiteName] : []),
-        ...genesisArtifactCliArgs(input as unknown as Record<string, unknown>)
+        ...genesisArtifactCliArgs(scaffoldArtifactInput)
       ],
       { passToken: false, token }
     );
@@ -1591,6 +1684,75 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
         scopes: [...NETLIFY_DEFAULT_ENV_SCOPES]
       }
     });
+  }
+
+  // 2b. G3 (2026-09-14) — THE TENANT'S OWN OBJECT-STORE CREDENTIALS.
+  //
+  // THE FAILURE THIS CLOSES. A minted tenant answered every `object_list` / `object_get` /
+  // `object_create` on its own `/mcp` with the tool error "Server-side object storage credentials
+  // are not configured." That string has exactly one source — `invokeObjectStore` in platform's
+  // `packages/core/server/lib/mcp-tool-handlers.ts`, whose first line reads
+  // `process.env.PUBLISH_SECRET || process.env.NETLIFY_PUBLISH_SECRET` and returns that error when
+  // neither is set. So the tenant existed, served, authenticated — and could not read or write a
+  // single object. Every downstream degradation on genesis-lab-2 (the strategy prefetch, the
+  // contract prefetch, the site prefetch, the artifact bridge) is that one missing variable.
+  //
+  // WHY IT WAS MISSING, and why fixing the scaffold path alone would not be enough. These values are
+  // `ENV_CHECKLIST` rows marked `generate:` in `create-site.mjs`, minted and pushed by
+  // `--provision-only`. Genesis reaches that subprocess only under `mode === "live" && platformRoot`;
+  // with no checkout mounted it takes its own `createSite` primitive, which mints the site and
+  // nothing else. But even WITH a checkout, `--provision-only` reports per-secret `secretsFailed[]`
+  // and genesis carried on regardless, so a partial provision left the same hole.
+  //
+  // THE SHAPE OF THE FIX IS THEREFORE "VERIFY AND FILL", NOT "WRITE". Every variable below is
+  // written with `onlyIfAbsent`, so:
+  //   - the delegated path's values are never overwritten (a second writer would replace a secret
+  //     the site is already serving with one nothing else holds — the same hazard the token-custody
+  //     block above refuses for the bearer);
+  //   - a partial `--provision-only` is completed rather than reported;
+  //   - re-running genesis against an existing tenant is a no-op, not a rotation.
+  // That makes this self-healing on every birth and every re-run, which is the point: a tenant must
+  // never again need a human to notice one variable.
+  //
+  // NETLIFY_SITE_ID is in the list and is NOT a secret: it is the id of the site this run just
+  // created, it is what platform's blob runtime detection keys on, and a site without it runs its
+  // functions against the file-backed test store and fails at the first write.
+  {
+    const envAccount = accountId ?? (mode === "live" ? await netlify.getSiteAccountId(siteId) : `dryrun_account_${netlifySiteName}`);
+    if (mode === "live" && !accountId) accountId = envAccount;
+    const installed: string[] = [];
+    const failed: Array<{ key: string; message: string }> = [];
+    for (const secret of GENESIS_OBJECT_STORE_ENV_VARS) {
+      const value = secret.derive === "netlify_site_id" ? siteId : randomBytes(secret.bytes ?? 32).toString("hex");
+      try {
+        await netlify.setEnvVar(envAccount, siteId, secret.key, value, {
+          onlyIfAbsent: true,
+          ...(secret.isSecret ? { isSecret: true, scopes: ["functions"], context: "production" } : {})
+        });
+        installed.push(secret.key);
+      } catch (error) {
+        // Never fatal. A tenant whose object store is one variable short is a tenant an operator can
+        // fix in a console in ten seconds — as long as the checklist NAMES the variable. Aborting
+        // birth here would instead leave an orphan Netlify site, a minted bearer and no record.
+        failed.push({ key: secret.key, message: error instanceof SiteGenesisRefusal ? error.safeSummary ?? error.message : error instanceof Error ? error.message : String(error) });
+      }
+    }
+    ledger.push({
+      step: "tenant_object_store_env",
+      kind: failed.length === 0 ? (mode === "dry_run" ? "dry_run" : "executed_unverified") : "requires_human",
+      detail: [
+        `${mode === "dry_run" ? "DRY-RUN: would install" : "Installed"} the tenant's own per-site object-store variables, by NAME only and only where absent: ${installed.join(", ") || "(none)"}.`,
+        `PUBLISH_SECRET is the one the tenant's /mcp checks before every object read or write (platform mcp-tool-handlers.ts invokeObjectStore); without it every object verb answers "Server-side object storage credentials are not configured."`,
+        failed.length > 0
+          ? `NOT installed, and therefore still a human step in the Netlify console for this site: ${failed.map((entry) => `${entry.key} (${entry.message})`).join("; ")}.`
+          : "",
+        mode === "dry_run" ? "" : "Recorded as executed_unverified for the same reason as the bearer above: a functions env var takes effect on the next deploy."
+      ].filter(Boolean).join(" "),
+      at: now(),
+      data: { projectId: slug, netlifySiteId: siteId, installed, failed, onlyIfAbsent: true }
+    });
+    objectStoreEnvInstalled.push(...installed);
+    objectStoreEnvFailed.push(...failed.map((entry) => entry.key));
   }
 
   // 3. Platform site -> CMS-Agent Client Manager credential. This is part of birth, not a human
@@ -1777,8 +1939,37 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   // sets <SLUG>_MCP_ENDPOINT, plus the conservative seeded capture policy that authorizes exactly
   // the requested source origin.
   const seededCapturePolicy = seededGenesisCapturePolicy(sourceOrigin);
-  const genesisVoice = genesisEditorialVoiceFallback({ slug, ...(input.niche ? { niche: input.niche } : {}), ...(input.audience ? { audience: input.audience } : {}) });
   const mcpEndpoint = input.mcpEndpoint?.trim() || deriveTenantMcpEndpoint(netlifySiteName, siteUrl);
+  // G2 (2026-09-14) — THE OBJECT DIALECT, WRITTEN AT BIRTH.
+  //
+  // Until now a minted tenant was born with no dialect at all, and the consequences were four
+  // separate degradations that each read like their own bug: every site-scoped artifact bridge verb
+  // refused `artifact_site_scope_missing` (no siteObjectId); contract prefetch no-opped
+  // `prefetch_object_type_unresolved` (no defaultObjectType), which withheld the site prefetch and
+  // left the aggression ceiling unresolvable; and voice prefetch fell back with
+  // `voice_object_unconfigured` (no voiceObjectId).
+  //
+  // WHY GENESIS IS THE RIGHT PLACE and a convention is not. The governed singletons DO resolve by
+  // convention for a tenant nobody configured — that is what makes the strategy fan-out cover the
+  // whole fleet — but the two repos spell the convention differently and only agreed because every
+  // slug in the fleet was hyphen-free (see projects/platformScaffoldIds.ts). Genesis is the one
+  // caller that does not have to guess: it invoked the scaffold that minted these ids, so it writes
+  // the addresses down. A pointer on the record outranks the convention in every reader.
+  //
+  // `objectIdSource: "server_minted"` matches PLATFORM_OBJECT_DIALECT, not dr-lurie's: a scaffolded
+  // tenant runs platform's object store, which mints content_item ids server-side on object_create
+  // and leaves the request id as run correlation. `requestIdPattern` is dr-lurie's and platform's
+  // shared shape, read off their definitions rather than guessed.
+  const scaffoldIds = platformScaffoldObjectIds(slug);
+  const objectDialect: ProjectObjectDialect = {
+    siteObjectId: scaffoldIds.siteObjectId,
+    taxonomyRegistryObjectId: scaffoldIds.taxonomyRegistryObjectId,
+    objectIdSource: "server_minted",
+    requestIdPattern: GENESIS_REQUEST_ID_PATTERN,
+    defaultObjectType: GENESIS_DEFAULT_OBJECT_TYPE,
+    voiceObjectId: scaffoldIds.voiceObjectId,
+    strategyObjectId: scaffoldIds.strategyObjectId
+  };
   const project = await createProject(deps.projectRepository, {
     projectId: slug,
     clientSiteBinding: { netlifySiteName, netlifySiteId: siteId },
@@ -1813,6 +2004,15 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     // the weekly strategy review was a single-tenant job for addressing reasons, not policy ones.
     // Written unconditionally: a minted tenant's partition is never in doubt, genesis just chose it.
     tracking: { projectId: slug },
+    // G2 — see the derivation above.
+    objectDialect,
+    // G5 (2026-09-14) — THE FLEET'S STANDING PUBLISH POSTURE, AT BIRTH. `createProject` writes
+    // DEFAULT_PUBLISHING_POLICY, which declares no autonomyMode, and an absent mode resolves
+    // "operator-gated" at snapshot time — so every minted tenant was born a policy behind the fleet
+    // and every run it started parked at publication_controller waiting for an operator nobody had
+    // told to show up. dr-lurie was moved to "autonomous" by hand on 2026-09-07; this is that same
+    // decision applied by the birth path instead of by a person remembering.
+    autonomyMode: "autonomous",
     contentContract: { contentContract: "content_source.v1" },
     capturePolicy: seededCapturePolicy,
     status: "active"
@@ -1820,9 +2020,9 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   ledger.push({
     step: "register_project",
     kind: "executed",
-    detail: `project.create registered "${slug}" with the endpoint ${mcpEndpoint} stored ON the record (${input.mcpEndpoint ? "supplied by the caller" : "derived from the minted Netlify site"} — an endpoint URL is not a secret, so no ${envPrefix}_MCP_ENDPOINT has to be set on this deployment; that env var stays an override) and the bearer token by NAME only (${envPrefix}_MCP_TOKEN — a secret value never transits MCP), plus a conservative capture policy scoped to ${sourceOrigin} (rights prohibited: copy regenerated, media never imported).`,
+    detail: `project.create registered "${slug}" with the endpoint ${mcpEndpoint} stored ON the record (${input.mcpEndpoint ? "supplied by the caller" : "derived from the minted Netlify site"} — an endpoint URL is not a secret, so no ${envPrefix}_MCP_ENDPOINT has to be set on this deployment; that env var stays an override) and the bearer token by NAME only (${envPrefix}_MCP_TOKEN — a secret value never transits MCP), plus the object dialect the platform scaffold's own ids resolve to (site ${objectDialect.siteObjectId}, taxonomy ${objectDialect.taxonomyRegistryObjectId}, voice ${objectDialect.voiceObjectId}, strategy ${objectDialect.strategyObjectId}, default object type ${objectDialect.defaultObjectType}), the fleet publish posture (autonomyMode "autonomous"), and ${sourceOrigin ? `a conservative capture policy scoped to ${sourceOrigin}` : "a DENY-ALL capture policy (no sourceUrl was supplied, so no crawl origin is authorized until an operator names one via project.update)"} (rights prohibited: copy regenerated, media never imported).`,
     at: now(),
-    data: { projectId: slug, mcpEndpoint, mcpEndpointSource: input.mcpEndpoint ? "caller_supplied" : "derived_from_netlify_site", mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`, tokenEnvVar: `${envPrefix}_MCP_TOKEN`, clientSiteBinding: { netlifySiteName, netlifySiteId: siteId }, allowedCrawlOrigins: [sourceOrigin] }
+    data: { projectId: slug, mcpEndpoint, mcpEndpointSource: input.mcpEndpoint ? "caller_supplied" : "derived_from_netlify_site", mcpEndpointEnvVar: `${envPrefix}_MCP_ENDPOINT`, tokenEnvVar: `${envPrefix}_MCP_TOKEN`, clientSiteBinding: { netlifySiteName, netlifySiteId: siteId }, allowedCrawlOrigins: seededCapturePolicy.allowedCrawlOrigins, objectDialect, autonomyMode: "autonomous" }
   });
 
   // 5. C3 — the visual-identity half of birth. Both steps are PLANNED here in full (exact ids, exact
@@ -1916,6 +2116,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     ...(input.ownerEmail?.trim() ? { ownerEmail: input.ownerEmail.trim() } : {}),
     deployBound,
     derivedEnvVars: derivedSiteEnvVars,
+    objectStoreEnvFailed,
     ...(siteId ? { netlifySiteId: siteId } : {}),
     visualIdentity
   });
@@ -1930,6 +2131,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     project,
     ledger,
     humanChecklist,
-    visualIdentity
+    visualIdentity,
+    objectDialect
   };
 }
