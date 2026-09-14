@@ -36,6 +36,7 @@ import { buildLearningObservations } from "./learningRecord.js";
 import { AGGRESSION_DIALS, buildPlacementResolution, extractPlacementSignals, readPlacementTarget, resolveAggressionVector, type AggressionVector } from "./aggressionVector.js";
 import { articleBodyFingerprint, enforcePublishExecutionEvidence, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority, PUBLICATION_CONTROLLER_NODE_ID } from "./publishDecision.js";
 import { lookupWorkflow } from "./workflowRegistry.js";
+import { applyWorkflowInitialInput } from "./workflowInitialInput.js";
 import { resolvePublishableTypeCharter } from "./publishableTypeCharter.js";
 // T12.9 — side-effect import: registers the capture_conductor workflow (§2.23 seam) on every plane
 // that drives runs, since they all import this module. See captureConductorWorkflow.ts.
@@ -1173,6 +1174,24 @@ export async function startDryRun(data: StartDryRunInput, store: ExecutionReposi
       );
     }
   }
+  // A10 — THE INITIAL-INPUT BUILD, before the subject gate and before the run record exists.
+  // A catalog operation whose bound workflow's ENTRY NODE reads a nested brief object
+  // (image_revision_intake's imageTemplateRevisionBrief; pdf_template_intake's own
+  // pdfTemplateFamilyBrief next) cannot be dispatched by operationWorkflowBindings.ts's inputMapping,
+  // which is a flat field-RENAME table by design and cannot express nesting. Platform therefore sent
+  // the operation's flat fields straight through (tools.ts's resolveCatalogOperation → this tool) and
+  // the entry node refused every such run by name (image_template_revision_brief_missing). This is
+  // the one place that construction happens: workflowInitialInput.ts owns the per-workflow builders,
+  // this call applies at most one of them, and a builder's named refusal becomes a
+  // WorkspaceToolError HERE — before a run is minted, before a node is dispatched, nothing spent.
+  // No builder registered for this workflow, an input that already carries what a builder would
+  // construct (every A9 operator/test caller, and every reset of an already-built run), or a
+  // non-object input: `data` is passed through untouched (see that module's own idempotence rule).
+  const dispatched = applyWorkflowInitialInput(data.workflowId, data.input);
+  if (!dispatched.ok) {
+    throw new WorkspaceToolError(dispatched.code, dispatched.reason, { workflowId: data.workflowId, builderId: dispatched.builderId });
+  }
+  const started: StartDryRunInput = dispatched.applied ? { ...data, input: dispatched.input } : data;
   // W10 — THE SUBJECT GATE, before the run record exists and therefore before anything can be spent.
   // A live editorial run that names no subject cannot succeed: it reaches article_body with nothing to
   // write about, emits an empty body, and is correctly refused at the publish gate having paid for the
@@ -1182,11 +1201,11 @@ export async function startDryRun(data: StartDryRunInput, store: ExecutionReposi
   //
   // Placed here rather than in the MCP tool so every plane is gated by one check — the same reasoning
   // that put preflightDriverAuth in the executor instead of in each driver's entry.
-  const subject = checkEditorialSubject(data);
+  const subject = checkEditorialSubject(started);
   if (!subject.ok) throw new WorkspaceToolError(subject.code, subject.message, subject.details);
   // S1 — a caller-supplied requestId (validated by the tool layer against the project's pattern)
   // becomes the run's requestId; absent, the auto-minted join key is used as before.
-  const initial = buildInitialRun(data, await resolveConductorNodes(workspaceRepository, data.workflowId ?? WORKFLOW_ID), makeRunId(), data.requestId?.trim() || makeRequestId());
+  const initial = buildInitialRun(started, await resolveConductorNodes(workspaceRepository, started.workflowId ?? WORKFLOW_ID), makeRunId(), started.requestId?.trim() || makeRequestId());
   return store.createRun(await capturePublishingPolicySnapshot(initial, projectRepository));
 }
 

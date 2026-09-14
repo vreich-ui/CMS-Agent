@@ -59,6 +59,27 @@ export const EDITORIAL_SUBJECT_KEYS = [
  *  or a source URL to work from has named its subject as surely as one handed a title. */
 export const EDITORIAL_CONTENT_KEYS = ["body", "draft", "articleBody", "content", "sourceUrl", "contentSource"] as const;
 
+/** A10 — STRUCTURED BRIEF ENVELOPES a non-editorial workflow's entry node reads off initialInput.
+ *  Populated, one of these says what the run is about at least as precisely as a topic line does —
+ *  the same reasoning this module already applies to a nested `brief`/`input` object and to a typed
+ *  `artifact` envelope, which it accepts structurally rather than by rendering them as prose.
+ *
+ *  WHY THIS WAS LOAD-BEARING. This gate is applied to EVERY live run in startDryRun, not just
+ *  editorial ones. A chat-dispatched image_template_revision run carries
+ *  {tenantId, templateRefs, sourceAsset, batchSize, imageTemplateRevisionBrief} — no topic, no
+ *  title, no body, and none of the keys above — so it was refused with editorial_subject_missing
+ *  before the workflow it names could run even one node. That refusal read as "this run does not say
+ *  what the piece is about" for a run that says exactly what it is about, in the system's own
+ *  vocabulary: a named tenant, a named source image, and a named list of templates.
+ *
+ *  Enumerated, not pattern-matched on a "*Brief" suffix: the three keys below are the ones a node in
+ *  this codebase actually reads from initialInput (grep initialInput.*Brief), and a new one should
+ *  arrive here deliberately, beside the node that reads it. `structureBrief` (clone_conductor's own
+ *  demand-driven input) is deliberately NOT in this list — it is already accepted as content by
+ *  cloneConductorRoutes' own resolveRunFacts and is not part of this task's path; adding it without
+ *  driving a clone run through this gate would be a guess. */
+export const EDITORIAL_STRUCTURED_BRIEF_KEYS = ["imageTemplateRevisionBrief", "pdfTemplateFamilyBrief", "pdfTemplateBrief"] as const;
+
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const nonEmptyString = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
@@ -86,6 +107,13 @@ export const readEditorialSubject = (initialInput: unknown): string | undefined 
   // than by enumerating envelope-specific fields keeps this gate from having to know every artifact
   // shape, now or later.
   if (nonEmptyString(initialInput.artifact)) return `<${initialInput.artifact.trim()}>`;
+  // A10 — a populated structured brief envelope, checked before the prose keys below for the same
+  // reason the typed `artifact` envelope above is: it is a declaration in the system's own
+  // vocabulary, and there is nothing to render as a line of text. See
+  // EDITORIAL_STRUCTURED_BRIEF_KEYS.
+  for (const key of EDITORIAL_STRUCTURED_BRIEF_KEYS) {
+    if (carriesSomething(initialInput[key])) return `<${key}>`;
+  }
   for (const key of EDITORIAL_SUBJECT_KEYS) {
     const value = initialInput[key];
     if (nonEmptyString(value)) return value.trim();
@@ -126,6 +154,6 @@ export function checkEditorialSubject(data: SubjectGateInput): SubjectGateVerdic
       `${EDITORIAL_SUBJECT_KEYS.slice(0, 6).join(", ")} — or the content itself (${EDITORIAL_CONTENT_KEYS.slice(0, 3).join(", ")}). ` +
       "Taxonomy alone (a category and tags) is not a subject: it says where a piece would file, not what it would say. " +
       "If you are an agent holding a conversation with the requester, ask for the topic and angle and start the run once you have them.",
-    details: { suppliedKeys: supplied, accepted: { subject: [...EDITORIAL_SUBJECT_KEYS], content: [...EDITORIAL_CONTENT_KEYS] } }
+    details: { suppliedKeys: supplied, accepted: { subject: [...EDITORIAL_SUBJECT_KEYS], content: [...EDITORIAL_CONTENT_KEYS], structuredBrief: [...EDITORIAL_STRUCTURED_BRIEF_KEYS] } }
   };
 }

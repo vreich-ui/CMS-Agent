@@ -30,6 +30,19 @@ import { IMAGE_REVISION_ARTIFACTS } from "../capture/imageTemplateRevisionEngine
 const UPDATED_AT = "2026-09-14T00:00:00.000Z";
 const openInput = { type: "object", additionalProperties: true } as const;
 
+// A10 — an entry node that reads ONE named nested object off the run's initialInput says so in its
+// own schema, instead of declaring the fully permissive openInput shape and leaving
+// bindingInputContract.ts's checkEntryNode with nothing to evaluate (the A10-D1 vacuous pass). Only
+// the top-level `required` array is read by that checker; the brief's own internal shape stays the
+// engine's business (imageTemplateRevisionEngine.ts validates it, totally, per field).
+const briefInput = (briefKey: string) =>
+  ({
+    type: "object",
+    additionalProperties: true,
+    required: [briefKey],
+    properties: { [briefKey]: { type: "object" } }
+  }) as const;
+
 const envelopeSchema = (artifact: string, extra: Record<string, unknown> = {}, extraRequired: string[] = []) => ({
   type: "object",
   required: ["artifact", "summary", ...extraRequired],
@@ -52,7 +65,16 @@ export const imageTemplateRevisionNodes = [
     description:
       "Resolves the tagged/checksummed/capture-request-provenanced source image exactly once against the tenant's asset catalog, then fetches every named template's CURRENT version from the cross-tenant TemplateLibraryStore (#207) — read-only, no mutation. A capture request id is used strictly as provenance to resolve an asset, never mapped to an article or any content_item. Multiple/zero tag matches are a named blocker, never a silent pick.",
     prompt: `Objective: resolve initialInput.imageTemplateRevisionBrief's source image and fetch every named target template's current version.\n${DETERMINISTIC_PROMPT_FOOTER}`,
-    inputSchema: openInput,
+    // A10 — NOT `openInput`, unlike this graph's three downstream nodes. This node reads ONE thing
+    // from the run's initialInput (imageTemplateRevisionBrief) and refuses without it
+    // (cloneConductorRoutes.ts's image_template_revision_brief_missing), so its schema now SAYS so.
+    // That is what makes bindingInputContract.ts's check a real check for this binding rather than
+    // an open schema passing for lack of anything to evaluate: the node states its requirement, the
+    // binding's declared initial-input builder is verified to supply exactly that field, and
+    // preflight's `executable:true` follows from those two facts meeting — never from a relaxed
+    // check. `additionalProperties: true` still admits everything else the run carries (the
+    // operation's own flat fields, targetProjectId, clientProjectId, dependencies).
+    inputSchema: briefInput("imageTemplateRevisionBrief"),
     outputSchema: envelopeSchema(
       IMAGE_REVISION_ARTIFACTS.intake,
       {

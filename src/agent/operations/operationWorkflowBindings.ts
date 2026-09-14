@@ -66,6 +66,8 @@ import { IMAGE_TEMPLATE_REVISION_WORKFLOW_ID } from "../workspace/imageTemplateR
 import { getOperation } from "./operationCatalog.js";
 import type { OperationId } from "./operationTypes.js";
 import { checkBindingInputContract, type BindingInputContractResult, type OperationInputContractSource } from "./bindingInputContract.js";
+import type { BindingInitialInputBuilderContract } from "./bindingInputContract.js";
+import { getWorkflowInitialInputBuilder } from "../workspace/workflowInitialInput.js";
 
 export type OperationWorkflowBinding = {
   operationId: OperationId;
@@ -75,7 +77,36 @@ export type OperationWorkflowBinding = {
   // discovery, not execution — a real executor (a later task) is the thing that would apply it.
   // A field with no equivalent on the target node is left OUT rather than guessed at.
   inputMapping: Record<string, string>;
+  // A10 — THE STRUCTURAL HALF inputMapping cannot express, for a workflow whose entry node reads a
+  // single NESTED brief object rather than flat fields. `inputMapping` renames; this CONSTRUCTS.
+  // Registered per workflow in workflowInitialInput.ts and applied in exactly one place —
+  // startDryRun, before the run record exists — never here (this module is still discovery, not
+  // execution). Present here because the BINDING is what declares that an operation's input can
+  // genuinely reach its workflow: bindingInputContract.ts reads the builder's declared
+  // requiredOperationFields/providesInitialInputFields and checks them against the operation's own
+  // guaranteed fields, so a preflight `executable:true` for such a binding is a verified statement
+  // about delivery rather than a hopeful one.
+  //
+  // DATA ONLY — never the live `build` function, the same posture operationExecutorBindings.ts's own
+  // public shape takes with its `run`: a caller asking "is this operation bound, and can its input
+  // reach the workflow" must never receive a callable it could invoke out of band. Derived from
+  // workflowInitialInput.ts's registry (the single source of truth for both halves) by
+  // declaredBuilderFor below, so the declaration can never drift from the builder that actually runs.
+  initialInputBuilder?: BindingInitialInputBuilderContract;
 };
+
+// The DATA half of a workflow's registered initial-input builder, or undefined when it has none.
+// Reads workflowInitialInput.ts's own registry rather than restating the declaration here, so
+// "what the binding claims" and "what startDryRun actually applies" are one fact, not two.
+function declaredBuilderFor(workflowId: string): BindingInitialInputBuilderContract | undefined {
+  const builder = getWorkflowInitialInputBuilder(workflowId);
+  if (!builder) return undefined;
+  return {
+    builderId: builder.builderId,
+    providesInitialInputFields: [...builder.providesInitialInputFields],
+    requiredOperationFields: [...builder.requiredOperationFields]
+  };
+}
 
 const BINDINGS: readonly OperationWorkflowBinding[] = [
   {
@@ -150,7 +181,17 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     // pdf_template_family's binding above. (cloneConductorRoutes.ts's own "image_revision_intake"
     // case also refuses outright, by name, if a run ever reaches dispatch without a brief anyway —
     // belt and suspenders against this exact class of defect.)
-    inputMapping: {}
+    //
+    // A10 — BOTH halves of that "until" are now done, and inputMapping stays EMPTY on purpose: the
+    // operation's flat fields are not renamed, they are CONSTRUCTED INTO the nested brief by
+    // `initialInputBuilder` below (imageTemplateRevisionBriefBuilder.ts, applied in startDryRun),
+    // and image_revision_intake's own inputSchema now NAMES imageTemplateRevisionBrief as required
+    // so the contract check has a real requirement to evaluate rather than an open schema to pass
+    // vacuously. resolveBindingInputContract therefore reports this binding SATISFIED for a checked
+    // reason: the entry node states what it needs, and the builder is declared — and verified
+    // against this operation's own required fields — to deliver exactly that.
+    inputMapping: {},
+    initialInputBuilder: declaredBuilderFor(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID)
   }
 ];
 
@@ -171,6 +212,19 @@ function assertBindingIsSound(binding: OperationWorkflowBinding): void {
     throw new Error(
       `operationWorkflowBindings: operation "${binding.operationId}" is bound to workflow "${binding.workflowId}", which workflowRegistry.ts has not registered. Register the workflow first, or remove this binding.`
     );
+  }
+  // A10 — a declared initial-input builder must be THIS workflow's own registered builder. Today
+  // every row derives it from its own workflowId (declaredBuilderFor), so a mismatch is
+  // unconstructible; a future hand-written row that names another workflow's builder — the exact
+  // copy-paste this table's whole "never bind on similarity" discipline exists to catch — fails
+  // loudly at import instead of silently building the wrong initialInput at run time.
+  if (binding.initialInputBuilder) {
+    const registered = getWorkflowInitialInputBuilder(binding.workflowId);
+    if (!registered || registered.builderId !== binding.initialInputBuilder.builderId) {
+      throw new Error(
+        `operationWorkflowBindings: operation "${binding.operationId}" declares initial-input builder "${binding.initialInputBuilder.builderId}", but workflowInitialInput.ts registers ${registered ? `"${registered.builderId}"` : "no builder"} for workflow "${binding.workflowId}". A binding may only declare the builder its own workflow actually applies.`
+      );
+    }
   }
 }
 
@@ -222,7 +276,7 @@ export function resolveBindingInputContract(binding: OperationWorkflowBinding): 
     return { operationId: binding.operationId, workflowId: binding.workflowId, resolved: false, contract: null };
   }
   const source = operationInputContractSource(operation.descriptor.inputSchema as Record<string, unknown>, operation.descriptor.defaults);
-  const contract = checkBindingInputContract(binding.workflowId, binding.inputMapping, source, workflow.canonicalNodes());
+  const contract = checkBindingInputContract(binding.workflowId, binding.inputMapping, source, workflow.canonicalNodes(), binding.initialInputBuilder);
   return { operationId: binding.operationId, workflowId: binding.workflowId, resolved: true, contract };
 }
 
@@ -249,7 +303,18 @@ for (const binding of BINDINGS) {
 const cloneBinding = (binding: OperationWorkflowBinding): OperationWorkflowBinding => ({
   operationId: binding.operationId,
   workflowId: binding.workflowId,
-  inputMapping: { ...binding.inputMapping }
+  inputMapping: { ...binding.inputMapping },
+  // The builder declaration is plain data (see the type's own comment — never the live `build`
+  // function), but its two arrays still get fresh copies for the same reason inputMapping does.
+  ...(binding.initialInputBuilder
+    ? {
+        initialInputBuilder: {
+          builderId: binding.initialInputBuilder.builderId,
+          providesInitialInputFields: [...binding.initialInputBuilder.providesInitialInputFields],
+          requiredOperationFields: [...binding.initialInputBuilder.requiredOperationFields]
+        }
+      }
+    : {})
 });
 
 // Sorted by operationId — deterministic, no clock, no randomness, safe to snapshot for a diff (same

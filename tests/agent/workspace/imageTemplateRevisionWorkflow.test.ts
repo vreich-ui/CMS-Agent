@@ -99,19 +99,22 @@ describe("image_template_revision_studio — routes and gates", () => {
   });
 });
 
-describe("image_template_revision (A2 catalog operation) is bound to image_template_revision_studio, its input contract NOT satisfied (A10-D1)", () => {
-  it("resolves via getOperationWorkflowBinding, but R1c now correctly reports the contract unsatisfied — the entry node's permissive openInput schema gives the empty inputMapping nothing to prove", () => {
+describe("image_template_revision (A2 catalog operation) is bound to image_template_revision_studio, its input contract SATISFIED (A10)", () => {
+  it("resolves via getOperationWorkflowBinding, and R1c now reports the contract satisfied for a CHECKED reason — the entry node names the brief it requires and the binding's declared builder supplies exactly that", () => {
     const binding = getOperationWorkflowBinding("image_template_revision");
     expect(binding).not.toBeNull();
     expect(binding?.workflowId).toBe(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID);
     expect(binding?.workflowId).not.toBe("image_template_revision"); // never the operation id itself
     const status = resolveBindingInputContract(binding!);
-    // A10-D1 — this used to read true: a vacuous pass, not a genuine satisfaction (see
-    // operationWorkflowBindings.test.ts's own R1c coverage for the full reasoning). The binding still
-    // resolves and still exists (operationWorkflowBindings.ts is unchanged); only the SOUNDNESS
-    // verdict changed. A real executor or a schema that names imageTemplateRevisionBrief is what
-    // would make this true again for a genuine reason.
-    expect(status.contract?.satisfied).toBe(false);
+    // A10-D1 pinned this false because the check had nothing to evaluate (an open entry-node schema)
+    // and nothing was guaranteed (an empty inputMapping). BOTH are now closed, in the two ways
+    // A10-D1's own comment named as legitimate: image_revision_intake's inputSchema names
+    // `imageTemplateRevisionBrief` as required, and the binding declares the initial-input builder
+    // that constructs it (verified against this operation's own guaranteed fields). See
+    // operationWorkflowBindings.test.ts's R1c block for the field-level assertions.
+    expect(status.contract?.satisfied).toBe(true);
+    expect(status.contract?.guaranteedTargetFields).toEqual(["imageTemplateRevisionBrief"]);
+    expect(status.contract?.unsatisfiedBuilderOperationFields).toEqual([]);
   });
 });
 

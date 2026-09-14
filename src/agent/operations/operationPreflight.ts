@@ -282,7 +282,11 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
     // closed (unsatisfied), never open.
     if (workflowDefinition) {
       const source: OperationInputContractSource = { requiredFields, defaultedFields: Object.keys(descriptor.defaults) };
-      const contract = checkBindingInputContract(binding.workflowId, binding.inputMapping, source, workflowDefinition.canonicalNodes());
+      // A10 — the binding's declared initial-input builder is passed through and CHECKED (never
+      // assumed): a binding whose builder needs an operation field the descriptor does not guarantee
+      // is reported unsatisfied, exactly like an unmapped required field. See
+      // bindingInputContract.ts's BindingInitialInputBuilderContract.
+      const contract = checkBindingInputContract(binding.workflowId, binding.inputMapping, source, workflowDefinition.canonicalNodes(), binding.initialInputBuilder);
       inputContractSatisfied = contract.satisfied;
       if (!contract.satisfied) {
         const entryNodes = resolveWorkflowEntryNodes(workflowDefinition.canonicalNodes());
@@ -305,6 +309,10 @@ export function preflightOperation(request: PreflightRequest, deps: PreflightDep
             entryNodeIds: entryNodes.map((node) => node.id),
             unsatisfiedEntryNodeIds: unsatisfiedNodeIds,
             guaranteedTargetFields: contract.guaranteedTargetFields,
+            // A10 — present (and empty) for every binding; non-empty only when a declared
+            // initial-input builder needs an operation field the descriptor does not guarantee.
+            builderId: contract.builderId,
+            unsatisfiedBuilderOperationFields: contract.unsatisfiedBuilderOperationFields,
             unmetRequiredFields,
             unmetAnyOfBranches,
             unsupportedConstructs
