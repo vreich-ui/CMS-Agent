@@ -70,15 +70,15 @@ describe("canonical client_manager workspace definition", () => {
   // aggression inputs and media request are carried, the request id is caller-supplied, and a
   // blocked/failed run is reported reusable-first.
   it("rev 3 carries the 'Starting and reporting production' rules and rev 2 is superseded", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(7);
+    expect(createCanonicalClientManagerAgent().rev).toBe(8);
     expect(CLIENT_MANAGER_PROMPT).toContain("## Starting and reporting production");
     expect(CLIENT_MANAGER_PROMPT).toContain("pass the editor's brief verbatim as `input.instructions` — never summarise or shorten it");
     expect(CLIENT_MANAGER_PROMPT).toContain("Set `trafficSource` and `awarenessStage` (ask if unknown)");
     expect(CLIENT_MANAGER_PROMPT).toContain("`input.mediaRequest`");
     expect(CLIENT_MANAGER_PROMPT).toContain("Supply `requestId` in the client's request-id form when the tool requires one.");
     expect(CLIENT_MANAGER_PROMPT).toContain("first name what was produced and is reusable (for example a completed draft), then what failed.");
-    // Every earlier canonical text (rev 1 through rev 6) is superseded and upgradeable.
-    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(6);
+    // Every earlier canonical text (rev 1 through rev 7) is superseded and upgradeable.
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(7);
     for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).toContain("## Candidates in learning mode");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).not.toContain("## Starting and reporting production");
@@ -91,7 +91,7 @@ describe("canonical client_manager workspace definition", () => {
   // raw verb path could create AND publish an article carrying none of the judge/score substrate.
   // These assertions are the regression wall for both. A deletion here is a live defect.
   it("rev 4 carries read-before-you-write and the single article production path", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(7);
+    expect(createCanonicalClientManagerAgent().rev).toBe(8);
 
     // Contract-first: the block platform's systemPrompt() used to send and CA6 left behind.
     expect(CLIENT_MANAGER_PROMPT).toContain("## Read before you write");
@@ -126,7 +126,7 @@ describe("canonical client_manager workspace definition", () => {
   // regression wall on the HISTORY (any tenant still on that exact text upgrades cleanly), not on
   // what ships today. Whether this feature returns to the live prompt is a separate editorial call.
   it("rev 5 routed a one-off look through a named standard, never through words in the brief (historical, superseded by rev 7)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(7);
+    expect(createCanonicalClientManagerAgent().rev).toBe(8);
     const rev6Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[5];
 
     expect(rev6Text).toContain("## A one-off look for a set of articles");
@@ -159,7 +159,7 @@ describe("canonical client_manager workspace definition", () => {
   // W5 (2026-09-13): same situation as rev 5 above — this section lives only in the rev-6
   // historical text now (index 5), not in the live CLIENT_MANAGER_PROMPT.
   it("rev 6 forbade assembling an object id and made an empty list an answer, not a dead end (historical, superseded by rev 7)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(7);
+    expect(createCanonicalClientManagerAgent().rev).toBe(8);
     const rev6Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[5];
 
     expect(rev6Text).toContain("## Object ids you were not given");
@@ -179,8 +179,12 @@ describe("canonical client_manager workspace definition", () => {
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[4]).not.toContain("## Object ids you were not given");
     expect(classifyConversationalAgentPrompt(SUPERSEDED_CLIENT_MANAGER_PROMPTS[4])).toBe("superseded");
     expect(classifyConversationalAgentPrompt(rev6Text)).toBe("superseded");
-    // The current, live canonical text no longer carries this section either.
-    expect(CLIENT_MANAGER_PROMPT).not.toContain("## Object ids you were not given");
+    // rev 8 restored this section to the live canonical text (see the rev 8 test below). rev 6
+    // remains a distinct historical entry because it also carried "A one-off look for a set of
+    // articles", which rev 8 does NOT bring back.
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Object ids you were not given");
+    expect(rev6Text).toContain("## A one-off look for a set of articles");
+    expect(CLIENT_MANAGER_PROMPT).not.toContain("## A one-off look for a set of articles");
   });
 
   // W5 (2026-09-13, publication-identity incident) — rev 7 lands the operator's live-store edit of
@@ -189,11 +193,14 @@ describe("canonical client_manager workspace definition", () => {
   // is a checked-in fingerprint of that one fetch, not a live re-verification (this test makes no
   // network or MCP call). If this test ever fails, CLIENT_MANAGER_PROMPT drifted from what was
   // landed; it does not mean the LIVE store has since changed (an operator can always edit it again).
-  it("rev 7 lands the live-store operator edit verbatim, byte for byte", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(7);
+  it("rev 7's live-store fingerprint survives as the superseded entry rev 8 was built from", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(8);
+    // rev 7 is SUPERSEDED_CLIENT_MANAGER_PROMPTS[6] now. The sha256 records one historical read-only
+    // fetch and never changes; asserting it here keeps rev 8 honest about what it was derived from.
+    const rev7Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[6];
     const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
-    expect(sha256(CLIENT_MANAGER_PROMPT)).toBe("fa143f797dbc827e5519cbdccb011212cea4123ebb1897eefb2bc7873a73ef77");
-    expect(CLIENT_MANAGER_PROMPT.length).toBe(9230);
+    expect(sha256(rev7Text)).toBe("fa143f797dbc827e5519cbdccb011212cea4123ebb1897eefb2bc7873a73ef77");
+    expect(rev7Text.length).toBe(9230);
 
     // New sections the operator's edit introduced.
     expect(CLIENT_MANAGER_PROMPT).toContain("## Say who you are once");
@@ -206,8 +213,10 @@ describe("canonical client_manager workspace definition", () => {
 
     // Sections the operator's edit dropped relative to rev 6 (a deliberate wholesale replacement,
     // not a smaller change layered on top — see the header comment above CLIENT_MANAGER_PROMPT).
+    // Both were dropped by rev 7; rev 8 brought exactly one of them back.
+    expect(rev7Text).not.toContain("## A one-off look for a set of articles");
+    expect(rev7Text).not.toContain("## Object ids you were not given");
     expect(CLIENT_MANAGER_PROMPT).not.toContain("## A one-off look for a set of articles");
-    expect(CLIENT_MANAGER_PROMPT).not.toContain("## Object ids you were not given");
 
     // Still project-neutral.
     expect(CLIENT_MANAGER_PROMPT).not.toMatch(/dr-lurie|fernwell|platform|zilberman/i);
@@ -225,6 +234,51 @@ describe("canonical client_manager workspace definition", () => {
     // An operator's own further edit — anything not matching a known canonical/superseded text —
     // is never touched by the upgrade path.
     expect(pendingCanonicalPromptUpgrades([{ ...createCanonicalClientManagerAgent(), prompt: "An operator wrote this." }])).toEqual([]);
+  });
+
+  // A10 close-out — rev 8 restores the "Object ids you were not given" guardrail that rev 7 dropped.
+  // rev 7's job was to make code match the live store byte for byte after an operator edited it in
+  // place, and its header named the restoration as "a separate, later editorial decision". This is
+  // that decision. The guardrail exists because of a real incident: a fresh chat on a site with no
+  // house imagery standard listed its visual standards (correctly empty), then built a `vis_` id out
+  // of the SITE OBJECT's id and looked it up, showing the editor a not-found card for a site that
+  // was simply new. Nothing else about rev 7 changes, so a tenant still holding rev 7's exact text
+  // is upgraded rather than left diverged.
+  it("rev 8 restores the object-id guardrail on top of rev 7, changing nothing else", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(8);
+    const rev7Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[6];
+
+    // The restoration is purely additive against rev 7: delete the new section and rev 7 returns,
+    // byte for byte. This is the assertion that makes "changing nothing else" checkable rather than
+    // asserted, and it will fail if anyone edits the live text without updating the history.
+    const guardrailStart = CLIENT_MANAGER_PROMPT.indexOf("## Object ids you were not given");
+    const guardrailEnd = CLIENT_MANAGER_PROMPT.indexOf("## Starting and reporting production");
+    expect(guardrailStart).toBeGreaterThan(-1);
+    expect(guardrailEnd).toBeGreaterThan(guardrailStart);
+    const withoutGuardrail =
+      CLIENT_MANAGER_PROMPT.slice(0, guardrailStart) + CLIENT_MANAGER_PROMPT.slice(guardrailEnd);
+    expect(withoutGuardrail).toBe(rev7Text);
+
+    // The guardrail's own substance, so a future edit cannot hollow it out and keep the heading.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never assemble an object id/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never the id of another object/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/an empty list is an answer/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never follow an empty list with a lookup of a name you constructed/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/the house look has never been written/i);
+    expect(CLIENT_MANAGER_PROMPT).toContain("visual identity workflow in house mode");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/editorial voice, its tracking configuration/i);
+
+    // Placed where rev 6 carried it: after the editor-facing rules, before production reporting.
+    expect(guardrailStart).toBeGreaterThan(CLIENT_MANAGER_PROMPT.indexOf("## One production path for articles"));
+
+    // Still project-neutral, and rev 7 is superseded rather than deleted — so the five live tenants,
+    // which hold rev 7's text today, are upgraded by the reconcile instead of going diverged.
+    expect(CLIENT_MANAGER_PROMPT).not.toMatch(/dr-lurie|fernwell|platform|zilberman/i);
+    expect(classifyConversationalAgentPrompt(rev7Text)).toBe("superseded");
+    expect(classifyConversationalAgentPrompt(CLIENT_MANAGER_PROMPT)).toBe("canonical");
+    expect(pendingCanonicalPromptUpgrades([{ ...createCanonicalClientManagerAgent(), prompt: rev7Text }])).toEqual([
+      { id: "agt_client_manager", prompt: CLIENT_MANAGER_PROMPT }
+    ]);
   });
 
   it("classifies stored prompts against the shipped canonical text", () => {
