@@ -15,7 +15,11 @@
 //     (executionTypes.NodeDispatchClaim, read through executor.assessRunStall) is for;
 //   - it never re-enters a run the operator vetoed (see skip_operator_withheld below).
 // Every gate the executor applies on an external advance applies here unchanged, because this drives
-// the run through the same runNextNode entry point an external caller uses.
+// the run through the same runNextNode entry point an external caller uses. node-default-output
+// (2026-09-15) is the newest example and needs no code here at all: run.outputMode lives on the run
+// record and dispatchRunnableNode reads it, so a tick advancing a defaults_where_set run passes its
+// defaulted nodes through exactly as an operator's own workflow.run_all would — and B1 (#349)'s tick
+// scoping is untouched, because a defaulted advance is still an ordinary advance of a continuable run.
 //
 // The selector is a PURE function of the persisted record plus a clock, so "which runs would this
 // tick touch, and which would it refuse" is answerable in a unit test with no repository, no network

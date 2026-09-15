@@ -84,7 +84,7 @@ export const READONLY_REASON =
 // live backend carries history).
 // ============================================================================
 
-export type ChangeKind = 'prompt' | 'tools' | 'skills' | 'inputSchema' | 'outputSchema' | 'model';
+export type ChangeKind = 'prompt' | 'tools' | 'skills' | 'inputSchema' | 'outputSchema' | 'model' | 'defaultOutput';
 
 export interface HistoryEntry {
   id: string;

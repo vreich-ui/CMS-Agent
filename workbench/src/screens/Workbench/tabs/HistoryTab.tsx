@@ -55,11 +55,13 @@ const KIND_TAB: Record<ChangeKind, NodeTab> = {
   inputSchema: 'schemas',
   outputSchema: 'schemas',
   model: 'model',
+  defaultOutput: 'defaultoutput',
 };
 
 function inferKind(field: string): ChangeKind | null {
   const f = field.toLowerCase();
   if (f.includes('prompt')) return 'prompt';
+  if (f.includes('default') && f.includes('output')) return 'defaultOutput';
   if (f.includes('input') && f.includes('schema')) return 'inputSchema';
   if (f.includes('output') && f.includes('schema')) return 'outputSchema';
   if (f.includes('tool')) return 'tools';

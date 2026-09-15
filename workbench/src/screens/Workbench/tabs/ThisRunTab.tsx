@@ -38,7 +38,7 @@ import { Disclosure, ErrorNote, LoadingNote } from './Shared';
 // and with what note — never present an override as if the node produced
 // it." Same node_list_outputs reading, same ⎘ vocabulary, as Rail.tsx's
 // marker and the override modal.
-import { extractOutputList, formatWhen } from '../../../components/drive/overrideStatus';
+import { extractOutputList, formatWhen, runNodeProvenance } from '../../../components/drive/overrideStatus';
 // Defect A — the one precedence resolution (override > canonical artifact >
 // legacy stage record > honest empty message) replacing the old
 // stage-store-only read. See that module's header for the full story.
@@ -251,12 +251,25 @@ export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; 
   });
   const stageOutputsQ = useStageOutputsList(nodeId);
 
+  // node-default-output (W4) — read off the run record once, then fed into
+  // resolveNodeOutput's tier 1 (an 'operator_override' provenance now
+  // decides the override tier there — see that module's header) AND, for
+  // 'default_output', into a separate additive banner below: a defaulted
+  // node's synthesized artifact still resolves as an ordinary tier-2
+  // "canonical" entry (resolveNodeOutput deliberately never treats a
+  // default as tier 1), so its banner is layered on top rather than
+  // replacing the resolution — and only wins the banner slot when no
+  // operator override is also present, so a later human correction over a
+  // pushed-through default still reads as the correction it is.
+  const provenance = runNodeProvenance(run.nodes, nodeId);
+
   const resolved = resolveNodeOutput({
     status,
     runId: run.id,
     nodeId,
     nodeOutputs: extractOutputList(outputsQ.data),
     stageOutputs: stageOutputsQ.data ?? [],
+    provenance,
   });
 
   // Defect B — when this node crosses into a terminal state (typically
@@ -424,7 +437,19 @@ export function ThisRunTab({ node, nodeId, run, status }: { node: WorkflowNode; 
             {resolved.overrideNote ? ` — note: "${resolved.overrideNote}"` : ' — no note given'}.
           </p>
         )}
-        {resolved.source === 'canonical' && (
+        {resolved.source !== 'override' && provenance?.source === 'default_output' && (
+          // node-default-output (W4) — never presented as if the node
+          // produced it: says whose standing default it came from, when,
+          // and with what note, every time. Purple to keep it visually
+          // distinct from the blue operator-override banner above — same
+          // rule Rail.tsx's chip-default/chip-override pair follows.
+          <p className="note" style={{ color: 'var(--paused)', marginTop: 0 }}>
+            ⚙ this output was pushed through from {nodeId}&rsquo;s standing default, {formatWhen(provenance.updatedAt)}
+            {provenance.note ? ` — note: "${provenance.note}"` : ' — no note given'}. It did not come from a model
+            turn — this run can never reach a live publish while it stands.
+          </p>
+        )}
+        {resolved.source === 'canonical' && provenance?.source !== 'default_output' && (
           <p className="note" style={{ color: 'var(--muted)', marginTop: 0, fontSize: 12 }}>
             current-run artifact{resolved.artifactType ? ` · ${resolved.artifactType}` : ''}
             {resolved.createdAt ? ` · ${formatWhen(resolved.createdAt)}` : ''} — from node_list_outputs.

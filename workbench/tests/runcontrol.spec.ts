@@ -304,11 +304,16 @@ test.describe('start-run modal', () => {
 
     // Live requires a deliberate click — it is never the default, and once
     // chosen the button itself becomes unmistakable about the stakes.
+    // Scoped to the dry-run/live field specifically: node-default-output
+    // (W4) added its own "live"-labelled button to the Output mode field
+    // right below this one, and an unscoped `hasText: /^live$/` now matches
+    // both.
+    const modeField = page.locator('.modal .field', { has: page.locator('.lbl', { hasText: /^mode$/ }) });
     await expect(page.locator('.modal .seg button.on').nth(1)).toHaveText('dry run');
-    await page.locator('.modal .seg button', { hasText: /^live$/ }).click();
+    await modeField.locator('.seg button', { hasText: /^live$/ }).click();
     await expect(page.locator('.modal')).toContainText('live — not a drill');
     await expect(page.locator('.modal button', { hasText: 'Start LIVE run' })).toBeVisible();
-    await page.locator('.modal .seg button', { hasText: /^dry run$/ }).click(); // back to dry for the launch below
+    await modeField.locator('.seg button', { hasText: /^dry run$/ }).click(); // back to dry for the launch below
 
     await startBtn.click();
     await expectConfirmVerb(page, 'workflow_start_dry_run');

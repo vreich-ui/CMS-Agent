@@ -5,6 +5,7 @@ import type {
   LearnTab,
   NodeTab,
   RegTab,
+  RunOutputMode,
   RunTab,
   ScreenId,
   ThemePref,
@@ -56,6 +57,13 @@ interface WorkbenchState {
    * state) so any surface (dock's "▸ Start run…", the Library card's "Start
    * run", ⌘K) can open it without prop-drilling. */
   startModalOpen: boolean;
+  /** node-default-output (W4) — the output mode StartRunModal seeds itself
+   * with the next time it opens; null means its own default ('live'). Set
+   * by ⌘K's "start defaults-only run" so that action doesn't have to know
+   * anything about the modal's internal form state. Consumed once on open
+   * and left as-is otherwise — the modal's own field is the live source of
+   * truth after that, exactly like every other field it resets on open. */
+  startModalOutputMode: RunOutputMode | null;
   /** WP-42 — command palette open/closed. ⌘K/Ctrl+K from anywhere sets this;
    * CommandPalette.tsx is the only reader. */
   paletteOpen: boolean;
@@ -98,7 +106,7 @@ interface WorkbenchState {
   cycleTheme: () => void;
   setTheme: (pref: ThemePref) => void;
   recordVerdict: () => void;
-  openStartModal: () => void;
+  openStartModal: (outputMode?: RunOutputMode) => void;
   closeStartModal: () => void;
   openPalette: () => void;
   closePalette: () => void;
@@ -134,6 +142,7 @@ export const useStore = create<WorkbenchState>((set) => ({
   cmpIdx: 0,
   blind: true,
   startModalOpen: false,
+  startModalOutputMode: null,
   paletteOpen: false,
   graphOverlayOpen: false,
   registryPickerOpen: false,
@@ -181,7 +190,7 @@ export const useStore = create<WorkbenchState>((set) => ({
   // Wired fully by a later WP; the increment lives here so the shared contract is stable now.
   recordVerdict: () => set((s) => ({ pairsDone: s.pairsDone + 1, cmpIdx: s.cmpIdx + 1 })),
 
-  openStartModal: () => set({ startModalOpen: true }),
+  openStartModal: (outputMode) => set({ startModalOpen: true, startModalOutputMode: outputMode ?? null }),
   closeStartModal: () => set({ startModalOpen: false }),
 
   openPalette: () => set({ paletteOpen: true }),

@@ -10,10 +10,28 @@
 // simply false for that node.
 //
 // Precedence (never re-derive this elsewhere — import resolveNodeOutput):
-//   1. current-run operator override      — node_list_outputs, type === 'operator_override'
+//   1. current-run operator override      — Run.nodes[].outputProvenance.source
+//                                            === 'operator_override' (authoritative;
+//                                            see the `provenance` param below), with
+//                                            node_list_outputs' legacy
+//                                            type === 'operator_override' entry kept
+//                                            only as a fallback for a run recorded
+//                                            before outputProvenance existed
 //   2. current-run canonical node artifact — node_list_outputs, any other type
 //   3. legacy stage-store record           — stage_list_outputs (id shape decides run-attribution)
 //   4. an honest, per-node-state empty message
+//
+// Adversarial-review fix (post-W4) — the live server does NOT type an
+// override's node_list_outputs entry 'operator_override'; it types it by
+// `node.produces[0]`, same as anything else the node ever produced (see
+// overrideStatus.ts's header comment on suppliedOutputMarker for the full
+// story). So on live data, tier 1 and tier 2 can hold the exact same entry
+// shape — the only thing that tells them apart is the run record's own
+// `outputProvenance`. Callers pass it in as `provenance`; this module still
+// falls back to the legacy typed-entry scan when a caller has none (an
+// older run, or a unit test written before outputProvenance existed —
+// tests/outputResolution.spec.ts's existing cases all omit it and keep
+// passing unmodified).
 //
 // Both node_list_outputs and stage_list_outputs are read defensively here:
 // node_list_outputs entries are matched EXACTLY on both runId and nodeId
@@ -113,16 +131,37 @@ export function resolveNodeOutput(params: {
   nodeOutputs: NodeOutputEntry[];
   /** Raw stage_list_outputs entries for this node's stage (== nodeId). */
   stageOutputs: StageOutputEntry[];
+  /** Adversarial-review fix (post-W4) — this node's outputProvenance off
+   *  the RUN record (Run.nodes[].outputProvenance), the authoritative
+   *  "was this supplied, and by what" source. Only its 'operator_override'
+   *  value is read here — 'default_output' provenance still resolves
+   *  through the ordinary canonical tier below; see ThisRunTab.tsx's own
+   *  comment on why that stays orthogonal to this precedence. Optional —
+   *  omit it to fall back to the legacy typed-entry scan. */
+  provenance?: { source: 'default_output' | 'operator_override'; updatedAt: string; note?: string };
 }): ResolvedNodeOutput {
-  const { status, runId, nodeId, nodeOutputs, stageOutputs } = params;
+  const { status, runId, nodeId, nodeOutputs, stageOutputs, provenance } = params;
 
   const scoped = nodeOutputs.filter((e) => e.runId === runId && e.nodeId === nodeId);
-  const overrides = scoped.filter((e) => e.type === 'operator_override');
+  const legacyOverrides = scoped.filter((e) => e.type === 'operator_override');
   const canonical = scoped.filter((e) => e.type !== undefined && e.type !== 'operator_override');
 
   // Tier 1 — always wins, regardless of node status: an override can be
-  // set on a node before it has even run (drive mode).
-  const bestOverride = newestOf(overrides);
+  // set on a node before it has even run (drive mode). Run-record
+  // provenance decides FIRST (the real server's own entry for an override
+  // is typed no differently than a produced artifact — see this module's
+  // header); the legacy type==='operator_override' scan only matters when
+  // the run carries no provenance for this node at all.
+  if (provenance?.source === 'operator_override') {
+    const suppliedEntry = newestOf(scoped) ?? newestOf(legacyOverrides);
+    return {
+      source: 'override',
+      value: suppliedEntry?.value,
+      createdAt: provenance.updatedAt,
+      overrideNote: provenance.note,
+    };
+  }
+  const bestOverride = newestOf(legacyOverrides);
   if (bestOverride) {
     return {
       source: 'override',

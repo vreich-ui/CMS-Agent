@@ -107,7 +107,7 @@ export function Dock() {
               style={{ flex: 1 }}
               disabled={IS_READ_ONLY}
               title={IS_READ_ONLY ? READONLY_REASON : undefined}
-              onClick={openStartModal}
+              onClick={() => openStartModal()}
             >
               ▸ Start run…
             </Btn>

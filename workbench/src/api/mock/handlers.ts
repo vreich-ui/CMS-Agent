@@ -421,6 +421,56 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   node_list_outputs: (a) => ({ outputs: mockStore.listNodeOutputs(str(a, 'nodeId'), str(a, 'runId')) }),
   stage_save_output: (a) =>
     mockStore.saveStageOutput(str(a, 'runId'), str(a, 'nodeId'), a.value, str(a, 'note') || undefined),
+
+  // -- node-default-output (W4) --
+  // Real schema wraps a single record in `{output}` (never a bare list) —
+  // "most recent" reuses listNodeOutputs' own precedence (override still
+  // wins if one exists), sorted newest-first the same way adoptOutputAsDefault does.
+  node_get_latest_output: (a) => {
+    const nodeId = str(a, 'nodeId');
+    const runId = optStr(a, 'runId');
+    const list = [...mockStore.listNodeOutputs(nodeId, runId)].sort((x, y) =>
+      String(y.createdAt ?? '').localeCompare(String(x.createdAt ?? '')),
+    );
+    return { output: list[0] ?? null };
+  },
+  // `value: null` clears (mirrors the real tool's contract — see
+  // defaultOutput.ts's doc comment, read-only). Without `force`, a value
+  // that fails this node's own declared output schema is refused with the
+  // same `default_output_schema_invalid` code the live tool throws — the
+  // Default output tab validates proactively via node_validate_output
+  // before ever getting here, so in normal use this is a safety net, not
+  // the primary path.
+  workspace_update_node_default_output: (a) => {
+    const nodeId = str(a, 'nodeId');
+    const value = a.value;
+    if (value === null || value === undefined) {
+      const updated = mockStore.setNodeDefaultOutput(nodeId, null) ?? null;
+      return { node: updated, workspaceVersion: mockWorkspaceVersion };
+    }
+    const force = a.force === true;
+    const validation = mockStore.validateNodeOutput(nodeId, value);
+    if (!validation.valid && !force) {
+      throw new Error(
+        `default_output_schema_invalid: ${validation.issues.map((i) => `${i.path}: ${i.message}`).join('; ') || 'value does not match this node’s declared output schema'}`,
+      );
+    }
+    const now = new Date().toISOString();
+    const updated =
+      mockStore.setNodeDefaultOutput(nodeId, {
+        value,
+        note: optStr(a, 'note'),
+        updatedAt: now,
+        updatedBy: 'human',
+        schemaValidAt: validation.valid ? now : null,
+      }) ?? null;
+    return { node: updated, workspaceVersion: mockWorkspaceVersion };
+  },
+  workspace_adopt_output_as_default: (a) => {
+    const updated =
+      mockStore.adoptOutputAsDefault(str(a, 'nodeId'), optStr(a, 'runId'), optStr(a, 'note')) ?? null;
+    return { node: updated, workspaceVersion: mockWorkspaceVersion };
+  },
   changes_compare: (a) => ({
     diff: {
       fromRevisionId: str(a, 'fromRevisionId'),
@@ -509,6 +559,13 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
     const dry = a.dry !== false;
     const execRaw = optStr(a, 'executionMode');
     const exec = execRaw === 'openai' ? 'openai' : 'mock';
+    // node-default-output (W4) — an unrecognized/absent value reads as the
+    // contract's own default ("live"), same as the server does (see
+    // defaultOutput.ts's DEFAULT_RUN_OUTPUT_MODE, read-only) rather than
+    // silently accepting a typo'd mode string.
+    const outputModeRaw = optStr(a, 'outputMode');
+    const outputMode =
+      outputModeRaw === 'defaults_where_set' || outputModeRaw === 'defaults_only' ? outputModeRaw : 'live';
     const run: adapters.RawRun = {
       runId: genId('run'),
       requestId: optStr(a, 'requestId'),
@@ -523,6 +580,8 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
       executionMode: exec,
       budgetUsd: optNum(a, 'budgetUsd') ?? null,
       mode: { executionMode: exec },
+      outputMode,
+      defaultedNodeIds: [],
     };
     return mockStore.addRun(run);
   },
@@ -530,20 +589,52 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   workflow_run_next_node: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'running' }) ?? null,
   workflow_run_until: (a) =>
     mockStore.updateRunRaw(str(a, 'runId'), { status: 'running', currentNodeId: str(a, 'nodeId') }) ?? null,
-  workflow_run_node: (a) =>
-    mockStore.updateRunRaw(str(a, 'runId'), { status: 'running', currentNodeId: str(a, 'nodeId') }) ?? null,
+  // node-default-output (W4) — `useDefaultOutput: true` branches into
+  // applyDefaultOutputToRun instead of the ordinary "mark it running"
+  // simulation: pushing through is a completion, not a step-and-wait, so
+  // the run record it returns already reflects the node as done.
+  workflow_run_node: (a) => {
+    const runId = str(a, 'runId');
+    const nodeId = str(a, 'nodeId');
+    if (a.useDefaultOutput === true) return mockStore.applyDefaultOutputToRun(runId, nodeId) ?? null;
+    return mockStore.updateRunRaw(runId, { status: 'running', currentNodeId: nodeId }) ?? null;
+  },
   workflow_pause_run: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'paused' }) ?? null,
   workflow_resume_run: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'running' }) ?? null,
   workflow_cancel_run: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'cancelled' }) ?? null,
   workflow_reset_run: (a) =>
     mockStore.updateRunRaw(str(a, 'runId'), { status: 'queued', currentNodeId: null, nodes: [], errors: [] }) ?? null,
-  workflow_retry_node: (a) =>
-    mockStore.updateRunRaw(str(a, 'runId'), { status: 'running', currentNodeId: str(a, 'nodeId') }) ?? null,
+  workflow_retry_node: (a) => {
+    const runId = str(a, 'runId');
+    const nodeId = str(a, 'nodeId');
+    if (a.useDefaultOutput === true) return mockStore.applyDefaultOutputToRun(runId, nodeId) ?? null;
+    // Adversarial-review fix (post-W4, server-contract follow-up) — a
+    // plain retry (no useDefaultOutput) on a defaults-mode run marks the
+    // node so a future dispatch runs it live instead of re-applying its
+    // default; a no-op for a `live` run (see mockStore's own comment).
+    mockStore.markDefaultOutputOverride(runId, nodeId);
+    return mockStore.updateRunRaw(runId, { status: 'running', currentNodeId: nodeId }) ?? null;
+  },
   workflow_set_operator_publish_decision: (a) => {
     const decision = str(a, 'decision');
     return mockStore.updateRunRaw(str(a, 'runId'), { status: decision === 'approve' ? 'running' : 'cancelled' }) ?? null;
   },
-  workflow_publish_run: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'completed' }) ?? null,
+  // Adversarial-review fix (post-W4, server-contract follow-up) —
+  // workflow.publish_run refuses outright when the run carries any
+  // defaulted node: a run that reached a live publish gate with even one
+  // node's output SUPPLIED rather than produced can never actually go
+  // live. Mirrors src/agent/workspace/defaultOutput.ts's
+  // defaultedUpstreamRefusal (read-only).
+  workflow_publish_run: (a) => {
+    const runId = str(a, 'runId');
+    const run = mockStore.getRun(runId);
+    if (run?.defaultedNodeIds && run.defaultedNodeIds.length > 0) {
+      throw new Error(
+        `defaulted_upstream_refusal: ${runId} can never publish live — ${run.defaultedNodeIds.join(', ')} supplied output instead of producing it.`,
+      );
+    }
+    return mockStore.updateRunRaw(runId, { status: 'completed' }) ?? null;
+  },
 
   workspace_update_node_prompt: (a) => mockStore.updateNode(str(a, 'id'), { prompt: str(a, 'prompt') }) ?? null,
   workspace_update_node_tools: (a) => {

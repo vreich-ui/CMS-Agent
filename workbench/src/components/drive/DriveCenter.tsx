@@ -32,6 +32,7 @@ import {
   useRun,
   useRunCost,
   useRunNextNode,
+  useRunNode,
   useRuns,
   useWorkflowGraph,
   useWorkflows,
@@ -44,7 +45,17 @@ import type { Run, WorkflowNode } from '../../types';
 import { formatDurationMs, nodeStatusFromRun, optimisticRunControl, orderedNodes } from '../../screens/Workbench/helpers';
 import { ErrorNote, LoadingNote, SchemaIssueList, type SchemaIssue } from '../../screens/Workbench/tabs/Shared';
 import { getBreakpoint, toggleBreakpoint } from './breakpoints';
-import { errMsg, extractOutputList, findOverride, formatWhen, normalizeValidationIssues } from './overrideStatus';
+import {
+  errMsg,
+  extractOutputList,
+  findOverride,
+  formatWhen,
+  isLiveRun,
+  isPublishTailNode,
+  normalizeValidationIssues,
+  runNodeProvenance,
+  suppliedOutputMarker,
+} from './overrideStatus';
 
 /** Same defensive per-node cost read the trace waterfall uses (its own copy
  * — trace/TraceWaterfallModal.tsx is not ours to edit or import from). The
@@ -94,7 +105,7 @@ function DriveEmptyState({ wf }: { wf: string }) {
         insert the output variant you prefer. Drive mode needs a bound run first.
       </p>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <Btn variant="pri" disabled={IS_READ_ONLY} onClick={openStartModal}>
+        <Btn variant="pri" disabled={IS_READ_ONLY} onClick={() => openStartModal()}>
           ▸ Start a dry run…
         </Btn>
       </div>
@@ -132,19 +143,38 @@ function DriveEmptyState({ wf }: { wf: string }) {
 // server-side.
 // ============================================================================
 
-function UpstreamDep({ depId, runId }: { depId: string; runId: string }) {
+// Adversarial-review fix (post-W4) — reads provenance off the run record
+// FIRST (the authoritative source; see overrideStatus.ts's header on
+// suppliedOutputMarker), and only falls back to the legacy
+// node_list_outputs query when the run carries no provenance for this
+// dependency at all (a run recorded before outputProvenance existed).
+function UpstreamDep({
+  depId,
+  runId,
+  provenance,
+}: {
+  depId: string;
+  runId: string;
+  provenance: 'default_output' | 'operator_override' | null;
+}) {
+  const needsLegacyCheck = provenance === null;
   const q = useQuery({
     queryKey: ['nodeOutputs', depId, runId],
     queryFn: () => verbs.nodeListOutputs({ nodeId: depId, runId }),
+    enabled: needsLegacyCheck,
     staleTime: 15_000,
     retry: false,
   });
-  const override = findOverride(extractOutputList(q.data));
+  const legacyOverride = needsLegacyCheck ? findOverride(extractOutputList(q.data)) : undefined;
+  const hasOverride = provenance === 'operator_override' || Boolean(legacyOverride);
+  const hasDefault = provenance === 'default_output';
   return (
     <span className="mono" style={{ fontSize: 11 }}>
       {depId}
-      {override ? (
-        <span style={{ color: 'var(--run)' }}> (⎘ operator override, {formatWhen(override.createdAt)})</span>
+      {hasOverride ? (
+        <span style={{ color: 'var(--run)' }}> (⎘ operator override{legacyOverride ? `, ${formatWhen(legacyOverride.createdAt)}` : ''})</span>
+      ) : hasDefault ? (
+        <span style={{ color: 'var(--paused)' }}> (⚙ standing default)</span>
       ) : (
         <span style={{ color: 'var(--faint)' }}> (no override)</span>
       )}
@@ -152,14 +182,14 @@ function UpstreamDep({ depId, runId }: { depId: string; runId: string }) {
   );
 }
 
-function UpstreamReadout({ nodeId, runId, deps }: { nodeId: string; runId: string; deps: string[] }) {
+function UpstreamReadout({ nodeId, run, deps }: { nodeId: string; run: Run; deps: string[] }) {
   if (deps.length === 0) return null;
   return (
     <p className="note" style={{ margin: '8px 0 0', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
       <span>{nodeId} reads from:</span>
       {deps.map((d, i) => (
         <span key={d}>
-          <UpstreamDep depId={d} runId={runId} />
+          <UpstreamDep depId={d} runId={run.id} provenance={suppliedOutputMarker(run, d)} />
           {i < deps.length - 1 ? ',' : ''}
         </span>
       ))}
@@ -194,14 +224,20 @@ function GridRow({
   const runNode = run.nodes.find((x) => x.nodeId === nid);
   const bp = getBreakpoint(run.id, nid, n?.risk);
 
+  // Adversarial-review fix (post-W4) — provenance off the run record first,
+  // the legacy node_list_outputs query only when the run carries none for
+  // this node (see overrideStatus.ts's header on suppliedOutputMarker).
+  const provenance = suppliedOutputMarker(run, nid);
+  const needsLegacyCheck = provenance === null;
   const overrideQ = useQuery({
     queryKey: ['nodeOutputs', nid, run.id],
     queryFn: () => verbs.nodeListOutputs({ nodeId: nid, runId: run.id }),
-    enabled: status === 'completed',
+    enabled: needsLegacyCheck && status === 'completed',
     staleTime: 30_000,
     retry: false,
   });
-  const hasOverride = overrideQ.isSuccess && Boolean(findOverride(extractOutputList(overrideQ.data)));
+  const hasOverride = provenance === 'operator_override' || (needsLegacyCheck && overrideQ.isSuccess && Boolean(findOverride(extractOutputList(overrideQ.data))));
+  const hasDefault = provenance === 'default_output';
 
   return (
     <tr className={['drive-gridrow', selected ? 'sel' : ''].filter(Boolean).join(' ')}>
@@ -223,6 +259,11 @@ function GridRow({
         {hasOverride && (
           <span className="chip-override" title="carries an operator output override in this run">
             ⎘ override
+          </span>
+        )}
+        {hasDefault && (
+          <span className="chip-default" title="this node's output was pushed through from its standing default — no model turn, and this run can never publish live while it stands">
+            ⚙ default
           </span>
         )}
       </td>
@@ -286,7 +327,12 @@ function StepResultCard({
   });
   const list = useMemo(() => extractOutputList(outputsQ.data), [outputsQ.data]);
   const entry = list[0];
-  const override = findOverride(list);
+  // Adversarial-review fix (post-W4) — run-record provenance first; the
+  // legacy node_list_outputs 'operator_override' entry only as a fallback
+  // for a run recorded before outputProvenance existed (see
+  // overrideStatus.ts's header on suppliedOutputMarker).
+  const provenance = runNodeProvenance(run.nodes, nodeId);
+  const legacyOverride = provenance === undefined ? findOverride(list) : undefined;
 
   const schemaQ = useQuery({
     queryKey: ['outputSchema', nodeId],
@@ -351,12 +397,23 @@ function StepResultCard({
       </div>
       <SchemaIssueList issues={issues} />
 
-      {override && (
+      {provenance?.source === 'operator_override' ? (
         <p className="note" style={{ color: 'var(--run)', margin: '4px 0 8px' }}>
-          ⎘ this output was supplied by the operator, {formatWhen(override.createdAt)}
-          {override.note ? ` — note: "${override.note}"` : ' — no note given'}. It did not come from the node itself.
+          ⎘ this output was supplied by the operator, {formatWhen(provenance.updatedAt)}
+          {provenance.note ? ` — note: "${provenance.note}"` : ' — no note given'}. It did not come from the node itself.
         </p>
-      )}
+      ) : provenance?.source === 'default_output' ? (
+        <p className="note" style={{ color: 'var(--paused)', margin: '4px 0 8px' }}>
+          ⚙ this output was pushed through from {nodeId}&rsquo;s standing default, {formatWhen(provenance.updatedAt)}
+          {provenance.note ? ` — note: "${provenance.note}"` : ' — no note given'}. It did not come from a model turn.
+        </p>
+      ) : legacyOverride ? (
+        <p className="note" style={{ color: 'var(--run)', margin: '4px 0 8px' }}>
+          ⎘ this output was supplied by the operator, {formatWhen(legacyOverride.createdAt)}
+          {legacyOverride.note ? ` — note: "${legacyOverride.note}"` : ' — no note given'}. It did not come from the
+          node itself.
+        </p>
+      ) : null}
 
       <span className="lbl">output</span>
       {outputsQ.isLoading ? (
@@ -433,9 +490,11 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
   const nodesQ = useNodes(wf);
   const graphQ = useWorkflowGraph(wf);
   const runNextM = useRunNextNode();
+  const runNodeM = useRunNode();
 
   const [lastStepped, setLastStepped] = useState<LastStepped | null>(null);
   const [stepping, setStepping] = useState(false);
+  const [pushingDefault, setPushingDefault] = useState(false);
   const [bpVersion, setBpVersion] = useState(0);
 
   useEffect(() => {
@@ -483,6 +542,38 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
     }
   }
 
+  // node-default-output (W4) — "push through with default" is Step's
+  // sibling, not a variant of it: same optimistic cur/done advance (the
+  // server always lands run.cur on the following node, exactly like
+  // workflow_run_next_node), but workflow_run_node with useDefaultOutput
+  // instead of workflow_run_next_node, and it can only ever be offered for
+  // a node that actually carries a defaultOutput — see the disabled/title
+  // logic below, not here.
+  async function handlePushThrough(triggerEl: HTMLElement | null) {
+    if (!run || !run.cur) return;
+    const steppedId = run.cur;
+    const idx = order.indexOf(steppedId);
+    const nextId = idx >= 0 && idx + 1 < order.length ? order[idx + 1] : null;
+    setNextConfirmTrigger(triggerEl);
+    setPushingDefault(true);
+    try {
+      await optimisticRunControl(
+        qc,
+        run.id,
+        { status: nextId ? 'running' : 'completed', cur: nextId, done: run.done + 1 },
+        () => runNodeM.mutateAsync({ runId: run.id, nodeId: steppedId, useDefaultOutput: true }),
+      );
+      setLastStepped({ nodeId: steppedId, at: Date.now() });
+      qc.invalidateQueries({ queryKey: ['nodeOutputs', steppedId, run.id] });
+      toast('Pushed through', `${steppedId} completed on its standing default — no model turn, no cost.`);
+    } catch (err) {
+      if (err instanceof ActionCancelledError) return;
+      toast('Push-through failed', errMsg(err));
+    } finally {
+      setPushingDefault(false);
+    }
+  }
+
   function toggleBp(nid: string, risk: string | undefined) {
     if (!run) return;
     toggleBreakpoint(run.id, nid, risk);
@@ -516,6 +607,12 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
   }
 
   const nextBp = nextNodeId ? getBreakpoint(run.id, nextNodeId, nextNode?.risk) : false;
+  // Adversarial-review fix (post-W4, server-contract follow-up) — known in
+  // advance (node risk/kind + run.exec are both already loaded), so this
+  // disables Push-through rather than letting the operator hit the
+  // `defaulted_publish_node_refused` toast on a round-trip that was always
+  // going to be refused.
+  const refusedAsPublishNode = isLiveRun(run) && isPublishTailNode(nextNode);
 
   return (
     <>
@@ -545,7 +642,7 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
               breakpoint (stops "Run until…" before this node)
             </label>
           </div>
-          <UpstreamReadout nodeId={run.cur} runId={run.id} deps={nextDeps} />
+          <UpstreamReadout nodeId={run.cur} run={run} deps={nextDeps} />
           <div className="editnote">
             <Btn
               variant="pri"
@@ -554,6 +651,21 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
               onClick={(e) => handleStep(e.currentTarget)}
             >
               {stepping ? 'Stepping…' : `▸ Step (run ${run.cur})`}
+            </Btn>
+            <Btn
+              disabled={pushingDefault || IS_READ_ONLY || !nextNode?.defaultOutput || refusedAsPublishNode}
+              title={
+                IS_READ_ONLY
+                  ? READONLY_REASON_DRIVE
+                  : refusedAsPublishNode
+                    ? `${run.cur} writes to a live client (${nextNode?.kind ?? nextNode?.risk} risk) and this is a live run — its output can never be supplied instead of produced (defaulted_publish_node_refused).`
+                    : !nextNode?.defaultOutput
+                      ? `${run.cur} has no standing default output set — give it one on its Default output tab first.`
+                      : "Complete this node from its standing default — no model turn, no cost. This run can never publish live while it stands."
+              }
+              onClick={(e) => handlePushThrough(e.currentTarget)}
+            >
+              {pushingDefault ? 'Pushing through…' : '⚙ Push through with default'}
             </Btn>
             <Btn
               disabled={IS_READ_ONLY}

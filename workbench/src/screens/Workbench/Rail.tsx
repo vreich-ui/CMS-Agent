@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNodes, useRubrics, useRun, useRuns, useWorkflows } from '../../api/hooks';
 import { changesListEvents, nodeListOutputs } from '../../api/verbs';
+import { suppliedOutputMarker } from '../../components/drive/overrideStatus';
 import { Dot } from '../../components/primitives';
 import { Skeleton } from '../../components/Skeleton';
 import { QueryError } from '../../components/QueryError';
@@ -72,6 +73,7 @@ function RailRow({
   evalScore,
   errorFreq,
   learned,
+  provenance,
   onSelect,
   rowRef,
 }: {
@@ -86,26 +88,39 @@ function RailRow({
   evalScore: number | null | undefined;
   errorFreq: number;
   learned: boolean;
+  /** Adversarial-review fix (post-W4) — this node's supplied-output
+   * provenance in the bound run, straight from the run record
+   * (overrideStatus.ts's suppliedOutputMarker): 'default_output' (pushed
+   * through from its standing default), 'operator_override' (a pasted
+   * operator value), or null when the run carries no provenance for this
+   * node — in which case the legacy node_list_outputs query below is the
+   * only signal available (an older run, recorded before outputProvenance
+   * existed). */
+  provenance: 'default_output' | 'operator_override' | null;
   onSelect: (id: string) => void;
   rowRef: (el: HTMLButtonElement | null) => void;
 }) {
   const ql = useNodeQuickLook(nid, wf);
 
-  // Override marker — only worth asking about for a node this run has
-  // actually completed (see nodeListOutputs's mock, which needs both
-  // nodeId AND runId to answer anything at all — an uncompleted node can't
-  // carry an override yet regardless). Silent on any failure: a missing
-  // signal here must read as "no marker", never as an error banner on the
-  // whole rail.
+  // Legacy override marker — node_list_outputs' 'operator_override'-typed
+  // entry. The live server no longer produces one (see overrideStatus.ts's
+  // header comment on suppliedOutputMarker); this query only still runs,
+  // and only still matters, for a run whose record carries no
+  // `outputProvenance` for this node at all — never queried once `provenance`
+  // above already has an answer. Silent on any failure: a missing signal
+  // here must read as "no marker", never as an error banner on the whole rail.
+  const needsLegacyCheck = provenance === null;
   const overrideQ = useQuery({
     queryKey: ['nodeOutputs', nid, runId],
     queryFn: () => nodeListOutputs({ nodeId: nid, runId: runId ?? undefined }),
-    enabled: Boolean(runId) && st === 'completed',
+    enabled: needsLegacyCheck && Boolean(runId) && st === 'completed',
     staleTime: 30_000,
     retry: false,
   });
   const overrideList = Array.isArray(overrideQ.data) ? overrideQ.data : (overrideQ.data?.outputs ?? []);
-  const hasOverride = overrideQ.isSuccess && overrideList.some((e) => (e as { type?: string })?.type === 'operator_override');
+  const legacyOverride = needsLegacyCheck && overrideQ.isSuccess && overrideList.some((e) => (e as { type?: string })?.type === 'operator_override');
+  const hasOverride = provenance === 'operator_override' || legacyOverride;
+  const defaulted = provenance === 'default_output';
 
   return (
     <div style={{ position: 'relative' }}>
@@ -141,6 +156,11 @@ function RailRow({
         {hasOverride && (
           <span className="chip-override" title="carries an operator output override in this run">
             ⎘
+          </span>
+        )}
+        {defaulted && (
+          <span className="chip-default" title="this node's output was pushed through from its standing default — no model turn, and this run can never publish live while it stands">
+            ⚙
           </span>
         )}
         {n && n.fan > 1 && (
@@ -395,6 +415,7 @@ export function Rail() {
                       evalScore={scoreByNode.get(nid)}
                       errorFreq={wfRunsQ.data ? nodeErrorFrequency(wfRunsQ.data, nid) : 0}
                       learned={learned}
+                      provenance={suppliedOutputMarker(run, nid)}
                       onSelect={setNode}
                       rowRef={(el) => {
                         rowRefs.current[nid] = el;

@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { listWorkspaceNodes, sortWorkspaceNodes } from "../../workspace/nodes.js";
-import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceEvent, type WorkspaceNode, type WorkspaceVersionSnapshot } from "../../workspace/nodeTypes.js";
+import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceEvent, type NodeDefaultOutput, type WorkspaceNode, type WorkspaceVersionSnapshot } from "../../workspace/nodeTypes.js";
 import { validateWorkspaceGraph } from "../../workspace/nodes.js";
 import { workspaceStoreCanonicalIds, workspaceStoreSeedNodes } from "../../workspace/workspaceStoreNodes.js";
 import { relationshipDirections, relationshipKinds, type WorkspaceRelationship, type WorkspaceRelationshipsUpdate } from "../../workspace/relationshipTypes.js";
@@ -88,6 +88,8 @@ export interface WorkspaceStore {
   // enforces THAT version, never a second racy read that could reflect a later, unrelated mutation.
   updateNodePrompt(id: string, prompt: string, meta?: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
   updateNodeSchema(id: string, schema: unknown, meta?: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
+  /** node-default-output — set the node's standing output, or clear it outright with `null`. */
+  updateNodeDefaultOutput(id: string, defaultOutput: NodeDefaultOutput | null, meta?: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
   createNode(node: WorkspaceNode, meta: WorkspaceMutationMeta, eventType?: string): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
   deleteNode(id: string, meta: WorkspaceMutationMeta): Promise<{ deleted: true; workspaceVersion: number }>;
   cloneNode(id: string, newId: string, meta: WorkspaceMutationMeta): Promise<{ node: WorkspaceNode; workspaceVersion: number }>;
@@ -163,7 +165,16 @@ const workspaceNodeSchema = z.object({
   updatedAt: z.string().datetime(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   modelConfig: z.record(z.string(), z.unknown()).optional(),
-  executionConfig: z.record(z.string(), z.unknown()).optional()
+  executionConfig: z.record(z.string(), z.unknown()).optional(),
+  // node-default-output — declared rather than left to .passthrough() so a malformed default written
+  // by a direct document edit is rejected at load instead of reaching a run as an output.
+  defaultOutput: z.object({
+    value: z.unknown(),
+    note: z.string().optional(),
+    updatedAt: z.string().datetime(),
+    updatedBy: z.enum(["human", "agent", "system"]),
+    schemaValidAt: z.string().datetime().nullable().optional()
+  }).optional()
 }).passthrough().transform((node) => ({ ...node, outputSchema: node.outputSchema ?? node.schema ?? { type: "object" } }));
 const conversationalAgentSchema: z.ZodType<ConversationalAgentDefinition> = z.object({
   id: z.string().regex(/^agt_[a-z0-9_]+$/),
@@ -566,6 +577,33 @@ export class WorkspaceStateStore implements WorkspaceStore {
       updated = { ...rest, outputSchema: schema, updatedAt: now() };
       document.nodes = upsertWorkspaceNode(document.nodes, updated);
     }, meta, "node.output_schema_updated", id);
+    return { node: updated!, workspaceVersion };
+  }
+  // node-default-output (2026-09-15) — SET or CLEAR one node's standing output.
+  //
+  // `defaultOutput === null` clears the field outright (a cleared default must leave NO residue: a
+  // `{value: null}` row would be indistinguishable from a deliberate null output). Any other value is
+  // written whole, with updatedAt/updatedBy stamped here so the record's own timestamps can never be
+  // authored by the caller.
+  //
+  // Unlike updateNodePrompt/updateNodeSchema above this does NOT synthesize a node row when the id is
+  // unknown: those two predate the canonical seed and their fabricated row is load-bearing legacy,
+  // whereas a default on a node that does not exist is an operator typo that would sit in the store
+  // forever, attached to nothing.
+  async updateNodeDefaultOutput(id: string, defaultOutput: NodeDefaultOutput | null, meta?: WorkspaceMutationMeta) {
+    let updated: WorkspaceNode | undefined;
+    const workspaceVersion = await this.mutate((document) => {
+      const existing = document.nodes.find((node) => node.id === id);
+      if (!existing) throw new Error(`Unknown node: ${id}`);
+      if (defaultOutput === null) {
+        const { defaultOutput: _cleared, ...rest } = existing;
+        void _cleared;
+        updated = { ...rest, updatedAt: now() };
+      } else {
+        updated = { ...existing, defaultOutput, updatedAt: now() };
+      }
+      document.nodes = upsertWorkspaceNode(document.nodes, updated);
+    }, meta, defaultOutput === null ? "node.default_output_cleared" : "node.default_output_updated", id);
     return { node: updated!, workspaceVersion };
   }
   async createNode(node: WorkspaceNode, meta: WorkspaceMutationMeta, eventType = "node.created") { let workspaceVersion = 0; const normalized = normalizeNode(coerceNodeInput(node)); workspaceVersion = await this.mutate((document) => { if (document.nodes.some((existing) => existing.id === normalized.id)) throw new Error(`Duplicate node id: ${normalized.id}`); document.nodes = [...document.nodes, normalized]; }, meta, eventType, normalized.id); return { node: normalized, workspaceVersion }; }

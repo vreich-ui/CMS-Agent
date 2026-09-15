@@ -442,11 +442,16 @@
      here is color-only — a number, a count, or a word rides along with every
      tint. Sized to sit alongside the existing .fan/.risk badges without
      growing the ~28px row. */
-  .chip-eval,.chip-err,.chip-learned,.chip-override{font-family:var(--mono); font-size:9.5px; letter-spacing:.02em; flex:none; white-space:nowrap;}
+  .chip-eval,.chip-err,.chip-learned,.chip-override,.chip-default{font-family:var(--mono); font-size:9.5px; letter-spacing:.02em; flex:none; white-space:nowrap;}
   .chip-eval{min-width:15px; text-align:right;}
   .chip-err{color:var(--bad);}
   .chip-learned{background:color-mix(in srgb,var(--acc) 16%,transparent); color:var(--acc-ink); border-radius:4px; padding:1px 5px; text-transform:uppercase; letter-spacing:.08em; font-size:8.5px;}
   .chip-override{color:var(--run);}
+  /* node-default-output (W4) — a distinct color+glyph from .chip-override:
+     an operator override (blue ⎘, one run's pasted value) and a pushed-
+     through default (purple ⚙, the node's own standing fixture) must never
+     read as the same marker at a glance. */
+  .chip-default{color:var(--paused);}
 
   /* Trace waterfall rows (trace/TraceWaterfallModal.tsx) — one clickable
      row per node span, laid out as a grid so id / bar-track / status+duration

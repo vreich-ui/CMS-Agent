@@ -89,6 +89,9 @@ export type NodeRetryState = {
   scheduledAt: string;
 };
 
+/** node-default-output — see WorkflowExecutionRecord.outputMode. */
+export type RunOutputMode = "live" | "defaults_where_set" | "defaults_only";
+
 export type NodeExecutionState = {
   nodeId: string;
   status: ExecutionStatus;
@@ -130,6 +133,25 @@ export type NodeExecutionState = {
     model: string;
     capturedAt: string;
   };
+  // node-default-output (2026-09-15) — WHERE THIS OUTPUT CAME FROM, when it was not produced here.
+  //
+  // Present ONLY on a node whose output was SUPPLIED: "default_output" (the node's standing default,
+  // applied by an operator push-through or by the run's outputMode) or "operator_override" (a value
+  // written straight onto this run through stage.save_output's run-scoped form). Absent on every node
+  // that actually ran, which is what makes presence meaningful.
+  //
+  // Deliberately separate from `provenance` above: that field is the EXECUTION identity of a model
+  // turn (promptVersion + model) and producerContextForPublish reads it to stamp a published object
+  // with its producer. A supplied output had no model turn, so it leaves that field absent — and the
+  // publish tail refuses the run outright (gate.publishing.defaulted_upstream) rather than publishing
+  // something no node produced.
+  outputProvenance?: { source: "default_output" | "operator_override"; updatedAt: string; note?: string };
+  // node-default-output — SET WHEN AN OPERATOR RETRIED THIS NODE FOR REAL on a run whose outputMode
+  // would otherwise supply it again. Exactly the skipOverride precedent above: without a durable
+  // marker the retry clears the supplied output, the very next dispatch re-reads run.outputMode,
+  // re-applies the same default, and the control silently does nothing forever. Cleared by an explicit
+  // push-through, which is the operator asking for the default back.
+  defaultOutputOverride?: boolean;
   // Set when an operator explicitly retried a node the conductor had skipped: the retry IS the
   // operator saying "run this one", so the predicate is not re-evaluated on the next dispatch. Durable
   // (a retry that only cleared the skip record would be re-skipped immediately, forever).
@@ -379,6 +401,19 @@ export type WorkflowExecutionRecord = {
   // The pre-dispatch halt reads this field, never the model's provenance labels.
   economicDecision?: EconomicDecision;
   dryRun: true;
+  // node-default-output — TEST MODE, chosen once at start and honoured by every advance of this run,
+  // including the scheduled continuation tick (which drives the same runNextNode entry point, so it
+  // needs no knowledge of this field at all — B1 #349's tick scoping is untouched).
+  //   "live" (default, and what an absent field means) — today's behaviour exactly.
+  //   "defaults_where_set" — any node carrying a default is passed through; the rest run live.
+  //   "defaults_only" — any node carrying a default is passed through; a node WITHOUT one FAILS with
+  //     default_output_missing, so one run proves a whole conductor's topology and contracts in
+  //     seconds and names every gap it has.
+  outputMode?: RunOutputMode;
+  // Every node on this run whose output was supplied rather than produced (default or operator
+  // override), in the order they were supplied. The publish tail reads exactly this: non-empty on a
+  // live run means the run may never publish. Deduplicated; a node retried for real is removed.
+  defaultedNodeIds?: string[];
   executionMode?: "mock" | "openai";
   // Monotonic revision used for optimistic concurrency control. A read carries the stored `rev`;
   // a save only succeeds when the stored `rev` still matches, then increments it. This makes the

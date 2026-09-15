@@ -31,12 +31,14 @@ import type {
   Dataset,
   FinetuneReadiness,
   ModelConfig,
+  NodeDefaultOutput,
   Observation,
   Project,
   PublishReadiness,
   Risk,
   Rubric,
   Run,
+  RunOutputMode,
   RunStatus,
   Skill,
   ToolDef,
@@ -606,6 +608,99 @@ export async function workspaceSaveSkillsWithReadback(args: {
   }
 }
 
+// ============================ node-default-output (W4) ========================
+// A node's STANDING output — a value written into a run as though the node
+// produced it, with no model turn and no cost. Distinct from an operator
+// override (stage_save_output, above): a default is a property of the NODE,
+// reused across every run that pushes it through or starts in a defaults
+// output mode; an override is pasted into ONE run. Keep that vocabulary
+// distinct everywhere this surfaces — see components/drive/overrideStatus.ts.
+//
+// Server contract (src/agent/workspace/defaultOutput.ts, nodeTypes.ts):
+// `value: null` on workspace.update_node_default_output CLEARS the default.
+// Without `force`, a value failing the node's declared outputSchema is
+// refused (classified default_output_schema_invalid); with `force` it is
+// stored anyway, stamped `schemaValidAt: null` so the record says which of
+// the two happened. Callers here follow the same proactive-validate-then-
+// confirm shape OverrideOutputModal already uses for its own second
+// confirmation, rather than relying on parsing the refusal back out of a
+// caught error — see DefaultOutputTab.tsx.
+
+export interface DefaultOutputSaveResult {
+  node: WorkflowNode | null;
+  workspaceVersion?: number;
+}
+
+function toDefaultOutputSaveResult(raw: { node?: adapters.RawWorkflowNode | null; workspaceVersion?: number }): DefaultOutputSaveResult {
+  return { node: raw?.node ? adapters.toNode(raw.node) : null, workspaceVersion: raw?.workspaceVersion };
+}
+
+export const workspaceUpdateNodeDefaultOutput = (args: {
+  nodeId: string;
+  /** The standing output, in the shape the node's outputSchema declares. `null` CLEARS the default. */
+  value: unknown;
+  note?: string;
+  /** Store the value even though it fails the node's outputSchema — stamps `schemaValidAt: null`. */
+  force?: boolean;
+}) => {
+  const clearing = args.value === null || args.value === undefined;
+  return mutate<{ node?: adapters.RawWorkflowNode | null; workspaceVersion?: number }>(
+    'workspace_update_node_default_output',
+    clearing
+      ? `Clear ${args.nodeId}'s standing default output. A push-through or a defaults-mode run then either runs this node for real or refuses it as default_output_missing.`
+      : `Set ${args.nodeId}'s standing default output${
+          args.force ? " — saving it even though it fails the node's declared output schema (force)" : ''
+        }. Any push-through (workflow.run_node with useDefaultOutput) or defaults-mode run on this node then uses this value in place of running it — no model turn, no cost, and a run carrying it can never reach a live publish.`,
+    {
+      nodeId: args.nodeId,
+      value: args.value,
+      ...(args.note?.trim() ? { note: args.note.trim() } : {}),
+      ...(args.force ? { force: true } : {}),
+    },
+    clearing,
+  ).then(toDefaultOutputSaveResult);
+};
+
+export const workspaceAdoptOutputAsDefault = (args: {
+  nodeId: string;
+  /** Adopt the output this node produced in THIS run; omitted, the most recent across every run. */
+  runId?: string;
+  executionId?: string;
+  note?: string;
+  force?: boolean;
+}) =>
+  mutate<{ node?: adapters.RawWorkflowNode | null; workspaceVersion?: number }>(
+    'workspace_adopt_output_as_default',
+    `Adopt ${args.nodeId}'s last good output${args.runId ? ` from run ${args.runId}` : ' (most recent across every run)'} as its standing default. Any push-through or defaults-mode run on this node then uses that value in place of running it.`,
+    {
+      nodeId: args.nodeId,
+      ...(args.runId ? { runId: args.runId } : {}),
+      ...(args.executionId ? { executionId: args.executionId } : {}),
+      ...(args.note?.trim() ? { note: args.note.trim() } : {}),
+      ...(args.force ? { force: true } : {}),
+    },
+  ).then(toDefaultOutputSaveResult);
+
+export interface LatestNodeOutput {
+  runId?: string;
+  nodeId: string;
+  type?: string;
+  value: unknown;
+  createdAt?: string;
+}
+
+/** Read-shaped — no confirmAction. Used to seed the Default output tab's
+ * editor when a node carries no default yet. */
+export const nodeGetLatestOutput = async (args: { nodeId: string; runId?: string }): Promise<LatestNodeOutput | null> => {
+  const raw = await callVerb<{ output: LatestNodeOutput | null } | LatestNodeOutput | null>('node_get_latest_output', args);
+  if (!raw) return null;
+  return 'output' in raw ? raw.output : raw;
+};
+
+// Re-exported so callers (DefaultOutputTab, StartRunModal) can name the type
+// without reaching into ../types directly for just this one alias.
+export type { RunOutputMode, NodeDefaultOutput };
+
 // ================================= node ======================================
 
 export const nodeGetEffectivePrompt = (args: { nodeId: string }) =>
@@ -844,6 +939,8 @@ export const workflowStartDryRun = (args: {
   dry?: boolean;
   executionMode?: 'openai' | 'mock';
   requestId?: string;
+  /** node-default-output (W4) — defaults to 'live' server-side when omitted. */
+  outputMode?: RunOutputMode;
 }): Promise<Run> =>
   // LIVE-VERIFIED CORRECTION (workbench-verb-fixes): this verb, like every
   // other run verb, returns the raw run shape — `mutate<Run>` cast straight
@@ -872,8 +969,14 @@ export const workflowRunUntil = (args: { runId: string; nodeId: string }) =>
     args,
   );
 
-export const workflowRunNode = (args: { runId: string; nodeId: string }) =>
-  mutate<Run | null>('workflow_run_node', `Run node ${args.nodeId} in ${args.runId}.`, args);
+export const workflowRunNode = (args: { runId: string; nodeId: string; useDefaultOutput?: boolean }) =>
+  mutate<Run | null>(
+    'workflow_run_node',
+    args.useDefaultOutput
+      ? `Push ${args.nodeId} through in ${args.runId} using its standing default output — no model turn, no cost. If ${args.nodeId} has no default this is refused (default_output_missing), and ${args.runId} can never reach a live publish while any node's output was supplied rather than produced.`
+      : `Run node ${args.nodeId} in ${args.runId}.`,
+    args,
+  );
 
 export const workflowPauseRun = (args: { runId: string }) =>
   mutate<Run | null>('workflow_pause_run', `Pause run ${args.runId}.`, args);
@@ -892,8 +995,14 @@ export const workflowResetRun = (args: { runId: string }) =>
     true,
   );
 
-export const workflowRetryNode = (args: { runId: string; nodeId: string }) =>
-  mutate<Run | null>('workflow_retry_node', `Retry node ${args.nodeId} in run ${args.runId}.`, args);
+export const workflowRetryNode = (args: { runId: string; nodeId: string; useDefaultOutput?: boolean }) =>
+  mutate<Run | null>(
+    'workflow_retry_node',
+    args.useDefaultOutput
+      ? `Retry ${args.nodeId} in run ${args.runId} by pushing it through with its standing default output — no model turn, no cost. If ${args.nodeId} has no default this is refused (default_output_missing).`
+      : `Retry node ${args.nodeId} in run ${args.runId}.`,
+    args,
+  );
 
 export const workflowSetOperatorPublishDecision = (args: {
   runId: string;

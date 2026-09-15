@@ -130,9 +130,22 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
 // Per-node facts in the run record's own node order (which is the conductor's canonical order), with
 // the usage ledger's per-node cost joined on. A node with no usage record and a completed status is
 // reported as deterministic — that is a FACT of the ledger, not an inference about how it ran.
+// node-default-output (2026-09-15) — A SUPPLIED OUTPUT IS NOT EVIDENCE.
+//
+// The learning corpus exists to record what the ENGINE did: which nodes ran, how long they took, what
+// they cost, what they warned about. A node whose output was handed to it by an operator (a default, or
+// a run-scoped override) did none of those things — it has durationMs 0, no usage record and no model —
+// and letting it into the corpus would teach the optimizer that this node is free, instant and always
+// correct. That is the single most expensive lie this record could tell, so such nodes are excluded
+// from nodeFacts entirely and named ONCE at run level instead (buildLearningObservations below), which
+// is the "the observation must say so" half: the record never silently omits them.
+const suppliedOutputNodes = (run: Pick<WorkflowExecutionRecord, "nodes">): string[] =>
+  run.nodes.filter((node) => node.outputProvenance?.source !== undefined).map((node) => node.nodeId);
+
 export function buildNodeFacts(run: Pick<WorkflowExecutionRecord, "nodes">, usage?: ModelUsageSummary): NodeRunFact[] {
+  const supplied = new Set(suppliedOutputNodes(run));
   return run.nodes
-    .filter((node) => node.status !== "queued")
+    .filter((node) => node.status !== "queued" && !supplied.has(node.nodeId))
     .map((node) => {
       const bucket = usage?.byNode?.[node.nodeId];
       return {
@@ -438,7 +451,11 @@ export function buildLearningObservations(sources: LearningRecordSources): Learn
     ? { actualUsd: round2(usage.actualCostUsdEstimate), estimatedUsd: round2(usage.estimatedCostUsdEstimate), totalUsd: round2(usage.totalCostUsdEstimate), recordCount: usage.recordCount, source: "usage ledger (summarizeModelUsage over this runId) — measured, never estimated by a model" }
     : { actualUsd: null, estimatedUsd: null, totalUsd: null, recordCount: null, source: `usage ledger unavailable (${sources.usageError ?? "no reason reported"}); cost is reported as unknown rather than as zero` };
 
+  const supplied = suppliedOutputNodes(run);
   const observations = [
+    ...(supplied.length
+      ? [`${supplied.length} node(s) on this run did NOT produce their output — it was supplied by an operator (${supplied.map((nodeId) => `${nodeId} [${run.nodes.find((node) => node.nodeId === nodeId)?.outputProvenance?.source}]`).join(", ")}). They are EXCLUDED from the node facts and cost figures below: a supplied output is evidence of an operator's choice, never of what this engine did. READ EVERYTHING ELSE IN THIS RECORD WITH THAT IN MIND — the gate events and the capture/clone ledgers are computed from run.stageOutputs, so where a supplied node is the source of one of those stage outputs, the fact derived from it describes the fixture, not the engine. Nothing on this run may be published live while that is true.`]
+      : []),
     `Run ${run.runId} ended with status ${run.status}: ${completed.length} node(s) completed, ${blocked.length} blocked, ${failed.length} failed, of ${nodeFacts.length} that were dispatched or seeded.`,
     ...(usage
       ? [`Measured model spend for this run: $${cost.actualUsd} actual + $${cost.estimatedUsd} estimated across ${usage.recordCount} usage record(s). ${deterministic.length} completed node(s) produced NO usage record at all — they ran on deterministic engine paths at $0.`]

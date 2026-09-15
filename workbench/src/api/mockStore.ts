@@ -48,7 +48,7 @@ import type {
   RawUsageSummary,
   RawWorkflowNode,
 } from './adapters';
-import type { ComparePair, Run, Workflow } from '../types';
+import type { ComparePair, NodeDefaultOutput, Run, Workflow } from '../types';
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -301,21 +301,43 @@ class MockStore {
     for (const run of this.runs) {
       if (runId && run.runId !== runId) continue;
       const hit = run.nodes.find((n) => n.nodeId === nodeId);
+      if (!hit) continue;
       const canonical = CANONICAL_ARTIFACTS[`${run.runId}:${nodeId}`];
-      if (!hit || !canonical) continue;
-      out.push({
-        id: `${run.runId}:${nodeId}:artifact`,
-        runId: run.runId,
-        nodeId,
-        type: canonical.type,
-        createdAt: hit.completedAt ?? run.startedAt,
-        value: {
-          artifact: canonical.type,
-          nodeId,
+      if (canonical) {
+        out.push({
+          id: `${run.runId}:${nodeId}:artifact`,
           runId: run.runId,
-          note: 'Fixture-mode canonical artifact placeholder — no live content captured for this node.',
-        },
-      });
+          nodeId,
+          type: canonical.type,
+          createdAt: hit.completedAt ?? run.startedAt,
+          value: {
+            artifact: canonical.type,
+            nodeId,
+            runId: run.runId,
+            note: 'Fixture-mode canonical artifact placeholder — no live content captured for this node.',
+          },
+        });
+        continue;
+      }
+      // node-default-output (W4) generalization — a run-node's own
+      // `.output` field is a canonical artifact too, exactly like a
+      // CANONICAL_ARTIFACTS entry, just written by a real mutation
+      // (applyDefaultOutputToRun below, or saveStageOutput's operator
+      // override) instead of hand-authored fixture data. `operatorOverride`
+      // rows are skipped here — they're unshifted back on below with their
+      // own `type: 'operator_override'` tag, which must still win
+      // precedence over an ordinary artifact for the same node.
+      if (hit.output !== undefined && !(hit as Record<string, unknown>).operatorOverride) {
+        const node = this.getNode(nodeId);
+        out.push({
+          id: `${run.runId}:${nodeId}:artifact`,
+          runId: run.runId,
+          nodeId,
+          type: node?.produces?.[0] ?? 'mock_output',
+          createdAt: (hit.outputProvenance?.updatedAt as string | undefined) ?? hit.completedAt ?? run.startedAt,
+          value: hit.output,
+        });
+      }
     }
     const override = this.stageOverrides.get(`${runId ?? ''}:${nodeId}`);
     if (override) {
@@ -363,18 +385,213 @@ class MockStore {
     return out;
   }
 
-  /** U3 — writes an operator override into the run's stage outputs. */
+  // Adversarial-review fix (post-W4, server-contract follow-up) — a node
+  // that writes to a live client (a real publish, a real release, a real
+  // emission) can never have its output SUPPLIED — override or default —
+  // instead of produced, on a run whose model turns actually reach a live
+  // client. Mirrors the server's own predicate exactly (same fields
+  // components/drive/overrideStatus.ts's UI-shaped isPublishTailNode checks,
+  // just off the RAW field names this store actually holds) and its
+  // classified refusal code, `defaulted_publish_node_refused`. Mock runs
+  // (`executionMode !== 'openai'`) are explicitly exempt, same as live.
+  private static readonly PUBLISH_TAIL_KINDS = new Set(['publisher', 'releaser', 'emission']);
+
+  private isPublishTailNode(node: RawWorkflowNode | undefined): boolean {
+    if (!node) return false;
+    if (node.riskLevel === 'publish' || node.riskLevel === 'admin') return true;
+    return MockStore.PUBLISH_TAIL_KINDS.has(node.kind);
+  }
+
+  private isLiveRun(run: RawRun): boolean {
+    return (run.mode?.executionMode ?? run.executionMode) === 'openai';
+  }
+
+  private refuseIfDefaultedPublishNode(run: RawRun, nodeId: string): void {
+    if (!this.isLiveRun(run)) return;
+    const node = this.getNode(nodeId);
+    if (!this.isPublishTailNode(node)) return;
+    throw new Error(
+      `defaulted_publish_node_refused: ${nodeId} writes to a live client (riskLevel=${node?.riskLevel}, kind=${node?.kind}) and ${run.runId} is a live run — its output can never be supplied instead of produced.`,
+    );
+  }
+
+  /** Adversarial-review fix (post-W4, server-contract follow-up) — a
+   *  supplied value (override or default) that fails the node's CURRENT
+   *  output schema still gets stored (the operator/default author is the
+   *  authority — same principle the Default output tab's own second
+   *  confirmation already applies), but the server now flags it with a
+   *  `supplied_output_schema_invalid:<first issue>` warning rather than
+   *  silently accepting it. Returns the warning string, or undefined when
+   *  the value validates (or the node has no output schema to check against). */
+  private suppliedOutputSchemaWarning(nodeId: string, value: unknown): string | undefined {
+    const validation = this.validateNodeOutput(nodeId, value);
+    if (validation.valid) return undefined;
+    const first = validation.issues[0];
+    return `supplied_output_schema_invalid:${first ? `${first.path}: ${first.message}` : 'value does not match the declared output schema'}`;
+  }
+
+  /** U3 — writes an operator override into the run's stage outputs.
+   *
+   *  Adversarial-review fix (post-W4) — this used to be strictly MORE
+   *  generous than the live server: it never stamped `outputProvenance` on
+   *  the run node at all, relying entirely on the synthesized
+   *  `operator_override`-typed row in listNodeOutputs() below to mark an
+   *  override — a row the real server never produces (see
+   *  overrideStatus.ts's header on suppliedOutputMarker for the whole
+   *  story). Now stamps `outputProvenance` + the `output_source:
+   *  operator_override` warning on the run node, exactly like a default
+   *  does, so every marker surface that reads the run record first (which
+   *  is now all of them) sees a real override here too. The synthesized
+   *  row itself is KEPT — OverrideOutputModal.tsx's "prior variant" picker
+   *  still needs the actual VALUE list (and its type label), which nothing
+   *  else provides — but it is no longer load-bearing for "is this
+   *  overridden", only for "what did a prior override actually contain". */
   saveStageOutput(runId: string, nodeId: string, value: unknown, note?: string): Record<string, unknown> {
+    const run = this.runs.find((r) => r.runId === runId);
+    if (run) this.refuseIfDefaultedPublishNode(run, nodeId);
     const savedAt = new Date().toISOString();
     this.stageOverrides.set(`${runId}:${nodeId}`, { value, note, savedAt });
-    const run = this.runs.find((r) => r.runId === runId);
     const target = run?.nodes.find((n) => n.nodeId === nodeId);
     if (target) {
+      const schemaWarning = this.suppliedOutputSchemaWarning(nodeId, value);
+      const warnings = ['output_source:operator_override', ...(schemaWarning ? [schemaWarning] : [])];
       target.output = value;
       target.status = 'completed';
+      target.outputProvenance = { source: 'operator_override', updatedAt: savedAt, note };
+      target.warnings = [...new Set([...(target.warnings ?? []), ...warnings])];
       (target as Record<string, unknown>).operatorOverride = true;
+      // A model-execution `provenance` (this run node's own prior real
+      // dispatch record, if any) is deleted the moment its output is
+      // supplied rather than produced — mirrors the server exactly; see
+      // applyDefaultOutputToRun's matching comment.
+      delete (target as Record<string, unknown>).provenance;
     }
     return { saved: true, runId, nodeId, savedAt, source: 'operator_override', note: note ?? null };
+  }
+
+  // --- node-default-output (W4) ---------------------------------------------
+
+  /** `workspace_update_node_default_output` — sets or (passing `null`) clears
+   *  a node's standing default. Mirrors buildNodeDefaultOutput's stored
+   *  shape (src/agent/workspace/defaultOutput.ts, read-only) but does no
+   *  schema validation of its own: the tab does that proactively client-side
+   *  (node_validate_output, same as the override modal), so by the time this
+   *  is called the value is already known-valid, or the operator already
+   *  confirmed saving it invalid — `force`/`schemaValidAt` are the caller's
+   *  business, passed straight through in the `defaultOutput` it hands us. */
+  setNodeDefaultOutput(nodeId: string, defaultOutput: NodeDefaultOutput | null): RawWorkflowNode | undefined {
+    return this.updateNode(nodeId, { defaultOutput: defaultOutput ?? undefined });
+  }
+
+  /** `workspace_adopt_output_as_default` — adopts a node's last recorded
+   *  output (scoped to `runId` when given, else the most recent across
+   *  every run) as its new standing default. Reuses listNodeOutputs — the
+   *  same canonical-artifact-or-override source "This run" and the override
+   *  modal already read — rather than a second output history, so "last
+   *  good output" means the same thing everywhere in this app. */
+  adoptOutputAsDefault(nodeId: string, runId: string | undefined, note: string | undefined): RawWorkflowNode | undefined {
+    const list = [...this.listNodeOutputs(nodeId, runId)].sort((a, b) =>
+      String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')),
+    );
+    const latest = list[0];
+    if (!latest) return undefined;
+    return this.setNodeDefaultOutput(nodeId, {
+      value: latest.value,
+      note,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'human',
+      schemaValidAt: null,
+    });
+  }
+
+  /** `workflow_run_node` / `workflow_retry_node` with `useDefaultOutput:
+   *  true` — pushes a node's standing default straight into a run, mirroring
+   *  the server's applyRunOutputFromDefault (src/agent/workspace/
+   *  defaultOutput.ts, read-only): the node completes with durationMs 0 and
+   *  no model turn, carries `outputProvenance` and the
+   *  `output_source:default_output` warning, and `run.defaultedNodeIds` /
+   *  `run.currentNodeId` advance exactly as a real completion would — one
+   *  step forward in this workflow's own node order, the same "one step"
+   *  contract `workflow_run_next_node`'s mock already simulates.
+   *
+   *  Returns undefined when the run itself isn't found. Throws
+   *  `defaulted_publish_node_refused` (see the comment above
+   *  refuseIfDefaultedPublishNode) BEFORE the missing-default check — a
+   *  publish-tail node on a live run is refused regardless of whether it
+   *  even has a default to push. Throws `default_output_missing` when the
+   *  run is found, the node passes that check, but it carries no standing
+   *  default — mirroring the server's own refusal as a plain Error message
+   *  (this mock plane has no structured McpError to throw instead; see
+   *  handlers.ts's own use of plain Error for every other refusal). */
+  applyDefaultOutputToRun(runId: string, nodeId: string): RawRun | undefined {
+    const run = this.runs.find((r) => r.runId === runId);
+    if (!run) return undefined;
+    this.refuseIfDefaultedPublishNode(run, nodeId);
+    const node = this.getNode(nodeId);
+    const def = node?.defaultOutput;
+    if (!def) {
+      throw new Error(
+        `default_output_missing: ${nodeId} carries no standing default output to push through in ${runId}.`,
+      );
+    }
+    const now = new Date().toISOString();
+    const provenance = { source: 'default_output' as const, updatedAt: now, note: def.note };
+    const schemaWarning = this.suppliedOutputSchemaWarning(nodeId, def.value);
+    const idx = run.nodes.findIndex((n) => n.nodeId === nodeId);
+    const patched: RawRunNode = {
+      nodeId,
+      status: 'completed',
+      startedAt: now,
+      completedAt: now,
+      durationMs: 0,
+      warnings: ['output_source:default_output', ...(schemaWarning ? [schemaWarning] : [])],
+      outputProvenance: provenance,
+      output: def.value,
+    };
+    // A model-execution `provenance` (this node's own prior real dispatch
+    // record in this run, if any) is deleted the moment its output is
+    // supplied from the default instead of produced — mirrors the server
+    // exactly; the `{...n, ...patched}` merge below otherwise carries a
+    // pre-existing one straight through untouched.
+    if (idx === -1) run.nodes = [...run.nodes, patched];
+    else
+      run.nodes = run.nodes.map((n, i) => {
+        if (i !== idx) return n;
+        const merged: Record<string, unknown> = { ...n, ...patched };
+        delete merged.provenance;
+        return merged as RawRunNode;
+      });
+    run.defaultedNodeIds = [...new Set([...(run.defaultedNodeIds ?? []), nodeId])];
+
+    const wf = this.workflows[run.workflowId];
+    const order: string[] = wf ? wf.phases.flatMap(([, ids]) => ids) : [];
+    const posIdx = order.indexOf(nodeId);
+    const nextId = posIdx >= 0 && posIdx + 1 < order.length ? order[posIdx + 1] : null;
+    run.currentNodeId = nextId;
+    run.status = nextId ? 'running' : 'completed';
+    return run;
+  }
+
+  /** Adversarial-review fix (post-W4, server-contract follow-up) —
+   *  `workflow_retry_node` WITHOUT `useDefaultOutput` on a
+   *  `defaults_where_set`/`defaults_only` run marks the node with a
+   *  durable `defaultOutputOverride: true` so its NEXT dispatch runs it
+   *  live instead of silently re-applying the standing default — the
+   *  operator asked for a real retry, and a defaults-mode run must not
+   *  quietly hand them the default again. No mock dispatch engine here
+   *  currently re-applies a default automatically (fixture mode has none —
+   *  see handlers.ts's own workflow_run_next_node comment), so this is a
+   *  data-fidelity mirror of the server's node-state shape, not a behavior
+   *  change to any existing mock flow. A no-op for a `live` (or unset)
+   *  outputMode run, same as the server. */
+  markDefaultOutputOverride(runId: string, nodeId: string): RawRun | undefined {
+    const run = this.runs.find((r) => r.runId === runId);
+    if (!run) return undefined;
+    if (!run.outputMode || run.outputMode === 'live') return run;
+    const idx = run.nodes.findIndex((n) => n.nodeId === nodeId);
+    if (idx === -1) run.nodes = [...run.nodes, { nodeId, status: 'queued', defaultOutputOverride: true }];
+    else run.nodes = run.nodes.map((n, i) => (i === idx ? { ...n, defaultOutputOverride: true } : n));
+    return run;
   }
 
   // --- workspace / nodes ---------------------------------------------------
