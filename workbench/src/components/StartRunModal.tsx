@@ -19,6 +19,7 @@ import { ActionCancelledError } from '../api/confirmAction';
 import { IS_READ_ONLY } from '../api/client';
 import { setNextConfirmTrigger } from './ConfirmDialog';
 import { nodeGetInputSchema, nodeValidateInput } from '../api/verbs';
+import type * as verbs from '../api/verbs';
 import { useStore } from '../store';
 import type { Project, Workflow } from '../types';
 import { toast } from './Toasts';
@@ -37,6 +38,9 @@ function entryNodeId(wf: Workflow | undefined): string | undefined {
 
 type ValidationState =
   | { status: 'checking' }
+  // W7 — the Workbench has no phase config for this workflow, so it cannot name an entry node to
+  // validate the brief against. Startable, with the gap stated.
+  | { status: 'unvalidated' }
   | { status: 'valid' }
   | { status: 'invalid'; errors: string[] }
   | { status: 'error'; message: string };
@@ -57,6 +61,10 @@ export function StartRunModal() {
   const [projId, setProjId] = useState<string>('');
   const [execMode, setExecMode] = useState<'mock' | 'openai'>('mock');
   const [dry, setDry] = useState(true);
+  // W4 — how this run treats stored node defaults. 'live' is the default and is what every run did
+  // before defaults existed; the other two are opt-in and are described in full below, because
+  // "defaults only" in particular changes what the run IS, not just how fast it goes.
+  const [outputMode, setOutputMode] = useState<verbs.RunOutputMode>('live');
   const [budget, setBudget] = useState('10');
   const [requestId, setRequestId] = useState(genRequestId);
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
@@ -85,6 +93,11 @@ export function StartRunModal() {
     setBrief(DEFAULT_BRIEF);
     setValidation({ status: 'checking' });
     setStarting(false);
+    // REVIEW FIX — outputMode was the one field this "re-seed every field to a clean state" effect did
+    // not re-seed, so "defaults only" was STICKY: start one fixtures run, come back later for a normal
+    // one, and every node completes from a fixture with no model called and the run permanently
+    // unpublishable. A mode that changes what a run IS must never carry over silently.
+    setOutputMode('live');
   }, [open]);
 
   useEffect(() => {
@@ -115,7 +128,17 @@ export function StartRunModal() {
   // stated done-criterion: "Invalid input blocks the button *and states the
   // reason*." Re-runs whenever the brief or the target workflow changes.
   useEffect(() => {
-    if (!open || !nodeId) return;
+    if (!open) return;
+    // REVIEW FIX (W7) — no entry node means nothing to validate the brief against, which is the case
+    // for every workflow the presentation catalog has no phase config for (W7 made three such
+    // workflows selectable). The effect used to return early leaving validation at 'checking' forever,
+    // so canStart stayed false and the modal showed "checking input…" with no way forward — three
+    // workflows selectable everywhere and startable nowhere. Unvalidatable is not invalid: allow the
+    // start and say the brief was not checked.
+    if (!nodeId) {
+      setValidation({ status: 'unvalidated' });
+      return;
+    }
     setValidation({ status: 'checking' });
     const trimmed = brief.trim();
     const timer = window.setTimeout(() => {
@@ -168,7 +191,7 @@ export function StartRunModal() {
     Boolean(workflow) &&
     Boolean(project) &&
     !projectBlocked &&
-    validation.status === 'valid';
+    (validation.status === 'valid' || validation.status === 'unvalidated');
 
   async function handleStart(triggerEl: HTMLElement | null) {
     if (!workflow || !project || starting) return; // re-entrancy guard — see canStart's comment above
@@ -182,6 +205,7 @@ export function StartRunModal() {
         budgetUsd: budget.trim() ? Number(budget) : undefined,
         dry,
         executionMode: execMode,
+        outputMode,
         requestId,
       });
       if (run) {
@@ -270,6 +294,52 @@ export function StartRunModal() {
           </div>
         </div>
 
+        <div className="field">
+          <span className="lbl">output mode</span>
+          <div className="seg">
+            {/* "run every node", NOT "live". The mode control directly above already has a button
+                labelled "live" meaning something entirely different (a live run vs a dry run), and two
+                adjacent segmented controls both offering "live" is a genuine trap for an operator, not
+                just an ambiguous selector. The wire value is still 'live'. */}
+            <button type="button" aria-pressed={outputMode === 'live'} className={outputMode === 'live' ? 'on' : ''} onClick={() => setOutputMode('live')}>
+              run every node
+            </button>
+            <button
+              type="button"
+              aria-pressed={outputMode === 'defaults_where_set'}
+              className={outputMode === 'defaults_where_set' ? 'on' : ''}
+              onClick={() => setOutputMode('defaults_where_set')}
+            >
+              defaults where set
+            </button>
+            <button
+              type="button"
+              aria-pressed={outputMode === 'defaults_only'}
+              className={outputMode === 'defaults_only' ? 'on' : ''}
+              onClick={() => setOutputMode('defaults_only')}
+            >
+              defaults only
+            </button>
+          </div>
+          <p className="note" style={{ margin: '6px 0 0' }}>
+            {outputMode === 'live' && 'Every node runs. Stored node defaults are never applied on their own.'}
+            {outputMode === 'defaults_where_set' &&
+              'A node with a stored default is completed from it — no model call, no cost. Every other node runs for real.'}
+            {outputMode === 'defaults_only' &&
+              'Every node must have a stored default; one that does not FAILS rather than running. Exercises the whole pipeline’s topology and contracts in seconds, with no model called at all.'}
+          </p>
+        </div>
+
+        {outputMode !== 'live' && (
+          <div className="card" style={{ marginBottom: 13 }}>
+            <span className="lbl">this run will use fixtures</span>
+            <p style={{ margin: 0, fontSize: 12.5 }}>
+              Any node completed from a default did not run. The run is marked permanently: it can never publish on a
+              live run, and those nodes are excluded from its learning record.
+            </p>
+          </div>
+        )}
+
         {!dry && (
           <div className="card" style={{ borderColor: 'var(--bad)', marginBottom: 13 }}>
             <span className="lbl" style={{ color: 'var(--bad)' }}>
@@ -354,6 +424,15 @@ function ValidationLabel({ validation }: { validation: ValidationState }) {
   }
   if (validation.status === 'checking') {
     return <span className="valnote" style={{ color: 'var(--muted)' }}>checking input…</span>;
+  }
+  if (validation.status === 'unvalidated') {
+    // Stated, not hidden: the brief is going to the run unchecked, and the operator should know which
+    // of the two it is before they press Start.
+    return (
+      <span className="valnote" style={{ color: 'var(--muted)' }}>
+        input not checked — the Workbench has no entry node configured for this workflow
+      </span>
+    );
   }
   return <span className="valnote" style={{ color: 'var(--bad)' }}>✗ input does not validate — see reason above</span>;
 }

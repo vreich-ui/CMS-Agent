@@ -20,6 +20,8 @@ import { IS_READ_ONLY } from '../../../api/client';
 import { workspaceUpdateNodePrompt } from '../../../api/verbs';
 import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
 import { Btn, Card } from '../../../components/primitives';
+import { NodeReplayModal } from '../../../components/diff/NodeReplayModal';
+import { useStore } from '../../../store';
 import { toast } from '../../../components/Toasts';
 import type { WorkflowNode } from '../../../types';
 import { useEffectivePrompt, usePlaybook } from '../queries';
@@ -58,6 +60,10 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
   const editingNode = useRef(nodeId);
   const [text, setText] = useState<string>(() => getLocalDraft<string>(nodeId, 'prompt') ?? storedPrompt);
   const [saving, setSaving] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
+  // The workflow ID, not the display name this component already receives: the replay needs to list
+  // runs of this workflow, and `wfName` is prose ("Publishing conductor").
+  const wfId = useStore((s) => s.wf);
 
   function setEditorContent(v: string) {
     setText(v);
@@ -194,12 +200,18 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
             loadingPlaybook={playbookQ.isLoading}
           />
         </Disclosure>
-        {/* U7 polish — operator copy, not an internal roadmap phase label
-            plus a bare MCP verb name. */}
-        <Btn disabled title="Replaying this prompt against a frozen test dataset isn't available from this screen yet.">
-          ⇄ Replay vs dataset
+        {/* W6 — was disabled with "isn't available from this screen yet". It is now: the replay runs
+            THIS node against a past run's real upstream outputs and diffs the result against what that
+            run recorded, so a prompt edit can be judged in ~30s and cents instead of a full conductor
+            run. It calls the live model, so the title says so before anything is pressed. */}
+        <Btn
+          onClick={() => setReplayOpen(true)}
+          title="Run this node against a past run's upstream outputs and compare the result. Calls the live model for this node only — this costs money."
+        >
+          ⇄ Replay against a past run
         </Btn>
       </div>
+      <NodeReplayModal open={replayOpen} onClose={() => setReplayOpen(false)} node={node} workflowId={wfId} />
     </Card>
   );
 }

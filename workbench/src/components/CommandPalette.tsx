@@ -17,8 +17,9 @@
 // tests/palette.spec.ts asserts three concrete cases.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNodes, useProjects, useRun, useRuns, useWorkflows } from '../api/hooks';
-import { changesList } from '../api/verbs';
+import { invalidateRunLists, useNodes, useProjects, useRun, useRuns, useWorkflows } from '../api/hooks';
+import { changesList, workflowPushThroughWithDefault } from '../api/verbs';
+import { ActionCancelledError } from '../api/confirmAction';
 import { performLogout } from './LoginGate';
 import { toast } from './Toasts';
 import { useQueryClient } from '@tanstack/react-query';
@@ -271,6 +272,23 @@ export function CommandPalette() {
   // sorts by `when` itself rather than trusting fetch order. Fewer than two
   // recorded changes is an honest "nothing to compare" toast, not a diff
   // modal opened on made-up revisions.
+  // W4 — the palette's own push-through. Goes through the same confirmAction-gated verb the drive
+  // panel uses, so the operator sees the same sentence about what a default does to the run before it
+  // happens, from whichever surface they invoked it.
+  async function pushThroughWithDefault(boundRunId: string, nodeId: string) {
+    try {
+      await workflowPushThroughWithDefault({ runId: boundRunId, nodeId });
+      invalidateRunLists(queryClient);
+      void queryClient.invalidateQueries({ queryKey: ['run', boundRunId] });
+      toast('Pushed through', `${nodeId} completed from its stored default — no model call.`);
+    } catch (err) {
+      if (err instanceof ActionCancelledError) return;
+      // The commonest failure is the honest one: the node has no default. The server's message says
+      // exactly that and how to set one, so it is surfaced verbatim rather than summarized away.
+      toast('Push through failed', err instanceof Error ? err.message : 'Unknown error');
+    }
+  }
+
   async function compareLastTwoRevisions(nodeId: string) {
     try {
       const records = await changesList({ nodeId });
@@ -328,6 +346,11 @@ export function CommandPalette() {
       out.push({ kind: 'screen', label: s.label, go: () => s.go(useStore.getState()) });
     }
     out.push({ kind: 'action', label: 'Start run…', go: () => useStore.getState().openStartModal() });
+    // REVIEW FIX — REMOVED. It opened the same start modal as "Start run…" without setting the mode,
+    // so it was a second identical row whose label promised something it did not do (and, before the
+    // modal's reset was fixed, could open on whatever mode was last used). The output mode is chosen
+    // in the modal, where its consequences are stated; a palette row that says otherwise is worse than
+    // no row. "Start run…" above is the one entry point.
     out.push({ kind: 'action', label: 'Toggle theme', go: () => useStore.getState().cycleTheme() });
     out.push({
       kind: 'action',
@@ -346,6 +369,33 @@ export function CommandPalette() {
         label: `override output on ${node}`,
         go: () =>
           useStore.getState().openModal('override', runId ? { node, run: runId } : { node }),
+      });
+      // W4 — the ⌘K half of "push through with default". Only offered when a run is BOUND, because
+      // pushing a node through is an act on a run: without one there is nothing to push it through.
+      // The refusal when the node has no stored default lives on the server (default_output_missing)
+      // and never falls back to running the node, so an accidental invocation here cannot cost money.
+      if (runId) {
+        out.push({
+          kind: 'action',
+          // Names the cost in the row itself. Unlike the drive panel, the palette cannot disable a row
+          // with a tooltip, so the label carries the warning — and the server's refusal
+          // (default_output_missing) is surfaced verbatim by the handler when there is no default, so
+          // an accidental invocation explains itself and costs nothing.
+          label: `push through ${node} with its default output (no model call)`,
+          go: () => {
+            void pushThroughWithDefault(runId, node);
+          },
+        });
+      }
+      out.push({
+        kind: 'action',
+        label: `set ${node}'s default output…`,
+        go: () => {
+          const st = useStore.getState();
+          st.setNode(node);
+          st.setTab('default');
+          st.setScreen('bench');
+        },
       });
       out.push({
         kind: 'action',

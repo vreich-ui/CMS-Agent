@@ -175,7 +175,32 @@ export function createToolRegistry(): ToolDefinition[] {
     // 2000 -> 8000 — model_timeout was observed in production against the old 2s ceiling, which is
     // tight for a workspace write reached at the end of a model turn; still well under the node's own
     // dispatch timeout (learning_recorder's modelConfig.timeout is 300000ms, nodes.ts).
-    makeTool({ toolId:"learning.record_observation", name:"learning.record_observation", description:"Record observation. Stamped with the recording run/node's id and the run's CMS-Agent projectId. Extra fields (e.g. an echoed nodeId/runId/projectId) are ignored, not rejected — provenance always comes from the execution context.", inputSchema:learningObservationInput, outputSchema:schema, riskLevel:"write", sideEffect:"workspace_write", requiresApproval:false, timeoutMs:8000, category:"learning", enabled:true, metadata:{}, handler: async (i,c) => { const d=learningObservationInput.parse(i); return ok({ observation: await ws.recordObservation(d.observation,d.metadata,{ runId:c.runId, nodeId:c.nodeId, projectId:c.projectId }) }); } }),
+    makeTool({ toolId:"learning.record_observation", name:"learning.record_observation", description:"Record observation. Stamped with the recording run/node's id and the run's CMS-Agent projectId. Extra fields (e.g. an echoed nodeId/runId/projectId) are ignored, not rejected — provenance always comes from the execution context.", inputSchema:learningObservationInput, outputSchema:schema, riskLevel:"write", sideEffect:"workspace_write", requiresApproval:false, timeoutMs:8000, category:"learning", enabled:true, metadata:{}, handler: async (i,c) => {
+      const d=learningObservationInput.parse(i);
+      // W2 — A FIXTURE TEACHES NOTHING.
+      //
+      // DEFENCE IN DEPTH, and stated as such rather than as the enforcement: `c.nodeId` is the
+      // RECORDING node, and a node completed from a stored default never dispatches at all, so in
+      // today's engine this branch cannot fire. It is kept because "the node filing this observation
+      // did not itself run" must stay refused if a future path ever does let a defaulted node take a
+      // turn — not because it is what protects the playbook now.
+      //
+      // What actually protects it: learning_recorder (the only node that files observations in a
+      // normal run) excludes every defaulted node from its facts and says so in the record
+      // (learningRecord.ts buildNodeFacts / defaultedNodeIds), and the stamp below marks any
+      // observation filed during a partly-fixture run so curation can weigh or exclude it. An echoed
+      // `nodeId` in the arguments is deliberately ignored by this tool's contract, so it cannot be
+      // used to attribute an observation to another node either.
+      const defaulted = c.defaultedNodeIds ?? [];
+      if (defaulted.includes(c.nodeId)) {
+        return ok({ observation: null, skipped: "output_source:default_output", reason: `Node ${c.nodeId} was completed from a stored default output rather than run, so it has nothing to observe. No observation was recorded.` });
+      }
+      // The node itself ran, but the run around it is partly fixture — so the observation is recorded
+      // AND says so, which is the run-level half of the same obligation. Curation can then weigh or
+      // exclude it; silently filing it as if the whole run were real is what this stamp prevents.
+      const metadata = defaulted.length ? { ...(d.metadata ?? {}), defaultedNodeIds: [...defaulted] } : d.metadata;
+      return ok({ observation: await ws.recordObservation(d.observation,metadata,{ runId:c.runId, nodeId:c.nodeId, projectId:c.projectId }) });
+    } }),
     // B3 — the response carries the page's MAIN TEXT (scripts, nav, header/footer, forms and asides
     // removed), capped at maxChars, plus title/canonicalUrl/publishedAt when the page declares them.
     // JSON and plain text are passed through untouched — those are already the payload. `extraction`

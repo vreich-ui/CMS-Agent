@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { coerceSchemaInput, validateJsonSchema, type WorkspaceMutationMeta } from "./store.js";
+import { buildNodeDefaultOutput, defaultOutputActorKind, readNodeDefaultOutput, saveRunScopedOutput } from "./defaultOutputTools.js";
+import { runOutputModes } from "../../workspace/defaultOutput.js";
 // B1 — advisory only. A root-level combinator is legal here and is enforced in full post-turn by
 // outputValidator; it is simply not enforceable by OpenAI response_format, which strips it. Warn,
 // never block (platform rule): rejecting the write would delete the invariant to please the API.
@@ -21,7 +23,7 @@ import { DETERMINISTIC_STAGE_MIN_TIMEOUT_MS, STALL_MARGIN_MS } from "../../works
 import { listRegisteredWorkflowIds } from "../../workspace/workflowRegistry.js";
 import { resolvePublishAuthority } from "../../workspace/publishDecision.js";
 import { conductorCache, getRunContext, planRun, summarizeRunCost, RUN_CONTEXT_KEY } from "../../workspace/conductor.js";
-import { executionStatuses, type WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
+import { executionStatuses, type NodeExecutionState, type WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
 import { WorkspaceToolError } from "../../workspace/workspaceErrors.js";
 import { getWorkspaceNode } from "../../workspace/nodes.js";
 import { validateOutput } from "../../execution/outputValidator.js";
@@ -129,7 +131,14 @@ export type CompactRunView = {
   // callers re-deriving it is exactly how the three surfaces drifted apart in the first place.
   // Empty array on a healthy run — never omitted, so a caller can trust `blockages.length === 0`.
   blockages: Blockage[];
-  nodes: Array<{ nodeId: string; status: string; warnings?: string[]; errors?: string[]; durationMs?: number; dispatch?: unknown; lastDispatch?: unknown; blockage?: Blockage }>;
+  // W4 — `outputProvenance` rides on the COMPACT view, not only the full record, because it is the one
+  // fact a reader needs to know before trusting anything else on the node: whether a model produced
+  // this output at all. Two small strings on a node that has one, absent on every node that ran.
+  nodes: Array<{ nodeId: string; status: string; warnings?: string[]; errors?: string[]; durationMs?: number; dispatch?: unknown; lastDispatch?: unknown; blockage?: Blockage; outputProvenance?: NodeExecutionState["outputProvenance"] }>;
+  // The run-level ledger the publish gate reads. Omitted when empty, so an ordinary run's compact view
+  // is byte-for-byte what it was.
+  defaultedNodeIds?: string[];
+  outputMode?: WorkflowExecutionRecord["outputMode"];
 };
 export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
   runId: run.runId,
@@ -163,8 +172,11 @@ export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
     ...(node.errors !== undefined ? { errors: node.errors } : {}),
     ...(node.durationMs !== undefined ? { durationMs: node.durationMs } : {}),
     ...(node.dispatch !== undefined ? { dispatch: node.dispatch } : {}),
-    ...(node.lastDispatch !== undefined ? { lastDispatch: node.lastDispatch } : {})
-  }))
+    ...(node.lastDispatch !== undefined ? { lastDispatch: node.lastDispatch } : {}),
+    ...(node.outputProvenance !== undefined ? { outputProvenance: node.outputProvenance } : {})
+  })),
+  ...((run.defaultedNodeIds ?? []).length ? { defaultedNodeIds: [...run.defaultedNodeIds!] } : {}),
+  ...(run.outputMode !== undefined ? { outputMode: run.outputMode } : {})
 });
 const RUN_LIVE_STATUSES: string[] = ["queued", "running"];
 
@@ -448,7 +460,39 @@ const assertGraphUpdateKeepsCanonicalTopology = (toolName: string, update: { cre
 const updateGraphInput = z.object({ create: z.array(z.any()).optional(), update: z.array(z.record(z.string(), z.unknown()).and(z.object({ id: z.string().min(1) }))).optional(), delete: z.array(z.string().min(1)).optional(), dependencies: z.record(z.string(), z.array(z.string().min(1))).optional(), orderedNodeIds: z.array(z.string().min(1)).optional(), positions: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).optional(), allowCanonicalNodeRemoval: z.boolean().optional(), adminApproved: z.boolean().optional(), ...mutationMeta }).strict();
 const validateNodeInput = z.object({ node: z.any().optional(), id: z.string().min(1).optional() }).strict();
 const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(), stageOutputs: z.array(stageOutputImport).optional(), learningObservations: z.array(learningObservationImport).optional() }).strict();
-const saveOutput = z.object({ id: z.string().min(1).optional(), stage: z.string().min(1), value: z.unknown() }).strict();
+// W3 — THE OVERRIDE MODAL'S ACTUAL PAYLOAD, finally accepted.
+//
+// The Workbench's OverrideOutputModal has always called stage.save_output with {runId, nodeId, value,
+// note} — and this schema was .strict() over {id, stage, value}, so every one of those calls was
+// rejected as an unrecognised key. Worse, had it parsed, the value would have gone to the WORKSPACE
+// stage-output collection, which no workflow run has ever read: run dispatch reads dependency outputs
+// from run.stageOutputs (executor.ts) and the only reader of workspace stage outputs is the standalone
+// node.execute path (nodeRuntime.ts). The modal was fixture-only in both directions.
+//
+// ONE TOOL, TWO FORMS, rather than a second verb: the workspace form ({stage, value, id?}) is
+// untouched for every existing caller, and the run-scoped form ({runId, nodeId, value, note?}) writes
+// run.stageOutputs[nodeId] through the SAME applyNonDispatchOutput the default-output paths use — so
+// an override is marked, gated and excluded from learning exactly like a default, with provenance
+// "operator_override". A union, not optional fields, so a half-specified call ({runId} with no nodeId,
+// or {stage} with {runId}) is refused at parse time instead of silently taking the wrong branch.
+const saveOutput = z.union([
+  z.object({ id: z.string().min(1).optional(), stage: z.string().min(1), value: z.unknown() }).strict(),
+  z.object({ runId: z.string().min(1), nodeId: z.string().min(1), value: z.unknown(), note: z.string().min(1).optional() }).strict()
+]);
+
+// W1 — the store-owned node default. `value: null` is NOT "clear": null is a legal JSON output and a
+// node whose default is literally null must be expressible. Clearing is its own explicit flag, so the
+// two can never be confused by a client that serializes an absent field as null.
+const updateNodeDefaultOutput = z.object({
+  nodeId: z.string().min(1),
+  value: z.unknown().optional(),
+  clear: z.boolean().optional(),
+  note: z.string().min(1).optional(),
+  force: z.boolean().optional(),
+  ...mutationMeta
+}).strict();
+const adoptOutputAsDefault = z.object({ nodeId: z.string().min(1), runId: z.string().min(1), note: z.string().min(1).optional(), force: z.boolean().optional(), ...mutationMeta }).strict();
+
 const listOutputs = z.object({ stage: z.string().min(1).optional() }).strict();
 const recordObservation = z.object({ observation: z.string().min(1), metadata: z.record(z.string(), z.unknown()).optional(), runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), projectId: z.string().min(1).optional() }).strict();
 // W0 complement (determinism program, 2026-08-12): this tool used to do exactly one thing — wrap an
@@ -472,7 +516,7 @@ const validateAgainstArticleBodyNode = (articleBody: unknown): string[] => {
 // two they are about to get, and what a mock artifact is worth.
 const EXECUTION_MODE_DESCRIPTION = "Execution mode. \"openai\" (DEFAULT) calls the configured model provider and produces real node output. \"mock\" produces deterministic placeholder output generated from each node's outputSchema — structurally valid but content-free, for cheap CI/test runs; mock artifacts must never be treated as publishable content. Every run reports its mode back on workflow.get_run / workflow.list_runs as `mode`.";
 
-const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default(DEFAULT_EXECUTION_MODE), entrypoint: z.enum(["article_body"]).optional(), articleBody: z.unknown().optional(), budgetUsd: z.number().nonnegative().optional(), requestId: z.string().min(1).optional(), publishRequestId: z.string().min(1).optional() }).strict();
+const startDryRunInput = z.object({ projectId: z.string().min(1), input: z.any(), workflowId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).default(DEFAULT_EXECUTION_MODE), entrypoint: z.enum(["article_body"]).optional(), articleBody: z.unknown().optional(), budgetUsd: z.number().nonnegative().optional(), requestId: z.string().min(1).optional(), publishRequestId: z.string().min(1).optional(), outputMode: z.enum(runOutputModes).optional() }).strict();
 
 // S1 (chat-path) — CALLER-SUPPLIED REQUEST IDS. The knowledge rule every client dialect states is
 // that request ids are supplied by the caller and never generated. A project that declares
@@ -548,7 +592,22 @@ async function resolvePublishRequestId(projectId: string, publishRequestId: stri
 // ignores it (shared schema) because it never re-dispatches a "failed" node in the first place
 // (findRunnableNodes only ever selects queued/dependency-ready nodes) — see executor.ts's
 // RunAdvanceOptions doc comment for what supplying it does and does not do.
-const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional(), retryJustification: z.string().min(1).optional() }).strict();
+// REVIEW FIX (W2) — `useDefaultOutput` REQUIRES `nodeId`, refused at parse time.
+//
+// Both tools accept an optional nodeId, and an advance is not one node: advanceRun dispatches up to
+// CONCURRENT_DISPATCH_LIMIT of them. So `{runId, useDefaultOutput: true}` with no nodeId pushed every
+// member of a four-wide batch through on its default AND hard-failed every member without one, on
+// nodes the operator never named. "Push a node through" is meaningless without naming the node, so the
+// honest fix is to require it rather than to pick one on the caller's behalf.
+const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional(), retryJustification: z.string().min(1).optional(), useDefaultOutput: z.boolean().optional() })
+  .strict()
+  .refine((data) => data.useDefaultOutput !== true || typeof data.nodeId === "string", {
+    message: "useDefaultOutput requires nodeId: name the node to push through. Without one this call advances whichever nodes are dependency-ready — up to four at once — and would default or hard-fail every one of them.",
+    path: ["nodeId"]
+  });
+/** Exported for the W2 pinning test: the refusal of an unpinned useDefaultOutput is a contract, not an
+ *  implementation detail, and is worth a test that does not need a live server to assert it. */
+export const runNodeInputForTest = runNodeInput;
 const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional() }).strict();
 const runIdInput = z.object({ runId: z.string().min(1) }).strict();
 // T7: get_run defaults to the compact view; "full" is the old raw-record behaviour, opted into.
@@ -634,7 +693,37 @@ const workspaceNodeJsonSchema = objectSchema({ id: { type: "string", minLength: 
 const stageOutputJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, stage: { type: "string", minLength: 1 }, value: {}, createdAt: { type: "string", format: "date-time" } }, ["id", "stage", "value", "createdAt"]);
 const learningObservationJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, observation: { type: "string", minLength: 1 }, metadata: { type: "object" }, createdAt: { type: "string", format: "date-time" } }, ["id", "observation", "createdAt"]);
 const importWorkspaceJsonSchema = objectSchema({ nodes: { type: "array", items: workspaceNodeJsonSchema }, stageOutputs: { type: "array", items: stageOutputJsonSchema }, learningObservations: { type: "array", items: learningObservationJsonSchema } });
-const saveOutputJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, stage: { type: "string", minLength: 1 }, value: {} }, ["stage", "value"]);
+// TWO FORMS IN ONE JSON SCHEMA. `value` is the only field both forms share, so it is the only thing
+// `required` can list — a client reading this schema alone must therefore also read the descriptions,
+// which name each field's form explicitly. The zod union above is the real gate: both of its branches
+// are `.strict()`, so a call mixing the two (`{stage, runId, value}`) or naming neither
+// (`{value}` alone) matches no branch and is refused rather than silently taking the wrong one.
+const saveOutputJsonSchema = objectSchema({
+  stage: { type: "string", minLength: 1, description: "WORKSPACE form. The stage key to save under, in the workspace-level stage-output collection. Read by node.execute (the standalone single-node path) and by stage.get_output — NOT by a workflow run, which reads its dependency outputs from run.stageOutputs. To override a node's output inside a RUN, use runId+nodeId instead." },
+  id: { type: "string", minLength: 1, description: "WORKSPACE form, optional. Overwrite an existing stage-output record by id instead of appending a new one." },
+  value: { description: "The output value. Required in both forms — and the ONLY always-required field, since the two forms share nothing else. Supply EITHER `stage` (workspace form) OR `runId`+`nodeId` (run-scoped form) alongside it; `value` on its own, or both forms' keys together, is refused." },
+  runId: { type: "string", minLength: 1, description: "RUN-SCOPED form. The run whose node output to override. Writes run.stageOutputs[nodeId] verbatim, completes the node with durationMs 0 and no model turn, and stamps provenance \"operator_override\" — so downstream nodes read the value immediately. The run is permanently marked (run.defaultedNodeIds): a LIVE run carrying an override can never reach a publishing node (gate.publishing.defaulted_upstream) and the node is excluded from the learning record. Validated against the node's own outputSchema; an invalid value is refused unless force is set." },
+  nodeId: { type: "string", minLength: 1, description: "RUN-SCOPED form. The node in that run to override." },
+  note: { type: "string", minLength: 1, description: "RUN-SCOPED form, optional. Free text recorded with the override's provenance — why this value was substituted." },
+  force: { type: "boolean", description: "RUN-SCOPED form, optional. Save a value that does NOT satisfy the node's outputSchema. The operator is the authority; the refusal names the failing fields first so force is always a second, deliberate act." }
+}, ["value"]);
+
+const updateNodeDefaultOutputJsonSchema = objectSchema({
+  nodeId: { type: "string", minLength: 1 },
+  value: { description: "The stored default output for this node — written verbatim into run.stageOutputs[nodeId] whenever the node is pushed through. Validated against the node's own outputSchema (node.get_output_schema); an invalid value is refused unless force is set, and a forced save is stamped schemaValidAt: null so it is visibly unvalidated. Required unless clear is true. `null` is a LEGAL value here, not a clear — use clear:true to remove a default." },
+  clear: { type: "boolean", description: "Remove this node's default output entirely. The one way to clear it; a null value does not, because null is a legal output." },
+  note: { type: "string", minLength: 1, description: "Free text stored with the default — where the value came from, what it stands in for." },
+  force: { type: "boolean", description: "Save a value that does not satisfy the node's outputSchema. Refused by default: the refusal names the failing fields, so forcing is a second, deliberate act. A forced default is stamped schemaValidAt: null." },
+  ...metaJson
+}, ["nodeId"]);
+
+const adoptOutputAsDefaultJsonSchema = objectSchema({
+  nodeId: { type: "string", minLength: 1 },
+  runId: { type: "string", minLength: 1, description: "The run to lift this node's output from. Reads run.stageOutputs[nodeId] for that run — a node that was itself defaulted or overridden in that run is REFUSED, since adopting a fixture as a default would launder it into a second run as if it were real." },
+  note: { type: "string", minLength: 1 },
+  force: { type: "boolean" },
+  ...metaJson
+}, ["nodeId", "runId"]);
 const listOutputsJsonSchema = objectSchema({ stage: { type: "string", minLength: 1 } });
 const recordObservationJsonSchema = objectSchema({ observation: { type: "string", minLength: 1 }, metadata: { type: "object" }, runId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the run that produced it, so it can be joined back later." }, nodeId: { type: "string", minLength: 1, description: "Optional: attribute this observation to the node that produced it." }, projectId: { type: "string", minLength: 1, description: "Optional: the CMS-Agent project id this observation belongs to (e.g. \"dr-lurie\"), so a project-scoped learning.list_observations finds it. NOT the tracking sink's partition id." } }, ["observation"]);
 // 2.8 (handoff 2026-08-10): lifecycle/archival for learning observations. Nothing is ever hard-deleted
@@ -658,7 +747,7 @@ const articleBodyArgJsonSchema = { type: "object", description: "Client-shaped c
 const publishBuildJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, runId: { type: "string", minLength: 1, description: "Project what publish_payload would emit for this run, built deterministically from the run's own article_body/artifact_plan stage outputs (dry_run_publish_payload.v1). Mutually exclusive with articleBody." }, target: { type: "string", enum: ["preview", "cms"], default: "preview" } }, []);
 const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyArgJsonSchema, target: { type: "string", enum: ["preview", "cms"] }, dryRun: { const: true }, builtAt: { type: "string", format: "date-time" } }, ["articleBody", "target", "dryRun", "builtAt"]);
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
-const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." }, requestId: { type: "string", minLength: 1, description: "Caller-supplied request id for this run. REQUIRED for a live (openai) run when the project declares objectDialect.requestIdPattern (platform, dr-lurie, fernwell: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case) — the tool refuses with request_id_required/invalid_request_id naming the pattern; request ids are never auto-generated for such a run. Optional (auto-minted) for a mock dry-run or a project without a pattern; a supplied id is always validated." }, publishRequestId: { type: "string", minLength: 1, description: "Operator-supplied PUBLISH request id (req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case), stored on the run and lifted into every node's run context. A DIFFERENT identifier from `requestId`, which is the platform/workspace join key — neither ever substitutes for the other. This id is normally authored by the artifact_plan node; supply it here for a late-stage entrypoint run, whose artifact_plan is seeded as skipped and therefore authors none (without it such a run reaches the publish gate and is refused with publish_request_id_absent). Always OPTIONAL and never generated: omit it and the run simply has no publish id and that refusal stands. A supplied id is validated before the run is created against the project's objectDialect.requestIdPattern where declared (platform, dr-lurie, fernwell), otherwise the publisher's shared contract pattern, refusing with invalid_publish_request_id. An id authored by a real artifact_plan run always takes precedence over this one. Survives workflow.reset_run." } }, ["projectId", "input"]);
+const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, outputMode: { type: "string", enum: [...runOutputModes], default: "live", description: "HOW THIS RUN TREATS STORED NODE DEFAULTS (workspace.update_node_default_output), fixed for the life of the run. \"live\" (default, and what every existing run does): defaults are never applied automatically. \"defaults_where_set\": any node carrying a default is completed from it with no model turn and no cost; every other node runs live — the mode for exercising the tail of a pipeline without paying for its head. \"defaults_only\": every node must carry a default, and one that does not FAILS with default_output_missing rather than quietly running live — this exercises a whole conductor's topology and contracts in seconds with no provider call at all. A run using any default is permanently marked (run.defaultedNodeIds): it can never publish on a live run (gate.publishing.defaulted_upstream) and its defaulted nodes are excluded from the learning record. Survives workflow.reset_run." }, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." }, requestId: { type: "string", minLength: 1, description: "Caller-supplied request id for this run. REQUIRED for a live (openai) run when the project declares objectDialect.requestIdPattern (platform, dr-lurie, fernwell: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case) — the tool refuses with request_id_required/invalid_request_id naming the pattern; request ids are never auto-generated for such a run. Optional (auto-minted) for a mock dry-run or a project without a pattern; a supplied id is always validated." }, publishRequestId: { type: "string", minLength: 1, description: "Operator-supplied PUBLISH request id (req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case), stored on the run and lifted into every node's run context. A DIFFERENT identifier from `requestId`, which is the platform/workspace join key — neither ever substitutes for the other. This id is normally authored by the artifact_plan node; supply it here for a late-stage entrypoint run, whose artifact_plan is seeded as skipped and therefore authors none (without it such a run reaches the publish gate and is refused with publish_request_id_absent). Always OPTIONAL and never generated: omit it and the run simply has no publish id and that refusal stands. A supplied id is validated before the run is created against the project's objectDialect.requestIdPattern where declared (platform, dr-lurie, fernwell), otherwise the publisher's shared contract pattern, refusing with invalid_publish_request_id. An id authored by a real artifact_plan run always takes precedence over this one. Survives workflow.reset_run." } }, ["projectId", "input"]);
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
 const getRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, detail: { type: "string", enum: ["compact", "full"], default: "compact", description: "compact (default): the compact run view. full: the complete record including node inputs/outputs, stageOutputs and artifacts." } }, ["runId"]);
 const resumeRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0, description: "Optional: raise (or set) the run's per-run cost ceiling in the same call that resumes it. Omit to resume unchanged — this is what makes the budget gate's own remedy (\"raise budgetUsd and resume\") actually reachable; previously resume_run took only runId and there was no way to raise the ceiling that blocked the run." } }, ["runId"]);
@@ -673,7 +762,7 @@ const setNodeBudgetOverrideJsonSchema = objectSchema({ runId: { type: "string", 
 // which is every strict client, and is why T6.6 could not be executed — was locked out of run_node,
 // run_until, run_all and retry_node. Verified live: the served workflow_run_all schema still shows
 // required: [] with no runId. Each tool now advertises exactly its own Zod shape.
-const runNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, retryJustification: { type: "string", minLength: 1, description: "workflow.retry_node only. Required to retry a node the no-progress gate has refused (unchanged input/node-definition/capability-state since its last terminal failure — see the node's own blockage/noProgress fields on workflow.get_run). Recorded verbatim for audit; never verified against anything real." } }, ["runId"]);
+const runNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, useDefaultOutput: { type: "boolean", description: "PUSH THE NODE THROUGH. REQUIRES nodeId — the call is refused without one, because an advance dispatches up to four dependency-ready nodes at once and an unnamed push-through would default (or hard-fail) every one of them. Completes the NAMED node from its stored defaultOutput instead of running it: the value is written to run.stageOutputs verbatim, the node completes with durationMs 0, and no model is called and nothing is charged. REFUSED with default_output_missing when the node has no default — it never silently falls back to a live dispatch, so asking to push a node through can never cost you a model turn you did not expect. Set a default with workspace.update_node_default_output or workspace.adopt_output_as_default. The run is permanently marked (run.defaultedNodeIds): on a LIVE run it can then never reach a publishing node (gate.publishing.defaulted_upstream), and the node is excluded from the learning record. workflow.retry_node accepts the same flag." }, retryJustification: { type: "string", minLength: 1, description: "workflow.retry_node only. Required to retry a node the no-progress gate has refused (unchanged input/node-definition/capability-state since its last terminal failure — see the node's own blockage/noProgress fields on workflow.get_run). Recorded verbatim for audit; never verified against anything real." } }, ["runId"]);
 const runUntilJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId", "nodeId"]);
 const runAllJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, budgetMs: { type: "number", minimum: RUN_DRIVER_TIME_BUDGET_FLOOR_MS, maximum: RUN_DRIVER_TIME_BUDGET_CEILING_MS, description: `Wall-clock budget for THIS call in ms (${RUN_DRIVER_TIME_BUDGET_FLOOR_MS}..${RUN_DRIVER_TIME_BUDGET_CEILING_MS}); default ${RUN_DRIVER_TIME_BUDGET_MS}. The loop stops dispatching when it is reached and the run continues on the scheduled continuation tick.` } }, ["runId"]);
 const runAllInput = z.object({ runId: z.string().min(1), approved: z.boolean().optional(), budgetMs: z.number().min(RUN_DRIVER_TIME_BUDGET_FLOOR_MS).max(RUN_DRIVER_TIME_BUDGET_CEILING_MS).optional() }).strict();
@@ -1084,6 +1173,49 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "workspace.delete_node", description: "Delete an unreferenced workspace node.", zodSchema: deleteNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = deleteNodeInput.parse(input); return ok(await workspaceRepository.deleteNode(data.id, meta(data))); } }),
     tool({ name: "workspace.clone_node", description: "Clone a workspace node.", zodSchema: cloneNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = cloneNodeInput.parse(input); return ok(await workspaceRepository.cloneNode(data.id, data.newId, meta(data))); } }),
     tool({ name: "workspace.update_node", description: "Patch a workspace node. Store-owned fields only: a patch touching a canonical-owned field (id, kind, dependsOn, requiredInputs, produces, riskLevel, status) on a node canonical defines is refused — those reach a run only via nodes.ts + redeploy.", zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); assertNoCanonicalOwnedFieldWrite("workspace.update_node", data.id, Object.keys(data.patch)); return ok(await workspaceRepository.updateNode(data.id, data.patch as Partial<WorkspaceNode>, meta(data))); } }),
+    tool({ name: "workspace.update_node_default_output", description: "Set or clear a node's DEFAULT OUTPUT — a stored value the conductor can write into run.stageOutputs[nodeId] instead of dispatching the node, completing it with durationMs 0, no model turn and no cost. Three surfaces apply it: workflow.run_node/retry_node with useDefaultOutput:true (one node, on demand), a run started with outputMode \"defaults_where_set\" or \"defaults_only\" (every seeded node), and this node's own Default output tab in the Workbench. The value is validated against the node's outputSchema (node.get_output_schema) and REFUSED with the failing fields named unless force:true — a forced default is stamped schemaValidAt:null so it is visibly unvalidated. Pass clear:true to remove the default; a `null` value does NOT clear it, because null is a legal output. defaultOutput is a STORE-OWNED field like prompt and outputSchema: it changes how a node runs, never the graph, so it needs no re-seed and the canonical drift gate ignores it. SAFETY: any run that uses a default is permanently marked (run.defaultedNodeIds) — it can never publish on a live run (gate.publishing.defaulted_upstream) and its defaulted nodes are excluded from the learning record.", zodSchema: updateNodeDefaultOutput, inputSchema: updateNodeDefaultOutputJsonSchema, execute: async (input) => {
+      const data = updateNodeDefaultOutput.parse(input);
+      const node = await workspaceRepository.getNode(data.nodeId);
+      if (!node) throw new WorkspaceToolError("unknown_node", `Unknown node: ${data.nodeId}`, { nodeId: data.nodeId });
+      if (data.clear) {
+        return ok({ ...(await workspaceRepository.updateNode(data.nodeId, { defaultOutput: undefined }, meta(data), "node.default_output_cleared")), cleared: true });
+      }
+      if (!("value" in data)) throw new WorkspaceToolError("missing_value", "Supply `value` to set this node's default output, or `clear: true` to remove it. (`null` is a legal default value and never clears.)", { nodeId: data.nodeId });
+      const built = buildNodeDefaultOutput(node, data.value, { note: data.note, force: data.force === true, updatedBy: defaultOutputActorKind(data) });
+      // REVIEW FIX — THROWN, not returned. server.ts turns a thrown WorkspaceToolError into a JSON-RPC
+      // error and a RETURNED toolError envelope into a JSON-RPC *success* carrying {ok:false}. These
+      // were the only two `return toolError(...)` sites in the codebase, so a client keying on the RPC
+      // result status saw a schema-invalid default as saved. The run-scoped override path
+      // (defaultOutputTools.saveRunScopedOutput) already threw for the identical case.
+      if (!built.ok) throw built.error;
+      return ok({ ...(await workspaceRepository.updateNode(data.nodeId, { defaultOutput: built.defaultOutput }, meta(data), "node.default_output_updated")), defaultOutput: built.defaultOutput, warnings: built.warnings });
+    } }),
+    // TWO WAYS TO GET A DEFAULT, and this is the one an operator actually reaches for: the value they
+    // want is almost always a real output this node already produced. The alternative considered and
+    // REJECTED was a `saveAsDefault: true` convenience flag on node.get_latest_output — a read tool
+    // that writes is a trap for every caller who expected a read, and it could not express the refusal
+    // below. This is its own verb, so "adopt run X's output" is auditable as its own change event.
+    tool({ name: "workspace.adopt_output_as_default", description: "Adopt a node's output from a PAST RUN as that node's stored default output — the usual way to seed one, since the value you want is normally something the node really produced. Reads run.stageOutputs[nodeId] from the named run and saves it exactly as workspace.update_node_default_output would, with the same outputSchema validation and the same force escape hatch. REFUSED when that node was itself defaulted or overridden in that run: adopting a fixture as a default would launder it into every future run as though it were real.", zodSchema: adoptOutputAsDefault, inputSchema: adoptOutputAsDefaultJsonSchema, execute: async (input) => {
+      const data = adoptOutputAsDefault.parse(input);
+      const node = await workspaceRepository.getNode(data.nodeId);
+      if (!node) throw new WorkspaceToolError("unknown_node", `Unknown node: ${data.nodeId}`, { nodeId: data.nodeId });
+      const run = await executionRepository.getRun(data.runId);
+      if (!run) throw new WorkspaceToolError("unknown_run", `Unknown run: ${data.runId}`, { runId: data.runId });
+      if (!Object.prototype.hasOwnProperty.call(run.stageOutputs ?? {}, data.nodeId)) {
+        throw new WorkspaceToolError("node_output_absent", `Run ${data.runId} has no recorded output for node ${data.nodeId} — it was skipped, never reached, or its output was cleared by a retry. Pick a run in which that node completed.`, { runId: data.runId, nodeId: data.nodeId });
+      }
+      // REVIEW FIX — checks the node's OWN provenance stamp as well as the run-level ledger. The stamp
+      // lives on the node state and survives every save path; the ledger is run-level and, before this
+      // review, could be dropped by the batch reconciler. Both are now correct, and reading both means
+      // this refusal does not depend on that being true.
+      const adoptedState = run.nodes.find((state) => state.nodeId === data.nodeId);
+      if (adoptedState?.outputProvenance !== undefined || (run.defaultedNodeIds ?? []).includes(data.nodeId)) {
+        throw new WorkspaceToolError("output_not_genuine", `Node ${data.nodeId} did not actually run in ${data.runId} — it was completed from a stored default or an operator override. Adopting that value as a default would present a fixture as a real result in every future run. Pick a run in which the node really ran, or set the value explicitly with workspace.update_node_default_output.`, { runId: data.runId, nodeId: data.nodeId });
+      }
+      const built = buildNodeDefaultOutput(node, run.stageOutputs[data.nodeId], { note: data.note ?? `Adopted from run ${data.runId}`, force: data.force === true, updatedBy: defaultOutputActorKind(data) });
+      if (!built.ok) throw built.error;
+      return ok({ ...(await workspaceRepository.updateNode(data.nodeId, { defaultOutput: built.defaultOutput }, meta(data), "node.default_output_updated")), defaultOutput: built.defaultOutput, adoptedFromRunId: data.runId, warnings: built.warnings });
+    } }),
     tool({ name: "workspace.update_node_prompt", description: "Update a node prompt.", zodSchema: updatePrompt, inputSchema: updatePromptJsonSchema, execute: async (input) => { const data = updatePrompt.parse(input); return ok(await workspaceRepository.updateNodePrompt(data.id, data.prompt, meta(data))); } }),
     tool({ name: "workspace.update_node_input_schema", description: "Update node input JSON Schema.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const schema = coerceSchemaInput(data.schema); const issues = validateJsonSchema(schema); if (issues.length) throw new Error(issues.join("; ")); return ok(await workspaceRepository.updateNode(data.id, { inputSchema: schema }, meta(data), "node.input_schema_updated")); } }),
     tool({ name: "workspace.update_node_output_schema", description: "Update node output JSON Schema draft 2020-12.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const schema = coerceSchemaInput(data.schema); const issues = validateJsonSchema(schema); if (issues.length) throw new Error(issues.join("; ")); const lint = openAiResponseSchemaLint(schema); const result = await workspaceRepository.updateNode(data.id, { outputSchema: schema, schema }, meta(data), "node.output_schema_updated"); return ok(lint ? { ...result, warnings: [lint] } : result); } }),
@@ -1152,7 +1284,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
         const skill = byId.get(skillId);
         return { skillId, version: skill?.version ?? null, status: skill?.status ?? null };
       });
-      return ok({ config: { prompt: node.prompt, inputSchema: node.inputSchema, outputSchema: node.outputSchema, modelConfig: node.modelConfig ?? {}, assignedSkills: node.assignedSkills ?? [], effectiveSkills, skillConflicts: policy.conflicts, effectiveTools: node.allowedTools, riskLevel: node.riskLevel, approvalRequirements: node.riskLevel === "publish" || node.riskLevel === "admin" ? ["explicit_approval"] : [] } });
+      return ok({ config: { prompt: node.prompt, inputSchema: node.inputSchema, outputSchema: node.outputSchema, modelConfig: node.modelConfig ?? {}, assignedSkills: node.assignedSkills ?? [], effectiveSkills, skillConflicts: policy.conflicts, effectiveTools: node.allowedTools, riskLevel: node.riskLevel, approvalRequirements: node.riskLevel === "publish" || node.riskLevel === "admin" ? ["explicit_approval"] : [], defaultOutput: readNodeDefaultOutput(node) ?? null } });
     } }),
     tool({ name: "workspace.export_workspace", description: "Export workspace data.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok(await workspaceRepository.exportWorkspace()); } }),
     tool({ name: "workspace.import_workspace", description: "Import workspace data.", zodSchema: importWorkspace, inputSchema: importWorkspaceJsonSchema, execute: async (input) => { const data = importWorkspace.parse(input); return ok(await workspaceRepository.importWorkspace({ ...data, nodes: data.nodes as WorkspaceNode[] | undefined })); } }),
@@ -1160,7 +1292,14 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // {schema_version, nodes} monolith — a drifted local copy the article_body node itself rejects. The
     // node's own outputSchema is served by node.get_output_schema and enforced by node.validate_output;
     // the client's own validator (object_validate via project.call_read_tool) is the authority beyond it.
-    tool({ name: "stage.save_output", description: "Save stage output.", zodSchema: saveOutput, inputSchema: saveOutputJsonSchema, execute: async (input) => { const data = saveOutput.parse(input); const output = await workspaceRepository.saveStageOutput(data.stage, data.value, data.id); return ok({ output, workspaceVersion: await workspaceRepository.getWorkspaceVersion() }); } }),
+    tool({ name: "stage.save_output", description: "Save a stage output, in one of TWO forms. WORKSPACE form {stage, value, id?} — unchanged: writes the workspace-level stage-output collection, which node.execute (the standalone single-node path) and stage.get_output read, and which a WORKFLOW RUN never reads. RUN-SCOPED form {runId, nodeId, value, note?} — the operator override: writes run.stageOutputs[nodeId] verbatim, completes that node with durationMs 0, no model turn and no cost, and stamps provenance \"operator_override\" so downstream nodes consume the value on the next advance. The value is validated against the node's own outputSchema and refused (naming the failing fields) unless force is set. The run is permanently marked: a LIVE run carrying an override can never reach a publishing node (gate.publishing.defaulted_upstream), and the overridden node is excluded from the learning record. To make a value reusable across runs, set it as the node's default instead (workspace.update_node_default_output).", zodSchema: saveOutput, inputSchema: saveOutputJsonSchema, execute: async (input) => {
+      const data = saveOutput.parse(input);
+      if ("stage" in data) {
+        const output = await workspaceRepository.saveStageOutput(data.stage, data.value, data.id);
+        return ok({ output, workspaceVersion: await workspaceRepository.getWorkspaceVersion() });
+      }
+      return ok(await saveRunScopedOutput(data, { workspaceRepository, executionRepository }));
+    } }),
     tool({ name: "stage.get_output", description: "Get stage output.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => ok({ output: await workspaceRepository.getStageOutput(nodeId.parse(input).id) ?? null }) }),
     tool({ name: "stage.list_outputs", description: "List stage outputs.", zodSchema: listOutputs, inputSchema: listOutputsJsonSchema, execute: async (input) => ok({ outputs: await workspaceRepository.listStageOutputs(listOutputs.parse(input).stage) }) }),
     tool({ name: "learning.record_observation", description: "Record a learning observation, optionally stamped with the runId/nodeId it came from and the CMS-Agent projectId it belongs to.", zodSchema: recordObservation, inputSchema: recordObservationJsonSchema, execute: async (input) => { const data = recordObservation.parse(input); const observation = await learningRepository.recordObservation(data.observation, data.metadata, { runId: data.runId, nodeId: data.nodeId, projectId: data.projectId }); return ok({ observation, workspaceVersion: await workspaceRepository.getWorkspaceVersion() }); } }),
@@ -1231,7 +1370,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       // S3 — the PUBLISH id, resolved and validated SEPARATELY from the join key above, and refused
       // here (before any run exists) exactly as a malformed `articleBody` is.
       const publishRequestId = await resolvePublishRequestId(data.projectId, data.publishRequestId);
-      const run = await startDryRun({ projectId: data.projectId, input: coerceJsonObjectInput(data.input), workflowId: data.workflowId, executionMode: data.executionMode, entrypoint, budgetUsd: data.budgetUsd, requestId }, executionRepository);
+      const run = await startDryRun({ projectId: data.projectId, input: coerceJsonObjectInput(data.input), workflowId: data.workflowId, executionMode: data.executionMode, entrypoint, budgetUsd: data.budgetUsd, requestId, outputMode: data.outputMode }, executionRepository);
       // Stamped onto the created run as its OWN field, never onto `requestId`. Written here rather
       // than threaded through startDryRun because this tool is the ONLY writer of the field (see
       // WorkflowExecutionRecord.publishRequestId): one writer, one validation point, and the run the
@@ -1314,12 +1453,14 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       let stop = await resolveDriverRefusal(run, workspaceRepository, deadline - Date.now(), timing, data.nodeId);
       if (!data.nodeId) {
         if (run && stop) return ok({ run, driverRefusal: stop.refusal, driverNote: stop.note });
+        // No nodeId: the schema above has already refused useDefaultOutput for this shape.
         return ok({ run: await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }) });
       }
       let timedOut = false;
       for (let i = 0; run && !stop && i < 100 && !HALTED_RUN_STATUSES.includes(run.status); i++) {
         if (Date.now() > deadline) { timedOut = true; break; }
-        run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved });
+        // Pinned to the NAMED node: the nodes this loop drives through on the way there run for real.
+        run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, useDefaultOutput: data.useDefaultOutput, useDefaultOutputNodeId: data.nodeId });
         const state = run.nodes.find((node) => node.nodeId === data.nodeId);
         if (state && state.status !== "queued" && state.status !== "running") break;
         stop = await resolveDriverRefusal(run, workspaceRepository, deadline - Date.now(), timing, data.nodeId);
@@ -1376,7 +1517,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // without a second tool. The run's own between-node gate re-evaluates the (now higher) ceiling
     // against accrued spend on the very next advance and clears budgetBlock itself once it passes.
     tool({ name: "workflow.resume_run", description: "Resume a run: status becomes \"queued\". Optionally raise (or set) budgetUsd in the same call — the reachable form of the budget gate's own \"raise budgetUsd and resume\" remedy. Node completion state is never mutated.", zodSchema: resumeRunInput, inputSchema: resumeRunJsonSchema, execute: async (input) => { const data = resumeRunInput.parse(input); return ok({ run: await updateRunStatus(data.runId, "queued", executionRepository, data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {}) ?? null }); } }),
-    tool({ name: "workflow.retry_node", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Reset a completed or failed node back to queued and run the next dependency-ready node. A failed node whose input, node definition and derived capability state are UNCHANGED since its last terminal failure is refused (no_progress) rather than re-dispatched — pass retryJustification to override, asserting a real fix this engine cannot see for itself.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); return ok({ run: await retryNode(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_retry_node", retryJustification: data.retryJustification }) ?? null }); } }),
+    tool({ name: "workflow.retry_node", description: "Wrong-path notice: content is normally driven from the site admin chat; direct use is operator/test only. Reset a completed or failed node back to queued and run the next dependency-ready node. A failed node whose input, node definition and derived capability state are UNCHANGED since its last terminal failure is refused (no_progress) rather than re-dispatched — pass retryJustification to override, asserting a real fix this engine cannot see for itself.", zodSchema: runNodeInput, inputSchema: runNodeJsonSchema, execute: async (input) => { const data = runNodeInput.parse(input); return ok({ run: await retryNode(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_retry_node", retryJustification: data.retryJustification, useDefaultOutput: data.useDefaultOutput, useDefaultOutputNodeId: data.nodeId }) ?? null }); } }),
     // P0 §2.2 — the operator veto channel: ONE named field (run.operatorPublishDecision), ONE setter
     // (this tool), ONE reader (publishDecision.isOperatorPublishWithheld, consumed by the publish
     // gates and the executor's publish-risk dispatch guard).

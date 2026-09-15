@@ -68,11 +68,18 @@ export function TopBar() {
   }
 
   const workflows = workflowsQ.data ?? [];
+  // REVIEW FIX (W7) — this fans out one workspace_get_graph PER WORKFLOW and is keyed on the id list,
+  // so W7's placeholder(3) -> merged(6) transition made boot issue 3 graph calls and then 6 more: ten
+  // calls to the very verb this branch set out to stop contending on. Gated on the list having
+  // settled (workflowsQ.isPlaceholderData) so the fan-out happens ONCE, against the real list, and
+  // cached for the session — the counts are a deploy-time property, not a per-visit one.
+  const workflowIds = workflows.map((workflow) => workflow.id);
   const workflowCountsQ = useQuery({
-    queryKey: ['resolvedWorkflowNodeCounts', workflows.map((workflow) => workflow.id)],
-    enabled: workflows.length > 0,
+    queryKey: ['resolvedWorkflowNodeCounts', workflowIds],
+    enabled: workflowIds.length > 0 && !workflowsQ.isPlaceholderData,
+    staleTime: 10 * 60_000,
     queryFn: async () => Object.fromEntries(
-      await Promise.all(workflows.map(async (workflow) => [workflow.id, await workspaceGetResolvedWorkflowNodeCount(workflow.id)] as const)),
+      await Promise.all(workflowIds.map(async (id) => [id, await workspaceGetResolvedWorkflowNodeCount(id)] as const)),
     ),
   });
   const activeWf = workflows.find((w) => w.id === wf);
@@ -87,7 +94,10 @@ export function TopBar() {
     const firstNode = target?.phases[0]?.[1]?.[0];
     if (run && run.wf !== id) unbindRun();
     setWf(id);
-    if (firstNode) setNode(firstNode);
+    // REVIEW FIX (W7) — a workflow with no phase config has no first node to jump to, and skipping
+    // setNode left the INSPECTOR pinned on a node belonging to the workflow we just left. Clearing it
+    // hands the choice to the rail, whose adoptNode fills an empty selection from the live graph.
+    setNode(firstNode ?? '');
     setMenuOpen(false);
   }
 

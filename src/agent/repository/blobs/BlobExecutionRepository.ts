@@ -51,7 +51,10 @@ type RunIndexMeta = { backfilledAt: string; v?: number };
 // `approvalsRequired: undefined` for those runs forever — indistinguishable from a run with no
 // pending gate, which is precisely the silent wire break restoring the field was meant to close.
 // Bumping is cheap now: a version gap heals lazily, per page, instead of scanning the fleet.
-const RUN_INDEX_VERSION = 3;
+// 4 (W5): rows gained nodeStatuses/failedNodeIds. Bumped so isStaleEntry re-reads a row written by an
+// older build instead of serving a listing whose per-node chips are silently absent — which would look
+// to the rail exactly like a fleet with no failures anywhere.
+export const RUN_INDEX_VERSION = 4;
 
 const RUN_INDEX_PREFIX = "run-index/";
 // "!" sorts before any encodeURIComponent output, and encodeURIComponent never emits it, so the meta

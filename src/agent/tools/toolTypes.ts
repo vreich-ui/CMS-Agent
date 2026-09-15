@@ -43,6 +43,11 @@ export type ToolExecutionContext = {
   platformAllowedTools?: string[];
   maxRiskLevel?: WorkspaceRiskLevel;
   dryRun?: boolean;
+  // W2 — the run's ledger of nodes completed from a stored default or an operator override
+  // (defaultOutput.ts). Threaded here for ONE consumer: learning.record_observation, which must not
+  // write a lesson drawn from a fixture. Absent means "nothing in this run was defaulted", which is
+  // every run that predates the feature and the overwhelming majority after it.
+  defaultedNodeIds?: string[];
   // Set by executeTool (toolExecutor.ts) once per call, from the SAME projectId it already fetched
   // for policy evaluation (evaluateToolPolicy's `project` argument). A project.* handler in
   // toolRegistry.ts reuses this instead of re-fetching by the projectId in its own arguments when the

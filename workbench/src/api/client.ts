@@ -190,6 +190,15 @@ export const MUTATING_VERBS: ReadonlySet<string> = new Set([
   'workspace_update_node_input_schema',
   'workspace_update_node_output_schema',
   'workspace_update_node_metadata',
+  // W4 — both write a node's stored default output, which every future run of that node can consume in
+  // place of running it. Registered here so they go through the confirmAction gate like every other
+  // mutating verb.
+  'workspace_update_node_default_output',
+  'workspace_adopt_output_as_default',
+  // W6 — node_execute in "openai" mode calls the live provider and is billed. It is a spend, so it
+  // belongs behind the same confirm gate (and the same IS_READ_ONLY refusal) as every other verb that
+  // costs something.
+  'node_execute',
   'changes_restore',
   'stage_save_output',
   'skill_update',
@@ -248,7 +257,22 @@ interface McpErrResponse {
 }
 type McpResponse<T> = McpOkResponse<T> | McpErrResponse;
 
-export async function callVerb<T>(verb: string, args?: object): Promise<T> {
+export type CallVerbOptions = {
+  /**
+   * W5 — the CALLER'S abort signal, distinct from the transport's own timeout. react-query supplies
+   * one to every queryFn and fires it on unmount or a key change; honouring it is what stops a panel
+   * an operator has navigated away from from continuing to occupy the server. The transport aborts on
+   * whichever fires first, and reports the two differently — a timeout is our ceiling, a caller abort
+   * is not a failure at all.
+   *
+   * HONOURED BY THE CLOUD RUN TRANSPORT ONLY, stated rather than implied. callVerbNetwork (the broker
+   * path, VITE_API_BASE) and callVerbMock ignore it — the broker path has no timeout of its own
+   * either, so cancellation there remains a gap, not a solved problem.
+   */
+  signal?: AbortSignal;
+};
+
+export async function callVerb<T>(verb: string, args?: object, opts?: CallVerbOptions): Promise<T> {
   if (MUTATING_VERBS.has(verb) && confirmedCallDepth === 0 && isDev()) {
     // eslint-disable-next-line no-console
     console.error(
@@ -260,7 +284,7 @@ export async function callVerb<T>(verb: string, args?: object): Promise<T> {
     return callVerbMock<T>(verb, (args ?? {}) as Args);
   }
   if (IS_CLOUD_RUN_TRANSPORT) {
-    return callVerbCloudRun<T>(verb, args);
+    return callVerbCloudRun<T>(verb, args, opts);
   }
   return callVerbNetwork<T>(verb, args);
 }
@@ -529,7 +553,7 @@ function unwrapRpc<T>(payload: CloudRunJsonRpcResponse<T> | undefined, verb: str
   return structured.data as T;
 }
 
-async function callVerbCloudRun<T>(verb: string, args?: object): Promise<T> {
+async function callVerbCloudRun<T>(verb: string, args?: object, opts?: CallVerbOptions): Promise<T> {
   const token = getCloudRunToken();
   if (!token) {
     throw new AuthError(verb, 'Enter an MCP bearer token before calling workspace tools.');
@@ -540,7 +564,20 @@ async function callVerbCloudRun<T>(verb: string, args?: object): Promise<T> {
   // answers headers promptly and then stops writing is the same dead panel to a
   // reader as one that never answers at all.
   const timer = setTimeout(() => controller.abort(), cloudRunTimeoutMs);
-  const timedOut = () => new NetworkError(verb, `timed out after ${Math.round(cloudRunTimeoutMs / 1000)}s`);
+  // W5 — the caller's abort forwarded onto the same controller, so ONE signal governs the fetch. The
+  // two are told apart below by which one actually fired: a caller abort is a cancellation (the
+  // reader left), not the "this verb is too slow" diagnosis a timeout warrants, and reporting it as a
+  // timeout would send an operator hunting a performance problem that did not happen. Already-aborted
+  // is handled too — a queryFn can be handed a signal that fired before it ran.
+  const onCallerAbort = () => controller.abort();
+  if (opts?.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener('abort', onCallerAbort, { once: true });
+  }
+  const timedOut = () =>
+    opts?.signal?.aborted
+      ? new NetworkError(verb, 'cancelled by the caller')
+      : new NetworkError(verb, `timed out after ${Math.round(cloudRunTimeoutMs / 1000)}s`);
 
   try {
     let res: Response;
@@ -604,6 +641,10 @@ async function callVerbCloudRun<T>(verb: string, args?: object): Promise<T> {
     return unwrapRpc<T>(payload, verb);
   } finally {
     clearTimeout(timer);
+    // Removed explicitly as well as via { once: true }: a long-lived caller signal (react-query
+    // reuses one across retries) would otherwise accumulate a listener per call for a controller
+    // that is already finished.
+    opts?.signal?.removeEventListener('abort', onCallerAbort);
   }
 }
 

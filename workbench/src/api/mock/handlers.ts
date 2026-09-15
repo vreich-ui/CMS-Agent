@@ -102,10 +102,24 @@ function skillsFor(node: adapters.RawWorkflowNode | undefined): Skill[] {
  * With no workflowId, live returns the flat store view of every node —
  * mirrored here too.
  */
+// The six workflows the live workspace has registered. Two beyond the three the presentation catalog
+// describes, deliberately, so a mock run of the Workflows deck shows the generic-card path W7 adds.
+const REGISTERED_WORKFLOW_IDS = [
+  'publishing_conductor',
+  'capture_conductor',
+  'clone_conductor',
+  'visual_identity',
+  'image_template_revision',
+  'pdf_template_studio',
+];
+
 function graphFor(workflowId: string): {
   workflowId: string;
   nodes: adapters.RawWorkflowNode[];
   edges: Array<{ from: string; to: string }>;
+  /** W7 — the fixture plane reports registered ids too, so verbs.workflowList exercises its real
+   *  merge path here rather than silently taking its catalog-only fallback in every mock test. */
+  registeredWorkflowIds: string[];
 } {
   const all = mockStore.getNodes();
   const wf = workflowId ? mockStore.getWorkflow(workflowId) : undefined;
@@ -114,14 +128,14 @@ function graphFor(workflowId: string): {
     for (const n of all) {
       for (const dep of (n.dependsOn as string[] | undefined) ?? []) edges.push({ from: dep, to: n.id });
     }
-    return { workflowId, nodes: all, edges };
+    return { workflowId, nodes: all, edges, registeredWorkflowIds: REGISTERED_WORKFLOW_IDS };
   }
   const order: string[] = wf.phases.flatMap(([, ids]) => ids);
   const byId = new Map(all.map((n) => [n.id, n]));
   const nodes = order.map((id) => byId.get(id)).filter((n): n is adapters.RawWorkflowNode => Boolean(n));
   const edges: Array<{ from: string; to: string }> = [];
   for (let i = 1; i < order.length; i++) edges.push({ from: order[i - 1], to: order[i] });
-  return { workflowId, nodes, edges };
+  return { workflowId, nodes, edges, registeredWorkflowIds: REGISTERED_WORKFLOW_IDS };
 }
 
 /** `err`/`done` — the same two counts toRun() itself derives from a raw
@@ -530,8 +544,33 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   workflow_run_next_node: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'running' }) ?? null,
   workflow_run_until: (a) =>
     mockStore.updateRunRaw(str(a, 'runId'), { status: 'running', currentNodeId: str(a, 'nodeId') }) ?? null,
+  // W4 — run_node with useDefaultOutput is a DIFFERENT act from run_node, and the mock has to model
+  // it as one: the node completes from its stored default (or the call is refused), rather than the
+  // run merely advancing.
   workflow_run_node: (a) =>
-    mockStore.updateRunRaw(str(a, 'runId'), { status: 'running', currentNodeId: str(a, 'nodeId') }) ?? null,
+    a.useDefaultOutput === true
+      ? (mockStore.pushThroughWithDefault(str(a, 'runId'), str(a, 'nodeId')) ?? null)
+      : (mockStore.updateRunRaw(str(a, 'runId'), { status: 'running', currentNodeId: str(a, 'nodeId') }) ?? null),
+  workspace_update_node_default_output: (a) =>
+    mockStore.setNodeDefaultOutput(str(a, 'nodeId'), a.value, {
+      clear: a.clear === true,
+      note: str(a, 'note') || undefined,
+      force: a.force === true,
+    }),
+  workspace_adopt_output_as_default: (a) => {
+    const runId = str(a, 'runId');
+    const nodeId = str(a, 'nodeId');
+    const run = mockStore.getRun(runId);
+    // The live refusal, mirrored: a value that node did not actually produce is never adoptable.
+    if (run?.defaultedNodeIds?.includes(nodeId)) {
+      throw new Error(`output_not_genuine: node ${nodeId} did not run in ${runId} — it was completed from a default or an override.`);
+    }
+    const entry = run?.nodes.find((n) => n.nodeId === nodeId);
+    if (!entry || entry.status !== 'completed') {
+      throw new Error(`node_output_absent: run ${runId} has no recorded output for node ${nodeId}.`);
+    }
+    return { ...mockStore.setNodeDefaultOutput(nodeId, (entry as Record<string, unknown>).output), adoptedFromRunId: runId };
+  },
   workflow_pause_run: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'paused' }) ?? null,
   workflow_resume_run: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'running' }) ?? null,
   workflow_cancel_run: (a) => mockStore.updateRunRaw(str(a, 'runId'), { status: 'cancelled' }) ?? null,

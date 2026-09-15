@@ -373,8 +373,69 @@ class MockStore {
       target.output = value;
       target.status = 'completed';
       (target as Record<string, unknown>).operatorOverride = true;
+      // W4 — mirrors what the server actually writes now (executor.applyNonDispatchOutput): the node's
+      // own provenance stamp and the run-level ledger, which together drive the rail markers and the
+      // publish gate. Without these the fixture plane would show a marker the live plane derives
+      // differently, which is how a mock stops testing anything.
+      this.markNonDispatchOutput(runId, nodeId, 'operator_override');
     }
     return { saved: true, runId, nodeId, savedAt, source: 'operator_override', note: note ?? null };
+  }
+
+  /** W4 — the shared bookkeeping both non-dispatch paths do, mirroring the server's one writer. */
+  private markNonDispatchOutput(runId: string, nodeId: string, source: 'default_output' | 'operator_override'): void {
+    const run = this.runs.find((r) => r.runId === runId);
+    if (!run) return;
+    const target = run.nodes.find((n) => n.nodeId === nodeId);
+    if (target) {
+      target.status = 'completed';
+      target.durationMs = 0;
+      (target as Record<string, unknown>).outputProvenance = { source, updatedAt: new Date().toISOString() };
+    }
+    run.defaultedNodeIds = [...new Set([...(run.defaultedNodeIds ?? []), nodeId])];
+  }
+
+  /** W4 — this node's stored default output, or undefined. */
+  getNodeDefaultOutput(nodeId: string): Record<string, unknown> | undefined {
+    return (this.getNode(nodeId) as unknown as Record<string, unknown> | undefined)?.defaultOutput as Record<string, unknown> | undefined;
+  }
+
+  /** W4 — set or clear a node's stored default. Mirrors workspace_update_node_default_output. */
+  setNodeDefaultOutput(nodeId: string, value: unknown, opts: { clear?: boolean; note?: string; force?: boolean } = {}) {
+    const node = this.getNode(nodeId);
+    if (!node) return { node: null };
+    if (opts.clear) {
+      delete (node as unknown as Record<string, unknown>).defaultOutput;
+      return { node, cleared: true };
+    }
+    const at = new Date().toISOString();
+    const validation = this.validateNodeOutput(nodeId, value) as { valid?: boolean };
+    const defaultOutput = {
+      value,
+      ...(opts.note ? { note: opts.note } : {}),
+      updatedAt: at,
+      updatedBy: 'human' as const,
+      schemaValidAt: validation?.valid ? at : null,
+    };
+    (node as unknown as Record<string, unknown>).defaultOutput = defaultOutput;
+    return { node, defaultOutput };
+  }
+
+  /** W4 — complete a node from its stored default, exactly as the executor's push-through path does. */
+  pushThroughWithDefault(runId: string, nodeId: string): RawRun | undefined {
+    const stored = this.getNodeDefaultOutput(nodeId);
+    // The live refusal, mirrored: never a silent fall-through to running the node.
+    if (!stored) throw new Error(`default_output_missing: node ${nodeId} has no defaultOutput, so it cannot be pushed through.`);
+    const run = this.runs.find((r) => r.runId === runId);
+    if (!run) return undefined;
+    const target = run.nodes.find((n) => n.nodeId === nodeId);
+    if (target) target.output = stored.value;
+    this.markNonDispatchOutput(runId, nodeId, 'default_output');
+    const order = run.nodes.map((n) => n.nodeId);
+    const idx = order.indexOf(nodeId);
+    run.currentNodeId = idx >= 0 && idx + 1 < order.length ? order[idx + 1] : null;
+    run.status = run.currentNodeId ? 'running' : 'completed';
+    return run;
   }
 
   // --- workspace / nodes ---------------------------------------------------

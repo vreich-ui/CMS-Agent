@@ -89,6 +89,23 @@ export const mergeNodeAdvance = (stored: WorkflowExecutionRecord, advanced: Work
     budgetBlock: advanced.budgetBlock,
     retryBackoffUntil: advanced.retryBackoffUntil,
     economicDecision: advanced.economicDecision ?? stored.economicDecision,
+    // REVIEW FIX (W2) — UNION, not "advanced wins" and not "stored wins".
+    //
+    // `defaultedNodeIds` is a run-level fact produced BY a dispatch (a node completed from a stored
+    // default or an operator override), so it belongs in this list alongside stageOutputs. It is
+    // append-only for the life of the run except for retryNode's single deliberate subtraction, and a
+    // union is the only merge that is correct in both directions here: taking `advanced` alone would
+    // discard an override another writer recorded while this advance was in flight, and taking
+    // `stored` alone would discard this advance's own mark — leaving fixture content in stageOutputs
+    // with an empty ledger, which is exactly the state the publish gate and the learning recorder read
+    // to protect against. Omitted entirely when both are empty, so an ordinary run's record is
+    // unchanged.
+    //
+    // retryNode's subtraction is unaffected: it runs inside withRunLock and saves through the normal
+    // store path, not through this merge.
+    ...((stored.defaultedNodeIds ?? []).length || (advanced.defaultedNodeIds ?? []).length
+      ? { defaultedNodeIds: [...new Set([...(stored.defaultedNodeIds ?? []), ...(advanced.defaultedNodeIds ?? [])])] }
+      : {}),
     updatedAt: advanced.updatedAt
   };
 };

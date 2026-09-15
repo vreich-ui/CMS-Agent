@@ -38,6 +38,12 @@ export function nodeRunStatus(run: Run, nodeId: string, order: string[]): NodeRu
   if (run.status === 'completed') return 'completed';
   const ci = order.indexOf(run.cur ?? '');
   if (i !== -1 && ci !== -1 && i < ci) return 'completed';
+  // REVIEW FIX (W7) — a node this order does not contain is UNKNOWN, not current. `i === ci` was true
+  // whenever BOTH were -1, so a workflow with no phase config (W7's generic card for a registered id
+  // the presentation catalog has never heard of) painted every node in the rail with the run's own
+  // status: eighteen rows all reading "running". It also made `dim` — which keys on 'queued' — never
+  // true, so "show unengaged" silently stopped filtering.
+  if (i === -1 || ci === -1) return 'queued';
   if (i === ci) {
     if (run.status === 'failed') return 'failed';
     if (run.status === 'cancelled') return 'cancelled';

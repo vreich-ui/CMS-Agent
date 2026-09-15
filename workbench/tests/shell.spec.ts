@@ -18,7 +18,9 @@ test('shell renders nav, workflow switcher, and both themes', async ({ page }) =
 
   await page.locator('#wfsel').click();
   await expect(page.locator('#wfmenu')).toHaveClass(/open/);
-  await expect(page.locator('#wfmenu button')).toHaveCount(4);
+  // W7 — 6 registered workflows + the planned entry (was 3 + planned). The switcher lists what the
+  // server actually runs, not the three the presentation catalog happens to describe.
+  await expect(page.locator('#wfmenu button')).toHaveCount(7);
   await page.keyboard.press('Escape');
 
   await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));

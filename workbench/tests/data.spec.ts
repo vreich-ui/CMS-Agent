@@ -22,8 +22,11 @@ test('data demo lists workflows and runs from fixtures', async ({ page }) => {
   await expect(root.locator('.pagewrap .pagehead h1')).toHaveText('Data layer demo');
 
   // Workflow cards: one .card per workflow, each naming its node count.
+  // W7 — SIX, not three. verbs.workflowList stopped returning a hardcoded catalog and now returns every
+  // workflow the server reports as registered (workspace_get_graph's registeredWorkflowIds); the three
+  // beyond the presentation catalog get generic cards. Three of the six used to be invisible here.
   const workflowCards = root.locator('.card').filter({ has: page.locator('.chip', { hasText: 'nodes' }) });
-  await expect(workflowCards).toHaveCount(3, { timeout: 10_000 });
+  await expect(workflowCards).toHaveCount(6, { timeout: 10_000 });
   await expect(workflowCards.first().locator('.chip')).toContainText('nodes');
 
   // Runs table: fixtures carry 39 runs, well over the required 15. Poll

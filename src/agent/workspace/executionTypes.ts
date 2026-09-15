@@ -1,3 +1,4 @@
+import type { OutputProvenance, RunOutputMode } from "./defaultOutput.js";
 // R-18 — "paused" exists because "blocked" had come to mean three unrelated things: a publish-approval
 // hold (approvalsRequired populated), a budget hold (budgetBlock populated), and an operator pressing
 // pause (neither populated). An operator-paused run was therefore only distinguishable from a
@@ -130,6 +131,12 @@ export type NodeExecutionState = {
     model: string;
     capturedAt: string;
   };
+  // Where this node's output came from when a dispatch did NOT produce it: a stored defaultOutput
+  // ("default_output") or an operator's run-scoped stage.save_output ("operator_override"). Absent on
+  // every node a model actually ran, which is what makes its PRESENCE the honest signal: a reader
+  // never has to infer "was this real" from durationMs or a missing usage record. See
+  // defaultOutput.ts; the run-level ledger of the same fact is run.defaultedNodeIds.
+  outputProvenance?: OutputProvenance;
   // Set when an operator explicitly retried a node the conductor had skipped: the retry IS the
   // operator saying "run this one", so the predicate is not re-evaluated on the next dispatch. Durable
   // (a retry that only cleared the skip record would be re-skipped immediately, forever).
@@ -379,6 +386,18 @@ export type WorkflowExecutionRecord = {
   // The pre-dispatch halt reads this field, never the model's provenance labels.
   economicDecision?: EconomicDecision;
   dryRun: true;
+  // W2 — HOW THIS RUN TREATS STORED NODE DEFAULTS, fixed at start_dry_run and persisted here rather
+  // than passed per call, for the same determinism reason publishingPolicySnapshot is snapshotted: a
+  // continuation tick in another process advances this run with no memory of the call that started it,
+  // and must reach the identical decision. Absent means "live" — every run that already exists.
+  outputMode?: RunOutputMode;
+  // W2 — THE LEDGER THE PUBLISH GATE AND THE LEARNING RECORDER READ. Every node this run completed
+  // from a stored default or an operator override, appended once, never removed for the life of the
+  // run (a retry that genuinely re-runs the node removes its id — see executor.retryNode — because
+  // the fixture no longer contributed anything; nothing else may). Non-empty on a run with
+  // dryRun === false is a hard publish refusal (gate.publishing.defaulted_upstream): fixture content
+  // never reaches a live site. Absent and empty mean the same thing.
+  defaultedNodeIds?: string[];
   executionMode?: "mock" | "openai";
   // Monotonic revision used for optimistic concurrency control. A read carries the stored `rev`;
   // a save only succeeds when the stored `rev` still matches, then increments it. This makes the

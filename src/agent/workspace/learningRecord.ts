@@ -115,6 +115,11 @@ export type LearningObservationsOutput = {
   assumptions: string[];
   unresolvedQuestions: string[];
   notes: string[];
+  // W2 — the nodes this record DELIBERATELY says nothing about, because they were completed from a
+  // stored default or an operator override rather than run. Present only when the run has any, so an
+  // ordinary record is byte-for-byte what it was. Stating the omission is the whole point: a reader
+  // must never have to work out from a short nodeFacts array that four nodes were fixtures.
+  defaultedNodeIds?: string[];
   // Present only when the run's own stageOutputs carry that workflow's ancestor artifacts — absent
   // (not null, not a placeholder) on a publishing_conductor run, which produces neither.
   captureFacts?: CaptureLearningFacts;
@@ -130,9 +135,17 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
 // Per-node facts in the run record's own node order (which is the conductor's canonical order), with
 // the usage ledger's per-node cost joined on. A node with no usage record and a completed status is
 // reported as deterministic — that is a FACT of the ledger, not an inference about how it ran.
-export function buildNodeFacts(run: Pick<WorkflowExecutionRecord, "nodes">, usage?: ModelUsageSummary): NodeRunFact[] {
+export function buildNodeFacts(run: Pick<WorkflowExecutionRecord, "nodes" | "defaultedNodeIds">, usage?: ModelUsageSummary): NodeRunFact[] {
+  // W2 — EXCLUDED, not reported as deterministic. A node completed from a stored default or an
+  // operator override (defaultOutput.ts) did not run: it has no duration worth recording, no cost, and
+  // — the part that matters — no outcome that could honestly be learned from. Leaving it in would file
+  // a fixture's shape as evidence, and the `deterministic: true` line below would actively mislabel it
+  // (it has no usage record for the same reason a deterministic engine path has none, which is where
+  // the resemblance ends). The run-level record says how many were excluded; see
+  // buildLearningObservations' defaultedNodeIds field, so the omission is never silent.
+  const defaulted = new Set(run.defaultedNodeIds ?? []);
   return run.nodes
-    .filter((node) => node.status !== "queued")
+    .filter((node) => node.status !== "queued" && !defaulted.has(node.nodeId))
     .map((node) => {
       const bucket = usage?.byNode?.[node.nodeId];
       return {
@@ -412,7 +425,7 @@ function describeCloneFacts(facts: CloneLearningFacts | undefined): string[] {
 }
 
 export type LearningRecordSources = {
-  run: Pick<WorkflowExecutionRecord, "runId" | "status" | "nodes" | "stageOutputs" | "approvalsRequired" | "operatorPublishDecision" | "budgetBlock" | "errors">;
+  run: Pick<WorkflowExecutionRecord, "runId" | "status" | "nodes" | "stageOutputs" | "approvalsRequired" | "operatorPublishDecision" | "budgetBlock" | "errors" | "defaultedNodeIds">;
   // Omitted when the usage ledger could not be read; cost fields then report null (never zero — an
   // unread ledger is "unknown", and conflating it with "$0" is exactly the fabrication class this
   // program exists to remove).
@@ -438,7 +451,14 @@ export function buildLearningObservations(sources: LearningRecordSources): Learn
     ? { actualUsd: round2(usage.actualCostUsdEstimate), estimatedUsd: round2(usage.estimatedCostUsdEstimate), totalUsd: round2(usage.totalCostUsdEstimate), recordCount: usage.recordCount, source: "usage ledger (summarizeModelUsage over this runId) — measured, never estimated by a model" }
     : { actualUsd: null, estimatedUsd: null, totalUsd: null, recordCount: null, source: `usage ledger unavailable (${sources.usageError ?? "no reason reported"}); cost is reported as unknown rather than as zero` };
 
+  // W2 — named before anything else, because every count below it is a count over the nodes that
+  // REALLY RAN, and a reader who learns that fact after the numbers has already misread them.
+  const defaultedNodeIds = [...(run.defaultedNodeIds ?? [])];
+
   const observations = [
+    ...(defaultedNodeIds.length
+      ? [`${defaultedNodeIds.length} node(s) in this run were completed from a stored default output or an operator override rather than run, and are EXCLUDED from every fact below: ${defaultedNodeIds.join(", ")}. Nothing in this record describes what those nodes would have produced, and no lesson here may be attributed to them.`]
+      : []),
     `Run ${run.runId} ended with status ${run.status}: ${completed.length} node(s) completed, ${blocked.length} blocked, ${failed.length} failed, of ${nodeFacts.length} that were dispatched or seeded.`,
     ...(usage
       ? [`Measured model spend for this run: $${cost.actualUsd} actual + $${cost.estimatedUsd} estimated across ${usage.recordCount} usage record(s). ${deterministic.length} completed node(s) produced NO usage record at all — they ran on deterministic engine paths at $0.`]
@@ -467,10 +487,14 @@ export function buildLearningObservations(sources: LearningRecordSources): Learn
     gateEvents,
     cost,
     blockers,
+    ...(defaultedNodeIds.length ? { defaultedNodeIds } : {}),
     assumptions: [
       "Every statement here is a value read from the run record or the model-usage ledger; nothing is inferred, summarized by a model, or estimated.",
       "A completed node with no usage record is reported as having run deterministically — that is a property of the ledger, which deterministic engine paths deliberately never write to (the R-20 rule: a $0 event stays $0).",
-      "Blocked nodes are recorded as safety states, not failures: the publish gates are designed to refuse."
+      "Blocked nodes are recorded as safety states, not failures: the publish gates are designed to refuse.",
+      ...(defaultedNodeIds.length
+        ? ["Nodes completed from a stored default output or an operator override are excluded from nodeFacts and from every count in this record: they did not run, so there is no measured outcome to report and nothing about them may be learned. They are listed by id in defaultedNodeIds."]
+        : [])
     ],
     unresolvedQuestions: [
       ...(failed.length ? [`Why did ${failed.map((fact) => fact.nodeId).join(", ")} fail? The record carries the error codes; root cause is not inferable from the run record alone.`] : []),

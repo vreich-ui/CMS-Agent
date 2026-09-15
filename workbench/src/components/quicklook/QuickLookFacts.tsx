@@ -39,6 +39,13 @@ export function QuickLookFacts({ nodeId, workflowId }: { nodeId: string; workflo
   const nodeQ = useNode(nodeId);
   // W4 — the "last run" line reports what the most recent run recorded FOR THIS NODE, which
   // needs node states: `detail: 'full'`, over the newest few runs rather than a full page.
+  //
+  // W5 kept `detail: 'full'` HERE, deliberately, while removing it from the rail. The measured
+  // starvation was first PAINT: the rail and Dock/Drive firing two identical 5x1.2MB list calls at
+  // the same instant, both aborting at 25s with the server still working on them. This popover opens
+  // on demand, one node at a time, and is not in that path — so dropping `full` here would buy no
+  // load back and would silently delete the duration figure on the line below, because a summary row
+  // carries per-node STATUS (nodeStatuses) and no timings at all.
   const runsQ = useRuns(workflowId ? { workflowId, limit: 8, detail: 'full' as const } : {}, {
     enabled: Boolean(workflowId),
   });

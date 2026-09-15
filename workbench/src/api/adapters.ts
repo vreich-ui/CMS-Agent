@@ -159,6 +159,10 @@ export function toNode(raw: RawWorkflowNode): WorkflowNode {
     requiredInputs: raw.requiredInputs,
     status: raw.status,
     updatedAt: raw.updatedAt,
+    // W6 — carried through, not just counted. `fan` is this array's length and was previously the only
+    // thing that survived the adapter, so any surface needing to know WHICH nodes feed this one had
+    // nothing to read.
+    deps: raw.dependsOn,
   };
 }
 
@@ -189,6 +193,8 @@ export interface RawRun {
   updatedAt?: string;
   completedAt?: string | null;
   nodes: RawRunNode[];
+  /** W4 — run-level ledger of nodes completed without running. Absent on an ordinary run. */
+  defaultedNodeIds?: string[];
   errors: string[];
   dryRun: boolean;
   executionMode: string;
@@ -207,6 +213,26 @@ export interface RawRun {
   failedCount?: number;
   errorCount?: number;
   artifactCount?: number;
+  // W5 — per-node status on a SUMMARY row, one letter each, read straight from the run index
+  // (RUN_INDEX_NODE_STATUS_CODES, server-side). This is what lets the rail's failure chips and
+  // QuickLook's per-node facts stop asking for `detail: "full"` — five run RECORDS, up to 1.2 MB
+  // each, twice per paint, for what is one character per node.
+  nodeStatuses?: Record<string, string>;
+  failedNodeIds?: string[];
+}
+
+// The server's own letter codes (ExecutionRepository.RUN_INDEX_NODE_STATUS_CODES), inverted. An
+// unrecognised letter maps to nothing and that node is simply omitted: a missing chip is honest, a
+// chip labelled with a guess is not.
+const RUN_INDEX_STATUS_BY_CODE: Record<string, string> = { c: 'completed', f: 'failed', b: 'blocked', s: 'skipped', q: 'queued', r: 'running', x: 'cancelled' };
+
+/** The node's `outputProvenance.source`, narrowed. Anything unrecognised reads as absent rather than
+ *  as a marker whose meaning this build does not know. */
+function readOutputSource(node: RawRunNode): 'default_output' | 'operator_override' | undefined {
+  const provenance = node.outputProvenance;
+  if (!provenance || typeof provenance !== 'object') return undefined;
+  const source = (provenance as { source?: unknown }).source;
+  return source === 'default_output' || source === 'operator_override' ? source : undefined;
 }
 
 /** Cost/budget come from a separate verb (`workflow_get_run_cost`) — the
@@ -244,13 +270,27 @@ export function toRun(raw: RawRun, cost?: RawRunCostLedger): Run {
   // workflow_get_run's record) carries the array. Prefer the counts when the row states them and
   // derive from the array otherwise, so one adapter reads both shapes without either surface
   // having to know which it was handed.
-  const nodes = raw.nodes ?? [];
+  // W5 — a summary row now carries per-node STATUS without carrying per-node records, so synthesize
+  // the array every existing consumer already reads rather than teaching each of them a second shape.
+  // Timings are genuinely absent here and are reported as absent (null), never as zero: a summary row
+  // never measured anything, and a fabricated 0ms would read as "this node was instant".
+  const synthesized = !raw.nodes?.length;
+  const nodes: RawRunNode[] = raw.nodes?.length
+    ? raw.nodes
+    : Object.entries(raw.nodeStatuses ?? {}).flatMap(([nodeId, code]) => {
+        const status = RUN_INDEX_STATUS_BY_CODE[code];
+        return status ? [{ nodeId, status } as RawRunNode] : [];
+      });
   return {
     id: raw.runId,
     wf: raw.workflowId,
     proj: raw.projectId,
     status: raw.status as RunStatus, // live values match RunStatus's members exactly (verified)
-    cur: raw.currentNodeId ?? deriveCurrentNodeId(nodes),
+    // REVIEW FIX — deriveCurrentNodeId walks the array POSITIONALLY, and a synthesized array is in JSON
+    // key order, which is not topological. A summary row lacking currentNodeId used to report null
+    // (empty array) and would now report a plausible-looking but arbitrary node. Null is the honest
+    // answer for a row that does not state one.
+    cur: raw.currentNodeId ?? (synthesized ? null : deriveCurrentNodeId(nodes)),
     started: shortDate(raw.startedAt),
     dur: durationText(raw.startedAt, raw.completedAt ?? raw.updatedAt ?? null),
     cost: cost?.totalCostUsdEstimate ?? 0,
@@ -273,7 +313,15 @@ export function toRun(raw: RawRun, cost?: RawRunCostLedger): Run {
       durationMs: typeof n.durationMs === 'number' ? n.durationMs : null,
       warnings: Array.isArray(n.warnings) ? n.warnings : undefined,
       produces: Array.isArray(n.produces) ? n.produces : undefined,
+      // W4 — read ONLY from the node's own provenance stamp (the compact run view and the full record
+      // both carry it). Never inferred from durationMs, and never from the run-level ledger:
+      // `defaultedNodeIds` holds BOTH defaults and operator overrides, so falling back to it labelled
+      // every override as `default_output` — the ⏭ marker whose title says "it did not run, no model
+      // was called" — which inverts the two-marker design the rail exists to express. A summary row
+      // carries no provenance, so a node on one is honestly unmarked rather than confidently mislabelled.
+      outputSource: readOutputSource(n),
     })),
+    defaultedNodeIds: raw.defaultedNodeIds,
     requestId: raw.requestId,
   };
 }

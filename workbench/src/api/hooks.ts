@@ -28,7 +28,23 @@ type Options<T> = Omit<UseQueryOptions<T>, 'queryKey' | 'queryFn'>;
 // ================================== reads =====================================
 
 export function useWorkflows(options?: Options<Workflow[]>) {
-  return useQuery({ queryKey: ['workflows'], queryFn: verbs.workflowList, ...options });
+  return useQuery({
+    queryKey: ['workflows'],
+    queryFn: verbs.workflowList,
+    // W7 — workflowList stopped being a synchronous Promise.resolve over a hardcoded catalog and
+    // became a real round trip (it asks the server which workflows are registered). This hook is on
+    // the boot path of EVERY screen, so without these two lines the whole app would gain a round trip
+    // before first paint — the precise regression W5 was fixing, reintroduced one layer up.
+    //
+    // placeholderData is the presentation catalog: the three workflows this build already knew, shown
+    // instantly, with the registered-only ones appearing when the call lands. It is a placeholder and
+    // not initialData deliberately — react-query still treats the query as pending and fetches, so the
+    // stale set can never become the permanent answer.
+    placeholderData: verbs.WORKFLOW_CATALOG_FALLBACK,
+    // Registered workflows change on deploy, not during a session.
+    staleTime: 10 * 60_000,
+    ...options,
+  });
 }
 
 export function useNodes(workflowId?: string, options?: Options<WorkflowNode[]>) {
@@ -98,7 +114,12 @@ export type RunFilters = Omit<verbs.RunListArgs, 'cursor'>;
 export function useRuns(filters: RunFilters = {}, options?: Options<Run[]>) {
   return useQuery({
     queryKey: ['runs', filters],
-    queryFn: () => verbs.workflowListRuns(filters),
+    queryFn: ({ signal }) => verbs.workflowListRuns(filters, { signal }),
+    // W5 — NO RETRY ON A LISTING. react-query's default retried a list call once, so a 25s timeout
+    // became a 50s hold AND a second full-fleet request landing on a server still working on the
+    // first (an aborted HTTP request does not stop the handler; only the signal below does). A stale
+    // listing is a far better failure than a server the panels are DDoSing themselves out of.
+    retry: 0,
     ...options,
   });
 }
@@ -116,7 +137,9 @@ export function useRuns(filters: RunFilters = {}, options?: Options<Run[]>) {
 export function useRunsPage(filters: RunFilters = {}, options?: Options<verbs.RunPage>) {
   return useQuery({
     queryKey: ['runsPage', filters],
-    queryFn: () => verbs.workflowListRunsPage(filters),
+    queryFn: ({ signal }) => verbs.workflowListRunsPage(filters, { signal }),
+    // W5 — same reasoning as useRuns above: a listing that times out must not double the load.
+    retry: 0,
     // REVIEW FIX — a filter change mints a new key; without this the screen falls back to its
     // loading branch, which on the Runs screen unmounts the filter controls themselves for the
     // length of the round trip (8-16s on this plane). Keep showing the previous answer, dimmed
@@ -140,9 +163,14 @@ export function useRunsPage(filters: RunFilters = {}, options?: Options<verbs.Ru
 export function useRunsPages(filters: RunFilters = {}) {
   return useInfiniteQuery({
     queryKey: ['runsPages', filters],
-    queryFn: ({ pageParam }) => verbs.workflowListRunsPage({ ...filters, ...(pageParam ? { cursor: pageParam } : {}) }),
+    queryFn: ({ pageParam, signal }) => verbs.workflowListRunsPage({ ...filters, ...(pageParam ? { cursor: pageParam } : {}) }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor,
+    // REVIEW FIX (W5) — this is the LARGEST listing in the app (the whole Runs screen) and it was the
+    // one that got neither the abort passthrough nor retry:0, so the exact failure the W5 comments
+    // describe — a 25s timeout becoming a 50s hold plus a second full-fleet request landing on a
+    // server still working on the first — was unchanged here.
+    retry: 0,
     // See useRunsPage — the same reasoning, and the app-wide default does not reach an infinite
     // query's placeholder in a way this screen can rely on.
     placeholderData: keepPreviousData,

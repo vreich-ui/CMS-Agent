@@ -28,6 +28,9 @@ export type NodeTab =
   | 'tools'
   | 'skills'
   | 'schemas'
+  // W4 — beside Schemas deliberately: a default output IS an instance of the node's output schema, and
+  // an operator authoring one is reading the schema next to it.
+  | 'default'
   | 'model'
   | 'deps'
   | 'history'
@@ -80,6 +83,12 @@ export interface WorkflowNode {
   requiredInputs?: string[];
   status?: string;
   updatedAt?: string;
+  /** W6 — the node's UPSTREAM node ids. `fan` above has always carried the COUNT of these, which is
+   *  all the rail needed; the replay needs the ids themselves, to hand the node exactly its declared
+   *  upstream outputs from a past run and nothing else. Optional because a node built from a source
+   *  that does not state dependsOn has none to report — and a replay with no upstream is refused
+   *  rather than run against an empty input. */
+  deps?: string[];
 }
 
 export interface ToolPolicyCounts {
@@ -121,6 +130,10 @@ export interface RunNode {
   durationMs?: number | null;
   warnings?: string[];
   produces?: string[];
+  /** W4 — where this node's output came from when a model did NOT produce it: a stored node default,
+   *  or an operator's run-scoped override. Absent on every node that actually ran, which is what makes
+   *  its PRESENCE the honest signal — no surface has to infer "was this real" from a 0ms duration. */
+  outputSource?: 'default_output' | 'operator_override';
 }
 
 export interface Run {
@@ -142,6 +155,10 @@ export interface Run {
    *  denominator of "x/y nodes", which used to require the whole array. */
   total: number;
   stall?: boolean;
+  /** W4 — every node in this run completed from a stored default or an operator override, as the run
+   *  record itself reports it. Empty on an ordinary run. A non-empty list on a LIVE run is why that
+   *  run can never reach a publishing node. */
+  defaultedNodeIds?: string[];
   /** P2-05 — per-node timings/status off the run record. Empty on a list
    * row that carried none (every `detail: "summary"` row); never fabricated.
    * A surface that genuinely needs per-node detail across a LIST asks for

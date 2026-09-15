@@ -14,14 +14,14 @@
 import { useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNodes, useRubrics, useRun, useRuns, useWorkflows } from '../../api/hooks';
-import { changesListEvents, nodeListOutputs } from '../../api/verbs';
+import { changesListEvents } from '../../api/verbs';
 import { Dot } from '../../components/primitives';
 import { Skeleton } from '../../components/Skeleton';
 import { QueryError } from '../../components/QueryError';
 import { QuickLookPopover } from '../../components/quicklook/QuickLookPopover';
 import { useNodeQuickLook } from '../../components/quicklook/useNodeQuickLook';
 import { useStore } from '../../store';
-import type { Run, WorkflowNode } from '../../types';
+import type { Run, RunNode, WorkflowNode } from '../../types';
 import { nodeErrorFrequency, nodeRunStatus, orderedNodes, type NodeRunStatus } from './helpers';
 
 interface VisibleRow {
@@ -68,10 +68,10 @@ function RailRow({
   selected,
   current,
   wf,
-  runId,
   evalScore,
   errorFreq,
   learned,
+  runNodeState,
   onSelect,
   rowRef,
 }: {
@@ -82,30 +82,33 @@ function RailRow({
   selected: boolean;
   current: boolean;
   wf: string;
-  runId: string | null;
   evalScore: number | null | undefined;
   errorFreq: number;
   learned: boolean;
+  /** This node's slice of the BOUND run, when one is bound — the source of the output-provenance
+   *  markers below. Null when no run is bound or the run has no state for this node. */
+  runNodeState: RunNode | null;
   onSelect: (id: string) => void;
   rowRef: (el: HTMLButtonElement | null) => void;
 }) {
   const ql = useNodeQuickLook(nid, wf);
 
-  // Override marker — only worth asking about for a node this run has
-  // actually completed (see nodeListOutputs's mock, which needs both
-  // nodeId AND runId to answer anything at all — an uncompleted node can't
-  // carry an override yet regardless). Silent on any failure: a missing
-  // signal here must read as "no marker", never as an error banner on the
-  // whole rail.
-  const overrideQ = useQuery({
-    queryKey: ['nodeOutputs', nid, runId],
-    queryFn: () => nodeListOutputs({ nodeId: nid, runId: runId ?? undefined }),
-    enabled: Boolean(runId) && st === 'completed',
-    staleTime: 30_000,
-    retry: false,
-  });
-  const overrideList = Array.isArray(overrideQ.data) ? overrideQ.data : (overrideQ.data?.outputs ?? []);
-  const hasOverride = overrideQ.isSuccess && overrideList.some((e) => (e as { type?: string })?.type === 'operator_override');
+  // W4 — THE MARKER NOW COMES FROM THE RUN, not from a per-node verb call.
+  //
+  // This used to fire `node_list_outputs` once PER NODE (25 queries on a publishing run) purely to ask
+  // whether that node carried an operator override — the same "the rail is asking the server a
+  // question per row" shape W5 removed from the failure chips. The run record already answers it: each
+  // node state carries `outputProvenance` (executor.applyNonDispatchOutput), which the compact run view
+  // and the adapter now carry through as `outputSource`. Zero extra requests, and it works for a node
+  // in any state rather than only a completed one.
+  //
+  // TWO MARKERS, NOT ONE, and deliberately distinct: an OVERRIDE is a value an operator supplied for
+  // this run only; a DEFAULT is the node's own stored value, reused across runs. They have identical
+  // consequences (never published live, never learned from) and entirely different causes, and an
+  // operator looking at a run needs to know which one they are looking at.
+  const outputSource = runNodeState?.outputSource;
+  const hasOverride = outputSource === 'operator_override';
+  const hasDefault = outputSource === 'default_output';
 
   return (
     <div style={{ position: 'relative' }}>
@@ -139,8 +142,13 @@ function RailRow({
           </span>
         )}
         {hasOverride && (
-          <span className="chip-override" title="carries an operator output override in this run">
+          <span className="chip-override" title="carries an operator output override in this run — a value you supplied for this run, not something the node produced">
             ⎘
+          </span>
+        )}
+        {hasDefault && (
+          <span className="chip-override" title="completed from this node's STORED DEFAULT output — it did not run, no model was called. This run can never publish live, and this node is excluded from its learning record.">
+            ⏭
           </span>
         )}
         {n && n.fan > 1 && (
@@ -177,10 +185,19 @@ export function Rail() {
   const nodesQ = useNodes(wf);
   // W1 — this panel renders a handful of "recent runs · this workflow" rows; ask the
   // server for exactly that rather than taking the default 20-row page and slicing.
-  // W4 — `detail: 'full'` because the rail's per-node failure chip (nodeErrorFrequency) reads
-  // each run's node states, which a summary row does not carry. Five scoped rows is a cheap
-  // exception to the default, not a return to fetching node arrays for the fleet.
-  const wfRunsQ = useRuns({ workflowId: wf, limit: 5, detail: 'full' });
+  // W5 — `detail: 'full'` REMOVED. It was fetching five whole run records (up to 1.2 MB each) for
+  // what the failure chips actually need: one status per node. A summary row now carries
+  // `nodeStatuses` straight off the run index, which the adapter expands into the same nodes[] array
+  // nodeErrorFrequency already reads, so the chips are unchanged and the listing opens no run blobs
+  // at all. Measured cause of the 19-25s `workspace_get_node` under rail load — with Dock/Drive
+  // firing an identical call at the same instant, both aborting at 25s, and the server still working
+  // on the aborted requests.
+  //
+  // The filter object is now BYTE-IDENTICAL to DriveCenter's and Dock's, so react-query's
+  // ['runs', filters] key dedupes those three to ONE in-flight request instead of two. QuickLookFacts
+  // is deliberately NOT one of them — it keeps `limit: 8, detail: 'full'` for the duration figure on
+  // its "last run" line, and it opens on demand rather than at first paint.
+  const wfRunsQ = useRuns({ workflowId: wf, limit: 5 });
   const boundRunQ = useRun(runId);
   const rubricsQ = useRubrics();
 
@@ -391,10 +408,15 @@ export function Rail() {
                       selected={node === nid}
                       current={run?.cur === nid}
                       wf={wf}
-                      runId={runId}
                       evalScore={scoreByNode.get(nid)}
                       errorFreq={wfRunsQ.data ? nodeErrorFrequency(wfRunsQ.data, nid) : 0}
                       learned={learned}
+                      // From the BOUND run, not from `run` above — that variable is deliberately null
+                      // outside 'run' mode because it gates the status dots and the dimming, and an
+                      // operator hand-driving a run in 'drive' mode still needs to see that a node was
+                      // completed from a fixture. Provenance is a fact about the run, not about which
+                      // view of it is open.
+                      runNodeState={boundRunQ.data?.nodes.find((rn) => rn.nodeId === nid) ?? null}
                       onSelect={setNode}
                       rowRef={(el) => {
                         rowRefs.current[nid] = el;

@@ -726,6 +726,39 @@ describe("per-project publish execution hooks", () => {
     expect(adapter.calls).toHaveLength(0);
   });
 
+  it("W2 review fix — a run carrying an operator override or a stored default is refused, with every gate green", async () => {
+    // THE HOLE THIS CLOSES. gate.publishing.defaulted_upstream lives in the executor's node-dispatch
+    // path, and publishRun is not that path: it reads run.stageOutputs and publishes. So a live run
+    // whose artifact_plan had been replaced by an operator override — the media-verification gate's own
+    // input — could be published here with nothing to stop it. Same shape as the mock refusal above,
+    // and checked in the same place, before any gate a prompt edit or a seeded output could influence.
+    const ctx = await seedRun(textBody, "dr-lurie");
+    const run = (await ctx.executionRepository.getRun(ctx.runId))!;
+    await ctx.executionRepository.saveRun({ ...run, defaultedNodeIds: ["artifact_plan"] });
+
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+
+    expect(result.published).toBe(false);
+    expect(result.mode).toBe("error");
+    if (result.mode === "error") {
+      expect(result.error).toContain("defaulted_upstream_not_publishable");
+      // Names the node, so the remedy (retry it for real) is actionable without opening the run.
+      expect(result.error).toContain("artifact_plan");
+    }
+    // Nothing was attempted against the tenant — the refusal is the record, on its own.
+    expect(adapter.calls).toHaveLength(0);
+  });
+
+  it("W2 review fix — an ordinary run with an empty ledger publishes exactly as before", async () => {
+    // The guard must be inert on every run that did not use a fixture, or it is a regression dressed
+    // up as a safety feature.
+    const ctx = await seedRun(textBody, "dr-lurie");
+    const adapter = fakeCallTool();
+    const result = await publishRun({ runId: ctx.runId, requestId: REQUEST_ID, approved: true, live: true, readiness: READY }, { ...ctx, env: ENABLED_ENV, callTool: adapter.fn });
+    expect(result.published).toBe(true);
+  });
+
   it("never calls release_to_production in any path — publishRun never releases (board B2)", async () => {
     const platformCtx = await seedRun(platformTextBody, "platform");
     const platformAdapter = fakePlatformCallTool();

@@ -33,12 +33,15 @@ test('library screen renders workflow cards from live data, both themes', async 
   );
 
   // Mock verbs carry an artificial delay, so poll rather than one-shot count.
+  // W7 — 6 registered workflows + the planned card (was 3 + planned). Polling matters more than it did:
+  // useWorkflows paints the 3 catalogued ones instantly from placeholder data and the other 3 arrive
+  // when the registered-ids call lands, so a one-shot count would race that fill-in.
   await expect(async () => {
-    expect(await page.locator('.cards .wfcard').count()).toBe(4);
+    expect(await page.locator('.cards .wfcard').count()).toBe(7);
   }).toPass({ timeout: 10_000 });
 
-  // 3 real workflow cards + the planned card.
-  await expect(page.locator('.cards .wfcard:not(.planned)')).toHaveCount(3);
+  // 6 real workflow cards + the planned card.
+  await expect(page.locator('.cards .wfcard:not(.planned)')).toHaveCount(6);
   const planned = page.locator('.cards .wfcard.planned');
   await expect(planned).toHaveCount(1);
   await expect(planned.locator('h3')).toHaveText('Foundation-charity conductor');
@@ -92,7 +95,8 @@ test('library screen renders workflow cards from live data, both themes', async 
 
   // Back to the library for the theme screenshots.
   await page.locator('nav.main button', { hasText: 'Workflows' }).click();
-  await expect(page.locator('.cards .wfcard')).toHaveCount(4);
+  // W7 — 6 registered workflows + the planned card.
+  await expect(page.locator('.cards .wfcard')).toHaveCount(7);
 
   await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
   await page.emulateMedia({ colorScheme: 'light' });

@@ -16,6 +16,7 @@ import { LearningTab } from './tabs/LearningTab';
 import { ModelTab } from './tabs/ModelTab';
 import { PromptTab } from './tabs/PromptTab';
 import { SchemasTab } from './tabs/SchemasTab';
+import { DefaultOutputTab } from './tabs/DefaultOutputTab';
 import { SkillsTab } from './tabs/SkillsTab';
 import { ThisRunTab } from './tabs/ThisRunTab';
 import { ToolsTab } from './tabs/ToolsTab';
@@ -26,6 +27,7 @@ const TABDEFS: Array<[NodeTab, string]> = [
   ['tools', 'Tools'],
   ['skills', 'Skills'],
   ['schemas', 'Schemas'],
+  ['default', 'Default output'],
   ['model', 'Model & limits'],
   ['deps', 'Dependencies'],
   ['history', 'History'],
@@ -164,6 +166,7 @@ export function Center() {
       {tab === 'tools' && <ToolsTab node={node} />}
       {tab === 'skills' && <SkillsTab node={node} nodeId={nodeId} />}
       {tab === 'schemas' && <SchemasTab nodeId={nodeId} />}
+      {tab === 'default' && <DefaultOutputTab node={node} nodeId={nodeId} />}
       {tab === 'model' && <ModelTab node={node} />}
       {tab === 'deps' && <DepsTab node={node} />}
       {tab === 'history' && <HistoryTab nodeId={nodeId} />}

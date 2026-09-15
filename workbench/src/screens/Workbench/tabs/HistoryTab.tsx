@@ -54,6 +54,7 @@ const KIND_TAB: Record<ChangeKind, NodeTab> = {
   skills: 'skills',
   inputSchema: 'schemas',
   outputSchema: 'schemas',
+  defaultOutput: 'default',
   model: 'model',
 };
 

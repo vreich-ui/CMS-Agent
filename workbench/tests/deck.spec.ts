@@ -170,8 +170,9 @@ test.describe('workflow cards — live facts', () => {
     await page.goto('/');
     await goToWorkflows(page);
 
+    // W7 — 6 registered workflows + the planned card (was 3 + planned).
     await expect(async () => {
-      expect(await page.locator('.cards .wfcard').count()).toBe(4);
+      expect(await page.locator('.cards .wfcard').count()).toBe(7);
     }).toPass({ timeout: 10_000 });
 
     const pub = cardFor(page, 'Publishing conductor');

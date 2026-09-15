@@ -27,6 +27,7 @@ import * as verbs from '../../api/verbs';
 import { ActionCancelledError } from '../../api/confirmAction';
 import { IS_READ_ONLY } from '../../api/client';
 import {
+  invalidateRunLists,
   useNodes,
   useRetryNode,
   useRun,
@@ -436,6 +437,7 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
 
   const [lastStepped, setLastStepped] = useState<LastStepped | null>(null);
   const [stepping, setStepping] = useState(false);
+  const [pushing, setPushing] = useState(false);
   const [bpVersion, setBpVersion] = useState(0);
 
   useEffect(() => {
@@ -459,6 +461,38 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
     return raw?.dependsOn ?? [];
   }, [graphQ.data, nextNodeId]);
 
+  // W4 — does this node have a stored default to push through? Read per node, cheap, and `retry: false`
+  // so an unreachable read leaves the button disabled with an honest reason rather than retrying behind
+  // a control an operator is looking at.
+  const nextDefaultQ = useQuery({
+    queryKey: ['nodeDefaultOutput', nextNodeId],
+    queryFn: () => verbs.workspaceGetNodeDefaultOutput(nextNodeId as string),
+    enabled: Boolean(nextNodeId),
+    retry: false,
+  });
+  const nextHasDefault = Boolean(nextDefaultQ.data);
+
+  async function handlePushThrough(nodeId: string, triggerEl: HTMLElement | null) {
+    if (!run || pushing) return;
+    setNextConfirmTrigger(triggerEl);
+    setPushing(true);
+    try {
+      await verbs.workflowPushThroughWithDefault({ runId: run.id, nodeId });
+      // No optimistic patch here, unlike handleStep: pushing a node through can legitimately end the
+      // run at the defaulted-upstream publish gate, so guessing the next state would show an operator
+      // a run advancing that has in fact just stopped. Re-read instead.
+      invalidateRunLists(qc);
+      void qc.invalidateQueries({ queryKey: ['run', run.id] });
+      setLastStepped({ nodeId, at: Date.now() });
+      toast('Pushed through', `${nodeId} completed from its stored default — no model call.`);
+    } catch (err) {
+      if (err instanceof ActionCancelledError) return;
+      toast('Push through failed', errMsg(err));
+    } finally {
+      setPushing(false);
+    }
+  }
+
   async function handleStep(triggerEl: HTMLElement | null) {
     if (!run || !run.cur) return;
     const steppedId = run.cur;
@@ -467,10 +501,14 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
     setNextConfirmTrigger(triggerEl);
     setStepping(true);
     try {
+      // REVIEW FIX (W7) — an optimistic patch is only honest when the order actually knows where this
+      // node sits. For a workflow with no phase config, indexOf is -1, nextId is null, and the old
+      // patch stamped {status:'completed', cur:null} on a run that is still going. No position, no
+      // guess: run the step and re-read.
       await optimisticRunControl(
         qc,
         run.id,
-        { status: nextId ? 'running' : 'completed', cur: nextId, done: run.done + 1 },
+        idx >= 0 ? { status: nextId ? 'running' : 'completed', cur: nextId, done: run.done + 1 } : {},
         () => runNextM.mutateAsync({ runId: run.id }),
       );
       setLastStepped({ nodeId: steppedId, at: Date.now() });
@@ -562,6 +600,25 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
             >
               ⎘ Override output…
             </Btn>
+            {/* W4 — PUSH THROUGH WITH DEFAULT. Beside "Override output", and the pairing is the point:
+                an override is a value for THIS run, a default is the node's own stored value reused
+                across runs. Disabled with a reason when the node carries none, rather than offered and
+                then refused — the server would refuse it (default_output_missing) and never silently
+                run the node instead, but making an operator discover that by pressing is poor. */}
+            <Btn
+              disabled={IS_READ_ONLY || !nextHasDefault || pushing}
+              title={
+                IS_READ_ONLY
+                  ? READONLY_REASON_DRIVE
+                  : nextHasDefault
+                    ? `Complete ${run.cur} from its stored default output without running it — no model call, no cost. This run can then never publish live.`
+                    : `${run.cur} has no stored default output. Set one on its Default output tab first.`
+              }
+              onClick={(e) => void handlePushThrough(run.cur as string, e.currentTarget)}
+            >
+              {pushing ? 'Pushing through…' : '⏭ Push through with default'}
+            </Btn>
+
           </div>
         </Card>
       )}

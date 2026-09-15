@@ -45,22 +45,102 @@ import type {
   Workflow,
 } from '../types';
 
+/** W4 — the three ways a run can treat stored node defaults (server: defaultOutput.ts runOutputModes). */
+export type RunOutputMode = 'live' | 'defaults_where_set' | 'defaults_only';
+
+export const OUTPUT_MODE_LABEL: Record<RunOutputMode, string> = {
+  live: 'live',
+  defaults_where_set: 'defaults where set',
+  defaults_only: 'defaults only',
+};
+
 function mutate<T>(verb: string, effect: string, args?: object, danger = false): Promise<T> {
   return confirmAction<T>({ verb, effect, danger }, () => callVerb<T>(verb, args));
 }
 
 // ============================ workflow catalog ================================
-// HANDOFF §6 has no "list workflows" MCP verb — the 3 (+1 planned) conductor
-// workflows are static app config (icon/short/desc marketing copy, per
-// fixtures/README.md), not a live query. This mirrors components/TopBar.tsx's
-// WF_SWITCHER placeholder, which a later WP swaps for this fixture-backed
-// list. Kept Promise-returning so it composes with the same hooks as every
-// other verb, but it never touches callVerb/the broker in either mode.
+// W7 — THE LIST IS NOW THE SERVER'S, NOT THIS FILE'S.
+//
+// This returned Object.values(WORKFLOW_CATALOG): three hardcoded workflows. The workspace has SIX
+// registered (publishing, capture, clone, visual_identity, image_template_revision,
+// pdf_template_studio) and `workspace_get_graph` has always reported all of them in
+// `registeredWorkflowIds`. Three of the six were therefore invisible everywhere the Workbench lists
+// workflows — the Workflows deck, the switcher, the ⌘K picker — with nothing anywhere saying so. An
+// operator could not select a workflow the server would happily run.
+//
+// The catalog keeps its ONE remaining job, the one its own header already scoped it to: presentation
+// (name, icon, blurb, and the editorial phase grouping the rail draws). A registered id the catalog
+// does not describe gets a generic card and a single "ungrouped (live)" phase, exactly as the rail
+// already does for a live node no phase claims — so a new workflow appears the day it is registered,
+// looking plain rather than not appearing at all.
 
 const WORKFLOWS = WORKFLOW_CATALOG;
 
-export const workflowList = (): Promise<Workflow[]> => Promise.resolve(Object.values(WORKFLOWS));
+/** The presentation catalog as a list — useWorkflows' placeholder, so first paint is unchanged. */
+export const WORKFLOW_CATALOG_FALLBACK: Workflow[] = Object.values(WORKFLOW_CATALOG);
 
+/** Title-case a bare id for a workflow the presentation catalog has never heard of. */
+const titleFromWorkflowId = (id: string): string => {
+  const words = id.replace(/[_-]+/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : id;
+};
+
+/**
+ * The generic card for a registered workflow with no presentation config. Deliberately plain and
+ * deliberately HONEST: it claims no phases (its single phase is filled from the live graph by the
+ * rail's existing "ungrouped (live)" path) and no description this file cannot vouch for.
+ */
+const genericWorkflow = (id: string): Workflow => ({
+  id,
+  name: titleFromWorkflowId(id),
+  fn: 'Registered workflow',
+  icon: 'ic-pub',
+  short: 'Registered on the workspace; no presentation config in the Workbench catalog yet.',
+  desc: `${id} is registered and runnable on the workspace. The Workbench has no phase grouping or description for it, so its nodes are listed live and ungrouped.`,
+  phases: [],
+});
+
+/**
+ * Every workflow the server has registered, merged with this file's presentation config.
+ *
+ * Order: catalogued workflows first, in the catalog's own order (the deck's established reading
+ * order), then any additional registered ids alphabetically — so adding a seventh workflow server-side
+ * never reshuffles the six an operator already knows.
+ *
+ * FAILURE BEHAVIOUR. A graph call that fails or a build too old to report `registeredWorkflowIds`
+ * falls back to the catalog alone — today's exact behaviour, three workflows, never an empty list. A
+ * workflow picker that renders nothing is a far worse failure than one that renders a stale set.
+ *
+ * FIRST PAINT. This turned a synchronous Promise.resolve into a round trip, and `useWorkflows` is on
+ * the boot path of every screen — so useWorkflows() seeds itself with the catalog as placeholder data
+ * and caches this answer for the session (hooks.ts). Surfaces paint with the three known workflows
+ * exactly as fast as before, and the registered-only ones appear when this lands.
+ */
+export const workflowList = async (): Promise<Workflow[]> => {
+  let registered: string[] = [];
+  try {
+    // SCOPED TO ONE WORKFLOW ON PURPOSE. `registeredWorkflowIds` rides on every workspace_get_graph
+    // response, and an UNSCOPED call returns the flat store view — every node of every workflow — which
+    // is a large payload to fetch on boot just to read a list of six ids, and exactly the kind of
+    // over-fetch W5 exists to remove. Scoping it to publishing_conductor returns that one workflow's
+    // nodes and the same id list.
+    registered = (await workspaceGetGraph({ workflowId: 'publishing_conductor' })).registeredWorkflowIds ?? [];
+  } catch {
+    registered = [];
+  }
+  const catalogued = Object.values(WORKFLOWS);
+  if (!registered.length) return catalogued;
+  const known = new Set(catalogued.map((wf) => wf.id));
+  // A CATALOGUED workflow the server does NOT report is kept, not dropped: the three original ids are
+  // load-bearing across this app (deep links, saved state, the mock plane), and silently removing one
+  // because a single graph call came back short would break navigation an operator is mid-way through.
+  const extra = registered.filter((id) => !known.has(id)).sort();
+  return [...catalogued, ...extra.map(genericWorkflow)];
+};
+
+/** Presentation config for one workflow, or undefined for a registered id this build has none for.
+ *  Deliberately does NOT fall back to workflowList(): that is a round trip per call, and every caller
+ *  that needs the merged list already holds it from useWorkflows. */
 export const workflowGet = (args: { workflowId: string }): Promise<Workflow | undefined> =>
   Promise.resolve(WORKFLOWS[args.workflowId]);
 
@@ -165,6 +245,9 @@ export interface WorkspaceGraph {
   workflowId?: string;
   nodes: Array<adapters.RawWorkflowNode & { deps?: string[] }>;
   edges: Array<{ from: string; to: string }>;
+  /** W7 — every workflow id the SERVER has registered, which is the only honest answer to "what
+   *  workflows are there". Absent on an older build; see workflowList() for what that degrades to. */
+  registeredWorkflowIds?: string[];
 }
 
 export interface ChangeRecord {
@@ -721,16 +804,21 @@ export interface RunListArgs {
 /** Runs plus the page metadata — see adapters.toRunPage(), which does the reading. */
 export type RunPage = adapters.RunPageView;
 
-export const workflowListRunsPage = async (args: RunListArgs = {}): Promise<RunPage> =>
+// W5 — `opts.signal` is the CALLER'S abort (react-query hands one to every queryFn and fires it when
+// the component unmounts or the key changes). Passed through to the transport, which now races it
+// against its own timeout, so a panel that navigates away actually cancels its listing instead of
+// leaving the server doing full-fleet blob reads for a reader who has gone.
+export const workflowListRunsPage = async (args: RunListArgs = {}, opts?: { signal?: AbortSignal }): Promise<RunPage> =>
   adapters.toRunPage(
-    await callVerb<{ runs: adapters.RawRun[]; page?: adapters.RawRunPage }>('workflow_list_runs', {
-      limit: DEFAULT_RUNS_LIMIT,
-      ...args,
-    }),
+    await callVerb<{ runs: adapters.RawRun[]; page?: adapters.RawRunPage }>(
+      'workflow_list_runs',
+      { limit: DEFAULT_RUNS_LIMIT, ...args },
+      opts,
+    ),
   );
 
-export const workflowListRuns = async (args: RunListArgs = {}): Promise<Run[]> =>
-  (await workflowListRunsPage(args)).runs;
+export const workflowListRuns = async (args: RunListArgs = {}, opts?: { signal?: AbortSignal }): Promise<Run[]> =>
+  (await workflowListRunsPage(args, opts)).runs;
 
 /**
  * `workflow_get_run` wraps `{ run, mode, stall }` — `mode`/`stall` are
@@ -844,6 +932,9 @@ export const workflowStartDryRun = (args: {
   dry?: boolean;
   executionMode?: 'openai' | 'mock';
   requestId?: string;
+  /** W4 — how this run treats stored node defaults, fixed for the run's life. Omitted (or 'live')
+   *  behaves exactly as every run did before defaults existed. */
+  outputMode?: RunOutputMode;
 }): Promise<Run> =>
   // LIVE-VERIFIED CORRECTION (workbench-verb-fixes): this verb, like every
   // other run verb, returns the raw run shape — `mutate<Run>` cast straight
@@ -854,7 +945,9 @@ export const workflowStartDryRun = (args: {
     'workflow_start_dry_run',
     args.dry === false
       ? `Start a LIVE run of ${args.workflowId} against project ${args.projectId} — not a dry run. Real, potentially irreversible actions may be taken depending on where the run stops.`
-      : `Start a dry run of ${args.workflowId} against project ${args.projectId}.`,
+      : `Start a dry run of ${args.workflowId} against project ${args.projectId}${
+          args.outputMode && args.outputMode !== 'live' ? ` in ${OUTPUT_MODE_LABEL[args.outputMode]} mode` : ''
+        }.`,
     args,
     args.dry === false,
   ).then((raw) => adapters.toRun(raw));
@@ -874,6 +967,56 @@ export const workflowRunUntil = (args: { runId: string; nodeId: string }) =>
 
 export const workflowRunNode = (args: { runId: string; nodeId: string }) =>
   mutate<Run | null>('workflow_run_node', `Run node ${args.nodeId} in ${args.runId}.`, args);
+
+// W4 — PUSH THROUGH WITH DEFAULT. Deliberately its own exported verb rather than an optional flag on
+// workflowRunNode above: the confirmAction gate shows the operator a sentence describing what is about
+// to happen, and "run this node" and "complete this node from a stored fixture without running it" are
+// not the same sentence. One function, one honest description.
+export const workflowPushThroughWithDefault = (args: { runId: string; nodeId: string }) =>
+  mutate<Run | null>(
+    'workflow_run_node',
+    `Complete ${args.nodeId} in ${args.runId} from its stored default output WITHOUT running it — no model call, no cost. Downstream nodes will read that stored value as this node's result, and the run is permanently marked as having used a default: it can then never publish on a live run, and this node is excluded from the learning record.`,
+    { ...args, useDefaultOutput: true },
+    true,
+  );
+
+// ======================= W4 — node default output ============================
+
+export interface NodeDefaultOutput {
+  value: unknown;
+  note?: string;
+  updatedAt: string;
+  updatedBy: 'human' | 'agent' | 'system';
+  /** An ISO timestamp when the value last validated against the node's output schema; `null` when it
+   *  was saved with force against a schema it does not satisfy. Absent on a row written before the
+   *  field existed — which is NOT the same as null, and is reported as "unknown", never as invalid. */
+  schemaValidAt?: string | null;
+}
+
+export const workspaceUpdateNodeDefaultOutput = (args: { nodeId: string; value?: unknown; clear?: boolean; note?: string; force?: boolean }) =>
+  mutate<{ node?: unknown; defaultOutput?: NodeDefaultOutput; warnings?: string[] }>(
+    'workspace_update_node_default_output',
+    args.clear
+      ? `Clear ${args.nodeId}'s stored default output. Pushing this node through will then be refused until a new default is set.`
+      : `Set ${args.nodeId}'s stored default output. Any run that pushes this node through — or runs in a defaults mode — will use this value verbatim in place of running the node.${
+          args.force ? ' It does NOT satisfy the node’s output schema and will be stored as never-validated.' : ''
+        }`,
+    args,
+    Boolean(args.force),
+  );
+
+export const workspaceAdoptOutputAsDefault = (args: { nodeId: string; runId: string; note?: string; force?: boolean }) =>
+  mutate<{ defaultOutput?: NodeDefaultOutput; adoptedFromRunId?: string; warnings?: string[] }>(
+    'workspace_adopt_output_as_default',
+    `Adopt ${args.nodeId}'s output from run ${args.runId} as this node's stored default output.`,
+    args,
+  );
+
+/** The node's stored default, or null. Read through workspace_get_node, which returns the whole row. */
+export const workspaceGetNodeDefaultOutput = async (nodeId: string): Promise<NodeDefaultOutput | null> => {
+  const raw = await callVerb<{ node?: { defaultOutput?: NodeDefaultOutput } | null }>('workspace_get_node', { id: nodeId });
+  return raw?.node?.defaultOutput ?? null;
+};
 
 export const workflowPauseRun = (args: { runId: string }) =>
   mutate<Run | null>('workflow_pause_run', `Pause run ${args.runId}.`, args);
@@ -965,10 +1108,78 @@ export const constellationGetMetrics = (args?: { projectId?: string; runId?: str
 export const nodeValidateOutput = (args: { nodeId: string; output: unknown }) =>
   callVerb<{ valid: boolean; issues?: unknown[] }>('node_validate_output', args);
 
+// ============================ W6 — single-node replay =========================
+// Iterate on ONE node's prompt against a run that already happened: ~30 seconds and cents, instead of
+// a full conductor run to see whether an edit helped. The upstream outputs are the real ones that run
+// produced, so the comparison is like-for-like — the only thing that changed is this node.
+
+export interface NodeReplayResult {
+  output: unknown;
+  /** The same node's output in the run being replayed against — the left-hand side of the diff. */
+  original: unknown;
+  validation: { valid: boolean; issues?: unknown[] } | null;
+  durationMs: number;
+}
+
+/**
+ * Replay one node against a past run.
+ *
+ * UPSTREAM ONLY, and that is the correctness point: `dependencyOutputs` is built from the node's own
+ * `dependsOn`, not from the whole of `run.stageOutputs`. Handing a node every stage output in the run
+ * would include its OWN previous output and its successors' — which is how a replay quietly turns into
+ * "the node reads the answer it is supposed to produce" and reports a suspiciously good result.
+ */
+export const nodeReplayAgainstRun = async (args: {
+  nodeId: string;
+  runId: string;
+  dependsOn: string[];
+  modelConfig?: Record<string, unknown>;
+}): Promise<NodeReplayResult> => {
+  const raw = await callVerb<{ run: { stageOutputs?: Record<string, unknown> } | null }>('workflow_get_run', {
+    runId: args.runId,
+    detail: 'full',
+  });
+  const stageOutputs = raw?.run?.stageOutputs ?? {};
+  const dependencyOutputs = Object.fromEntries(
+    args.dependsOn.filter((id) => Object.prototype.hasOwnProperty.call(stageOutputs, id)).map((id) => [id, stageOutputs[id]]),
+  );
+  const started = Date.now();
+  // REVIEW FIX (high) — THROUGH THE CONFIRM GATE. This spends real money: node_execute in "openai"
+  // mode calls the live provider. It was calling callVerb directly, which bypasses confirmAction — the
+  // only place IS_READ_ONLY is enforced — so a read-only deployment would happily bill a replay, with
+  // a tooltip as the sole warning. node_execute is registered in MUTATING_VERBS for the same reason.
+  const executed = await mutate<{ execution?: { output?: unknown }; output?: unknown }>(
+    'node_execute',
+    `Run ${args.nodeId} once against run ${args.runId}'s upstream outputs, using the live model. This costs money. Nothing in that run is modified — the result is shown beside it for comparison.`,
+    {
+      nodeId: args.nodeId,
+      dependencyOutputs,
+      executionMode: 'openai',
+      ...(args.modelConfig ? { modelConfig: args.modelConfig } : {}),
+    },
+  );
+  const output = executed?.execution?.output ?? executed?.output ?? null;
+  // Best-effort: a validation call that fails must not discard the replay output the operator just
+  // paid for. `null` reads as "not checked", which is honest; `{valid:false}` would not be.
+  // Measured BEFORE the validation round trip — "Replayed in Xs" is a claim about the model call, and
+  // folding a second request into it overstates it by a full round trip.
+  const durationMs = Date.now() - started;
+  const validation = await nodeValidateOutput({ nodeId: args.nodeId, output }).catch(() => null);
+  return {
+    output,
+    original: Object.prototype.hasOwnProperty.call(stageOutputs, args.nodeId) ? stageOutputs[args.nodeId] : null,
+    validation,
+    durationMs,
+  };
+};
+
 export const nodeListOutputs = (args: { nodeId?: string; runId?: string; artifactType?: string; limit?: number }) =>
   callVerb<{ outputs?: unknown[] } | unknown[]>('node_list_outputs', args);
 
-export const stageSaveOutput = (args: { runId: string; nodeId: string; stage?: string; value: unknown; note?: string }) =>
+// W3 — `stage` REMOVED from this signature. The server's stage.save_output is now a union of a
+// workspace form ({stage, value}) and this run-scoped one ({runId, nodeId, value, note}); sending both
+// `stage` and `runId` matches neither branch and is refused at parse time. No caller ever set it.
+export const stageSaveOutput = (args: { runId: string; nodeId: string; value: unknown; note?: string }) =>
   mutate<unknown>(
     'stage_save_output',
     `Replace ${args.nodeId}'s output in run ${args.runId} with the variant you supplied. Every downstream node in this run will read YOUR value as this node's result, and the run record will record it as an operator override.`,

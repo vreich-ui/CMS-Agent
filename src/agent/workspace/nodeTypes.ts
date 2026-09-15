@@ -1,3 +1,4 @@
+import type { NodeDefaultOutput } from "./defaultOutput.js";
 export const workspaceRiskLevels = ["read", "write", "publish", "admin"] as const;
 export type WorkspaceRiskLevel = typeof workspaceRiskLevels[number];
 
@@ -28,6 +29,12 @@ export type WorkspaceNode = {
   metadata?: Record<string, unknown>;
   modelConfig?: Record<string, unknown>;
   executionConfig?: Record<string, unknown>;
+  // STORE-OWNED, like prompt/outputSchema/allowedTools and deliberately NOT in
+  // CANONICAL_OWNED_FIELDS: a stored value the executor may write into run.stageOutputs verbatim
+  // instead of dispatching this node. See defaultOutput.ts for the whole contract and for why a run
+  // that used one can never publish live or be learned from. Typed as the imported shape so a node
+  // row and the executor agree on one definition; absent on every node until an operator sets one.
+  defaultOutput?: NodeDefaultOutput;
 };
 
 export type WorkspaceEvent = { id: string; type: string; nodeId?: string; actor?: string; summary?: string; workspaceVersion: number; beforeHash?: string; afterHash?: string; createdAt: string };

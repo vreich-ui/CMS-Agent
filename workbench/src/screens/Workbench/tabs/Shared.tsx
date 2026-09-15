@@ -84,7 +84,9 @@ export const READONLY_REASON =
 // live backend carries history).
 // ============================================================================
 
-export type ChangeKind = 'prompt' | 'tools' | 'skills' | 'inputSchema' | 'outputSchema' | 'model';
+// W4 — 'defaultOutput' joins the set so a stored-default edit appears in the History feed in the same
+// vocabulary as a prompt or schema edit. It is a node-definition change like any other here.
+export type ChangeKind = 'prompt' | 'tools' | 'skills' | 'inputSchema' | 'outputSchema' | 'model' | 'defaultOutput';
 
 export interface HistoryEntry {
   id: string;

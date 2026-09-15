@@ -268,6 +268,22 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
     return { published: false, mode: "error", gates, plan: null, steps: [], error: `mock_run_not_publishable: run ${input.runId} executed in mock mode, whose node outputs are placeholders and were never produced by a model or judged by the client. A publish test must run in "openai" mode against a seeded entrypoint (see docs/plan/PUBLISH-SMOKE.md); mock is a wiring check and is never publishable.` };
   }
 
+  // REVIEW FIX (W2) — THE SAME OBLIGATION AS THE MOCK REFUSAL ABOVE, AND FOR THE SAME REASON.
+  //
+  // `gate.publishing.defaulted_upstream` lives in the executor's node-dispatch path, and
+  // workflow.publish_run is not that path: it reads run.stageOutputs directly and publishes. So a run
+  // whose artifact_plan (or any other node) was replaced by an operator override or a stored default
+  // could be published here with nothing to stop it — the fixture supplying, among other things, the
+  // verified artifact set that authorizes the media. Like the mock check, this is a property of the
+  // RUN RECORD, checked before any gate a prompt edit or a seeded output could influence.
+  //
+  // No flag lifts it, because the question is not "is this authorized" but "is this real". The remedy
+  // is to retry those nodes so they genuinely run (workflow.retry_node clears each id as it goes).
+  if ((run.defaultedNodeIds ?? []).length) {
+    const defaulted = run.defaultedNodeIds!.join(", ");
+    return { published: false, mode: "error", gates, plan: null, steps: [], error: `defaulted_upstream_not_publishable: run ${input.runId} completed ${run.defaultedNodeIds!.length} node(s) from a stored default output or an operator override rather than running them (${defaulted}). Their outputs are fixtures, not results, and are never published. Retry those nodes so they run for real (workflow.retry_node), or publish a run that produced its own content.` };
+  }
+
   const emptyPlan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: 0, publishedTime: input.publishedTime ?? null, toolSequence: [] };
 
   const requestIdPattern = compileRequestIdPattern(config.objectDialect?.requestIdPattern);

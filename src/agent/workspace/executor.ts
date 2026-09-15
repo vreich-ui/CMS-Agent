@@ -2,6 +2,7 @@ import type { WorkspaceNode } from "./nodeTypes.js";
 import { runStallFacts, HALTED_EXECUTION_STATUSES, type ApprovalRequired, type ExecutionArtifact, type ExecutionStatus, type NodeExecutionState, type PublishingPolicySnapshot, type RunDriver, type RunStallFacts, type WorkflowEntrypoint, type WorkflowExecutionRecord } from "./executionTypes.js";
 import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
 import { RunConcurrencyError, type ExecutionRepository, type RunSummaryRecord } from "../repository/interfaces/ExecutionRepository.js";
+import { DEFAULTED_UPSTREAM_GATE_ID, DEFAULT_OUTPUT_MISSING_CODE, decideDefaultOutput, defaultOutputMissingMessage, outputSourceWarning, type OutputProvenance, type RunOutputMode } from "./defaultOutput.js";
 import { saveNodeAdvance } from "./nodeAdvanceSave.js";
 import { beginDispatchHeartbeat, DISPATCH_HEARTBEAT_GRACE_MS, DISPATCH_HEARTBEAT_INTERVAL_MS, endDispatchHeartbeat, isDispatchHeartbeatSilent, resolveDispatchHeartbeatRepository, type DispatchHeartbeat } from "./dispatchHeartbeat.js";
 import { repositoryManager } from "../runtime/repositories.js";
@@ -263,7 +264,7 @@ const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: Workspa
   metadata: { dryRun: true, source: "workflow.run_next_node", estimateMethod: "deterministic_mock_length" }
 });
 
-export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number; requestId?: string; commissionedBy?: string; commissioningRationale?: string };
+export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number; requestId?: string; commissionedBy?: string; commissioningRationale?: string; outputMode?: RunOutputMode };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
 
 // Session A (2026-08-03) — cursor pagination + filters on workflow.list_runs. PR #105 made each row
@@ -483,6 +484,11 @@ const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): Work
   assignedSkills: stored.assignedSkills ? [...stored.assignedSkills] : canonical.assignedSkills,
   modelConfig: stored.modelConfig ?? canonical.modelConfig,
   executionConfig: stored.executionConfig ?? canonical.executionConfig,
+  // STORE-OWNED like prompt and outputSchema above, for the reason defaultOutput.ts states: it changes
+  // how a node runs, never the graph it runs in, so it is absent from CANONICAL_OWNED_FIELDS and is
+  // overlaid rather than pinned. A canonical definition never declares one, so in practice this reads
+  // "the operator's default, or none".
+  defaultOutput: stored.defaultOutput ?? canonical.defaultOutput,
   // MERGE, not replace: a store row that sets one metadata key (approvalRequired: false) must not
   // erase the canonical keys it did not mention (voicePrefetch, contractPrefetch, skipWhen). A stored
   // key still wins where both declare it — EXCEPT the route-selecting keys pinned to canonical just
@@ -617,6 +623,10 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
     dryRun: true,
     executionMode: data.executionMode ?? DEFAULT_EXECUTION_MODE,
     ...(entrypoint ? { entrypoint } : {}),
+    // W2 — persisted at birth for the determinism reason executionTypes.ts states: a continuation
+    // tick advances this run in another process with no memory of the call that started it. Omitted
+    // when "live" so an ordinary run record is byte-for-byte what it was before this field existed.
+    ...(data.outputMode && data.outputMode !== "live" ? { outputMode: data.outputMode } : {}),
     ...(data.budgetUsd !== undefined ? { budgetUsd: data.budgetUsd } : {}),
     // Track C — stamped at birth, never later. A stamp written after the run exists would mean a
     // window in which a commissioned run is indistinguishable from a human-asked one, which is
@@ -745,6 +755,71 @@ const findRunnableNodes = (run: WorkflowExecutionRecord, nodes: WorkspaceNode[])
 // MockNodeRunner (R-17) — this file used to carry a SECOND hand-written copy of the same fixtures, which
 // is precisely how two implementations of "what a mock output looks like" drifted apart unnoticed.
 const mockOutputForNode = (node: WorkspaceNode, run: WorkflowExecutionRecord) => mockOutputForNodeShared(node, run);
+
+// W2 — THE ONE WRITER for a stage output no model produced. All three application paths in
+// defaultOutput.ts (the explicit useDefaultOutput flag, a run's outputMode, and the MCP run-scoped
+// stage.save_output override) come through here, so there is exactly one shape for the publish gate
+// and the learning recorder to read, and exactly one place a future fourth path has to reach.
+//
+// What it deliberately does NOT do: record usage (nothing was charged), stamp a dispatch claim
+// (nothing was dispatched), or write a node `provenance` block (that field is the execution-time
+// identity of a MODEL turn — promptVersion/model — and filling it for a fixture would make a run's
+// own record lie about what ran). The artifact IS written, because every downstream reader of
+// run.artifacts expects one per completed node and an absent artifact would read as a failure.
+export const applyNonDispatchOutput = (
+  run: WorkflowExecutionRecord,
+  node: WorkspaceNode,
+  state: NodeExecutionState,
+  value: unknown,
+  provenance: OutputProvenance
+): void => {
+  const at = now();
+  state.status = "completed";
+  state.startedAt = state.startedAt ?? at;
+  state.completedAt = at;
+  // ZERO, not a measured microsecond: every cost/latency reader treats durationMs as "what this node
+  // cost in wall clock", and a fixture cost none. It is also the cheapest possible tell in a UI.
+  state.durationMs = 0;
+  state.output = value;
+  state.outputProvenance = provenance;
+  state.warnings = [...new Set([...(state.warnings ?? []), outputSourceWarning(provenance.source)])];
+  delete state.dispatch;
+  delete state.retry;
+  run.stageOutputs[node.id] = value;
+  // REVIEW FIX — SUPERSEDE, not append. Overriding a node that had already completed otherwise left
+  // two artifacts for one node, contradicting this function's own contract above and handing
+  // node.list_outputs a stale real output sitting beside the fixture that replaced it. Same filter
+  // retryNode applies, for the same reason.
+  run.artifacts = [...run.artifacts.filter((artifact) => artifact.nodeId !== node.id), buildArtifact(node, value)];
+  // Append-once. The list is the run's permanent record that something in it was not real; the only
+  // subtraction anywhere is retryNode's, when the node is genuinely re-run.
+  run.defaultedNodeIds = [...new Set([...(run.defaultedNodeIds ?? []), node.id])];
+  run.updatedAt = at;
+};
+
+// The run-level "this can really touch the world" test, named once. Mirrors executeRunnableNode's own
+// `liveRun` (executionMode, never run.dryRun — every record carries dryRun: true, which names the
+// workflow family rather than the mode) so the defaulted-upstream gate and the publish-risk gate can
+// never disagree about which runs they are protecting.
+const isLiveExecution = (run: Pick<WorkflowExecutionRecord, "executionMode">): boolean =>
+  ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock";
+
+// Non-empty means at least one node in this run was satisfied from a fixture rather than run.
+export const runHasDefaultedNodes = (run: Pick<WorkflowExecutionRecord, "defaultedNodeIds">): boolean =>
+  (run.defaultedNodeIds ?? []).length > 0;
+
+// THE GUARDRAIL THIS WHOLE FEATURE IS ALLOWED TO EXIST BECAUSE OF.
+//
+// A live run (dryRun === false) whose defaultedNodeIds is non-empty may not reach a publishing tail
+// node, full stop — no approval, no autonomy policy and no operator flag lifts it, because the
+// question it answers is not "is this authorized" but "is this real". Matched on the same semantic
+// node properties the publish gates already use (publish risk, publisher kind, releaser kind) rather
+// than the three ids, so a future publishing node is covered the day it is added.
+//
+// A DRY RUN PASSES. Exercising a whole conductor's topology on fixtures is the entire point of
+// defaults_only, and a dry run performs no publication by construction.
+const isPublishingTailNode = (node: WorkspaceNode): boolean =>
+  isPublishRisk(node) || isPublishExecutorNode(node) || isReleaserNode(node);
 
 const buildArtifact = (node: WorkspaceNode, output: unknown): ExecutionArtifact => ({ id: `artifact_${node.id}_${Date.now()}`, nodeId: node.id, type: node.produces[0] ?? "mock_output", value: output, createdAt: now() });
 
@@ -966,7 +1041,19 @@ function withRunLock<T>(runId: string, task: () => Promise<T>): Promise<T> {
 // changed — so it is deliberately narrow: it bypasses the PRE-DISPATCH refusal for exactly one
 // dispatch, never the underlying classified retry budget (nodeRetryPolicy.ts, untouched) and never any
 // gate this module does not own (a publish gate, an approval, a budget ceiling).
-export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean; driver?: RunDriver; retryJustification?: string };
+// `useDefaultOutput` is the MANUAL application path of defaultOutput.ts: satisfy the next dispatched
+// node (or the named one) from its stored default instead of running it. It outranks the run's own
+// outputMode in both directions — it applies a default a "live" run would not have touched, and a node
+// with no default is REFUSED by name (default_output_missing) rather than silently dispatched, so an
+// operator who asked to push a node through never pays for a model turn they did not ask for.
+//
+// SCOPED, and this is not a detail. workflow.run_node with a nodeId DRIVES the run — it advances node
+// after node until the named one completes. An unscoped flag would therefore push EVERY node between
+// here and there through on its default, which is emphatically not what "push this node through"
+// means and would hand back a run full of fixtures from one click. `useDefaultOutputNodeId` pins the
+// flag to one node; absent (the no-nodeId call, which advances exactly one node) it applies to
+// whichever node this single advance dispatches.
+export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean; driver?: RunDriver; retryJustification?: string; useDefaultOutput?: boolean; useDefaultOutputNodeId?: string };
 
 // S1 — dispatch provenance. Resolves, for THIS process, whether the run's project MCP endpoint env var
 // is set (never its value), so the claim written at dispatch says what the dispatching driver could
@@ -1312,7 +1399,7 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     // money already spent), and left the platform's adoption sweep unable to see it at all — so the
     // article would publish with no accountable origin anywhere, which is precisely the state the
     // stamp exists to make impossible.
-    const rebuilt = buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd, commissionedBy: existing.commissionedBy, commissioningRationale: existing.commissioningRationale }, nodes, runId, existing.requestId);
+    const rebuilt = buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd, commissionedBy: existing.commissionedBy, commissioningRationale: existing.commissioningRationale, outputMode: existing.outputMode }, nodes, runId, existing.requestId);
     return store.resetRun(runId, {
       ...rebuilt,
       ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision, operatorDecisionSource: existing.operatorDecisionSource ?? "explicit" } : {}),
@@ -1320,6 +1407,11 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
       // budget-override-and-ui-save — same reason requestId/operatorPublishDecision survive above: a
       // reset retries the SAME request, it does not un-say an operator's per-run budget raise.
       ...(existing.nodeBudgetOverrides ? { nodeBudgetOverrides: existing.nodeBudgetOverrides } : {})
+      // W2 — `outputMode` is carried through buildInitialRun above (a reset re-runs the SAME kind of
+      // run: a defaults_only reset that silently became a live run would spend real money on a reset
+      // nobody costed). `defaultedNodeIds` is deliberately NOT carried: rebuilt starts with every node
+      // queued and nothing defaulted yet, which is the truth about the new run, and the defaults will
+      // re-apply themselves node by node as it advances.
     });
   });
 }
@@ -1583,8 +1675,23 @@ const wouldSkipBeforeDispatch = (run: WorkflowExecutionRecord, node: WorkspaceNo
 // Publish-risk is the hard exclusion: a publish-risk node is NEVER dispatched alongside anything. Its
 // gates (operator veto, explicit approval, an affirmative controller decision) exist to STOP the run
 // there, and a sibling completing beside it would be work done past a stop.
+// REVIEW FIX (W2) — a node about to be satisfied from a stored default is INELIGIBLE for the batch,
+// for exactly the reason `wouldSkipBeforeDispatch` is: both paths write RUN-LEVEL state
+// (`run.defaultedNodeIds` here, `run.publishRequestId` there), and the batch reconciler copies back
+// only per-node state plus stageOutputs/artifacts/errors from each sibling's own cloned record. A
+// defaulted sibling's mark was therefore dropped on the floor while its fixture stage output was kept
+// — a run with fixture content and an empty ledger, which is precisely the state the publish gate and
+// the learning recorder exist to catch. The ledger is now carried through the reconciler and the CAS
+// merge as well (belt and braces), but a run-level write still belongs on the serial path, where it is
+// made once by the code that owns the record.
+//
+// Costs nothing that matters: applying a default is microseconds with no I/O, so serialising four of
+// them is not the latency batching exists to hide.
+const wouldUseDefaultBeforeDispatch = (run: WorkflowExecutionRecord, node: WorkspaceNode): boolean =>
+  decideDefaultOutput(node, { outputMode: run.outputMode }).use === true;
+
 const isConcurrentDispatchEligible = (run: WorkflowExecutionRecord, node: WorkspaceNode): boolean =>
-  !isPublishRisk(node) && !isPublishExecutorNode(node) && !declaresDeterministicRoute(node) && !wouldSkipBeforeDispatch(run, node);
+  !isPublishRisk(node) && !isPublishExecutorNode(node) && !declaresDeterministicRoute(node) && !wouldSkipBeforeDispatch(run, node) && !wouldUseDefaultBeforeDispatch(run, node);
 
 // THE BATCH: the longest PREFIX of the ready list (canonical order) whose members are all eligible, at
 // most CONCURRENT_DISPATCH_LIMIT long, that the run budget can still reserve for. A prefix, never a
@@ -1693,6 +1800,12 @@ async function dispatchConcurrentBatch(run: WorkflowExecutionRecord, batch: Work
     // this node's earlier entries are dropped, then whatever THIS attempt recorded is appended — in
     // batch (canonical) order, so a slow sibling's error never sorts ahead of a fast one's.
     reconciled.errors = [...dropUnretriedNodeErrors(reconciled.errors, node.id), ...produced.errors.filter((entry) => entry.startsWith(`${node.id}:`))];
+    // REVIEW FIX (W2) — the defaulted ledger is RUN-level, so unlike stageOutputs it is not keyed by
+    // node and was silently dropped by this clone-and-copy-back. Unioned rather than assigned: each
+    // sibling produced its own clone, so the last writer would otherwise erase the others.
+    if ((produced.defaultedNodeIds ?? []).length) {
+      reconciled.defaultedNodeIds = [...new Set([...(reconciled.defaultedNodeIds ?? []), ...produced.defaultedNodeIds!])];
+    }
     if (!halted && HALTED_EXECUTION_STATUSES.has(produced.status)) halted = { nodeId: node.id, status: produced.status };
     if (outcome.value.commit) commits.push(outcome.value.commit);
   });
@@ -2242,6 +2355,98 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
       }
       run.status = "running";
       run.updatedAt = completedAt;
+      run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
+      return { run };
+    }
+  }
+
+  // W2 — DEFAULT OUTPUT, EVALUATED AT THE SAME MOMENT THE SKIP PREDICATES ARE, and for the same
+  // reason: this is the last point at which the node is dependency-ready and nothing has been spent.
+  // Placed AFTER the skip block deliberately — a node the conductor would skip is not a node anyone
+  // needs to push through, and applying a fixture to it would write a stage output the skip path
+  // exists to withhold.
+  //
+  // Two outcomes, and the refusal is the one that carries the weight: a default that exists is
+  // applied (no dispatch, no cost, provenance stamped), and a default that was ASKED FOR and does not
+  // exist fails the node by name rather than falling through to a live dispatch nobody authorized.
+  {
+    // REVIEW FIX (W2) — PINNED, ALWAYS. The earlier reading ("absent means this single advance's node")
+    // was wrong twice over: an advance is not one node (advanceRun dispatches up to
+    // CONCURRENT_DISPATCH_LIMIT), and `nodeId` is optional on both run_node and retry_node. An unpinned
+    // flag therefore pushed every member of a four-wide batch through on its default and HARD-FAILED
+    // every member without one — nodes the operator never named. The MCP layer now refuses
+    // useDefaultOutput without a nodeId, and this is the second lock on that door: no nodeId pinned,
+    // no default applied.
+    const explicitDefault = options.useDefaultOutput === true && options.useDefaultOutputNodeId === nextNode.id;
+    const decision = decideDefaultOutput(nextNode, { explicit: explicitDefault, outputMode: run.outputMode });
+    // THE GUARDRAIL THIS FEATURE IS ALLOWED TO EXIST BECAUSE OF, and it is checked for EVERY
+    // publishing tail node on a live run — not only one that would itself be defaulted. The contract
+    // is about the run, not the node: once anything upstream was satisfied from a fixture, the body
+    // this tail would publish is partly invented, whether or not the tail itself is running honestly.
+    // `decision.use` is ORed in for the first-defaulted-node case, where defaultedNodeIds is still
+    // empty at this instant and would otherwise let the very first fixture through the gate.
+    //
+    // Refused BEFORE the write, so the run stops at the gate with nothing in stageOutputs rather than
+    // one node later with a fabricated publish decision already recorded. No approval, autonomy policy
+    // or operator flag lifts it: the question is not "is this authorized" but "is this real".
+    if (isLiveExecution(run) && isPublishingTailNode(nextNode) && (runHasDefaultedNodes(run) || decision.use)) {
+      const completedAt = now();
+      const defaulted = [...(run.defaultedNodeIds ?? []), ...(decision.use ? [nextNode.id] : [])];
+      const message = `Node ${nextNode.id} is a publishing node on a LIVE (executionMode "openai") run, and this run completed ${defaulted.length} node(s) from stored defaults rather than running them (${defaulted.join(", ")}). Fixture content is never published. Retry those nodes live, or start a dry run to exercise the pipeline.`;
+      state.status = "blocked";
+      state.startedAt = startedAt;
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.output = { artifact: nextNode.produces[0] ?? `${nextNode.id}.decision`, decision: "blocked", gateId: DEFAULTED_UPSTREAM_GATE_ID, defaultedNodeIds: defaulted, reason: message };
+      state.warnings = [...(state.warnings ?? []), `gate_blocked:${DEFAULTED_UPSTREAM_GATE_ID}`, "no_publication_performed"];
+      state.blockage = toBlockage(
+        {
+          code: "defaulted_upstream",
+          message,
+          details: { gateId: DEFAULTED_UPSTREAM_GATE_ID, nodeId: nextNode.id, defaultedNodeIds: defaulted },
+          operatorAction: "Retry each defaulted node so it runs for real (workflow.retry_node), or start a dry run if you only meant to exercise the pipeline."
+        },
+        { node_id: nextNode.id, run_id: run.runId, surface: "run", attempt: nextAttemptNumber(state) }
+      );
+      delete state.dispatch;
+      run.status = "blocked";
+      run.currentNodeId = nextNode.id;
+      run.updatedAt = completedAt;
+      return { run };
+    }
+    if ("missing" in decision && decision.missing) {
+      const completedAt = now();
+      const message = defaultOutputMissingMessage(nextNode.id, decision.reason);
+      state.status = "failed";
+      state.startedAt = startedAt;
+      state.completedAt = completedAt;
+      state.durationMs = duration(startedAt, completedAt);
+      state.errors = [DEFAULT_OUTPUT_MISSING_CODE, message];
+      state.output = { error: { code: DEFAULT_OUTPUT_MISSING_CODE, message } };
+      state.blockage = toBlockage(
+        {
+          code: DEFAULT_OUTPUT_MISSING_CODE,
+          message,
+          details: { nodeId: nextNode.id, requestedBy: decision.reason, outputMode: run.outputMode ?? "live" },
+          operatorAction: "Set this node's default output (workspace.update_node_default_output, or adopt its last good output with workspace.adopt_output_as_default), then retry the node."
+        },
+        { node_id: nextNode.id, run_id: run.runId, surface: "run", attempt: nextAttemptNumber(state) }
+      );
+      delete state.dispatch;
+      run.status = "failed";
+      run.currentNodeId = nextNode.id;
+      run.errors = [...run.errors, `${nextNode.id}:${DEFAULT_OUTPUT_MISSING_CODE}`];
+      run.updatedAt = completedAt;
+      return { run };
+    }
+    if (decision.use) {
+      applyNonDispatchOutput(run, nextNode, state, decision.defaultOutput.value, {
+        source: "default_output",
+        updatedAt: decision.defaultOutput.updatedAt,
+        ...(decision.defaultOutput.note ? { note: decision.defaultOutput.note } : {})
+      });
+      state.warnings = [...new Set([...(state.warnings ?? []), `default_output_applied:${decision.reason}`])];
+      run.status = "running";
       run.currentNodeId = findNextRunnableNode(run, nodes)?.id;
       return { run };
     }
@@ -4116,6 +4321,15 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
       delete node.durationMs;
       delete node.warnings;
       delete run.stageOutputs[node.nodeId];
+      // W2 — THE ONLY SUBTRACTION from run.defaultedNodeIds anywhere, and it is earned: this node's
+      // fixture output was just deleted along with its artifact, and the retry re-dispatches it for
+      // real. Leaving the id behind would keep the defaulted-upstream publish gate refusing a run an
+      // operator has already un-faked node by node — a gate that can never be cleared is not a gate,
+      // it is a dead end. The node's own provenance stamp goes with it for the same reason.
+      delete node.outputProvenance;
+      if ((run.defaultedNodeIds ?? []).includes(node.nodeId)) {
+        run.defaultedNodeIds = run.defaultedNodeIds!.filter((id) => id !== node.nodeId);
+      }
       if (node.nodeId === "monetization_strategy") delete run.economicDecision;
       run.artifacts = run.artifacts.filter((artifact) => artifact.nodeId !== node.nodeId);
       run.approvalsRequired = run.approvalsRequired.filter((approval) => approval.nodeId !== node.nodeId);
@@ -4132,4 +4346,4 @@ export async function retryNode(runId: string, nodeId: string | undefined, optio
 }
 
 export const publishingConductorWorkflowId = WORKFLOW_ID;
-export const __test__ = { buildInitialRun, findNextRunnableNode, findRunnableNodes, mockOutputForNode, nodeById, isPublishRisk, nodeSource, overlayStoreNode, resolveConductorNodes, selectConcurrentBatch };
+export const __test__ = { buildInitialRun, findNextRunnableNode, isConcurrentDispatchEligible, findRunnableNodes, mockOutputForNode, nodeById, isPublishRisk, nodeSource, overlayStoreNode, resolveConductorNodes, selectConcurrentBatch };
