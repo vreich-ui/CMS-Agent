@@ -197,10 +197,16 @@ export function Rail() {
   const nodesQ = useNodes(wf);
   // W1 — this panel renders a handful of "recent runs · this workflow" rows; ask the
   // server for exactly that rather than taking the default 20-row page and slicing.
-  // W4 — `detail: 'full'` because the rail's per-node failure chip (nodeErrorFrequency) reads
-  // each run's node states, which a summary row does not carry. Five scoped rows is a cheap
-  // exception to the default, not a return to fetching node arrays for the fleet.
-  const wfRunsQ = useRuns({ workflowId: wf, limit: 5, detail: 'full' });
+  // W5 — `detail: 'full'` REMOVED. It was pulling five whole run records (up to 1.2 MB each) on
+  // every paint for what the failure chips actually need: one status per node. A summary row now
+  // carries `nodeStatuses` straight off the run index, and the adapter expands it into the same
+  // nodes[] array nodeErrorFrequency already reads — so the chips are unchanged and this listing
+  // opens no run blobs at all.
+  //
+  // The filter object is now BYTE-IDENTICAL to DriveCenter's, so react-query's ['runs', filters] key
+  // dedupes those two into ONE in-flight request instead of firing both at first paint. That
+  // coincidence is load-bearing: keep the shapes identical, or the dedupe silently stops happening.
+  const wfRunsQ = useRuns({ workflowId: wf, limit: 5 });
   const boundRunQ = useRun(runId);
   const rubricsQ = useRubrics();
 

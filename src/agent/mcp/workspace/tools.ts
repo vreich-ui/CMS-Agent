@@ -165,8 +165,25 @@ export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
     ...(node.errors !== undefined ? { errors: node.errors } : {}),
     ...(node.durationMs !== undefined ? { durationMs: node.durationMs } : {}),
     ...(node.dispatch !== undefined ? { dispatch: node.dispatch } : {}),
-    ...(node.lastDispatch !== undefined ? { lastDispatch: node.lastDispatch } : {})
-  }))
+    ...(node.lastDispatch !== undefined ? { lastDispatch: node.lastDispatch } : {}),
+    // node-default-output follow-up (2026-09-15) — THE FIELD THAT MAKES THE MARKERS REAL.
+    //
+    // #351 taught the Workbench to read a node's supplied-output provenance from the run record, and
+    // to fall back to a per-node node_list_outputs query only when the record carries none for that
+    // node. It never added the field to THIS projection — and workflow.get_run's compact view is the
+    // default, and the one the rail binds to. So `outputProvenance` was absent for every node of
+    // every run: the fallback fired unconditionally, the rail issued one node_list_outputs per
+    // COMPLETED node (25 on a publishing run) on every paint to answer a question the run record
+    // already knew, and the markers themselves never rendered. One missing line, two defects.
+    //
+    // Cheap enough to carry on every node of every compact read: a three-field object, present only
+    // on a node whose output was supplied — which is none of them on an ordinary run.
+    ...(node.outputProvenance !== undefined ? { outputProvenance: node.outputProvenance } : {})
+  })),
+  // Run-level companions, same reasoning: the Workbench reads both and could otherwise learn them
+  // only from a `detail: "full"` read of the whole record.
+  ...((run.defaultedNodeIds ?? []).length ? { defaultedNodeIds: [...(run.defaultedNodeIds ?? [])] } : {}),
+  ...(run.outputMode !== undefined ? { outputMode: run.outputMode } : {})
 });
 const RUN_LIVE_STATUSES: string[] = ["queued", "running"];
 

@@ -212,6 +212,12 @@ export interface RawRun {
   mode?: { executionMode?: string };
   /** Only ever populated on a `status: "running"` row. */
   stall?: unknown;
+  /** W5 — per-node status as one letter each, carried on a `detail: "summary"` row straight off the
+   *  run index (RUN_INDEX_NODE_STATUS_CODES, server-side). This is what lets the rail's failure chips
+   *  read a summary listing instead of pulling five whole run records. Absent on a `detail: "full"`
+   *  row, which carries the real nodes[] array, and on any row written before the index bump. */
+  nodeStatuses?: Record<string, string>;
+  failedNodeIds?: string[];
   // W4 summary-row counts. Present on `detail: "summary"` rows (the default), absent on a
   // `detail: "full"` row and on workflow_get_run's record, which carry nodes[]/errors[] instead.
   nodeCount?: number;
@@ -253,13 +259,27 @@ function deriveCurrentNodeId(nodes: RawRunNode[]): string | null {
  * 0 — the type's own "nothing spent yet" value — not a guess at a real
  * figure this call never saw.
  */
+// The server's own letter codes (ExecutionRepository.RUN_INDEX_NODE_STATUS_CODES), inverted. An
+// unrecognised letter is DROPPED rather than guessed at: a missing chip is honest, a wrong one is not.
+const RUN_INDEX_STATUS_BY_CODE: Record<string, string> = { c: 'completed', f: 'failed', b: 'blocked', s: 'skipped', q: 'queued', r: 'running', x: 'cancelled' };
+
 export function toRun(raw: RawRun, cost?: RawRunCostLedger): Run {
   const exec: Run['exec'] = (raw.mode?.executionMode ?? raw.executionMode) === 'mock' ? 'mock' : 'openai';
   // W4 — a `detail: "summary"` row carries COUNTS and no nodes[]; a `detail: "full"` row (and
   // workflow_get_run's record) carries the array. Prefer the counts when the row states them and
   // derive from the array otherwise, so one adapter reads both shapes without either surface
   // having to know which it was handed.
-  const nodes = raw.nodes ?? [];
+  // W5 — a summary row now carries `nodeStatuses` (one letter per node) where it carries no nodes[]
+  // at all. Expanded here into the same shape every consumer already reads, so the rail's per-node
+  // chips work off a summary listing and nothing downstream has to know which row shape it was given.
+  // Status is all a summary row can state — a chip needs nothing more, and anything that needs
+  // timings or outputs still asks for `detail: "full"` explicitly.
+  const nodes: RawRunNode[] = raw.nodes?.length
+    ? raw.nodes
+    : Object.entries(raw.nodeStatuses ?? {}).flatMap(([nodeId, code]) => {
+        const status = RUN_INDEX_STATUS_BY_CODE[code];
+        return status ? [{ nodeId, status } as RawRunNode] : [];
+      });
   return {
     id: raw.runId,
     wf: raw.workflowId,

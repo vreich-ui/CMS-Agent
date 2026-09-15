@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { BlobExecutionRepository } from "../../../src/agent/repository/blobs/BlobExecutionRepository.js";
+import { BlobExecutionRepository, RUN_INDEX_VERSION } from "../../../src/agent/repository/blobs/BlobExecutionRepository.js";
 import { MemoryExecutionRepository } from "../../../src/agent/repository/memory/MemoryExecutionRepository.js";
 import { runSummaryOf } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 import type { BlobStoreClient } from "../../../src/agent/repository/blobs/blobClient.js";
@@ -46,7 +46,12 @@ interface FakeStore {
 const fakeStore = (seed: WorkflowExecutionRecord[], options: { seedIndex?: boolean; indexVersion?: number } = {}): FakeStore => {
   const data = new Map<string, unknown>(seed.map((r) => [`runs/${r.runId}.json`, r]));
   if (options.seedIndex) {
-    const version = options.indexVersion ?? 3;
+    // Defaults to the CURRENT index version, not a hardcoded number. The tests below that assert "this
+    // page opened zero run blobs" mean "a CURRENT index costs nothing" — a hardcoded version turns
+    // every future RUN_INDEX_VERSION bump into a false failure of those tests, because a stale row is
+    // supposed to be healed by reading its run blob. The staleness tests pass `indexVersion`
+    // explicitly and keep saying exactly what they mean.
+    const version = options.indexVersion ?? RUN_INDEX_VERSION;
     const byProject = new Map<string, WorkflowExecutionRecord[]>();
     for (const r of seed) byProject.set(r.projectId, [...(byProject.get(r.projectId) ?? []), r]);
     for (const [projectId, runs] of byProject) {
@@ -54,7 +59,7 @@ const fakeStore = (seed: WorkflowExecutionRecord[], options: { seedIndex?: boole
         // A pre-W4 index held only the filterable fields; that is what `indexVersion: 1` models.
         runs: runs.map((r) =>
           version >= 2
-            ? { ...runSummaryOf(r), v: 3 }
+            ? { ...runSummaryOf(r), v: version }
             : { runId: r.runId, projectId: r.projectId, workflowId: r.workflowId, status: r.status, startedAt: r.startedAt, updatedAt: r.updatedAt }
         )
       });
