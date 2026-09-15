@@ -16,7 +16,26 @@ export const assetLookupAdoptOperationV1: OperationDescriptor = {
       tenantId: { type: "string", minLength: 1 },
       query: { type: "string", minLength: 1 },
       assetKind: { type: "string", enum: ["capture_artifact", "stored_media", "content_linked_asset"], description: "Restrict the search to one asset kind; omit to search all three." },
-      maxResults: { type: "integer", minimum: 1, maximum: 100, default: 20 }
+      maxResults: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+      // A5 (Milestone A remainder, runner 3c) — ADDITIVE and OPTIONAL, the same way A7's descriptor
+      // grew useCase/sourceUrl: this operation's second effect (adopt_asset, riskLevel "write") is
+      // "adopts one resolved asset reference INTO A CONTENT OBJECT", and nothing in the original
+      // input named that object — so the write half was undispatchable. A dispatch that omits it is
+      // still a complete, legitimate search: the run resolves (or refuses to pick) and reports
+      // asset_adopt_target_unspecified without writing anything. `nodeId` names the EXISTING node
+      // the asset is recorded on; this operation never invents a node in someone's document.
+      adoptInto: {
+        type: "object",
+        additionalProperties: false,
+        required: ["objectType", "objectId", "tenantId"],
+        properties: {
+          objectType: { type: "string", minLength: 1 },
+          objectId: { type: "string", minLength: 1 },
+          tenantId: { type: "string", minLength: 1 },
+          nodeId: { type: "string", minLength: 1 }
+        },
+        description: "The existing content object (and node on it) to record the resolved asset on. Omit to search without adopting."
+      }
     }
   },
   defaults: { maxResults: 20 },

@@ -14,13 +14,14 @@ import { TemplateLibraryStore } from "../../../src/agent/library/templateLibrary
 import { resetTemplateLibraryMemoryStore } from "../../../src/agent/library/templateLibraryBackend.js";
 import {
   IMAGE_REVISION_ARTIFACTS,
+  resolveSourceImageStep,
   type AssetCatalogSource,
   type ResolvedSourceAsset,
   type PreviewTemplateVariantFn,
   type VerifyImagePresenceFn
 } from "../../../src/agent/capture/imageTemplateRevisionEngine.js";
 import { PDF_FAMILY_ARTIFACTS } from "../../../src/agent/capture/pdfTemplateFamilyEngine.js";
-import { setImageTemplateRevisionProviders, resetImageTemplateRevisionProviders } from "../../../src/agent/workspace/imageTemplateRevisionProviders.js";
+import { setImageTemplateRevisionProviders, resetImageTemplateRevisionProviders, resolveImageTemplateRevisionProviders } from "../../../src/agent/workspace/imageTemplateRevisionProviders.js";
 import type { WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
 
 // =================================================================================================
@@ -72,6 +73,25 @@ const HERO: ResolvedSourceAsset = {
   reference: "asset://a10-hero/v1",
   provenance: { captureRequestId: "capreq_a10_1" }
 };
+
+// Milestone A remainder (3a) — a REAL image ArtifactReference row, shaped exactly as dr-lurie's
+// search_artifacts returns one (captured 2026-09-15), plus the two knobs the wiring tests turn:
+// whether the reference states pixel dimensions at all, and what verify_pdf_content answers.
+const LIVE_HERO_SHA = "a".repeat(64);
+const LIVE_HERO_ROW: Record<string, unknown> = {
+  blobKey: `image/req_a10_hero/${LIVE_HERO_SHA}.webp`,
+  sizeBytes: 15618,
+  sha256: LIVE_HERO_SHA,
+  contentType: "image/webp",
+  createdAtISO: "2026-09-01T10:00:00.000Z",
+  artifactKind: "image",
+  originalFilename: "hero.webp",
+  filename: "hero.webp",
+  tags: ["a10-hero"],
+  metadata: { imageRole: "featured", usageContext: "article_body" }
+};
+let liveAssetMetadataExtra: Record<string, unknown>;
+let liveVerifyVerdict: Record<string, unknown>;
 
 const templateRef = (requestedId: string) => ({ surface: "pdf" as const, templateId: `${TARGET}::pdf_template::${requestedId}`, tenantId: TARGET });
 const pdfmePage = (fieldY: number) => [{ name: `field_${fieldY}`, type: "text", position: { x: 20, y: fieldY } }];
@@ -140,6 +160,35 @@ const installFetchDouble = () => {
       return ok({ templateId: `pdftool_internal_${created}`, version: 1 });
     }
     if (verb === "publish_pdf_template") return ok({ published: true, activeVersion: 1 });
+    // Milestone A remainder (3a) — the four verbs the PRODUCTION provider wiring
+    // (imageTemplateRevisionPlatformProviders.ts) speaks, doubled here in their real response
+    // shapes: search_artifacts' {artifacts, nextCursor, outcome}, get_artifact_metadata's full
+    // ArtifactReference, preview_pdf_template_fixture's TemplatePreviewReceipt and
+    // verify_pdf_content's {status, verified, pageCount, ...} verdict.
+    if (verb === "search_artifacts") {
+      return ok({ artifacts: args.tag === "a10-hero" ? [{ ...LIVE_HERO_ROW }] : [], limit: 100, cursor: "0", nextCursor: null, outcome: "ok" });
+    }
+    if (verb === "get_artifact_metadata") {
+      return ok({ ...LIVE_HERO_ROW, metadata: { ...(LIVE_HERO_ROW.metadata as Record<string, unknown>), ...liveAssetMetadataExtra } });
+    }
+    if (verb === "preview_pdf_template_fixture") {
+      return ok({
+        siteId: args.site_id,
+        templateId: args.template_id,
+        version: args.version ?? 1,
+        fixtureId: args.fixture,
+        requestId: "req_preview_a10",
+        status: "complete",
+        reused: false,
+        rendered: true,
+        public_path: `/pdf/req_preview_a10/${"c".repeat(64)}.pdf`,
+        pageCount: 3,
+        contentCheck: { status: "ok", pageCount: 3, sizeBytes: 4096 },
+        verified: true,
+        summary: "Rendered and verified (3 pages, 4096 bytes)."
+      });
+    }
+    if (verb === "verify_pdf_content") return ok({ siteId: args.site_id, status: liveVerifyVerdict.status, verified: liveVerifyVerdict.status === "ok", ...liveVerifyVerdict });
     throw new Error(`Unexpected verb in this fixture: ${verb}`);
   }) as unknown as typeof fetch;
 };
@@ -194,6 +243,8 @@ beforeEach(async () => {
   previewCalls = [];
   verifyCalls = [];
   timeoutOnce = new Set();
+  liveAssetMetadataExtra = { widthPx: 1600, heightPx: 900 };
+  liveVerifyVerdict = { pageCount: 3, sizeBytes: 4096, status: "ok" };
   process.env[MCP_ENV_VAR] = `https://${TARGET}.example/mcp`;
   await createProject(
     repositoryManager.getProjectRepository(),
@@ -338,25 +389,112 @@ describe("fault: unavailable renderer", () => {
 //    A5's acceptance: "forbidden/unavailable is not 'none found'". It now genuinely is not.
 // =================================================================================================
 describe("A10-D2 — an unconfigured asset catalogue is reported as 'no such asset'", () => {
-  it("FIXED — the default provider's answer is now DISTINCT, in both code and prose, from a genuinely absent tag", async () => {
-    await seedLibrary();
-    resetImageTemplateRevisionProviders(); // exactly what a live run with no wiring gets
-    const run = briefRun();
-    await stage(run, "image_revision_intake", "image_revision_intake");
-    const intake = run.stageOutputs.image_revision_intake as Record<string, unknown>;
-    const error = intake.sourceAssetError as { code: string; reason: string };
-    // "not configured" now carries its OWN code and prose — never the "not found" text a genuine
-    // search miss returns (AssetCatalogSource's `configured` flag; resolveSourceImageStep checks it
-    // BEFORE any resolve* call).
-    expect(error.code).toBe("image_revision_asset_catalog_not_configured");
-    expect(error.code).not.toBe("image_revision_source_tag_not_found");
-    expect(error.reason).toMatch(/configur/i);
-    expect(error.reason).not.toContain('No asset tagged "a10-hero"');
+  it("FIXED — the default provider's answer is still DISTINCT, in both code and prose, from a genuinely absent tag", async () => {
+    // Milestone A remainder (3a) — this property lives on the DEFAULT providers, and it is now
+    // asserted against them directly. It used to be asserted through a live route run, which no
+    // longer reaches them: a run with no test override now assembles REAL providers from the
+    // tenant's own MCP surface (the next describe block), so the route is no longer the place
+    // "nothing is wired" can be observed. The defaults themselves are unchanged and still the
+    // honest answer for any caller that reads them without assembling.
+    resetImageTemplateRevisionProviders();
+    const providers = resolveImageTemplateRevisionProviders();
+    expect(providers.previewTemplateVariant).toBeUndefined();
+    expect(providers.verifyImagePresence).toBeUndefined();
+    expect(providers.assetCatalog.configured).toBe(false);
 
+    const resolved = await resolveSourceImageStep({ tenantId: TARGET, ref: { tag: "a10-hero" } }, { assetCatalog: providers.assetCatalog });
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) return;
+    expect(resolved.code).toBe("image_revision_asset_catalog_not_configured");
+    expect(resolved.code).not.toBe("image_revision_source_tag_not_found");
+    expect(resolved.reason).toMatch(/configur/i);
+    expect(resolved.reason).not.toContain('No asset tagged "a10-hero"');
+  });
+});
+
+// =================================================================================================
+// 3b. Milestone A remainder (runner 3a) — THE SEAMS ARE WIRED.
+//
+// With no test override installed, the three stages now assemble per-run providers bound to this
+// tenant and its site object id, speaking search_artifacts / get_artifact_metadata /
+// preview_pdf_template_fixture / verify_pdf_content through the same fetch double every other verb
+// in this file goes through. What these assert is the whole point of the task: the intake→preview→
+// apply→verify path completes with a REAL rendered artifact behind the verdict, and every place the
+// platform cannot answer is named rather than guessed.
+// =================================================================================================
+describe("Milestone A remainder (3a) — image_template_revision's provider seams reach real verbs", () => {
+  it("resolves the source asset, previews the stored version, and verifies the PUBLISHED version against a rendered artifact", async () => {
+    await seedLibrary();
+    resetImageTemplateRevisionProviders(); // exactly what a live run gets: no doubles, real wiring
+    const run = briefRun();
+    const { report } = await runImagePipeline(run);
+    if (report.kind !== "completed") throw new Error(`expected a completed report, got ${report.kind}`);
+
+    // The source asset came from the artifact plane, addressed as a renderable public path — never
+    // a blobKey, never an invented asset:// scheme.
+    const intake = run.stageOutputs.image_revision_intake as Record<string, unknown>;
+    expect(intake.sourceAssetError).toBeNull();
+    expect((intake.sourceAsset as ResolvedSourceAsset).reference).toBe(`/img/req_a10_hero/${LIVE_HERO_SHA}.webp`);
+    expect((intake.sourceAsset as ResolvedSourceAsset).widthPx).toBe(1600);
+    expect(wire.map((call) => call.verb)).toContain("search_artifacts");
+    expect(wire.map((call) => call.verb)).toContain("get_artifact_metadata");
+
+    // Preview: a REAL before render, and the after render named as unavailable rather than faked.
+    const previewed = (run.stageOutputs.image_revision_compile_preview as Record<string, unknown>).items as Array<{
+      outcome: string;
+      beforeRef?: string;
+      afterRef?: string;
+      detail?: string;
+    }>;
+    expect(previewed.every((item) => item.outcome === "previewed")).toBe(true);
+    expect(previewed[0].beforeRef).toMatch(/^\/pdf\/req_preview_a10\//);
+    expect(previewed[0].afterRef).toBeUndefined();
+    expect(previewed[0].detail).toContain("image_revision_after_preview_unavailable");
+
+    // Verify: the published version was rendered and INSPECTED — verify_pdf_content ran against the
+    // public path that render produced, and every item reached `verified`.
+    const items = report.output.items as Array<{ outcome: string; detail?: string }>;
+    expect(items.every((item) => item.outcome === "verified")).toBe(true);
+    expect(report.output.allFailed).toBe(false);
+    const verifyCall = wire.find((call) => call.verb === "verify_pdf_content");
+    expect(verifyCall?.args.url).toMatch(/^\/pdf\/req_preview_a10\//);
+    expect(verifyCall?.args.site_id).toBe(`site_${TARGET}`);
+    // Every pdf-tool call carried the tenant's SITE object id, never its tenantId.
+    for (const call of wire.filter((entry) => entry.verb === "preview_pdf_template_fixture")) {
+      expect(call.args.site_id).toBe(`site_${TARGET}`);
+      expect(call.args.fixture).toBe("images");
+    }
+  });
+
+  it("an artifact whose reference states no pixel dimensions is refused BY NAME, never placed and never reported as 'no such asset'", async () => {
+    await seedLibrary();
+    resetImageTemplateRevisionProviders();
+    liveAssetMetadataExtra = {}; // the shape a live dr-lurie image reference actually has today
+    const run = briefRun();
+    const outcome = await stage(run, "image_revision_intake", "image_revision_intake");
+    expect(outcome.kind).toBe("refused");
+    if (outcome.kind !== "refused") return;
+    expect(outcome.code).toBe("image_revision_asset_dimensions_unavailable");
+    expect(outcome.message).not.toContain("No asset tagged");
+    // Nothing was minted or published off an asset this run could not place.
+    expect(wire.filter((call) => call.verb === "create_pdf_template")).toEqual([]);
+  });
+
+  it("an unresolved-image finding that names no page is reported as a granularity gap, never a guessed page list and never a pass", async () => {
+    await seedLibrary();
+    resetImageTemplateRevisionProviders();
+    liveVerifyVerdict = {
+      pageCount: 3,
+      status: "failed",
+      reason: "1 image failed to resolve.",
+      findings: [{ code: "UNRESOLVED_IMAGE", detail: "header image did not resolve" }]
+    };
+    const run = briefRun();
     const { report } = await runImagePipeline(run);
     if (report.kind !== "completed") throw new Error("expected a completed report");
-    const items = report.output.items as Array<{ outcome: string }>;
-    expect(items.every((item) => item.outcome === "source_resolve_failed")).toBe(true);
+    const items = report.output.items as Array<{ outcome: string; detail?: string }>;
+    expect(items.every((item) => item.outcome === "verify_failed")).toBe(true);
+    expect(items[0].detail).toContain("verify_page_granularity_unavailable");
   });
 });
 

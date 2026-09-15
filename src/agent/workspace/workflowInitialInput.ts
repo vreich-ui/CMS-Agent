@@ -39,6 +39,20 @@ import {
   VISUAL_IDENTITY_BRIEF_PROVIDED_FIELDS,
   VISUAL_IDENTITY_BRIEF_REQUIRED_OPERATION_FIELDS
 } from "./visualIdentityBriefBuilder.js";
+import { DOCUMENT_RENDER_WORKFLOW_ID } from "./documentRenderWorkflow.js";
+import { ASSET_LOOKUP_WORKFLOW_ID } from "./assetLookupWorkflow.js";
+import {
+  buildAssetLookupBrief,
+  ASSET_LOOKUP_BRIEF_BUILDER_ID,
+  ASSET_LOOKUP_BRIEF_KEY,
+  ASSET_LOOKUP_BRIEF_REQUIRED_OPERATION_FIELDS
+} from "../capture/assetLookupBriefBuilder.js";
+import {
+  buildDocumentRenderBrief,
+  DOCUMENT_RENDER_BRIEF_BUILDER_ID,
+  DOCUMENT_RENDER_BRIEF_KEY,
+  DOCUMENT_RENDER_BRIEF_REQUIRED_OPERATION_FIELDS
+} from "../capture/documentRenderBriefBuilder.js";
 import {
   buildPdfTemplateFamilyBrief,
   PDF_TEMPLATE_FAMILY_BRIEF_BUILDER_ID,
@@ -150,6 +164,54 @@ const BUILDERS: readonly WorkflowInitialInputBuilder[] = [
         };
       }
       return { ok: true, initialInput: { ...source, targetProjectId: built.tenantId, [PDF_TEMPLATE_FAMILY_BRIEF_KEY]: built.brief } };
+    }
+  },
+  {
+    // A8 (runner 3b) — document_render -> document_render_studio. Nested brief, like A7's and A10's.
+    // `siteId` is NOT written here either: it is the tenant's Platform site object id, read off the
+    // project record by cloneConductorRoutes.ts's document_render_execute case, never the tenantId.
+    builderId: DOCUMENT_RENDER_BRIEF_BUILDER_ID,
+    workflowId: DOCUMENT_RENDER_WORKFLOW_ID,
+    providesInitialInputFields: [DOCUMENT_RENDER_BRIEF_KEY],
+    requiredOperationFields: [...DOCUMENT_RENDER_BRIEF_REQUIRED_OPERATION_FIELDS],
+    conflictCode: "document_render_brief_conflict",
+    build: (input) => {
+      const built = buildDocumentRenderBrief(input);
+      if (!built.ok) return built;
+      const source = isRecord(input) ? input : {};
+      // Same clone_target_mismatch guard the two builders above hold.
+      const declaredTarget = typeof source.targetProjectId === "string" ? source.targetProjectId.trim() : "";
+      if (declaredTarget && declaredTarget !== built.tenantId) {
+        return {
+          ok: false,
+          code: "document_render_target_project_mismatch",
+          reason: `This run declares targetProjectId "${declaredTarget}" but the operation is scoped to tenant "${built.tenantId}". A dispatched render is never redirected to another project's documents; the two must name the same tenant.`
+        };
+      }
+      return { ok: true, initialInput: { ...source, targetProjectId: built.tenantId, [DOCUMENT_RENDER_BRIEF_KEY]: built.brief } };
+    }
+  },
+  {
+    // A5 (runner 3c) — asset_lookup_adopt -> asset_lookup_studio. Nested brief, same posture as the
+    // three above.
+    builderId: ASSET_LOOKUP_BRIEF_BUILDER_ID,
+    workflowId: ASSET_LOOKUP_WORKFLOW_ID,
+    providesInitialInputFields: [ASSET_LOOKUP_BRIEF_KEY],
+    requiredOperationFields: [...ASSET_LOOKUP_BRIEF_REQUIRED_OPERATION_FIELDS],
+    conflictCode: "asset_lookup_brief_conflict",
+    build: (input) => {
+      const built = buildAssetLookupBrief(input);
+      if (!built.ok) return built;
+      const source = isRecord(input) ? input : {};
+      const declaredTarget = typeof source.targetProjectId === "string" ? source.targetProjectId.trim() : "";
+      if (declaredTarget && declaredTarget !== built.tenantId) {
+        return {
+          ok: false,
+          code: "asset_lookup_target_project_mismatch",
+          reason: `This run declares targetProjectId "${declaredTarget}" but the operation is scoped to tenant "${built.tenantId}". An asset lookup is never redirected to another project's artifacts; the two must name the same tenant.`
+        };
+      }
+      return { ok: true, initialInput: { ...source, targetProjectId: built.tenantId, [ASSET_LOOKUP_BRIEF_KEY]: built.brief } };
     }
   }
 ];

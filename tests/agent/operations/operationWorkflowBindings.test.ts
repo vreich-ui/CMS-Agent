@@ -58,6 +58,37 @@ describe("operationWorkflowBindings", () => {
     });
   });
 
+  // A8 (Milestone A remainder, runner 3b) — document_render is BOUND, builder-backed, and its
+  // builder's declared contract is checked here the same way every other row's is.
+  it("binds document_render to the document_render_studio workflow with an empty inputMapping and a declared initial-input builder", () => {
+    const binding = getOperationWorkflowBinding("document_render");
+    expect(binding).toEqual({
+      operationId: "document_render",
+      workflowId: "document_render_studio",
+      inputMapping: {},
+      initialInputBuilder: {
+        builderId: "document_render_brief_builder.v1",
+        providesInitialInputFields: ["documentRenderBrief"],
+        requiredOperationFields: ["tenantId", "documentRef"]
+      }
+    });
+  });
+
+  // A5 (Milestone A remainder, runner 3c) — the last operation to be bound.
+  it("binds asset_lookup_adopt to the asset_lookup_studio workflow with an empty inputMapping and a declared initial-input builder", () => {
+    const binding = getOperationWorkflowBinding("asset_lookup_adopt");
+    expect(binding).toEqual({
+      operationId: "asset_lookup_adopt",
+      workflowId: "asset_lookup_studio",
+      inputMapping: {},
+      initialInputBuilder: {
+        builderId: "asset_lookup_adopt_brief_builder.v1",
+        providesInitialInputFields: ["assetLookupBrief"],
+        requiredOperationFields: ["tenantId", "query"]
+      }
+    });
+  });
+
   it("no binding carries BOTH a rename table and a builder — Platform applies inputMapping before the builder runs, which would hide the builder's own required fields from it", () => {
     for (const binding of listOperationWorkflowBindings()) {
       if (binding.initialInputBuilder) expect(binding.inputMapping, `${binding.operationId} must not rename fields its builder reads`).toEqual({});
@@ -68,12 +99,21 @@ describe("operationWorkflowBindings", () => {
     expect(listRequiredCapabilitiesForWorkflow("visual_identity")).toEqual(["visual_identity_propose", "visual_identity_read"]);
     expect(listRequiredCapabilitiesForWorkflow("pdf_template_studio")).toEqual(["pdf_template_publish", "pdf_template_write"]);
     expect(listRequiredCapabilitiesForWorkflow("image_template_revision_studio")).toEqual(["image_search", "image_template_write", "pdf_template_publish"]);
+    expect(listRequiredCapabilitiesForWorkflow("document_render_studio")).toEqual(["pdf_render"]);
+    expect(listRequiredCapabilitiesForWorkflow("asset_lookup_studio")).toEqual(["asset_search"]);
     expect(listRequiredCapabilitiesForWorkflow("publishing_conductor")).toBeNull();
     expect(listRequiredCapabilitiesForWorkflow(undefined)).toBeNull();
   });
 
   it("getOperationWorkflowBinding returns null (never a guess, never a throw) for every operation with no genuine implementing workflow today", () => {
-    const unboundOperationIds = ["site_inventory", "document_render", "asset_lookup_adopt"];
+    // A8 (Milestone A remainder) — document_render moved OUT of this set: documentRenderWorkflow.ts
+    // registers document_render_studio and the binding below is real, exactly as A7 and A9 moved out
+    // before it. site_inventory stays here for its own, different reason (it has a registered
+    // EXECUTOR, not a workflow — see operationWorkflowBindings.ts's header).
+    // A5 (Milestone A remainder) — asset_lookup_adopt moved out too; site_inventory is the ONLY id
+    // left here, and for its own different reason: it has a registered EXECUTOR, not a workflow, so
+    // getOperationWorkflowBinding correctly still returns null for it (see this module's header).
+    const unboundOperationIds = ["site_inventory"];
     for (const operationId of unboundOperationIds) {
       expect(getOperationWorkflowBinding(operationId)).toBeNull();
     }

@@ -191,6 +191,67 @@ const TOOL_WIRE_SPECS: Record<string, ToolWireSpec> = {
       { engine: "version", wire: "version" }
     ],
     required: ["site_id", "template_id"]
+  },
+  // Milestone A remainder (3a) — the four verbs imageTemplateRevisionPlatformProviders.ts speaks.
+  // Two are site-scoped pdf-tool bridge verbs in the same vocabulary as the four above
+  // (site_id/template_id/template_json); two are the artifact-plane admin verbs, whose real schemas
+  // are camelCase ON THE WIRE (requestId, sha256, createdAfter, includeDeleted, nextCursor) — an
+  // engine name identical to its wire name is not an oversight here, it is what the captured schema
+  // says, and writing a snake_case wire name for them would be the exact bug this module exists to
+  // prevent. Every field below is copied verbatim from the live tool schemas captured on 2026-09-15
+  // into tests/agent/capture/fixtures/platformToolSchemas.ts.
+  preview_pdf_template_fixture: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "templateId", wire: "template_id" },
+      { engine: "templateJson", wire: "template_json", opaque: true },
+      { engine: "fixture", wire: "fixture" },
+      { engine: "renderer", wire: "renderer" },
+      { engine: "version", wire: "version" },
+      { engine: "idempotencyKey", wire: "idempotency_key" }
+    ],
+    required: ["site_id", "template_id", "template_json", "fixture"]
+  },
+  verify_pdf_content: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "url", wire: "url" },
+      { engine: "artifactReference", wire: "artifactReference", opaque: true },
+      { engine: "requirements", wire: "requirements", opaque: true }
+    ],
+    required: ["site_id"]
+  },
+  search_artifacts: {
+    fields: [
+      { engine: "tag", wire: "tag" },
+      { engine: "limit", wire: "limit" },
+      { engine: "cursor", wire: "cursor" },
+      { engine: "includeDeleted", wire: "includeDeleted" },
+      { engine: "createdAfter", wire: "createdAfter" },
+      { engine: "createdBefore", wire: "createdBefore" }
+    ],
+    required: []
+  },
+  get_artifact_metadata: {
+    fields: [
+      { engine: "requestId", wire: "requestId" },
+      { engine: "sha256", wire: "sha256" }
+    ],
+    required: ["requestId", "sha256"]
+  },
+  // A8 (runner 3b) — the one verb document_render_studio speaks.
+  document_render: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "ownerObjectType", wire: "owner_object_type" },
+      { engine: "ownerObjectId", wire: "owner_object_id" },
+      { engine: "documentKind", wire: "document_kind" },
+      { engine: "templateId", wire: "template_id" },
+      { engine: "filename", wire: "filename" },
+      { engine: "attach", wire: "attach" },
+      { engine: "idempotencyKey", wire: "idempotency_key" }
+    ],
+    required: ["site_id", "owner_object_type", "owner_object_id"]
   }
 };
 

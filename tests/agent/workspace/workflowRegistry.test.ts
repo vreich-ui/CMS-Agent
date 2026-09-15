@@ -10,7 +10,7 @@ import { validateOutput } from "../../../src/agent/execution/outputValidator.js"
 // entries: publishing_conductor (the canonical array), capture_conductor (since T12.9, registered by
 // captureConductorWorkflow.ts), clone_conductor (since T13.1, registered by cloneConductorWorkflow.ts),
 // visual_identity (C5, registered by visualIdentityWorkflow.ts), pdf_template_studio (A7, registered
-// by pdfTemplateStudioWorkflow.ts) and image_template_revision_studio (A9, registered by
+// by pdfTemplateStudioWorkflow.ts), image_template_revision_studio (A9, registered by
 // imageTemplateRevisionWorkflow.ts) — all side-effect-imported by executor.ts, which this file imports,
 // so all six registrations are present here exactly as on every run-driving plane. A genuinely ABSENT
 // workflowId (no second argument / `undefined`) still falls back to the publishing_conductor canonical
@@ -21,7 +21,7 @@ import { validateOutput } from "../../../src/agent/execution/outputValidator.js"
 
 describe("§2.23 workflow registry", () => {
   it("ships publishing_conductor, capture_conductor, clone_conductor, visual_identity and pdf_template_studio as the registered workflows, resolving the canonical arrays", () => {
-    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio"]);
+    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio", "document_render_studio", "asset_lookup_studio"]);
     expect(getWorkflowDefinition(publishingConductorWorkflowId)?.canonicalNodes()).toEqual(listWorkspaceNodes());
     expect(getWorkflowDefinition("capture_conductor")?.canonicalNodes().map((node) => node.id)).toContain("capture_crawl");
     expect(getWorkflowDefinition("clone_conductor")?.canonicalNodes().map((node) => node.id)).toContain("clone_intake");
@@ -41,6 +41,11 @@ describe("§2.23 workflow registry", () => {
     // A9 — the standalone image-on-every-page batch operation's workflow: four nodes, also no
     // composed tail (its apply stage reuses pdf-tool's own template store, never a CMS
     // object_publish/release_to_production node).
+    // A8 (Milestone A remainder) — document_render_studio: the two-node graph document_render's own
+    // declared effect describes.
+    expect(getWorkflowDefinition("document_render_studio")?.canonicalNodes().map((node) => node.id)).toEqual(["document_render_execute", "document_render_report"]);
+    // A5 (Milestone A remainder) — asset_lookup_studio: one node per declared effect, read then write.
+    expect(getWorkflowDefinition("asset_lookup_studio")?.canonicalNodes().map((node) => node.id)).toEqual(["asset_lookup_search", "asset_lookup_adopt"]);
     expect(getWorkflowDefinition("image_template_revision_studio")?.canonicalNodes().map((node) => node.id)).toEqual([
       "image_revision_intake",
       "image_revision_compile_preview",

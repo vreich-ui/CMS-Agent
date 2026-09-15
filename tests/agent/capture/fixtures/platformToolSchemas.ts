@@ -223,5 +223,83 @@ export const PLATFORM_TOOL_SCHEMAS: Record<string, unknown> = {
     },
     required: ["site_id", "template_id"],
     type: "object"
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // SECOND CAPTURE — 2026-09-15, same provenance as the block above: the live platform MCP
+  // connector's own tools/list (connector "Kugel-Platform"), pasted verbatim, not retyped from
+  // memory and not paraphrased. These four are the verbs Milestone A remainder runner 3a's
+  // production wiring (imageTemplateRevisionPlatformProviders.ts) speaks. Descriptions are elided
+  // (the conformance checker reads type/required/enum/minLength/minimum/additionalProperties only,
+  // and the real descriptions run to several hundred words each) — every SHAPE field is verbatim.
+  preview_pdf_template_fixture: {
+    additionalProperties: false,
+    properties: {
+      fixture: { enum: ["long", "short", "empty", "rich_text", "rtl", "images"], type: "string" },
+      idempotency_key: { minLength: 1, type: "string" },
+      renderer: { enum: ["pdfme", "react-pdf", "typst", "chromium"], type: "string" },
+      site_id: { minLength: 1, type: "string" },
+      template_id: { minLength: 1, type: "string" },
+      template_json: { additionalProperties: true, type: "object" },
+      version: { minimum: 0, type: "integer" }
+    },
+    required: ["site_id", "template_id", "template_json", "fixture"],
+    type: "object"
+  },
+  verify_pdf_content: {
+    additionalProperties: false,
+    properties: {
+      artifactReference: {
+        additionalProperties: false,
+        properties: { blobKey: { type: "string" }, sha256: { type: "string" } },
+        type: "object"
+      },
+      requirements: {
+        additionalProperties: false,
+        properties: { maxBytes: { minimum: 1, type: "integer" }, minPageCount: { minimum: 1, type: "integer" } },
+        type: "object"
+      },
+      site_id: { minLength: 1, type: "string" },
+      url: { minLength: 1, type: "string" }
+    },
+    required: ["site_id"],
+    type: "object"
+  },
+  search_artifacts: {
+    additionalProperties: false,
+    properties: {
+      createdAfter: { format: "date-time", type: "string" },
+      createdBefore: { format: "date-time", type: "string" },
+      cursor: { minLength: 1, type: "string" },
+      includeDeleted: { type: "boolean" },
+      limit: { maximum: 100, minimum: 1, type: "integer" },
+      tag: { maxLength: 40, minLength: 1, type: "string" }
+    },
+    required: [],
+    type: "object"
+  },
+  get_artifact_metadata: {
+    additionalProperties: false,
+    properties: {
+      requestId: { minLength: 1, type: "string" },
+      sha256: { pattern: "^[a-fA-F0-9]{64}$", type: "string" }
+    },
+    required: ["requestId", "sha256"],
+    type: "object"
+  },
+  document_render: {
+    additionalProperties: false,
+    properties: {
+      attach: { default: true, type: "boolean" },
+      document_kind: { minLength: 1, type: "string" },
+      filename: { minLength: 1, type: "string" },
+      idempotency_key: { minLength: 1, type: "string" },
+      owner_object_id: { minLength: 1, type: "string" },
+      owner_object_type: { minLength: 1, type: "string" },
+      site_id: { minLength: 1, type: "string" },
+      template_id: { minLength: 1, type: "string" }
+    },
+    required: ["site_id", "owner_object_type", "owner_object_id"],
+    type: "object"
   }
 };

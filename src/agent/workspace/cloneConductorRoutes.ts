@@ -54,6 +54,12 @@ import { buildObjectPublishPlan, executeObjectPublish, type ObjectPublishPlan } 
 // into this stage's own output.
 import { TemplateLibraryStore } from "../library/templateLibraryStore.js";
 import { resolvePdfToolSiteId } from "../capture/pdfToolSiteScope.js";
+// A8 (runner 3b) — document_render_studio's own two deterministic stages, dispatched through the
+// same metadata-keyed route as A7's and A9's.
+import { buildDocumentRenderReportStep, documentRenderExecuteStep, DOCUMENT_RENDER_ARTIFACTS, type DocumentRenderBrief, type DocumentRenderExecuteEnvelope } from "../capture/documentRenderEngine.js";
+// A5 (runner 3c) — asset_lookup_studio's own two deterministic stages, on the same route.
+import { assetLookupAdoptStep, assetLookupSearchStep, ASSET_LOOKUP_ARTIFACTS, type AssetLookupBrief, type AssetLookupSearchEnvelope } from "../capture/assetLookupEngine.js";
+import type { TenantCallContext } from "../tools/tenantInvoke.js";
 import { ClientMemoryStore } from "../memory/clientMemoryStore.js";
 import type { TemplateArtifactValue } from "../memory/memoryEnvelope.js";
 // T15.34 (#210; ADR-2026-08-25-structure-studio §7) — the pdf-template branch's own deterministic
@@ -105,7 +111,11 @@ import {
   type ImageTemplateRevisionBrief,
   type ImageRevisionItemLedgerEntry
 } from "../capture/imageTemplateRevisionEngine.js";
-import { resolveImageTemplateRevisionProviders } from "./imageTemplateRevisionProviders.js";
+import { hasImageTemplateRevisionProviderOverride, resolveImageTemplateRevisionProviders } from "./imageTemplateRevisionProviders.js";
+// Milestone A remainder (3a) — the production assembly of the three seams A9 left injectable. See
+// that module's header for what each seam is backed by and for the two platform gaps it names
+// rather than guesses at.
+import { buildImageTemplateRevisionProviders } from "../capture/imageTemplateRevisionPlatformProviders.js";
 import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 
 export const CLONE_STAGES = [
@@ -128,7 +138,11 @@ export const CLONE_STAGES = [
   "image_revision_intake",
   "image_revision_compile_preview",
   "image_revision_apply",
-  "image_revision_report"
+  "image_revision_report",
+  "document_render_execute",
+  "document_render_report",
+  "asset_lookup_search",
+  "asset_lookup_adopt"
 ] as const;
 export type CloneStage = typeof CLONE_STAGES[number];
 
@@ -142,6 +156,19 @@ export const readCloneStage = (node: Pick<WorkspaceNode, "metadata">): CloneStag
 export type CloneStageOutcome = { kind: "completed"; output: Record<string, unknown> } | { kind: "refused"; code: string; message: string };
 
 const refused = (code: string, message: string): CloneStageOutcome => ({ kind: "refused", code, message });
+
+// Milestone A remainder (3a) — ONE place decides where image_template_revision's seams come from.
+// A test that installed doubles through setImageTemplateRevisionProviders keeps winning, unchanged
+// (hasImageTemplateRevisionProviderOverride); every other run gets real, per-run providers bound to
+// this tenant, its site object id and this run's own tenantContext.
+const imageRevisionProvidersFor = (scope: { targetProjectId: string; tenantContext?: TenantCallContext; siteId?: string }) =>
+  hasImageTemplateRevisionProviderOverride()
+    ? resolveImageTemplateRevisionProviders()
+    : buildImageTemplateRevisionProviders({
+        targetProjectId: scope.targetProjectId,
+        ...(scope.siteId ? { siteId: scope.siteId } : {}),
+        deps: { ...(scope.tenantContext ? { tenantContext: scope.tenantContext } : {}) }
+      });
 
 // T15.30 (#206; ADR-2026-08-25-structure-studio §3) — "one node graph, two entry adapters." A run's
 // facts now carry EITHER a captureRunId (clone-driven, unchanged since T13.1) OR a structureBrief
@@ -502,14 +529,24 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
             "The run's initialInput carries no imageTemplateRevisionBrief; image_revision_intake needs one to resolve a source asset or fetch any target template. A binding that dispatches this workflow without constructing an imageTemplateRevisionBrief cannot run it — see operationWorkflowBindings.ts's image_template_revision entry."
           );
         }
-        const providers = resolveImageTemplateRevisionProviders();
+        // The asset catalogue is the only seam intake needs, and it is NOT site-scoped
+        // (search_artifacts / get_artifact_metadata are artifact-plane verbs), so no site id is
+        // resolved here — see imageRevisionProvidersFor below.
+        const providers = imageRevisionProvidersFor({ targetProjectId, tenantContext });
         const envelope = await imageRevisionIntakeStep({ initialInput: run.initialInput }, { assetCatalog: providers.assetCatalog });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "image_revision_compile_preview": {
         const intake = envelopeOf(run, "image_revision_intake", IMAGE_REVISION_ARTIFACTS.intake);
         if (isOutcome(intake)) return intake;
-        const providers = resolveImageTemplateRevisionProviders();
+        // Milestone A remainder (3a) — preview renders through pdf-tool, which is site-scoped by the
+        // tenant's own site object id (pdfToolSiteScope.ts), exactly as apply below already was.
+        // Refused by name here rather than sent as a tenantId platform would reject with
+        // artifact_site_mismatch.
+        const { config: previewConfig } = await resolveCloneAuthority(targetProjectId);
+        const previewScope = resolvePdfToolSiteId(previewConfig);
+        if (!previewScope.ok) return refused(previewScope.code, previewScope.reason);
+        const providers = imageRevisionProvidersFor({ targetProjectId, tenantContext, siteId: previewScope.siteId });
         const priorRaw = stageOutput(run, "image_revision_compile_preview");
         const priorItems =
           priorRaw && priorRaw.artifact === IMAGE_REVISION_ARTIFACTS.compilePreview && Array.isArray(priorRaw.items)
@@ -540,7 +577,7 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         }
         const initial = isRecord(run.initialInput) ? run.initialInput : {};
         const brief = isRecord(initial.imageTemplateRevisionBrief) ? (initial.imageTemplateRevisionBrief as ImageTemplateRevisionBrief) : undefined;
-        const providers = resolveImageTemplateRevisionProviders();
+        const providers = imageRevisionProvidersFor({ targetProjectId, tenantContext, siteId: applyScope.siteId });
         const priorRaw = stageOutput(run, "image_revision_apply");
         const priorItems =
           priorRaw && priorRaw.artifact === IMAGE_REVISION_ARTIFACTS.apply && Array.isArray(priorRaw.items)
@@ -570,6 +607,72 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
           applied: applied?.artifact === IMAGE_REVISION_ARTIFACTS.apply ? (applied as unknown as ImageRevisionApplyEnvelope) : undefined
         });
         return { kind: "completed", output: report as unknown as Record<string, unknown> };
+      }
+      // A8 (runner 3b) — document_render_studio's two stages. ONE tenant call, then a terminal
+      // report that reads the receipt rather than asserting anything about it.
+      case "document_render_execute": {
+        // Same dispatch-boundary refusal A7's pdf_family_plan and A9's image_revision_intake hold:
+        // a run whose initialInput carries no brief is refused BY NAME here, never completed on an
+        // empty envelope.
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.documentRenderBrief)) {
+          return refused(
+            "document_render_brief_missing",
+            "The run's initialInput carries no documentRenderBrief; document_render_execute needs one to name the document to render. A binding that dispatches this workflow without constructing a documentRenderBrief cannot run it — see operationWorkflowBindings.ts's document_render entry."
+          );
+        }
+        const { config: renderConfig } = await resolveCloneAuthority(targetProjectId);
+        // document_render is a pdf-tool-scoped verb like every other one in this module: scoped by
+        // the tenant's Platform site object id, refused by name when the record has none.
+        const renderScope = resolvePdfToolSiteId(renderConfig);
+        if (!renderScope.ok) return refused(renderScope.code, renderScope.reason);
+        const envelope = await documentRenderExecuteStep(
+          { targetProjectId, siteId: renderScope.siteId, brief: initial.documentRenderBrief as unknown as DocumentRenderBrief },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "document_render_report": {
+        const execute = envelopeOf(run, "document_render_execute", DOCUMENT_RENDER_ARTIFACTS.execute);
+        if (isOutcome(execute)) return execute;
+        const report = buildDocumentRenderReportStep({ execute: execute as unknown as DocumentRenderExecuteEnvelope });
+        return { kind: "completed", output: report as unknown as Record<string, unknown> };
+      }
+      // A5 (runner 3c) — asset_lookup_studio's two stages: a read that resolves exactly one asset
+      // or none, then a governed write that records it — or names why it wrote nothing.
+      case "asset_lookup_search": {
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.assetLookupBrief)) {
+          return refused(
+            "asset_lookup_brief_missing",
+            "The run's initialInput carries no assetLookupBrief; asset_lookup_search needs one to know what to search for. A binding that dispatches this workflow without constructing an assetLookupBrief cannot run it — see operationWorkflowBindings.ts's asset_lookup_adopt entry."
+          );
+        }
+        const envelope = await assetLookupSearchStep(
+          { targetProjectId, brief: initial.assetLookupBrief as unknown as AssetLookupBrief },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "asset_lookup_adopt": {
+        const search = envelopeOf(run, "asset_lookup_search", ASSET_LOOKUP_ARTIFACTS.search);
+        if (isOutcome(search)) return search;
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.assetLookupBrief)) {
+          return refused(
+            "asset_lookup_brief_missing",
+            "The run's initialInput carries no assetLookupBrief; asset_lookup_adopt reads the adoption target from it and never infers one."
+          );
+        }
+        const envelope = await assetLookupAdoptStep(
+          {
+            targetProjectId,
+            search: search as unknown as AssetLookupSearchEnvelope,
+            brief: initial.assetLookupBrief as unknown as AssetLookupBrief
+          },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       // T15.10 (ADR-2026-08-25-publish-autonomy §6.2, §9) — clone_conductor's segment of the SHARED
       // publishing tail. These three stages ARE publish_payload / publication_controller /

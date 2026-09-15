@@ -128,6 +128,23 @@ describe("mcpBoundary conformance — toWireArguments output validates against t
   it("site_apply_theme", () =>
     assertConforms("site_apply_theme", toWireArguments("site_apply_theme", { siteId: "site_x", themeId: "thm_x", dryRun: true })));
 
+  // Milestone A remainder (3a) — the four verbs imageTemplateRevisionPlatformProviders.ts speaks.
+  it("preview_pdf_template_fixture", () =>
+    assertConforms(
+      "preview_pdf_template_fixture",
+      toWireArguments("preview_pdf_template_fixture", { siteId: "site_x", templateId: "tpl_x", templateJson: { schemas: [] }, fixture: "images", version: 3 })
+    ));
+
+  it("verify_pdf_content", () => assertConforms("verify_pdf_content", toWireArguments("verify_pdf_content", { siteId: "site_x", url: "/pdf/req_1/" + "a".repeat(64) + ".pdf" })));
+
+  it("search_artifacts", () => assertConforms("search_artifacts", toWireArguments("search_artifacts", { tag: "hero", limit: 100 })));
+
+  it("get_artifact_metadata", () => assertConforms("get_artifact_metadata", toWireArguments("get_artifact_metadata", { requestId: "req_1", sha256: "a".repeat(64) })));
+
+  // A8 (3b) — document_render_studio's one verb.
+  it("document_render", () =>
+    assertConforms("document_render", toWireArguments("document_render", { siteId: "site_x", ownerObjectType: "content_item", ownerObjectId: "ci_1", templateId: "tpl_x" })));
+
   it('object_create — a fully-formed mint call (the "site" the spec\'s defect table names) conforms', () =>
     assertConforms(
       "object_create",

@@ -360,9 +360,33 @@ export type PreviewTemplateVariantFn = (input: {
   beforeTemplateJson: Record<string, unknown>;
   afterTemplateJson: Record<string, unknown>;
   pageCount: number;
-}) => Promise<{ beforeRef: string; afterRef: string }>;
+}) => Promise<PreviewTemplateVariantResult>;
 
-export type VerifyImagePresenceFn = (input: { templateId: string; version: number; pageCount: number; imageFieldNamePrefix: string }) => Promise<{ pagesWithImage: number[]; pagesMissingImage: number[] }>;
+// Milestone A remainder (3a) — BOTH refs are optional, and an ABSENT one must be explained.
+// The production wiring (imageTemplateRevisionPlatformProviders.ts) can render the BEFORE variant
+// (a stored version) but not the AFTER one: preview_pdf_template_fixture renders the template the
+// STORE holds, and the after variant does not exist there until apply mints it. Rather than return
+// the before render twice under two names — a fabricated "after" — the provider states the gap, and
+// runImageRevisionCompilePreviewBatch carries it onto the item as its `detail`. A provider that CAN
+// render both (a future platform verb that takes a template body) just returns both refs and says
+// nothing; nothing here changes for it.
+export type PreviewTemplateVariantResult = {
+  beforeRef?: string;
+  afterRef?: string;
+  afterUnavailable?: { code: string; reason: string };
+};
+
+// `templateJson` is the APPLIED (after) template document for the version being verified — the
+// caller already holds it, and a verifier that has to render the stored version to inspect it needs
+// the same document its renderer was given. Never used to decide the verdict, only to produce the
+// artifact the verdict is read from.
+export type VerifyImagePresenceFn = (input: {
+  templateId: string;
+  version: number;
+  pageCount: number;
+  imageFieldNamePrefix: string;
+  templateJson: Record<string, unknown>;
+}) => Promise<{ pagesWithImage: number[]; pagesMissingImage: number[] }>;
 
 // ---------------------------------------------------------------------------------------------
 // Per-item ledger — the fixed outcome vocabulary. Never any other string, so a caller (and
@@ -558,6 +582,25 @@ export async function runImageRevisionCompilePreviewBatch(
         afterTemplateJson: compiled.edit.templateJson,
         pageCount: current.pageCount
       });
+      // A preview that produced NEITHER render is not a preview — it is a failure that happens not
+      // to have thrown, and it must never reach an approval decision wearing the "previewed"
+      // outcome. A preview that produced one of the two is honest so long as the missing one is
+      // named: `detail` carries the provider's own reason onto the item, and from there into the
+      // terminal report a human approves from.
+      if (!preview.beforeRef && !preview.afterRef) {
+        items.push({
+          templateRef: item.templateRef,
+          outcome: "preview_failed",
+          detail: preview.afterUnavailable
+            ? `${preview.afterUnavailable.code}: ${preview.afterUnavailable.reason}`
+            : "previewTemplateVariant returned no rendered artifact for either variant and named no reason.",
+          inputDigest: digest,
+          beforeVersion: current.version,
+          pageCount: current.pageCount,
+          pages: compiled.edit.pages
+        });
+        continue;
+      }
       items.push({
         templateRef: item.templateRef,
         outcome: "previewed",
@@ -565,8 +608,9 @@ export async function runImageRevisionCompilePreviewBatch(
         beforeVersion: current.version,
         pageCount: current.pageCount,
         pages: compiled.edit.pages,
-        beforeRef: preview.beforeRef,
-        afterRef: preview.afterRef
+        ...(preview.beforeRef ? { beforeRef: preview.beforeRef } : {}),
+        ...(preview.afterRef ? { afterRef: preview.afterRef } : {}),
+        ...(preview.afterUnavailable ? { detail: `${preview.afterUnavailable.code}: ${preview.afterUnavailable.reason}` } : {})
       });
     } catch (error) {
       items.push({
@@ -722,7 +766,13 @@ export async function runImageRevisionApplyBatch(
       continue;
     }
     try {
-      const verification = await deps.verifyImagePresence({ templateId: published.templateId, version: published.version, pageCount: attempt.compiled.pageCount ?? 0, imageFieldNamePrefix: attempt.imageFieldNamePrefix });
+      const verification = await deps.verifyImagePresence({
+        templateId: published.templateId,
+        version: published.version,
+        pageCount: attempt.compiled.pageCount ?? 0,
+        imageFieldNamePrefix: attempt.imageFieldNamePrefix,
+        templateJson: attempt.templateJson
+      });
       if (verification.pagesMissingImage.length > 0) {
         items.push({
           ...attempt.compiled,

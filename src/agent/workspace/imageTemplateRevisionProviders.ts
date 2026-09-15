@@ -58,6 +58,19 @@ export function resolveImageTemplateRevisionProviders(): ImageTemplateRevisionPr
   return current;
 }
 
+// Milestone A remainder (3a) — production no longer reads the DEFAULT_PROVIDERS above: every live
+// stage assembles its OWN per-run providers from the tenant's MCP surface
+// (imageTemplateRevisionPlatformProviders.ts's buildImageTemplateRevisionProviders), because the
+// tenant, its site object id and the run's tenantContext are all run-scoped and a module-level
+// singleton cannot hold them. This predicate is how a caller tells the two apart: TRUE means a test
+// has installed doubles through setImageTemplateRevisionProviders and they must win (that is the
+// whole point of the seam); FALSE means nobody has, so the caller assembles the real thing. The
+// defaults stay exactly as they were — the honest, named "nothing is wired" answer for any caller
+// that reads them without assembling.
+export function hasImageTemplateRevisionProviderOverride(): boolean {
+  return current !== DEFAULT_PROVIDERS;
+}
+
 export function setImageTemplateRevisionProviders(providers: ImageTemplateRevisionProviders): void {
   current = providers;
 }
